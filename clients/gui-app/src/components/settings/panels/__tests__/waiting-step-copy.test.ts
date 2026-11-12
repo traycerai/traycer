@@ -17,6 +17,7 @@ describe("waitingStepCopy", () => {
         startingCopy: STARTING_COPY,
         cancelRequested: false,
         deviceCode: false,
+        codeReturn: "automatic",
       }),
     ).toEqual(STARTING_COPY);
   });
@@ -29,6 +30,7 @@ describe("waitingStepCopy", () => {
         startingCopy: null,
         cancelRequested: false,
         deviceCode: false,
+        codeReturn: "automatic",
       }),
     ).toEqual({
       title: "Opening the sign-in page…",
@@ -46,6 +48,7 @@ describe("waitingStepCopy", () => {
         startingCopy: STARTING_COPY,
         cancelRequested: true,
         deviceCode: false,
+        codeReturn: "automatic",
       }),
     ).toEqual({
       title: "Cancelling sign-in",
@@ -65,6 +68,7 @@ describe("waitingStepCopy", () => {
         startingCopy: STARTING_COPY,
         cancelRequested: false,
         deviceCode: false,
+        codeReturn: "automatic",
       }),
     ).toEqual({
       title: "Approve sign-in in your browser",
@@ -81,6 +85,7 @@ describe("waitingStepCopy", () => {
         startingCopy: STARTING_COPY,
         cancelRequested: false,
         deviceCode: false,
+        codeReturn: "automatic",
       }),
     ).toEqual({ title: "Checking approval…", guidance: null });
   });

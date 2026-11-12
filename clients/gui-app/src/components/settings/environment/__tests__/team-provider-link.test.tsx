@@ -461,7 +461,7 @@ describe("ProviderLinkDialog", () => {
     render(<ProviderLinkDialog />, { wrapper: harness.Wrapper });
     await userEvent.clear(await screen.findByLabelText("Profile name"));
     await userEvent.type(screen.getByLabelText("Profile name"), "Acme Claude");
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await screen.findByLabelText("Paste the code");
 
     expect(harness.paramsOf("providers.link")).toEqual([
@@ -478,13 +478,20 @@ describe("ProviderLinkDialog", () => {
       version: { major: 1, minor: 2 },
     });
 
-    await userEvent.type(screen.getByLabelText("Paste the code"), PASTED_CODE);
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect((await screen.findByRole("status")).textContent).toBe("Signed in.");
+    // The code claude.ai shows is `code#state`.
+    const environmentCode = "ONE-TIME-CODE#4821";
+    await userEvent.type(
+      screen.getByLabelText("Paste the code"),
+      environmentCode,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Submit code" }));
+    expect(
+      (await screen.findByTestId("provider-link-linked")).textContent,
+    ).toBe("Signed in.");
     expect(harness.paramsOf("providers.linkComplete")).toEqual([
       {
         linkId: "link-team-profile",
-        code: PASTED_CODE,
+        code: environmentCode,
         environmentId: "env-a",
       },
     ]);

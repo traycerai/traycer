@@ -6,7 +6,8 @@ import {
   screen,
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { AddProfileWaitingStep } from "@/components/settings/panels/add-provider-profile-dialog";
+import { AddProfileWaitingStep } from "@/components/settings/panels/add-profile-steps";
+import { shouldAutoOpenLoginUrl } from "@/components/providers/provider-signin-availability";
 import type { ProviderProfileLoginFlowCodePaste } from "@/components/settings/panels/use-provider-profile-login-flow";
 
 const DISABLED_CODE_PASTE: ProviderProfileLoginFlowCodePaste = {
@@ -42,15 +43,15 @@ describe("<AddProfileWaitingStep />", () => {
           // before the marker is read, so this row also pins that a child
           // which opens its own browser is irrelevant when that browser is on
           // a machine the user cannot see.
-          loginCapability={{
+          autoOpenBrowser={shouldAutoOpenLoginUrl(false, {
             oauthArgs: ["login"],
             token: null,
             codePaste: null,
             terminalLogin: null,
             remoteSafe: null,
             selfOpensBrowser: {},
-          }}
-          isLocalHost={false}
+          })}
+          codeReturn="automatic"
           queuePending={false}
           startingCopy={null}
           cancelRequested={false}
@@ -118,15 +119,15 @@ describe("<AddProfileWaitingStep />", () => {
       <AddProfileWaitingStep
         loginUrl="https://claude.com/cai/oauth/authorize?code=true"
         userCode={null}
-        loginCapability={{
+        autoOpenBrowser={shouldAutoOpenLoginUrl(true, {
           oauthArgs: ["setup-token"],
           token: null,
           codePaste: null,
           terminalLogin: null,
           remoteSafe: null,
           selfOpensBrowser: {},
-        }}
-        isLocalHost
+        })}
+        codeReturn="automatic"
         queuePending={false}
         startingCopy={null}
         cancelRequested={false}
@@ -156,15 +157,15 @@ describe("<AddProfileWaitingStep />", () => {
         // Codex prints a URL and a code for the GUI to open, so the marker is
         // null and the tab is ours to open. The device code is what gets
         // DISPLAYED here; it is no longer what decides the opening.
-        loginCapability={{
+        autoOpenBrowser={shouldAutoOpenLoginUrl(true, {
           oauthArgs: ["login", "--device-auth"],
           token: null,
           codePaste: null,
           terminalLogin: null,
           remoteSafe: {},
           selfOpensBrowser: null,
-        }}
-        isLocalHost
+        })}
+        codeReturn="automatic"
         queuePending={false}
         startingCopy={null}
         cancelRequested={false}
@@ -201,15 +202,15 @@ describe("<AddProfileWaitingStep />", () => {
         <AddProfileWaitingStep
           loginUrl="https://auth.openai.com/codex/device"
           userCode="7CH1-OXNVU"
-          loginCapability={{
+          autoOpenBrowser={shouldAutoOpenLoginUrl(false, {
             oauthArgs: ["login", "--device-auth"],
             token: null,
             codePaste: null,
             terminalLogin: null,
             remoteSafe: {},
             selfOpensBrowser: null,
-          }}
-          isLocalHost={false}
+          })}
+          codeReturn="automatic"
           queuePending={false}
           startingCopy={null}
           cancelRequested={false}

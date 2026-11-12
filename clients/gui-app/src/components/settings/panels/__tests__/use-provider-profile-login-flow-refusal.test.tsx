@@ -27,7 +27,8 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
 import { appLogger } from "@/lib/logger";
-import { AddProfileWaitingStep } from "@/components/settings/panels/add-provider-profile-dialog";
+import { AddProfileWaitingStep } from "@/components/settings/panels/add-profile-steps";
+import { shouldAutoOpenLoginUrl } from "@/components/providers/provider-signin-availability";
 import {
   useProviderProfileLoginFlow,
   type AwaitLoginMutation,
@@ -250,8 +251,8 @@ function LoginFlowHarness(props: {
         <AddProfileWaitingStep
           loginUrl={flow.state.url}
           userCode={flow.state.userCode}
-          loginCapability={null}
-          isLocalHost={false}
+          autoOpenBrowser={shouldAutoOpenLoginUrl(false, null)}
+          codeReturn="automatic"
           queuePending={false}
           startingCopy={null}
           cancelRequested={false}

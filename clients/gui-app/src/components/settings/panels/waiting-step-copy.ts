@@ -1,5 +1,7 @@
 import type { ProviderLoginStartCopy } from "@/components/providers/provider-login-start";
 import type { ProviderProfileLoginFlowCodePastePhase } from "./use-provider-profile-login-flow";
+import { LINK_SIGN_IN_LINE } from "@/lib/providers/provider-link-copy";
+import type { WaitingStepCodeReturn } from "./add-profile-steps";
 
 export interface WaitingStepCopy {
   readonly title: string;
@@ -29,6 +31,7 @@ export function waitingStepCopy(args: {
   readonly startingCopy: ProviderLoginStartCopy | null;
   readonly cancelRequested: boolean;
   readonly deviceCode: boolean;
+  readonly codeReturn: WaitingStepCodeReturn;
 }): WaitingStepCopy {
   if (args.cancelRequested) {
     return {
@@ -59,6 +62,12 @@ export function waitingStepCopy(args: {
       title: "Approve sign-in in your browser",
       guidance:
         "Open the page, enter this code, then return here. We'll continue automatically after you approve.",
+    };
+  }
+  if (args.codeReturn === "paste") {
+    return {
+      title: "Approve sign-in in your browser",
+      guidance: LINK_SIGN_IN_LINE,
     };
   }
   return {

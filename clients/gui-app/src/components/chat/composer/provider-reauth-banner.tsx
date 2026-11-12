@@ -60,6 +60,7 @@ import {
   providerLoginIsRemoteSafe,
   providerSupportsTerminalLogin,
   providerTerminalLoginHostBlock,
+  shouldAutoOpenLoginUrl,
   type ProviderHostBlock,
 } from "@/components/providers/provider-signin-availability";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
@@ -976,8 +977,7 @@ function OAuthWaitingRow({
 }) {
   const openLink = useOpenLink();
   const autoOpen = useAutoOpenLoginUrl(
-    isLocalHost,
-    loginCapability,
+    shouldAutoOpenLoginUrl(isLocalHost, loginCapability),
     loginUrl,
     (url) => {
       void openLink(url, "auth", null);
@@ -990,6 +990,7 @@ function OAuthWaitingRow({
     startingCopy: null,
     cancelRequested: false,
     deviceCode: userCode !== null,
+    codeReturn: "automatic",
   });
   return (
     <div className="flex flex-col gap-2.5" aria-live="polite">

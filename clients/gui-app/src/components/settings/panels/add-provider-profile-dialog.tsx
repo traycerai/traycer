@@ -1,32 +1,21 @@
-import { EnvironmentAddProfileDialog } from "@/components/providers/environment-add-profile-dialog";
+import { EnvironmentProfileSignIn } from "@/components/providers/environment-profile-sign-in";
 import {
   useEnvironmentProfileSignInSupported,
   useProfileSignInEnvironment,
 } from "@/hooks/providers/use-profile-sign-in-environment";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ChevronRight,
-  Eye,
-  EyeOff,
-  ExternalLink,
-  Link2,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Eye, EyeOff } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   PROVIDER_DISPLAY_NAMES,
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderCliState,
-  type ProviderLoginRefusal,
   type ProviderProfile,
   type ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
-import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,22 +40,18 @@ import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
 import type { ProviderLoginStartCopy } from "@/components/providers/provider-login-start";
 import {
-  ProviderLoginRefusalAction,
-  ProviderLoginRefusalMessage,
-} from "@/components/providers/provider-login-refusal";
-import {
   providerHostBlock,
   providerHostBlockLabel,
+  shouldAutoOpenLoginUrl,
   type ProviderHostBlock,
 } from "@/components/providers/provider-signin-availability";
 import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
-import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
-import { SignInCopyIconButton } from "./sign-in-copy-icon-button";
 import {
-  openBrowserLabel,
-  useAutoOpenLoginUrl,
-} from "./use-auto-open-login-url";
-import { waitingStepCopy } from "./waiting-step-copy";
+  AddProfileFailureStep,
+  AddProfileSignInCard,
+  AddProfileStatusCard,
+  AddProfileWaitingStep,
+} from "./add-profile-steps";
 import {
   useProviderProfileLoginFlow,
   providerProfileLoginProgress,
@@ -209,14 +194,11 @@ function RoutedAddProviderProfileDialog(
     );
   if (route.kind === "environment") {
     return (
-      <EnvironmentAddProfileDialog
+      <EnvironmentAddProviderProfileDialog
         {...props}
         client={props.client}
         environmentId={route.environmentId}
-        initialAccentColor={nextAvailableAccentColor(props.state.profiles)}
-        sharesSkillsAndPlugins={
-          PROVIDER_SHARES_SKILLS_AND_PLUGINS[props.state.providerId]
-        }
+        team={route.team}
       />
     );
   }
@@ -459,136 +441,447 @@ function LocalAddProviderProfileDialog({
       : null;
 
   return (
-    <Dialog open={open} onOpenChange={close}>
+    <AddProfileDialogShell
+      providerId={state.providerId}
+      open={open}
+      onOpenChange={close}
+      showCloseButton={!linking}
+      dismissalLocked={dismissalLocked}
+      footer={
+        <AddProfileFooter
+          step={addProfileFooterStep({
+            started: flow.state.kind !== "start",
+            naming: naming !== null,
+            duplicate: duplicateProfile !== null,
+          })}
+          saveDisabled={trimmedLabel.length === 0 || finalizing}
+          savePending={finalizing}
+          signInAgainDisabled={credentialRefusal !== null}
+          onCancel={() => close(false)}
+          onSave={() => {
+            if (naming !== null) commitNaming(naming.profile);
+          }}
+          onSignInAgain={linkAccount}
+        />
+      }
+    >
+      <ProviderProfileCard
+        profile={null}
+        profiles={state.profiles}
+        label={label}
+        onLabelChange={setLabel}
+        selectedColor={accentColor}
+        onSelectColor={setAccentColor}
+        disabled={(linking && naming === null) || finalizing}
+      />
+
+      {supportsShareSkillsAndPlugins ? (
+        <ShareSkillsAndPluginsField
+          checked={shareSkillsAndPlugins}
+          disabled={linking || finalizing}
+          onCheckedChange={setShareSkillsAndPlugins}
+        />
+      ) : null}
+
+      <CredentialRefusalNote refusal={credentialRefusal} />
+      <ProfileMacosNotice
+        block={macosBlock}
+        providerId={state.providerId}
+        visible={flow.state.kind === "start"}
+      />
+      <AddProfileAccountSection
+        providerId={state.providerId}
+        flowState={flow.state}
+        loginCapability={state.loginCapability}
+        isLocalHost={isLocalHost}
+        startPending={flow.startPending}
+        startingCopy={flow.startingCopy}
+        cancelPending={flow.cancelPending}
+        cancelDisabled={flow.commitPending}
+        codePaste={flow.codePaste}
+        finalizing={finalizing}
+        finalizeError={recolorProfile.error}
+        duplicateProfile={duplicateProfile}
+        naming={naming}
+        namingError={renameProfile.error}
+        emailRevealed={emailRevealed}
+        setEmailRevealed={setEmailRevealed}
+        linkDisabled={linkHeldOff({
+          labelEmpty: trimmedLabel.length === 0,
+          busy: flow.busy,
+          credentialRefused: credentialRefusal !== null,
+          macosBlocked: macosBlock !== null,
+        })}
+        onLink={linkAccount}
+        onOpenExternalLink={(url) => {
+          void openLink(url, "auth", null);
+        }}
+        onCancel={() => close(false)}
+        onRetryLogin={linkAccount}
+        onRetryFinalize={retryFinalize}
+      />
+    </AddProfileDialogShell>
+  );
+}
+
+interface EnvironmentSignedIn {
+  readonly profileId: string;
+  /** Null when the profile arrived before this computer could read it. */
+  readonly profile: ProviderProfile | null;
+  /** The account already had a profile here before this sign-in. */
+  readonly duplicate: boolean;
+}
+
+/**
+ * The add dialog for a sign-in through the environment: the same steps as the
+ * local one, with the environment's sign-in in place of this computer's.
+ */
+function EnvironmentAddProviderProfileDialog(
+  props: AddProviderProfileDialogProps & {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly environmentId: string;
+    readonly team: boolean;
+  },
+): ReactNode {
+  const { state, client } = props;
+  const { providerId } = state;
+  const supportsShareSkillsAndPlugins =
+    PROVIDER_SHARES_SKILLS_AND_PLUGINS[providerId];
+  const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
+    supportsShareSkillsAndPlugins,
+  );
+  const [label, setLabel] = useState("New profile");
+  const [accentColor, setAccentColor] = useState<ProviderProfileAccentColor>(
+    () => nextAvailableAccentColor(state.profiles),
+  );
+  const [emailRevealed, setEmailRevealed] = useState(false);
+  // Counts sign-ins started from this dialog; each one mounts a fresh attempt.
+  const [signInCount, setSignInCount] = useState(0);
+  const [signedIn, setSignedIn] = useState<EnvironmentSignedIn | null>(null);
+  const [namingCommitted, setNamingCommitted] = useState(false);
+  const profileIdsBeforeSignIn = useRef<ReadonlySet<string>>(new Set());
+  const recolorProfile = useRecolorProviderProfileForClient(client);
+  const renameProfile = useRenameProviderProfileForClient(client);
+  const trimmedLabel = label.trim();
+  const started = signInCount > 0;
+  const finalizing = recolorProfile.isPending || renameProfile.isPending;
+  const duplicateProfile =
+    signedIn !== null && signedIn.duplicate ? signedIn.profile : null;
+  const naming = environmentNamingStep(
+    signedIn,
+    namingCommitted,
+    state.profiles,
+  );
+
+  const close = (nextOpen: boolean): void => {
+    if (!nextOpen && finalizing) return;
+    props.onOpenChange(nextOpen);
+  };
+  const complete = (profileId: string): void => {
+    props.onFailedAttempt(null);
+    props.onProfileCreated(profileId);
+    props.onOpenChange(false);
+  };
+  const finalize = (
+    profileId: string,
+    color: ProviderProfileAccentColor | null,
+  ): void => {
+    if (color === accentColor) {
+      complete(profileId);
+      return;
+    }
+    recolorProfile.mutate(
+      { providerId, profileId, accentColor },
+      { onSuccess: () => complete(profileId) },
+    );
+  };
+  const signIn = (): void => {
+    if (trimmedLabel.length === 0) return;
+    props.onFailedAttempt(null);
+    profileIdsBeforeSignIn.current = new Set(
+      state.profiles.map((profile) => profile.profileId),
+    );
+    setSignedIn(null);
+    setNamingCommitted(false);
+    setEmailRevealed(false);
+    setSignInCount((count) => count + 1);
+  };
+  const signedInAs = (profile: ProviderProfile): void => {
+    const duplicate = profileIdsBeforeSignIn.current.has(profile.profileId);
+    setSignedIn({ profileId: profile.profileId, profile, duplicate });
+    if (duplicate) {
+      props.onFailedAttempt(null);
+      return;
+    }
+    // Same email as another profile: the person names this one first.
+    if (findEmailCollisionProfile(state.profiles, profile) !== null) return;
+    setNamingCommitted(true);
+    finalize(profile.profileId, profile.accentColor);
+  };
+  const receiving = (profileId: string | null): void => {
+    if (profileId === null) {
+      close(false);
+      return;
+    }
+    if (profileIdsBeforeSignIn.current.has(profileId)) {
+      complete(profileId);
+      return;
+    }
+    setSignedIn({ profileId, profile: null, duplicate: false });
+    setNamingCommitted(true);
+    finalize(profileId, null);
+  };
+  const commitNaming = (profile: ProviderProfile): void => {
+    if (trimmedLabel.length === 0) return;
+    const named = (): void => {
+      setNamingCommitted(true);
+      finalize(profile.profileId, profile.accentColor);
+    };
+    if (trimmedLabel === profile.label) {
+      named();
+      return;
+    }
+    renameProfile.mutate(
+      { providerId, profileId: profile.profileId, label: trimmedLabel },
+      { onSuccess: named },
+    );
+  };
+
+  return (
+    <AddProfileDialogShell
+      providerId={providerId}
+      open={props.open}
+      onOpenChange={close}
+      showCloseButton={!started}
+      dismissalLocked={finalizing}
+      footer={
+        <AddProfileFooter
+          step={addProfileFooterStep({
+            started,
+            naming: naming !== null,
+            duplicate: duplicateProfile !== null,
+          })}
+          saveDisabled={trimmedLabel.length === 0 || finalizing}
+          savePending={finalizing}
+          signInAgainDisabled={false}
+          onCancel={() => close(false)}
+          onSave={() => {
+            if (naming !== null) commitNaming(naming.profile);
+          }}
+          onSignInAgain={signIn}
+        />
+      }
+    >
+      <ProviderProfileCard
+        profile={null}
+        profiles={state.profiles}
+        label={label}
+        onLabelChange={setLabel}
+        selectedColor={accentColor}
+        onSelectColor={setAccentColor}
+        disabled={(started && naming === null) || finalizing}
+      />
+
+      {supportsShareSkillsAndPlugins ? (
+        <ShareSkillsAndPluginsField
+          checked={shareSkillsAndPlugins}
+          disabled={started || finalizing}
+          onCheckedChange={setShareSkillsAndPlugins}
+        />
+      ) : null}
+
+      {started ? (
+        <EnvironmentProfileSignIn
+          key={signInCount}
+          client={client}
+          request={{
+            providerId,
+            profileId: null,
+            environmentId: props.environmentId,
+            createProfile: {
+              label: trimmedLabel,
+              shareSkillsAndPlugins:
+                supportsShareSkillsAndPlugins && shareSkillsAndPlugins,
+            },
+            replaceAccount: false,
+          }}
+          waitForLocalProfile
+          team={props.team}
+          ruleAboveWaitingStep
+          reportSource="Add profile"
+          onComplete={({ profile }) => {
+            if (profile !== null) signedInAs(profile);
+          }}
+          onDeliveryPending={receiving}
+          onNotOffered={null}
+          onCancel={() => close(false)}
+        />
+      ) : (
+        <AddProfileSignInCard
+          disabled={trimmedLabel.length === 0}
+          onClick={signIn}
+        />
+      )}
+
+      {signedIn === null ? null : (
+        <AddProfileSignedInSection
+          providerId={providerId}
+          duplicateProfile={duplicateProfile}
+          naming={naming}
+          namingError={renameProfile.error}
+          finalizing={finalizing}
+          finalizeError={recolorProfile.error}
+          emailRevealed={emailRevealed}
+          setEmailRevealed={setEmailRevealed}
+          onCancel={() => close(false)}
+          onRetryFinalize={() =>
+            finalize(signedIn.profileId, signedIn.profile?.accentColor ?? null)
+          }
+        />
+      )}
+    </AddProfileDialogShell>
+  );
+}
+
+function environmentNamingStep(
+  signedIn: EnvironmentSignedIn | null,
+  namingCommitted: boolean,
+  profiles: readonly ProviderProfile[],
+): NamingStepState | null {
+  if (
+    signedIn === null ||
+    signedIn.duplicate ||
+    signedIn.profile === null ||
+    namingCommitted
+  )
+    return null;
+  const collisionProfile = findEmailCollisionProfile(
+    profiles,
+    signedIn.profile,
+  );
+  return collisionProfile === null
+    ? null
+    : { profile: signedIn.profile, collisionProfile };
+}
+
+/** The add-profile dialog's frame, whichever sign-in runs inside it. */
+function AddProfileDialogShell(props: {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly showCloseButton: boolean;
+  readonly dismissalLocked: boolean;
+  readonly footer: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  const name = PROVIDER_DISPLAY_NAMES[props.providerId];
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         layout="banded"
         className="flex max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
-        showCloseButton={!linking}
+        showCloseButton={props.showCloseButton}
         onEscapeKeyDown={(event) => {
-          if (dismissalLocked) event.preventDefault();
+          if (props.dismissalLocked) event.preventDefault();
         }}
         onPointerDownOutside={(event) => {
-          if (dismissalLocked) event.preventDefault();
+          if (props.dismissalLocked) event.preventDefault();
         }}
       >
         <DialogHeader className="gap-1.5">
-          <DialogTitle>
-            Add new {PROVIDER_DISPLAY_NAMES[state.providerId]} profile
-          </DialogTitle>
+          <DialogTitle>Add new {name} profile</DialogTitle>
           <DialogDescription>
-            Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
-            its color, then sign in to the account it should use.
+            Name this {name} profile, choose its color, then sign in to the
+            account it should use.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
-          <ProviderProfileCard
-            profile={null}
-            profiles={state.profiles}
-            label={label}
-            onLabelChange={setLabel}
-            selectedColor={accentColor}
-            onSelectColor={setAccentColor}
-            disabled={(linking && naming === null) || finalizing}
-          />
-
-          {supportsShareSkillsAndPlugins ? (
-            <ShareSkillsAndPluginsField
-              checked={shareSkillsAndPlugins}
-              disabled={linking || finalizing}
-              onCheckedChange={setShareSkillsAndPlugins}
-            />
-          ) : null}
-
-          <CredentialRefusalNote refusal={credentialRefusal} />
-          <ProfileMacosNotice
-            block={macosBlock}
-            providerId={state.providerId}
-            visible={flow.state.kind === "start"}
-          />
-          <AddProfileAccountSection
-            providerId={state.providerId}
-            flowState={flow.state}
-            loginCapability={state.loginCapability}
-            isLocalHost={isLocalHost}
-            startPending={flow.startPending}
-            startingCopy={flow.startingCopy}
-            cancelPending={flow.cancelPending}
-            cancelDisabled={flow.commitPending}
-            codePaste={flow.codePaste}
-            finalizing={finalizing}
-            finalizeError={recolorProfile.error}
-            duplicateProfile={duplicateProfile}
-            naming={naming}
-            namingError={renameProfile.error}
-            emailRevealed={emailRevealed}
-            setEmailRevealed={setEmailRevealed}
-            linkDisabled={linkHeldOff({
-              labelEmpty: trimmedLabel.length === 0,
-              busy: flow.busy,
-              credentialRefused: credentialRefusal !== null,
-              macosBlocked: macosBlock !== null,
-            })}
-            onLink={linkAccount}
-            onOpenExternalLink={(url) => {
-              void openLink(url, "auth", null);
-            }}
-            onCancel={() => close(false)}
-            onRetryLogin={linkAccount}
-            onRetryFinalize={retryFinalize}
-          />
+          {props.children}
         </div>
 
-        {flow.state.kind === "start" ? (
-          <DialogFooter>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => close(false)}
-            >
-              Cancel
-            </Button>
-          </DialogFooter>
-        ) : null}
-        {naming !== null ? (
-          <DialogFooter>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={trimmedLabel.length === 0 || finalizing}
-              onClick={() => commitNaming(naming.profile)}
-            >
-              {finalizing ? <MutedAgentSpinner /> : null}
-              Save profile
-            </Button>
-          </DialogFooter>
-        ) : null}
-        {duplicateProfile !== null ? (
-          <DialogFooter>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              disabled={credentialRefusal !== null}
-              onClick={linkAccount}
-            >
-              Sign in again
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => close(false)}
-            >
-              Done
-            </Button>
-          </DialogFooter>
-        ) : null}
+        {props.footer}
       </DialogContent>
     </Dialog>
   );
+}
+
+type AddProfileFooterStep = "start" | "naming" | "duplicate" | null;
+
+function addProfileFooterStep(at: {
+  readonly started: boolean;
+  readonly naming: boolean;
+  readonly duplicate: boolean;
+}): AddProfileFooterStep {
+  if (!at.started) return "start";
+  if (at.naming) return "naming";
+  if (at.duplicate) return "duplicate";
+  return null;
+}
+
+function AddProfileFooter(props: {
+  readonly step: AddProfileFooterStep;
+  readonly saveDisabled: boolean;
+  readonly savePending: boolean;
+  readonly signInAgainDisabled: boolean;
+  readonly onCancel: () => void;
+  readonly onSave: () => void;
+  readonly onSignInAgain: () => void;
+}): ReactNode {
+  switch (props.step) {
+    case "start":
+      return (
+        <DialogFooter>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={props.onCancel}
+          >
+            Cancel
+          </Button>
+        </DialogFooter>
+      );
+    case "naming":
+      return (
+        <DialogFooter>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={props.saveDisabled}
+            onClick={props.onSave}
+          >
+            {props.savePending ? <MutedAgentSpinner /> : null}
+            Save profile
+          </Button>
+        </DialogFooter>
+      );
+    case "duplicate":
+      return (
+        <DialogFooter>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={props.signInAgainDisabled}
+            onClick={props.onSignInAgain}
+          >
+            Sign in again
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={props.onCancel}
+          >
+            Done
+          </Button>
+        </DialogFooter>
+      );
+    case null:
+      return null;
+  }
 }
 
 function ProfileMacosNotice({
@@ -656,28 +949,7 @@ function AddProfileAccountSection({
   readonly onRetryFinalize: () => void;
 }): ReactNode {
   if (flowState.kind === "start") {
-    return (
-      <button
-        type="button"
-        aria-label="Sign in"
-        className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={linkDisabled}
-        onClick={onLink}
-      >
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
-          <Link2 className="size-4" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-ui-sm font-medium text-foreground">
-            Sign in
-          </span>
-          <span className="block text-ui-xs text-muted-foreground">
-            Sign in to the account this profile should use.
-          </span>
-        </span>
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-      </button>
-    );
+    return <AddProfileSignInCard disabled={linkDisabled} onClick={onLink} />;
   }
 
   if (flowState.kind === "starting" || flowState.kind === "waiting") {
@@ -685,8 +957,8 @@ function AddProfileAccountSection({
       <div className="border-t border-border/60 pt-4">
         <AddProfileWaitingStep
           {...providerProfileLoginProgress(flowState)}
-          loginCapability={loginCapability}
-          isLocalHost={isLocalHost}
+          autoOpenBrowser={shouldAutoOpenLoginUrl(isLocalHost, loginCapability)}
+          codeReturn="automatic"
           queuePending={startPending}
           startingCopy={startingCopy}
           cancelPending={cancelPending}
@@ -705,6 +977,8 @@ function AddProfileAccountSection({
         providerId={providerId}
         message={flowState.message}
         refusal={flowState.refusal}
+        source="Add profile"
+        retryLabel={providerLoginRetryLabel(flowState.refusal, "Retry")}
         onCancel={onCancel}
         onRetry={onRetryLogin}
       />
@@ -712,14 +986,49 @@ function AddProfileAccountSection({
   }
 
   if (flowState.kind === "cancelled") {
-    return (
-      <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-foreground/3 p-3 text-ui-sm text-muted-foreground">
-        <MutedAgentSpinner />
-        <span>Cancelling sign-in</span>
-      </div>
-    );
+    return <AddProfileStatusCard>Cancelling sign-in</AddProfileStatusCard>;
   }
 
+  return (
+    <AddProfileSignedInSection
+      providerId={providerId}
+      duplicateProfile={duplicateProfile}
+      naming={naming}
+      namingError={namingError}
+      finalizing={finalizing}
+      finalizeError={finalizeError}
+      emailRevealed={emailRevealed}
+      setEmailRevealed={setEmailRevealed}
+      onCancel={onCancel}
+      onRetryFinalize={onRetryFinalize}
+    />
+  );
+}
+
+/** What follows a finished sign-in, until the profile is named and colored. */
+function AddProfileSignedInSection({
+  providerId,
+  duplicateProfile,
+  naming,
+  namingError,
+  finalizing,
+  finalizeError,
+  emailRevealed,
+  setEmailRevealed,
+  onCancel,
+  onRetryFinalize,
+}: {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly duplicateProfile: ProviderProfile | null;
+  readonly naming: NamingStepState | null;
+  readonly namingError: Error | null;
+  readonly finalizing: boolean;
+  readonly finalizeError: Error | null;
+  readonly emailRevealed: boolean;
+  readonly setEmailRevealed: (value: boolean) => void;
+  readonly onCancel: () => void;
+  readonly onRetryFinalize: () => void;
+}): ReactNode {
   if (duplicateProfile !== null) {
     return <DuplicateAccountNotice profile={duplicateProfile} />;
   }
@@ -742,6 +1051,8 @@ function AddProfileAccountSection({
         providerId={providerId}
         message="The account is signed in, but the profile color could not be saved."
         refusal={null}
+        source="Add profile"
+        retryLabel="Retry"
         onCancel={onCancel}
         onRetry={onRetryFinalize}
       />
@@ -749,12 +1060,9 @@ function AddProfileAccountSection({
   }
 
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-foreground/3 p-3 text-ui-sm text-muted-foreground">
-      <MutedAgentSpinner />
-      <span>
-        {finalizing ? "Finishing profile setup" : "Account signed in"}
-      </span>
-    </div>
+    <AddProfileStatusCard>
+      {finalizing ? "Finishing profile setup" : "Account signed in"}
+    </AddProfileStatusCard>
   );
 }
 
@@ -845,191 +1153,6 @@ function ShareSkillsAndPluginsField({
   );
 }
 
-export function WaitingStepDeviceCode(props: {
-  readonly processingCode: boolean;
-  readonly userCode: string | null;
-}): ReactNode {
-  if (props.processingCode || props.userCode === null) return null;
-  const { userCode } = props;
-  return (
-    <div className="flex flex-wrap items-center gap-2 pl-6">
-      <code className="rounded-md border border-border/60 bg-foreground/5 px-2.5 py-1 font-mono text-ui tracking-[0.12em] text-foreground">
-        {userCode}
-      </code>
-      <SignInCopyIconButton value={userCode} kind="code" variant="outline" />
-    </div>
-  );
-}
-
-export function WaitingStepUrlActions(props: {
-  readonly processingCode: boolean;
-  readonly loginUrl: string | null;
-  readonly autoOpen: boolean;
-  readonly onOpenExternalLink: (url: string) => void;
-}): ReactNode {
-  if (props.processingCode || props.loginUrl === null) return null;
-  const { loginUrl, autoOpen, onOpenExternalLink } = props;
-  return (
-    <div className="flex flex-wrap items-center gap-2 pl-6">
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        onClick={() => onOpenExternalLink(loginUrl)}
-      >
-        <ExternalLink className="size-3.5" />
-        {openBrowserLabel(autoOpen)}
-      </Button>
-      <SignInCopyIconButton value={loginUrl} kind="link" variant="outline" />
-    </div>
-  );
-}
-
-function WaitingStepPasteFallback(props: {
-  readonly waiting: boolean;
-  readonly processingCode: boolean;
-  readonly userCode: string | null;
-  readonly cancelRequested: boolean;
-  readonly codePaste: ProviderProfileLoginFlowCodePaste;
-}): ReactNode {
-  if (!props.waiting || !props.codePaste.enabled || props.userCode !== null) {
-    return null;
-  }
-  return (
-    <div className="border-t border-border/50 pt-3">
-      {props.processingCode ? null : (
-        <div className="mb-2">
-          <p className="text-ui-xs font-medium text-foreground">
-            Didn&apos;t return automatically?
-          </p>
-          <p className="mt-0.5 text-ui-xs text-muted-foreground">
-            If the browser shows a code, paste it here.
-          </p>
-        </div>
-      )}
-      <CodePasteField
-        key={props.codePaste.attemptId}
-        codePaste={props.codePaste}
-        disabled={props.cancelRequested}
-        visibleLabel={false}
-      />
-    </div>
-  );
-}
-
-export function AddProfileWaitingStep({
-  loginUrl,
-  userCode,
-  loginCapability,
-  isLocalHost,
-  queuePending,
-  startingCopy,
-  cancelRequested,
-  cancelPending,
-  cancelDisabled,
-  waiting,
-  readerCount,
-  codePaste,
-  onOpenExternalLink,
-  onCancel,
-}: {
-  readonly loginUrl: string | null;
-  readonly userCode: string | null;
-  /** Read only for `selfOpensBrowser` - whether this provider's own child
-   *  already opened a browser, which decides whether the GUI opens one too.
-   *  `userCode` above is still the paste-flow signal and is NOT that fact. */
-  readonly loginCapability: ProviderCliState["loginCapability"] | null;
-  readonly isLocalHost: boolean;
-  readonly queuePending: boolean;
-  /** The flow's `startingCopy`: what a slow start says instead of "Opening
-   *  the sign-in page…". */
-  readonly startingCopy: ProviderLoginStartCopy | null;
-  readonly cancelRequested: boolean;
-  readonly cancelPending: boolean;
-  readonly cancelDisabled: boolean;
-  /** True only once the flow has reached `waiting` (a live profileId/child
-   *  exists). The paste field renders only then - during `starting` there
-   *  is nothing yet for a submit to reach, and rendering it anyway would
-   *  let a user's paste silently lock the field without ever being sent.
-   */
-  readonly waiting: boolean;
-  readonly readerCount?: number;
-  readonly codePaste: ProviderProfileLoginFlowCodePaste;
-  readonly onOpenExternalLink: (url: string) => void;
-  readonly onCancel: () => void;
-}): ReactNode {
-  const autoOpen = useAutoOpenLoginUrl(
-    isLocalHost,
-    loginCapability,
-    loginUrl,
-    onOpenExternalLink,
-  );
-  const processingCode = codePaste.phase !== "idle";
-  const deviceCode = userCode !== null;
-  const { title, guidance } = waitingStepCopy({
-    phase: codePaste.phase,
-    queuePending,
-    startingCopy,
-    cancelRequested,
-    deviceCode,
-  });
-
-  return (
-    <div className="flex flex-col gap-3" aria-live="polite">
-      {codePaste.restartNotice !== null ? (
-        <CodePasteRestartNotice message={codePaste.restartNotice} />
-      ) : null}
-      <div className="flex items-start gap-2.5">
-        <MutedAgentSpinner />
-        <div className="min-w-0">
-          <div className="text-ui-sm font-medium text-foreground">
-            {readerCount === undefined
-              ? title
-              : `Waiting for ${readerCount} ${readerCount === 1 ? "agent" : "agents"} on this profile`}
-          </div>
-          {readerCount === undefined && guidance !== null ? (
-            <p className="mt-0.5 text-ui-xs leading-relaxed text-muted-foreground">
-              {guidance}
-            </p>
-          ) : null}
-        </div>
-      </div>
-
-      <WaitingStepDeviceCode
-        processingCode={processingCode}
-        userCode={userCode}
-      />
-      <WaitingStepUrlActions
-        processingCode={processingCode}
-        loginUrl={loginUrl}
-        autoOpen={autoOpen}
-        onOpenExternalLink={onOpenExternalLink}
-      />
-      <WaitingStepPasteFallback
-        waiting={waiting}
-        processingCode={processingCode}
-        userCode={userCode}
-        cancelRequested={cancelRequested}
-        codePaste={codePaste}
-      />
-
-      <div className="flex justify-end">
-        <Button
-          type="button"
-          size="sm"
-          variant="destructive"
-          aria-label="Cancel sign-in"
-          disabled={cancelRequested || cancelPending || cancelDisabled}
-          onClick={onCancel}
-        >
-          {cancelPending ? <MutedAgentSpinner /> : null}
-          Cancel
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 export function AddProfileIdentityStep({
   profile,
   duplicateLabel,
@@ -1084,55 +1207,6 @@ export function AddProfileIdentityStep({
           <span>This is the same account as {duplicateLabel}.</span>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function AddProfileFailureStep({
-  providerId,
-  message,
-  refusal,
-  onCancel,
-  onRetry,
-}: {
-  readonly providerId: ProviderCliState["providerId"];
-  readonly message: string;
-  readonly refusal: ProviderLoginRefusal | null;
-  readonly onCancel: () => void;
-  readonly onRetry: () => void;
-}): ReactNode {
-  return (
-    <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-ui-sm text-destructive">
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        {refusal === null ? (
-          <span>{message}</span>
-        ) : (
-          <ProviderLoginRefusalMessage
-            providerId={providerId}
-            refusal={refusal}
-          />
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
-          Cancel
-        </Button>
-        <ProviderLoginRefusalAction refusal={refusal} />
-        <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
-          {providerLoginRetryLabel(refusal, "Retry")}
-        </Button>
-        <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Provider sign-in failed",
-            message: null,
-            code: null,
-            source: "Add profile",
-          })}
-          presentation="link"
-          className={undefined}
-        />
-      </div>
     </div>
   );
 }

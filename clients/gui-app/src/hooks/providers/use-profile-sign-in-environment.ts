@@ -30,6 +30,8 @@ export type ProfileSignInEnvironment =
       readonly kind: "environment";
       readonly environmentId: string;
       readonly canSignIn: boolean;
+      /** A team's environment, where a teammate can sign in instead. */
+      readonly team: boolean;
     };
 
 /** Unknown versions cannot authorize a local sign-in before negotiation. */
@@ -167,8 +169,13 @@ function boundSignInEnvironment(
     return { kind: "failed", retry };
   }
   if (query.data === undefined) return { kind: "reading" };
-  const environmentId = query.data.environment.environmentId;
-  return { kind: "environment", environmentId, canSignIn: true };
+  const { environment } = query.data;
+  return {
+    kind: "environment",
+    environmentId: environment.environmentId,
+    canSignIn: true,
+    team: environment.ownerKind === "organization",
+  };
 }
 
 /** A named team's role comes from the account inventory, not the host binding. */
@@ -190,10 +197,11 @@ function listedSignInEnvironment(
   if (target === undefined)
     return environmentId === null
       ? { kind: "local" }
-      : { kind: "environment", environmentId, canSignIn: false };
+      : { kind: "environment", environmentId, canSignIn: false, team: true };
   return {
     kind: "environment",
     environmentId: target.environmentId,
     canSignIn: configurationRoleOf(target) !== null,
+    team: target.ownerKind === "organization",
   };
 }

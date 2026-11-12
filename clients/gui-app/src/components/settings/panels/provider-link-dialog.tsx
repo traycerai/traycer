@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
+import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import {
   AgentSpinningDots,
@@ -55,6 +56,7 @@ import {
   LINK_OUTCOME_UNKNOWN,
   isLinkCompletionOutcomeUnknown,
   mismatchLine,
+  signedInLine,
   onHostOnlyLine,
   stateOfLinkComplete,
   stateOfLinkCompleteError,
@@ -189,88 +191,102 @@ function EnvironmentPlanSignInDialog(props: {
   const client = useHostClient();
   const queryClient = useQueryClient();
   const labelId = useId();
-  const [label, setLabel] = useState("New profile");
+  const providerId = providerIdSchema.parse(props.target.providerId);
+  // What a new plan was named when no name was sent.
+  const [label, setLabel] = useState(PROVIDER_DISPLAY_NAMES[providerId]);
   const [started, setStarted] = useState(false);
-  const [complete, setComplete] = useState(false);
+  // The account the finished sign-in names; undefined until it finishes.
+  const [completeAccount, setCompleteAccount] = useState<
+    string | null | undefined
+  >(undefined);
+  const complete = completeAccount !== undefined;
   const personal = useConfigurationIsPersonal();
   const name = usePickedTeamLabel(props.environmentId) ?? "this team";
-  const providerId = providerIdSchema.parse(props.target.providerId);
+  const newProfile = props.target.profileId === null;
+  const trimmedLabel = label.trim();
+  let stateKind = "intro";
+  if (complete) stateKind = "linked";
+  else if (started) stateKind = "signing_in";
+  let footer: ReactNode = null;
+  if (complete)
+    footer = (
+      <Button type="button" size="sm" variant="ghost" onClick={props.onClose}>
+        Done
+      </Button>
+    );
+  else if (!started)
+    footer = (
+      <>
+        <Button type="button" size="sm" variant="ghost" onClick={props.onClose}>
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={trimmedLabel.length === 0}
+          onClick={() => setStarted(true)}
+          data-testid="provider-link-continue"
+        >
+          Continue
+        </Button>
+      </>
+    );
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) props.onClose();
-      }}
+    <LinkDialogShell
+      title={personal ? "Sign in" : `Sign in to ${name}`}
+      intro={personal ? LINK_INTRO : teamLinkIntro()}
+      stateKind={stateKind}
+      onClose={props.onClose}
+      footer={footer}
     >
-      <DialogContent
-        layout="banded"
-        className="flex max-h-[min(85dvh,calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)))] w-full flex-col overflow-y-auto sm:max-w-lg"
-      >
-        <DialogHeader>
-          <DialogTitle>
-            {personal ? "Sign in" : `Sign in to ${name}`}
-          </DialogTitle>
-          <DialogDescription>
-            {personal ? LINK_INTRO : teamLinkIntro()}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-3 px-5 pb-5">
-          {complete ? (
-            <>
-              <p role="status">Signed in.</p>
-              <Button onClick={props.onClose}>Done</Button>
-            </>
-          ) : (
-            <>
-              {props.target.profileId === null ? (
-                <label
-                  htmlFor={labelId}
-                  className="flex flex-col gap-1 text-ui-sm"
-                >
-                  Profile name
-                  <Input
-                    id={labelId}
-                    value={label}
-                    maxLength={64}
-                    disabled={started}
-                    onChange={(event) => setLabel(event.target.value)}
-                  />
-                </label>
-              ) : null}
-              <EnvironmentProfileSignIn
-                client={client}
-                request={{
-                  providerId,
-                  profileId: props.target.profileId,
-                  environmentId: props.environmentId,
-                  createProfile:
-                    props.target.profileId === null
-                      ? { label: label.trim(), shareSkillsAndPlugins: false }
-                      : null,
-                  replaceAccount: false,
-                }}
-                autoStart={false}
-                onActiveChange={setStarted}
-                waitForLocalProfile={false}
-                disabled={label.trim().length === 0}
-                onComplete={() => {
-                  invalidateConfigurationReads(
-                    queryClient,
-                    props.environmentId,
-                    [
-                      "environment.plans.list",
-                      "environment.configuration.items",
-                    ],
-                  );
-                  setComplete(true);
-                }}
-                onCancel={props.onClose}
+      {completeAccount !== undefined ? (
+        <Line testId="provider-link-linked" tone="plain">
+          {signedInLine(completeAccount)}
+        </Line>
+      ) : (
+        <>
+          {newProfile ? (
+            <label htmlFor={labelId} className="flex flex-col gap-1 text-ui-sm">
+              Profile name
+              <Input
+                id={labelId}
+                value={label}
+                maxLength={64}
+                disabled={started}
+                onChange={(event) => setLabel(event.target.value)}
               />
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+            </label>
+          ) : null}
+          {started ? (
+            <EnvironmentProfileSignIn
+              client={client}
+              request={{
+                providerId,
+                profileId: props.target.profileId,
+                environmentId: props.environmentId,
+                createProfile: newProfile
+                  ? { label: trimmedLabel, shareSkillsAndPlugins: false }
+                  : null,
+                replaceAccount: false,
+              }}
+              waitForLocalProfile={false}
+              team={!personal}
+              ruleAboveWaitingStep={false}
+              reportSource="Team sign-in"
+              onComplete={({ account }) => {
+                invalidateConfigurationReads(queryClient, props.environmentId, [
+                  "environment.plans.list",
+                  "environment.configuration.items",
+                ]);
+                setCompleteAccount(account);
+              }}
+              onNotOffered={null}
+              onCancel={props.onClose}
+            />
+          ) : null}
+        </>
+      )}
+    </LinkDialogShell>
   );
 }
 
@@ -511,6 +527,46 @@ function LinkDialogFrame(props: {
 }): ReactNode {
   const openLink = useOpenLink();
   const hostName = usePersonalHostName() ?? "this host";
+  return (
+    <LinkDialogShell
+      title={props.title}
+      intro={props.intro}
+      stateKind={props.state.kind}
+      onClose={props.onClose}
+      footer={
+        <LinkActions
+          state={props.state}
+          target={props.target}
+          code={props.code}
+          submitting={props.submitting}
+          startable={props.startable}
+          onStart={props.onStart}
+          onSubmitCode={props.onSubmitCode}
+          onClose={props.onClose}
+        />
+      }
+    >
+      <LinkBody
+        state={props.state}
+        hostName={hostName}
+        code={props.code}
+        onCodeChange={props.onCodeChange}
+        onOpenUrl={(url) => void openLink(url, "auth", null)}
+      />
+    </LinkDialogShell>
+  );
+}
+
+/** The sign-in dialog's frame, whichever sign-in runs inside it. */
+function LinkDialogShell(props: {
+  readonly title: string;
+  readonly intro: string;
+  readonly stateKind: string;
+  readonly onClose: () => void;
+  /** Null when the step in the body carries its own actions. */
+  readonly footer: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
   const onOpenChange = (open: boolean): void => {
     if (!open) props.onClose();
   };
@@ -520,33 +576,18 @@ function LinkDialogFrame(props: {
         layout="banded"
         className="flex max-h-[min(85dvh,36rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
         data-testid="provider-link-dialog"
-        data-state={props.state.kind}
+        data-state={props.stateKind}
       >
         <DialogHeader className="gap-1.5">
           <DialogTitle>{props.title}</DialogTitle>
           <DialogDescription>{props.intro}</DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-5 text-ui-sm">
-          <LinkBody
-            state={props.state}
-            hostName={hostName}
-            code={props.code}
-            onCodeChange={props.onCodeChange}
-            onOpenUrl={(url) => void openLink(url, "auth", null)}
-          />
+          {props.children}
         </div>
-        <DialogFooter>
-          <LinkActions
-            state={props.state}
-            target={props.target}
-            code={props.code}
-            submitting={props.submitting}
-            startable={props.startable}
-            onStart={props.onStart}
-            onSubmitCode={props.onSubmitCode}
-            onClose={props.onClose}
-          />
-        </DialogFooter>
+        {props.footer === null ? null : (
+          <DialogFooter>{props.footer}</DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -661,7 +702,7 @@ function LinkBody(props: {
     case "linked":
       return (
         <Line testId="provider-link-linked" tone="plain">
-          Signed in.
+          {signedInLine(state.account)}
         </Line>
       );
     case "mismatch":
@@ -719,7 +760,7 @@ function LinkActions(props: {
     case "intro":
       return (
         <>
-          {closeButton("Close")}
+          {closeButton("Cancel")}
           <Button
             type="button"
             size="sm"
@@ -734,7 +775,7 @@ function LinkActions(props: {
     case "sign_in":
       return (
         <>
-          {closeButton("Close")}
+          {closeButton("Cancel")}
           <Button
             type="button"
             size="sm"
@@ -756,7 +797,7 @@ function LinkActions(props: {
     case "expired":
       return (
         <>
-          {closeButton("Close")}
+          {closeButton("Cancel")}
           <Button
             type="button"
             size="sm"
@@ -787,7 +828,7 @@ function LinkActions(props: {
     case "starting":
     case "device":
     case "linking":
-      return closeButton("Close");
+      return closeButton("Cancel");
     case "not_offered":
       return closeButton("Close");
   }

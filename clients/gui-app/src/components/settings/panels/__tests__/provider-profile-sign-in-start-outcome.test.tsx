@@ -634,14 +634,12 @@ describe("managed profile add entry-point routing", () => {
       );
     });
     expect(
-      await screen.findByText(
-        "Use terminal skills and plugins on this computer",
-      ),
+      await screen.findByText("Use terminal skills and plugins"),
     ).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await linkEvents.waitFor(1);
 
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
     expect(linkRequests).toHaveLength(1);
     expect(linkRequests[0]).toEqual({
       providerId: "claude-code",
@@ -994,17 +992,19 @@ describe("environment delivery pending from ProfileEditDialog", () => {
       true,
       Promise.resolve(PERSONAL_PROFILE_ENVIRONMENT_LIST),
     );
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
     expect(requests.links).toHaveLength(1);
     expect(requests.links[0]?.replaceAccount).toBe(false);
 
     const signInBody = screen
-      .getByLabelText("One-time code")
+      .getByLabelText("Paste the code")
       .closest<HTMLElement>('[aria-live="polite"]');
     if (signInBody === null) {
       throw new Error("Expected the one-time-code sign-in body.");
     }
-    fireEvent.click(within(signInBody).getByRole("button", { name: "Close" }));
+    fireEvent.click(
+      within(signInBody).getByRole("button", { name: "Cancel sign-in" }),
+    );
     await screen.findByRole("heading", { name: "Edit profile" });
 
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
@@ -1019,11 +1019,11 @@ describe("environment delivery pending from ProfileEditDialog", () => {
     await screen.findByText(REPLACE_PROFILE_ACCOUNT_LINE);
     expect(requests.links).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
-    await screen.findByLabelText("One-time code");
-    fireEvent.change(screen.getByLabelText("One-time code"), {
-      target: { value: "delivery-code" },
+    await screen.findByLabelText("Paste the code");
+    fireEvent.change(screen.getByLabelText("Paste the code"), {
+      target: { value: "delivery-code#state" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
     fireEvent.click(await screen.findByRole("button", { name: "Done" }));
 
     const returnedName = screen.getByLabelText("Profile name");
@@ -1050,11 +1050,11 @@ describe("environment delivery pending from ProfileEditDialog", () => {
       true,
       Promise.resolve(PERSONAL_PROFILE_ENVIRONMENT_LIST),
     );
-    await screen.findByLabelText("One-time code");
-    fireEvent.change(screen.getByLabelText("One-time code"), {
-      target: { value: "delivery-code" },
+    await screen.findByLabelText("Paste the code");
+    fireEvent.change(screen.getByLabelText("Paste the code"), {
+      target: { value: "delivery-code#state" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
     fireEvent.click(await screen.findByRole("button", { name: "Done" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);

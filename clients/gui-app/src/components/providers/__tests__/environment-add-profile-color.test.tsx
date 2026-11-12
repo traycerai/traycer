@@ -36,7 +36,7 @@ import {
   createCallEvents,
   type CallEvents,
 } from "./environment-sign-in-call-events";
-import { EnvironmentAddProfileDialog } from "@/components/providers/environment-add-profile-dialog";
+import { AddProviderProfileDialog } from "@/components/settings/panels/add-provider-profile-dialog";
 import {
   buildEnvironmentClient,
   type EnvironmentClientFixture,
@@ -50,12 +50,23 @@ import {
 
 const HOST_ID = "host-add-profile-color";
 const ENVIRONMENT_ID = "environment-add-profile-color";
+const openLink = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
+// The route is read elsewhere; this suite starts on the environment it names.
+vi.mock("@/hooks/providers/use-profile-sign-in-environment", () => ({
+  useEnvironmentProfileSignInSupported: () => true,
+  useProfileSignInEnvironment: () => ({
+    kind: "environment",
+    environmentId: "environment-add-profile-color",
+    canSignIn: true,
+    team: false,
+  }),
+}));
 const ENVIRONMENT_PROFILE_ID = "environment-profile-created";
 const PROFILE_ID = "managed-profile-created";
 const EXISTING_PROFILE_ID = "managed-profile-existing";
 const CHOSEN_COLOR = PROVIDER_PROFILE_ACCENT_COLORS[0];
-const INITIAL_COLOR = PROVIDER_PROFILE_ACCENT_COLORS[1];
-const SIGN_IN_CODE = "COLOR-CODE";
+const SIGN_IN_CODE = "COLOR-CODE#state";
 
 const MANIFEST: ConnectionManifest = {
   "providers.link": { major: 1, minor: 2 },
@@ -290,17 +301,14 @@ function AddProfileFromProviderInventory(props: {
     }
   }, [props.events, state.profiles]);
   return (
-    <EnvironmentAddProfileDialog
+    <AddProviderProfileDialog
       state={state}
       client={props.client}
-      environmentId={ENVIRONMENT_ID}
       isLocalHost
       open
       onOpenChange={props.onOpenChange}
       onFailedAttempt={() => undefined}
       onProfileCreated={props.onProfileCreated}
-      initialAccentColor={INITIAL_COLOR}
-      sharesSkillsAndPlugins
     />
   );
 }
@@ -308,10 +316,11 @@ function AddProfileFromProviderInventory(props: {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  openLink.mockReset();
   resetNegotiatedManifests();
 });
 
-describe("EnvironmentAddProfileDialog profile color", () => {
+describe("the add dialog on the environment sign-in: profile color", () => {
   it("keeps the chosen color when inventory adds the new profile before sign-in finishes", async () => {
     const events: string[] = [];
     const parentStateWriter: {
@@ -369,15 +378,14 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       screen.getByRole("button", { name: `Use color ${CHOSEN_COLOR}` }),
     );
     await user.click(screen.getByRole("button", { name: "Sign in" }));
-    await screen.findByLabelText("One-time code");
-    fireEvent.change(screen.getByLabelText("One-time code"), {
+    await screen.findByLabelText("Paste the code");
+    fireEvent.change(screen.getByLabelText("Paste the code"), {
       target: { value: SIGN_IN_CODE },
     });
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await user.click(screen.getByRole("button", { name: "Submit code" }));
 
     await host.providersListEvents.waitFor(2);
     await host.setEnabledEvents.waitFor(1);
-    await screen.findByRole("button", { name: "Done" });
     await expect(created.promise).resolves.toBe(PROFILE_ID);
     await expect(opened.promise).resolves.toBe(false);
     expect(host.setEnabledRequests[0]).toMatchObject({
@@ -397,7 +405,7 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     );
   });
 
-  it("unlocks after startup fails, then retries edited values and recolors the new profile", async () => {
+  it("keeps the started name, color and sharing through a failed start, then retries them and recolors", async () => {
     const events: string[] = [];
     const parentStateWriter: {
       current: Dispatch<SetStateAction<ProviderCliState>> | null;
@@ -464,7 +472,7 @@ describe("EnvironmentAddProfileDialog profile color", () => {
         .hasAttribute("disabled"),
     ).toBe(true);
     const shareTools = screen.getByRole("checkbox", {
-      name: "Use terminal skills and plugins on this computer",
+      name: "Use terminal account skills and plugins",
     });
     expect(shareTools.hasAttribute("disabled")).toBe(true);
 
@@ -474,39 +482,14 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     });
     const failedAlert = await screen.findByRole("alert");
     expect(failedAlert.textContent).toBe("Sign-in did not start. Try again.");
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    // As before environment sign-in: the started values stay until it ends.
     expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
-      false,
+      true,
     );
-    expect(
-      screen
-        .getByRole("button", { name: `Use color ${CHOSEN_COLOR}` })
-        .hasAttribute("disabled"),
-    ).toBe(false);
-    expect(shareTools.hasAttribute("disabled")).toBe(false);
-
-    const profileName = screen.getByLabelText("Profile name");
-    await user.clear(profileName);
-    expect(
-      screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
-    ).toBe(true);
-    await user.type(screen.getByLabelText("Profile name"), "Retry profile");
-    expect(
-      screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
-    ).toBe(false);
-    await user.click(
-      screen.getByRole("button", {
-        name: `Use color ${PROVIDER_PROFILE_ACCENT_COLORS[3]}`,
-      }),
-    );
-    await user.click(shareTools);
-    expect(screen.getByRole("alert").textContent).toBe(
-      "Sign-in did not start. Try again.",
-    );
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(shareTools.hasAttribute("disabled")).toBe(true);
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await host.linkEvents.waitFor(2);
-    expect(host.linkRequests[0]).toEqual({
+    const started = {
       providerId: "claude-code",
       profileId: null,
       environmentId: ENVIRONMENT_ID,
@@ -515,21 +498,8 @@ describe("EnvironmentAddProfileDialog profile color", () => {
         shareSkillsAndPlugins: true,
       },
       replaceAccount: false,
-    });
-    expect(host.linkRequests[1]).toEqual({
-      providerId: "claude-code",
-      profileId: null,
-      environmentId: ENVIRONMENT_ID,
-      createProfile: {
-        label: "Retry profile",
-        shareSkillsAndPlugins: false,
-      },
-      replaceAccount: false,
-    });
-    expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
-      true,
-    );
-    expect(shareTools.hasAttribute("disabled")).toBe(true);
+    };
+    expect(host.linkRequests).toEqual([started, started]);
 
     await act(async () => {
       secondStart.resolve({
@@ -543,17 +513,16 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       });
       await secondStart.promise;
     });
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
     expect(screen.getByLabelText("Profile name").hasAttribute("disabled")).toBe(
       true,
     );
-    fireEvent.change(screen.getByLabelText("One-time code"), {
+    fireEvent.change(screen.getByLabelText("Paste the code"), {
       target: { value: SIGN_IN_CODE },
     });
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await user.click(screen.getByRole("button", { name: "Submit code" }));
 
     await host.setEnabledEvents.waitFor(1);
-    await screen.findByRole("button", { name: "Done" });
     await expect(created.promise).resolves.toBe(PROFILE_ID);
     await expect(opened.promise).resolves.toBe(false);
     expect(host.setEnabledRequests[0]).toMatchObject({
@@ -562,7 +531,7 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       profileAction: {
         type: "recolor",
         profileId: PROFILE_ID,
-        accentColor: PROVIDER_PROFILE_ACCENT_COLORS[3],
+        accentColor: CHOSEN_COLOR,
       },
     });
     expect(events.indexOf("parent-inventory-rerender")).toBeLessThan(
@@ -658,11 +627,11 @@ describe("EnvironmentAddProfileDialog profile color", () => {
         screen.getByRole("button", { name: `Use color ${CHOSEN_COLOR}` }),
       );
       await user.click(screen.getByRole("button", { name: "Sign in" }));
-      await screen.findByLabelText("One-time code");
-      fireEvent.change(screen.getByLabelText("One-time code"), {
+      await screen.findByLabelText("Paste the code");
+      fireEvent.change(screen.getByLabelText("Paste the code"), {
         target: { value: SIGN_IN_CODE },
       });
-      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      await user.click(screen.getByRole("button", { name: "Submit code" }));
       if (isCertifiedLink) {
         await host.linkCompleteEvents.waitFor(1);
         await host.providersListEvents.waitFor(2);
@@ -686,26 +655,9 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       }
       await host.setEnabledEvents.waitFor(1);
       const dialog = screen.getByRole("dialog");
-      const recolorSpinner = await within(dialog).findByText(
-        (_content, element) =>
-          element instanceof HTMLSpanElement &&
-          element.getAttribute("aria-hidden") === "true" &&
-          element.classList.contains("font-mono") &&
-          element.classList.contains("text-code") &&
-          element.textContent.trim() !== "" &&
-          element.closest('[aria-live="polite"]') === null,
-      );
-      if (!(recolorSpinner instanceof HTMLSpanElement)) {
-        throw new Error("Expected the parent recolor spinner glyph.");
-      }
-      expect(recolorSpinner.textContent.trim()).toBeTruthy();
-
-      const done = await within(dialog).findByRole("button", { name: "Done" });
-      if (!(done instanceof HTMLButtonElement)) {
-        throw new Error("Expected Done to be a native button.");
-      }
-      expect(done.textContent).toBe("Done");
-      expect(done.disabled).toBe(true);
+      expect(
+        await within(dialog).findByText("Finishing profile setup"),
+      ).toBeTruthy();
       expect(host.providersListCalls).toEqual([1, 2]);
       expect(onProfileCreated).not.toHaveBeenCalled();
 
@@ -715,7 +667,6 @@ describe("EnvironmentAddProfileDialog profile color", () => {
       expect(overlay).not.toBeNull();
       if (overlay === null) throw new Error("Dialog overlay was not rendered.");
       fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
-      await user.click(screen.getByRole("button", { name: "Done" }));
       expect(onOpenChange).not.toHaveBeenCalled();
       expect(onProfileCreated).not.toHaveBeenCalled();
       expect(host.setEnabledRequests).toHaveLength(1);
@@ -798,11 +749,11 @@ describe("EnvironmentAddProfileDialog profile color", () => {
 
     await host.providersListEvents.waitFor(1);
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    await screen.findByLabelText("One-time code");
-    fireEvent.change(screen.getByLabelText("One-time code"), {
+    await screen.findByLabelText("Paste the code");
+    fireEvent.change(screen.getByLabelText("Paste the code"), {
       target: { value: SIGN_IN_CODE },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
     await host.linkCompleteEvents.waitFor(1);
     await host.providersListEvents.waitFor(2);
     expect(host.linkCompleteRequests).toEqual([
@@ -827,5 +778,219 @@ describe("EnvironmentAddProfileDialog profile color", () => {
     expect(host.setEnabledRequests).toEqual([]);
     expect(host.linkCompleteRequests).toHaveLength(1);
     expect(host.providersListCalls).toEqual([1, 2]);
+  });
+});
+
+describe("the add dialog on the environment sign-in: the steps it had before", () => {
+  const WORK_EMAIL = "work@example.test";
+  const noOverrides: ColorHostOverrides = {
+    startLinkHandler: undefined,
+    recolorHandler: undefined,
+    linkCompleteHandler: undefined,
+    providersListHandler: undefined,
+  };
+
+  function renderDialog(
+    host: ColorHost,
+    state: ProviderCliState,
+    onOpenChange: (open: boolean) => void,
+  ): void {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddProviderProfileDialog
+          state={state}
+          client={host.client}
+          isLocalHost
+          open
+          onOpenChange={onOpenChange}
+          onFailedAttempt={() => undefined}
+          onProfileCreated={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("opens the browser by itself and offers Open browser with a copy-link button", async () => {
+    const host = makeHost(() => undefined, [], noOverrides);
+    renderDialog(host, providerState([existingProfile()]), () => undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByLabelText("Paste the code");
+    expect(openLink).toHaveBeenCalledExactlyOnceWith(
+      "https://auth.example.test/sign-in",
+      "auth",
+      null,
+    );
+    expect(
+      screen.getByRole("button", { name: "Open browser again" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Copy sign-in link" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Sign in on claude.ai, then paste the code it shows."),
+    ).toBeTruthy();
+  });
+
+  it("sends a pasted code by itself from the paste field", async () => {
+    const host = makeHost(() => undefined, [], noOverrides);
+    renderDialog(host, providerState([existingProfile()]), () => undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    const field = await screen.findByLabelText("Paste the code");
+    fireEvent.paste(field, {
+      clipboardData: { getData: () => `  ${SIGN_IN_CODE}  ` },
+    });
+    await host.linkCompleteEvents.waitFor(1);
+    expect(host.linkCompleteRequests).toEqual([
+      {
+        linkId: "link-created-profile",
+        code: SIGN_IN_CODE,
+        environmentId: ENVIRONMENT_ID,
+      },
+    ]);
+  });
+
+  it("starts a fresh link with the old notice when the provider refuses the code", async () => {
+    const host = makeHost(() => undefined, [], {
+      ...noOverrides,
+      linkCompleteHandler: () => ({
+        state: "failed",
+        code: "harness_token_invalid",
+        account: null,
+        expectedAccount: null,
+        environmentProfileId: null,
+        profileId: null,
+      }),
+    });
+    renderDialog(host, providerState([existingProfile()]), () => undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.change(await screen.findByLabelText("Paste the code"), {
+      target: { value: SIGN_IN_CODE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
+    await host.linkEvents.waitFor(2);
+    expect(
+      await screen.findByText(
+        "That code didn't work - a new sign-in link was generated.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(host.linkRequests).toHaveLength(2);
+  });
+
+  it("shows the Codex device code with a copy-code button", async () => {
+    const host = makeHost(() => undefined, [], {
+      ...noOverrides,
+      startLinkHandler: () => ({
+        linkId: "link-codex-device",
+        environmentProfileId: ENVIRONMENT_PROFILE_ID,
+        prompt: {
+          kind: "device_code",
+          verificationUrl: "https://auth.example.test/device",
+          userCode: "WDJB-MJHT",
+          expiresAt: Date.now() + 600_000,
+        },
+      }),
+    });
+    renderDialog(
+      host,
+      { ...providerState([]), providerId: "codex" },
+      () => undefined,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(await screen.findByText("WDJB-MJHT")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Copy sign-in code" }),
+    ).toBeTruthy();
+    expect(openLink).toHaveBeenCalledWith(
+      "https://auth.example.test/device",
+      "auth",
+      null,
+    );
+  });
+
+  it("asks for a name after sign-in when the account's email is already on another profile", async () => {
+    const withEmail = (profile: ProviderProfile): ProviderProfile => ({
+      ...profile,
+      identity: { email: WORK_EMAIL, tier: null, accountUuid: null },
+    });
+    const host = makeHost(() => undefined, [], {
+      ...noOverrides,
+      providersListHandler: () => ({
+        providers: [
+          providerState([
+            withEmail(existingProfile()),
+            withEmail(createdProfile()),
+          ]),
+        ],
+        native: null,
+      }),
+    });
+    const closed = Promise.withResolvers<boolean>();
+    renderDialog(host, providerState([withEmail(existingProfile())]), (open) =>
+      closed.resolve(open),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.change(await screen.findByLabelText("Paste the code"), {
+      target: { value: SIGN_IN_CODE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
+    expect(
+      await screen.findByText(
+        "Existing profile already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeTruthy();
+    const name = screen.getByLabelText("Profile name");
+    expect(name.hasAttribute("disabled")).toBe(false);
+    fireEvent.change(name, { target: { value: "Second org" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+
+    await expect(closed.promise).resolves.toBe(false);
+    expect(host.setEnabledRequests[0]).toMatchObject({
+      profileAction: {
+        type: "rename",
+        profileId: PROFILE_ID,
+        label: "Second org",
+      },
+    });
+  });
+
+  it("says the account is already signed in when sign-in lands on an existing profile", async () => {
+    const host = makeHost(() => undefined, [], {
+      ...noOverrides,
+      linkCompleteHandler: () => ({
+        state: "installing",
+        code: null,
+        account: null,
+        expectedAccount: null,
+        environmentProfileId: ENVIRONMENT_PROFILE_ID,
+        profileId: EXISTING_PROFILE_ID,
+      }),
+      providersListHandler: () => ({
+        providers: [providerState([existingProfile()])],
+        native: null,
+      }),
+    });
+    renderDialog(host, providerState([existingProfile()]), () => undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.change(await screen.findByLabelText("Paste the code"), {
+      target: { value: SIGN_IN_CODE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
+    expect(await screen.findByText("Account already signed in")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in again" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(host.setEnabledRequests).toEqual([]);
   });
 });

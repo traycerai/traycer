@@ -128,18 +128,21 @@ export type ProviderProfileLoginFlowState =
  * `awaitLogin` not authenticating and `submitLoginCode` reporting
  * `noActiveLogin` for the same attempt - see that function's doc comment.
  */
-type CodePasteRestartCause = "codeRejected" | "sessionExpired";
-const CODE_PASTE_RESTART_CAP = 2;
-const CODE_PASTE_RESTART_NOTICES: Record<CodePasteRestartCause, string> = {
-  codeRejected: "That code didn't work - a new sign-in link was generated.",
-  sessionExpired: "That sign-in link expired - a new one was generated.",
-};
-const CODE_PASTE_RESTART_LIMIT_MESSAGES: Record<CodePasteRestartCause, string> =
+export type CodePasteRestartCause = "codeRejected" | "sessionExpired";
+export const CODE_PASTE_RESTART_CAP = 2;
+export const CODE_PASTE_RESTART_NOTICES: Record<CodePasteRestartCause, string> =
   {
-    codeRejected: "That code kept getting rejected. Try signing in again.",
-    sessionExpired:
-      "The sign-in session kept expiring before the code arrived. Try again.",
+    codeRejected: "That code didn't work - a new sign-in link was generated.",
+    sessionExpired: "That sign-in link expired - a new one was generated.",
   };
+export const CODE_PASTE_RESTART_LIMIT_MESSAGES: Record<
+  CodePasteRestartCause,
+  string
+> = {
+  codeRejected: "That code kept getting rejected. Try signing in again.",
+  sessionExpired:
+    "The sign-in session kept expiring before the code arrived. Try again.",
+};
 /** Keeps `providers.touchLogin` calls well under the host's 3-minute
  *  rolling kill timer while still bounding call frequency during sustained
  *  typing. */

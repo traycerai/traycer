@@ -42,8 +42,18 @@ import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { useOpenLink } from "@/lib/links/open-link";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import {
+  AddProfileFailureStep,
+  AddProfileStatusCard,
+  AddProfileWaitingStep,
+} from "@/components/settings/panels/add-profile-steps";
+import {
+  CODE_PASTE_RESTART_CAP,
+  CODE_PASTE_RESTART_LIMIT_MESSAGES,
+  CODE_PASTE_RESTART_NOTICES,
+  type CodePasteRestartCause,
+  type ProviderProfileLoginFlowCodePaste,
+} from "@/components/settings/panels/use-provider-profile-login-flow";
 
 type SignInState =
   | { readonly kind: "idle" }
@@ -51,25 +61,39 @@ type SignInState =
   | {
       readonly kind: "prompt";
       readonly prompt: ProvidersLinkResponseV12["prompt"];
-      readonly note: string | null;
     }
   | { readonly kind: "waiting" }
   | {
       readonly kind: "installing";
+      readonly account: string | null;
       readonly environmentProfileId: string | null;
       readonly profileId: string | null;
       readonly certified: boolean;
     }
   | { readonly kind: "complete" }
   | { readonly kind: "refused"; readonly line: string }
-  | { readonly kind: "failed"; readonly line: string };
+  | { readonly kind: "failed"; readonly line: string }
+  /** The host will not run this sign-in; another attempt here cannot help. */
+  | { readonly kind: "declined"; readonly line: string };
 
 type SignInStartFailure = Extract<
   SignInState,
-  { readonly kind: "refused" | "failed" }
+  { readonly kind: "refused" | "failed" | "declined" }
 >;
 
-function signInStartFailure(error: unknown): SignInStartFailure {
+const NOT_OFFERED_LINE = "Sign-in is not offered for this profile here.";
+
+function isNotOffered(error: unknown): boolean {
+  return (
+    error instanceof HostRpcError && error.code === "PROVIDER_LINK_NOT_OFFERED"
+  );
+}
+
+function pastesCode(prompt: ProvidersLinkResponseV12["prompt"]): boolean {
+  return prompt.kind === "sign_in_url" && prompt.codePrompt !== null;
+}
+
+function signInStartFailure(error: unknown, team: boolean): SignInStartFailure {
   if (mayHaveReachedHost(error))
     return { kind: "failed", line: LINK_OUTCOME_UNKNOWN };
   if (
@@ -77,10 +101,18 @@ function signInStartFailure(error: unknown): SignInStartFailure {
     error.code === "harness_account_unidentified"
   )
     return { kind: "refused", line: ACCOUNT_UNIDENTIFIED_SIGN_IN_LINE };
+  if (isNotOffered(error)) return { kind: "declined", line: NOT_OFFERED_LINE };
+  // The host's own words, such as an update it needs first.
+  if (
+    error instanceof HostRpcError &&
+    error.code === "PROVIDER_LINK_UNAVAILABLE" &&
+    error.message.length > 0
+  )
+    return { kind: "declined", line: error.message };
   return {
     kind: "failed",
     line:
-      error instanceof HostRpcError && error.code === "FORBIDDEN"
+      team && error instanceof HostRpcError && error.code === "FORBIDDEN"
         ? "Ask a teammate to sign in on Providers."
         : "Sign-in did not start. Try again.",
   };
@@ -90,6 +122,9 @@ interface SignInAttempt {
   readonly client: HostClient<HostRpcRegistry>;
   readonly environmentId: ProvidersLinkRequestV12["environmentId"];
   readonly hostId: string | null;
+  readonly replaceAccount: boolean;
+  /** Set once the answer is a sign-in link whose code is pasted back. */
+  pastesCode: boolean;
   completing: boolean;
   linkId: string | null;
   environmentProfileId: string | null;
@@ -108,6 +143,8 @@ function isLiveSignInAttempt(
 }
 
 export interface EnvironmentSignInCompletion {
+  /** The account the host says was signed in, when it names one. */
+  readonly account: string | null;
   readonly environmentProfileId: string | null;
   readonly profile: ProviderProfile | null;
 }
@@ -115,18 +152,25 @@ export interface EnvironmentSignInCompletion {
 interface EnvironmentProfileSignInProps {
   readonly client: HostClient<HostRpcRegistry>;
   readonly request: ProvidersLinkRequestV12;
-  readonly autoStart: boolean;
-  readonly onActiveChange?: (active: boolean) => void;
   readonly waitForLocalProfile: boolean;
-  readonly disabled: boolean;
+  /** The sign-in goes to a team's environment, not Personal. */
+  readonly team: boolean;
+  /** The add dialog sets its waiting step off from the fields above it. */
+  readonly ruleAboveWaitingStep: boolean;
+  /** Where a filed issue says a failed sign-in happened. */
+  readonly reportSource: string;
   readonly onComplete: (completion: EnvironmentSignInCompletion) => void;
   /** A certified local id can finalize presentation without asserting usable auth. */
   readonly onDeliveryPending?: (certifiedProfileId: string | null) => void;
+  /** Takes over when the host does not offer this sign-in for the profile,
+   * such as one detached from its environment; null shows the refusal. */
+  readonly onNotOffered: (() => void) | null;
   readonly onCancel: () => void;
 }
 
-/** A different target owns a fresh attempt and its auto-start policy.
- * Editable new-profile settings are captured at start, outside that identity. */
+/** Mounting starts the sign-in, unless it would replace the profile's account,
+ * which waits for Switch account. A different target owns a fresh attempt.
+ * New-profile settings are captured at start, outside that identity. */
 export function EnvironmentProfileSignIn(
   props: EnvironmentProfileSignInProps,
 ): ReactNode {
@@ -156,35 +200,43 @@ export function EnvironmentProfileSignIn(
 }
 
 /** One visible sign-in owns one attempt. A late start still releases its item
- * after dismissal; a completed connection is never withdrawn. */
+ * after dismissal; a completed connection is never withdrawn. A pasted code
+ * the provider refuses, or a link that ran out, starts a fresh link on its
+ * own, at most `CODE_PASTE_RESTART_CAP` times, as the local sign-in does. */
 function EnvironmentProfileSignInForScope(
   props: EnvironmentProfileSignInProps,
 ): ReactNode {
   const credentialRefusal = useHostCredentialRefusal(
     props.client.getActiveHostId(),
   );
-  const disabled = props.disabled || credentialRefusal !== null;
+  const disabled = credentialRefusal !== null;
   const [state, setState] = useState<SignInState>({ kind: "idle" });
-  const [code, setCode] = useState("");
+  // Each link gets a fresh paste field; so does a code the host asked to be
+  // pasted whole, so the field takes the next paste.
+  const [pasteAttempt, setPasteAttempt] = useState(0);
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+  const restarts = useRef(0);
   const { mutateAsync: startLink, isPending: starting } = useProvidersLink();
   const {
     mutateAsync: completeLink,
-    isPending: submitting,
+    isPending: completing,
+    variables: completeVariables,
     reset: resetComplete,
   } = useProvidersLinkComplete();
+  const submittingCode = completing && completeVariables.request.code !== null;
   const { mutateAsync: cancelLink } = useProvidersLinkCancel();
   const [replaceConfirmed, setReplaceConfirmed] = useState(false);
   const attempt = useRef<SignInAttempt | null>(null);
   const autoStarted = useRef(false);
   const delivered = useRef(false);
   const onComplete = useRef(props.onComplete);
-  const onActiveChange = useRef(props.onActiveChange);
   const onDeliveryPending = useRef(props.onDeliveryPending);
+  const onNotOffered = useRef(props.onNotOffered);
   const onCancel = useRef(props.onCancel);
   useEffect(() => {
     onComplete.current = props.onComplete;
-    onActiveChange.current = props.onActiveChange;
     onDeliveryPending.current = props.onDeliveryPending;
+    onNotOffered.current = props.onNotOffered;
     onCancel.current = props.onCancel;
   });
   const inventory = useProvidersListForClient(props.client, {
@@ -223,7 +275,6 @@ function EnvironmentProfileSignInForScope(
   useEffect(
     () => () => {
       if (attempt.current !== null) release(attempt.current);
-      onActiveChange.current?.(false);
     },
     [release],
   );
@@ -265,6 +316,7 @@ function EnvironmentProfileSignInForScope(
         setState({ kind: "complete" });
         delivered.current = true;
         onComplete.current({
+          account: response.account,
           environmentProfileId:
             response.environmentProfileId ?? current.environmentProfileId,
           profile: null,
@@ -272,6 +324,7 @@ function EnvironmentProfileSignInForScope(
       } else {
         setState({
           kind: "installing",
+          account: response.account,
           environmentProfileId:
             response.environmentProfileId ?? current.environmentProfileId,
           profileId: response.profileId,
@@ -279,21 +332,54 @@ function EnvironmentProfileSignInForScope(
         });
       }
     } else if (current.connected === false) {
+      const restartCause = codePasteRestartCause(current, response);
+      if (restartCause !== null) {
+        restart(current, restartCause);
+        return;
+      }
+      if (response.code === "harness_token_shape" && current.pastesCode) {
+        setPasteNotice(TOKEN_SHAPE_NOTICE);
+        setPasteAttempt((previous) => previous + 1);
+      }
       setState((previous) => incompleteSignInState(previous, response));
     }
+  };
+  const restart = (
+    current: SignInAttempt,
+    cause: CodePasteRestartCause,
+  ): void => {
+    if (restarts.current >= CODE_PASTE_RESTART_CAP) {
+      setState({
+        kind: "failed",
+        line: CODE_PASTE_RESTART_LIMIT_MESSAGES[cause],
+      });
+      return;
+    }
+    restarts.current += 1;
+    void startRef.current(
+      current.replaceAccount,
+      CODE_PASTE_RESTART_NOTICES[cause],
+    );
   };
   const acceptRef = useRef(accept);
   useEffect(() => {
     acceptRef.current = accept;
   });
 
-  const start = async (replaceAccount: boolean): Promise<void> => {
+  /** `restartNotice` is null for a person's own start, which also gives the
+   * automatic restarts their full allowance again. */
+  const start = async (
+    replaceAccount: boolean,
+    restartNotice: string | null,
+  ): Promise<void> => {
     if (disabled || starting || attempt.current?.connected === null) return;
     if (attempt.current !== null) release(attempt.current);
     const current: SignInAttempt = {
       client: props.client,
       environmentId: props.request.environmentId,
       hostId: props.client.getActiveHostId(),
+      replaceAccount,
+      pastesCode: false,
       completing: false,
       linkId: null,
       environmentProfileId: null,
@@ -303,8 +389,9 @@ function EnvironmentProfileSignInForScope(
     };
     attempt.current = current;
     delivered.current = false;
-    onActiveChange.current?.(true);
-    setCode("");
+    if (restartNotice === null) restarts.current = 0;
+    setPasteNotice(restartNotice);
+    setPasteAttempt((previous) => previous + 1);
     setState({ kind: "starting" });
     try {
       const answer = await startLink({
@@ -313,6 +400,7 @@ function EnvironmentProfileSignInForScope(
       });
       current.linkId = answer.linkId;
       current.environmentProfileId = answer.environmentProfileId;
+      current.pastesCode = pastesCode(answer.prompt);
       if (current.closed) {
         release(current);
         return;
@@ -321,38 +409,37 @@ function EnvironmentProfileSignInForScope(
       setState(
         answer.prompt.kind === "local_handoff"
           ? { kind: "waiting" }
-          : { kind: "prompt", prompt: answer.prompt, note: null },
+          : { kind: "prompt", prompt: answer.prompt },
       );
     } catch (error) {
-      if (isLiveSignInAttempt(current, attempt.current)) {
-        onActiveChange.current?.(false);
-        if (mayHaveReachedHost(error)) current.connected = null;
-        setState(signInStartFailure(error));
-      }
+      if (isLiveSignInAttempt(current, attempt.current))
+        startFailed(current, error);
     }
+  };
+  const startFailed = (current: SignInAttempt, error: unknown): void => {
+    if (isNotOffered(error) && onNotOffered.current !== null) {
+      onNotOffered.current();
+      return;
+    }
+    if (mayHaveReachedHost(error)) current.connected = null;
+    setState(signInStartFailure(error, props.team));
   };
   const startRef = useRef(start);
   useEffect(() => {
     startRef.current = start;
   });
   useEffect(() => {
-    if (
-      !props.autoStart ||
-      props.request.replaceAccount ||
-      disabled ||
-      autoStarted.current
-    )
-      return;
+    if (props.request.replaceAccount || disabled || autoStarted.current) return;
     let disposed = false;
     queueMicrotask(() => {
       if (disposed || autoStarted.current) return;
       autoStarted.current = true;
-      void startRef.current(false);
+      void startRef.current(false, null);
     });
     return () => {
       disposed = true;
     };
-  }, [props.autoStart, disabled, props.request.replaceAccount]);
+  }, [disabled, props.request.replaceAccount]);
 
   const complete = async (
     current: SignInAttempt,
@@ -383,12 +470,22 @@ function EnvironmentProfileSignInForScope(
           response.state === "unavailable" &&
           current.connected !== true
         ) {
-          markOutcomeUnknown(current);
+          // A check without a code changed nothing; the next one asks again.
+          if (pastedCode !== null) markOutcomeUnknown(current);
           return;
         }
         acceptRef.current(current, response);
       })
       .catch((error: unknown) => {
+        // A check that never reached the host changed nothing either. One
+        // that may have is not retried: the host forgets a link once it
+        // answers linked, so the next check would read "expired".
+        if (
+          pastedCode === null &&
+          current.connected === false &&
+          !isLinkCompletionOutcomeUnknown(error)
+        )
+          return;
         if (
           current.connected !== true &&
           isLinkCompletionOutcomeUnknown(error)
@@ -403,10 +500,7 @@ function EnvironmentProfileSignInForScope(
         )
           setState({
             kind: "failed",
-            line:
-              pastedCode === null
-                ? "Couldn't check this sign-in. Try again."
-                : "Sign-in did not finish. Try again.",
+            line: "Sign-in did not finish. Try again.",
           });
       })
       .finally(() => {
@@ -442,6 +536,7 @@ function EnvironmentProfileSignInForScope(
     ? state.environmentProfileId
     : null;
   const installingProfileId = installing ? state.profileId : null;
+  const installingAccount = installing ? state.account : null;
   const certified = installing && state.certified;
   useEffect(() => {
     if (!installing || !props.waitForLocalProfile) return;
@@ -475,6 +570,7 @@ function EnvironmentProfileSignInForScope(
         delivered.current = true;
         setState({ kind: "complete" });
         onComplete.current({
+          account: installingAccount,
           environmentProfileId: installingEnvironmentId,
           profile,
         });
@@ -498,6 +594,7 @@ function EnvironmentProfileSignInForScope(
     installing,
     installingEnvironmentId,
     installingProfileId,
+    installingAccount,
     certified,
     props.waitForLocalProfile,
     props.request.profileId,
@@ -506,19 +603,18 @@ function EnvironmentProfileSignInForScope(
     finishReceiving,
   ]);
 
-  const submit = (): void => {
-    const current = attempt.current;
-    if (
-      current === null ||
-      current.linkId === null ||
-      disabled ||
-      code.trim().length === 0 ||
-      submitting
-    )
-      return;
-    const pasted = code.trim();
-    setCode("");
-    void complete(current, pasted);
+  const codePaste: ProviderProfileLoginFlowCodePaste = {
+    enabled: state.kind === "prompt" && pastesCode(state.prompt),
+    attemptId: pasteAttempt,
+    restartNotice: pasteNotice,
+    phase: submittingCode ? "submitting" : "idle",
+    submitError: null,
+    submit: (pasted) => {
+      const current = attempt.current;
+      if (current === null || current.linkId === null || disabled) return;
+      void complete(current, pasted);
+    },
+    touch: () => undefined,
   };
   const cancel = (): void => {
     if (state.kind === "installing") {
@@ -533,15 +629,15 @@ function EnvironmentProfileSignInForScope(
       <CredentialRefusalNote refusal={credentialRefusal} />
       <EnvironmentSignInBody
         state={state}
-        code={code}
-        submitting={submitting}
+        providerId={props.request.providerId}
+        ruleAboveWaitingStep={props.ruleAboveWaitingStep}
+        reportSource={props.reportSource}
+        codePaste={codePaste}
         disabled={disabled}
         replaceAccount={props.request.replaceAccount || replaceConfirmed}
         onStart={() =>
-          void start(props.request.replaceAccount || replaceConfirmed)
+          void start(props.request.replaceAccount || replaceConfirmed, null)
         }
-        onCodeChange={setCode}
-        onSubmit={() => void submit()}
         onSwitch={() => {
           setReplaceConfirmed(true);
           setState({ kind: "idle" });
@@ -552,190 +648,225 @@ function EnvironmentProfileSignInForScope(
   );
 }
 
+const TOKEN_SHAPE_NOTICE = "Paste the whole code claude.ai shows.";
+
+/** Why a pasted-code sign-in starts a fresh link on its own, if it does. */
+function codePasteRestartCause(
+  current: SignInAttempt,
+  response: ProvidersLinkCompleteResponseV12,
+): CodePasteRestartCause | null {
+  if (!current.pastesCode) return null;
+  if (response.state === "expired") return "sessionExpired";
+  if (response.state === "failed" && response.code === "harness_token_invalid")
+    return "codeRejected";
+  return null;
+}
+
+/** The sign-in link or device page and its code, as the waiting step shows them. */
+function promptProgress(state: SignInState): {
+  readonly loginUrl: string | null;
+  readonly userCode: string | null;
+} {
+  if (state.kind !== "prompt") return { loginUrl: null, userCode: null };
+  const { prompt } = state;
+  if (prompt.kind === "sign_in_url")
+    return { loginUrl: prompt.url, userCode: null };
+  if (prompt.kind === "device_code")
+    return { loginUrl: prompt.verificationUrl, userCode: prompt.userCode };
+  return { loginUrl: null, userCode: null };
+}
+
 function EnvironmentSignInBody(props: {
   readonly state: SignInState;
-  readonly code: string;
-  readonly submitting: boolean;
+  readonly providerId: ProvidersLinkRequestV12["providerId"];
+  readonly ruleAboveWaitingStep: boolean;
+  readonly reportSource: string;
+  readonly codePaste: ProviderProfileLoginFlowCodePaste;
   readonly disabled: boolean;
   readonly replaceAccount: boolean;
   readonly onStart: () => void;
-  readonly onCodeChange: (value: string) => void;
-  readonly onSubmit: () => void;
   readonly onSwitch: () => void;
   readonly onCancel: () => void;
 }): ReactNode {
-  const openLink = useOpenLink();
   const { state } = props;
-  const closeLabel =
-    state.kind === "complete" || state.kind === "installing" ? "Done" : "Close";
-  let body: ReactNode;
+  if (state.kind === "idle" && props.replaceAccount)
+    return (
+      <EnvironmentSwitchAccountStep
+        disabled={props.disabled}
+        onStart={props.onStart}
+        onCancel={props.onCancel}
+      />
+    );
+  if (state.kind === "idle" && props.disabled)
+    return (
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={props.onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
+    );
   switch (state.kind) {
+    // Not refused and not replacing: the automatic start is a microtask away.
     case "idle":
-      body = (
-        <>
-          {props.replaceAccount ? (
-            <p className="text-ui-sm text-muted-foreground">
-              {REPLACE_PROFILE_ACCOUNT_LINE}
-            </p>
-          ) : null}
-          <Button
-            type="button"
-            disabled={props.disabled}
-            onClick={props.onStart}
-          >
-            {props.replaceAccount ? "Switch account" : "Sign in"}
-          </Button>
-        </>
-      );
-      break;
     case "starting":
+    case "prompt":
+      return (
+        <EnvironmentWaitingStep
+          state={state}
+          codePaste={props.codePaste}
+          ruleAbove={props.ruleAboveWaitingStep}
+          onCancel={props.onCancel}
+        />
+      );
     case "waiting":
     case "installing":
-      body = (
-        <div className="flex items-center gap-2 text-ui-sm">
-          <MutedAgentSpinner />
-          {state.kind === "installing"
-            ? SIGNED_IN_RECEIVING_LINE
-            : "Waiting for sign-in…"}
-        </div>
-      );
-      break;
-    case "prompt":
-      body = (
-        <EnvironmentSignInPrompt
-          prompt={state.prompt}
-          note={state.note}
-          code={props.code}
-          submitting={props.submitting}
-          disabled={props.disabled}
-          onCodeChange={props.onCodeChange}
-          onSubmit={props.onSubmit}
-          onOpen={(url) => void openLink(url, "auth", null)}
+      return (
+        <EnvironmentStatusStep
+          receiving={state.kind === "installing"}
+          onCancel={props.onCancel}
         />
       );
-      break;
     case "refused":
-      body = (
-        <>
-          <p role="alert" className="text-ui-sm">
-            {state.line}
-          </p>
-          <Button type="button" onClick={props.onSwitch}>
-            Switch account
-          </Button>
-        </>
-      );
-      break;
+    case "declined":
     case "failed":
-      body = (
-        <EnvironmentSignInFailure
-          line={state.line}
-          disabled={props.disabled}
-          onRetry={props.onStart}
-        />
-      );
-      break;
+      return <EnvironmentFailureStep {...props} state={state} />;
     case "complete":
-      body = null;
-      break;
+      return null;
   }
+}
+
+function EnvironmentStatusStep(props: {
+  /** Signed in, while this computer is still receiving the profile. */
+  readonly receiving: boolean;
+  readonly onCancel: () => void;
+}): ReactNode {
   return (
     <div className="flex flex-col gap-3" aria-live="polite">
-      {body}
-      <Button
-        type="button"
-        variant="ghost"
-        disabled={state.kind === "complete" && props.disabled}
-        onClick={props.onCancel}
-      >
-        {closeLabel}
-      </Button>
+      <AddProfileStatusCard>
+        {props.receiving ? SIGNED_IN_RECEIVING_LINE : "Waiting for sign-in…"}
+      </AddProfileStatusCard>
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          size="sm"
+          variant={props.receiving ? "secondary" : "ghost"}
+          onClick={props.onCancel}
+        >
+          {props.receiving ? "Done" : "Cancel"}
+        </Button>
+      </div>
     </div>
   );
 }
 
-function EnvironmentSignInFailure(props: {
-  readonly line: string;
+function EnvironmentFailureStep(props: {
+  readonly state: Extract<
+    SignInState,
+    { readonly kind: "refused" | "declined" | "failed" }
+  >;
+  readonly providerId: ProvidersLinkRequestV12["providerId"];
+  readonly reportSource: string;
   readonly disabled: boolean;
-  readonly onRetry: () => void;
+  readonly onStart: () => void;
+  readonly onSwitch: () => void;
+  readonly onCancel: () => void;
 }): ReactNode {
+  const { state } = props;
+  let retry: (() => void) | null = null;
+  if (state.kind === "refused") retry = props.onSwitch;
+  else if (
+    state.kind === "failed" &&
+    state.line !== LINK_OUTCOME_UNKNOWN &&
+    !props.disabled
+  )
+    retry = props.onStart;
   return (
-    <>
-      <p role="alert" className="text-ui-sm">
-        {props.line}
-      </p>
-      {props.line === LINK_OUTCOME_UNKNOWN ? null : (
-        <Button type="button" disabled={props.disabled} onClick={props.onRetry}>
-          Retry
-        </Button>
-      )}
-    </>
+    <AddProfileFailureStep
+      providerId={props.providerId}
+      message={state.line}
+      refusal={null}
+      source={props.reportSource}
+      retryLabel={state.kind === "refused" ? "Switch account" : "Retry"}
+      onCancel={props.onCancel}
+      onRetry={retry}
+    />
   );
 }
 
-function EnvironmentSignInPrompt(props: {
-  readonly prompt: ProvidersLinkResponseV12["prompt"];
-  readonly note: string | null;
-  readonly code: string;
-  readonly submitting: boolean;
-  readonly disabled: boolean;
-  readonly onCodeChange: (value: string) => void;
-  readonly onSubmit: () => void;
-  readonly onOpen: (url: string) => void;
+function EnvironmentWaitingStep(props: {
+  readonly state: Extract<
+    SignInState,
+    { readonly kind: "idle" | "starting" | "prompt" }
+  >;
+  readonly codePaste: ProviderProfileLoginFlowCodePaste;
+  readonly ruleAbove: boolean;
+  readonly onCancel: () => void;
 }): ReactNode {
-  const { prompt } = props;
-  if (prompt.kind === "sign_in_url")
-    return (
-      <>
-        <p className="text-ui-sm">
-          Sign in on claude.ai, then paste the code it shows.
-        </p>
+  const openLink = useOpenLink();
+  const { loginUrl, userCode } = promptProgress(props.state);
+  const prompted = props.state.kind === "prompt";
+  const waitingStep = (
+    <AddProfileWaitingStep
+      loginUrl={loginUrl}
+      userCode={userCode}
+      // No sign-in process runs on a computer for this link, so this window
+      // is the one that opens it.
+      autoOpenBrowser
+      codeReturn={props.codePaste.enabled ? "paste" : "automatic"}
+      queuePending={!prompted}
+      startingCopy={null}
+      cancelRequested={false}
+      cancelPending={false}
+      cancelDisabled={false}
+      waiting={prompted}
+      codePaste={props.codePaste}
+      onOpenExternalLink={(url) => void openLink(url, "auth", null)}
+      onCancel={props.onCancel}
+    />
+  );
+  return props.ruleAbove ? (
+    <div className="border-t border-border/60 pt-4">{waitingStep}</div>
+  ) : (
+    waitingStep
+  );
+}
+
+function EnvironmentSwitchAccountStep(props: {
+  readonly disabled: boolean;
+  readonly onStart: () => void;
+  readonly onCancel: () => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-ui-sm text-muted-foreground">
+        {REPLACE_PROFILE_ACCOUNT_LINE}
+      </p>
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <Button
           type="button"
-          variant="outline"
-          onClick={() => props.onOpen(prompt.url)}
+          size="sm"
+          variant="ghost"
+          onClick={props.onCancel}
         >
-          Sign in on claude.ai
+          Cancel
         </Button>
-        <Input
-          aria-label={prompt.codePrompt ?? "Code"}
-          value={props.code}
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
           disabled={props.disabled}
-          onChange={(event) => props.onCodeChange(event.target.value)}
-          autoComplete="off"
-        />
-        {props.note === null ? null : (
-          <p className="text-ui-xs text-muted-foreground">{props.note}</p>
-        )}
-        <Button
-          type="button"
-          disabled={
-            props.disabled || props.submitting || props.code.trim().length === 0
-          }
-          onClick={props.onSubmit}
+          onClick={props.onStart}
         >
-          {props.submitting ? <MutedAgentSpinner /> : null}
-          Sign in
+          Switch account
         </Button>
-      </>
-    );
-  if (prompt.kind === "device_code")
-    return (
-      <>
-        <p className="text-ui-sm">
-          Open the page below and enter this code to sign in.
-        </p>
-        <code className="text-ui-base font-mono">{prompt.userCode}</code>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => props.onOpen(prompt.verificationUrl)}
-        >
-          Open sign-in page
-        </Button>
-      </>
-    );
-  return null;
+      </div>
+    </div>
+  );
 }
 
 function incompleteSignInState(
@@ -756,10 +887,7 @@ function incompleteSignInState(
     };
   }
   if (response.state === "pending") {
-    if (response.code === "harness_token_shape")
-      return previous.kind === "prompt"
-        ? { ...previous, note: "Paste the whole code claude.ai shows." }
-        : previous;
+    if (response.code === "harness_token_shape") return previous;
     return previous.kind === "prompt" && previous.prompt.kind === "device_code"
       ? previous
       : { kind: "waiting" };

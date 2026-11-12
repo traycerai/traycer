@@ -38,6 +38,11 @@ export function onHostOnlyLine(hostName: string): string {
   return `On ${hostName} only.`;
 }
 
+/** What a finished sign-in says, naming the account when the host knows it. */
+export function signedInLine(account: string | null): string {
+  return account === null ? "Signed in." : `Signed in as ${account}.`;
+}
+
 export function mismatchLine(
   account: string | null,
   expectedAccount: string | null,

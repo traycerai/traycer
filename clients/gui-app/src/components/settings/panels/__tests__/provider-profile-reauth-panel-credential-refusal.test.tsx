@@ -204,6 +204,8 @@ const POOL_LIST_ONLY_MANIFEST: ConnectionManifest = {
   "environment.list": { major: 1, minor: 1 },
 };
 const routeReadMethods: string[] = [];
+// What a route client's providers.link refuses with; reset before every test.
+const routeLink: { refusal: HostRpcError | null } = { refusal: null };
 
 interface RouteFixture {
   readonly status: EnvironmentStatusResponseV12;
@@ -320,6 +322,8 @@ function buildRouteClient(
       },
       "providers.link": (request) => {
         linkRequests.push(request);
+        if (routeLink.refusal !== null)
+          return Promise.reject(routeLink.refusal);
         const response: ProvidersLinkResponseV12 = {
           linkId: "link-reauth-route",
           environmentProfileId: "environment-profile-reauth-route",
@@ -477,6 +481,7 @@ function ambientProfile(): ProviderProfile {
 
 beforeEach(() => {
   routeReadMethods.length = 0;
+  routeLink.refusal = null;
   refusalHosts.ids.length = 0;
   routingPlan.current = NO_POOL_HOST_RPC_TIER_PLAN;
   useAuthStore.setState({
@@ -512,6 +517,40 @@ afterEach(() => {
 });
 
 describe("managed profile reauth routing", () => {
+  it("signs a profile the host does not offer through the environment in on this computer", async () => {
+    // A detached row: the host keeps it off the environment sign-in.
+    routeLink.refusal = new HostRpcError({
+      code: "PROVIDER_LINK_NOT_OFFERED",
+      message: "detached profile",
+      requestId: "req-detached-profile",
+      method: "providers.link",
+      fatalDetails: null,
+    });
+    const linkRequests: ProvidersLinkRequestV12[] = [];
+    const client = buildRouteClient(
+      linkRequests,
+      {
+        status: environmentStatusFixture({}),
+        bindingOwnerKind: "user",
+        effectiveRole: "owner",
+      },
+      ROUTE_MANIFEST,
+    );
+    const localStart = Promise.withResolvers<void>();
+    mocks.startLoginAsync.mockImplementationOnce(() => localStart.resolve());
+    renderRoutedPanel(managedProfile(), false, client, () => undefined);
+
+    await localStart.promise;
+    expect(linkRequests).toHaveLength(1);
+    expect(mocks.startLoginAsync).toHaveBeenCalledOnce();
+    expect(mocks.startLoginAsync.mock.calls[0]?.[0]).toMatchObject({
+      providerId: "codex",
+      profileId: managedProfile().profileId,
+    });
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText("Sign-in did not start. Try again.")).toBeNull();
+  });
+
   it("routes ordinary sign-in through @1.2 without replacing the account", async () => {
     const profile: ProviderProfile = {
       ...managedProfile(),
@@ -530,7 +569,7 @@ describe("managed profile reauth routing", () => {
     const signedInAuth = useAuthStore.getState().profile;
     renderRoutedPanel(profile, false, client, () => undefined);
 
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
     expect(routeReadMethods).toEqual([
       "environment.status",
       "environment.host.read",
@@ -569,7 +608,7 @@ describe("managed profile reauth routing", () => {
     expect(linkRequests).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
     expect(linkRequests).toEqual([
       {
         providerId: "codex",
@@ -690,7 +729,7 @@ describe("managed profile reauth routing", () => {
     expect(mocks.startLoginAsync).not.toHaveBeenCalled();
 
     act(() => recordNegotiatedHostManifest(HOST_ID, ROUTE_MANIFEST));
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
 
     expect(routeReadMethods).toEqual([
       "environment.status",
@@ -829,7 +868,7 @@ describe("managed profile reauth routing", () => {
     );
     renderRoutedPanel(profile, false, editorClient, vi.fn());
 
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
     expect(editorRequests).toEqual([
       {
         providerId: "codex",
@@ -1068,7 +1107,7 @@ describe("a local profile promoted to an environment alias during reauth", () =>
     });
 
     rendered.rerender(sectionForState(codexState(aliasedProfile)));
-    expect(screen.getByText("Waiting for sign-in…")).toBeTruthy();
+    expect(screen.getByText("Opening the sign-in page…")).toBeTruthy();
     const nameInputAfterAlias = screen.getByLabelText("Profile name");
     if (!(nameInputAfterAlias instanceof HTMLInputElement)) {
       throw new Error("Expected the profile name input after alias promotion.");
@@ -1222,13 +1261,13 @@ describe("a local profile promoted to an environment alias during reauth", () =>
       ]);
 
       const pendingSignIn = screen
-        .getByText("Waiting for sign-in…")
+        .getByText("Opening the sign-in page…")
         .closest('[aria-live="polite"]');
       if (!(pendingSignIn instanceof HTMLElement)) {
         throw new Error("Expected the active sign-in status region.");
       }
       fireEvent.click(
-        within(pendingSignIn).getByRole("button", { name: "Close" }),
+        within(pendingSignIn).getByRole("button", { name: "Cancel sign-in" }),
       );
       await act(async () => {
         secondLinkResponse.resolve({
@@ -1370,7 +1409,7 @@ describe("managed profile routing reads in a pool build", () => {
     );
     renderRoutedPanel(profile, false, fixture.client, vi.fn());
 
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
 
     expect(
       getNegotiatedHostMethodVersion(POOL_HOST_ID, "environment.binding.read"),
@@ -1460,7 +1499,7 @@ describe("managed profile routing reads in a pool build", () => {
     );
     expect(firstBindingCall?.authority.endpoint.hostId).toBe(POOL_HOST_ID);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByLabelText("One-time code");
+    await screen.findByLabelText("Paste the code");
 
     // Retry re-reads the status that let the binding be asked, then the binding.
     expect(fixture.readMethods).toEqual([

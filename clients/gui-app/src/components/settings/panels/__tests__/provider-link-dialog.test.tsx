@@ -571,15 +571,15 @@ describe("negotiated sign-in routing", () => {
     );
     await listRequested.promise;
     await screen.findByLabelText("Profile name");
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    await screen.findByLabelText("Code");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByLabelText("Paste the code");
 
     expect(listMock).toHaveBeenCalledTimes(1);
     expect(linkMock.link).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
       environmentId: PERSONAL_ENV_ID,
-      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      createProfile: { label: "Claude Code", shareSkillsAndPlugins: false },
       replaceAccount: false,
     });
     expect(providersListMock).not.toHaveBeenCalled();
@@ -687,7 +687,7 @@ it("shows the real sandbox refusal before either link request can be sent", asyn
 });
 
 describe("a sign-in URL with a pasted code", () => {
-  it("unlocks a cloud profile after start fails and retries with the edited label", async () => {
+  it("keeps the name it started with when Retry follows a failed start", async () => {
     recordNegotiatedHostManifest(HOST_ID, {
       "providers.link": { major: 1, minor: 2 },
       "providers.linkComplete": { major: 1, minor: 2 },
@@ -709,7 +709,7 @@ describe("a sign-in URL with a pasted code", () => {
         codePrompt: "Retry code",
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(profileName.hasAttribute("disabled")).toBe(true);
 
     await act(async () => {
@@ -719,18 +719,10 @@ describe("a sign-in URL with a pasted code", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(
       "Sign-in did not start. Try again.",
     );
-    expect(profileName.hasAttribute("disabled")).toBe(false);
-
-    fireEvent.change(profileName, { target: { value: "" } });
-    const retry = screen.getByRole("button", { name: "Retry" });
-    expect(retry.hasAttribute("disabled")).toBe(true);
-    fireEvent.change(profileName, { target: { value: "Updated profile" } });
-    expect(retry.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(retry);
-    await screen.findByLabelText("Retry code");
-
     expect(profileName.hasAttribute("disabled")).toBe(true);
-    expect(linkMock.link).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByLabelText("Paste the code");
     expect(linkMock.link.mock.calls.map(([request]) => request)).toEqual([
       {
         providerId: "claude-code",
@@ -747,7 +739,7 @@ describe("a sign-in URL with a pasted code", () => {
         profileId: null,
         environmentId: PERSONAL_ENV_ID,
         createProfile: {
-          label: "Updated profile",
+          label: "Original profile",
           shareSkillsAndPlugins: false,
         },
         replaceAccount: false,
@@ -757,11 +749,13 @@ describe("a sign-in URL with a pasted code", () => {
     linkMock.complete.mockResolvedValueOnce(
       answer({ state: "installing", account: "synthetic-account" }),
     );
-    fireEvent.change(screen.getByLabelText("Retry code"), {
-      target: { value: "RETRY-CODE" },
+    fireEvent.change(screen.getByLabelText("Paste the code"), {
+      target: { value: "RETRY-CODE#state" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect((await screen.findByRole("status")).textContent).toBe("Signed in.");
+    fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
+    expect(
+      (await screen.findByTestId("provider-link-linked")).textContent,
+    ).toBe("Signed in as synthetic-account.");
     expect(providersListMock).not.toHaveBeenCalled();
   });
 
@@ -782,8 +776,8 @@ describe("a sign-in URL with a pasted code", () => {
     await userEvent.type(profileName, `${maximumLabel}X`);
     expect(profileName.value).toBe(maximumLabel);
     linkMock.link.mockResolvedValueOnce(SIGN_IN_RESPONSE);
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    await screen.findByLabelText("Code");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByLabelText("Paste the code");
 
     expect(linkMock.link).toHaveBeenCalledWith({
       providerId: "claude-code",
@@ -798,18 +792,20 @@ describe("a sign-in URL with a pasted code", () => {
     linkMock.complete.mockResolvedValueOnce(
       answer({ state: "installing", account: "synthetic-account" }),
     );
-    fireEvent.change(screen.getByLabelText("Code"), {
+    fireEvent.change(screen.getByLabelText("Paste the code"), {
       target: { value: "abc#def" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
 
-    expect((await screen.findByRole("status")).textContent).toBe("Signed in.");
+    expect(
+      (await screen.findByTestId("provider-link-linked")).textContent,
+    ).toBe("Signed in as synthetic-account.");
     expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
     expect(linkMock.complete).toHaveBeenCalledTimes(1);
     expect(providersListMock).not.toHaveBeenCalled();
   });
 
-  it("opens the sign-in page, sends the trimmed code and ends on Signed in", async () => {
+  it("opens the sign-in page, sends the trimmed code and ends on Signed in as <account>", async () => {
     await reachSignIn(PROFILE_ID);
     expect(
       screen.getByText("Sign in on claude.ai, then paste the code it shows."),
@@ -838,7 +834,7 @@ describe("a sign-in URL with a pasted code", () => {
       code: "abc#def",
       environmentId: PERSONAL_ENV_ID,
     });
-    expect(linked.textContent).toBe("Signed in.");
+    expect(linked.textContent).toBe("Signed in as a@x.test.");
   });
 
   it("closes an unavailable Personal legacy completion after refreshing observed inventory", async () => {
@@ -1264,7 +1260,7 @@ describe("a device code", () => {
     });
     expect(linkMock.complete).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId("provider-link-linked").textContent).toBe(
-      "Signed in.",
+      "Signed in as dev@x.test.",
     );
 
     // Settled: no further polls.
@@ -1274,7 +1270,7 @@ describe("a device code", () => {
     expect(linkMock.complete).toHaveBeenCalledTimes(3);
   });
 
-  it("stops polling once the dialog is closed", async () => {
+  it("stops polling once the dialog is cancelled", async () => {
     await reachDevice();
     linkMock.complete.mockResolvedValue(answer({ state: "pending" }));
     await act(async () => {
@@ -1283,7 +1279,7 @@ describe("a device code", () => {
     expect(linkMock.complete).toHaveBeenCalledTimes(1);
 
     await clickAndSettle(
-      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+      within(linkDialogFooter()).getByRole("button", { name: "Cancel" }),
     );
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
 
@@ -1342,7 +1338,7 @@ describe("a device code", () => {
 });
 
 describe("a local handoff", () => {
-  it("shows Signing in…, polls every 2 s, then Signed in", async () => {
+  it("shows Signing in…, polls every 2 s, then Signed in as <account>", async () => {
     vi.useFakeTimers();
     linkMock.link.mockResolvedValueOnce(HANDOFF_RESPONSE);
     await openDialog("claude-code", PROFILE_ID);
@@ -1376,7 +1372,7 @@ describe("a local handoff", () => {
     });
     expect(linkMock.complete).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("provider-link-linked").textContent).toBe(
-      "Signed in.",
+      "Signed in as a@x.test.",
     );
   });
 });
@@ -1495,10 +1491,10 @@ describe("a provider the dialog does not know", () => {
 });
 
 describe("closing", () => {
-  it("clears the store target on Close", async () => {
+  it("clears the store target on Cancel", async () => {
     await openDialog("claude-code", PROFILE_ID);
     fireEvent.click(
-      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+      within(linkDialogFooter()).getByRole("button", { name: "Cancel" }),
     );
 
     expect(useProviderLinkDialogStore.getState().target).toBeNull();
@@ -1511,7 +1507,7 @@ describe("closing", () => {
       target: { value: "half-typed" },
     });
     fireEvent.click(
-      within(linkDialogFooter()).getByRole("button", { name: "Close" }),
+      within(linkDialogFooter()).getByRole("button", { name: "Cancel" }),
     );
     expect(screen.queryByTestId("provider-link-dialog")).toBeNull();
 

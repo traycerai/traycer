@@ -34,12 +34,17 @@ import {
   ProviderLoginRefusalAction,
   ProviderLoginRefusalMessage,
 } from "@/components/providers/provider-login-refusal";
-import { providerHostBlock } from "@/components/providers/provider-signin-availability";
-import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
 import {
-  AddProfileIdentityStep,
+  providerHostBlock,
+  shouldAutoOpenLoginUrl,
+} from "@/components/providers/provider-signin-availability";
+import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
+import { AddProfileIdentityStep } from "./add-provider-profile-dialog";
+import {
+  AddProfileFailureStep,
+  AddProfileStatusCard,
   AddProfileWaitingStep,
-} from "./add-provider-profile-dialog";
+} from "./add-profile-steps";
 import {
   useProviderProfileLoginFlow,
   providerProfileLoginProgress,
@@ -111,6 +116,10 @@ function RoutedProviderProfileReauthPanel(
 ): ReactNode {
   const { client } = props;
   const route = useProfileSignInEnvironment(client);
+  // The host does not offer this profile's sign-in through the environment
+  // (one detached from it): it signs in on this computer instead.
+  const [notOffered, setNotOffered] = useState(false);
+  if (notOffered) return <LocalProviderProfileReauthPanel {...props} />;
   if (route.kind === "environment") {
     if (!route.canSignIn)
       return (
@@ -124,39 +133,49 @@ function RoutedProviderProfileReauthPanel(
         </div>
       );
     return (
-      <EnvironmentProfileSignIn
-        client={client}
-        request={{
-          providerId: props.state.providerId,
-          profileId:
-            props.profile.environmentProfileId ?? props.profile.profileId,
-          environmentId: route.environmentId,
-          createProfile: null,
-          replaceAccount: props.replaceAccount,
-        }}
-        autoStart={!props.replaceAccount}
-        waitForLocalProfile
-        disabled={false}
-        onComplete={({ profile }) => {
-          if (profile === null) return;
-          if (props.onSameAccountReconnected !== null)
-            props.onSameAccountReconnected(profile);
-          else props.onDone(profile);
-        }}
-        onDeliveryPending={props.onDeliveryPending}
-        onCancel={props.onCancel}
-      />
+      <ProviderProfileReauthFrame entryProfile={props.profile}>
+        <EnvironmentProfileSignIn
+          client={client}
+          request={{
+            providerId: props.state.providerId,
+            profileId:
+              props.profile.environmentProfileId ?? props.profile.profileId,
+            environmentId: route.environmentId,
+            createProfile: null,
+            replaceAccount: props.replaceAccount,
+          }}
+          waitForLocalProfile
+          team={route.team}
+          ruleAboveWaitingStep={false}
+          reportSource="Provider reauth"
+          onComplete={({ profile }) => {
+            if (profile === null) return;
+            if (props.onSameAccountReconnected !== null)
+              props.onSameAccountReconnected(profile);
+            else props.onDone(profile);
+          }}
+          onDeliveryPending={props.onDeliveryPending}
+          onNotOffered={() => setNotOffered(true)}
+          onCancel={props.onCancel}
+        />
+      </ProviderProfileReauthFrame>
     );
   }
   if (route.kind === "reading")
     return <ProfileReauthReading onCancel={props.onCancel} />;
   if (route.kind === "failed")
     return (
-      <div>
-        <p>Couldn't read where this profile will be available.</p>
-        <Button onClick={route.retry}>Retry</Button>
-        <Button onClick={props.onCancel}>Back</Button>
-      </div>
+      <ProviderProfileReauthFrame entryProfile={props.profile}>
+        <AddProfileFailureStep
+          providerId={props.state.providerId}
+          message="Couldn't read where this profile will be available."
+          refusal={null}
+          source="Provider reauth"
+          retryLabel="Retry"
+          onCancel={props.onCancel}
+          onRetry={route.retry}
+        />
+      </ProviderProfileReauthFrame>
     );
   return <LocalProviderProfileReauthPanel {...props} />;
 }
@@ -166,10 +185,19 @@ function ProfileReauthReading(props: {
 }): ReactNode {
   return (
     <div className="flex flex-col gap-3">
-      <MutedAgentSpinner />
-      <Button type="button" onClick={props.onCancel}>
-        Back
-      </Button>
+      <AddProfileStatusCard>
+        Reading where this profile will be available…
+      </AddProfileStatusCard>
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={props.onCancel}
+        >
+          Back
+        </Button>
+      </div>
     </div>
   );
 }
@@ -288,20 +316,7 @@ function LocalProviderProfileReauthPanel({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
-      <div>
-        <div className="text-ui-sm font-medium text-foreground">
-          {entryProfile.auth.status === "unauthenticated"
-            ? "Signing in"
-            : "Switching account"}
-        </div>
-        <p className="mt-0.5 text-ui-xs text-muted-foreground">
-          {entryProfile.auth.status === "unauthenticated"
-            ? "Reconnect this profile. Its name and color will not change."
-            : "The profile name and color will not change."}
-        </p>
-      </div>
-
+    <ProviderProfileReauthFrame entryProfile={entryProfile}>
       <ProviderProfileReauthState
         flow={flow}
         providerId={state.providerId}
@@ -324,6 +339,29 @@ function LocalProviderProfileReauthPanel({
           if (flow.state.kind === "identity") onDone(flow.state.profile);
         }}
       />
+    </ProviderProfileReauthFrame>
+  );
+}
+
+/** The reauth panel's box, whichever sign-in runs inside it. */
+function ProviderProfileReauthFrame(props: {
+  readonly entryProfile: ProviderProfile;
+  readonly children: ReactNode;
+}): ReactNode {
+  const signingIn = props.entryProfile.auth.status === "unauthenticated";
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
+      <div>
+        <div className="text-ui-sm font-medium text-foreground">
+          {signingIn ? "Signing in" : "Switching account"}
+        </div>
+        <p className="mt-0.5 text-ui-xs text-muted-foreground">
+          {signingIn
+            ? "Reconnect this profile. Its name and color will not change."
+            : "The profile name and color will not change."}
+        </p>
+      </div>
+      {props.children}
     </div>
   );
 }
@@ -369,8 +407,8 @@ function ProviderProfileReauthState({
       {showWaiting ? (
         <AddProfileWaitingStep
           {...providerProfileLoginProgress(flow.state)}
-          loginCapability={loginCapability}
-          isLocalHost={isLocalHost}
+          autoOpenBrowser={shouldAutoOpenLoginUrl(isLocalHost, loginCapability)}
+          codeReturn="automatic"
           queuePending={flow.startPending}
           startingCopy={flow.startingCopy}
           cancelPending={flow.cancelPending}

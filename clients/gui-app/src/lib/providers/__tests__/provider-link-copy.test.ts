@@ -13,6 +13,7 @@ import {
   LINK_UNAVAILABLE,
   mismatchLine,
   onHostOnlyLine,
+  signedInLine,
   stateOfLinkComplete,
   stateOfLinkError,
   stateOfLinkStart,
@@ -72,6 +73,11 @@ describe("the exact copy", () => {
     expect(mismatchLine("a@x.test", "b@x.test")).toBe(
       "You signed in as a@x.test, not b@x.test.",
     );
+  });
+
+  it("names the account on a signed-in line only when it is known", () => {
+    expect(signedInLine("a@x.test")).toBe("Signed in as a@x.test.");
+    expect(signedInLine(null)).toBe("Signed in.");
   });
 
   it("falls back to a generic mismatch line when either account is unknown", () => {

@@ -26,6 +26,7 @@ import {
 import {
   providerSignInUnavailableHint,
   providerSupportsTerminalLogin,
+  shouldAutoOpenLoginUrl,
 } from "@/components/providers/provider-signin-availability";
 import {
   ProviderLoginRefusalAction,
@@ -544,8 +545,7 @@ function OnboardingLoginWaiting(props: {
     props;
   const openLink = useOpenLink();
   const autoOpen = useAutoOpenLoginUrl(
-    isLocalHost,
-    loginCapability,
+    shouldAutoOpenLoginUrl(isLocalHost, loginCapability),
     loginUrl,
     (url) => {
       void openLink(url, "auth", null);
@@ -564,6 +564,7 @@ function OnboardingLoginWaiting(props: {
     startingCopy: null,
     cancelRequested: false,
     deviceCode: userCode !== null,
+    codeReturn: "automatic",
   });
   return (
     <div className="flex min-w-0 flex-col gap-2" aria-live="polite">
