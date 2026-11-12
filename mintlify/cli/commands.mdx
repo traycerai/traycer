@@ -168,13 +168,23 @@ Sign in as a member of `acme` when prompted. Already installed? Run
 `traycer host use acme`. To install or start the host when needed, use
 `traycer host ensure --team acme`.
 
+Traycer restarts once on this computer when it starts running for the team.
+
 For a computer nobody will sign in to, open **Settings → Environment → your
 team → Members → Computers → Add a computer** in the app. Under **Set up
 without signing in**, choose **Create install token**, then save the token in
-a private file on the target computer and run:
+a private file on the target computer and run the command for its terminal:
+
+**macOS and Linux**
 
 ```sh
 traycer host install --team acme < install-token.txt
+```
+
+**Windows (PowerShell)**
+
+```powershell
+Get-Content install-token.txt | traycer host install --team acme
 ```
 
 The token works once and expires after one hour. The team can run agents and

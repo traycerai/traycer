@@ -447,7 +447,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             handle !== null &&
             handle.state.postSwapError === null &&
             handle.state.postSwapWarning === null
-              ? await completeTeamInstall(args.team, teamSession)
+              ? await completeTeamInstall(args.team, teamSession, ctx.progress)
               : null;
           const teamInstallReceipt =
             preparedTeamToken !== null &&

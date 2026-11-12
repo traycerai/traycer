@@ -357,6 +357,7 @@ export async function provisionInstalledHostCredential(
     };
 
     const activeClient = new WsStreamClient<HostStreamRpcRegistry>({
+      onClientClosed: (message) => options.logger.debug(message, {}),
       localOpenAuth: createCliLocalOpenAuth(options.auth.authnBaseUrl),
       registry: hostStreamRpcRegistry,
       // `null`, and not a stale read of the slot below: `endpoint` is declared

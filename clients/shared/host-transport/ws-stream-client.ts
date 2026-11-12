@@ -251,6 +251,8 @@ export interface WsStreamClientOptions<
    * compile time to say so.
    */
   readonly clientIdentity: FirstPartyClientIdentity;
+  /** CLI diagnostics use its log level; renderer clients retain console output. */
+  readonly onClientClosed?: (message: string) => void;
 }
 
 /**
@@ -685,9 +687,12 @@ export class WsStreamClient<
     // socket left to deliver it on, and the next client mints its own.
     this.discardAllPendingProvisions();
     this.clearAllProvisionRetries();
-    console.info(
-      `[stream] WsStreamClient closed (client=${this.instanceId}, reason=${reason}, sessions=${this.ownedSessions.size})`,
-    );
+    const closeMessage = `[stream] WsStreamClient closed (client=${this.instanceId}, reason=${reason}, sessions=${this.ownedSessions.size})`;
+    if (this.options.onClientClosed === undefined) {
+      console.info(closeMessage);
+    } else {
+      this.options.onClientClosed(closeMessage);
+    }
     for (const session of Array.from(this.ownedSessions)) {
       session.close();
     }

@@ -333,8 +333,9 @@ describe("buildHostEnsureCommand", () => {
       baseEnsureResult({ action: "noop", serviceLifecycle: null }),
     );
 
+    const ctx = fakeCtx();
     const result = await buildHostEnsureCommand(baseArgs({ team: "acme" }))(
-      fakeCtx(),
+      ctx,
     );
 
     expect(result.data).toMatchObject({ teamBinding: teamBindingFixture });
@@ -345,6 +346,7 @@ describe("buildHostEnsureCommand", () => {
         preflight: { state: "signed-in", reason: null },
         inlineSignInToken: null,
       }),
+      ctx.progress,
     );
   });
 

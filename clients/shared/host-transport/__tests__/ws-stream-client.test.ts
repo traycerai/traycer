@@ -3212,6 +3212,40 @@ describe("WsStreamClient", () => {
     expect(lateStatuses).toHaveLength(0);
   });
 
+  it("delivers the close diagnostic to the caller without logging it to the console", () => {
+    const { factory } = makeFactory();
+    const diagnostic = vi.fn();
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
+      auth: null,
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      onClientClosed: diagnostic,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    client.close("team-install-complete");
+
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("WsStreamClient closed"),
+    );
+    expect(info).not.toHaveBeenCalled();
+  });
+
   it("rewrites a directory entry's '/rpc' suffix to '/stream' on first dial", async () => {
     const { factory, sockets } = makeFactory();
     const entry: HostDirectoryEntry = {

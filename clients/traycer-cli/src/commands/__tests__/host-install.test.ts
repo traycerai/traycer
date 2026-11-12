@@ -885,11 +885,13 @@ describe("buildHostInstallCommand", () => {
     });
     setStdoutIsTTY(true);
 
-    await buildHostInstallCommand(baseArgs({ team: "acme" }))(fakeCtx());
+    const ctx = fakeCtx();
+    await buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx);
 
     expect(mocks.completeTeamInstallMock).toHaveBeenCalledWith(
       "acme",
       expect.objectContaining({ inlineSignInToken: "inline-team-token" }),
+      ctx.progress,
     );
   });
 
