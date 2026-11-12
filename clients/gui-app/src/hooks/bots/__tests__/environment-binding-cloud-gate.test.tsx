@@ -20,6 +20,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostRead } from "@/hooks/bots/use-environment-host-read-query";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -38,8 +39,10 @@ const VIEWER = "user-1";
 const TARGET_HOST = "host-9";
 const OTHER_HOST = "host-10";
 const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
-let statusAnswer = environmentStatusFixture({});
-let statusAnswers: ReadonlyArray<typeof statusAnswer> = [];
+let statusAnswer: EnvironmentStatusResponseV12 | Error =
+  environmentStatusFixture({});
+let statusAnswers: ReadonlyArray<EnvironmentStatusResponseV12 | Error> = [];
+let otherAdvertisesStatus = true;
 const connectable = vi.hoisted(() => ({
   hostIds: [] as string[],
   resolved: true,
@@ -140,7 +143,7 @@ function mount(initialBinding: EnvironmentHostBinding) {
   });
   const reads: string[] = [];
   const hostReads: string[] = [];
-  const statusReads: Array<typeof statusAnswer> = [];
+  const statusReads: Array<EnvironmentStatusResponseV12 | Error> = [];
   let poolBinding = initialBinding;
   const targetEntry = { ...mockLocalHostEntry, hostId: TARGET_HOST };
   const otherEntry = { ...mockLocalHostEntry, hostId: OTHER_HOST };
@@ -174,7 +177,7 @@ function mount(initialBinding: EnvironmentHostBinding) {
         "environment.status": () => {
           const answer = statusAnswers[statusReads.length] ?? statusAnswer;
           statusReads.push(answer);
-          return answer;
+          return answer instanceof Error ? Promise.reject(answer) : answer;
         },
         "environment.host.read": () => {
           hostReads.push(TARGET_HOST);
@@ -192,9 +195,11 @@ function mount(initialBinding: EnvironmentHostBinding) {
   recordNegotiatedHostManifest(TARGET_HOST, {
     "environment.status": { major: 1, minor: 1 },
   });
-  recordNegotiatedHostManifest(OTHER_HOST, {
-    "environment.status": { major: 1, minor: 1 },
-  });
+  if (otherAdvertisesStatus) {
+    recordNegotiatedHostManifest(OTHER_HOST, {
+      "environment.status": { major: 1, minor: 1 },
+    });
+  }
   bindingRef.current = {
     hostClient: spine,
     hostId: undefined,
@@ -225,6 +230,7 @@ describe("environment.binding.read in a pool build", () => {
     settleProcessHostRpcTierPlan(POOL_ENTRY);
     statusAnswer = environmentStatusFixture({});
     statusAnswers = [];
+    otherAdvertisesStatus = true;
     connectable.hostIds = [];
     invalidateLocalTeamAdmissionAfterClaim.mockReset();
     invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
@@ -347,6 +353,71 @@ describe("environment.binding.read in a pool build", () => {
     });
     expect(rendered.result.current.byHostId.has(TARGET_HOST)).toBe(false);
     expect(rendered.result.current.failedHostIds).toEqual([]);
+  });
+
+  it("fails an advertised host whose status read errors instead of using Personal", async () => {
+    signInAs("signed-in");
+    connectable.hostIds = [TARGET_HOST];
+    statusAnswers = [new Error("status unavailable")];
+    const fixture = mount(BINDING);
+    const rendered = renderHook(
+      () => useHostEnvironmentBindings([TARGET_HOST], true),
+      { wrapper: fixture.wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.failedHostIds).toEqual([TARGET_HOST]);
+    });
+    expect(rendered.result.current.byHostId.has(TARGET_HOST)).toBe(false);
+    expect(fixture.reads).toEqual([TARGET_HOST]);
+    expect(fixture.statusReads).toHaveLength(1);
+  });
+
+  it("uses the pool answer when a host does not advertise environment.status", async () => {
+    signInAs("signed-in");
+    connectable.hostIds = [OTHER_HOST];
+    statusAnswers = [new Error("status unavailable")];
+    otherAdvertisesStatus = false;
+    const fixture = mount(BINDING);
+    const rendered = renderHook(
+      () => useHostEnvironmentBindings([OTHER_HOST], true),
+      { wrapper: fixture.wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.byHostId.get(OTHER_HOST)).toEqual(
+        OTHER_BINDING,
+      );
+    });
+    expect(rendered.result.current.failedHostIds).toEqual([]);
+    expect(fixture.reads).toEqual([OTHER_HOST]);
+    expect(fixture.statusReads).toHaveLength(1);
+  });
+
+  it("returns failed and retries status when the single host status read errors", async () => {
+    signInAs("signed-in");
+    statusAnswer = new Error("status unavailable");
+    const fixture = mount(BINDING);
+    const rendered = renderHook(
+      () => useEnvironmentHostReadQuery(fixture.client, TARGET_HOST, true),
+      { wrapper: fixture.wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.kind).toBe("failed");
+    });
+    expect(fixture.reads).toEqual([TARGET_HOST]);
+    expect(fixture.statusReads).toHaveLength(1);
+
+    const failed = rendered.result.current;
+    if (failed.kind !== "failed") throw new Error("Expected failed status");
+    act(() => failed.retry());
+
+    await waitFor(() => {
+      expect(fixture.statusReads).toHaveLength(2);
+      expect(rendered.result.current.kind).toBe("failed");
+    });
+    expect(fixture.reads).toEqual([TARGET_HOST]);
   });
 
   it("refuses a refetch of useEnvironmentHostReadQuery once the verdict is gone, without dispatching", async () => {

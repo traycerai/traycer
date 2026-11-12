@@ -16,7 +16,6 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { queryKeys } from "@/lib/query-keys";
 
 const HOST_ID = "host-a";
 const BINDING: EnvironmentHostBinding = {
@@ -132,7 +131,7 @@ describe("useHostEnvironmentBindings retry", () => {
     expect(bindingCalls).toBe(1);
   });
 
-  it("rechecks failed status before retrying a refused binding read", async () => {
+  it("retries a failed status and classifies the host as Local without reading its binding", async () => {
     let statusCalls = 0;
     let bindingCalls = 0;
     const { spine } = buildEnvironmentClient({
@@ -170,7 +169,7 @@ describe("useHostEnvironmentBindings retry", () => {
       expect(result.current.failedHostIds).toEqual([HOST_ID]);
     });
     expect(result.current.ownSettingsHostIds).toEqual([]);
-    expect(bindingCalls).toBe(1);
+    expect(bindingCalls).toBe(0);
 
     result.current.retryFailed();
 
@@ -179,10 +178,10 @@ describe("useHostEnvironmentBindings retry", () => {
       expect(result.current.failedHostIds).toEqual([]);
     });
     expect(statusCalls).toBe(2);
-    expect(bindingCalls).toBe(1);
+    expect(bindingCalls).toBe(0);
   });
 
-  it("retries the binding when a status re-read fails with stale Local data", async () => {
+  it("keeps a failed host failed until status answers non-Local, then reads its binding", async () => {
     let statusCalls = 0;
     let bindingCalls = 0;
     const { spine } = buildEnvironmentClient({
@@ -191,18 +190,16 @@ describe("useHostEnvironmentBindings retry", () => {
         "environment.status": () => {
           statusCalls += 1;
           if (statusCalls === 1) {
-            return environmentStatusFixture({
-              principal: null,
-              planes: { records: "local", broker: "local", room: "local" },
-            });
+            return Promise.reject(new Error("status unavailable"));
           }
-          return Promise.reject(new Error("status unavailable"));
+          if (statusCalls === 2)
+            return Promise.reject(new Error("status still unavailable"));
+          return environmentStatusFixture({
+            principal: { kind: "personal" },
+          });
         },
         "environment.host.read": () => {
           bindingCalls += 1;
-          if (bindingCalls === 1) {
-            return Promise.reject(new Error("Local hosts refuse this read"));
-          }
           return { ...BINDING, sharingGeneration: null };
         },
       },
@@ -226,26 +223,24 @@ describe("useHostEnvironmentBindings retry", () => {
         {props.children}
       </QueryClientProvider>
     );
-    const statusKey = queryKeys.hostMethod<
-      HostRpcRegistry,
-      "environment.status"
-    >(HOST_ID, "environment.status", {});
     const { result } = renderHook(
       () => useHostEnvironmentBindings([HOST_ID], true),
       { wrapper: queryWrapper },
     );
 
     await waitFor(() => {
-      expect(result.current.ownSettingsHostIds).toEqual([HOST_ID]);
-    });
-
-    await queryClient.invalidateQueries({ queryKey: statusKey, exact: true });
-
-    await waitFor(() => {
       expect(result.current.failedHostIds).toEqual([HOST_ID]);
     });
-    expect(statusCalls).toBe(2);
-    expect(bindingCalls).toBe(1);
+    expect(result.current.ownSettingsHostIds).toEqual([]);
+    expect(bindingCalls).toBe(0);
+
+    result.current.retryFailed();
+
+    await waitFor(() => {
+      expect(statusCalls).toBe(2);
+      expect(result.current.failedHostIds).toEqual([HOST_ID]);
+    });
+    expect(bindingCalls).toBe(0);
 
     result.current.retryFailed();
 
@@ -257,6 +252,6 @@ describe("useHostEnvironmentBindings retry", () => {
       expect(result.current.failedHostIds).toEqual([]);
     });
     expect(statusCalls).toBe(3);
-    expect(bindingCalls).toBe(2);
+    expect(bindingCalls).toBe(1);
   });
 });

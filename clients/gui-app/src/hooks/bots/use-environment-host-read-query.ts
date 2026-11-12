@@ -38,12 +38,15 @@ const STATUS_STALE_MS = 5 * 60_000;
  *   settings (the picker's Local row). It is in no environment, so there is
  *   no binding to read: never Personal, and never a failure.
  * - `pending`: its status has not answered yet.
- * - `binding`: anything else, with the binding read itself. A host whose
- *   status failed, or that predates the method, lands here, as before.
+ * - `failed`: its status read failed. Nothing is known, so the pool's
+ *   answer, which names an unbound host Personal, is not used.
+ * - `binding`: anything else, with the binding read itself. A host that
+ *   predates the method lands here, as before.
  */
 export type EnvironmentHostRead =
   | { readonly kind: "own_settings" }
   | { readonly kind: "pending" }
+  | { readonly kind: "failed"; readonly retry: () => void }
   | {
       readonly kind: "binding";
       readonly query: UseQueryResult<EnvironmentHostBinding, HostRpcError>;
@@ -77,7 +80,11 @@ export function useEnvironmentHostReadQuery(
   enabled: boolean,
 ): EnvironmentHostRead {
   const fromPool = readsHostBindingsFromPool();
-  const statusAnswer = useHostStatusAnswer(client, hostId, enabled);
+  const { answer: statusAnswer, retry: retryStatus } = useHostStatusAnswer(
+    client,
+    hostId,
+    enabled,
+  );
   const poolClient = useMemo(
     () => (client === null ? null : resolvePoolTierHostClient(client)),
     [client],
@@ -119,19 +126,21 @@ export function useEnvironmentHostReadQuery(
     },
   });
   if (statusAnswer === "own_settings") return { kind: "own_settings" };
+  if (statusAnswer === "failed") return { kind: "failed", retry: retryStatus };
   if (enabled && statusAnswer === "unsettled") return { kind: "pending" };
   return { kind: "binding", query: fromPool ? pooled : own };
 }
 
 /**
- * The host's own `environment.status`, as it bears on its binding. With no
- * client, or on a host without the method, there is nothing to wait for.
+ * The host's own `environment.status`, as it bears on its binding, and how to
+ * ask it again. With no client, or on a host without the method, there is
+ * nothing to wait for.
  */
 function useHostStatusAnswer(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): HostStatusAnswer {
+): { readonly answer: HostStatusAnswer; readonly retry: () => void } {
   const supported = useHostMethodSupport(hostId, "environment.status");
   const status = useHostQuery<HostRpcRegistry, "environment.status">({
     cacheKeyIdentity: undefined,
@@ -144,5 +153,8 @@ function useHostStatusAnswer(
       staleTime: STATUS_STALE_MS,
     },
   });
-  return hostStatusAnswer(status, client !== null && supported !== false);
+  return {
+    answer: hostStatusAnswer(status, client !== null && supported !== false),
+    retry: () => void status.refetch(),
+  };
 }

@@ -155,6 +155,8 @@ function boundSignInEnvironment(
   // environment: the pool would name it Personal, and the host refuses.
   if (binding.kind === "own_settings") return { kind: "local" };
   if (binding.kind === "pending") return { kind: "reading" };
+  if (binding.kind === "failed")
+    return { kind: "failed", retry: binding.retry };
   const query = binding.query;
   if (query.isError) {
     return { kind: "failed", retry: () => void query.refetch() };

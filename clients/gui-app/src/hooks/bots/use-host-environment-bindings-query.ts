@@ -22,6 +22,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useHostsAdvertisingMethod } from "@/hooks/host/use-hosts-advertising-method";
 import { environmentStatusQueryOptions } from "@/hooks/environment/use-registered-host-environment-statuses";
 import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
@@ -88,9 +89,9 @@ export interface HostEnvironmentBindings {
    */
   readonly failedHostIds: ReadonlyArray<string>;
   /**
-   * Asks the failed hosts again: a failed status first, and the binding only
-   * if that status does not say the host runs its own settings. A no-op when
-   * none failed.
+   * Asks the failed hosts again: the status of a host whose status failed
+   * (its binding follows from the answer), the binding of one whose binding
+   * failed. A no-op when none failed.
    */
   readonly retryFailed: () => void;
 }
@@ -112,8 +113,9 @@ export interface HostEnvironmentBindings {
  * only once the status has said otherwise, of the same host, so the host is
  * never asked for a binding it refuses. With a pool the status is read for
  * the hosts this client can dial, and the pool's answer for one of them
- * waits for it; a host this client cannot dial, or whose status fails or
- * predates the method, keeps the binding alone, as before.
+ * waits for it; a host this client cannot dial, or whose status predates the
+ * method, keeps the binding alone, as before. A status read that fails is a
+ * failed host, never the pool's Personal.
  */
 export function useHostEnvironmentBindings(
   hostIds: ReadonlyArray<string>,
@@ -148,16 +150,26 @@ export function useHostEnvironmentBindings(
       binding !== null && (!connectable.resolved || readsStatus(hostId)),
     [binding, connectable.resolved, readsStatus],
   );
+  // A status read that errors on a host which never advertised the method
+  // is a host too old to answer, not a failure: its binding answers alone.
+  const answeringHostIds = useHostsAdvertisingMethod(
+    hostIdList,
+    "environment.status",
+  );
   // Joined into one string so a re-render that changed no answer keeps the
   // bindings' `combine` below, and what it returns, the same.
   const combineStatuses = useCallback(
     (results: Array<UseQueryResult<EnvironmentStatusResponseV12>>): string =>
       results
-        .map((result, index) =>
-          hostStatusAnswer(result, awaitsStatus(hostIdList[index] ?? "")),
-        )
+        .map((result, index) => {
+          const hostId = hostIdList[index] ?? "";
+          const answer = hostStatusAnswer(result, awaitsStatus(hostId));
+          return answer === "failed" && !answeringHostIds.has(hostId)
+            ? "other"
+            : answer;
+        })
         .join("\n"),
-    [awaitsStatus, hostIdList],
+    [answeringHostIds, awaitsStatus, hostIdList],
   );
   const statusKey = useQueries({
     queries: hostIdList.map((hostId) =>
@@ -174,30 +186,14 @@ export function useHostEnvironmentBindings(
     [statusKey],
   );
   const queryClient = useQueryClient();
-  // A failed status reads as "other", so its host's binding was asked, and a
-  // host that runs its own settings refuses that. Re-reading the binding
-  // alone would keep such a host failed after it recovers.
-  const retryHost = useCallback(
-    async (
-      hostId: string,
-      refetchBinding: () => Promise<unknown>,
-    ): Promise<void> => {
-      const { queryKey } = environmentStatusQueryOptions(binding, hostId, true);
-      if (queryClient.getQueryState(queryKey)?.status === "error") {
-        await queryClient.refetchQueries({ queryKey, exact: true });
-        // Only a status that answered this time counts: a failed re-read
-        // keeps an older answer as its data, which says nothing now.
-        const state = queryClient.getQueryState(queryKey);
-        if (
-          state?.status === "success" &&
-          state.data !== undefined &&
-          localRowCohort(state.data).kind === "local"
-        ) {
-          return;
-        }
-      }
-      await refetchBinding();
-    },
+  // Once the status answers, the binding follows from it: no-pool reads turn
+  // on for a host somewhere else, and the pool's answer is already held.
+  const refetchStatus = useCallback(
+    (hostId: string): Promise<void> =>
+      queryClient.refetchQueries({
+        queryKey: environmentStatusQueryOptions(binding, hostId, true).queryKey,
+        exact: true,
+      }),
     [binding, queryClient],
   );
   const combine = useCallback(
@@ -207,7 +203,7 @@ export function useHostEnvironmentBindings(
       const byHostId = new Map<string, EnvironmentHostBinding>();
       const ownSettingsHostIds: string[] = [];
       const failedHostIds: string[] = [];
-      const failedRetries: Array<() => Promise<void>> = [];
+      const failedRetries: Array<() => Promise<unknown>> = [];
       // Positional, and safe by construction: `useQueries` returns results in
       // the order the queries were given, so index `n` is `hostIdList[n]`.
       results.forEach((result, index) => {
@@ -218,11 +214,14 @@ export function useHostEnvironmentBindings(
           ownSettingsHostIds.push(hostId);
         } else if (status === "unsettled") {
           // Not yet known: neither a binding nor a failure.
+        } else if (status === "failed") {
+          failedHostIds.push(hostId);
+          failedRetries.push(() => refetchStatus(hostId));
         } else if (result.data !== undefined) {
           byHostId.set(hostId, result.data);
         } else if (result.status === "error") {
           failedHostIds.push(hostId);
-          failedRetries.push(() => retryHost(hostId, result.refetch));
+          failedRetries.push(result.refetch);
         }
       });
       return {
@@ -234,7 +233,7 @@ export function useHostEnvironmentBindings(
         },
       };
     },
-    [hostIdList, retryHost, statusAnswers],
+    [hostIdList, refetchStatus, statusAnswers],
   );
   return useQueries({
     queries: hostIdList.map((hostId, index) =>
@@ -291,18 +290,25 @@ export function useHostEnvironmentBindings(
 
 /**
  * What a host's own `environment.status` says for its binding: it runs its
- * own settings, it is somewhere else (`other`, which includes a status that
- * failed or predates the method: the binding alone answers then), or it has
- * not said yet. A host that is not waited for (`awaited` false) is `other`
- * at once.
+ * own settings, it is somewhere else (`other`), it has not said yet, or its
+ * read `failed`. A failed status is a failed read, never "no answer": the
+ * pool would name an unbound host Personal, and that host may run its own
+ * settings. A host that is not waited for (`awaited` false), such as one
+ * whose status predates the method, is `other` at once, and the binding
+ * alone answers for it.
  */
-export type HostStatusAnswer = "own_settings" | "other" | "unsettled";
+export type HostStatusAnswer =
+  | "own_settings"
+  | "other"
+  | "unsettled"
+  | "failed";
 
 export function hostStatusAnswer(
   result: UseQueryResult<EnvironmentStatusResponseV12>,
   awaited: boolean,
 ): HostStatusAnswer {
-  if (!awaited || result.status === "error") return "other";
+  if (!awaited) return "other";
+  if (result.status === "error") return "failed";
   if (result.data === undefined) return "unsettled";
   return localRowCohort(result.data).kind === "local"
     ? "own_settings"
@@ -310,6 +316,8 @@ export function hostStatusAnswer(
 }
 
 function parseHostStatusAnswer(value: string): HostStatusAnswer {
-  if (value === "own_settings" || value === "unsettled") return value;
+  if (value === "own_settings" || value === "unsettled" || value === "failed") {
+    return value;
+  }
   return "other";
 }

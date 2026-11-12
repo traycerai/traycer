@@ -691,6 +691,7 @@ export function HostOverviewSettingsCardSlot(props: {
     status.supported === false ||
     status.isError ||
     bindingSupport === false ||
+    binding.kind === "failed" ||
     (binding.kind === "binding" && binding.query.isError)
   ) {
     return null;
