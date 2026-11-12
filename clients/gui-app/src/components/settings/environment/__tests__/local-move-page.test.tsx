@@ -169,6 +169,43 @@ describe("LocalMovePageOr", () => {
     expect(screen.queryByTestId("local-move-page-move")).toBeNull();
   });
 
+  it("shows no count while the move has registered no item", async () => {
+    renderPage(
+      "mcp-servers",
+      environmentStatusFixture({
+        setup: { stage: "moving_settings", state: "running" },
+      }),
+    );
+
+    await screen.findByTestId("host-settings-card-progress");
+    const page = screen.getByTestId("local-move-page");
+    expect(
+      within(page).getByTestId("host-settings-card-progress").textContent,
+    ).toBe("Moving this computer's settings to Personal");
+  });
+
+  it("says the move stopped, and not Move to Personal, once it stalled", async () => {
+    renderPage(
+      "mcp-servers",
+      environmentStatusFixture({
+        setup: { stage: "moving_settings", state: "stalled" },
+        items: [
+          itemStatusFixture({ kind: "variable", key: "A", status: "applied" }),
+          itemStatusFixture({ kind: "variable", key: "B", status: "pending" }),
+        ],
+      }),
+    );
+
+    await screen.findByTestId("host-settings-card-move-stopped");
+    const page = screen.getByTestId("local-move-page");
+    expect(
+      within(page).getByTestId("host-settings-card-move-stopped").textContent,
+    ).toBe("Moving stopped: it timed out. 1 item left.");
+    expect(
+      within(page).queryByRole("button", { name: "Move to Personal" }),
+    ).toBeNull();
+  });
+
   it("keeps the real panel for a non-Local pick and an unrelated section", () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
     render(

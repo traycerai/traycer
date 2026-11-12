@@ -9,6 +9,7 @@ import {
   ONBOARDING_REMINDER_TOAST_ID,
 } from "@/lib/toast/onboarding-reminder-toast";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import { ActionToastContent } from "@/components/layout/bridges/action-toast-content";
 import {
   useOnboardingStore,
   onboardingCompletedCount,
@@ -142,8 +143,8 @@ function GettingStartedToast() {
  * the next move at once is noise - and the reminder is held back for as long
  * as one has been shown and not answered.
  *
- * Once shown, the invitation stands until the person presses it, answers Not
- * now, or ×s it, or on a phone on its side until its time runs out, which is
+ * Once shown, the invitation stands until the person presses it, answers
+ * Later, or ×s it, or on a phone on its side until its time runs out, which is
  * no answer: it asks again the next time the Start page opens. An answer is
  * kept on this desktop (`moveInvitationAnswered`) and settles the reminder
  * too, so nothing new appears after it. A status that stops naming a move - a host swap, a version
@@ -186,43 +187,42 @@ function StartToast(props: {
       answerInvitation();
       dismiss();
     };
-    // The invitation's shape is the import announcement's
-    // (`session-import-announcement-controller.tsx`): outside a phone on its
-    // side it does not time out, and only the person takes it down - which is
-    // why there is nothing to undo here. ×, Not now and the action each dismiss
-    // it themselves, and a sign-out retires it (`retireOnboardingReminder`).
-    toast(GETTING_STARTED.definitions.move.label, {
-      id: MOVE_INVITATION_TOAST_ID,
-      description: (
-        <span className="text-pretty">
-          {GETTING_STARTED.definitions.move.description}
-        </span>
-      ),
-      duration: startToastDuration(),
-      closeButton: true,
-      onDismiss: () => {
-        if (identityIsCurrent()) answer();
-      },
-      // Off the screen, so it no longer holds the reminder back, and nothing
-      // the person said is recorded.
-      onAutoClose: () => {
-        if (identityIsCurrent()) markMoveInvitationAnswered();
-      },
-      action: {
-        label: "Move to Personal",
-        onClick: () => {
+    // The import announcement's component and call shape
+    // (`session-import-announcement-controller.tsx`): the action, its own
+    // Later and sonner's ×, each of which records the answer. Outside a phone
+    // on its side it does not time out, and a sign-out retires it
+    // (`retireOnboardingReminder`).
+    toast(
+      <ActionToastContent
+        toastId={MOVE_INVITATION_TOAST_ID}
+        eyebrow={null}
+        title={GETTING_STARTED.definitions.move.label}
+        description={GETTING_STARTED.definitions.move.description ?? ""}
+        actionLabel="Move to Personal"
+        onAction={() => {
           if (!identityIsCurrent()) return;
           answer();
           openMoveSheet({ hostId, hostName });
-        },
-      },
-      cancel: {
-        label: "Not now",
-        onClick: () => {
+        }}
+        onLater={() => {
+          if (identityIsCurrent()) answer();
+        }}
+      />,
+      {
+        id: MOVE_INVITATION_TOAST_ID,
+        description: null,
+        duration: startToastDuration(),
+        cancel: null,
+        onDismiss: () => {
           if (identityIsCurrent()) answer();
         },
+        // Off the screen, so it no longer holds the reminder back, and
+        // nothing the person said is recorded.
+        onAutoClose: () => {
+          if (identityIsCurrent()) markMoveInvitationAnswered();
+        },
       },
-    });
+    );
   }, [answerInvitation, dismiss, hostId, hostName, openMoveSheet]);
   useEffect(() => {
     if (completedAt === null || dismissed) return;

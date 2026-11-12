@@ -51,7 +51,7 @@ interface OnboardingState {
   readonly dismissSetupReminder: () => void;
   /**
    * The Start page's invitation to move this computer to Personal has been
-   * answered (its action, Not now or ×). Its own flag rather than
+   * answered (its action, Later or ×). Its own flag rather than
    * `setupReminderDismissed`, which most people who used the app before the
    * invitation existed answered long ago: they are still asked once.
    */

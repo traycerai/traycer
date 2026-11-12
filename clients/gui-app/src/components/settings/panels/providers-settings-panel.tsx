@@ -68,7 +68,6 @@ import {
   usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
-import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { providerRailStateWord } from "./provider-rail-state-word";
 
@@ -1610,12 +1609,11 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Only a computer running its own settings gets anything here: one
-            line saying so and the action that moves it to Personal. Every
-            other pick renders nothing, and the rail is PINNED, so nothing
-            else may park above it: a block here would occupy fixed height at
-            the top of the pane forever, not just until you scrolled. */}
-        <LocalRowNote />
+        {/* Nothing renders between the provider header and the tab rail. The
+            key is the first block of Profiles & Limits when that tab exists,
+            and the whole body of Account when that is the only key home.
+            The rail is PINNED: a block parked here would occupy fixed height
+            at the top of the pane forever, not just until you scrolled. */}
         <Tabs
           value={activeTab}
           onValueChange={(value) => {

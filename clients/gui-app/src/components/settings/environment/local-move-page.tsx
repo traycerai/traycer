@@ -1,11 +1,14 @@
 import type { ReactNode } from "react";
-import { MoveProgressOr } from "@/components/settings/environment/local-row-note";
 import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
 import { STORAGE } from "@/components/settings/environment/storage-page.definitions";
+import { MoveProgressLine } from "@/components/settings/move/move-progress-line";
+import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
 import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definitions";
 import { SKILLS } from "@/components/settings/panels/skills.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { Button } from "@/components/ui/button";
+import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
@@ -116,5 +119,33 @@ function LocalMovePage(props: {
         </MoveProgressOr>
       </div>
     </SettingsPanelShell>
+  );
+}
+
+/**
+ * While the computer's move runs, or once it stopped, the line the Overview's
+ * settings card shows (`MoveProgressLine`), read from that computer's own
+ * `environment.status`; otherwise `children`, which offer the move.
+ */
+function MoveProgressOr(props: {
+  readonly hostId: string;
+  readonly hostName: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const client = useHostClientForHostId(props.hostId);
+  const status = useEnvironmentStatusRead(client, props.hostId, true);
+  if (client === null || status.data === null) return props.children;
+  const state = hostSettingsCardState(status.data);
+  if (state.kind !== "moving" && state.kind !== "move_stopped") {
+    return props.children;
+  }
+  return (
+    <MoveProgressLine
+      client={client}
+      hostId={props.hostId}
+      hostName={props.hostName}
+      status={status.data}
+      progress={state}
+    />
   );
 }

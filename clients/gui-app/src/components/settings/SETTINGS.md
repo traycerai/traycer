@@ -167,10 +167,11 @@ the checklist remains available in Settings. Completed checklists hide the toast
 While this computer runs its own settings, the move's own invitation stands
 there instead, once, under an id of its own (`MOVE_INVITATION_TOAST_ID`), in
 the move card's words: "Move this computer to Personal" · "So your settings
-follow you to every computer and sandbox." · Move to Personal · Not now. On a
-fresh install Home is hidden, so this is where a new person first meets the
-move. Only the person takes it down - a status that stops naming a move does
-not, and the reminder never stands in its place. The answer is kept on the
+follow you to every computer and sandbox." · Move to Personal · Later, through
+the import announcement's `ActionToastContent`. On a fresh install Home is
+hidden, so this is where a new person first meets the move. Only the person
+takes it down - a status that stops naming a move does not, and the reminder
+never stands in its place. The answer is kept on the
 desktop in its own flag (`moveInvitationAnswered`), not the reminder's, so
 someone who dismissed the reminder long ago is still asked once; it settles
 the reminder too. Afterwards the checklist's move card is the only place the
