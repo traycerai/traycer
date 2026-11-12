@@ -1428,10 +1428,19 @@ describe("page activity from a commentable html page", () => {
     expect(heard).toEqual([]);
   });
 
-  it("drops reports while the page is for reading, including one already queued", () => {
+  it("drops reports while the page is for reading", () => {
     const harness = commentable(true);
     const heard = listen(harness);
 
+    harness.host.receive(hover(6));
+    vi.advanceTimersToNextFrame();
+    expect(heard).toEqual([]);
+  });
+
+  it("cancels a queued report when leaving Edit and accepts a later Edit pick", () => {
+    const harness = commentable(true);
+    const heard = listen(harness);
+    edit(harness);
     harness.host.receive(hover(7));
     void harness.host.setMode("play");
     vi.advanceTimersToNextFrame();
