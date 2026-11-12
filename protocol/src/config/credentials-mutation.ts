@@ -600,7 +600,7 @@ export function createCredentialsMutationStore(
     } finally {
       if (context.noSpace) diskPressure = "low";
       else if (context.saved) diskPressure = "clear";
-      reserve.end(diskPressure === "clear");
+      reserve.end(diskPressure !== "low");
       if (diskPressure !== null) {
         try {
           options.onDiskPressure?.(diskPressure);

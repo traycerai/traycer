@@ -3562,6 +3562,41 @@ describe("AuthService", () => {
       expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
     });
 
+    it("start() leaves a newer pending sign-in intact when its held get() faults", async () => {
+      const { service, host } = makeService();
+      let markReadEntered: () => void = () => undefined;
+      const readEntered = new Promise<void>((resolve) => {
+        markReadEntered = resolve;
+      });
+      let rejectRead: (error: Error) => void = () => undefined;
+      const pendingRead = new Promise<StoredCredentials | null>(
+        (_resolve, reject) => {
+          rejectRead = (error) => {
+            reject(error);
+          };
+        },
+      );
+      host.tokenStore.get = (): Promise<StoredCredentials | null> => {
+        markReadEntered();
+        return pendingRead;
+      };
+
+      const starting = service.start();
+      await readEntered;
+      await service.signIn();
+      expect(useAuthStore.getState().status).toBe("signing-in");
+
+      rejectRead(
+        Object.assign(new Error("EACCES: credentials unreadable"), {
+          code: "EACCES",
+        }),
+      );
+
+      await expect(starting).resolves.toBeUndefined();
+      expect(useAuthStore.getState().status).toBe("signing-in");
+      expect(service.getLastError()).toBeNull();
+    });
+
     it("start() maps rotate() faults to store-unavailable UI signed-out", async () => {
       const { service, host } = makeService();
       await host.tokenStore.signIn(

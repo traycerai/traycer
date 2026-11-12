@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import {
   mkdir,
   open,
@@ -19,6 +19,27 @@ import { withCredentialsLock } from "./credentials-lock";
 const PIECE_COUNT = 16;
 const PIECE_BYTES = 64 * 1024;
 
+/** The existing entry's metadata, read through its own handle; `null` when absent. */
+async function statExistingPiece(path: string): Promise<Stats | null> {
+  let existing: FileHandle;
+  try {
+    existing = await open(
+      path,
+      constants.O_RDONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+    );
+  } catch (err) {
+    if (errorCode(err) === "ENOENT") return null;
+    throw err;
+  }
+  try {
+    return await existing.stat();
+  } finally {
+    await existing.close();
+  }
+}
+
 async function createReservePiece(
   path: string,
   interrupted: () => boolean,
@@ -31,27 +52,9 @@ async function createReservePiece(
       if (errorCode(err) !== "EEXIST") throw err;
       if (attempt !== 0 || interrupted()) return null;
     }
-    let existing: FileHandle;
-    try {
-      existing = await open(
-        path,
-        constants.O_RDONLY |
-          (constants.O_NOFOLLOW ?? 0) |
-          (constants.O_NONBLOCK ?? 0),
-      );
-    } catch (err) {
-      if (errorCode(err) === "ENOENT") continue;
-      throw err;
-    }
-    let short = false;
-    try {
-      if (interrupted()) return null;
-      const piece = await existing.stat();
-      if (interrupted()) return null;
-      short = piece.isFile() && piece.size < PIECE_BYTES;
-    } finally {
-      await existing.close();
-    }
+    const piece = await statExistingPiece(path);
+    if (piece === null) continue;
+    const short = piece.isFile() && piece.size < PIECE_BYTES;
     if (interrupted() || !short) return null;
     try {
       await unlink(path);
@@ -169,14 +172,11 @@ export class CredentialsReserve {
       const missing: number[] = [];
       for (let index = 0; index < PIECE_COUNT; index += 1) {
         if (interrupted()) return;
-        try {
-          const piece = await stat(`${this.credentialsPath}.reserve.${index}`);
-          if (interrupted()) return;
-          if (piece.size !== PIECE_BYTES) missing.push(index);
-        } catch (err) {
-          if (errorCode(err) !== "ENOENT") return;
-          missing.push(index);
-        }
+        const piece = await statExistingPiece(
+          `${this.credentialsPath}.reserve.${index}`,
+        );
+        if (interrupted()) return;
+        if (piece === null || piece.size !== PIECE_BYTES) missing.push(index);
       }
       if (missing.length === 0 || interrupted()) return;
       await withCredentialsLock(

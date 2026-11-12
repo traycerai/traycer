@@ -17,6 +17,8 @@ import {
   AUTH_ERROR_STORE_UNAVAILABLE,
   AuthService,
 } from "@/lib/auth/auth-service";
+import { AuthTokenStore } from "@/lib/auth/auth-token-store";
+import { appLogger } from "@/lib/logger";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const CLAIM_URL = "http://localhost:5005/api/v3/auth/link/claim";
@@ -375,6 +377,60 @@ describe("link-login attempt fence", () => {
     return { saveEnteredPromise, releaseSave };
   }
 
+  interface StoreSignInSlot {
+    readonly gate: Promise<void>;
+    readonly entered: Promise<void>;
+    release(): void;
+    markEntered(): void;
+  }
+
+  function gateStoreSignInsByToken(realStore: ITokenStore): {
+    readonly slotFor: (token: string) => StoreSignInSlot;
+    readonly reject: (token: string, error: Error) => void;
+  } {
+    const slots = new Map<string, StoreSignInSlot>();
+    const failures = new Map<string, Error>();
+    const slotFor = (token: string): StoreSignInSlot => {
+      let slot = slots.get(token);
+      if (slot === undefined) {
+        let release: () => void = () => undefined;
+        let markEntered: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const entered = new Promise<void>((resolve) => {
+          markEntered = resolve;
+        });
+        slot = { gate, release, entered, markEntered };
+        slots.set(token, slot);
+      }
+      return slot;
+    };
+    const originalSignIn = realStore.signIn.bind(realStore);
+    Object.defineProperty(realStore, "signIn", {
+      configurable: true,
+      value: async (
+        tokens: { readonly token: string; readonly refreshToken: string },
+        identity: StoredCredentialsIdentity,
+      ): Promise<SignInSaveResult> => {
+        const slot = slotFor(tokens.token);
+        slot.markEntered();
+        await slot.gate;
+        const failure = failures.get(tokens.token);
+        if (failure !== undefined) {
+          throw failure;
+        }
+        return originalSignIn(tokens, identity);
+      },
+    });
+    return {
+      slotFor,
+      reject: (token, error) => {
+        failures.set(token, error);
+      },
+    };
+  }
+
   it("a supersession landing MID-SAVE undoes the durable credential write", async () => {
     const { service, host } = makeService();
     const { script, restore } = installLinkFetch();
@@ -482,6 +538,186 @@ describe("link-login attempt fence", () => {
     }
   });
 
+  it("a failed stale undo keeps the newer signed-in session and remains retryable", async () => {
+    const { service, host } = makeService();
+    const { script, restore } = installLinkFetch();
+    const realStore: ITokenStore = host.tokenStore;
+    const gatedSaves = gateStoreSignInsByToken(realStore);
+    const infoSpy = vi.spyOn(appLogger, "info");
+    const queuedSaves = vi.spyOn(AuthTokenStore.prototype, "signIn");
+    let releaseFailedDelete: () => void = () => undefined;
+    const failedDeleteGate = new Promise<void>((resolve) => {
+      releaseFailedDelete = resolve;
+    });
+    const settledDeletes: Array<{
+      readonly token: string;
+      readonly result: "deleted" | "kept";
+    }> = [];
+    let deleteIfTokenBroken = true;
+    let settleRetry: (result: "deleted" | "kept") => void = () => undefined;
+    const retrySettled = new Promise<"deleted" | "kept">((resolve) => {
+      settleRetry = resolve;
+    });
+    const realDeleteIfToken = realStore.deleteIfToken.bind(realStore);
+    Object.defineProperty(realStore, "deleteIfToken", {
+      configurable: true,
+      value: async (
+        expectedToken: string,
+      ): Promise<"deleted" | "kept"> => {
+        if (expectedToken === "attempt-a-token" && deleteIfTokenBroken) {
+          await failedDeleteGate;
+          throw new Error("EIO: credentials file unwritable");
+        }
+        const result = await realDeleteIfToken(expectedToken);
+        settledDeletes.push({ token: expectedToken, result });
+        if (expectedToken === "attempt-a-token") {
+          settleRetry(result);
+        }
+        return result;
+      },
+    });
+    try {
+      script.validationResponse = () => json(PROFILE_BODY, 200);
+      await service.start();
+
+      script.tokenResponse = () =>
+        json(
+          {
+            token: "attempt-a-token",
+            refreshToken: "attempt-a-r",
+            familyId: "f",
+          },
+          200,
+        );
+      const linkA = service.signInWithLinkCode("ABCDE-FGHJK");
+      await vi.advanceTimersByTimeAsync(1_100);
+      await gatedSaves.slotFor("attempt-a-token").entered;
+
+      script.tokenResponse = () =>
+        json(
+          {
+            token: "attempt-b-token",
+            refreshToken: "attempt-b-r",
+            familyId: "f",
+          },
+          200,
+        );
+      const linkB = service.signInWithLinkCode("ABCDE-FGHJK");
+      await vi.advanceTimersByTimeAsync(1_100);
+      // Renderer store writes run one at a time: B's save waits behind A's held
+      // one, and A's undo must queue after it for its delete to fail while B is
+      // signed in.
+      while (
+        !queuedSaves.mock.calls.some(
+          ([tokens]) => tokens.token === "attempt-b-token",
+        )
+      ) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      gatedSaves.reject(
+        "attempt-a-token",
+        Object.assign(new Error("ENOSPC: credentials file full"), {
+          code: "ENOSPC",
+        }),
+      );
+      gatedSaves.slotFor("attempt-b-token").release();
+      gatedSaves.slotFor("attempt-a-token").release();
+      expect((await linkB).kind).toBe("signed-in");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe("attempt-b-token");
+      expect(service.getCurrentSessionSnapshot().profile?.userId).toBe("user-1");
+
+      releaseFailedDelete();
+      expect((await linkA).kind).toBe("superseded");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe("attempt-b-token");
+      expect(service.getCurrentSessionSnapshot().profile?.userId).toBe("user-1");
+      expect(service.getLastError()).toBeNull();
+      expect(infoSpy).toHaveBeenCalledWith(
+        "[auth] stored-session recovery scheduled",
+        expect.objectContaining({
+          trigger: "undo-superseded-save:store-unavailable",
+        }),
+      );
+
+      deleteIfTokenBroken = false;
+      host.notifyTokenStoreChanged();
+      await retrySettled;
+
+      expect(settledDeletes).toEqual([
+        { token: "attempt-a-token", result: "kept" },
+      ]);
+      expect(await realStore.get()).toMatchObject({
+        token: "attempt-b-token",
+        refreshToken: "attempt-b-r",
+        user: { id: "user-1" },
+      });
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe("attempt-b-token");
+    } finally {
+      queuedSaves.mockRestore();
+      infoSpy.mockRestore();
+      restore();
+    }
+  });
+
+  it("a failed stale undo keeps a newer device sign-in attempt intact", async () => {
+    const { service, host } = makeService();
+    const { script, restore } = installLinkFetch();
+    const realStore: ITokenStore = host.tokenStore;
+    const gatedSaves = gateStoreSignInsByToken(realStore);
+    const infoSpy = vi.spyOn(appLogger, "info");
+    const realDeleteIfToken = realStore.deleteIfToken.bind(realStore);
+    Object.defineProperty(realStore, "deleteIfToken", {
+      configurable: true,
+      value: (expectedToken: string): Promise<"deleted" | "kept"> =>
+        expectedToken === "attempt-a-token"
+          ? Promise.reject(new Error("EIO: credentials file unwritable"))
+          : realDeleteIfToken(expectedToken),
+    });
+    try {
+      script.validationResponse = () => json(PROFILE_BODY, 200);
+      script.tokenResponse = () =>
+        json(
+          {
+            token: "attempt-a-token",
+            refreshToken: "attempt-a-r",
+            familyId: "f",
+          },
+          200,
+        );
+      const linkA = service.signInWithLinkCode("ABCDE-FGHJK");
+      await vi.advanceTimersByTimeAsync(1_100);
+      await gatedSaves.slotFor("attempt-a-token").entered;
+
+      await service.signIn();
+      const progressBeforeUndo = service.getDeviceProgress();
+      expect(progressBeforeUndo).toMatchObject({
+        userCode: "ABCDE-FGHIJ",
+        phase: "waiting-approval",
+      });
+      expect(useAuthStore.getState().status).toBe("signing-in");
+      expect(service.getLastError()).toBeNull();
+
+      gatedSaves.slotFor("attempt-a-token").release();
+
+      expect((await linkA).kind).toBe("superseded");
+      expect(service.getDeviceProgress()).toEqual(progressBeforeUndo);
+      expect(useAuthStore.getState().status).toBe("signing-in");
+      expect(service.getLastError()).toBeNull();
+      expect(infoSpy).toHaveBeenCalledWith(
+        "[auth] stored-session recovery scheduled",
+        expect.objectContaining({
+          trigger: "undo-superseded-save:store-unavailable",
+        }),
+      );
+    } finally {
+      infoSpy.mockRestore();
+      restore();
+    }
+  });
+
   it("a watcher self-write echo cannot re-adopt the stale pair while its undo is pending", async () => {
     const { service, host } = makeService();
     const { script, restore } = installLinkFetch();
@@ -548,46 +784,7 @@ describe("link-login attempt fence", () => {
     const { service, host } = makeService();
     const { script, restore } = installLinkFetch();
     const realStore: ITokenStore = host.tokenStore;
-    // Per-token save gates: A and B each pause at the durable-store boundary
-    // and are released independently, so their writes and undos interleave.
-    const slots = new Map<
-      string,
-      {
-        gate: Promise<void>;
-        release: () => void;
-        entered: Promise<void>;
-        markEntered: () => void;
-      }
-    >();
-    const slotFor = (token: string) => {
-      let slot = slots.get(token);
-      if (slot === undefined) {
-        let release: () => void = () => undefined;
-        let markEntered: () => void = () => undefined;
-        const gate = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        const entered = new Promise<void>((resolve) => {
-          markEntered = resolve;
-        });
-        slot = { gate, release, entered, markEntered };
-        slots.set(token, slot);
-      }
-      return slot;
-    };
-    const originalSignIn = realStore.signIn.bind(realStore);
-    Object.defineProperty(realStore, "signIn", {
-      configurable: true,
-      value: async (
-        tokens: { readonly token: string; readonly refreshToken: string },
-        identity: StoredCredentialsIdentity,
-      ): Promise<SignInSaveResult> => {
-        const slot = slotFor(tokens.token);
-        slot.markEntered();
-        await slot.gate;
-        return originalSignIn(tokens, identity);
-      },
-    });
+    const { slotFor } = gateStoreSignInsByToken(realStore);
     // Only B's conditional delete fails; A's settles as kept.
     let bDeleteBroken = true;
     const realDeleteIfToken = realStore.deleteIfToken.bind(realStore);

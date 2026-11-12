@@ -1162,6 +1162,9 @@ export class AuthService {
       try {
         stored = await this.tokenStore.get();
       } catch (error) {
+        if (this.shouldStopStartFlow(startGeneration)) {
+          return;
+        }
         // Unreadable store (EACCES/EIO/…) must never escape start() — the host
         // runtime provider would dispose the entire runtime. UI-only signed-out
         // + store-unavailable; no file write.
@@ -4004,14 +4007,18 @@ export class AuthService {
     this.applySignedOut("retired");
   }
 
-  // Clear the UI session only when one is actually projected — avoids a redundant
-  // signed-out emit when reconcile just confirms an already-absent session.
-  private clearUiSessionIfSignedIn(): void {
-    if (
+  private hasProjectedSession(): boolean {
+    return (
       this.currentBearer !== null ||
       this.contextProvider.current() !== null ||
       useAuthStore.getState().status === "signed-in"
-    ) {
+    );
+  }
+
+  // Clear the UI session only when one is actually projected — avoids a redundant
+  // signed-out emit when reconcile just confirms an already-absent session.
+  private clearUiSessionIfSignedIn(): void {
+    if (this.hasProjectedSession()) {
       this.clearUiSession();
     }
   }
@@ -4507,9 +4514,11 @@ export class AuthService {
    * this stale finalization wrote — any other window's `signIn` serializes
    * wholly before or after it, so a successor's pair can never be destroyed
    * by a stale comparison. A failed undo has a real consequence (the stale
-   * pair would rehydrate on a later launch if the successor fails), so it
-   * surfaces through the shared store-fault seam AND is remembered: the
-   * recovery loop completes the delete before adopting anything durable.
+   * pair would rehydrate on a later launch if the successor fails), so it is
+   * remembered and arms recovery, which completes the delete before adopting
+   * anything durable. When nothing newer is live (a sign-out or dispose
+   * superseded it and no attempt is in flight) it also surfaces through the
+   * shared store-fault seam.
    */
   private async undoSupersededCredentialSave(token: string): Promise<void> {
     // Recorded BEFORE the attempt, not on failure: the very write being
@@ -4524,6 +4533,17 @@ export class AuthService {
       await this.tokenStore.deleteIfToken(token);
       this.pendingUndoTokens.delete(token);
     } catch (error) {
+      // This finalization returned before projecting a session, so a live
+      // session or an attempt in flight now belongs to something newer and is
+      // not this failure's to clear.
+      if (this.hasProjectedSession() || this.isInteractiveAttemptInFlight()) {
+        appLogger.warn(
+          "[auth] superseded-save undo failed; keeping the newer session or attempt",
+          { error: describeLogError(error) },
+        );
+        this.scheduleSessionRecovery("undo-superseded-save:store-unavailable");
+        return;
+      }
       this.markStoreUnavailable("undo-superseded-save", error);
     }
   }
