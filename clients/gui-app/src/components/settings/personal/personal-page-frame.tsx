@@ -47,6 +47,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import { UnresolvedEnvironmentPage } from "@/components/settings/environment/unresolved-environment-page";
 import { cn } from "@/lib/utils";
 
 interface WindowHostEnvironment {
@@ -142,6 +143,9 @@ export function PersonalPageFrame(props: {
   const environmentPage = SETTINGS_SECTIONS.some(
     (section) => section.id === props.section && section.group === "personal",
   );
+  if (pick.kind === "unresolved" && environmentPage) {
+    return <UnresolvedEnvironmentPage />;
+  }
   if (pick.kind === "team" && environmentPage) {
     return (
       <CloudPageFrame

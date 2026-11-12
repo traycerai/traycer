@@ -1,3 +1,4 @@
+import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import type {
   EnvironmentDescriptor,
@@ -237,8 +238,9 @@ export async function runSignInPreflight(
   try {
     const login = await runDeviceAuthFlow(ctx);
     if (typeof policy === "object") policy.onInlineSignIn?.(login.token);
+    const identity = login.user.email || login.user.name;
     ctx.output.humanRequired(
-      `Signed in as ${login.user.email || login.user.name || login.user.id}.`,
+      identity ? `Signed in as ${identity}.` : "Signed in.",
     );
     return { state: "signed-in-inline", reason: null };
   } catch (err) {
@@ -426,7 +428,7 @@ export function formatCredentialProvisionNote(
     case "unreachable":
       return `host authorization not confirmed (the host did not respond in time) - ${nextStep}`;
     case "unsupported":
-      return "host authorization not confirmed (this version of the CLI can't authorize this host)";
+      return "host authorization not confirmed - update the Traycer CLI using your install method, run `traycer host update`, then `traycer login`";
     case "mint-unavailable":
       return `host authorization not confirmed (the authorization did not complete) - ${nextStep}`;
     case "not-adopted":
@@ -436,7 +438,7 @@ export function formatCredentialProvisionNote(
     case "unauthorized":
       return `host authorization not confirmed - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
     case "error":
-      return `host authorization not confirmed (${outcome.message}) - ${nextStep}`;
+      return `host authorization not confirmed - ${nextStep}`;
   }
 }
 
@@ -494,6 +496,7 @@ export async function warnIfTeamInstallSignInRemains(
 /** The one team transfer used by host use, install --team and ensure --team. */
 export async function useInstalledHostTeam(
   team: string,
+  progress: CommandContext["progress"],
 ): Promise<EnvironmentHostBinding> {
   const dispatch = {
     ...PLAIN_DISPATCH,
@@ -586,7 +589,25 @@ export async function useInstalledHostTeam(
       exitCode: 1,
     });
   }
+  for (const message of TEAM_TRANSFER_DISCLOSURE) {
+    progress({
+      stage: "host-team",
+      message,
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits: null,
+    });
+  }
   // A Local computer has no environment binding to read before its transfer.
+  progress({
+    stage: "host-team",
+    message: `Restarting Traycer on this computer to run as ${target.label}…`,
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+    workUnits: null,
+  });
   return transferInstalledHostTeam(endpoint, auth, target, dispatch, true);
 }
 
@@ -754,8 +775,9 @@ async function transferInstalledHostTeam(
 export async function completeTeamInstall(
   team: string,
   session: TeamInstallAuthSession,
+  progress: CommandContext["progress"],
 ): Promise<EnvironmentHostBinding> {
-  const binding = await useInstalledHostTeam(team);
+  const binding = await useInstalledHostTeam(team, progress);
   if (session.inlineSignInToken !== null) {
     const token = session.inlineSignInToken;
     const outcome = await runWithCliStore((store) =>

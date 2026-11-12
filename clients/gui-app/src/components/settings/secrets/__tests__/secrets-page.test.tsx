@@ -231,6 +231,9 @@ function renderPage(host: SecretsHost): QueryClient {
 }
 
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   useAuthStore.setState({ status: "signed-in" });

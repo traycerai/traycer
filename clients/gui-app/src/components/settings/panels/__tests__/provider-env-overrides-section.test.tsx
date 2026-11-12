@@ -358,6 +358,9 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   );
 
   beforeEach(() => {
+    useSettingsEnvironmentPickStore.setState({
+      defaultPick: { kind: "personal" },
+    });
     useAuthStore.setState({ status: "signed-in" });
   });
   afterEach(() => {

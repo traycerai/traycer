@@ -437,6 +437,7 @@ describe("HostDangerZone", () => {
               state: "awake",
               frozen: false,
               summary: null,
+              ownerKind: "unknown",
               teamOwned: false,
             },
           }),

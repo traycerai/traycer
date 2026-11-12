@@ -86,13 +86,39 @@ describe("TeamComputerUnattended", () => {
     installClipboard(writeText);
     render(<TeamComputerUnattended {...props({})} />);
 
-    const command =
+    const posixCommand =
       "traycer host install --team 'team'\\''s org' < install-token.txt";
+    const powershellCommand =
+      "Get-Content install-token.txt | traycer host install --team 'team''s org'";
+    expect(screen.getByText(/^macOS and Linux(?: command)?$/)).not.toBeNull();
+    expect(
+      screen.getByText(/^Windows \(PowerShell\)(?: command)?$/),
+    ).not.toBeNull();
+    expect(screen.getByText(posixCommand)).not.toBeNull();
+    expect(screen.getByText(powershellCommand)).not.toBeNull();
+
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
-      expect(writeText.mock.calls).toEqual([[command]]);
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: /Copy macOS and Linux command/i,
+        }),
+      );
+      expect(writeText.mock.calls).toEqual([[posixCommand]]);
       copyAttempt.resolve();
       await copyAttempt.promise;
+    });
+
+    const powershellCopy = Promise.withResolvers<void>();
+    writeText.mockImplementation((_value: string) => powershellCopy.promise);
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: /Copy Windows \(PowerShell\) command/i,
+        }),
+      );
+      expect(writeText.mock.calls.at(-1)).toEqual([powershellCommand]);
+      powershellCopy.resolve();
+      await powershellCopy.promise;
     });
   });
 

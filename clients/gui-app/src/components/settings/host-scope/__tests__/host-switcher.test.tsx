@@ -789,6 +789,7 @@ describe("<HostSwitcher /> trigger status", () => {
         state: "awake",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -825,6 +826,7 @@ describe("<HostSwitcher /> trigger status", () => {
         state: "awake",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -846,6 +848,7 @@ describe("<HostSwitcher /> trigger status", () => {
           state: "awake",
           frozen: false,
           summary: null,
+          ownerKind: "unknown",
           teamOwned: false,
         },
       });
@@ -868,7 +871,12 @@ describe("<HostSwitcher /> trigger status", () => {
         hostId: "sandbox-a",
         name: "Build box",
         kind: "sandbox",
-        sandbox: { ...sandboxState, summary: null, teamOwned: false },
+        sandbox: {
+          ...sandboxState,
+          summary: null,
+          ownerKind: "unknown",
+          teamOwned: false,
+        },
       });
       renderSelectedHost(sandbox, "rail");
 

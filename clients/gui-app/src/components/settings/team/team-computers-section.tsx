@@ -61,7 +61,7 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
   } else if (read.isError) {
     contents = (
       <p role="alert" className="text-ui-sm">
-        Could not read this team's computers.
+        {read.error.message}
       </p>
     );
   } else {
@@ -236,7 +236,7 @@ function TeamBotHostPicker(props: {
       <div>
         <p className="text-ui-sm font-medium">Run the team's bots on</p>
         <p className="text-ui-xs text-muted-foreground">
-          {props.botHost?.hostName ?? "No bot host chosen"}
+          {props.botHost?.hostName ?? "No bot computer chosen"}
         </p>
       </div>
       <Select
@@ -267,7 +267,7 @@ function TeamBotHostPicker(props: {
               disabled={host.purgePending}
             >
               {host.hostName ?? "Unnamed computer"}
-              {host.holdsBotSlot ? " · Current bot host" : ""}
+              {host.holdsBotSlot ? " · Current bot computer" : ""}
             </SelectItem>
           ))}
         </SelectContent>

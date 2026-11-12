@@ -38,7 +38,13 @@ function sandboxHost(
             tone: "live",
             live: true,
           },
-    sandbox: { state, frozen, summary: null, teamOwned: false },
+    sandbox: {
+      state,
+      frozen,
+      summary: null,
+      ownerKind: "unknown",
+      teamOwned: false,
+    },
   });
 }
 

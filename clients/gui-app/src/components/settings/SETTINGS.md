@@ -840,6 +840,25 @@ name, endpoint route and active byte counters inline with wrapping rows.
 
 ## Team configuration sources
 
+The Environment default stays unresolved until the window's own computer is
+listed and its status has answered. The picker shows a spinner, and every
+Environment page waits without mounting its editors. Failed host lists reuse
+`HostScopeGate`; failed status reads show the existing settings read error and
+Retry. An answered host keeps its Local or Personal default, and a window with
+no host keeps Personal. A listed sandbox defaults to Personal without a Local
+status read. The stored default belongs to the window host it was derived for;
+a host change makes readers unresolved immediately, before upkeep runs.
+An explicit choice still takes precedence.
+A pending Settings host entry waits for a reachable computer's failed status
+read before asking for bindings. A completed handshake that explicitly lacks
+`environment.status` keeps the legacy entry path, without a status retry; an
+unnegotiated method still waits. It keeps “Finding your hosts…” with “Try again” after a
+failed attempt; that action retries the target status. An error holds the entry
+through a retry with cached data. An offline target keeps the existing
+binding path and offers no status retry; its observer reads again when the
+route returns. Unresolved picks ignore Personal membership results, including
+cached hosts.
+
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the
 cloud. A Local row reads that computer's own host pages. Personal reads the
@@ -6594,9 +6613,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
   trailing "working" dropped, otherwise Idle or Busy); a health detail when
   the host is not live, or when it needs an update; this computer's lifecycle
   line; and the cost. A team sandbox's header cost is the rate only. A
-  personal sandbox adds "{amount} today", or **Free today** for an automation,
-  when a ledger row exists. The rate itself reads Free, Not billing, the
-  hourly rate, or Not priced here.
+  personal sandbox adds "{amount} today", or **Free today** for a personal
+  Automations host, when a ledger row exists. The rate itself reads Free for
+  personal Automations hosts, Not billing, or the hourly rate, and is left out
+  when no price is known. Team Automations hosts show the same rates as team
+  sandboxes. During a transition, the header omits the current rate until the
+  ledger supplies it; personal Automations remain Free and frozen sandboxes
+  show Not billing.
+  Installation omits the other rate during transitions.
 
   The header offers one primary action and one More menu. A sandbox's existing
   lifecycle verbs move here from the former sandbox card: Suspend while awake,

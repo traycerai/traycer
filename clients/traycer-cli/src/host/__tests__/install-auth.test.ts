@@ -151,6 +151,7 @@ import type {
 } from "../install-auth";
 import type { HostCredentialProvisionOutcome } from "../credential-provisioning";
 import type { CommandContext } from "../../runner/runner";
+import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
 const credentialsRoot = mkdtempSync(join(tmpdir(), "team-install-auth-test-"));
@@ -381,6 +382,89 @@ describe("install auth helpers", () => {
     });
   });
 
+  it("discloses transfer once before both binds and reports restart progress during recovery", async () => {
+    const order: string[] = [];
+    const progress = vi.fn(
+      (info: { readonly stage: string; readonly message: string | null }) => {
+        order.push(`progress:${info.message ?? ""}`);
+        expect(info.stage).toBe("host-team");
+      },
+    );
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+    mocks.callHostRpcAtResolvedEndpointMock
+      .mockImplementationOnce((method: string) => {
+        order.push(method);
+        return Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "WebSocket closed before the response arrived",
+            requestId: "team-bind-recovery",
+            method: "environment.host.bind",
+            fatalDetails: null,
+          }),
+        );
+      })
+      .mockImplementation((method: string) => {
+        order.push(method);
+        if (method === "environment.host.bind") {
+          return Promise.resolve(teamBinding);
+        }
+        if (method === "host.status") return Promise.resolve({ ready: true });
+        throw new Error(`unexpected host RPC ${method}`);
+      });
+
+    await expect(
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        progress,
+      ),
+    ).resolves.toEqual(teamBinding);
+
+    expect(progress).toHaveBeenCalledWith({
+      stage: "host-team",
+      message: "Restarting Traycer on this computer to run as Acme…",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits: null,
+    });
+    const disclosureMessages = progress.mock.calls
+      .map(([info]) => info.message)
+      .filter((message) =>
+        TEAM_TRANSFER_DISCLOSURE.some((disclosure) => disclosure === message),
+      );
+    expect(disclosureMessages).toEqual([...TEAM_TRANSFER_DISCLOSURE]);
+    const firstBind = order.indexOf("environment.host.bind");
+    const disclosureProgressIndexes = TEAM_TRANSFER_DISCLOSURE.map((line) =>
+      order.indexOf(`progress:${line}`),
+    );
+    expect(Math.max(...disclosureProgressIndexes)).toBeLessThan(firstBind);
+    expect(
+      order.filter((entry) => entry === "environment.host.bind"),
+    ).toHaveLength(2);
+    expect(progress).toHaveBeenCalledTimes(TEAM_TRANSFER_DISCLOSURE.length + 1);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+  });
+
   it("the CLI does not send a team target to a host that cannot transfer", async () => {
     const legacyHost = new LegacyTeamHost();
     mocks.legacyHost = legacyHost;
@@ -392,6 +476,42 @@ describe("install auth helpers", () => {
     expect(legacyHost.requests).toEqual([]);
     expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
     expect(mocks.readHostOwnershipMock).not.toHaveBeenCalled();
+  });
+
+  it("reports the team transfer through host use progress", async () => {
+    const progress = vi.fn<CommandContext["progress"]>();
+    const ctx: CommandContext = { ...fakeCtx(), progress };
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(buildHostUseCommand("acme")(ctx)).resolves.toMatchObject({
+      data: { binding: teamBinding },
+      human: "This computer belongs to Acme.",
+    });
+
+    expect(progress).toHaveBeenCalledWith({
+      stage: "host-team",
+      message: "Restarting Traycer on this computer to run as Acme…",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits: null,
+    });
+    expect(progress).toHaveBeenCalledTimes(TEAM_TRANSFER_DISCLOSURE.length + 1);
+    const disclosureMessages = progress.mock.calls
+      .map(([info]) => info.message)
+      .filter((message) =>
+        TEAM_TRANSFER_DISCLOSURE.some((disclosure) => disclosure === message),
+      );
+    expect(disclosureMessages).toEqual([...TEAM_TRANSFER_DISCLOSURE]);
   });
 
   it("prefers an exact team slug when another team's display label collides", async () => {
@@ -419,10 +539,14 @@ describe("install auth helpers", () => {
       );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).resolves.toEqual(teamBinding);
 
     expect(
@@ -462,10 +586,14 @@ describe("install auth helpers", () => {
       );
 
     await expect(
-      completeTeamInstall(teamEnvironment.environmentId, {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        teamEnvironment.environmentId,
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).resolves.toEqual(teamBinding);
 
     expect(
@@ -509,10 +637,14 @@ describe("install auth helpers", () => {
         );
       });
 
-    await completeTeamInstall("team/acme", {
-      preflight: { state: "signed-in-inline", reason: null },
-      inlineSignInToken: token,
-    });
+    await completeTeamInstall(
+      "team/acme",
+      {
+        preflight: { state: "signed-in-inline", reason: null },
+        inlineSignInToken: token,
+      },
+      vi.fn(),
+    );
 
     expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
       "environment.list",
@@ -572,10 +704,14 @@ describe("install auth helpers", () => {
     );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in-inline", reason: null },
-        inlineSignInToken: token,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in-inline", reason: null },
+          inlineSignInToken: token,
+        },
+        vi.fn(),
+      ),
     ).rejects.toThrow();
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
@@ -627,10 +763,14 @@ describe("install auth helpers", () => {
         ),
       );
 
-    const operation = completeTeamInstall("acme", {
-      preflight: { state: "signed-in", reason: null },
-      inlineSignInToken: null,
-    });
+    const operation = completeTeamInstall(
+      "acme",
+      {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      },
+      vi.fn(),
+    );
     await readStarted;
     let settled = false;
     void operation.then(
@@ -709,10 +849,14 @@ describe("install auth helpers", () => {
       );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).resolves.toEqual(teamBinding);
 
     const bindCalls = mocks.callHostRpcAtResolvedEndpointMock.mock.calls.filter(
@@ -740,10 +884,14 @@ describe("install auth helpers", () => {
     );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({
       code: "E_ENVIRONMENT_NOT_A_MEMBER",
       message: "Join the team before adding this computer.",
@@ -787,10 +935,14 @@ describe("install auth helpers", () => {
         .mockResolvedValueOnce(confirmation);
 
       await expect(
-        completeTeamInstall("acme", {
-          preflight: { state: "signed-in", reason: null },
-          inlineSignInToken: null,
-        }),
+        completeTeamInstall(
+          "acme",
+          {
+            preflight: { state: "signed-in", reason: null },
+            inlineSignInToken: null,
+          },
+          vi.fn(),
+        ),
       ).rejects.toMatchObject({
         code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
         exitCode: 1,
@@ -834,10 +986,14 @@ describe("install auth helpers", () => {
       );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({
       code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
       exitCode: 1,
@@ -881,10 +1037,14 @@ describe("install auth helpers", () => {
       );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({
       code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
       exitCode: 1,
@@ -919,7 +1079,7 @@ describe("install auth helpers", () => {
         );
       });
 
-    await completeTeamInstall("acme", session);
+    await completeTeamInstall("acme", session, vi.fn());
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
       replacement,
@@ -949,10 +1109,14 @@ describe("install auth helpers", () => {
     await writeStoredCredentials(token);
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in-inline", reason: null },
-        inlineSignInToken: token,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in-inline", reason: null },
+          inlineSignInToken: token,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({ code: "E_HOST_REQUEST_OUTCOME_UNKNOWN" });
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
@@ -971,10 +1135,14 @@ describe("install auth helpers", () => {
       ),
     );
 
-    const binding = await completeTeamInstall("acme", {
-      preflight: { state: "signed-in", reason: null },
-      inlineSignInToken: null,
-    });
+    const binding = await completeTeamInstall(
+      "acme",
+      {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      },
+      vi.fn(),
+    );
 
     expect(binding).toEqual(teamBinding);
     expect(
@@ -994,10 +1162,14 @@ describe("install auth helpers", () => {
     );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_IS_SANDBOX });
   });
 
@@ -1010,10 +1182,14 @@ describe("install auth helpers", () => {
     );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
       message:
@@ -1035,10 +1211,14 @@ describe("install auth helpers", () => {
         ),
       );
 
-    await completeTeamInstall("acme", {
-      preflight: { state: "signed-in", reason: null },
-      inlineSignInToken: null,
-    });
+    await completeTeamInstall(
+      "acme",
+      {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      },
+      vi.fn(),
+    );
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
       token,

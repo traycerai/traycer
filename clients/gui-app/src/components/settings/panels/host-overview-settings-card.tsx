@@ -453,7 +453,7 @@ function TeamEnvironmentSourceControl(
             </DialogTitle>
             <DialogDescription>
               The team will own this computer. Any member of the team can claim
-              it as their own.
+              it as their own. Traycer restarts once on this computer.
             </DialogDescription>
           </DialogHeader>
           <ul className="list-disc space-y-2 pl-5 text-ui-sm">

@@ -333,8 +333,9 @@ describe("buildHostEnsureCommand", () => {
       baseEnsureResult({ action: "noop", serviceLifecycle: null }),
     );
 
+    const ctx = fakeCtx();
     const result = await buildHostEnsureCommand(baseArgs({ team: "acme" }))(
-      fakeCtx(),
+      ctx,
     );
 
     expect(result.data).toMatchObject({ teamBinding: teamBindingFixture });
@@ -345,6 +346,7 @@ describe("buildHostEnsureCommand", () => {
         preflight: { state: "signed-in", reason: null },
         inlineSignInToken: null,
       }),
+      ctx.progress,
     );
   });
 
@@ -446,8 +448,17 @@ describe("buildHostEnsureCommand", () => {
       hostId: "host-local",
       environmentId: "environment-acme",
     };
+    const ctx = fakeCtx();
     mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
-    mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
+    mocks.waitForTeamTokenInstallMock.mockImplementation(async () => {
+      expect(ctx.progress).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stage: "host-team",
+          message: "Waiting for this computer to join the team…",
+        }),
+      );
+      return receipt;
+    });
     mocks.ensureHostMock.mockResolvedValue(
       baseEnsureResult({
         action: "started",
@@ -463,7 +474,7 @@ describe("buildHostEnsureCommand", () => {
 
     const result = await buildHostEnsureCommand(
       baseArgs({ team: "environment-acme" }),
-    )(fakeCtx());
+    )(ctx);
 
     expect(mocks.callOrder).toEqual([
       "team-token-prepare",

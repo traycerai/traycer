@@ -265,6 +265,47 @@ afterEach(() => {
 });
 
 describe("<EnvironmentPicker />", () => {
+  it("defaults a listed active sandbox to Personal without reading a Local status", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: null,
+        teamOwned: false,
+        ownerKind: "unknown",
+      },
+    });
+    render(
+      <EnvironmentPicker
+        scope={hostScopeFixture({
+          hosts: [host],
+          host,
+          activeHostId: host.hostId,
+        })}
+        activeSection="skills"
+      />,
+    );
+    expect(screen.getByTestId("environment-picker-trigger").textContent).toBe(
+      "Personal",
+    );
+    expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
+      PERSONAL_PICK,
+    );
+  });
+
+  it("shows loading without claiming Personal until the window host answers", () => {
+    answer("mac", null, V11);
+    const view = renderPicker("mac");
+    const trigger = screen.getByTestId("environment-picker-trigger");
+    expect(screen.getByRole("button", { name: "Environment" })).toBe(trigger);
+    expect(trigger.textContent).not.toContain("Personal");
+    expect(trigger.querySelector("[aria-hidden=true]")).not.toBeNull();
+    answer("mac", awaiting, V11);
+    view.rerender(pickerElement("mac"));
+    expect(trigger.textContent).toBe("MacBook ProRuns its own settings");
+  });
+
   it("draws an awaiting_consent host under its own-settings group and opens the move sheet", () => {
     answer("mac", running, V11);
     answer("dev", running, V11);
@@ -419,6 +460,7 @@ describe("<EnvironmentPicker />", () => {
     cleanup();
 
     useSettingsEnvironmentPickStore.setState({ defaultPick: PERSONAL_PICK });
+    answer("mac", running, V11);
     renderPicker("mac");
     expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
       PERSONAL_PICK,

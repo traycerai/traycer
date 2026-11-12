@@ -11,6 +11,7 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   PERSONAL_PICK,
+  UNRESOLVED_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 
@@ -206,13 +207,18 @@ export function environmentPickerModel(input: {
   }
   const windowRow =
     localRows.find((row) => row.hostId === input.windowHostId) ?? null;
-  return {
-    localRows,
-    defaultPick:
+  const windowStatusKnown =
+    input.windowHostId === null ||
+    (input.hosts.some((host) => host.hostId === input.windowHostId) &&
+      (input.statuses.get(input.windowHostId) ?? null) !== null);
+  let defaultPick = UNRESOLVED_PICK;
+  if (windowStatusKnown) {
+    defaultPick =
       windowRow !== null && !windowRow.needsUpdate && windowRow.defaultsToLocal
         ? { kind: "local", hostId: windowRow.hostId, hostName: windowRow.name }
-        : PERSONAL_PICK,
-  };
+        : PERSONAL_PICK;
+  }
+  return { localRows, defaultPick };
 }
 
 /**

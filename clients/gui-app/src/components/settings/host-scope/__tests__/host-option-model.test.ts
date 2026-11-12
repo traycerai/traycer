@@ -315,6 +315,7 @@ describe("hostOptionStatusWord - a sandbox's lifecycle word against its health",
         state: input.state,
         frozen: input.frozen,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -398,6 +399,7 @@ describe("sandboxWordYieldsToHealth", () => {
         state: input.state,
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });

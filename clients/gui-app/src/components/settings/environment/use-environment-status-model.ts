@@ -27,15 +27,23 @@ export function useEnvironmentStatusModel(scope: HostScope): {
     hostIds,
     "environment.status",
   );
+  const windowHost = scope.hosts.find(
+    (host) => host.hostId === scope.activeHostId,
+  );
+  // A listed sandbox has no own-settings row; an unlisted host is still unknown.
+  const windowHostId =
+    windowHost !== undefined && windowHost.sandbox !== null
+      ? null
+      : scope.activeHostId;
   const picker = useMemo(
     () =>
       environmentPickerModel({
         hosts,
         statuses,
         versions,
-        windowHostId: scope.activeHostId,
+        windowHostId,
       }),
-    [hosts, statuses, versions, scope.activeHostId],
+    [hosts, statuses, versions, windowHostId],
   );
   return { picker, statuses };
 }
