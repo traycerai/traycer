@@ -22,6 +22,7 @@ const reads = vi.hoisted(() => ({
       isError: false,
     },
   },
+  bindingOwnSettings: false,
   bindingSupport: true as boolean | null,
 }));
 
@@ -29,7 +30,8 @@ vi.mock("@/hooks/environment/use-environment-reads", () => ({
   useEnvironmentStatusRead: () => reads.status,
 }));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
-  useEnvironmentHostReadQuery: () => reads.binding,
+  useEnvironmentHostReadQuery: () =>
+    reads.bindingOwnSettings ? { kind: "own_settings" } : reads.binding,
 }));
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
   readsHostBindingsFromPool: () => false,
@@ -74,6 +76,7 @@ function mount(usable: boolean, hostId: string | null): void {
 beforeEach(() => {
   reads.status = { data: null, supported: true, isError: false };
   reads.binding = { kind: "binding", query: { data: null, isError: false } };
+  reads.bindingOwnSettings = false;
   reads.bindingSupport = true;
 });
 
@@ -160,6 +163,21 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("combobox", { name: "Environment" }));
     expect(screen.getByText("Personal")).toBeTruthy();
+  });
+
+  it("renders a Local row when status is supported and host binding is unsupported", () => {
+    reads.status.data = environmentStatusFixture({
+      principal: null,
+      planes: { records: "local", broker: "local", room: "local" },
+    });
+    reads.bindingOwnSettings = true;
+    reads.bindingSupport = false;
+
+    mount(true, "host-a");
+
+    expect(
+      screen.getByText("Runs its own settings, not in Personal yet"),
+    ).toBeTruthy();
   });
 
   it("keeps the row's skeleton while binding support is unknown", () => {

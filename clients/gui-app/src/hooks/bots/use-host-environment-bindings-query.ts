@@ -222,8 +222,12 @@ export function useHostEnvironmentBindings(
         } else if (result.data !== undefined) {
           byHostId.set(hostId, result.data);
         } else if (result.status === "error") {
+          // The status that let the binding be asked is re-read too: a host
+          // moved to its own settings since then is no longer asked.
           failedHostIds.push(hostId);
-          failedRetries.push(result.refetch);
+          failedRetries.push(() =>
+            Promise.all([refetchStatus(hostId), result.refetch()]),
+          );
         }
       });
       return {

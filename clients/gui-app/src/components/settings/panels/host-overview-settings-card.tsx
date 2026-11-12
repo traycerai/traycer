@@ -690,7 +690,7 @@ export function HostOverviewSettingsCardSlot(props: {
     props.hostId === null ||
     status.supported === false ||
     status.isError ||
-    bindingSupport === false ||
+    (bindingSupport === false && binding.kind !== "own_settings") ||
     binding.kind === "failed" ||
     (binding.kind === "binding" && binding.query.isError)
   ) {

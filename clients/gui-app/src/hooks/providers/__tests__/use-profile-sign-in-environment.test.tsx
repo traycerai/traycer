@@ -12,6 +12,7 @@ import type {
   EnvironmentDescriptorV11,
   EnvironmentHostBinding,
 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import { useProfileSignInEnvironment } from "@/hooks/providers/use-profile-sign-in-environment";
 import {
   PersonalPageContext,
@@ -49,6 +50,8 @@ const BINDING: EnvironmentHostBinding = {
   enrolledByUserId: null,
   canUnbind: false,
 };
+let statusAnswers: ReadonlyArray<EnvironmentStatusResponseV12> = [];
+let bindingFails = false;
 
 function personalPageValue(
   client: PersonalPageContextValue["client"],
@@ -93,11 +96,14 @@ function buildClient() {
     hostId: HOST_ID,
     handlers: {
       "environment.status": () => {
+        const answer = statusAnswers[requests.status] ?? localStatus();
         requests.status += 1;
-        return localStatus();
+        return answer;
       },
       "environment.host.read": () => {
         requests.binding += 1;
+        if (bindingFails)
+          return Promise.reject(new Error("binding unavailable"));
         return { ...BINDING, sharingGeneration: null };
       },
       "environment.list": () => {
@@ -116,6 +122,8 @@ function buildClient() {
 
 beforeEach(() => {
   settleProcessHostRpcTierPlan(null);
+  statusAnswers = [];
+  bindingFails = false;
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: "viewer", username: "viewer" },
@@ -157,5 +165,32 @@ describe("useProfileSignInEnvironment", () => {
     expect(requests.status).toBeGreaterThan(0);
     expect(requests.binding).toBe(0);
     expect(requests.list).toBe(0);
+  });
+
+  it("rechecks status after a failed binding and answers local", async () => {
+    statusAnswers = [
+      environmentStatusFixture({ principal: { kind: "personal" } }),
+      localStatus(),
+    ];
+    bindingFails = true;
+    const { client, requests } = buildClient();
+    const { result } = renderHook(() => useProfileSignInEnvironment(client), {
+      wrapper: wrapperFor(null),
+    });
+
+    await waitFor(() => {
+      expect(result.current.kind).toBe("failed");
+    });
+    expect(requests.status).toBe(1);
+    expect(requests.binding).toBe(1);
+
+    const failed = result.current;
+    if (failed.kind !== "failed") throw new Error("Expected failed binding");
+    failed.retry();
+
+    await waitFor(() => {
+      expect(result.current).toEqual({ kind: "local" });
+    });
+    expect(requests.status).toBe(2);
   });
 });

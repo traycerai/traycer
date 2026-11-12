@@ -159,7 +159,12 @@ function boundSignInEnvironment(
     return { kind: "failed", retry: binding.retry };
   const query = binding.query;
   if (query.isError) {
-    return { kind: "failed", retry: () => void query.refetch() };
+    // Re-read the status too: a host moved to its own settings signs in locally.
+    const retry = (): void => {
+      void status.refetch();
+      void query.refetch();
+    };
+    return { kind: "failed", retry };
   }
   if (query.data === undefined) return { kind: "reading" };
   const environmentId = query.data.environment.environmentId;

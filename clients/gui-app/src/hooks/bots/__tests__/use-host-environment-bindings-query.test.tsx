@@ -131,6 +131,48 @@ describe("useHostEnvironmentBindings retry", () => {
     expect(bindingCalls).toBe(1);
   });
 
+  it("rechecks status when retrying a failed binding and classifies the host as Local", async () => {
+    let statusCalls = 0;
+    const { spine } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.status": () => {
+          statusCalls += 1;
+          return statusCalls === 1
+            ? environmentStatusFixture({ principal: { kind: "personal" } })
+            : environmentStatusFixture({
+                principal: null,
+                planes: { records: "local", broker: "local", room: "local" },
+              });
+        },
+        "environment.host.read": () =>
+          Promise.reject(new Error("binding unavailable")),
+      },
+    });
+    runtime.client = spine;
+    recordNegotiatedHostManifest(HOST_ID, {
+      "environment.status": { major: 1, minor: 1 },
+      "environment.host.read": { major: 1, minor: 1 },
+    });
+    const { result } = renderHook(
+      () => useHostEnvironmentBindings([HOST_ID], true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.failedHostIds).toEqual([HOST_ID]);
+    });
+    expect(statusCalls).toBe(1);
+
+    result.current.retryFailed();
+
+    await waitFor(() => {
+      expect(result.current.ownSettingsHostIds).toEqual([HOST_ID]);
+      expect(result.current.failedHostIds).toEqual([]);
+    });
+    expect(statusCalls).toBe(2);
+  });
+
   it("retries a failed status and classifies the host as Local without reading its binding", async () => {
     let statusCalls = 0;
     let bindingCalls = 0;
