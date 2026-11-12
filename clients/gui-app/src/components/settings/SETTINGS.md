@@ -176,7 +176,11 @@ desktop in its own flag (`moveInvitationAnswered`), not the reminder's, so
 someone who dismissed the reminder long ago is still asked once; it settles
 the reminder too. Afterwards the checklist's move card is the only place the
 move waits. A computer that runs a team's settings, or has moved, is never
-asked (`useThisComputersMove` answers `team` or `moved`).
+asked (`useThisComputersMove` answers `team` or `moved`). One ask at a time:
+while the invitation is owed, or the move sheet is open, the session-import
+and login-import announcements are held, unclaimed, and show once it is
+answered (`useMoveAskHoldsAnnouncements`); otherwise following the invitation
+would open the sheet under an announcement at the toaster's corner.
 
 The Home tab draws the checklist itself, above its task sections
 (`home-focus/home-getting-started-section.tsx`), from the same cards

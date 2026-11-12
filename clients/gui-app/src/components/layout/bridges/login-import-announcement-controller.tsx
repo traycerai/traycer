@@ -7,6 +7,7 @@ import {
   useSurfaceReadiness,
   windowNarratorOwns,
 } from "@/components/layout/host-readiness-controller-context";
+import { useMoveAskHoldsAnnouncements } from "@/components/settings/move/use-move-ask-holds-announcements";
 import { useLoginImportAvailable } from "@/hooks/browser/use-login-import-available";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -43,7 +44,10 @@ const LOGIN_IMPORT_ANNOUNCEMENT_TOAST_ID = "traycer-login-import-announcement";
  *   reads, so the two cannot disagree. Held, not dropped: the effect re-runs
  *   when the narrator releases;
  * - Settings is reachable: the system-tab modal API is published, so the
- *   action has somewhere to go (see `settingsReachable` below).
+ *   action has somewhere to go (see `settingsReachable` below);
+ * - this computer's move ask is not owed and its sheet is not open
+ *   (`useMoveAskHoldsAnnouncements`): one ask at a time. Held, not a reason
+ *   to dismiss, so it shows once the move is answered.
  *
  * The primary action arms the one-shot intent BEFORE navigating, so the row
  * that mounts on the General section finds it armed and opens the dialog;
@@ -56,6 +60,9 @@ export function LoginImportAnnouncementController(): null {
   const signedIn = useAuthStore((state) => state.status === "signed-in");
   const onboardingComplete = useOnboardingStore(
     (state) => state.completedAt !== null,
+  );
+  const moveAskHolds = useMoveAskHoldsAnnouncements(
+    signedIn && onboardingComplete,
   );
   const tourOpen = useOnboardingTourOpenStore((state) => state.open);
   const consumed = useFeatureAnnouncementsStore((state) =>
@@ -99,7 +106,7 @@ export function LoginImportAnnouncementController(): null {
       return;
     }
     if (consumed || !available || !signedIn || !onboardingComplete) return;
-    if (tourOpen || narrated || !settingsReachable) return;
+    if (tourOpen || narrated || !settingsReachable || moveAskHolds) return;
     // A claim, not a consume: `consumed` above is this window's copy, and a
     // second window restored alongside this one holds its own. The claim
     // re-reads the install's record, so of two windows that both get here
@@ -130,6 +137,7 @@ export function LoginImportAnnouncementController(): null {
     available,
     claim,
     consumed,
+    moveAskHolds,
     narrated,
     onboardingComplete,
     settingsReachable,
