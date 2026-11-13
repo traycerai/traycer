@@ -440,6 +440,11 @@ function turnReport(
       };
     case "cursor":
       return NO_REPORT;
+    // Staging: antigravity has no terminal-agent hook flow until the host ships
+    // its `agy` launch adapter, so it reports nothing — like the reserved
+    // cursor value.
+    case "antigravity":
+      return NO_REPORT;
   }
 }
 
