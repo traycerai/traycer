@@ -129,6 +129,7 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   threadAnchorKinds: [],
   chooseOption: null,
   answerQuestion: null,
+  answerQuestions: null,
   discussQuestion: null,
   failedRequest: () => null,
   openTurn: null,
@@ -355,10 +356,16 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
       kind: "thread",
       chooseOption: null,
       answerQuestion: null,
+      answerQuestions: null,
       discussQuestion: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
+      opening: {
+        messageId: "post-1",
+        conversationId: "channel-1",
+        show: vi.fn(),
+      },
     });
 
     expect(screen.queryByRole("status")).toBeNull();

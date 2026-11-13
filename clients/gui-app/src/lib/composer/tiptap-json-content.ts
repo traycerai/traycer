@@ -190,6 +190,17 @@ export function mentionAttrsFromAttachment(
     };
   }
 
+  if (mention.contextType === "host") {
+    return {
+      contextType: "host",
+      id: mention.hostId,
+      hostId: mention.hostId,
+      path: mention.path,
+      label: mention.label,
+      description: mention.description,
+    };
+  }
+
   if (mention.contextType === "worktree") {
     return {
       contextType: "worktree",

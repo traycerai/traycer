@@ -6,11 +6,13 @@ import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-ru
 import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
 import type { EpicReadArtifactObjectRequest } from "@traycer/protocol/host/epic/artifact-objects";
+import type { EpicEditArtboardRequest } from "@traycer/protocol/host/epic/artboard-edit";
 import type {
   CommentThreadWire,
   CreateCommentThreadRequest,
   ListCommentThreadsRequest,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { insertTid } from "@traycer/html-source";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
@@ -21,6 +23,7 @@ import type {
   SandboxArtifactRequest,
 } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import { fetchRemoteHosts } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { HtmlArtifactCommentSurface } from "@/components/html-artifact/html-artifact-comment-surface";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
@@ -44,7 +47,9 @@ import {
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { requestCommentThreadAnchorReveal } from "@/lib/comments/comment-editor-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
@@ -64,6 +69,10 @@ const HOST_ID = "comment-mode-host";
 const FRAME_TITLE = "Comment page";
 const ENTRY_PATH = "index.html";
 const PAGE_SHA = "a".repeat(64);
+const DETAIL_PATH = "detail.html";
+const DETAIL_SHA = "d".repeat(64);
+const BROKEN_PATH = "broken.html";
+const BROKEN_SHA = "e".repeat(64);
 const SECTION_COUNT = 42;
 const DEEP_SECTION = 32;
 
@@ -82,26 +91,31 @@ const sections = Array.from({ length: SECTION_COUNT }, (_, index) => {
   return `<section class="block"><h2>Section ${String(number)}</h2><p>Paragraph ${String(number)} of the page.</p></section>`;
 }).join("");
 
-const PAGE_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+const PAGE_STYLE = `<style>
 html,body{margin:0}
 body{font:16px/1.4 sans-serif}
 .controls{padding:16px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 button,a,summary{font:inherit}
 #note{width:200px}
 section{min-height:140px;padding:12px 16px;border-top:1px solid #ddd}
-#deep{display:block;margin:0;padding:12px 16px;background:#e8eef8}
+#deep,#marked,#top{display:block;margin:0;padding:12px 16px;background:#e8eef8}
+#fresh{margin:0;padding:12px 16px;background:#f4f0e6}
 .rows{margin:0;padding:0;list-style:none}
 .rows li{margin:0;padding:0;font-size:12px;line-height:14px}
-</style></head><body>
-<div class="controls">
+</style>`;
+
+const PAGE_CONTROLS = `<div class="controls">
 <button id="counter" type="button">count 0</button>
 <button id="touch" type="button">touch 0</button>
 <a id="away" href="other.html">Leave</a>
+<a id="detail" href="${DETAIL_PATH}">Detail</a>
+<a id="broken" href="${BROKEN_PATH}">Broken</a>
 <details id="fold"><summary id="fold-summary">Fold</summary><p>Inside the fold</p></details>
 <input id="note" aria-label="Note">
-</div>
-${sections}
-<script>
+<p id="fresh">A fresh paragraph to comment on.</p>
+</div>`;
+
+const PAGE_BEHAVIOR = `<script>
 document.documentElement.dataset.loadId = String(Math.random());
 document.documentElement.dataset.escaped = "0";
 document.getElementById("counter").addEventListener("click", () => {
@@ -119,8 +133,18 @@ window.addEventListener("keydown", (event) => {
   const next = Number(document.documentElement.dataset.escaped || "0") + 1;
   document.documentElement.dataset.escaped = String(next);
 });
-</script>
-</body></html>`;
+</script>`;
+
+function pageDocument(body: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8">${PAGE_STYLE}</head><body>${body}${PAGE_BEHAVIOR}</body></html>`;
+}
+
+const PAGE_HTML = pageDocument(
+  `<p id="top" data-tid="top">On the entry page.</p>${PAGE_CONTROLS}${sections}`,
+);
+const DETAIL_HTML = pageDocument(
+  `${PAGE_CONTROLS}<p id="marked" data-tid="marked">Marked on the detail page.</p>`,
+);
 
 interface ServedFile {
   readonly status: number;
@@ -129,6 +153,9 @@ interface ServedFile {
 }
 interface CommentModeProbe {
   readonly serve: (url: string) => Promise<ServedFile>;
+  /** What the comments panel calls: select the thread, then ask its editor to reveal it. */
+  readonly revealThread: (threadId: string) => void;
+  readonly lastThreadId: () => string | null;
 }
 interface ProbeWindow extends Window {
   __commentModeProbe?: CommentModeProbe;
@@ -136,22 +163,62 @@ interface ProbeWindow extends Window {
 const probeWindow: ProbeWindow = window;
 
 const pageBytes = new TextEncoder().encode(PAGE_HTML);
-const manifest: ArtifactManifest = {
+const detailBytes = new TextEncoder().encode(DETAIL_HTML);
+const bytesBySha = new Map<string, Uint8Array>([
+  [PAGE_SHA, pageBytes],
+  [DETAIL_SHA, detailBytes],
+]);
+
+function manifestFile(
+  sha256: string,
+  bytes: Uint8Array,
+): ArtifactManifest["files"][string] {
+  return {
+    sha256,
+    byteLength: bytes.length,
+    mediaType: "text/html",
+    status: "local-only",
+  };
+}
+
+let currentManifest: ArtifactManifest = {
   files: {
-    [ENTRY_PATH]: {
-      sha256: PAGE_SHA,
-      byteLength: pageBytes.length,
+    [ENTRY_PATH]: manifestFile(PAGE_SHA, pageBytes),
+    [DETAIL_PATH]: manifestFile(DETAIL_SHA, detailBytes),
+    // Present, so a link here is a page whose bytes never arrive.
+    [BROKEN_PATH]: {
+      sha256: BROKEN_SHA,
+      byteLength: 1,
       mediaType: "text/html",
       status: "local-only",
     },
   },
 };
+const manifestListeners = new Set<(manifest: ArtifactManifest) => void>();
+
+function publishManifest(next: ArtifactManifest): void {
+  currentManifest = next;
+  for (const listener of manifestListeners) listener(next);
+}
+
+/** The bytes a later navigation must be served, published once the comment lands. */
+let pendingStamp: {
+  readonly path: string;
+  readonly sha256: string;
+  readonly bytes: Uint8Array;
+} | null = null;
+let stampCount = 0;
+let createdCount = 0;
+let lastCreatedThreadId: string | null = null;
+
 const readSpan: ArtifactReadSpan = (hash, offset, length, signal) => {
   signal.throwIfAborted();
-  if (hash !== PAGE_SHA) return Promise.resolve({ unavailable: "missing" });
+  if (hash === BROKEN_SHA) return Promise.resolve({ unavailable: "failed" });
+  const bytes = bytesBySha.get(hash);
+  if (bytes === undefined) return Promise.resolve({ unavailable: "missing" });
   return Promise.resolve({
-    bytes: pageBytes.slice(offset, offset + length),
-    totalBytes: pageBytes.length,
+    bytes: bytes.slice(offset, offset + length),
+    totalBytes: bytes.length,
     mediaType: "text/html",
   });
 };
@@ -238,6 +305,11 @@ class FixtureArtifactBridge implements SandboxArtifactBridge {
 const artifactBridge = new FixtureArtifactBridge();
 probeWindow.__commentModeProbe = {
   serve: (url) => artifactBridge.serve(url),
+  revealThread: (threadId) => {
+    useCommentThreadsStore.getState().setActiveThread(EPIC_ID, threadId);
+    requestCommentThreadAnchorReveal(EPIC_ID, ARTIFACT_ID, threadId);
+  },
+  lastThreadId: () => lastCreatedThreadId,
 };
 
 const files: Record<string, ArtifactObjectRef> = {
@@ -261,6 +333,38 @@ const artifact: ArtifactProjection = {
   status: null,
   createdManually: false,
   head: { files, capturedAt: 0 },
+};
+
+const TOP_THREAD: CommentThreadWire = {
+  threadId: "thread-top",
+  resolved: false,
+  createdAt: 0,
+  comments: [
+    {
+      commentId: "thread-top-c1",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "about the top of the entry page" },
+            ],
+          },
+        ],
+      },
+      createdAt: 0,
+      updatedAt: null,
+      author: { userId: "user-1", fallbackHandle: "You" },
+    },
+  ],
+  data: {
+    createdByUserId: "user-1",
+    anchorKind: "element",
+    artboard: ENTRY_PATH,
+    elementId: "top",
+    label: "Top",
+  },
 };
 
 const DEEP_THREAD: CommentThreadWire = {
@@ -293,6 +397,38 @@ const DEEP_THREAD: CommentThreadWire = {
   },
 };
 
+const MARKED_THREAD: CommentThreadWire = {
+  threadId: "thread-marked",
+  resolved: false,
+  createdAt: 2,
+  comments: [
+    {
+      commentId: "thread-marked-c1",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "about the marked paragraph" }],
+          },
+        ],
+      },
+      createdAt: 2,
+      updatedAt: null,
+      author: { userId: "user-1", fallbackHandle: "You" },
+    },
+  ],
+  data: {
+    createdByUserId: "user-1",
+    anchorKind: "element",
+    artboard: DETAIL_PATH,
+    elementId: "marked",
+    label: "Marked",
+  },
+};
+
+let threads: CommentThreadWire[] = [TOP_THREAD, DEEP_THREAD, MARKED_THREAD];
+
 useAuthStore
   .getState()
   .setSignedIn(
@@ -321,7 +457,7 @@ epicHandle.store.setState({
   durabilityStatus: "local",
   recordsTransportStatus: "open",
   artifacts: { byId: { [ARTIFACT_ID]: artifact }, allIds: [ARTIFACT_ID] },
-  commentThreads: { byArtifactId: { [ARTIFACT_ID]: [DEEP_THREAD] } },
+  commentThreads: { byArtifactId: { [ARTIFACT_ID]: threads } },
 });
 recordNegotiatedHostManifest(HOST_ID, {
   "epic.createCommentThread": { major: 1, minor: 3 },
@@ -383,21 +519,118 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
       }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
       "epic.readArtifactObject": (request: EpicReadArtifactObjectRequest) => {
-        if (request.sha256 !== PAGE_SHA)
+        if (request.sha256 === BROKEN_SHA)
+          return { kind: "unavailable", reason: "failed" };
+        const bytes = bytesBySha.get(request.sha256);
+        if (bytes === undefined)
           return { kind: "unavailable", reason: "missing" };
         return {
           kind: "text",
-          text: PAGE_HTML,
+          text: new TextDecoder().decode(bytes),
           mediaType: "text/html",
           networkPolicy: "https-only",
         };
       },
       "epic.listCommentThreads": (_request: ListCommentThreadsRequest) => ({
-        threads: [DEEP_THREAD],
+        threads,
       }),
-      "epic.createCommentThread": (_request: CreateCommentThreadRequest) => ({
-        threadId: "thread-posted",
-      }),
+      "epic.editArtboard": (request: EpicEditArtboardRequest) => {
+        if (request.edit.kind !== "insert-tid-only") {
+          return {
+            ok: false as const,
+            reason: "unsupported",
+            detail: "This fixture only stamps a comment id.",
+          };
+        }
+        const current = bytesBySha.get(request.servedSha256);
+        if (current === undefined) {
+          return {
+            ok: false as const,
+            reason: "missing",
+            detail: "The page being commented on is not served.",
+          };
+        }
+        stampCount += 1;
+        const tid = `comment-${String(stampCount)}`;
+        const edited = insertTid(
+          new TextDecoder().decode(current),
+          request.locator,
+          tid,
+        );
+        if (!edited.ok) {
+          return {
+            ok: false as const,
+            reason: edited.reason,
+            detail: "The comment id could not be written into the page.",
+          };
+        }
+        const sha256After = stampCount.toString(16).padStart(64, "0");
+        const stamped = new TextEncoder().encode(edited.text);
+        // Available to the next read immediately. The manifest the frame is
+        // serving moves only once the comment itself has been created, which
+        // is after the live document has adopted this revision.
+        bytesBySha.set(sha256After, stamped);
+        pendingStamp = {
+          path: request.boardPath,
+          sha256: sha256After,
+          bytes: stamped,
+        };
+        return {
+          ok: true as const,
+          tid,
+          sha256After,
+          splices: edited.splices,
+        };
+      },
+      "epic.createCommentThread": (request: CreateCommentThreadRequest) => {
+        createdCount += 1;
+        const threadId = `thread-posted-${String(createdCount)}`;
+        const anchor = request.anchor;
+        if (anchor !== undefined && anchor.kind === "element") {
+          const thread: CommentThreadWire = {
+            threadId,
+            resolved: false,
+            createdAt: 10 + createdCount,
+            comments: [
+              {
+                commentId: `${threadId}-c1`,
+                content: request.content,
+                createdAt: 10 + createdCount,
+                updatedAt: null,
+                author: { userId: "user-1", fallbackHandle: "You" },
+              },
+            ],
+            data: {
+              createdByUserId: "user-1",
+              anchorKind: "element",
+              artboard: anchor.artboard,
+              elementId: anchor.elementId,
+              label: anchor.label,
+            },
+          };
+          threads = [...threads, thread];
+          epicHandle.store.setState({
+            commentThreads: { byArtifactId: { [ARTIFACT_ID]: threads } },
+          });
+          if (pendingStamp !== null && pendingStamp.path === anchor.artboard) {
+            const stamped = pendingStamp;
+            const previous = currentManifest.files[stamped.path];
+            publishManifest({
+              files: {
+                ...currentManifest.files,
+                [stamped.path]: {
+                  ...previous,
+                  sha256: stamped.sha256,
+                  byteLength: stamped.bytes.length,
+                },
+              },
+            });
+            pendingStamp = null;
+          }
+        }
+        lastCreatedThreadId = threadId;
+        return { threadId };
+      },
     },
   });
 
@@ -421,6 +654,13 @@ function RequestContext(props: { readonly children: ReactNode }): ReactNode {
 }
 
 export function CommentModeFixture(): ReactNode {
+  const [manifest, setManifest] = useState(currentManifest);
+  useEffect(() => {
+    manifestListeners.add(setManifest);
+    return () => {
+      manifestListeners.delete(setManifest);
+    };
+  }, []);
   return (
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
@@ -429,7 +669,10 @@ export function CommentModeFixture(): ReactNode {
           messengerFactory={messengerFactory}
           invalidator={null}
           requestId={null}
-          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
+          // The runtime disposes itself when this function's identity changes.
+          // A comment publishes a new manifest and re-renders here; a fresh
+          // function would reload the page whose stamp was just adopted.
+          remoteFetcher={fetchRemoteHosts}
           fallback={<div data-fixture-runtime-fallback />}
         >
           <RequestContext>

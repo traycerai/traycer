@@ -10,6 +10,10 @@
  * drawn as the bot's, with no request to show. Every state opens on the
  * channel row the thread answers, drawn by the channel's own row component.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { StrictMode, useSyncExternalStore, type ReactNode } from "react";
 import {
   act,
@@ -24,7 +28,15 @@ import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   HostClient,
   type HostRequester,
@@ -53,6 +65,7 @@ import {
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -150,6 +163,15 @@ const mocks = vi.hoisted(() => ({
     listeners: new Set<() => void>(),
   },
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
@@ -508,6 +530,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
                 hostId={HOST_ID}
                 boundHostId={HOST_ID}
                 imageReach="none"
+                answerReach="each"
                 botTitle="Release Bot"
                 conversationId={CONVERSATION_ID}
                 originMessageId={originOf(thread)}
@@ -2167,8 +2190,7 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
 
-  it("offers Retry and no Edit on a teammate's reply", async () => {
-    const user = userEvent.setup();
+  it("says a teammate's reply failed, with no Retry and no Edit, and sends nothing", () => {
     activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
     mountPanel(listed(VIEWER_USER_ID), [
       memberMessage(
@@ -2180,15 +2202,14 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     ]);
     const row = replyRow();
 
+    expect(within(row).getByTestId("bot-message-unanswered")).toBeTruthy();
+    expect(within(row).queryByTestId("bot-message-retry")).toBeNull();
     expect(within(row).queryByTestId("bot-message-edit")).toBeNull();
-    await user.click(within(row).getByTestId("bot-message-retry"));
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0].redeliver).toEqual({ requestId: REPLY_REQUEST });
-    expect(sent[0].threadId).toBe(THREAD_ID);
+    expect(within(row).queryAllByRole("button", { name: "Retry" })).toEqual([]);
+    expect(sent).toEqual([]);
   });
 
-  it("offers Retry and no Edit on the anchor post a teammate wrote", () => {
+  it("says the anchor post a teammate wrote failed, with no Retry and no Edit", () => {
     channelMessages = [
       memberMessage("anchor-1", POST_REQUEST, "Ship it?", "user-teammate"),
     ];
@@ -2196,9 +2217,10 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     mountPanel(listed("user-teammate"), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");
+    expect(within(anchor).getByTestId("bot-message-unanswered")).toBeTruthy();
     expect(
-      within(anchor).getByTestId("bot-message-unanswered-retry"),
-    ).toBeTruthy();
+      within(anchor).queryByTestId("bot-message-unanswered-retry"),
+    ).toBeNull();
     expect(
       within(anchor).queryByTestId("bot-message-unanswered-edit"),
     ).toBeNull();
@@ -2223,7 +2245,6 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
       label: null,
       originRequestId: null,
       createdByChatId: THREAD_ID,
-      checkins: null,
       inputNeeded: null,
       pause: null,
       stop: null,
@@ -2476,5 +2497,64 @@ describe("<BotThreadPanel /> the replying line as the way into the turn", () => 
 
     expect(screen.getByTestId("bot-thread-replying-strip")).toBe(strip);
     expect(screen.getByTestId("bot-thread-composer")).toBe(composer);
+  });
+});
+
+describe("<BotThreadPanel /> a reply that names the post the thread opens on", () => {
+  function userPost(): Message {
+    return {
+      role: "user",
+      messageId: "anchor-1",
+      sender: { type: "user", userId: "user-teammate" },
+      message: {
+        kind: "user",
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Ship the release today?" }],
+            },
+          ],
+        },
+        browserAnnotations: [],
+      },
+      timestamp: 1_000,
+      sessionAnchor: null,
+    };
+  }
+
+  it("badges the second reply, not the first directly under the post, and shows the post highlighted when chosen", async () => {
+    const user = userEvent.setup();
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    onTestFinished(() => scrolled.mockRestore());
+    channelMessages = [userPost()];
+    mountPanel(listed("user-teammate"), [
+      { ...botReply(null), repliesTo: "anchor-1" },
+      { ...userPost(), messageId: "between-1", timestamp: 2_500 },
+      {
+        ...botReply(null),
+        messageId: "reply-2",
+        timestamp: 3_000,
+        startedAt: 3_000,
+        repliesTo: "anchor-1",
+      },
+    ]);
+
+    const badges = screen.getAllByTestId("bot-reply-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.getAttribute("aria-label")).toBe(
+      "Replying to Tess Teammate: Ship the release today?",
+    );
+    const opening = screen.getByTestId("bot-thread-opening");
+    expect(scrolled).not.toHaveBeenCalled();
+
+    await user.click(badges[0]);
+
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest" });
+    expect(scrolled.mock.contexts).toEqual([opening]);
+    for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
+      expect(opening.classList.contains(token)).toBe(true);
+    }
   });
 });

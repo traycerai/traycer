@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
+  botExpressionOf,
   botWorkingOf,
   failedOn,
   failedOnRequest,
@@ -306,6 +307,43 @@ describe("replyingSessionOf and botWorkingOf", () => {
     expect(botWorkingOf({ trunk: IDLE, threads: { a: IDLE } })).toBe(false);
     expect(botWorkingOf({ trunk: null, threads: {} })).toBeNull();
     expect(botWorkingOf(null)).toBeNull();
+  });
+});
+
+describe("botExpressionOf", () => {
+  const IDLE: BotSessionActivity = {
+    state: "idle",
+    startedAt: null,
+    step: null,
+    requestId: null,
+    reason: null,
+  };
+  const PARKED: BotSessionActivity = { ...IDLE, state: "parked" };
+
+  it("is working while the trunk or any thread replies, even with the trunk parked", () => {
+    expect(botExpressionOf({ trunk: REPLYING, threads: {} })).toBe("working");
+    expect(botExpressionOf({ trunk: IDLE, threads: { a: REPLYING } })).toBe(
+      "working",
+    );
+    expect(botExpressionOf({ trunk: PARKED, threads: { a: REPLYING } })).toBe(
+      "working",
+    );
+  });
+
+  it("is away while the trunk is parked and nothing replies", () => {
+    expect(botExpressionOf({ trunk: PARKED, threads: { a: IDLE } })).toBe(
+      "away",
+    );
+  });
+
+  it("is idle with no activity, an idle or failed trunk, or a parked thread alone", () => {
+    expect(botExpressionOf(null)).toBe("idle");
+    expect(botExpressionOf({ trunk: null, threads: {} })).toBe("idle");
+    expect(botExpressionOf({ trunk: IDLE, threads: { a: IDLE } })).toBe("idle");
+    expect(botExpressionOf({ trunk: FAILED, threads: {} })).toBe("idle");
+    expect(botExpressionOf({ trunk: IDLE, threads: { a: PARKED } })).toBe(
+      "idle",
+    );
   });
 });
 

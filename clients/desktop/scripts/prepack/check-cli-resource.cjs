@@ -3,10 +3,15 @@
 "use strict";
 
 /**
- * Precheck invoked before `electron-builder`. Replaces the previous
- * `check-host-resource.cjs` - Desktop no longer bundles a host. The CLI
- * (single-file SEA, per platform/arch) is the only native asset Desktop
- * ships, staged into `resources/cli/` and mapped to `extraResources/cli/`.
+ * Precheck invoked before `electron-builder`. The CLI (single-file SEA, per
+ * platform/arch) is staged into `resources/cli/<platform>-<arch>/`, and the
+ * host archive rides in that same directory through the existing
+ * extraResources mapping, whose filter already copies every file.
+ * `resources/host` stays the empty placeholder. Release-matrix mode requires
+ * the four host siblings beside the binary: the archive (Windows keeps the
+ * signed asset's real extension), its `.minisig`, the descriptor, and the
+ * descriptor `.minisig`. Host mode (`make install-desktop`) only requires
+ * the CLI.
  *
  * NP-7 publishes per-platform/arch binaries (`traycer-darwin-arm64`,
  * `traycer-win32-x64.exe`, ...). The desktop release workflows rename and
@@ -57,6 +62,22 @@ function parseArgs(argv) {
 
 function cliBinaryName(platform) {
   return platform === "win32" ? "traycer.exe" : "traycer";
+}
+
+// Same names as `bundledHostArchiveNames` in the CLI. Windows arm64 resolves
+// to the x64 host. The drift test imports that function and requires this
+// list to match it, including the arm64 remap and the tar.gz-then-zip order.
+function bundledHostSiblingNames(platform, arch) {
+  const resolvedArch = platform === "win32" && arch === "arm64" ? "x64" : arch;
+  const platformKey = `${platform}-${resolvedArch}`;
+  const extensions = platform === "win32" ? [".tar.gz", ".zip"] : [".tar.gz"];
+  return {
+    platformKey,
+    archives: extensions.map(
+      (extension) => `host-runtime-${platformKey}${extension}`,
+    ),
+    descriptor: `host-runtime-${platformKey}.descriptor.json`,
+  };
 }
 
 function isExecutable(path) {
@@ -121,112 +142,140 @@ function fail(message) {
   process.exit(1);
 }
 
-if (!existsSync(CLI_DIR)) {
-  fail(
-    `CLI resource directory is missing at ${CLI_DIR}.\n` +
-      `         The desktop build refuses to package without a bundled CLI binary.`,
-  );
-}
+function main() {
+  if (!existsSync(CLI_DIR)) {
+    fail(
+      `CLI resource directory is missing at ${CLI_DIR}.\n` +
+        `         The desktop build refuses to package without a bundled CLI binary.`,
+    );
+  }
 
-const { platforms, archs } = parseArgs(process.argv.slice(2));
+  const { platforms, archs } = parseArgs(process.argv.slice(2));
 
-// Explicit-matrix mode: every (platform, arch) pair must have a real
-// executable at resources/cli/<platform>-<arch>/<binary> AND a sibling
-// `version.json` so Desktop's `readBundledCliVersion()` resolves to the
-// actual bundled release version instead of the `0.0.0-local` fallback.
-// Release workflows drive this - both the rename step and the
-// version-metadata staging must land before electron-builder runs.
-if (platforms.length > 0 && archs.length > 0) {
-  const problems = [];
-  for (const p of platforms) {
-    for (const a of archs) {
-      const archDir = join(CLI_DIR, `${p}-${a}`);
-      const binaryPath = join(archDir, cliBinaryName(p));
-      if (!isExecutable(binaryPath)) {
-        problems.push(`missing or non-executable binary: ${binaryPath}`);
-        // Skip metadata check when the binary itself is absent - the
-        // workflow has bigger problems and the metadata-missing message
-        // would just be noise.
-        continue;
-      }
-      const versionPath = join(archDir, VERSION_METADATA_FILENAME);
-      const versionProblem = validateVersionMetadata(versionPath);
-      if (versionProblem.length > 0) {
-        problems.push(versionProblem);
+  // Explicit-matrix mode: every (platform, arch) pair must have a real
+  // executable at resources/cli/<platform>-<arch>/<binary> AND a sibling
+  // `version.json` so Desktop's `readBundledCliVersion()` resolves to the
+  // actual bundled release version instead of the `0.0.0-local` fallback.
+  // Release workflows drive this - both the rename step and the
+  // version-metadata staging must land before electron-builder runs.
+  if (platforms.length > 0 && archs.length > 0) {
+    const problems = [];
+    for (const p of platforms) {
+      for (const a of archs) {
+        const archDir = join(CLI_DIR, `${p}-${a}`);
+        const binaryPath = join(archDir, cliBinaryName(p));
+        if (!isExecutable(binaryPath)) {
+          problems.push(`missing or non-executable binary: ${binaryPath}`);
+          // Skip metadata check when the binary itself is absent - the
+          // workflow has bigger problems and the metadata-missing message
+          // would just be noise.
+          continue;
+        }
+        const versionPath = join(archDir, VERSION_METADATA_FILENAME);
+        const versionProblem = validateVersionMetadata(versionPath);
+        if (versionProblem.length > 0) {
+          problems.push(versionProblem);
+        }
+        const siblings = bundledHostSiblingNames(p, a);
+        const present = siblings.archives.filter((name) =>
+          existsSync(join(archDir, name)),
+        );
+        if (present.length !== 1) {
+          problems.push(
+            `expected exactly one host archive beside ${binaryPath} (${siblings.archives.join(" or ")}); found ${present.length}`,
+          );
+          continue;
+        }
+        const archivePath = join(archDir, present[0]);
+        for (const sidecar of [
+          `${archivePath}.minisig`,
+          join(archDir, siblings.descriptor),
+          join(archDir, `${siblings.descriptor}.minisig`),
+        ]) {
+          if (!existsSync(sidecar)) {
+            problems.push(`missing host sibling: ${sidecar}`);
+          }
+        }
       }
     }
-  }
-  if (problems.length > 0) {
-    fail(
-      `Release-matrix CLI staging failed validation:\n` +
-        problems.map((m) => `         - ${m}`).join("\n"),
+    if (problems.length > 0) {
+      fail(
+        `Release-matrix CLI staging failed validation:\n` +
+          problems.map((m) => `         - ${m}`).join("\n"),
+      );
+    }
+    console.log(
+      `[desktop] CLI resource precheck ok - verified ${platforms.length * archs.length} platform/arch binar${
+        platforms.length * archs.length === 1 ? "y" : "ies"
+      } + version metadata + host archive, signatures, and descriptor under ${CLI_DIR}.`,
     );
+    process.exit(0);
   }
-  console.log(
-    `[desktop] CLI resource precheck ok - verified ${platforms.length * archs.length} platform/arch binar${
-      platforms.length * archs.length === 1 ? "y" : "ies"
-    } + version metadata under ${CLI_DIR}.`,
-  );
-  process.exit(0);
-}
 
-// Host-mode: at minimum the current host needs a usable binary in the
-// arch-scoped layout (`make install-desktop` and the release workflows both
-// stage it there). The flat layout is deliberately NOT accepted: the
-// packager's `${arch}`-scoped mapping never copies it, so a green here
-// would ship an app with no CLI.
-const hostBinary = cliBinaryName(process.platform);
-const archScoped = join(
-  CLI_DIR,
-  `${process.platform}-${process.arch}`,
-  hostBinary,
-);
-const flat = join(CLI_DIR, hostBinary);
-const flatPresent = isExecutable(flat);
-if (isExecutable(archScoped)) {
-  // A flat binary alongside the arch-scoped one does not make the pack
-  // wrong - the flat path sits outside the `from` root of every mapping in
-  // `package.json`, so it cannot reach the bundle and the app still ships
-  // the correct CLI. Refusing here would fail a build whose output is
-  // perfectly good. It IS worth saying out loud though: someone who staged
-  // the flat copy expecting it to ship, next to an arch dir left over from
-  // an older build, would otherwise ship the stale arch-scoped binary and
-  // never learn which one they packaged (host mode has no version check to
-  // catch that - only the release matrix mode above validates version.json).
+  // Host-mode: at minimum the current host needs a usable binary in the
+  // arch-scoped layout (`make install-desktop` and the release workflows both
+  // stage it there). The flat layout is deliberately NOT accepted: the
+  // packager's `${arch}`-scoped mapping never copies it, so a green here
+  // would ship an app with no CLI.
+  const hostBinary = cliBinaryName(process.platform);
+  const archScoped = join(
+    CLI_DIR,
+    `${process.platform}-${process.arch}`,
+    hostBinary,
+  );
+  const flat = join(CLI_DIR, hostBinary);
+  const flatPresent = isExecutable(flat);
+  if (isExecutable(archScoped)) {
+    // A flat binary alongside the arch-scoped one does not make the pack
+    // wrong - the flat path sits outside the `from` root of every mapping in
+    // `package.json`, so it cannot reach the bundle and the app still ships
+    // the correct CLI. Refusing here would fail a build whose output is
+    // perfectly good. It IS worth saying out loud though: someone who staged
+    // the flat copy expecting it to ship, next to an arch dir left over from
+    // an older build, would otherwise ship the stale arch-scoped binary and
+    // never learn which one they packaged (host mode has no version check to
+    // catch that - only the release matrix mode above validates version.json).
+    if (flatPresent) {
+      console.warn(
+        `[desktop] warning: a flat-layout CLI binary is also staged at ${flat}.\n` +
+          `          electron-builder no longer copies it - the packaged app gets\n` +
+          `          ${archScoped}\n` +
+          `          Delete the flat binary so a stale copy cannot be mistaken for the one that ships.`,
+      );
+    }
+    console.log(
+      `[desktop] CLI resource precheck ok - arch-scoped binary present at ${archScoped}.`,
+    );
+    process.exit(0);
+  }
   if (flatPresent) {
-    console.warn(
-      `[desktop] warning: a flat-layout CLI binary is also staged at ${flat}.\n` +
-        `          electron-builder no longer copies it - the packaged app gets\n` +
-        `          ${archScoped}\n` +
-        `          Delete the flat binary so a stale copy cannot be mistaken for the one that ships.`,
+    fail(
+      `Found a flat-layout CLI binary at ${flat}, which electron-builder no longer packages.\n` +
+        `         Move it to the arch-scoped layout: ${archScoped}`,
     );
   }
-  console.log(
-    `[desktop] CLI resource precheck ok - arch-scoped binary present at ${archScoped}.`,
-  );
-  process.exit(0);
-}
-if (flatPresent) {
+
+  // No executable binary for this host - surface what the directory does
+  // contain so the failure is debuggable.
+  let listing = "(empty)";
+  try {
+    const entries = readdirSync(CLI_DIR, { withFileTypes: true })
+      .filter((entry) => !PLACEHOLDERS.has(entry.name))
+      .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`);
+    if (entries.length > 0) listing = entries.join(", ");
+  } catch {
+    // fall through - listing stays "(empty)".
+  }
+
   fail(
-    `Found a flat-layout CLI binary at ${flat}, which electron-builder no longer packages.\n` +
-      `         Move it to the arch-scoped layout: ${archScoped}`,
+    `No executable CLI binary found for ${process.platform}-${process.arch}.\n` +
+      `         Looked at: ${archScoped}\n` +
+      `         Directory contents: ${listing}`,
   );
 }
 
-// No executable binary for this host - surface what the directory does
-// contain so the failure is debuggable.
-let listing = "(empty)";
-try {
-  const entries = readdirSync(CLI_DIR, { withFileTypes: true })
-    .filter((entry) => !PLACEHOLDERS.has(entry.name))
-    .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`);
-  if (entries.length > 0) listing = entries.join(", ");
-} catch {
-  // fall through - listing stays "(empty)".
+if (require.main === module) {
+  main();
 }
 
-fail(
-  `No executable CLI binary found for ${process.platform}-${process.arch}.\n` +
-    `         Looked at: ${archScoped}\n` +
-    `         Directory contents: ${listing}`,
-);
+module.exports = { bundledHostSiblingNames };

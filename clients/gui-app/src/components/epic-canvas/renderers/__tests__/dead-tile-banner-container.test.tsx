@@ -594,7 +594,7 @@ describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
     await settleEpicSession();
 
     const text = screen.getByTestId("banner-under-test").textContent;
-    expect(text).toContain("This chat's sandbox isn't available");
+    expect(text).toContain("This chat's host isn't available");
     expect(text).not.toContain("belongs to another collaborator");
   });
 });

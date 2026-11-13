@@ -1,3 +1,4 @@
+import { appLocalOpenAuthFor } from "@/lib/host/app-local-open-auth";
 import { v4 as uuidv4 } from "uuid";
 import type {
   BearerSourceProvider,
@@ -95,8 +96,8 @@ export interface BuildRawHostMessengerForTargetParams<
    * than read off the auth store in here, because this function is also the
    * seam tests build through: an implicit ambient read would make the
    * permission untestable from the outside and invisible at the call site.
-   * Only consulted on the `remote` and `pool` branches, so local hosts are
-   * unaffected; a pool session has no mint and only reports it on `open`.
+   * A pool session has no mint and only reports it on `open`. Local team
+   * admission uses the app-wide cloud verdict and shared member minter.
    */
   readonly cloudAuthorized: () => boolean;
   /**
@@ -219,6 +220,7 @@ export function buildRawHostMessengerForTarget<
       // no-dispatch attestation when the client's timer wins that race.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
+      localOpenAuth: appLocalOpenAuthFor(params.authnBaseUrl),
     }),
     remoteTransport: null,
   };
@@ -329,7 +331,7 @@ class RuntimeHostMessenger<
     hostId: string,
     fatal: FatalErrorDetails,
   ) => void;
-  private readonly localMessenger: IHostMessenger<Registry>;
+  private readonly localMessenger: WsRpcClient<Registry>;
   /**
    * The remote bindings, keyed by the host they serve. Two slots: the server
    * pool's, and ONE host's. A request for a different remote host replaces
@@ -422,6 +424,7 @@ class RuntimeHostMessenger<
       // Same post-`openAck` attestation grace as the standalone builder above.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
+      localOpenAuth: appLocalOpenAuthFor(params.authnBaseUrl),
     });
   }
 
@@ -545,6 +548,7 @@ class RuntimeHostMessenger<
     this.currentBearer = null;
     this.detachOrphanAvailability();
     this.teardownRemoteTransport();
+    this.localMessenger.releaseIdleLocalSessions();
   }
 
   reset(): void {
@@ -556,6 +560,7 @@ class RuntimeHostMessenger<
     this.currentBearer = null;
     this.detachOrphanAvailability();
     this.teardownRemoteTransport();
+    this.localMessenger.releaseIdleLocalSessions();
     this.terminalVerdictByHost.clear();
   }
 

@@ -22,6 +22,7 @@ import {
   sandboxCardShowsCostView,
   sandboxCreatorName,
   sandboxGuestConfigFailure,
+  sandboxGuestConfigFailureReason,
   sandboxHostVouches,
   sandboxIdleLine,
   sandboxOperationalLine,
@@ -96,21 +97,19 @@ import { openEnvironmentPage } from "@/components/settings/environment/open-envi
 import { PERSONAL_CONFIGURATION_ID } from "@/lib/settings-environment-pages";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/** The Sandbox section contains facts; lifecycle actions live in the header. */
-export function SandboxCard(props: {
-  readonly hostState: HostHealthState;
+/**
+ * Size, region, idle policy, last active, and the room line. Grants and the
+ * ledger stay on their own tabs. A missing summary is the same missing state
+ * the facts group shows.
+ */
+export function SandboxInstallationGroup(props: {
   readonly sandbox: HostScopeSandbox;
 }): ReactNode {
   const { summary, state, frozen, teamOwned } = props.sandbox;
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const operationalLine = sandboxOperationalLine(state, frozen);
   return (
-    <div
-      className="flex min-w-0 flex-col gap-5 p-5 wrap-anywhere"
-      data-testid="sandbox-card"
-      data-state={state ?? "unknown"}
-      data-frozen={frozen ? "true" : "false"}
-    >
+    <>
       {operationalLine === null ? null : (
         <p
           className="text-ui-xs text-muted-foreground"
@@ -124,6 +123,7 @@ export function SandboxCard(props: {
       ) : (
         <>
           <SandboxFacts
+            ownerKind={props.sandbox.ownerKind}
             summary={summary}
             teamOwned={teamOwned}
             state={state}
@@ -136,19 +136,27 @@ export function SandboxCard(props: {
             </p>
           ) : null}
           <SandboxPodRoom summary={summary} teamOwned={teamOwned} />
-          <SandboxSecretsSection
-            summary={summary}
-            state={state}
-            frozen={frozen}
-            hostState={props.hostState}
-            teamOwned={teamOwned}
-          />
-          {sandboxCardShowsCostView(teamOwned) ? (
-            <SandboxCostView sandboxId={summary.id} frozen={frozen} />
-          ) : null}
         </>
       )}
-    </div>
+    </>
+  );
+}
+
+/** Grants and network events, or the missing-summary state. */
+export function SandboxSecretsPanel(props: {
+  readonly hostState: HostHealthState;
+  readonly sandbox: HostScopeSandbox;
+}): ReactNode {
+  const { summary, state, frozen, teamOwned } = props.sandbox;
+  if (summary === null) return <SandboxDetailsMissing state={state} />;
+  return (
+    <SandboxSecretsSection
+      summary={summary}
+      state={state}
+      frozen={frozen}
+      hostState={props.hostState}
+      teamOwned={teamOwned}
+    />
   );
 }
 
@@ -156,14 +164,17 @@ export function SandboxCard(props: {
 export function SandboxHeaderCost(props: {
   readonly sandbox: HostScopeSandbox;
 }): ReactNode {
-  const { summary, state, frozen, teamOwned } = props.sandbox;
+  const { summary, state, frozen, teamOwned, ownerKind } = props.sandbox;
   if (summary === null) return null;
-  return teamOwned ? (
+  return teamOwned ||
+    (summary.kind === "automation" && ownerKind !== "user") ? (
     <SandboxHeaderRate
       summary={summary}
       state={state}
       frozen={frozen}
       cost={null}
+      teamOwned={teamOwned}
+      ownerKind={ownerKind}
     />
   ) : (
     <SandboxPersonalHeaderCost
@@ -174,42 +185,59 @@ export function SandboxHeaderCost(props: {
   );
 }
 
-function SandboxHeaderRate(props: {
+interface SandboxHeaderRateProps {
   readonly summary: SandboxSummary;
   readonly state: HostSandboxState | null;
   readonly frozen: boolean;
   readonly cost: SandboxCost | null;
-}): ReactNode {
+  readonly ownerKind: HostScopeSandbox["ownerKind"];
+  readonly teamOwned: boolean;
+}
+
+function SandboxHeaderRate(props: SandboxHeaderRateProps): ReactNode {
+  const rate = formatHeaderRate(props);
+  if (rate === null) return null;
   return (
     <>
       <span aria-hidden>·</span>
-      <span>
-        {formatHeaderRate(props.summary, props.state, props.frozen, props.cost)}
-      </span>
+      <span>{rate}</span>
     </>
   );
 }
 
-function formatHeaderRate(
-  summary: SandboxSummary,
-  state: HostSandboxState | null,
-  frozen: boolean,
-  cost: SandboxCost | null,
-): string {
-  if (summary.kind === "automation") return "Free";
-  if (cost !== null)
-    return cost.currentRateMillicreditsPerHour === 0
-      ? "Not billing"
-      : hourlyRate(cost.currentRateMillicreditsPerHour);
-  // Without a ledger (a team's sandbox, or a personal ledger not read yet),
-  // the list price of the state's own tier is the rate. A frozen sandbox and
-  // a state that accrues nothing are not billing: the list price is not
-  // their rate.
+function sandboxRateNeedsLedger(state: HostSandboxState): boolean {
+  return (
+    state === "suspending" ||
+    state === "resuming" ||
+    state === "stopping" ||
+    state === "starting" ||
+    state === "destroying"
+  );
+}
+
+function formatHeaderRate(props: SandboxHeaderRateProps): string | null {
+  const { summary, state, frozen, cost, teamOwned } = props;
+  if (summary.kind === "automation" && !teamOwned && props.ownerKind === "user")
+    return "Free";
+  if (cost !== null) {
+    if (cost.currentRateMillicreditsPerHour !== 0)
+      return hourlyRate(cost.currentRateMillicreditsPerHour);
+    if (
+      !frozen &&
+      summary.priceMcPerHour === null &&
+      (state ?? summary.state) !== "creating"
+    )
+      return null;
+    return "Not billing";
+  }
   if (frozen) return "Not billing";
-  const field = sandboxBilledPriceField(state ?? summary.state);
+  const currentState = state ?? summary.state;
+  // Transitional billing depends on the entry state, absent from the summary.
+  if (sandboxRateNeedsLedger(currentState)) return null;
+  const field = sandboxBilledPriceField(currentState);
   if (field === null) return "Not billing";
   const price = summary.priceMcPerHour;
-  if (price === null) return "Not priced here";
+  if (price === null) return null;
   return hourlyRate(price[field]);
 }
 
@@ -231,6 +259,8 @@ function SandboxPersonalHeaderCost(props: {
         state={props.state}
         frozen={props.frozen}
         cost={cost}
+        teamOwned={false}
+        ownerKind="user"
       />
       {cost === null ? null : (
         <>
@@ -370,6 +400,7 @@ function SandboxDetailsMissing(props: {
 }
 
 function SandboxFacts(props: {
+  readonly ownerKind: HostScopeSandbox["ownerKind"];
   readonly summary: SandboxSummary;
   readonly teamOwned: boolean;
   readonly state: HostSandboxState | null;
@@ -400,7 +431,12 @@ function SandboxFacts(props: {
           <dd data-testid="sandbox-card-region">{regionLabel}</dd>
         </>
       )}
-      <SandboxOtherRate summary={summary} state={props.state} />
+      <SandboxOtherRate
+        ownerKind={props.ownerKind}
+        summary={summary}
+        state={props.state}
+        teamOwned={props.teamOwned}
+      />
       <dt className="text-muted-foreground">Idle policy</dt>
       <dd className="min-w-0 wrap-anywhere" data-testid="sandbox-card-idle">
         {sandboxIdleLine(summary, props.state)}
@@ -429,13 +465,22 @@ function SandboxFacts(props: {
 
 /** The header states the current rate; these facts retain the other rate. */
 function SandboxOtherRate(props: {
+  readonly ownerKind: HostScopeSandbox["ownerKind"];
   readonly summary: SandboxSummary;
+  readonly teamOwned: boolean;
   readonly state: HostSandboxState | null;
 }): ReactNode {
   const price = props.summary.priceMcPerHour;
-  if (price === null || props.summary.kind === "automation") return null;
+  if (
+    price === null ||
+    (props.summary.kind === "automation" &&
+      !props.teamOwned &&
+      props.ownerKind === "user")
+  ) {
+    return null;
+  }
   const state = props.state ?? props.summary.state;
-  if (state === "destroying" || state === "destroyed") return null;
+  if (sandboxRateNeedsLedger(state) || state === "destroyed") return null;
   const field = sandboxBilledPriceField(state);
   const resting = field === "suspendedMc" || field === "stoppedMc";
   const rate = resting
@@ -578,61 +623,154 @@ function SandboxGuestConfigFailure(props: {
 }
 
 /**
- * The personal ledger and balance, separate from the rates and today's total.
+ * Rate, today's charge, and the personal ledger as separate rows. A team's
+ * sandbox keeps the rate lines and skips the ledger.
  */
-function SandboxCostView(props: {
+export function SandboxCostsPanel(props: {
+  readonly sandbox: HostScopeSandbox;
+}): ReactNode {
+  const { summary, frozen, teamOwned } = props.sandbox;
+  if (summary === null) {
+    return <SandboxDetailsMissing state={props.sandbox.state} />;
+  }
+  return (
+    <div
+      className="flex min-w-0 flex-col gap-3 text-ui-xs"
+      data-testid="sandbox-card-cost"
+    >
+      <SandboxCostRates
+        summary={summary}
+        teamOwned={teamOwned}
+        ownerKind={props.sandbox.ownerKind}
+      />
+      {sandboxCardShowsCostView(teamOwned) ? (
+        <SandboxCostLedger sandboxId={summary.id} frozen={frozen} />
+      ) : null}
+    </div>
+  );
+}
+
+function SandboxCostRates(props: {
+  readonly ownerKind: HostScopeSandbox["ownerKind"];
+  readonly summary: SandboxSummary;
+  readonly teamOwned: boolean;
+}): ReactNode {
+  if (
+    props.summary.kind === "automation" &&
+    !props.teamOwned &&
+    props.ownerKind === "user"
+  ) {
+    return (
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+        <dt className="text-muted-foreground">Rate</dt>
+        <dd>Free</dd>
+      </dl>
+    );
+  }
+  const price = props.summary.priceMcPerHour;
+  if (price === null) return null;
+  const storage = Math.max(price.suspendedMc, price.stoppedMc);
+  return (
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+      <dt className="text-muted-foreground">Rate</dt>
+      <dd>{`${hourlyRate(price.awakeMc)} while awake`}</dd>
+      <dt className="text-muted-foreground">Storage rate</dt>
+      <dd>{`${hourlyRate(storage)} while suspended or stopped`}</dd>
+    </dl>
+  );
+}
+
+function SandboxCostLedger(props: {
   readonly sandboxId: string;
   readonly frozen: boolean;
 }): ReactNode {
   // Also mounted by the host list's banner; the hook elects one owner, so a
-  // change is still one invalidation (and a phone, which shows the card
+  // change is still one invalidation (and a phone, which shows the tab
   // without the banner, still refreshes).
   useRefreshSandboxCosts();
   const costs = useSandboxCosts();
+  const now = useSampledNow();
   const user = useAuthUser().data ?? null;
   const warning = useSandboxRunwayWarning();
   const cost =
-    costs.data?.sandboxes.find((c) => c.sandboxId === props.sandboxId) ?? null;
+    costs.data?.sandboxes.find((item) => item.sandboxId === props.sandboxId) ??
+    null;
   const balanceMc = sandboxBalanceMc(user);
   const burn = costs.data?.awakeBurnMillicreditsPerHour ?? null;
   return (
-    <div
-      className="flex min-w-0 flex-col gap-2 border-t border-border/50 pt-3"
-      data-testid="sandbox-card-cost"
-    >
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-ui-xs">
-        {cost === null ? (
-          <>
-            <dt className="text-muted-foreground">Cost</dt>
-            <dd className="text-muted-foreground">
-              {costs.isError ? "Couldn't load the cost" : "Loading…"}
-            </dd>
-          </>
-        ) : (
-          <SandboxCostFacts cost={cost} />
-        )}
+    <>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+        <SandboxLedgerRow
+          label="Today"
+          testId="sandbox-card-cost-today"
+          value={
+            cost === null
+              ? null
+              : formatSandboxCost(sandboxCostTodayMc(cost, now))
+          }
+          failed={costs.isError}
+        />
+        <SandboxLedgerRow
+          label="Charged"
+          testId="sandbox-card-cost-charged"
+          value={cost === null ? null : chargedSince(cost)}
+          failed={costs.isError}
+        />
+        <SandboxLedgerRow
+          label="Compute"
+          testId={undefined}
+          value={
+            cost === null
+              ? null
+              : formatSandboxCost(cost.charged.computeMillicredits)
+          }
+          failed={costs.isError}
+        />
+        <SandboxLedgerRow
+          label="Storage"
+          testId={undefined}
+          value={
+            cost === null
+              ? null
+              : formatSandboxCost(cost.charged.storageMillicredits)
+          }
+          failed={costs.isError}
+        />
+        <SandboxLedgerRow
+          label="Pending"
+          testId={undefined}
+          value={
+            cost === null ? null : formatSandboxCost(cost.pendingMillicredits)
+          }
+          failed={costs.isError}
+        />
         <dt className="text-muted-foreground">Balance</dt>
         <dd data-testid="sandbox-card-balance">
           {formatBalance(balanceMc, burn, props.frozen)}
         </dd>
       </dl>
       <SandboxRunwayWarningLine warning={warning} />
-    </div>
+    </>
   );
 }
 
-function SandboxCostFacts(props: { readonly cost: SandboxCost }): ReactNode {
-  const { cost } = props;
+function chargedSince(cost: SandboxCost): string {
   const charged =
     cost.charged.computeMillicredits + cost.charged.storageMillicredits;
+  return `${formatSandboxCost(charged)} since ${formatSandboxDay(cost.charged.sinceCreatedAt)}`;
+}
+
+function SandboxLedgerRow(props: {
+  readonly label: string;
+  readonly value: string | null;
+  readonly failed: boolean;
+  readonly testId: string | undefined;
+}): ReactNode {
   return (
     <>
-      <dt className="text-muted-foreground">Charged</dt>
-      <dd data-testid="sandbox-card-cost-charged">
-        {`${formatSandboxCost(charged)} since ${formatSandboxDay(cost.charged.sinceCreatedAt)} (${formatSandboxCost(cost.charged.computeMillicredits)} compute · ${formatSandboxCost(cost.charged.storageMillicredits)} storage)`}
-        {cost.pendingMillicredits > 0
-          ? ` · ${formatSandboxCost(cost.pendingMillicredits)} pending`
-          : null}
+      <dt className="text-muted-foreground">{props.label}</dt>
+      <dd data-testid={props.testId}>
+        {props.value ?? (props.failed ? "Couldn't load the cost" : "Loading…")}
       </dd>
     </>
   );
@@ -663,7 +801,7 @@ function SandboxSecretsSection(props: {
   return (
     <>
       <section
-        className="flex min-w-0 flex-col gap-2 border-t border-border/50 pt-3 text-ui-xs wrap-anywhere"
+        className="flex min-w-0 flex-col gap-2 text-ui-xs wrap-anywhere"
         aria-label="Secrets"
         data-testid="sandbox-card-secrets"
       >
@@ -938,9 +1076,7 @@ function SandboxRepairAction(props: {
                   toast.success("Sandbox setup repaired");
                 } else {
                   toast.warning(
-                    result.guestConfigFailureReason === null
-                      ? "Sandbox setup is still failing"
-                      : `Sandbox setup is still failing: ${result.guestConfigFailureReason}`,
+                    `Sandbox setup is still failing. ${sandboxGuestConfigFailureReason(result.guestConfigFailureReason)}`,
                   );
                 }
                 void list.refetch();

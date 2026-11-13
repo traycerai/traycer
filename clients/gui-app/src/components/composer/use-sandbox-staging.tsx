@@ -1,6 +1,7 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import { create } from "zustand";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type {
   SandboxCatalogue,
   UserSandboxCost,
@@ -13,6 +14,8 @@ import type { TaskHostGroup } from "@/components/epic-canvas/sidebar/task-host-g
 import { mirrorLineOtherHostName } from "@/components/home/composer/composer-mirror-line-model";
 import { SandboxShapeSheet } from "@/components/hosts/sandbox-shape-sheet";
 import { taskHasReadersOutsideTeam } from "@/components/hosts/team-host-disclosure-model";
+import { isEnvironmentComputer } from "@/components/settings/environment/environment-picker-model";
+import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import {
   hostOptionPickerGroup,
   hostOptionTeamOwner,
@@ -24,6 +27,7 @@ import type {
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherNewRow } from "@/components/settings/host-scope/host-switcher-new-rows";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
 import {
   useCloudChatHasCloudAuthorization,
   useCloudChatViewerId,
@@ -71,6 +75,7 @@ import {
   agentSandboxCreatedByLine,
   burstIdleShortLine,
   SANDBOXES_CANT_BE_CREATED,
+  LOCAL_SUB_LINE,
   NEEDS_CREDITS,
   fundedRowPrice,
   needsCreditsRow,
@@ -261,7 +266,17 @@ export function useSandboxStaging(input: {
   const user = useAuthUser().data ?? null;
   // Neither read without a surface: nothing prices or shapes a stage.
   const reads = surface !== null;
-  const catalogue = useSandboxCatalogue(reads).data ?? null;
+  const catalogueQuery = useSandboxCatalogue(reads);
+  const catalogue = catalogueQuery.data ?? null;
+  let catalogueState: "loading" | "error" | null = null;
+  if (catalogue === null) {
+    catalogueState = catalogueQuery.isError ? "error" : "loading";
+  }
+  const computers = useMemo(
+    () => (reads ? input.hosts.filter(isEnvironmentComputer) : []),
+    [input.hosts, reads],
+  );
+  const computerStatuses = useRegisteredHostEnvironmentStatuses(computers);
   const defaultsFor = useSandboxDefaultsLookup(reads);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
@@ -375,8 +390,13 @@ export function useSandboxStaging(input: {
   );
 
   const stageNew = useCallback(
-    (facts: NewRowFacts): void => {
-      if (facts.shape === null || catalogue === null) return;
+    (facts: NewRowFacts): boolean => {
+      if (facts.shape === null || catalogue === null) {
+        if (catalogueState === "error") {
+          setSheetKey(stageConfigurationKey(facts.configuration));
+        }
+        return false;
+      }
       const current = readStagedSandbox(surfaceKey);
       // Reselecting the picked row keeps the name and shape already edited.
       if (
@@ -385,7 +405,7 @@ export function useSandboxStaging(input: {
         stageConfigurationKey(current.target.configuration) ===
           stageConfigurationKey(facts.configuration)
       )
-        return;
+        return true;
       const provider = stageProviderFor(catalogue, facts.shape.os);
       placeNew({
         kind: "new",
@@ -401,8 +421,17 @@ export function useSandboxStaging(input: {
           memoryHostId,
           stageConfigurationKey(facts.configuration),
         );
+      return true;
     },
-    [catalogue, forkOnNew, memoryHostId, placeNew, surfaceKey],
+    [
+      catalogue,
+      catalogueState,
+      forkOnNew,
+      memoryHostId,
+      placeNew,
+      setSheetKey,
+      surfaceKey,
+    ],
   );
 
   // In this task: every host the task already uses, and every agent sandbox
@@ -466,23 +495,25 @@ export function useSandboxStaging(input: {
           creatorName,
           viewerUserId: composerViewerId,
         });
-        if (task === null) return sandboxLines;
+        const localLine = computerSettingsLine(
+          host,
+          computerStatuses.get(hostId) ?? null,
+        );
+        const lines =
+          localLine === null ? sandboxLines : [localLine, ...sandboxLines];
+        if (task === null) return lines;
         const owner = hostOptionTeamOwner(host);
         const principal: TaskHostPrincipal =
           owner === null
             ? { kind: "user", id: viewerUserId }
             : { kind: "team", id: owner.teamId };
         const other = reachFor(hostId, principal);
-        if (other === null) return sandboxLines;
+        if (other === null) return lines;
         const remedyTeam =
           host.isLocalMachine && owner === null ? taskTeamTitle(task) : null;
         return remedyTeam === null
-          ? [...sandboxLines, reachSentence(other)]
-          : [
-              ...sandboxLines,
-              reachSentence(other),
-              reachRemedyLine(remedyTeam),
-            ];
+          ? [...lines, reachSentence(other)]
+          : [...lines, reachSentence(other), reachRemedyLine(remedyTeam)];
       },
       tagFor: (hostId) => {
         const host = input.hosts.find((option) => option.hostId === hostId);
@@ -491,7 +522,7 @@ export function useSandboxStaging(input: {
         if (summary === null || !summary.burst) return null;
         return hostConfigurationLabel(host);
       },
-      newRows: rows.map(newRowPresentation),
+      newRows: rows.map((row) => newRowPresentation(row, catalogueState)),
       rememberedConfigurationKey:
         memoryHostId === null
           ? null
@@ -500,7 +531,8 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
-      stagedLabel: stage === null ? null : stagedLabel(stage, input.hosts),
+      stagedLabel:
+        stage === null ? null : stagedLabel(stage, stagedFacts, input.hosts),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
@@ -525,7 +557,7 @@ export function useSandboxStaging(input: {
           (row) =>
             stageConfigurationKey(row.configuration) === configurationKey,
         );
-        if (facts !== undefined) stageNew(facts);
+        return facts !== undefined && stageNew(facts);
       },
       onOpenShape: setSheetKey,
       onManage: () => {
@@ -542,6 +574,8 @@ export function useSandboxStaging(input: {
       },
     };
   }, [
+    catalogueState,
+    computerStatuses,
     costs,
     creatorIds,
     creatorTitles,
@@ -557,6 +591,7 @@ export function useSandboxStaging(input: {
     rows,
     setSheetKey,
     stage,
+    stagedFacts,
     stageNew,
     surfaceKey,
     task,
@@ -629,6 +664,24 @@ export function useSandboxStaging(input: {
   };
 }
 
+function computerSettingsLine(
+  host: HostScopeOption,
+  status: EnvironmentStatusResponseV12 | null,
+): string | null {
+  if (
+    host.sandbox !== null ||
+    hostOptionTeamOwner(host) !== null ||
+    status === null ||
+    status.principal?.kind === "team"
+  ) {
+    return null;
+  }
+  const cohort = localRowCohort(status);
+  return cohort.kind === "local" && cohort.defaultsToLocal
+    ? LOCAL_SUB_LINE
+    : null;
+}
+
 function newRowFacts(input: {
   readonly user: AuthenticatedUser | null;
   readonly catalogue: SandboxCatalogue | null;
@@ -685,9 +738,24 @@ function stagedNewFacts(
  * credits` over `Linux · 2 vCPU · 4 GB · from $0.12 an hour · uses your Acme
  * credits`.
  */
-function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
+function newRowPresentation(
+  facts: NewRowFacts,
+  catalogueState: "loading" | "error" | null,
+): HostSwitcherNewRow {
   const copy = stageConfigurationCopy(facts.configuration);
   const head = newSandboxRowLabel(copy);
+  if (catalogueState !== null) {
+    return {
+      configurationKey: stageConfigurationKey(facts.configuration),
+      label: head,
+      subLine:
+        catalogueState === "loading"
+          ? "Loading sizes and regions…"
+          : "Sizes and regions couldn't be loaded.",
+      configuration: copy,
+      disabled: catalogueState === "loading",
+    };
+  }
   if (facts.uncreatable) {
     return {
       configurationKey: stageConfigurationKey(facts.configuration),
@@ -738,6 +806,7 @@ export function restingVerb(
 
 function stagedLabel(
   stage: StagedSandbox,
+  facts: NewRowFacts | null,
   hosts: readonly HostScopeOption[],
 ): string {
   const { target } = stage;
@@ -764,6 +833,11 @@ function stagedLabel(
     configuration: stageConfigurationCopy(target.configuration),
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
+    priceMcPerHour:
+      facts === null || facts.price === null
+        ? null
+        : facts.price.awakeMcPerHour,
+    priceIsFrom: facts !== null && facts.price !== null && !facts.price.exact,
   });
 }
 

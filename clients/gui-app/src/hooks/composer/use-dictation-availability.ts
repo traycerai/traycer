@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { isMobileApp } from "@/lib/mobile-app";
-import { hostQueryKeys, speechMutationKeys } from "@/lib/query-keys";
+import {
+  hostQueryKeys,
+  speechMutationKeys,
+  speechQueryKeys,
+} from "@/lib/query-keys";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 // `modelId: null` selects the host's default dictation model.
@@ -23,6 +28,7 @@ interface EnsureModelMutationContext {
  * composer shows a "preparing" indicator instead of silently nothing.
  */
 export interface DictationPreparingStatus {
+  readonly errorMessage: string | null;
   readonly downloadState: "absent" | "downloading" | "ready" | "error";
   // 0..1 while downloading, else null.
   readonly progress: number | null;
@@ -56,21 +62,48 @@ export interface DictationAvailability {
  * host gates its mic on the app-wide host's model rather than that host's. Do
  * not "fix" this by threading a target client through - it is a change to where
  * a user's voice goes, and wants that conversation first.
+ *
+ * A shell with its own recognizer (`IRunnerHost.deviceDictation`, the phone)
+ * asks that instead and never touches a host: ready when the device can
+ * transcribe `language` by itself, with nothing to prepare.
  */
 export function useDictationAvailability(
   enabled: boolean,
+  language: string,
 ): DictationAvailability {
-  // The installed mobile app never offers dictation, whatever the setting says.
-  // Dictation is HOST-executed: `speech.dictate` streams live microphone audio
-  // to the app-wide host (see above) and that host's on-device engine
-  // transcribes it. On desktop the app-wide host is the same machine, which is
-  // what Settings' "audio never leaves your machine" promise rests on. The
-  // mobile app has no local host - every host it can reach is a remote machine
-  // - so offering the mic there would stream phone microphone audio off the
-  // device and break that promise. Hence the gate is on the BUILD
-  // (`isMobileApp()`) and not on viewport width: a phone-width desktop browser
-  // can still be talking to an honest localhost host, and keeps its mic.
-  const available = enabled && !isMobileApp();
+  const deviceDictation = useRunnerHostOrNull()?.deviceDictation ?? null;
+  const deviceQuery = useQuery({
+    ...queryOptions({
+      queryKey: speechQueryKeys.deviceAvailability(language),
+      queryFn: () => deviceDictation?.isAvailable(language) ?? false,
+    }),
+    enabled: enabled && deviceDictation !== null,
+    // The device's answer changes outside the app (a language installed in
+    // the OS settings), so it is asked again each time the app comes back.
+    refetchOnWindowFocus: "always",
+  });
+  // The installed mobile app never offers HOST dictation, whatever the setting
+  // says: `speech.dictate` streams live microphone audio to the app-wide host
+  // (see above) and that host's on-device engine transcribes it. On desktop
+  // the app-wide host is the same machine, which is what Settings' "audio
+  // never leaves this device" promise rests on. The mobile app has no local
+  // host - every host it can reach is a remote machine - so the host path
+  // there would stream phone microphone audio off the device and break that
+  // promise. Hence the gate is on the BUILD (`isMobileApp()`) and not on
+  // viewport width: a phone-width desktop browser can still be talking to an
+  // honest localhost host, and keeps its mic.
+  const hostAvailability = useHostDictationAvailability(
+    enabled && deviceDictation === null && !isMobileApp(),
+  );
+  if (deviceDictation !== null) {
+    return { ready: enabled && deviceQuery.data === true, preparing: null };
+  }
+  return hostAvailability;
+}
+
+function useHostDictationAvailability(
+  available: boolean,
+): DictationAvailability {
   const binding = useHostBinding();
   const selectedHostId = useEffectiveHostId();
   const client = useMemo(
@@ -161,6 +194,7 @@ export function useDictationAvailability(
   return {
     ready: false,
     preparing: {
+      errorMessage: statusQuery.data?.errorMessage ?? null,
       downloadState: downloadState ?? "absent",
       progress: downloadProgress,
     },

@@ -51,8 +51,10 @@ import {
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
   getChatRunSettingsResponseSchemaV30,
+  getChatRunSettingsResponseSchemaV41,
   getChatRunSettingsBatchResponseSchema,
   getChatRunSettingsBatchResponseSchemaV10,
+  getChatRunSettingsBatchResponseSchemaV21,
 } from "../../src/host/epic/chat-records";
 import {
   providersListRequestSchema,
@@ -66,6 +68,8 @@ import {
   providersListResponseSchemaV105Preimage,
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
+  providersListResponseSchemaV108Preimage,
+  providersListResponseSchemaV109Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -152,9 +156,8 @@ const FIXTURES = {
   // schema and must not regenerate. 9.2 froze when 10.0 opened for the first
   // harness id after 1.5.0; its dump did not change by the freeze. 10.0 froze
   // when 10.1 opened to put the run tuple on the row; it is RELEASED
-  // (`host-v1.5.1` registers it), so its dump must not regenerate. 10.1 is the
-  // head line and dumps LIVE, so the next attempt to grow the row goes red on
-  // that line.
+  // (`host-v1.5.1` registers it), so its dump must not regenerate. 10.1 also
+  // retains its preimage after 10.2 opened for reach and host connectivity.
   "agent.list@9.1": dump(listAgentsResponseSchemaV91),
   "agent.list@9.2": dump(listAgentsResponseSchemaV92),
   // 10.0 froze when 10.1 opened to put the run tuple on the row; `1.5.1`
@@ -195,12 +198,10 @@ const FIXTURES = {
   // whole 7.1 line with it (they were its entire delta) and left v7.0 as the
   // last frozen line under the live v8.0.
   //
-  // The dump is DEEP - it walks `providerProfileSchema`,
-  // `providerNativeCapabilitiesSchema`, `nativeListResultSchema` and every
-  // other sub-schema this line reaches, all of which `providerCliStateSchemaV70`
-  // deliberately still references live - so growth ANYWHERE beneath it fails
-  // this snapshot. When that happens, hand-freeze the sub-schema that grew (the
-  // `*V70Preimage` shapes are the precedent); do not regenerate to green.
+  // The dump walks every nested profile, capability and native-result leaf.
+  // All retain this line's published shape: freeze a shared leaf before growing
+  // it on the current line (`*V70Preimage` is the precedent), rather than
+  // regenerating a released snapshot to green.
   "providers.list@7.0": dump(providersListResponseSchemaV70),
   // Two freezes here too, in the same order as `agent.gui.listHarnesses`
   // above: 8.0 froze when 9.0 opened (it bound the live schema while it was
@@ -209,18 +210,9 @@ const FIXTURES = {
   // provider state when 9.1 opened to publish the per-provider judge. Neither
   // dump is changed by its freeze.
   //
-  // They have since parted over the `remoteSafe` login-capability marker, and
-  // the split is release status rather than taste. 8.0 is RELEASED
-  // (`cli-v1.3.0` / `host-v1.3.0`), so it was kept byte-identical by pinning
-  // `providerCliStateBaseShapeV80` to the hand-frozen four-key
-  // `providerLoginCapabilitySchemaV70` - the response rows above are never
-  // regenerated to green, and this one did not have to be. Major 9 is
-  // UNRELEASED (no tag contains the commit that opened 9.1, rcs included; the
-  // newest non-rc OSS tag registers `providers.list` only to 8.0), and
-  // `providerCliStateSchemaV90` is `.omit({ autoJudge })` off the LIVE state,
-  // so it widens with the live shape by construction and its row regenerates -
-  // the `agent.list@9.0` licence, verbatim. Re-derive that status from the tags
-  // before copying this paragraph; it moves with every release.
+  // Both 8.0 and 9.0 are released. Their capability rows retain the published
+  // four-key preimage; 9.0 derives from the frozen 9.1 state without autoJudge.
+  // Additions to the current provider state must not change either dump.
   "providers.list@8.0": dump(providersListResponseSchemaV80),
   "providers.list@9.0": dump(providersListResponseSchemaV90),
   // 9.1 froze when 9.2 opened for the login-capability markers. It is RELEASED
@@ -245,14 +237,16 @@ const FIXTURES = {
   // 10.6 froze when `chatsFollow` opened 10.7. Its dump did not change by the
   // freeze.
   "providers.list@10.6": dump(providersListResponseSchemaV106Preimage),
-  // 10.7 froze when `nativeMemory` and `nativeMemorySupported` opened 10.8.
-  // Its dump did not change by the freeze.
+  // 10.7 froze when native-memory fields opened the released 10.8 line.
   "providers.list@10.7": dump(providersListResponseSchemaV107Preimage),
-  // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the
-  // live shape goes red on this row rather than on the release that ships the
-  // growth. Same response then applies - freeze the line that stopped being
-  // head, open the next one.
-  "providers.list@10.8": dump(providersListResponseSchema),
+  // 10.8 froze when credential projections opened 10.9. Dump the released
+  // preimage, so generation cannot copy the current credential-bearing shape.
+  "providers.list@10.8": dump(providersListResponseSchemaV108Preimage),
+  // 10.9 froze when `hiddenModelProviders` opened 10.10.
+  "providers.list@10.9": dump(providersListResponseSchemaV109Preimage),
+  // The head line. It dumps LIVE, so the next attempt to grow the provider
+  // state goes red on this line.
+  "providers.list@10.10": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
@@ -281,12 +275,14 @@ const FIXTURES = {
   "epic.getChatRunSettings@2.0": dump(getChatRunSettingsResponseSchemaV20),
   "epic.getChatRunSettings@3.0": dump(getChatRunSettingsResponseSchemaV30),
   "epic.getChatRunSettings@4.0": dump(getChatRunSettingsResponseSchema),
+  "epic.getChatRunSettings@4.1": dump(getChatRunSettingsResponseSchemaV41),
   "epic.getChatRunSettingsBatch@1.0": dump(
     getChatRunSettingsBatchResponseSchemaV10,
   ),
   "epic.getChatRunSettingsBatch@2.0": dump(
     getChatRunSettingsBatchResponseSchema,
   ),
+  "epic.getChatRunSettingsBatch@2.1": dump(getChatRunSettingsBatchResponseSchemaV21),
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
   // This row DOES get regenerated when a provider id is added, and it is the
   // one row here where that is the right answer rather than the forbidden one.

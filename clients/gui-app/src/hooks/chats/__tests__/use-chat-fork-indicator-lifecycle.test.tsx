@@ -102,6 +102,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
       () => {
         const fork = useChatForkEventQuery();
         const indicators = useHostNotificationIndicators({
+          freshnessMode: "base",
           hostId: mockLocalHostEntry.hostId,
           epicIds: [],
           chatIds: [CHAT_ID],

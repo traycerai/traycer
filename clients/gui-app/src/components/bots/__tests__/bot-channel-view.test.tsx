@@ -5,14 +5,21 @@
  * the channel PASSES them is what is asserted: the thread line it draws under
  * each post, the chat the thread panel reads, and where each box writes.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import type { ComponentProps, ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
-import { BotLooksContext } from "@/hooks/bots/use-bot-appearance";
-import { botSwatchAt } from "@/lib/providers/profile-accent-color";
+import {
+  BotLooksContext,
+  type BotLooks,
+} from "@/hooks/bots/use-bot-appearance";
+import { botColorAt } from "@/lib/providers/profile-accent-color";
 import {
   useVoiceSessionStore,
   type VoiceSessionDriver,
@@ -40,11 +47,13 @@ import type {
   BotThreadAnchors,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type {
-  BotReadCursorAdvanceRequest,
-  BotNotificationLevel,
-  BotReadCursorReadResponse,
-  BotThreadFollow,
+import {
+  BOT_APPEARANCE_UNRECOGNISED,
+  type BotAppearance,
+  type BotReadCursorAdvanceRequest,
+  type BotNotificationLevel,
+  type BotReadCursorReadResponse,
+  type BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
@@ -143,6 +152,15 @@ const mocks = vi.hoisted(() => {
     },
   };
 });
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
@@ -552,7 +570,7 @@ let mountLanding: BotChannelLanding | null = null;
 let mountTiles: MobileTileCount | null = null;
 
 /** The background the surface's list names for the bot on the next mount. */
-let mountBackground: number | null = null;
+let mountBackground: BotAppearance["background"] = null;
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
@@ -563,9 +581,12 @@ function mount(options: MountOptions): {
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const queryClient = new QueryClient();
-  const looks = new Map([
-    [BOT_ID, { mark: null, swatch: null, background: mountBackground }],
-  ]);
+  const looks: BotLooks = {
+    appearances: new Map([
+      [BOT_ID, { mark: null, color: null, background: mountBackground }],
+    ]),
+    main: null,
+  };
   const runnerHost = createFakeRunnerHost({});
   const tree = (openThread: BotOpenThread | null): ReactNode => (
     <BotLooksContext value={looks}>
@@ -684,7 +705,7 @@ describe("<BotChannelView tiles={null} /> channel background", () => {
   const TINT_CLASS = "bg-(--channel-tint)/10";
 
   it.each([false, true])(
-    "tints the message area, and only it, with the chosen swatch (dark: %s)",
+    "tints the message area, and only it, with the chosen colour (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
       mountBackground = 11;
@@ -694,7 +715,7 @@ describe("<BotChannelView tiles={null} /> channel background", () => {
       expect(area.classList.contains(TINT_CLASS)).toBe(true);
       expect(area.getAttribute("data-channel-background")).toBe("11");
       expect(area.style.getPropertyValue("--channel-tint")).toBe(
-        botSwatchAt(11).color,
+        botColorAt(11),
       );
       expect(within(area).getByTestId("stub-transcript-channel")).toBeTruthy();
       // The composer and the thread panel sit outside it.
@@ -712,14 +733,18 @@ describe("<BotChannelView tiles={null} /> channel background", () => {
     },
   );
 
-  it("keeps the page's own message area when no background is chosen", () => {
-    mount({ openThreadPostId: null });
+  it.each([null, BOT_APPEARANCE_UNRECOGNISED] as const)(
+    "keeps the page's own message area when the background is %s",
+    (background) => {
+      mountBackground = background;
+      mount({ openThreadPostId: null });
 
-    const area = screen.getByTestId("bot-channel-messages");
-    expect(area.classList.contains(TINT_CLASS)).toBe(false);
-    expect(area.hasAttribute("data-channel-background")).toBe(false);
-    expect(area.style.getPropertyValue("--channel-tint")).toBe("");
-  });
+      const area = screen.getByTestId("bot-channel-messages");
+      expect(area.classList.contains(TINT_CLASS)).toBe(false);
+      expect(area.hasAttribute("data-channel-background")).toBe(false);
+      expect(area.style.getPropertyValue("--channel-tint")).toBe("");
+    },
+  );
 });
 
 describe("<BotChannelView tiles={null} /> channel", () => {

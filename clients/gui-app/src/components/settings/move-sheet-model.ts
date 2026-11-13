@@ -83,8 +83,18 @@ export function existingSecretsArriveSentence(hostName: string): string {
   return `Nothing new is stored as a secret. Once ${hostName} runs Personal, it receives Personal's existing keys and secrets as values its tools and agents can read.`;
 }
 
+/** What moving gives the computer, under the sheet's title. */
+export const MOVE_SHEET_DESCRIPTION =
+  "It then uses your Personal settings, the same ones every computer and sandbox running Personal uses. You can move it back any time.";
+
+/** A plan with no Moves row: the computer still moves, with nothing in it. */
 export function nothingToMoveLine(hostName: string): string {
   return `Nothing on ${hostName} needs moving.`;
+}
+
+/** A plan with Moves rows: what moves is copied, never taken off. */
+export function nothingDeletedLine(hostName: string): string {
+  return `Everything also stays on ${hostName}; nothing is deleted.`;
 }
 
 /**

@@ -2,12 +2,14 @@ import type {
   BrowserForgetLedger,
   BrowserPrimaryProfileDelta,
 } from "@traycer/protocol/host/browser/contracts";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type {
   BrowserSessionsStreamEventEnvelope,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { BrowserSessionsTabPort } from "../browser-sessions-electron-tabs";
 import type {
   BrowserSessionsJarPort,
@@ -321,6 +323,37 @@ export const LOCAL_HOST_ENTRY: HostDirectoryEntry = {
   transportDialability: "dialable",
 };
 
+export function hostListResultForOwner(
+  hostId: string,
+  owner: HostOwnerPrincipal,
+): HostListFetchResult {
+  return {
+    kind: "ok",
+    response: {
+      hosts: [
+        {
+          hostId,
+          displayName: "Remote",
+          platform: "linux",
+          kind: "personal",
+          publicKey: "cHVibGljS2V5",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatePolicy: "auto",
+          status: {
+            connectivity: "connectable",
+            viewerReachability: "ok",
+            clientCloud: "ok",
+            updateState: "current",
+            appVersion: "1.2.3",
+            lastSeenAt: null,
+          },
+          owner,
+        },
+      ],
+    },
+  };
+}
+
 export interface RegistryHarness {
   readonly deps: BrowserSessionsRegistryDeps;
   rotateBearer: () => void;
@@ -341,6 +374,13 @@ export interface RegistryHarness {
   readonly jar: JarRecorder;
   readonly tabs: TabRecorder;
   readonly clients: FakeStreamClient[];
+  /** Resolves when the next transport has been created by a registry open. */
+  readonly nextClient: () => Promise<FakeStreamClient>;
+  /** A trusted directory publication for suites using the shared fake. */
+  readonly publishDirectoryEntry: (
+    hostId: string,
+    entry: HostDirectoryEntry | null,
+  ) => void;
   readonly emitted: Array<{
     readonly windowId: string;
     readonly envelope: BrowserSessionsStreamEventEnvelope;
@@ -354,13 +394,22 @@ export function createRegistryHarness(): RegistryHarness {
   const jar = createJarRecorder();
   const tabs = createTabRecorder();
   const clients: FakeStreamClient[] = [];
+  const queuedClients: FakeStreamClient[] = [];
+  const clientWaiters: Array<(client: FakeStreamClient) => void> = [];
   const emitted: RegistryHarness["emitted"] = [];
   const closedTransports: number[] = [];
+  const directoryListeners = new Set<() => void>();
+  const directoryEntries = new Map<string, HostDirectoryEntry>([
+    [LOCAL_HOST_ENTRY.hostId, LOCAL_HOST_ENTRY],
+  ]);
   const openTransport = (): BrowserSessionsHostTransport => {
     // The desktop suites drive the connection themselves - the attach burst,
     // a rotation, a terminal close - so a subscription must not be born open.
     const client = new FakeStreamClient(false);
     const index = clients.push(client) - 1;
+    const waiter = clientWaiters.shift();
+    if (waiter === undefined) queuedClients.push(client);
+    else waiter(client);
     return {
       wsStreamClient: client,
       close: () => {
@@ -375,6 +424,16 @@ export function createRegistryHarness(): RegistryHarness {
     jar,
     tabs,
     clients,
+    nextClient: () => {
+      const client = queuedClients.shift();
+      if (client !== undefined) return Promise.resolve(client);
+      return new Promise((resolve) => clientWaiters.push(resolve));
+    },
+    publishDirectoryEntry: (hostId, entry) => {
+      if (entry === null) directoryEntries.delete(hostId);
+      else directoryEntries.set(hostId, entry);
+      for (const listener of directoryListeners) listener();
+    },
     emitted,
     closedTransports,
     invalidated,
@@ -391,13 +450,28 @@ export function createRegistryHarness(): RegistryHarness {
     },
     deps: {
       directory: {
+        peek: (hostId) => directoryEntries.get(hostId) ?? null,
+        subscribe: (listener) => {
+          directoryListeners.add(listener);
+          return () => {
+            directoryListeners.delete(listener);
+          };
+        },
         invalidate: (hostId) => {
           invalidated.push(hostId);
+          directoryEntries.delete(hostId);
         },
         reset: () => {
           harness.directoryResets.count += 1;
+          directoryEntries.clear();
+          directoryEntries.set(LOCAL_HOST_ENTRY.hostId, LOCAL_HOST_ENTRY);
         },
-        resolve: (hostId) => harness.resolveHost(hostId),
+        resolve: async (hostId) => {
+          const entry = await harness.resolveHost(hostId);
+          if (entry === null) directoryEntries.delete(hostId);
+          else directoryEntries.set(hostId, entry);
+          return entry;
+        },
         endpoint: () => ({
           hostId: LOCAL_HOST_ENTRY.hostId,
           websocketUrl: LOCAL_HOST_ENTRY.websocketUrl,

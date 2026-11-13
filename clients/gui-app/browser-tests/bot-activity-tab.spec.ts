@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
-// A bot's Activity tab lists the tasks it started, each row a parent the
+// A bot's Activity tab lists its tasks, each row a parent the
 // way the Chats panel draws one: a chevron, the rolled-up glyph, the title
 // with its badges and the state line under it, all one open button. On a
 // phone the title and the line give way (they truncate or wrap) and nothing
@@ -31,7 +31,17 @@ test("no row pushes the page sideways or its open button out of the pane on a ph
   page,
 }) => {
   await page.goto(fixture("bot-activity-tab"));
-  await expect(page.locator(ROW)).toHaveCount(4);
+  const rows = page.locator(ROW);
+  await expect(rows).toHaveCount(5);
+  for (const title of [
+    "Release notes draft for 1.9",
+    "Nightly flake roster",
+    "iPad switcher scroller layer fix",
+    "Weekly dependency sweep",
+    "Slack uninstall copy",
+  ]) {
+    await expect(rows.filter({ hasText: title })).toHaveCount(1);
+  }
   await nextFrames(page, 2);
   const reading = ReadingSchema.parse(
     await page.evaluate(
@@ -51,7 +61,7 @@ test("no row pushes the page sideways or its open button out of the pane on a ph
     ),
   );
   expect(reading.pageScrollWidth).toBeLessThanOrEqual(reading.pageClientWidth);
-  expect(reading.openRights).toHaveLength(4);
+  expect(reading.openRights).toHaveLength(5);
   for (const right of reading.openRights) {
     expect(right).toBeLessThanOrEqual(reading.pageRight);
   }

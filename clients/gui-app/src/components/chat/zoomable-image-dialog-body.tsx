@@ -10,6 +10,14 @@ import {
   type ImagePreviewTransformReport,
 } from "@/components/epic-canvas/image-preview/image-preview-transform";
 import { ZoomControls } from "@/components/epic-canvas/zoom-controls/zoom-controls";
+import { cn } from "@/lib/utils";
+
+/**
+ * The box an expanded chat image occupies whatever its state. Loading and
+ * unavailable images take it too, so moving through a set of images never
+ * resizes the dialog or shifts the arrows from under the pointer.
+ */
+export const EXPANDED_IMAGE_STAGE_BOX = "h-[min(88vh,52rem)] w-full";
 
 /**
  * The body every expanded chat image shares - the message lightbox and the
@@ -48,7 +56,12 @@ export function ZoomableImageDialogBody(props: {
   }
 
   return (
-    <div className="relative h-[min(88vh,52rem)] w-full overflow-hidden rounded-lg">
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-lg",
+        EXPANDED_IMAGE_STAGE_BOX,
+      )}
+    >
       <ImagePreview
         status="ready"
         url={props.src}

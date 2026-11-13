@@ -1,4 +1,10 @@
-import type { CSSProperties, ReactElement, ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import {
   Avatar,
   AvatarFallback,
@@ -7,26 +13,23 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar";
 import { computeInitials } from "@/lib/auth/compute-initials";
-import {
-  type BotSwatch,
-  botSwatchAt,
-  resolveBotSwatch,
-  resolveProfileAccentColor,
-} from "@/lib/providers/profile-accent-color";
+import { resolveProfileAccentColor } from "@/lib/providers/profile-accent-color";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import {
-  type CreatureChoice,
-  type CreatureMark,
-  type CreatureMarkSize,
-  chosenCreatureMark,
-  creatureMark,
-  drawCreatureMark,
-} from "@/lib/bots/creature-mark";
-import { useBotLook } from "@/hooks/bots/use-bot-appearance";
+  MASCOT_AT_REST,
+  MASCOT_WORKING_BEATS,
+  type MascotExpression,
+  type MascotLook,
+  type MascotMarkSize,
+  type MascotPose,
+  botMascot,
+  drawMascotMark,
+} from "@/lib/bots/mascot-mark";
+import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
 
 type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
 
-const CREATURE_SIZE: Readonly<Record<IdentityAvatarSize, CreatureMarkSize>> = {
+const MASCOT_SIZE: Readonly<Record<IdentityAvatarSize, MascotMarkSize>> = {
   xs: 16,
   sm: 24,
   default: 32,
@@ -35,9 +38,9 @@ const CREATURE_SIZE: Readonly<Record<IdentityAvatarSize, CreatureMarkSize>> = {
 
 /**
  * Who a picture is of, in a bot's channel and everywhere a bot appears:
- * a person is a circle, a bot a squircle. A bot is its creature mark on a
- * swatch, both from its id alone, so a rename changes neither, unless a
- * person chose another creature or swatch in its settings. A
+ * a person is a circle, a bot its mascot with nothing behind it. Each part of
+ * a bot's look comes from its id alone, so a rename changes
+ * none, unless a person chose another in its settings. A
  * person without a picture shows their initials on a colour hashed from who
  * they are; the smallest size has room for one letter. The picture is
  * decoration beside the name, which every surface shows or labels its
@@ -45,7 +48,11 @@ const CREATURE_SIZE: Readonly<Record<IdentityAvatarSize, CreatureMarkSize>> = {
  */
 function IdentityAvatar(
   props: (
-    | { readonly kind: "bot"; readonly botId: string }
+    | {
+        readonly kind: "bot";
+        readonly botId: string;
+        readonly expression: MascotExpression;
+      }
     | {
         readonly kind: "person";
         readonly name: string;
@@ -62,21 +69,19 @@ function IdentityAvatar(
     return (
       <BotIdentityAvatar
         botId={props.botId}
+        expression={props.expression}
         size={props.size}
         testId={props.testId}
       />
     );
   }
   const initials = computeInitials(props.name, "");
+  const color = resolveProfileAccentColor(props.seed, null);
   return (
     <AvatarFrame
-      kind="person"
       size={props.size}
       testId={props.testId}
-      swatch={{
-        color: resolveProfileAccentColor(props.seed, null),
-        ink: "dark",
-      }}
+      fill={{ light: color, dark: color }}
       image={
         props.avatarUrl === null ? null : (
           <AvatarImage src={props.avatarUrl} alt="" />
@@ -94,63 +99,110 @@ function IdentityAvatar(
  */
 function BotIdentityAvatar(props: {
   readonly botId: string;
+  readonly expression: MascotExpression;
   readonly size: IdentityAvatarSize;
   readonly testId: string;
 }): ReactElement {
-  const { botId, size, testId } = props;
+  const { botId, expression, size, testId } = props;
   const look = useBotLook(botId);
-  const mark = look?.mark ?? null;
-  const swatchIndex = look?.swatch ?? null;
-  const creature =
-    mark === null
-      ? creatureMark(botId)
-      : chosenCreatureMark(botId, { family: mark.family, seed: mark.seed });
+  const main = useBotIsMain(botId);
+  const beat = useWorkingBeat(expression === "working");
   return (
-    <AvatarFrame
-      kind="bot"
+    <BotMascotFrame
+      mascot={botMascot(botId, look, main)}
+      pose={{ expression, beat }}
       size={size}
       testId={testId}
-      swatch={
-        swatchIndex === null
-          ? resolveBotSwatch(botId)
-          : botSwatchAt(swatchIndex)
-      }
-      image={null}
-    >
-      <CreatureMarkSvg mark={creature} size={CREATURE_SIZE[size]} />
-    </AvatarFrame>
+    />
   );
 }
 
-/** The clipped picture: an image when there is one, over its fallback. */
-function AvatarFrame(props: {
-  readonly kind: "bot" | "person";
+/** How long each beat of a working mascot's eyes lasts. */
+const WORKING_BEAT_MS = 500;
+
+/**
+ * The beat a working mascot's eyes are on, moving while `working`. It stays
+ * on the first for a person who asks for reduced motion, from the moment
+ * they ask.
+ */
+function useWorkingBeat(working: boolean): number {
+  const [beat, setBeat] = useState(0);
+  useEffect(() => {
+    if (!working) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let timer: number | null = null;
+    const follow = (): void => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = null;
+      if (reduced.matches) {
+        setBeat(0);
+        return;
+      }
+      timer = window.setInterval(() => {
+        setBeat((current) => (current + 1) % MASCOT_WORKING_BEATS);
+      }, WORKING_BEAT_MS);
+    };
+    follow();
+    reduced.addEventListener("change", follow);
+    return () => {
+      reduced.removeEventListener("change", follow);
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [working]);
+  return working ? beat : 0;
+}
+
+/**
+ * A mascot in a bot's box, drawn straight on the page: no fill behind it and
+ * no clip over it, so the figure's own outline is its shape.
+ */
+function BotMascotFrame(props: {
+  readonly mascot: MascotLook;
+  readonly pose: MascotPose;
   readonly size: IdentityAvatarSize;
   readonly testId: string;
-  readonly swatch: BotSwatch;
+}): ReactElement {
+  const { mascot, pose, size, testId } = props;
+  return (
+    <Avatar
+      shape="squircle"
+      size={size}
+      data-testid={testId}
+      data-identity="bot"
+    >
+      <MascotMarkSvg mascot={mascot} pose={pose} size={MASCOT_SIZE[size]} />
+    </Avatar>
+  );
+}
+
+/**
+ * A person's clipped picture: an image when there is one, over its fallback,
+ * filled with one colour in each theme.
+ */
+function AvatarFrame(props: {
+  readonly size: IdentityAvatarSize;
+  readonly testId: string;
+  readonly fill: { readonly light: string; readonly dark: string };
   readonly image: ReactNode;
   readonly children: ReactNode;
 }): ReactElement {
-  const { kind, size, testId, swatch } = props;
+  const { size, testId, fill } = props;
   return (
     <Avatar
-      shape={kind === "bot" ? "squircle" : "circle"}
+      shape="circle"
       size={size}
       data-testid={testId}
-      data-identity={kind}
+      data-identity="person"
     >
       {props.image}
       <AvatarFallback
         style={
           {
-            "--swatch": swatch.color,
+            "--avatar-fill": fill.light,
+            "--avatar-fill-dark": fill.dark,
           } as CSSProperties
         }
-        className={
-          swatch.ink === "light"
-            ? "bg-[var(--swatch)] font-semibold text-white"
-            : "bg-[var(--swatch)] font-semibold text-neutral-950"
-        }
+        className="bg-(--avatar-fill) font-semibold text-neutral-950 dark:bg-(--avatar-fill-dark)"
       >
         {props.children}
       </AvatarFallback>
@@ -159,15 +211,15 @@ function AvatarFrame(props: {
 }
 
 /**
- * The creature in the swatch's ink (the fallback's text colour); its eyes are
- * holes, so the swatch shows through them. Drawn in whole pixels of the
- * avatar's own size, and scaled with it only where the root font is not 16px.
+ * The mascot, one path per colour, drawn in whole pixels of the avatar's own
+ * size and scaled with it only where the root font is not 16px.
  */
-function CreatureMarkSvg(props: {
-  readonly mark: CreatureMark;
-  readonly size: CreatureMarkSize;
+function MascotMarkSvg(props: {
+  readonly mascot: MascotLook;
+  readonly pose: MascotPose;
+  readonly size: MascotMarkSize;
 }): ReactElement {
-  const drawing = drawCreatureMark(props.mark, props.size);
+  const drawing = drawMascotMark(props.mascot, props.size, props.pose);
   return (
     <svg
       viewBox={drawing.viewBox}
@@ -175,36 +227,30 @@ function CreatureMarkSvg(props: {
       focusable="false"
       shapeRendering="crispEdges"
       className="size-full"
-      data-slot="bot-creature"
+      data-slot="bot-mascot"
     >
-      <path d={drawing.path} fill="currentColor" fillRule="evenodd" />
+      {drawing.layers.map((layer) => (
+        <path key={layer.fill} d={layer.path} fill={layer.fill} />
+      ))}
     </svg>
   );
 }
 
 /**
- * One creature a bot's settings offer, on a swatch, as the bot would draw it
- * if chosen.
+ * One mascot a bot's settings offer, as the bot would draw it if chosen,
+ * looking ahead.
  */
-export function BotCreaturePreview(props: {
-  readonly botId: string;
-  readonly choice: CreatureChoice;
-  readonly swatch: BotSwatch;
+export function BotMascotPreview(props: {
+  readonly mascot: MascotLook;
   readonly size: IdentityAvatarSize;
 }): ReactElement {
   return (
-    <AvatarFrame
-      kind="bot"
+    <BotMascotFrame
+      mascot={props.mascot}
+      pose={MASCOT_AT_REST}
       size={props.size}
-      testId="bot-creature-preview"
-      swatch={props.swatch}
-      image={null}
-    >
-      <CreatureMarkSvg
-        mark={chosenCreatureMark(props.botId, props.choice)}
-        size={CREATURE_SIZE[props.size]}
-      />
-    </AvatarFrame>
+      testId="bot-mascot-preview"
+    />
   );
 }
 
@@ -215,11 +261,23 @@ export function BotCreaturePreview(props: {
 export function BotAvatar(props: {
   readonly size: IdentityAvatarSize;
 }): ReactElement {
+  return <ExpressiveBotAvatar size={props.size} expression="idle" />;
+}
+
+/**
+ * The surface's bot with its eyes on what it is doing: where a surface says
+ * what the bot is doing now, beside that.
+ */
+export function ExpressiveBotAvatar(props: {
+  readonly size: IdentityAvatarSize;
+  readonly expression: MascotExpression;
+}): ReactElement {
   const identity = useBotIdentity();
   return (
     <IdentityAvatar
       kind="bot"
       botId={identity?.botId ?? "bot"}
+      expression={props.expression}
       size={props.size}
       testId="bot-avatar"
     />
@@ -238,6 +296,7 @@ export function NamedBotAvatar(props: {
     <IdentityAvatar
       kind="bot"
       botId={props.botId}
+      expression="idle"
       size={props.size}
       testId="bot-avatar"
     />

@@ -475,10 +475,10 @@ describe("<ChatMessage /> in a bot channel", () => {
       ),
     );
 
-    const swatchIn = (scope: HTMLElement): string | undefined =>
+    const fillIn = (scope: HTMLElement): string | undefined =>
       scope
         .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
-        ?.style.getPropertyValue("--swatch");
+        ?.style.getPropertyValue("--avatar-fill");
     const row = screen.getByTestId("bot-member-row");
     const stack = within(row).getByTestId("bot-thread-participants");
     const rowAvatar = within(row)
@@ -486,8 +486,8 @@ describe("<ChatMessage /> in a bot channel", () => {
       .find((avatar) => !stack.contains(avatar));
     expect(rowAvatar).toBeDefined();
     if (rowAvatar === undefined) return;
-    expect(swatchIn(rowAvatar)).toBeTruthy();
-    expect(swatchIn(rowAvatar)).toBe(swatchIn(stack));
+    expect(fillIn(rowAvatar)).toBeTruthy();
+    expect(fillIn(rowAvatar)).toBe(fillIn(stack));
   });
 
   it("marks a thread line unread with a dot where the host does not count, and a read one with none", () => {

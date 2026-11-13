@@ -8,6 +8,7 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   IHostStreamClient,
@@ -53,6 +54,15 @@ export class StubSession implements IStreamSession {
     reason: StreamCloseReason | null,
   ): void {
     this.statusChangeHandler(status, reason, null, null);
+  }
+
+  /** A transition of a session that negotiated resume: `continuity` says whether one subscription outlives the outage. */
+  statusWithContinuity(
+    status: StreamConnectionStatus,
+    reason: StreamCloseReason | null,
+    continuity: StreamContinuity,
+  ): void {
+    this.statusChangeHandler(status, reason, null, continuity);
   }
 }
 

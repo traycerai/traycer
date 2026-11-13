@@ -37,6 +37,7 @@ function sandboxRow(
         hostId,
         ...input.summary,
       }),
+      ownerKind: "unknown",
       teamOwned: input.teamOwned,
     },
   });

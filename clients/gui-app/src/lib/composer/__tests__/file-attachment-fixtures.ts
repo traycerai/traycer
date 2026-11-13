@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { vi, type Mock } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { FILE_ATTACHMENT_MAX_BYTES } from "@traycer/protocol/host/drafts/schemas";
 
 import type {
   FileAttachmentUploadClient,
@@ -47,6 +48,12 @@ export function freshHostId(label: string): string {
 
 export function uniqueFile(name: string): File {
   return new File([uuidv4()], name, { type: "text/plain" });
+}
+
+export function oversizedFile(): File {
+  const file = uniqueFile("huge.mov");
+  Object.defineProperty(file, "size", { value: FILE_ATTACHMENT_MAX_BYTES + 1 });
+  return file;
 }
 
 export function okPut(): Mock<PutFileBlob> {

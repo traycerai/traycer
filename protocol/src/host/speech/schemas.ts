@@ -13,6 +13,9 @@
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
+export const SPEECH_MODEL_INSUFFICIENT_DISK_MESSAGE =
+  "Not enough disk space to download the voice model. Free up some space and try again.";
+
 // The model's expected PCM rate: 16 kHz mono 16-bit little-endian. The renderer
 // captures at its AudioContext rate (which the browser may pin to the hardware
 // rate) and reports that rate on the wire; the host resamples to this.

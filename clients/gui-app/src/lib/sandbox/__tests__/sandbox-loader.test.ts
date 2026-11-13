@@ -139,7 +139,14 @@ describe("sandbox loader wheel", () => {
           {
             jsonrpc: "2.0",
             method: "traycer/notifications/wheel",
-            params: { deltaX: 0, deltaY: 40, deltaMode: 0 },
+            params: {
+              deltaX: 0,
+              deltaY: 40,
+              deltaMode: 0,
+              cancelable: true,
+              ownsBack: false,
+              ownsForward: false,
+            },
           },
           "*",
         ],
@@ -151,6 +158,87 @@ describe("sandbox loader wheel", () => {
         wheel(unscrollable, { deltaY: 40, ctrlKey: true }).defaultPrevented,
       ).toBe(false);
       expect(posted).toEqual([]);
+    });
+  });
+});
+
+describe("sandbox loader swipe ownership", () => {
+  function wheelParams(posted: unknown[]): unknown {
+    const [[message]] = posted as [[{ params: unknown }, string]];
+    return message.params;
+  }
+
+  it.each([
+    { scrollLeft: 0, deltaX: -40, ownsBack: false, ownsForward: true },
+    { scrollLeft: 300, deltaX: 40, ownsBack: true, ownsForward: false },
+  ])(
+    "reports an inner scroller at scrollLeft $scrollLeft as owning back $ownsBack and forward $ownsForward",
+    async ({ scrollLeft, deltaX, ownsBack, ownsForward }) => {
+      await inBootstrapWindow((page, posted) => {
+        const rail = page.document.body.appendChild(
+          page.document.createElement("div"),
+        );
+        rail.style.overflowX = "auto";
+        Object.defineProperty(rail, "scrollWidth", { value: 600 });
+        Object.defineProperty(rail, "clientWidth", { value: 300 });
+        rail.scrollLeft = scrollLeft;
+        const inRail = rail.appendChild(page.document.createElement("span"));
+
+        // The wheel pulls toward the edge the rail has already reached, so the
+        // page gives it up while the rail still owns the other direction.
+        inRail.dispatchEvent(
+          new page.WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            deltaX,
+          }),
+        );
+
+        expect(wheelParams(posted)).toMatchObject({ ownsBack, ownsForward });
+      });
+    },
+  );
+
+  it("cancels every wheel while the app holds the page still, and relays again once released", async () => {
+    await inBootstrapWindow((page, posted) => {
+      const { document } = page;
+      const panel = document.body.appendChild(document.createElement("div"));
+      panel.style.overflowY = "auto";
+      Object.defineProperty(panel, "scrollHeight", { value: 900 });
+      Object.defineProperty(panel, "clientHeight", { value: 300 });
+      const inPanel = panel.appendChild(document.createElement("span"));
+      const unscrollable = document.body.appendChild(
+        document.createElement("p"),
+      );
+      const hold = (held: boolean): void => {
+        page.dispatchEvent(
+          new page.MessageEvent("message", {
+            data: { method: "traycer/history-gesture/hold", params: { held } },
+            // A top-level window is its own parent, which is what the
+            // bootstrap takes the app to be.
+            source: page.parent,
+          }),
+        );
+      };
+      const wheel = (target: Element): WheelEvent => {
+        const event = new page.WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          deltaY: 40,
+        });
+        target.dispatchEvent(event);
+        return event;
+      };
+
+      hold(true);
+      expect(wheel(inPanel).defaultPrevented).toBe(true);
+      expect(wheel(unscrollable).defaultPrevented).toBe(true);
+      expect(posted).toEqual([]);
+
+      hold(false);
+      expect(wheel(inPanel).defaultPrevented).toBe(false);
+      expect(wheel(unscrollable).defaultPrevented).toBe(true);
+      expect(posted).toHaveLength(1);
     });
   });
 });
@@ -229,21 +317,18 @@ describe("served artifact page links", () => {
       artifactRootPath,
       anchorTarget: null,
       baseTarget: null,
+      activation: "dispatch",
     }).followed;
   }
 
-  /** The same click with the anchor's and the document's `target` settable. */
-  function clickLink(input: {
+  interface LinkClick {
     readonly artifactPage: ArtifactPageRole;
     readonly href: string;
     readonly artifactRootPath: string | undefined;
     readonly anchorTarget: string | null;
     readonly baseTarget: string | null;
-  }): ClickedLink {
-    return clickLinkAt(
-      "traycer-artifact://artifact-a1--m1/site/index.html",
-      input,
-    );
+    /** How the click is made: `dispatchEvent`, or the anchor's own `click()`. */
+    readonly activation: "dispatch" | "click";
   }
 
   interface ClickedLink {
@@ -252,19 +337,19 @@ describe("served artifact page links", () => {
     /** Where the anchor points once the click has been handled. */
     readonly href: string;
     readonly linkRequests: readonly unknown[];
+    readonly artifactLinks: readonly unknown[];
+  }
+
+  /** The same click with the anchor's and the document's `target` settable. */
+  function clickLink(input: LinkClick): ClickedLink {
+    return clickLinkAt(
+      "traycer-artifact://artifact-a1--m1/site/index.html",
+      input,
+    );
   }
 
   /** The same click on a page served at `pageUrl`. */
-  function clickLinkAt(
-    pageUrl: string,
-    input: {
-      readonly artifactPage: ArtifactPageRole;
-      readonly href: string;
-      readonly artifactRootPath: string | undefined;
-      readonly anchorTarget: string | null;
-      readonly baseTarget: string | null;
-    },
-  ): ClickedLink {
+  function clickLinkAt(pageUrl: string, input: LinkClick): ClickedLink {
     const composed = buildDocument({
       html: "",
       csp: null,
@@ -302,21 +387,38 @@ describe("served artifact page links", () => {
     if (input.anchorTarget !== null)
       anchor.setAttribute("target", input.anchorTarget);
     window.document.body.append(anchor);
-    const followed = anchor.dispatchEvent(
-      new window.MouseEvent("click", { bubbles: true, cancelable: true }),
-    );
+    let followed = true;
+    if (input.activation === "dispatch") {
+      followed = anchor.dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    } else {
+      // `click()` returns nothing: a click that was cancelled is read off the
+      // event once the bootstrap's listener on the window has run.
+      window.addEventListener("click", (event) => {
+        followed = !event.defaultPrevented;
+      });
+      anchor.click();
+    }
     const target = anchor.getAttribute("target");
     const href = anchor.href;
     window.close();
     // The bootstrap posts other notifications too; only link requests matter here.
-    const linkRequests = posted.filter(
-      (message) =>
-        typeof message === "object" &&
-        message !== null &&
-        "method" in message &&
-        message.method === "ui/open-link",
-    );
-    return { followed, target, href, linkRequests };
+    const sentWith = (method: string): unknown[] =>
+      posted.filter(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "method" in message &&
+          message.method === method,
+      );
+    return {
+      followed,
+      target,
+      href,
+      linkRequests: sentWith("ui/open-link"),
+      artifactLinks: sentWith("traycer/notifications/artifact-link"),
+    };
   }
 
   it.each([
@@ -331,6 +433,7 @@ describe("served artifact page links", () => {
         artifactRootPath: "/site/",
         anchorTarget,
         baseTarget,
+        activation: "dispatch",
       });
 
       // The sandbox has no popup permission, so a blank target would do nothing.
@@ -347,6 +450,7 @@ describe("served artifact page links", () => {
       artifactRootPath: "/site/",
       anchorTarget: "_blank",
       baseTarget: null,
+      activation: "dispatch",
     });
 
     expect(clicked.followed).toBe(false);
@@ -357,6 +461,70 @@ describe("served artifact page links", () => {
         params: { url: "https://example.com/docs" },
       }),
     ]);
+  });
+
+  function clickOnPage(
+    href: string,
+    activation: "dispatch" | "click",
+  ): {
+    readonly followed: boolean;
+    readonly linkRequests: readonly unknown[];
+    readonly artifactLinks: readonly unknown[];
+  } {
+    return clickLink({
+      artifactPage: "found",
+      href,
+      artifactRootPath: "/site/",
+      anchorTarget: null,
+      baseTarget: null,
+      activation,
+    });
+  }
+
+  // The prelude reports only a trusted click. jsdom cannot make one, so what
+  // it can show is that a click the page's script makes is dropped. A trusted
+  // click, by mouse and by Enter, is in the browser spec.
+  it.each([
+    ["a dispatched click", "dispatch"],
+    ["the anchor's own click()", "click"],
+  ] as const)(
+    "drops %s on a link out of the artifact root: nothing is reported or opened, and the frame does not navigate",
+    (_label, activation) => {
+      for (const href of [
+        "../other/index.html",
+        "../../top/",
+        "/elsewhere/page.html",
+      ]) {
+        const clicked = clickOnPage(href, activation);
+
+        expect(clicked.followed).toBe(false);
+        expect(clicked.linkRequests).toEqual([]);
+        expect(clicked.artifactLinks).toEqual([]);
+      }
+    },
+  );
+
+  it("sends nothing for a link to another page inside the root, which the frame follows", () => {
+    const clicked = clickOnPage("about.html", "dispatch");
+
+    expect(clicked.followed).toBe(true);
+    expect(clicked.artifactLinks).toEqual([]);
+    expect(clicked.linkRequests).toEqual([]);
+  });
+
+  it("leaves an https link on ui/open-link and off the artifact-link report", () => {
+    const clicked = clickOnPage("https://example.com/docs", "dispatch");
+
+    expect(clicked.linkRequests).toHaveLength(1);
+    expect(clicked.artifactLinks).toEqual([]);
+  });
+
+  it("leaves a hash link to the browser", () => {
+    const clicked = clickOnPage("#section", "dispatch");
+
+    expect(clicked.followed).toBe(true);
+    expect(clicked.linkRequests).toEqual([]);
+    expect(clicked.artifactLinks).toEqual([]);
   });
 
   it("follows a link to another page of the artifact only on a served artifact page that knows its root", () => {
@@ -391,6 +559,7 @@ describe("served artifact page links", () => {
         artifactRootPath: "/site/",
         anchorTarget: null,
         baseTarget: null,
+        activation: "dispatch",
       });
 
     it("follows a relative link to another page through the page's own mount", () => {

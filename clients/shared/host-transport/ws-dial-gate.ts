@@ -69,6 +69,14 @@ import type { DialPriority } from "./dial-priority";
  * are built from host addresses, not user input - and reporting a bare close
  * instead would classify identically, so it stands as written.
  *
+ * ## When the dial timer starts
+ *
+ * At the grant, through {@link DialTicket.granted}. Time in the queue belongs
+ * to this client, so counting it would report a host timeout the host never
+ * caused. The queue has no clock of its own: a queued dial waits for a slot to
+ * come back, by the rules above, or for its caller to give up, and a
+ * `background` dial also waits out every `interactive` one.
+ *
  * ## Runtime neutrality
  *
  * `@traycer-clients/shared` transport code is the CLI's too. Bun has no
@@ -128,6 +136,8 @@ const MAX_BACKGROUND_CONNECTING = 3;
 const DRAIN_ORDER: readonly DialPriority[] = ["interactive", "background"];
 
 export interface DialTicket {
+  /** Settles when this dial is granted its slot; never if it is cancelled first. */
+  readonly granted: Promise<void>;
   /**
    * Gives up a dial that has not started yet. `true` when this call dequeued
    * it - the caller now owes its own close notification, because no native
@@ -263,9 +273,16 @@ export function createDialGate(): DialGate {
 
   return {
     acquire(priority: DialPriority, start: () => void): DialTicket {
+      let markGranted = (): void => undefined;
+      const granted = new Promise<void>((resolve) => {
+        markGranted = resolve;
+      });
       const entry: QueueEntry = {
         priority,
-        start,
+        start: () => {
+          markGranted();
+          start();
+        },
         started: false,
         cancelled: false,
         released: false,
@@ -276,6 +293,7 @@ export function createDialGate(): DialGate {
       // release.
       queueMicrotask(pump);
       return {
+        granted,
         cancel(): boolean {
           if (entry.started || entry.cancelled) return false;
           // Left in place for `takeNext` to skip. Splicing it out would be an

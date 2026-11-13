@@ -107,8 +107,7 @@ import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
-import { buildHostJoinCommand } from "./commands/host-join";
-import { readInstallToken } from "./commands/host-join-token";
+import { buildHostUseCommand } from "./commands/host-use";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
@@ -1481,11 +1480,24 @@ function registerHostCommands(program: Command): void {
       }),
   );
 
+  host
+    .command("pin")
+    .description("Print the host version pinned by this CLI build as JSON")
+    .action(() => {
+      process.stdout.write(
+        `${JSON.stringify({ supportedHostVersion: config.supportedHostVersion })}\n`,
+      );
+    });
+
   registerServiceCommands(host);
 
   withRunner(
     host
       .command("install")
+      .option(
+        "--team <slug>",
+        "Add this computer to the team identified by its slug after installing.",
+      )
       .description(
         "Install a host version from the registry (defaults to latest), or a local archive with --from, then register the OS service and start the host. Prompts for browser sign-in first when you are signed out and the terminal can ask, and provisions the started host's credential (best effort). Use --no-service-register for bytes only.",
       )
@@ -1573,6 +1585,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostInstallCommand({
+          team: typeof opts.team === "string" ? opts.team : null,
           attemptAdoption: attemptAdoptionNonce(opts),
           lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           // Registry path defaults to "latest" when neither flag is set.
@@ -1598,6 +1611,10 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("ensure")
+      .option(
+        "--team <slug>",
+        "Add this computer to the team identified by its slug, or keep it there.",
+      )
       .description(
         "Make sure the host is installed, registered as a service, and running - installing or starting it if needed. Safe to run repeatedly.",
       )
@@ -1612,6 +1629,12 @@ function registerHostCommands(program: Command): void {
       .option(
         "--from <path>",
         "Ensure from a local archive. Mutually exclusive with --release.",
+      )
+      .addOption(
+        new Option(
+          "--bundled <path>",
+          "Ensure from a signed bundled host archive.",
+        ).conflicts(["release", "from"]),
       )
       .option(
         "--no-linger",
@@ -1642,23 +1665,31 @@ function registerHostCommands(program: Command): void {
           ? opts.release
           : null;
       const fromPath = typeof opts.from === "string" ? opts.from : null;
+      const bundledPath =
+        typeof opts.bundled === "string" ? opts.bundled : null;
       // See `host install` above - the mutual-exclusion check runs inside
       // the CommandFn so the runner emits a proper NDJSON error envelope.
       return async (ctx) => {
-        if (explicitVersion !== null && fromPath !== null) {
+        if (
+          [explicitVersion, fromPath, bundledPath].filter(
+            (value) => value !== null,
+          ).length > 1
+        ) {
           throw cliError({
             code: CLI_ERROR_CODES.INVALID_ARGUMENT,
             message:
-              "host ensure: --release and --from are mutually exclusive; pass one or the other",
-            details: { release: explicitVersion, from: fromPath },
+              "host ensure: --release, --from and --bundled are mutually exclusive",
+            details: null,
             exitCode: 1,
           });
         }
         return buildHostEnsureCommand({
+          team: typeof opts.team === "string" ? opts.team : null,
           attemptAdoption: attemptAdoptionNonce(opts),
           lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
           versionRequest: explicitVersion,
           fromPath,
+          bundledPath,
           enableLinger: opts.linger !== false,
           allowSelfInvocation: opts.allowSelfInvocation === true,
           // commander's `--no-service-register` materialises as
@@ -1674,15 +1705,10 @@ function registerHostCommands(program: Command): void {
 
   withRunner(
     host
-      .command("join")
-      .description(
-        "Make this machine a team's host with the one-time install token from the app, then install and start the host. Asks for the token, or reads it from stdin. Refused on a machine that already has a Traycer host.",
-      ),
-    () =>
-      buildHostJoinCommand({
-        readToken: (canPrompt) =>
-          readInstallToken(process.stdin, process.stderr, canPrompt),
-      }),
+      .command("use")
+      .argument("<slug>", "Team slug from its dashboard address")
+      .description("Give this computer to a team you belong to."),
+    (_opts, [team]) => buildHostUseCommand(team ?? ""),
   );
 
   withRunner(
@@ -3238,17 +3264,14 @@ function registerAgentCommands(
     ? " Use this with a path returned by 'traycer worktree create'."
     : "";
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
-  // Deliberately spells out what OMITTING the option does: omission is its own
-  // selection (the remembered last-used profile), not a synonym for 'ambient'.
   const profileHelp =
-    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to use the last-used profile.";
+    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to use 'ambient'.";
   // Rate-limit reads and configuration resolve no last-used fallback - they
   // act on the one profile the caller names - so `--profile` is required there.
   const profileRequiredHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'.";
-  // Fork's own omission default is 'inherit' (continue the SOURCE agent's
-  // profile byte-for-byte) - distinct from create's last-used preference
-  // lookup, so this cannot reuse `profileHelp`'s wording.
+  // Fork inherits the source profile, so it cannot reuse create's
+  // ambient-default wording.
   const forkProfileHelp =
     "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to inherit the source agent's own profile.";
   const agent = program

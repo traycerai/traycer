@@ -3,6 +3,7 @@ import { Drawer as DrawerPrimitive } from "vaul";
 
 import { cn } from "@/lib/utils";
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
 
 function Drawer({
   ...props
@@ -59,11 +60,12 @@ function DrawerContent({
   children,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Content>) {
+  const contentRef = useOverlayDragSuppressionRef(ref);
   return (
     <DrawerPortal data-slot="drawer-portal">
       <DrawerOverlay />
       <DrawerPrimitive.Content
-        ref={ref}
+        ref={contentRef}
         data-slot="drawer-content"
         className={cn(
           "group/drawer-content fixed z-50 flex h-auto flex-col bg-popover bg-clip-padding text-popover-foreground shadow-lg",

@@ -21,6 +21,8 @@ export type ConfigurationSource =
       /** `null` for a role that authorizes nothing - an older inventory's
        *  unknown role, or a retired one. */
       readonly effectiveRole: GrantedEnvironmentRole | null;
+      /** The serving computer can read configuration without changing it. */
+      readonly transportReadOnly?: boolean;
     };
 
 const HOST_SOURCE: ConfigurationSource = { kind: "host" };
@@ -51,15 +53,18 @@ export function useConfigurationIsPersonal(): boolean {
 
 export function useCanEditConfiguration(): boolean {
   const source = useConfigurationSource();
-  return source.kind === "host" || source.effectiveRole !== null;
+  return (
+    source.kind === "host" ||
+    (!source.transportReadOnly && source.effectiveRole !== null)
+  );
 }
 
 export function useCanAdministerConfiguration(): boolean {
   const source = useConfigurationSource();
   return (
     source.kind === "host" ||
-    source.effectiveRole === "owner" ||
-    source.effectiveRole === "admin"
+    (!source.transportReadOnly &&
+      (source.effectiveRole === "owner" || source.effectiveRole === "admin"))
   );
 }
 

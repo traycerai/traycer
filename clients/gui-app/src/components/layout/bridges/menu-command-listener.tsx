@@ -1,3 +1,4 @@
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -236,6 +237,11 @@ export function MenuCommandListener() {
     const subscription = menu.onCommand((payload) => {
       handleMenuCommand(payload, {
         authService,
+        signOut: () => {
+          void useSignOutConfirmStore
+            .getState()
+            .signOut(queryClient, authService);
+        },
         navigateSettings: () => {
           // Signed out there is no tab host to open Settings in:
           // `TabNavigationRouteBridge` mounts only when admitted, so an
@@ -300,6 +306,7 @@ export function MenuCommandListener() {
     };
   }, [
     authService,
+    queryClient,
     navigate,
     openAboutDetails,
     closeTabFlow.closeActiveTab,
@@ -349,6 +356,7 @@ export function MenuCommandListener() {
 
 interface MenuCommandHandlers {
   readonly authService: AuthService;
+  readonly signOut: () => void;
   readonly closeActiveTab: () => void;
   readonly navigateSettings: () => void;
   readonly openAboutDetails: () => void;
@@ -392,7 +400,7 @@ function handleMenuCommand(
     Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
       source: "native_menu",
     });
-    void handlers.authService.signOut();
+    handlers.signOut();
     return;
   }
   if (payload.command === "app.openLogs") {

@@ -1,10 +1,10 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -55,6 +55,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetTeamPageHarness();
 });
@@ -108,6 +109,7 @@ describe("the team page chip", () => {
 
   it("keeps mounted host metadata fresh after an item settles, and stops on unmount", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
     let state: EnvironmentHostItemApply["state"] = "received";
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.host.list": () => ({ hosts: [hostReporting(state)] }),
@@ -208,15 +210,10 @@ describe("the team page chip", () => {
       expect(chipText()).toBe("✓ On Mac mini");
     });
     const editor = await screen.findByRole("textbox", {
-      name: "NODE_ENV value",
+      name: "Value for NODE_ENV",
     });
     await userEvent.type(editor, "!");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
+    fireEvent.blur(editor);
 
     await waitFor(() => {
       expect(chipText()).toBe("1 not applied on Mac mini");

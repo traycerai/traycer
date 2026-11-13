@@ -4,7 +4,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   EnvironmentNotice,
   EnvironmentReviewEntry,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV12,
   EnvironmentWriteOutcome,
   HostRemoteAccessSetResponse,
   LocalOverride,
@@ -16,6 +16,12 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  EnvironmentDescriptorV11,
+  EnvironmentHostBinding,
+  EnvironmentListResponseV11,
+} from "@traycer/protocol/host/environment/contracts";
 
 /**
  * A fake host for the Access and setup tab and the Personal page notices. The
@@ -40,12 +46,14 @@ export const ACCESS_METHODS: readonly string[] = [
   "config.env.localOverride.clear",
   "config.env.list",
   "host.remoteAccess.set",
+  "environment.host.read",
+  "environment.list",
   "providers.list",
   "providers.setProfileEnabled",
 ];
 
 export interface AccessHostState {
-  status: EnvironmentStatusResponseV11;
+  status: EnvironmentStatusResponseV12;
   /** The host cannot answer `environment.status` (it is down). */
   failStatus: boolean;
   notices: EnvironmentNotice[];
@@ -55,6 +63,11 @@ export interface AccessHostState {
   envEntries: ConfigEnvEntry[];
   /** What `host.remoteAccess.set` answers. */
   remoteAccessAnswer: HostRemoteAccessSetResponse;
+  remoteAccessError: HostRpcError | null;
+  binding: EnvironmentHostBinding | null;
+  environments: EnvironmentDescriptorV11[];
+  failEnvironmentList: boolean;
+  environmentListRead: Promise<EnvironmentListResponseV11> | null;
   /** What `environment.undo` answers. */
   undoAnswer: EnvironmentWriteOutcome;
   /** `config.env.localOverride.set` answers `needs_grant` instead of saving. */
@@ -70,6 +83,7 @@ export interface AccessHostReads {
   status: number;
   notices: number;
   review: number;
+  environments: number;
 }
 
 export interface AccessHost {
@@ -95,6 +109,11 @@ export function accessHostState(
     providers: [],
     envEntries: [],
     remoteAccessAnswer: { state: "on" },
+    remoteAccessError: null,
+    binding: null,
+    environments: [],
+    failEnvironmentList: false,
+    environmentListRead: null,
     undoAnswer: { outcome: "saved", revision: 2 },
     localOverrideNeedsGrant: false,
     ...overrides,
@@ -114,10 +133,27 @@ export function buildAccessHostOn(
 ): AccessHost {
   const state = accessHostState(overrides);
   const requests: RecordedRequest[] = [];
-  const reads: AccessHostReads = { status: 0, notices: 0, review: 0 };
+  const reads: AccessHostReads = {
+    status: 0,
+    notices: 0,
+    review: 0,
+    environments: 0,
+  };
   const { client } = buildEnvironmentClient({
     hostId,
     handlers: {
+      "environment.host.read": () => {
+        if (state.binding === null) throw new Error("Binding unavailable");
+        return { ...state.binding, sharingGeneration: null };
+      },
+      "environment.list": () => {
+        reads.environments += 1;
+        if (state.failEnvironmentList)
+          throw new Error("Environment list unavailable");
+        if (state.environmentListRead !== null)
+          return state.environmentListRead;
+        return { environments: state.environments };
+      },
       "environment.status": () => {
         reads.status += 1;
         if (state.failStatus) throw new Error("the host is down");
@@ -152,6 +188,7 @@ export function buildAccessHostOn(
       "config.env.list": () => ({ entries: [...state.envEntries] }),
       "host.remoteAccess.set": (request) => {
         requests.push({ method: "host.remoteAccess.set", params: request });
+        if (state.remoteAccessError !== null) throw state.remoteAccessError;
         return state.remoteAccessAnswer;
       },
       "environment.setup.retry": (request) => {

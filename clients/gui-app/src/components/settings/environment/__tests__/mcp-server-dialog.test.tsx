@@ -133,6 +133,14 @@ function handlers(options: {
 
 const SAVED = { outcome: "saved" as const, reason: null };
 
+async function openServerCard(name: string): Promise<void> {
+  const row = (await screen.findAllByRole("listitem")).find(
+    (item) => within(item).queryByText(name) !== null,
+  );
+  if (row === undefined) throw new Error(`No row for ${name}.`);
+  await userEvent.click(within(row).getByRole("button", { expanded: false }));
+}
+
 async function openAdd(): Promise<HTMLElement> {
   await userEvent.click(
     await screen.findByRole("button", { name: "Add a server" }),
@@ -411,7 +419,7 @@ describe("The MCP server dialog", () => {
     },
   );
 
-  it("keeps the command and arguments a name-only edit did not touch", async () => {
+  it("keeps the arguments a command edit did not touch", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(
       poolSource("editor"),
@@ -432,10 +440,11 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText("Name"), "2");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await openServerCard("local");
+    const command = screen.getByLabelText("Command for local");
+    expect(command).toHaveProperty("value", " /usr/bin/server ");
+    await userEvent.type(command, "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(
@@ -445,13 +454,14 @@ describe("The MCP server dialog", () => {
     expect(
       harness.paramsOf("environment.configuration.mcpServers.put")[0],
     ).toMatchObject({
-      name: "local2",
-      command: " /usr/bin/server ",
+      serverId: "srv-2",
+      name: "local",
+      command: "/usr/bin/server x",
       args: ["--label", " padded ", ""],
     });
   });
 
-  it("saves a disabled server's name-only edit with its id and no toggles or providers, and never switches it on", async () => {
+  it("saves a disabled server's endpoint edit with its id and no toggles or providers, and never switches it on", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(
       poolSource("editor"),
@@ -465,10 +475,11 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText("Name"), "2");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await openServerCard("github");
+    const endpoint = screen.getByLabelText("Endpoint URL for github");
+    expect(endpoint).toHaveProperty("value", "https://github.invalid/mcp");
+    await userEvent.type(endpoint, "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(
@@ -479,7 +490,8 @@ describe("The MCP server dialog", () => {
       harness.paramsOf("environment.configuration.mcpServers.put")[0],
     ).toMatchObject({
       serverId: "srv-1",
-      name: "github2",
+      name: "github",
+      url: "https://github.invalid/mcpx",
       toolToggles: {},
       offFor: [],
     });
@@ -488,7 +500,7 @@ describe("The MCP server dialog", () => {
     ).toHaveLength(0);
   });
 
-  it("saves an edit that leaves the sign-in unchanged, keeping the item's toggles and providers", async () => {
+  it("saves an endpoint edit that leaves the sign-in unchanged, keeping the item's toggles and providers", async () => {
     negotiate(PUT_1_1);
     const harness = mountTeamPage(
       poolSource("editor"),
@@ -518,10 +530,15 @@ describe("The MCP server dialog", () => {
     );
     render(<EnvironmentMcpServersPage />, { wrapper: harness.Wrapper });
 
-    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Edit github")).toBeTruthy();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await openServerCard("github");
+    const endpoint = screen.getByLabelText("Endpoint URL for github");
+    expect(endpoint).toHaveProperty("value", "https://github.invalid/mcp");
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    await userEvent.type(endpoint, "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(
@@ -532,7 +549,7 @@ describe("The MCP server dialog", () => {
           serverId: "srv-1",
           name: "github",
           transport: "http",
-          url: "https://github.invalid/mcp",
+          url: "https://github.invalid/mcpx",
           command: null,
           args: [],
           env: ["GITHUB_TOKEN"],

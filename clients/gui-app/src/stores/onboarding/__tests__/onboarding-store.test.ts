@@ -23,6 +23,7 @@ function resetStore(): void {
   useOnboardingStore.setState({
     setupProgress: { agents: -1, appearance: -1, cookies: -1 },
     setupReminderDismissed: false,
+    moveInvitationAnswered: false,
     completedAt: null,
     step: 0,
   });
@@ -41,6 +42,7 @@ describe("useOnboardingStore", () => {
       cookies: -1,
     });
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
   });
 
   it("counts only the completed tour and setup guides", () => {
@@ -160,12 +162,14 @@ describe("useOnboardingStore", () => {
     useOnboardingStore.getState().completeSetup("agents");
     useOnboardingStore.setState({ step: 4 });
     useOnboardingStore.getState().dismissSetupReminder();
+    useOnboardingStore.getState().answerMoveInvitation();
 
     useOnboardingStore.getState().reset();
 
     expect(useOnboardingStore.getState().completedAt).toBeNull();
     expect(useOnboardingStore.getState().step).toBe(0);
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
     expect(
       onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
     ).toBe(0);
@@ -173,15 +177,21 @@ describe("useOnboardingStore", () => {
 
   it("persists and rehydrates setup reminder dismissal", async () => {
     useOnboardingStore.getState().dismissSetupReminder();
+    useOnboardingStore.getState().answerMoveInvitation();
 
     await useOnboardingStore.persist.rehydrate();
 
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
     const raw = window.localStorage.getItem(PERSIST_KEY);
     const parsed = JSON.parse(raw ?? "{}") as {
-      state?: { setupReminderDismissed?: boolean };
+      state?: {
+        setupReminderDismissed?: boolean;
+        moveInvitationAnswered?: boolean;
+      };
     };
     expect(parsed.state?.setupReminderDismissed).toBe(true);
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
+    expect(parsed.state?.moveInvitationAnswered).toBe(true);
   });
 
   it("restart returns to the first step without clearing completion", () => {
@@ -236,6 +246,7 @@ describe("useOnboardingStore", () => {
 
     expect(keys).toEqual([
       "completedAt",
+      "moveInvitationAnswered",
       "setupProgress",
       "setupReminderDismissed",
     ]);
@@ -269,6 +280,24 @@ describe("useOnboardingStore", () => {
       appearance: 2,
       cookies: 1,
     });
+  });
+
+  it("defaults the invitation answer to false when a persisted blob predates the flag", async () => {
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          completedAt: null,
+          setupReminderDismissed: true,
+          setupProgress: { agents: -1, appearance: -1, cookies: -1 },
+        },
+        version: ONBOARDING_PERSIST_VERSION,
+      }),
+    );
+
+    await useOnboardingStore.persist.rehydrate();
+
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
   });
 
   it("restores legacy state with default setup progress", async () => {

@@ -16,6 +16,7 @@ export type EnvironmentPageId =
   | "mcp-servers"
   | "skills"
   | "permissions"
+  | "agent-memories"
   | "agents"
   | "model-routing"
   | "variables"
@@ -43,6 +44,7 @@ export interface EnvironmentPageAddress {
  * own settings have not moved into Personal: its pages are read from it.
  */
 export type EnvironmentPick =
+  | { readonly kind: "unresolved" }
   | { readonly kind: "personal" }
   | {
       readonly kind: "local";
@@ -52,10 +54,13 @@ export type EnvironmentPick =
     }
   | { readonly kind: "team"; readonly environmentId: string };
 
+export const UNRESOLVED_PICK: EnvironmentPick = { kind: "unresolved" };
+
 export const PERSONAL_PICK: EnvironmentPick = { kind: "personal" };
 
 /** A pick as one string, the Environment dropdown's radio value. */
 export function environmentPickValue(pick: EnvironmentPick): string {
+  if (pick.kind === "unresolved") return "";
   if (pick.kind === "local") return `local:${pick.hostId}`;
   if (pick.kind === "team") return `team:${pick.environmentId}`;
   return "personal";
@@ -72,6 +77,7 @@ const PAGE_SECTIONS: Readonly<Record<EnvironmentPageId, SettingsSectionId>> = {
   "mcp-servers": "mcp-servers",
   skills: "skills",
   permissions: "permissions",
+  "agent-memories": "agent-memories",
   agents: "agents",
   "model-routing": "fallback",
   variables: "shell",
@@ -102,17 +108,20 @@ function isEnvironmentPageId(value: string): value is EnvironmentPageId {
 
 /**
  * Pages a kind of configuration does not offer. Personal and a Local row have
- * no members. A Local row has no MCP servers, Skills, Sandboxes or Storage
- * pages: those are a cloud configuration's, and a computer that has not moved
- * has none.
+ * no members. A Local row keeps MCP servers, Skills, Sandboxes and Storage in
+ * the rail although a computer that has not moved has none of them (they are
+ * a cloud configuration's): each says what moving gives it
+ * (`components/settings/environment/local-move-page.tsx`), so the rail does
+ * not change shape when the computer moves.
  * A team offers every page; the sandboxes plan adds `sandboxes` here for a
  * team if a team without one should not show it.
  */
 const PAGES_HIDDEN_BY_PICK: Readonly<
   Record<EnvironmentPick["kind"], ReadonlySet<EnvironmentPageId>>
 > = {
+  unresolved: new Set(["members"]),
   personal: new Set(["members"]),
-  local: new Set(["mcp-servers", "skills", "sandboxes", "storage", "members"]),
+  local: new Set(["members"]),
   team: new Set(),
 };
 

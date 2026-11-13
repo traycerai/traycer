@@ -3,6 +3,13 @@ import type { Command } from "commander";
 import type { ProgressInfo } from "../../runner/output";
 import type { CommandContext, CommandFn } from "../../runner/runner";
 
+// These cases exercise parsing; the systemd relocation boundary is covered separately.
+vi.mock("../../host/cgroup-relocation", () => ({
+  relocateOutOfHostCgroupIfNeeded: () =>
+    Promise.resolve({ kind: "not-needed" }),
+  acknowledgeRelocationEntry: () => undefined,
+}));
+
 // Captures what `host download`'s wiring actually forwards down the real
 // chain (index.ts's positional/`latest` normalization -> host-download.ts's
 // `buildHostDownloadCommand` -> the installer) - a pure structural check on
@@ -497,7 +504,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["host", "restart"],
       ["host", "install"],
       ["host", "ensure"],
-      ["host", "join"],
+      ["host", "use"],
       ["host", "apply"],
       ["host", "update"],
       ["host", "download"],
@@ -526,7 +533,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["host", "stop"],
       ["host", "install"],
       ["host", "ensure"],
-      ["host", "join"],
+      ["host", "use"],
       ["host", "apply"],
       ["host", "update"],
       ["host", "download"],
@@ -722,10 +729,25 @@ describe("traycer CLI entrypoint registration", () => {
     expect(flags).toContain("--no-service-register");
   });
 
-  it("host join takes no token argument", () => {
+  it("host use takes a team slug argument", () => {
     const program = buildProgram();
-    const cmd = expectCommand(program, ["host", "join"]);
-    expect(cmd.registeredArguments).toEqual([]);
+    const cmd = expectCommand(program, ["host", "use"]);
+    expect(cmd.registeredArguments.map((arg) => arg.name())).toEqual(["slug"]);
+    expect(cmd.helpInformation()).toContain("<slug>");
+  });
+
+  it("host install and ensure accept a team", () => {
+    const program = buildProgram();
+    expect(
+      expectCommand(program, ["host", "install"]).options.map(
+        (option) => option.long,
+      ),
+    ).toContain("--team");
+    expect(
+      expectCommand(program, ["host", "ensure"]).options.map(
+        (option) => option.long,
+      ),
+    ).toContain("--team");
   });
 
   it("service lifecycle commands live under host service", () => {

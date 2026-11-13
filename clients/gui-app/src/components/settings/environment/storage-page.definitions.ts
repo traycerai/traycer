@@ -40,15 +40,6 @@ export const STORAGE = defineSettingsSection("storage", {
     availableWhen: alwaysAvailable,
     keywords: ["cloud", "chats"],
   },
-  artifacts: {
-    kind: "row",
-    group: "idleTasks",
-    search: { contributesTo: "page" },
-    label: "Artifacts",
-    description: "Keep them in the cloud instead of on disk.",
-    availableWhen: alwaysAvailable,
-    keywords: ["cloud", "artifacts"],
-  },
   idleTaskWindow: {
     kind: "row",
     group: "idleTasks",

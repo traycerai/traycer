@@ -130,6 +130,8 @@ function hasUsableCredential(status: ProviderAuthStatus): boolean {
 }
 
 function hasUsableProfileCredential(profile: ProviderProfile): boolean {
+  if (profile.readability?.kind === "unreadable") return false;
+  if (profile.presence?.kind === "revoking") return false;
   return hasUsableCredential(profile.auth.status);
 }
 

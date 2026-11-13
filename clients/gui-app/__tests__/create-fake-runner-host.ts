@@ -94,6 +94,14 @@ export function createFakeRunnerHost(
     deviceDescriber: null,
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
+    setEnvironmentBotHost: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    mintTeamComputerInstallToken: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    releaseTeamComputer: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () =>
@@ -133,8 +141,6 @@ export function createFakeRunnerHost(
     disconnectSlackApp: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     setSlackAppDms: () =>
-      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
-    mintTeamHostInstallToken: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxGrants: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
@@ -182,12 +188,15 @@ export function createFakeRunnerHost(
     },
     fileSave: null,
     tokenStore: {
+      getSignInStorageLow: () => Promise.resolve(false),
+      subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
       get: () => Promise.resolve(null),
-      signIn: () => Promise.resolve(),
+      signIn: () => Promise.resolve("saved" as const),
       rotate: () =>
         Promise.resolve({
           outcome: "deleted" as const,
           pair: null,
+          diskPressure: null,
           rejection: null,
         }),
       delete: () => Promise.resolve(),
@@ -235,6 +244,9 @@ export function createFakeRunnerHost(
     // Desktop-shaped by default; a phone-shaped test passes its own
     // `pushPermission` double through `overrides`.
     pushPermission: null,
+    // A test of on-device dictation passes its own double through
+    // `overrides`.
+    deviceDictation: null,
     // Likewise: a shell that raises an OS back request passes its own
     // `systemBack` double through `overrides`.
     systemBack: null,

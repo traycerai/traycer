@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -240,16 +241,11 @@ describe("team pages on a build with a server pool", () => {
     removeSurfaceHost();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    const value = await screen.findByLabelText("NODE_ENV value");
+    const value = await screen.findByLabelText("Value for NODE_ENV");
     const listReadsBefore = hostIdsOf(harness, "environment.list").length;
     await userEvent.clear(value);
     await userEvent.type(value, "staging");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
+    fireEvent.blur(value);
 
     await waitFor(() => {
       expect(hostIdsOf(harness, "environment.configuration.items.put")).toEqual(

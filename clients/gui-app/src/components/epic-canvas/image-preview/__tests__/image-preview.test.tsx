@@ -1,3 +1,4 @@
+import { readDesktopHorizontalWheelOwnership } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -19,21 +20,32 @@ const META: FileAssetMeta = {
   height: IMAGE_HEIGHT,
 };
 
+interface PreviewFlags {
+  readonly compact: boolean;
+  readonly servedFromCache: boolean;
+  readonly gesturesEnabled: boolean;
+}
+
+const DEFAULT_FLAGS: PreviewFlags = {
+  compact: false,
+  servedFromCache: false,
+  gesturesEnabled: true,
+};
+
 function renderPreview(
   status: "loading" | "header" | "ready",
   meta: FileAssetMeta | null,
-  compact: boolean,
-  servedFromCache: boolean,
+  flags: PreviewFlags,
 ) {
   return render(
     <ImagePreview
       status={status}
       url={status === "ready" ? "blob:image" : null}
       meta={meta}
-      servedFromCache={servedFromCache}
+      servedFromCache={flags.servedFromCache}
       fileName="photo.png"
-      compact={compact}
-      gesturesEnabled
+      compact={flags.compact}
+      gesturesEnabled={flags.gesturesEnabled}
       animationMs={DEFAULT_ANIMATION_MS}
       transformRef={null}
       onTransformChange={null}
@@ -52,7 +64,7 @@ afterEach(() => {
 
 describe("<ImagePreview />", () => {
   it("shows an aspect-ratio skeleton from known header dimensions", () => {
-    renderPreview("header", META, false, false);
+    renderPreview("header", META, DEFAULT_FLAGS);
 
     const skeleton = screen.getByTestId("image-preview-skeleton");
     expect(skeleton.style.aspectRatio).toContain(
@@ -66,8 +78,7 @@ describe("<ImagePreview />", () => {
     renderPreview(
       "header",
       { ...META, width: null, height: null },
-      false,
-      false,
+      DEFAULT_FLAGS,
     );
 
     expect(screen.queryByTestId("image-preview-skeleton")).toBeNull();
@@ -75,7 +86,7 @@ describe("<ImagePreview />", () => {
   });
 
   it("shows the loading spinner before the header arrives", () => {
-    const { container } = renderPreview("loading", null, false, false);
+    const { container } = renderPreview("loading", null, DEFAULT_FLAGS);
 
     expect(
       container.querySelector(
@@ -95,7 +106,7 @@ describe("<ImagePreview />", () => {
   // `react-zoom-pan-pinch` mocked for deterministic jsdom behavior and are
   // left to that suite rather than guessed at here.
   it("renders fit/zoom toolbar controls with fit active by default, and drops the old click-to-toggle image button", () => {
-    renderPreview("ready", META, false, false);
+    renderPreview("ready", META, DEFAULT_FLAGS);
 
     const toolbar = screen.getByRole("toolbar", {
       name: "Image preview controls",
@@ -129,8 +140,22 @@ describe("<ImagePreview />", () => {
     expect(document.querySelector(".cursor-zoom-out")).toBeNull();
   });
 
+  it.each([true, false])(
+    "marks itself as owning horizontal swipes only when gestures are enabled (%s)",
+    (gesturesEnabled) => {
+      const { container } = renderPreview("ready", META, {
+        ...DEFAULT_FLAGS,
+        gesturesEnabled,
+      });
+
+      expect(
+        readDesktopHorizontalWheelOwnership(container.firstElementChild),
+      ).toEqual({ back: gesturesEnabled, forward: gesturesEnabled });
+    },
+  );
+
   it("omits the controls toolbar in compact mode", () => {
-    renderPreview("header", META, true, false);
+    renderPreview("header", META, { ...DEFAULT_FLAGS, compact: true });
 
     expect(
       screen.queryByRole("toolbar", { name: "Image preview controls" }),
@@ -140,13 +165,13 @@ describe("<ImagePreview />", () => {
   });
 
   it("skips the entrance fade for cache hits but keeps it for streamed images", () => {
-    renderPreview("ready", META, false, true);
+    renderPreview("ready", META, { ...DEFAULT_FLAGS, servedFromCache: true });
 
     const cachedImage = screen.getByRole("img", { name: "photo.png" });
     expect(cachedImage.className).toContain("opacity-100");
 
     cleanup();
-    renderPreview("ready", META, false, false);
+    renderPreview("ready", META, DEFAULT_FLAGS);
 
     const streamedImage = screen.getByRole("img", { name: "photo.png" });
     expect(streamedImage.className).toContain("opacity-0");
@@ -159,7 +184,7 @@ describe("<ImagePreview />", () => {
     const classNameSetter = vi.spyOn(Element.prototype, "className", "set");
     const setAttribute = vi.spyOn(Element.prototype, "setAttribute");
 
-    renderPreview("ready", META, false, true);
+    renderPreview("ready", META, { ...DEFAULT_FLAGS, servedFromCache: true });
 
     const imageClasses = [
       ...classNameSetter.mock.calls.map(([value]) => String(value)),

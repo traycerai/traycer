@@ -154,7 +154,6 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
     label: `Watching shard ${String(index + 1)}`,
     originRequestId: null,
     createdByChatId: THREAD_ID,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -441,6 +440,7 @@ function PaneBody(): ReactElement {
                   hostId={HOST_ID}
                   boundHostId={HOST_ID}
                   imageReach="none"
+                  answerReach="each"
                   botTitle="Release Bot"
                   conversationId="channel-1"
                   originMessageId="post-1"

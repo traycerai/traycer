@@ -55,7 +55,8 @@ import "@/index.css";
  * Rows: a task waiting on the person (its session open in this window, so
  * its agents fold under a chevron), a periodic task with agents working, a
  * finished task whose result is unseen, a periodic task with nothing going
- * on, and a quiet, seen task that the list leaves out. `?empty=1` lists
+ * on, and a quiet, seen task whose unknown waiting state keeps it listed.
+ * `?empty=1` lists
  * nothing; `?theme=dark` the dark theme, set as the app sets it, through the
  * settings store the theme applier follows.
  */
@@ -98,7 +99,6 @@ function entry(
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -423,7 +423,7 @@ export function RequestContext(props: {
 }
 
 export function ActivityTab(): ReactElement {
-  const active = useBotActiveTasks(tasks);
+  const active = useBotActiveTasks(tasks, HOST_ID, true);
   return (
     <Tabs
       defaultValue="activity"
@@ -448,11 +448,14 @@ export function ActivityTab(): ReactElement {
       </header>
       <TabsContent value="activity" className="flex min-h-0 flex-1 flex-col">
         <BotActivityPage
+          roomFresh
           botId={BOT_ID}
           hostId={HOST_ID}
-          botTitle="Tracy"
           boundHere
           active={active}
+          notificationSubscriptions={null}
+          trunkChatId="bot-trunk"
+          onOpenSession={() => {}}
           resolveMember={UNRESOLVED_BOT_MEMBERS}
           threads={[thread]}
         />

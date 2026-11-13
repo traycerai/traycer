@@ -124,6 +124,7 @@ function sandboxOption(hostId: string, teamId: string | null): HostScopeOption {
       state: "awake",
       frozen: false,
       summary: sandboxSummaryFixture({ id: `sbx-${hostId}` }),
+      ownerKind: "unknown",
       teamOwned: teamId !== null,
     },
   });
@@ -352,6 +353,7 @@ describe("<UserMenu /> host section", () => {
 
     expect(screen.getByText("Host", { exact: true })).toBeTruthy();
     expect(screen.queryByText("Set the app's machine")).toBeNull();
+    // OR-04: the Host heading has no sentence under it.
     expect(
       screen.queryByText(
         "Every window follows, and the choice outlives this one.",
@@ -403,7 +405,19 @@ describe("<UserMenu /> host section", () => {
       activeHostId: "host-0",
     });
 
-    await openMenu();
+    const host = buildHost();
+    mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings
+        trigger={null}
+      />,
+    );
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    await screen.findByTestId("user-menu-identity");
 
     const menu = screen.getByTestId("user-menu-content");
     const hostSection = screen.getByTestId("user-menu-host-section");
@@ -420,6 +434,9 @@ describe("<UserMenu /> host section", () => {
       hostSection.querySelectorAll('[data-testid^="user-menu-host-option-"]'),
     ).toHaveLength(15);
     expect(within(actions).getByText("Drafts")).toBeTruthy();
+    expect(within(actions).getByText("App settings")).toBeTruthy();
+    expect(within(hostSection).queryByText("App settings")).toBeNull();
+    expect(within(actions).getByText("Manage subscription")).toBeTruthy();
     expect(within(actions).getByText("Sign out")).toBeTruthy();
     expect(
       hostSection.compareDocumentPosition(actions) &
@@ -743,18 +760,11 @@ describe("<UserMenu /> host section", () => {
       fireEvent.focus(screen.getByTestId("user-menu-host-option-host-other"));
       const tooltip = await screen.findByRole("tooltip");
 
-      expect(tooltip.textContent).toBe(
-        "Office Linux Workstation · Use for every window, including future windows.",
-      );
-      expect(
-        screen.queryByText(
-          "Every window follows, and the choice outlives this one.",
-        ),
-      ).toBeNull();
+      expect(tooltip.textContent).toBe("Office Linux Workstation");
       restore();
     });
 
-    it("shows the app-wide choice in a pickable row tooltip even when its name fits", async () => {
+    it("shows no row tooltip when the name fits", async () => {
       const active = hostScopeOptionFixture({
         hostId: "host-active",
         isActive: true,
@@ -786,14 +796,7 @@ describe("<UserMenu /> host section", () => {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(501);
         });
-        expect(screen.getByRole("tooltip").textContent).toBe(
-          "Short · Use for every window, including future windows.",
-        );
-        expect(
-          screen.queryByText(
-            "Every window follows, and the choice outlives this one.",
-          ),
-        ).toBeNull();
+        expect(screen.queryByRole("tooltip")).toBeNull();
       } finally {
         vi.useRealTimers();
         restore();

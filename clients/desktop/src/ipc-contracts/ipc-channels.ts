@@ -36,6 +36,8 @@ export const RunnerHostInvoke = {
   // which owns the single machine-local credentials file + its lock/WAL. `rotate`
   // performs the refresh HTTP spend in main, inside the file lock.
   authTokenStoreGet: "runnerHost:auth:tokenStore:get",
+  authTokenStoreGetSignInStorageLow:
+    "runnerHost:auth:tokenStore:getSignInStorageLow",
   authTokenStoreSignIn: "runnerHost:auth:tokenStore:signIn",
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
@@ -67,6 +69,11 @@ export const RunnerHostInvoke = {
   // reason as the two above — and, like them, a registry-only write that needs
   // no route to the machine, which is why it does not live on the host-
   // management bridge next to the OS-service verbs it must not be confused with.
+  readHostOwnership: "runnerHost:hosts:readOwnership",
+  listTeamComputers: "runnerHost:teams:listComputers",
+  setEnvironmentBotHost: "runnerHost:teams:setBotHost",
+  mintTeamComputerInstallToken: "runnerHost:teams:mintComputerInstallToken",
+  releaseTeamComputer: "runnerHost:hosts:releaseTeamComputer",
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
   // The team's soundtrack set on a staging build, with its samples' links
   // signed: `electron-main/soundtrack/`. Only main holds the key.
@@ -111,8 +118,6 @@ export const RunnerHostInvoke = {
   mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
   disconnectSlackApp: "runnerHost:slackApps:disconnect",
   setSlackAppDms: "runnerHost:slackApps:dms",
-  // A team environment's bot-host install token (traycer-server), likewise.
-  mintTeamHostInstallToken: "runnerHost:teamHost:installToken",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",
@@ -360,6 +365,7 @@ export const RunnerHostInvoke = {
   // post-commit activation, or clearing activation debt). Resolves a
   // `MutationOutcome`.
   traycerHostActivateInstalled: "runnerHost:traycer:host:activateInstalled",
+  invalidateLocalTeamAdmission: "runnerHost:localAdmission:invalidate",
   // Pins an explicit version (incl. downgrades). Resolves a
   // `MutationOutcome`.
   traycerHostInstallVersion: "runnerHost:traycer:host:installVersion",
@@ -498,6 +504,8 @@ export const RunnerHostEvent = {
   // AND self-writes) so each renderer's reconcile worker re-reads the file. The
   // watcher itself lands in §4; the channel + preload subscription ship now.
   authTokenStoreChange: "runnerHost:event:auth:tokenStore:change",
+  authSignInStorageLowChanged:
+    "runnerHost:event:auth:sign-in-storage-low-changed",
   // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a
   // superseded attempt's late result can't be mistaken for the live one.
   deviceFlowResult: "runnerHost:event:deviceFlowResult",

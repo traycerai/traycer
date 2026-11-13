@@ -72,6 +72,7 @@ export type ResumePositions = Readonly<
 /** What is sounding now; null while the view in front has no track. */
 interface SoundingMix {
   readonly view: SoundtrackView;
+  readonly track: SoundtrackTrack;
   readonly plan: MixPlan | null;
 }
 
@@ -228,6 +229,7 @@ export class SoundtrackSession {
   /** Starts the track a view moved on to, once the silence is over. */
   private pendingStart: PendingStart | null = null;
   private paused = false;
+  private setPiecesEnabled = true;
   /** Moves on at each Play, pause and end, so a refusal answers only the latest. */
   private resumeAttempt = 0;
   /** The plan last applied, and the view and track it was for. */
@@ -278,6 +280,46 @@ export class SoundtrackSession {
   setDirector(director: MixDirector): void {
     this.director = director;
     if (!this.paused) this.replan();
+  }
+
+  /** Excludes complete recordings immediately, including history and loading voices. */
+  setSetPiecesEnabled(enabled: boolean): void {
+    if (this.setPiecesEnabled === enabled) return;
+    this.setPiecesEnabled = enabled;
+    if (!enabled) {
+      for (const [name, player] of this.trackPlayers) {
+        if (!(player instanceof ComposedPlayer)) continue;
+        player.stop(0);
+        this.trackPlayers.delete(name);
+      }
+      if (this.pendingStart?.player instanceof ComposedPlayer) {
+        this.cancelPendingStart();
+      }
+      for (const [view, entry] of this.players) {
+        if (entry.track.kind === "composed") {
+          this.players.delete(view);
+          continue;
+        }
+        const tracks = entry.history.tracks.filter(
+          (track) => track.kind !== "composed",
+        );
+        const at = entry.history.tracks
+          .slice(0, entry.history.at)
+          .filter((track) => track.kind !== "composed").length;
+        const filtered = { ...entry, history: { tracks, at } };
+        this.players.set(view, filtered);
+        if (this.inFront === entry) this.inFront = filtered;
+      }
+      if (this.inFront?.track.kind === "composed") {
+        this.inFront = null;
+        this.frontView = null;
+        this.applied = null;
+        this.ports.setDimmed(false);
+        this.onSounding(null);
+      }
+    }
+    if (this.inFront === null) this.frontView = null;
+    if (!this.paused) this.followSignals();
   }
 
   /** A chime heard during a pause is over long before the music is back. */
@@ -457,6 +499,9 @@ export class SoundtrackSession {
     this.players.set(to.view, to);
     this.inFront = to;
     crossfadePlayers(from.player, to.player);
+    // The person asked for this track, so what is reported as sounding follows
+    // at once rather than at the next tick.
+    this.replan();
   }
 
   private playerFor(view: SoundtrackView): ViewPlayer | null {
@@ -530,7 +575,11 @@ export class SoundtrackSession {
 
   private poolOf(view: SoundtrackView): readonly SoundtrackTrack[] {
     const names = this.manifest.views[view];
-    return this.manifest.tracks.filter((track) => names.includes(track.name));
+    return this.manifest.tracks.filter(
+      (track) =>
+        names.includes(track.name) &&
+        (this.setPiecesEnabled || track.kind !== "composed"),
+    );
   }
 
   /** The track it was on if the view is resuming, else one from its pool. */
@@ -618,7 +667,7 @@ export class SoundtrackSession {
     if (track.kind === "composed" || !(player instanceof TrackPlayer)) {
       this.applied = null;
       this.ports.setDimmed(false);
-      this.onSounding({ view, plan: null });
+      this.onSounding({ view, track, plan: null });
       return;
     }
     const plan = this.director.plan(signals, {
@@ -635,7 +684,7 @@ export class SoundtrackSession {
     });
     settleEnabledLayers(player, plan, this.random);
     this.ports.setDimmed(plan.dim);
-    this.onSounding({ view, plan });
+    this.onSounding({ view, track, plan });
   }
 
   private logPause(cause: PauseCause): void {

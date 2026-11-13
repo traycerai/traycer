@@ -5,7 +5,7 @@ import type {
   HostCredentialMintOutcome,
   HostCredentialMintRequest,
 } from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
-import { appLogger } from "@/lib/logger";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 /**
  * App-wide policy for delegated host-credential provisioning.
@@ -245,7 +245,12 @@ const PENDING_ADOPTION_TTL_MS = 60_000;
  */
 const awaitingAdoptionByHostId = new Map<
   string,
-  { readonly mintedAt: number; readonly generation: number }
+  {
+    readonly mintedAt: number;
+    readonly generation: number;
+    readonly familyId: string;
+    readonly provisionedAt: string;
+  }
 >();
 
 /**
@@ -276,6 +281,24 @@ export function noteHostCredentialState(
   _state: HostCredentialState,
 ): void {
   // Intentionally empty. See above.
+}
+
+/** Releases only the credential whose same-socket intake a snapshot proved. */
+export function noteAppMemberCredentialAdopted(
+  hostId: string,
+  credential: MemberCredentialHandoff,
+): void {
+  const claim = awaitingAdoptionByHostId.get(hostId);
+  if (
+    claim?.generation === generation &&
+    claim.familyId === credential.familyId &&
+    claim.provisionedAt === credential.provisionedAt
+  ) {
+    awaitingAdoptionByHostId.delete(hostId);
+    // A proved handoff ends this mint-failure episode. Local data connections
+    // deliberately reprovision, so healthy reconnects must not escalate it.
+    mintBackoffByHostId.delete(hostId);
+  }
 }
 
 /**
@@ -365,6 +388,9 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   }
   const current = runner;
   if (current === null) {
+    appLogger.info("Host credential mint skipped, no mint runner installed", {
+      hostId,
+    });
     return Promise.resolve({ kind: "unavailable" });
   }
 
@@ -372,7 +398,13 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   // Registered in `attemptsByHostId` BELOW, synchronously, so a second local
   // transport joins this attempt rather than starting its own.
   const settled = current(request)
-    .catch((): HostCredentialMintOutcome => ({ kind: "unavailable" }))
+    .catch((error: unknown): HostCredentialMintOutcome => {
+      appLogger.warn("Host credential mint runner threw", {
+        hostId,
+        error: describeLogError(error),
+      });
+      return { kind: "unavailable" };
+    })
     .then((outcome): HostCredentialMintOutcome => {
       if (generation !== startedAt) {
         // A reset (sign-out, or a switch to another account) overtook this
@@ -381,6 +413,10 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
         // host would reject it anyway - it asserts the access token's `id`
         // matches its own owner-gated identity - but dropping it here keeps a
         // dead 30-day refresh JWE from travelling at all.
+        appLogger.info(
+          "Host credential mint dropped, the signed-in identity changed",
+          { hostId },
+        );
         return { kind: "unavailable" };
       }
       attemptsByHostId.delete(hostId);
@@ -392,6 +428,8 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
         awaitingAdoptionByHostId.set(hostId, {
           mintedAt: Date.now(),
           generation: startedAt,
+          familyId: outcome.familyId,
+          provisionedAt: outcome.provisionedAt,
         });
         recordCompletedMint(hostId);
         return outcome;

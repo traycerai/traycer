@@ -1,3 +1,9 @@
+import {
+  LocalOpenAuth,
+  SESSION_GRANT_REQUIRED,
+  isLocalAdmissionFatal,
+  teamMembershipUnavailable,
+} from "./local-open-auth";
 import type {
   MethodVersionRegistry,
   SchemaVersion,
@@ -15,7 +21,10 @@ import {
 } from "@traycer/protocol/framework/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  markMayHaveReachedHost,
+  transportFailureBeforeSend,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
@@ -40,6 +49,7 @@ import type {
   WebSocketLike,
   WebSocketMessageEvent,
 } from "./ws-factory";
+import { whenDialStarted } from "@traycer/protocol/host-transport/websocket";
 import {
   CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   checkCompatibility,
@@ -47,6 +57,7 @@ import {
   toClientHandshakeIdentity,
   RPC_REQUEST_TIMEOUT_FATAL_CODE,
   UNARY_CAPABILITY_IDEMPOTENCY_KEY,
+  UNARY_CAPABILITY_PERSISTENT_SESSION,
   type ClientHandshakeIdentity,
   type FirstPartyClientIdentity,
   type ClientFrame,
@@ -60,6 +71,15 @@ import {
 import type { TimerHandle } from "./timer-handle";
 import { recordNegotiatedHostManifest } from "./negotiated-manifest-registry";
 import { resolveUnavailableMethodDegrade } from "./unavailable-method-degrade";
+import {
+  localUnarySessionKey,
+  LocalUnarySession,
+  LocalUnarySessionDirectory,
+  type AttachedPersistentSocket,
+  type PersistentSocketHandlers,
+  type SessionHandoff,
+  type SessionPublisher,
+} from "./local-unary-session";
 
 /**
  * Minimal endpoint shape the transport layer needs to dial a host. The
@@ -128,6 +148,27 @@ const ATTESTATION_DELIVERY_SLACK_MS = 5_000;
  * emit and deliver its attestation.
  */
 const SUSPENSION_OVERSHOOT_TOLERANCE_MS = 1_000;
+
+/**
+ * Named on an `open` that can be adopted as a session. The persistent-session
+ * name is an opt-in: a host that does not advertise it on `openAck` is kept
+ * on one socket per call. An older host ignores a capability name it does not
+ * know.
+ */
+const LOCAL_UNARY_OPEN_CAPABILITIES: readonly string[] = [
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
+  UNARY_CAPABILITY_PERSISTENT_SESSION,
+];
+
+/**
+ * A socket this client will use as one-shot. Omitting the session name keeps
+ * an upgraded host on one socket per call: the process-lifetime legacy latch
+ * does not re-probe, and advertising the name would make that host require a
+ * bearer the one-shot request does not send.
+ */
+const LOCAL_UNARY_ONE_SHOT_CAPABILITIES: readonly string[] = [
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
+];
 
 /**
  * Injectable source of the host endpoint the client should target. Returning
@@ -201,6 +242,7 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    * it is a construction dependency rather than something resolved per call.
    */
   readonly clientIdentity: FirstPartyClientIdentity;
+  readonly localOpenAuth?: LocalOpenAuth;
 }
 
 /**
@@ -265,10 +307,14 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
  *   - response upgrade throw → `HostRpcError(code: "RPC_ERROR")` with the
  *     wrapped message.
  *
- * `WsRpcClient` deliberately holds no socket state across requests. Every call
- * to `request()` creates a fresh `WebSocketLike` through `webSocketFactory`
- * and discards it on completion - so cross-request leaks are impossible by
- * construction.
+ * A host that does not advertise `unary.persistentSession` is still dialed
+ * once per call, and the socket closes with the response. A host that does
+ * is dialed once per host and signed-in identity: the discovering socket
+ * stays open, and later calls reuse it. Isolation is then by contract. Each
+ * request carries its own bearer and abort, and the host builds a request
+ * context for that request alone and discards it when the request settles.
+ * The only state kept for the socket is the negotiated manifest and the
+ * identity the open frame authenticated.
  */
 
 export class WsRpcClient<
@@ -288,8 +334,13 @@ export class WsRpcClient<
    * per-request sockets would allocate an identical object per RPC.
    */
   private readonly clientIdentity: ClientHandshakeIdentity;
+  private readonly sessions = new LocalUnarySessionDirectory<Registry>();
+  private readonly localOpenAuth: LocalOpenAuth | undefined;
+  private readonly reprobeErrors = new WeakSet<HostRpcError>();
+  private readonly localRevisionByHost = new Map<string, number>();
 
   constructor(options: WsRpcClientOptions<Registry>) {
+    this.localOpenAuth = options.localOpenAuth;
     this.registry = options.registry;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
@@ -299,6 +350,17 @@ export class WsRpcClient<
     this.evidence = options.evidence;
     this.liveness = new LocalHostLiveness(options.evidence);
     this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
+  }
+
+  /**
+   * Closes sessions with nothing queued and nothing in flight.
+   * A process that builds a client for one call uses this when that call
+   * settles, so the adopted socket does not keep the process alive. A client
+   * that outlives its calls does not: the idle socket is what the next call
+   * reuses.
+   */
+  releaseIdleLocalSessions(): void {
+    this.sessions.releaseIdle();
   }
 
   async request<Method extends keyof Registry & string>(
@@ -320,12 +382,50 @@ export class WsRpcClient<
     responseTimeoutMs: number,
     options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const { idempotencyKey, authority } = options;
+    let challengeRetried = false;
+    let grantReprobed = false;
+    for (;;) {
+      try {
+        return await this.requestWithResponseTimeoutInternal(
+          method,
+          params,
+          responseTimeoutMs,
+          options,
+        );
+      } catch (cause) {
+        if (
+          this.localOpenAuth === undefined ||
+          !(cause instanceof HostRpcError)
+        )
+          throw cause;
+        if (this.reprobeErrors.has(cause) && !grantReprobed) {
+          grantReprobed = true;
+          challengeRetried = false;
+          continue;
+        }
+        if (
+          cause.fatalDetails?.code === SESSION_GRANT_REQUIRED &&
+          !challengeRetried
+        ) {
+          challengeRetried = true;
+          continue;
+        }
+        throw cause;
+      }
+    }
+  }
+
+  private async requestWithResponseTimeoutInternal<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+    options: HostRequestOptions,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
-    const selected = authority.endpoint;
-
-    throwIfAuthorityAborted(authority, requestId, method);
-
+    const selected = options.authority.endpoint;
+    throwIfAuthorityAborted(options.authority, requestId, method);
     if (selected.websocketUrl === null) {
       throw new HostRpcError({
         code: "RPC_ERROR",
@@ -335,48 +435,262 @@ export class WsRpcClient<
         fatalDetails: null,
       });
     }
+    const websocketUrl = selected.websocketUrl;
+    const revision = this.localOpenAuth?.revisionFor(selected.hostId) ?? 0;
+    const previousRevision = this.localRevisionByHost.get(selected.hostId);
+    if (previousRevision !== undefined && previousRevision !== revision)
+      this.sessions.releaseIdle();
+    this.localRevisionByHost.set(selected.hostId, revision);
+    const sessionKey =
+      localUnarySessionKey(
+        selected.hostId,
+        options.authority.bearer.identity.userId,
+        websocketUrl,
+      ) + (this.localOpenAuth === undefined ? "" : `\u0000${revision}`);
+    let handoff: SessionHandoff | null = null;
+    for (;;) {
+      const admission = this.sessions.claim(sessionKey, handoff);
+      handoff = null;
+      if (admission.kind === "ready") {
+        return admission.session.call({
+          requestId,
+          method,
+          params,
+          responseTimeoutMs,
+          options,
+          boundToDialRelease: false,
+        });
+      }
+      if (admission.kind === "legacy") {
+        return this.requestOnFreshSocket(
+          method,
+          params,
+          responseTimeoutMs,
+          options,
+          requestId,
+          null,
+          sessionKey,
+        );
+      }
+      if (admission.kind === "wait") {
+        const hold = this.sessions.acquireDialHold(sessionKey);
+        try {
+          const settled = await waitForSessionAdmission(
+            admission.settled,
+            options.authority,
+            requestId,
+            method,
+          );
+          if (settled.kind === "ready") {
+            return await settled.session.call({
+              requestId,
+              method,
+              params,
+              responseTimeoutMs,
+              options,
+              boundToDialRelease: true,
+            });
+          }
+          if (settled.kind === "failed") {
+            throw readdressDiscoveryFailure(settled.error, requestId, method);
+          }
+          if (settled.kind === "legacy") {
+            return await this.requestOnFreshSocket(
+              method,
+              params,
+              responseTimeoutMs,
+              options,
+              requestId,
+              null,
+              sessionKey,
+            );
+          }
+          // This handoff names the slot that still holds the release.
+          // The next claim converts that object and no other.
+          handoff = settled.handoff;
+        } catch (cause) {
+          admission.relinquish();
+          throw cause;
+        } finally {
+          admission.leave();
+          hold.release();
+        }
+        continue;
+      }
+      return this.requestOnFreshSocket(
+        method,
+        params,
+        responseTimeoutMs,
+        options,
+        requestId,
+        admission.publish,
+        sessionKey,
+      );
+    }
+  }
 
-    const clientManifest = this.buildManifest();
-    const token = extractBearerOrThrowRpcError(
-      authority.bearer,
+  private async requestOnFreshSocket<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+    options: HostRequestOptions,
+    requestId: string,
+    publish: SessionPublisher<Registry> | null,
+    sessionKey: string,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    const { idempotencyKey, authority } = options;
+    const selected = authority.endpoint;
+    const admissionRevision =
+      this.localOpenAuth?.revisionFor(selected.hostId) ?? 0;
+    let published = false;
+    const settleUnpublished = (cause: unknown): void => {
+      if (publish === null || published) {
+        return;
+      }
+      if (
+        (cause instanceof HostRpcError && this.reprobeErrors.has(cause)) ||
+        isCallerSpecificAuthRefusal(cause) ||
+        (cause instanceof HostRpcError &&
+          cause.fatalDetails?.code === SESSION_GRANT_REQUIRED)
+      ) {
+        // The host refused this call's open-frame credential. A waiter on
+        // the same account can hold a different lease, so it dials its own
+        // handshake instead of inheriting this refusal.
+        publish.retry();
+      } else if (
+        cause instanceof HostRpcError &&
+        cause.fatalDetails !== null &&
+        !(cause instanceof RetryableTransportError)
+      ) {
+        publish.failed(cause);
+      } else {
+        publish.retry();
+      }
+      published = true;
+    };
+    const discovery = prepareDiscoveryOpen(
+      authority,
       requestId,
       method,
+      settleUnpublished,
     );
 
-    const session = openSession({
-      socket: this.webSocketFactory.create(
-        selected.websocketUrl,
-        // Classified here because here is where the method is known: the
-        // factory sees a URL, and every unary call in this app dials its own
-        // socket, so this is the only frame that can tell a catalog prefetch
-        // apart from a call a user is waiting on. See `dial-priority.ts`.
-        dialPriorityForMethod(method),
-      ),
-      dialTimeoutMs: this.dialTimeoutMs,
-      hostAttestationWindowMs: this.hostAttestationWindowMs,
-      requestId,
-      method,
-      hostId: selected.hostId,
-      evidence: this.evidence,
-      liveness: this.liveness,
-    });
+    let session: Session | null = null;
+    let socket: WebSocketLike | null = null;
     const onAbort = (): void => {
-      session.abort();
+      session?.abort();
     };
-    authority.abortSignal.addEventListener("abort", onAbort, { once: true });
-    if (authority.abortSignal.aborted) {
-      onAbort();
-    }
+    let adopted = false;
 
     try {
+      const clientManifest = this.buildManifest();
+      const usesSessionGrant =
+        this.localOpenAuth?.requiresSessionGrant(selected.hostId) === true;
+      let sessionGrant: string | null = null;
+      if (usesSessionGrant && this.localOpenAuth !== undefined) {
+        const readiness = await this.localOpenAuth.ensureMemberReady(
+          selected,
+          authority.bearer,
+          authority.abortSignal,
+        );
+        throwIfAuthorityAborted(authority, requestId, method);
+        if (readiness.kind === "reprobe") {
+          const error = hostFatalError(
+            { kind: "fatalError", details: readiness.fatal },
+            requestId,
+            method,
+            "beforeRequest",
+          );
+          this.reprobeErrors.add(error);
+          throw error;
+        }
+        if (readiness.kind !== "ready") {
+          throw hostFatalError(
+            {
+              kind: "fatalError",
+              details:
+                readiness.kind === "refused"
+                  ? readiness.fatal
+                  : (readiness.retryCause ?? teamMembershipUnavailable()),
+            },
+            requestId,
+            method,
+            "beforeRequest",
+          );
+        }
+        const provision = await this.localOpenAuth.mint(
+          selected.hostId,
+          authority.bearer,
+          authority.abortSignal,
+        );
+        throwIfAuthorityAborted(authority, requestId, method);
+        if (provision.kind !== "ok") {
+          throw hostFatalError(
+            {
+              kind: "fatalError",
+              details:
+                provision.kind === "refused"
+                  ? provision.fatal
+                  : (provision.retryCause ?? teamMembershipUnavailable()),
+            },
+            requestId,
+            method,
+            "beforeRequest",
+          );
+        }
+        sessionGrant = provision.token;
+      }
+      // Construction is inside this try: `create()` throws synchronously when
+      // the runtime has no WebSocket global, and that throw has to release the
+      // unpublished dial. A slot left in `dialing` would make the next call
+      // wait forever.
+      socket = this.webSocketFactory.create(
+        discovery.websocketUrl,
+        // Classified here because here is where the method is known: the
+        // factory sees a URL. A one-shot host is dialed once per call, and
+        // the discovering dial of a persistent session uses this call's
+        // method. See `dial-priority.ts`.
+        dialPriorityForMethod(method),
+      );
+      session = openSession({
+        socket,
+        dialTimeoutMs: this.dialTimeoutMs,
+        hostAttestationWindowMs: this.hostAttestationWindowMs,
+        requestId,
+        method,
+        hostId: selected.hostId,
+        evidence: this.evidence,
+        liveness: this.liveness,
+      });
+      authority.abortSignal.addEventListener("abort", onAbort, { once: true });
+      if (authority.abortSignal.aborted) {
+        onAbort();
+      }
+
       await session.dial();
+      throwIfAuthorityAborted(authority, requestId, method);
+      // A queued dial must still belong to its bearer lease at OPEN, even
+      // when the wire token is the grant minted before socket construction.
+      const liveBearer = extractBearerOrThrowRpcError(
+        authority.bearer,
+        requestId,
+        method,
+      );
+      const token = sessionGrant ?? liveBearer;
 
       session.send({
         kind: "open",
+        // Read again after the dial, which may have waited for a slot
+        // (`ws-dial-gate.ts`) with no bound of its own: the bearer can rotate
+        // or expire meanwhile. `prepareDiscoveryOpen` still reads it first,
+        // so a call with no bearer fails before it dials.
         token,
         manifest: clientManifest.manifest,
         optionalManifest: clientManifest.optionalManifest,
-        capabilities: [CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1],
+        capabilities:
+          publish === null
+            ? LOCAL_UNARY_ONE_SHOT_CAPABILITIES
+            : LOCAL_UNARY_OPEN_CAPABILITIES,
         clientIdentity: this.clientIdentity,
         // Additive and needs no negotiation to send: an older host's copy of
         // the open-frame schema strips the key (zod objects are non-strict) and
@@ -394,7 +708,32 @@ export class WsRpcClient<
       const ackFrame = await session.next(this.frameTimeoutMs);
 
       if (ackFrame.kind === "fatalError") {
-        throw hostFatalError(ackFrame, requestId, method, "beforeRequest");
+        if (
+          ackFrame.details.code === SESSION_GRANT_REQUIRED &&
+          !usesSessionGrant
+        ) {
+          this.localOpenAuth?.noteSessionGrantRequired(selected.hostId);
+        }
+        this.localOpenAuth?.noteRefusal(
+          selected.hostId,
+          authority.bearer,
+          ackFrame.details,
+        );
+        const error = hostFatalError(
+          ackFrame,
+          requestId,
+          method,
+          "beforeRequest",
+        );
+        if (
+          usesSessionGrant &&
+          this.localOpenAuth !== undefined &&
+          !isLocalAdmissionFatal(ackFrame.details.code)
+        ) {
+          this.localOpenAuth.invalidateHost(selected.hostId, ackFrame.details);
+          this.reprobeErrors.add(error);
+        }
+        throw error;
       }
       if (ackFrame.kind !== "openAck") {
         throw new HostRpcError({
@@ -406,6 +745,21 @@ export class WsRpcClient<
         });
       }
 
+      if (
+        this.localOpenAuth !== undefined &&
+        this.localOpenAuth.revisionFor(selected.hostId) !== admissionRevision
+      ) {
+        throw new RetryableTransportError({
+          code: "RPC_ERROR",
+          message: "Local admission changed before the request was sent",
+          requestId,
+          method,
+          replaySafetyFromKey: false,
+          fatalDetails: null,
+        });
+      }
+      if (usesSessionGrant)
+        this.localOpenAuth?.noteAdmitted(selected.hostId, authority.bearer);
       const mergedClientManifest = mergeConnectionManifests(
         clientManifest.manifest,
         clientManifest.optionalManifest,
@@ -420,6 +774,94 @@ export class WsRpcClient<
       // truthfully which methods the host has, and the gate wants that fact
       // even when this particular call is about to fail.
       recordNegotiatedHostManifest(selected.hostId, mergedHostManifest);
+      if (
+        publish !== null &&
+        ackFrame.capabilities?.includes(UNARY_CAPABILITY_PERSISTENT_SESSION) ===
+          true
+      ) {
+        const sessionCompat = checkCompatibility(
+          this.registry,
+          clientManifest.manifest,
+          ackFrame.manifest,
+          "client",
+        );
+        if (!sessionCompat.ok) {
+          const downgradeFailure = classifyDowngradeFailure(
+            sessionCompat.details,
+            method,
+            mergedClientManifest[method],
+            mergedHostManifest[method],
+          );
+          if (downgradeFailure !== null) {
+            throw new HostRpcError({
+              code: "DOWNGRADE_UNSUPPORTED",
+              message: downgradeFailure,
+              requestId,
+              method,
+              fatalDetails: null,
+            });
+          }
+          session.send({ kind: "fatalError", details: sessionCompat.details });
+          throw new HostRpcError({
+            code: isRpcErrorCode(sessionCompat.details.code)
+              ? sessionCompat.details.code
+              : "RPC_ERROR",
+            message: sessionCompat.details.reason,
+            requestId,
+            method,
+            fatalDetails: sessionCompat.details,
+          });
+        }
+        const recorded = session.recordedFailure();
+        if (recorded !== null) {
+          throw recorded;
+        }
+        if (session.isClosed()) {
+          throw closedBeforeAdopt(requestId, method);
+        }
+        const local = this.adoptDiscoveredSession(
+          session,
+          sessionKey,
+          selected.hostId,
+          mergedClientManifest,
+          mergedHostManifest,
+          usesSessionGrant,
+          ackFrame.capabilities?.includes(UNARY_CAPABILITY_IDEMPOTENCY_KEY) ===
+            true,
+        );
+        if (local.isRetired) {
+          const fatal = local.admissionFatalFrame;
+          throw fatal === null
+            ? closedBeforeAdopt(requestId, method)
+            : hostFatalError(fatal, requestId, method, "beforeRequest");
+        }
+        publish.ready(local);
+        published = true;
+        adopted = true;
+        authority.abortSignal.removeEventListener("abort", onAbort);
+        // Publish is the boundary. A release during the dial is session
+        // state before this call and before any waiter continuation. Both
+        // are bound to it. A later claim of the published session returns
+        // it. A discovery retry keeps this slot while a caller holds its
+        // handoff, and only that caller reads the release. A dial hold does
+        // not keep the slot. Waiters already admitted hold this dial, so a
+        // settlement here cannot close the socket before they enter.
+        if (this.sessions.consumeReleaseBeforeReady(sessionKey, local)) {
+          local.retainDialRelease();
+        }
+        return local.call({
+          requestId,
+          method,
+          params,
+          responseTimeoutMs,
+          options,
+          boundToDialRelease: true,
+        });
+      }
+      if (publish !== null) {
+        publish.legacy();
+        published = true;
+      }
       // The caller's version floor, answered by THIS connection rather than by
       // whatever the registry above remembers. First check after the manifest
       // lands and before anything is written: the point of carrying the
@@ -458,19 +900,15 @@ export class WsRpcClient<
       // premise the retry rests on, and the earlier attempt may already have
       // committed.
       //
-      // Ambiguous rather than retryable, and that is the point of failing here
-      // instead of dispatching: the outcome of the first attempt is genuinely
-      // unknown, so the honest answer is the one that makes a caller reconcile
-      // (`classifyEpicWriteCommandFailure` routes `HostTransportFailureError`
-      // to `unknown-outcome`) rather than one that invites a third attempt into
-      // the same hole.
+      // Non-retryable, and this attempt sent nothing, so it reads as not
+      // reached. `classifyEpicWriteCommandFailure` still routes the class to
+      // `unknown-outcome`. An earlier attempt's uncertainty is the retry
+      // messenger's wrapper, which engages because these details are non-null.
       if (options.replayMustBeKeyed && wireIdempotencyKey === null) {
-        throw new HostTransportFailureError({
-          code: "RPC_ERROR",
+        throw transportFailureBeforeSend({
           message: `Host '${selected.hostId}' cannot honour the idempotency key a replay of '${method}' requires`,
           requestId,
           method,
-          fatalDetails: null,
         });
       }
 
@@ -541,10 +979,57 @@ export class WsRpcClient<
         selected.hostId,
         wireIdempotencyKey,
       );
+    } catch (cause) {
+      // The asynchronous membership/grant work precedes socket construction.
+      // Preserve the unary API's typed, proven-pre-dispatch cancellation.
+      if (socket === null && authority.abortSignal.aborted) {
+        settleUnpublished(cause);
+        throwIfAuthorityAborted(authority, requestId, method);
+      }
+      settleUnpublished(cause);
+      throw cause;
     } finally {
       authority.abortSignal.removeEventListener("abort", onAbort);
-      session.close(1000, "ok");
+      if (session !== null && !adopted) {
+        session.close(1000, "ok");
+      } else if (socket !== null && session === null) {
+        socket.close(1000, "ok");
+      }
     }
+  }
+
+  private adoptDiscoveredSession(
+    socketSession: Session,
+    sessionKey: string,
+    hostId: string,
+    clientManifest: ConnectionManifest,
+    hostManifest: ConnectionManifest,
+    usesSessionGrant: boolean,
+    idempotency: boolean,
+  ): LocalUnarySession<Registry> {
+    const local = new LocalUnarySession<Registry>({
+      key: sessionKey,
+      registry: this.registry,
+      hostId,
+      directory: this.sessions,
+    });
+    const attached: AttachedPersistentSocket = {
+      socket: {
+        send: (frame) => {
+          socketSession.send(frame);
+        },
+        close: (code, reason) => {
+          socketSession.close(code, reason);
+        },
+      },
+      clientManifest,
+      hostManifest,
+      idempotency,
+      usesSessionGrant,
+    };
+    local.attach(attached);
+    socketSession.adoptMultiplex(local.handlers);
+    return local;
   }
 
   private buildManifest(): SplitConnectionManifest {
@@ -993,7 +1478,7 @@ function classifyDowngradeFailure(
   return `No direct downgrade path exists from major ${clientCanonical.major} to major ${hostCanonical.major}`;
 }
 
-function hostFatalError(
+export function hostFatalError(
   frame: HostFatalErrorFrame,
   requestId: string,
   method: string,
@@ -1101,9 +1586,11 @@ interface SessionOptions {
  * The local transport's connectivity, as the selection authority needs to see
  * it (redesign P1.3, Q3 ruling (c)).
  *
- * This transport opens a FRESH socket per RPC, so a naive per-socket
- * announcement would make the authority's session inventory flicker once per
- * request. That is not merely noisy - a live session is the authority's
+ * A one-request socket opens and closes per call. A persistent session holds
+ * one socket for the host, so a naive per-request announcement would still
+ * flicker the authority's inventory on the one-request path, and would
+ * over-count the persistent path. That is not merely noisy - a live session
+ * is the authority's
  * strongest evidence class and suppresses death accumulation entirely, so
  * announcing and retracting it thousands of times a day would make death
  * suppression a race against RPC timing, at exactly the moments evidence
@@ -1191,6 +1678,18 @@ interface Session {
   send(frame: ClientFrame): void;
   abort(): void;
   close(code: number, reason: string): void;
+  /**
+   * After `openAck` has been consumed, hand later frames to `handlers`
+   * instead of the single-request `next` wait. The socket stays open.
+   */
+  adoptMultiplex(handlers: PersistentSocketHandlers): void;
+  /** True once `onclose` has run. Adoption must not publish that socket. */
+  isClosed(): boolean;
+  /**
+   * The one terminal failure recorded for this socket, if any. Adoption
+   * throws it instead of publishing. The first failure wins.
+   */
+  recordedFailure(): HostRpcError | null;
 }
 
 /**
@@ -1357,11 +1856,35 @@ function openSession(options: SessionOptions): Session {
   };
 
   const buffer: HostFrame[] = [];
-  let dialResolver: {
+  let multiplex: PersistentSocketHandlers | null = null;
+  let multiplexNotified = false;
+  let closeNotice: { message: string; selfInitiated: boolean } | null = null;
+  const notifyMultiplex = (message: string, selfInitiated: boolean): void => {
+    if (multiplex === null || multiplexNotified) {
+      return;
+    }
+    multiplexNotified = true;
+    multiplex.onTransportClosed(message, selfInitiated);
+  };
+  const closeMultiplexSocket = (): void => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    endLiveness();
+    try {
+      socket.close(1000, "malformed");
+    } catch (cause) {
+      void cause;
+    }
+  };
+  interface PendingDial {
     readonly resolve: () => void;
     readonly reject: (error: HostRpcError) => void;
-    readonly timer: TimerHandle;
-  } | null = null;
+    /** Null until the handshake starts. */
+    timer: TimerHandle | null;
+  }
+  let dialResolver: PendingDial | null = null;
   let frameResolver: {
     readonly resolve: (frame: HostFrame) => void;
     readonly reject: (error: HostRpcError) => void;
@@ -1394,7 +1917,9 @@ function openSession(options: SessionOptions): Session {
     if (dialResolver !== null) {
       const resolver = dialResolver;
       dialResolver = null;
-      clearTimeout(resolver.timer);
+      if (resolver.timer !== null) {
+        clearTimeout(resolver.timer);
+      }
       resolver.reject(settled);
     }
     if (frameResolver !== null) {
@@ -1491,7 +2016,9 @@ function openSession(options: SessionOptions): Session {
     if (dialResolver !== null) {
       const resolver = dialResolver;
       dialResolver = null;
-      clearTimeout(resolver.timer);
+      if (resolver.timer !== null) {
+        clearTimeout(resolver.timer);
+      }
       resolver.resolve();
     }
   };
@@ -1502,31 +2029,43 @@ function openSession(options: SessionOptions): Session {
       parsed = JSON.parse(event.data);
     } catch (cause) {
       void cause;
-      failAll(
-        new HostRpcError({
-          code: "RPC_ERROR",
-          message: `Malformed host frame: ${truncate(event.data)}`,
-          requestId,
-          method,
-          fatalDetails: null,
-        }),
-      );
+      const malformed = new HostRpcError({
+        code: "RPC_ERROR",
+        message: `Malformed host frame: ${truncate(event.data)}`,
+        requestId,
+        method,
+        fatalDetails: null,
+      });
+      if (multiplex !== null) {
+        notifyMultiplex(malformed.message, false);
+        closeMultiplexSocket();
+        return;
+      }
+      failAll(malformed);
       return;
     }
     const frameParse = hostFrameSchema.safeParse(parsed);
     if (!frameParse.success) {
-      failAll(
-        new HostRpcError({
-          code: "RPC_ERROR",
-          message: `Malformed host frame: ${truncate(event.data)}`,
-          requestId,
-          method,
-          fatalDetails: null,
-        }),
-      );
+      const malformed = new HostRpcError({
+        code: "RPC_ERROR",
+        message: `Malformed host frame: ${truncate(event.data)}`,
+        requestId,
+        method,
+        fatalDetails: null,
+      });
+      if (multiplex !== null) {
+        notifyMultiplex(malformed.message, false);
+        closeMultiplexSocket();
+        return;
+      }
+      failAll(malformed);
       return;
     }
     const frame = frameParse.data;
+    if (multiplex !== null) {
+      multiplex.onFrame(frame);
+      return;
+    }
     if (frameResolver !== null) {
       // Once the caller's response deadline has elapsed, the call's fate is
       // decided unless the HOST itself speaks to this request. Exactly two
@@ -1557,12 +2096,23 @@ function openSession(options: SessionOptions): Session {
       resolver.resolve(frame);
       return;
     }
+    // openAck already resolved and adoption has not installed handlers.
+    // A host fatal here is this discovery's outcome. Buffering it would
+    // let adoption publish the socket and drop the error.
+    if (frame.kind === "fatalError") {
+      failAll(hostFatalError(frame, requestId, method, "beforeRequest"));
+      return;
+    }
     buffer.push(frame);
   };
 
   socket.onerror = (event: WebSocketErrorEvent) => {
     if (!opened) {
       erroredBeforeOpen = true;
+    }
+    if (multiplex !== null) {
+      notifyMultiplex(`WebSocket transport error: ${event.message}`, false);
+      return;
     }
     failAll(transientFailure(`WebSocket transport error: ${event.message}`));
   };
@@ -1592,6 +2142,13 @@ function openSession(options: SessionOptions): Session {
     const selfInitiated = closed;
     closed = true;
     endLiveness();
+    if (multiplex !== null) {
+      notifyMultiplex(
+        `WebSocket closed (code=${event.code}, reason='${event.reason}')`,
+        selfInitiated,
+      );
+      return;
+    }
     if (!opened) {
       // `erroredBeforeOpen` overrides `selfInitiated`: an `error` event ahead
       // of `close` is itself the refusal, and the caller's `finally`-driven
@@ -1614,7 +2171,15 @@ function openSession(options: SessionOptions): Session {
           `WebSocket closed before next frame (code=${event.code}, reason='${event.reason}')`,
         ),
       );
+      return;
     }
+    const message = `WebSocket closed (code=${event.code}, reason='${event.reason}')`;
+    // The ack was already delivered and adoption has not installed handlers.
+    // Record the close as the terminal outcome (the first failure still
+    // wins) and keep the notice so a later adopt cannot publish a socket
+    // whose `send` would discard every later request.
+    closeNotice = { message, selfInitiated };
+    failAll(transientFailure(message));
   };
 
   return {
@@ -1626,15 +2191,22 @@ function openSession(options: SessionOptions): Session {
         return Promise.resolve();
       }
       return new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          reportDialOutcome("timeout");
-          failAll(
-            transientFailure(
-              `WebSocket dial timed out after ${dialTimeoutMs}ms`,
-            ),
-          );
-        }, dialTimeoutMs);
-        dialResolver = { resolve, reject, timer };
+        const pending: PendingDial = { resolve, reject, timer: null };
+        dialResolver = pending;
+        // Time queued for a dial slot says nothing about the host.
+        whenDialStarted(socket, () => {
+          if (dialResolver !== pending) {
+            return;
+          }
+          pending.timer = setTimeout(() => {
+            reportDialOutcome("timeout");
+            failAll(
+              transientFailure(
+                `WebSocket dial timed out after ${dialTimeoutMs}ms`,
+              ),
+            );
+          }, dialTimeoutMs);
+        });
       });
     },
 
@@ -1718,7 +2290,93 @@ function openSession(options: SessionOptions): Session {
         void cause;
       }
     },
+
+    adoptMultiplex(handlers: PersistentSocketHandlers): void {
+      multiplex = handlers;
+      const pending = buffer.splice(0, buffer.length);
+      for (const frame of pending) {
+        handlers.onFrame(frame);
+      }
+      if (closeNotice !== null) {
+        notifyMultiplex(closeNotice.message, closeNotice.selfInitiated);
+      }
+    },
+
+    isClosed(): boolean {
+      return closed;
+    },
+
+    recordedFailure(): HostRpcError | null {
+      return failure;
+    },
   };
+}
+
+/**
+ * The host rejected this discovery's own open-frame credential. That refusal
+ * is not a property of the connection: another call on the same account can
+ * hold a different lease and has to dial for itself.
+ */
+function isCallerSpecificAuthRefusal(cause: unknown): cause is HostRpcError {
+  return (
+    cause instanceof HostRpcError &&
+    !(cause instanceof RetryableTransportError) &&
+    cause.code === "UNAUTHORIZED" &&
+    cause.fatalDetails !== null &&
+    cause.fatalDetails.retryable !== true
+  );
+}
+
+/**
+ * A connection-wide discovery failure, restated for the waiter that is about
+ * to throw it. The owner already throws the original. Each waiter gets its
+ * own object, carrying its own request id and method.
+ */
+function readdressDiscoveryFailure(
+  error: HostRpcError,
+  requestId: string,
+  method: string,
+): HostRpcError {
+  if (error instanceof RetryableTransportError) {
+    return new RetryableTransportError({
+      code: error.code,
+      message: error.message,
+      requestId,
+      method,
+      fatalDetails: error.fatalDetails,
+      replaySafetyFromKey: error.replaySafetyFromKey,
+    });
+  }
+  if (error instanceof HostTransportFailureError) {
+    return new HostTransportFailureError({
+      code: error.code,
+      message: error.message,
+      requestId,
+      method,
+      fatalDetails: error.fatalDetails,
+    });
+  }
+  return new HostRpcError({
+    code: error.code,
+    message: error.message,
+    requestId,
+    method,
+    fatalDetails: error.fatalDetails,
+  });
+}
+
+function closedBeforeAdopt(
+  requestId: string,
+  method: string,
+): RetryableTransportError {
+  return new RetryableTransportError({
+    code: "RPC_ERROR",
+    message: "WebSocket closed before the persistent session was adopted",
+    requestId,
+    method,
+    fatalDetails: null,
+    replaySafetyFromKey: false,
+  });
 }
 
 function truncate(raw: string): string {
@@ -1770,13 +2428,13 @@ export function extractBearerForOpenFrame(
   }
   if (token.length === 0) {
     throw new MissingBearerTokenForOpenFrameError(
-      `Cannot open host WebSocket with an empty bearer token for user '${source.identity.userId}'`,
+      "Cannot open host WebSocket with an empty bearer token",
     );
   }
   return token;
 }
 
-function extractBearerOrThrowRpcError(
+export function extractBearerOrThrowRpcError(
   source: OpenFrameBearerSource,
   requestId: string,
   method: string,
@@ -1793,6 +2451,79 @@ function extractBearerOrThrowRpcError(
         fatalDetails: null,
       });
     }
+    throw cause;
+  }
+}
+
+function waitForSessionAdmission<T>(
+  settled: Promise<T>,
+  authority: HostRequestAuthority,
+  requestId: string,
+  method: string,
+): Promise<T> {
+  throwIfAuthorityAborted(authority, requestId, method);
+  const signal = authority.abortSignal;
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (settle: () => void): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      signal.removeEventListener("abort", onAbort);
+      settle();
+    };
+    const onAbort = (): void => {
+      finish(() => {
+        reject(
+          new HostRequestAbortedError({
+            message:
+              "Host request authority was aborted before the WebSocket dial",
+            requestId,
+            method,
+            mayHaveDispatched: false,
+          }),
+        );
+      });
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    settled.then(
+      (value) => {
+        finish(() => {
+          resolve(value);
+        });
+      },
+      (error: unknown) => {
+        finish(() => {
+          reject(error);
+        });
+      },
+    );
+  });
+}
+
+function prepareDiscoveryOpen(
+  authority: HostRequestAuthority,
+  requestId: string,
+  method: string,
+  settleUnpublished: (cause: unknown) => void,
+): { readonly websocketUrl: string } {
+  try {
+    throwIfAuthorityAborted(authority, requestId, method);
+    const websocketUrl = authority.endpoint.websocketUrl;
+    if (websocketUrl === null) {
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: `Host '${authority.endpoint.hostId}' does not expose a WebSocket endpoint`,
+        requestId,
+        method,
+        fatalDetails: null,
+      });
+    }
+    extractBearerOrThrowRpcError(authority.bearer, requestId, method);
+    return { websocketUrl };
+  } catch (cause) {
+    settleUnpublished(cause);
     throw cause;
   }
 }

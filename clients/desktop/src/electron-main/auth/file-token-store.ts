@@ -7,6 +7,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
   refreshOnceAbortable,
@@ -17,8 +18,11 @@ import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import {
   createCredentialsMutationStore,
   type CredentialsMutationStore,
+  type DiskPressure,
 } from "@traycer/protocol/config/credentials-mutation";
+import { isDiskFullSignInError } from "@traycer-clients/shared/auth/sign-in-storage";
 import { runInitGate } from "@traycer/protocol/config/credentials-wal";
+import { isCredentialsReserveComplete } from "@traycer/protocol/config/credentials-reserve";
 import { runLegacyCredentialsMigration } from "./credentials-migration";
 import { describeLogError, log } from "../app/logger";
 
@@ -125,8 +129,12 @@ export class FileTokenStore {
   private readonly recoveryGate: Promise<void>;
   // Monotonic emit counter for TokenStoreChange (dedup / WindowsBridge fence).
   private revision = 0;
+  private signInStorageLow = false;
+  private diskPressureRevision = 0;
+  private readonly storagePressureListeners = new Set<(low: boolean) => void>();
   private watcher: FSWatcher | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
+  private credentialsChangePending = false;
   private watcherReinstallTimer: NodeJS.Timeout | null = null;
   private watcherReinstallDelayMs: number = WATCHER_REINSTALL_INITIAL_MS;
   private watcherWasInterrupted = false;
@@ -151,6 +159,7 @@ export class FileTokenStore {
     const lockPath = `${credentialsPath}.lock`;
     const metaPath = `${credentialsPath}.meta.json`;
     this.store = createCredentialsMutationStore({
+      onDiskPressure: (pressure) => this.applyDiskPressure(pressure),
       paths: { credentialsPath, metaPath, lockPath },
       refresh: (args) =>
         refreshOnceAbortable({
@@ -257,14 +266,20 @@ export class FileTokenStore {
         this.credentialsDir,
         (_event, filename) => {
           if (filename === null) {
-            this.scheduleEmitChange();
+            this.scheduleWatchUpdate(true);
             return;
           }
           if (
             typeof filename === "string" &&
             filename === this.credentialsBasename
           ) {
-            this.scheduleEmitChange();
+            this.scheduleWatchUpdate(true);
+          } else if (
+            this.signInStorageLow &&
+            typeof filename === "string" &&
+            filename.startsWith(`${this.credentialsBasename}.reserve.`)
+          ) {
+            this.scheduleWatchUpdate(false);
           }
         },
       );
@@ -304,7 +319,7 @@ export class FileTokenStore {
         // it.
         this.catchUpPending = true;
         this.catchUpRetryDelayMs = CATCH_UP_RETRY_INITIAL_MS;
-        this.scheduleEmitChange();
+        this.scheduleWatchUpdate(true);
       }
     } catch (error) {
       log.warn("[file-token-store] unable to install credentials watcher", {
@@ -339,28 +354,43 @@ export class FileTokenStore {
     this.catchUpRetryTimer = setTimeout(() => {
       this.catchUpRetryTimer = null;
       if (this.catchUpPending) {
-        this.scheduleEmitChange();
+        this.scheduleWatchUpdate(true);
       }
     }, delayMs);
   }
 
-  private scheduleEmitChange(): void {
+  private scheduleWatchUpdate(credentialsChanged: boolean): void {
     if (this.disposed) {
       return;
     }
     if (this.debounceTimer !== null) {
       clearTimeout(this.debounceTimer);
     }
+    this.credentialsChangePending ||= credentialsChanged;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      void this.emitChange();
+      const emitCredentials = this.credentialsChangePending;
+      this.credentialsChangePending = false;
+      void this.emitWatchUpdate(emitCredentials);
     }, WATCHER_DEBOUNCE_MS);
   }
 
-  private async emitChange(): Promise<void> {
+  private async emitWatchUpdate(emitCredentials: boolean): Promise<void> {
     if (this.disposed) {
       return;
     }
+    if (this.signInStorageLow) {
+      const pressureRevision = this.diskPressureRevision;
+      const complete = await isCredentialsReserveComplete(this.credentialsPath);
+      if (
+        !this.disposed &&
+        pressureRevision === this.diskPressureRevision &&
+        complete
+      ) {
+        this.applyDiskPressure("clear");
+      }
+    }
+    if (!emitCredentials || this.disposed) return;
     let file: StoredCredentials | null;
     try {
       // Through the store, not a raw file read: the change fan-out must be
@@ -420,27 +450,60 @@ export class FileTokenStore {
     return this.recoveryGate.then(() => this.store.read());
   }
 
+  getSignInStorageLow(): boolean {
+    return this.signInStorageLow;
+  }
+
+  subscribeSignInStorageLow(listener: (low: boolean) => void): () => void {
+    this.storagePressureListeners.add(listener);
+    return () => {
+      this.storagePressureListeners.delete(listener);
+    };
+  }
+
+  private applyDiskPressure(pressure: DiskPressure | null): void {
+    if (pressure === null) return;
+    this.diskPressureRevision += 1;
+    const low = pressure === "low";
+    if (this.signInStorageLow === low) return;
+    this.signInStorageLow = low;
+    for (const listener of this.storagePressureListeners) listener(low);
+  }
+
   /**
    * Interactive create/replace — the device-flow sign-in. The renderer supplies
    * only the freshly-minted pair and the validated identity; this process stamps
-   * `savedAt`. Rejects on a non-`applied` outcome (a persistent local failure)
-   * so the sign-in surfaces as failed rather than a signed-in state the next
-   * launch cannot rehydrate.
+   * `savedAt`. Reports disk-full explicitly across IPC; other persistent local
+   * failures reject so the next launch cannot inherit a sign-in never saved.
    */
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void> {
-    return this.enqueue(async () => {
+  ): Promise<SignInSaveResult> {
+    return this.enqueue(async (): Promise<SignInSaveResult> => {
       const credentials: StoredCredentials = {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
         savedAt: new Date().toISOString(),
         user: identity,
       };
-      const result = await this.store.signIn(credentials, false, null);
-      if (result.outcome !== "applied") {
-        throw new Error(`credentials sign-in did not apply: ${result.outcome}`);
+      try {
+        const result = await this.store.signIn(credentials, false, null);
+        this.applyDiskPressure(result.diskPressure);
+        if (result.outcome === "disk-full") {
+          this.applyDiskPressure("low");
+          return "disk-full";
+        }
+        if (result.outcome !== "applied") {
+          throw new Error(
+            `credentials sign-in did not apply: ${result.outcome}`,
+          );
+        }
+        return "saved";
+      } catch (error) {
+        if (!isDiskFullSignInError(error)) throw error;
+        this.applyDiskPressure("low");
+        return "disk-full";
       }
     });
   }
@@ -461,7 +524,11 @@ export class FileTokenStore {
         refreshTokenOverride: null,
         signal: null,
       });
+      this.applyDiskPressure(
+        result.outcome === "disk-full" ? "low" : result.diskPressure,
+      );
       return {
+        diskPressure: result.diskPressure,
         outcome: result.outcome,
         pair: result.credentials,
         rejection: result.rejection,
@@ -478,6 +545,7 @@ export class FileTokenStore {
   delete(): Promise<void> {
     return this.enqueue(async () => {
       const result = await this.store.signOut(null);
+      this.applyDiskPressure(result.diskPressure);
       if (result.outcome !== "deleted") {
         throw new Error(`credentials sign-out did not land: ${result.outcome}`);
       }
@@ -497,6 +565,7 @@ export class FileTokenStore {
   deleteIfToken(expectedToken: string): Promise<"deleted" | "kept"> {
     return this.enqueue(async () => {
       const result = await this.store.signOutIfToken(expectedToken, null);
+      this.applyDiskPressure(result.diskPressure);
       if (result.outcome === "deleted") {
         return "deleted";
       }
@@ -598,5 +667,6 @@ export class FileTokenStore {
     }
     this.store.dispose();
     this.listeners.clear();
+    this.storagePressureListeners.clear();
   }
 }

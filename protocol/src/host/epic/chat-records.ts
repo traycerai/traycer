@@ -1,4 +1,7 @@
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreProfileBinding,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
@@ -793,8 +796,8 @@ export const chatRunSettingsHarnessIdSchemaV10 = lazySchema(() =>
  * caller decodes this response against a three-mode enum, so an `auto` chat
  * read on that line would fail the whole response rather than one field. 2.0
  * below is RELEASED and carries the identical pin for the identical reason;
- * major 3 (the head) binds the live tuple and is the only line that may spell
- * `auto`.
+ * major 3 first carries `auto` through its frozen tuple. The separate current
+ * line carries later additions.
  */
 export const chatRunSettingsSchemaV10 = lazySchema(() =>
   z.object({
@@ -869,8 +872,8 @@ export const chatRunSettingsSchemaV20 = lazySchema(() =>
     model: z.string().min(1),
     // Pinned pre-`auto` for the same half-freeze reason the id is: 2.0 is
     // RELEASED, so an `auto` chat read on that line would fail the whole
-    // response rather than one field. Major 3 (the head) binds the live tuple
-    // and is the only line that may spell `auto`.
+    // response rather than one field. Major 3 first carries `auto` through
+    // its frozen tuple; later additions belong to the separate current line.
     permissionMode: permissionModeSchemaPreAuto,
     reasoningEffort: z.string().nullable(),
     serviceTier: z.string().nullable().default(null),
@@ -1449,7 +1452,7 @@ export const hostChatRecordsSubscribeV14 = defineStreamRpcContract({
 
 export const getChatRunSettingsResponseSchemaV41 = lazySchema(() =>
   getChatRunSettingsResponseSchema.extend({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreProfileBinding.nullable(),
   }),
 );
 export type GetChatRunSettingsResponseV41 = z.infer<
@@ -1457,7 +1460,7 @@ export type GetChatRunSettingsResponseV41 = z.infer<
 >;
 export const getChatRunSettingsBatchEntrySchemaV21 = lazySchema(() =>
   getChatRunSettingsBatchEntrySchema.extend({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreProfileBinding.nullable(),
   }),
 );
 export const getChatRunSettingsBatchResponseSchemaV21 = lazySchema(() =>
@@ -1486,3 +1489,26 @@ export function projectChatRunSettingsBatchResponseBeforeUltracode(
     })),
   };
 }
+
+/** Portable provenance is absent on the released 4.1 / 2.1 read lines. */
+export const getChatRunSettingsResponseSchemaV42 = lazySchema(() =>
+  getChatRunSettingsResponseSchemaV41.extend({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export type GetChatRunSettingsResponseV42 = z.infer<
+  typeof getChatRunSettingsResponseSchemaV42
+>;
+export const getChatRunSettingsBatchEntrySchemaV22 = lazySchema(() =>
+  getChatRunSettingsBatchEntrySchemaV21.extend({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export const getChatRunSettingsBatchResponseSchemaV22 = lazySchema(() =>
+  getChatRunSettingsBatchResponseSchemaV21.extend({
+    entries: z.array(getChatRunSettingsBatchEntrySchemaV22),
+  }),
+);
+export type GetChatRunSettingsBatchResponseV22 = z.infer<
+  typeof getChatRunSettingsBatchResponseSchemaV22
+>;

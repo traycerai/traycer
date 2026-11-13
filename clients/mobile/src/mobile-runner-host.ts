@@ -1,3 +1,21 @@
+import {
+  readHostOwnershipViaHttp,
+  type HostOwnershipResult,
+} from "@traycer-clients/shared/host-client/host-ownership";
+import {
+  listTeamComputersViaHttp,
+  setEnvironmentBotHostViaHttp,
+  type TeamComputersResult,
+  type SetEnvironmentBotHostResult,
+} from "@traycer-clients/shared/host-client/team-computers";
+import {
+  mintTeamComputerInstallTokenViaHttp,
+  type TeamComputerInstallTokenResult,
+} from "@traycer-clients/shared/host-client/team-computer-install";
+import {
+  releaseTeamComputerViaHttp,
+  type TeamComputerReleaseResult,
+} from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   MobileSandboxArtifacts,
@@ -81,6 +99,7 @@ import type {
   ILinkCodeScanner,
   ILinkLoginDeepLinkSource,
   INotificationHost,
+  IDeviceDictationHost,
   IPushPermissionHost,
   IRunnerHost,
   ISecureStorage,
@@ -104,6 +123,7 @@ import type {
   SystemSuspendCause,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -140,10 +160,6 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import {
-  mintTeamHostInstallTokenViaHttp,
-  type TeamHostInstallTokenResult,
-} from "@traycer-clients/shared/host-client/team-host";
 import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
@@ -321,6 +337,11 @@ export interface MobileRunnerHostOptions {
    * `getUserMedia` drives the browser's own prompt.
    */
   readonly voiceAudio: MobileVoiceAudio | null;
+  /**
+   * On-device dictation, or `null` where the app has no native recognizer -
+   * see `IRunnerHost.deviceDictation`. Decided by the entry point.
+   */
+  readonly deviceDictation: IDeviceDictationHost | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -393,6 +414,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly deviceFlow: MobileDeviceFlowHost;
   private readonly authSheet: MobileAuthSheet | null;
   private readonly voiceAudio: MobileVoiceAudio | null;
+  readonly deviceDictation: IDeviceDictationHost | null;
   /**
    * The phone's own notification switch. `null` wherever this shell cannot
    * both read the permission AND open the OS page to repair it (the dev web
@@ -454,6 +476,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.statusBarTap = options.statusBarTap;
     this.authSheet = options.authSheet;
     this.voiceAudio = options.voiceAudio;
+    this.deviceDictation = options.deviceDictation;
     this.notifications = buildNotifications(options.pushRegistration);
     this.tokenStore = new MobileTokenStore(
       this.secureStorage,
@@ -751,6 +774,57 @@ export class MobileRunnerHost implements IRunnerHost {
     );
   }
 
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult> {
+    return readHostOwnershipViaHttp(this.authnBaseUrl, bearer, hostId);
+  }
+
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult> {
+    return listTeamComputersViaHttp(this.authnBaseUrl, bearer, environmentId);
+  }
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult> {
+    return setEnvironmentBotHostViaHttp(
+      this.authnBaseUrl,
+      bearer,
+      environmentId,
+      hostId,
+      sharingGeneration,
+    );
+  }
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    return mintTeamComputerInstallTokenViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      environmentId,
+    );
+  }
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    return releaseTeamComputerViaHttp(
+      this.authnBaseUrl,
+      bearer,
+      hostId,
+      environmentId,
+    );
+  }
+
   deregisterHostFromAccount(
     bearerToken: string,
     hostId: string,
@@ -982,18 +1056,6 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       request,
-    );
-  }
-
-  mintTeamHostInstallToken(
-    bearerToken: string,
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult> {
-    return mintTeamHostInstallTokenViaHttp(
-      this.serverBaseUrl,
-      bearerToken,
-      null,
-      environmentId,
     );
   }
 
@@ -1445,6 +1507,14 @@ class MobileTokenStore implements ITokenStore {
     private readonly authnBaseUrl: string,
   ) {}
 
+  subscribeSignInStorageLow(): Disposable {
+    return { dispose: () => undefined };
+  }
+
+  getSignInStorageLow(): Promise<boolean> {
+    return Promise.resolve(false);
+  }
+
   async get(): Promise<StoredCredentials | null> {
     return parseStoredCredentials(
       await this.secureStorage.get(MOBILE_TOKEN_STORE_KEY),
@@ -1454,13 +1524,14 @@ class MobileTokenStore implements ITokenStore {
   async signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void> {
+  ): Promise<SignInSaveResult> {
     await this.write({
       token: tokens.token,
       refreshToken: tokens.refreshToken,
       savedAt: new Date().toISOString(),
       user: identity,
     });
+    return "saved";
   }
 
   async rotate(expected: {
@@ -1469,23 +1540,44 @@ class MobileTokenStore implements ITokenStore {
   }): Promise<TokenRotateResult> {
     const stored = await this.get();
     if (stored === null) {
-      return { outcome: "deleted", pair: null, rejection: null };
+      return {
+        outcome: "deleted",
+        pair: null,
+        diskPressure: null,
+        rejection: null,
+      };
     }
     if (stored.user.id !== expected.userId) {
-      return { outcome: "user-mismatch", pair: stored, rejection: null };
+      return {
+        outcome: "user-mismatch",
+        pair: stored,
+        diskPressure: null,
+        rejection: null,
+      };
     }
     if (stored.token !== expected.token) {
-      return { outcome: "superseded", pair: stored, rejection: null };
+      return {
+        outcome: "superseded",
+        pair: stored,
+        diskPressure: null,
+        rejection: null,
+      };
     }
     const refreshed = await refreshOnceAbortable({
       authnBaseUrl: this.authnBaseUrl,
       token: stored.token,
       refreshToken: stored.refreshToken,
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
     if (refreshed.kind === "network-error") {
-      return { outcome: "refresh-network", pair: null, rejection: null };
+      return {
+        outcome: "refresh-network",
+        pair: null,
+        diskPressure: null,
+        rejection: null,
+      };
     }
     if (refreshed.kind === "rejected") {
       // Carried through rather than collapsed. `refreshOnceAbortable` already
@@ -1501,6 +1593,7 @@ class MobileTokenStore implements ITokenStore {
             ? "refresh-rejected-account"
             : "refresh-rejected-credential",
         pair: null,
+        diskPressure: null,
         rejection: refreshed.rejection,
       };
     }
@@ -1511,7 +1604,12 @@ class MobileTokenStore implements ITokenStore {
       savedAt: new Date().toISOString(),
     };
     await this.write(next);
-    return { outcome: "applied", pair: next, rejection: null };
+    return {
+      outcome: "applied",
+      pair: next,
+      diskPressure: null,
+      rejection: null,
+    };
   }
 
   async delete(): Promise<void> {
@@ -1560,6 +1658,7 @@ class MobileTokenStore implements ITokenStore {
       authnBaseUrl: this.authnBaseUrl,
       token: legacy.token,
       refreshToken: legacy.refreshToken,
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });

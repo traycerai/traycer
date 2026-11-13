@@ -1,3 +1,4 @@
+import { unresolvedSetupText } from "@/components/settings/environment/environment-picker-model";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { planesOfferStopSharing } from "@/components/settings/move/status-planes";
@@ -66,29 +67,41 @@ export function hostSettingsCardState(
     : { kind: "moved", acceptedAt: status.consent.acceptedAt };
 }
 
-interface HostSettingsRowOption {
+export interface HostSettingsRowOption {
   readonly value: "personal" | "local";
   readonly label: string;
-  readonly action: "move" | "stop_sharing";
+  /** The sentence under the name in the menu. Hidden in the closed trigger. */
+  readonly detail: string;
+  readonly action: "move" | "stop_sharing" | "none";
 }
 
-const HOST_SETTINGS_OPTIONS: readonly HostSettingsRowOption[] = [
-  {
-    value: "personal",
-    label: "Personal",
-    action: "move",
-  },
-  {
-    value: "local",
-    label: "This computer only",
-    action: "stop_sharing",
-  },
-];
+const RUNS_PERSONAL = "Runs Personal";
+const RUNS_OWN_SETTINGS = "Runs its own settings, not in Personal yet";
 
-type HostSettingsRowModel =
+function hostSettingsOptions(
+  hostName: string,
+): readonly HostSettingsRowOption[] {
+  return [
+    {
+      value: "personal",
+      label: "Personal",
+      detail: RUNS_PERSONAL,
+      action: "move",
+    },
+    {
+      value: "local",
+      label: hostName,
+      detail: "its own settings, not in Personal yet",
+      action: "stop_sharing",
+    },
+  ];
+}
+
+export type HostSettingsRowModel =
   | { readonly kind: "loading" }
   | {
       readonly kind: "team";
+      readonly environmentId: string;
       readonly label: string;
       readonly description: string;
     }
@@ -106,17 +119,37 @@ type HostSettingsRowModel =
       readonly options: readonly HostSettingsRowOption[];
     };
 
-/** Settings place comes from status; the binding answers only which team. */
+/**
+ * Settings place comes from status; the binding answers only which team. A
+ * computer that runs its own settings is in no team, and no binding is read
+ * for it (`useEnvironmentHostReadQuery`), so its row does not wait for one.
+ */
 export function hostSettingsRowModel(
   status: EnvironmentStatusResponseV11 | null,
   binding: EnvironmentHostBinding | null,
+  hostName: string,
 ): HostSettingsRowModel {
-  if (status === null || binding === null) return { kind: "loading" };
-  if (binding.explicit && binding.environment.ownerKind === "organization") {
+  if (status === null) return { kind: "loading" };
+  if (localRowCohort(status).kind !== "local") {
+    if (binding === null) return { kind: "loading" };
+    if (binding.explicit && binding.environment.ownerKind === "organization") {
+      return {
+        kind: "team",
+        environmentId: binding.environment.environmentId,
+        label: binding.environment.label,
+        description: `Runs ${binding.environment.label}`,
+      };
+    }
+  }
+  const setup = unresolvedSetupText(status);
+  if (setup !== null) {
     return {
-      kind: "team",
-      label: binding.environment.label,
-      description: "Runs the team's settings.",
+      kind: "select",
+      value: "local",
+      description: setup,
+      options: [
+        { value: "local", label: hostName, detail: setup, action: "none" },
+      ],
     };
   }
   const state = hostSettingsCardState(status);
@@ -127,11 +160,8 @@ export function hostSettingsRowModel(
   return {
     kind: "select",
     value,
-    description:
-      value === "local"
-        ? "Uses the settings stored on this computer. Changes stay here."
-        : "Your Personal settings reach this computer.",
-    options: HOST_SETTINGS_OPTIONS.filter(
+    description: value === "local" ? RUNS_OWN_SETTINGS : RUNS_PERSONAL,
+    options: hostSettingsOptions(hostName).filter(
       (option) =>
         option.value === value || option.action === "move" || offerStop,
     ),

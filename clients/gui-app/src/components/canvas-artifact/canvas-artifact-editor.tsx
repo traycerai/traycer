@@ -1155,6 +1155,10 @@ function CanvasEditorSurface({
             role="application"
             tabIndex={-1}
             aria-label="Canvas"
+            // The whole canvas, fullscreen header included, keeps horizontal
+            // swipes: the gesture must not change meaning between the board
+            // and the chrome beside it.
+            data-history-gesture-owner=""
             className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-canvas text-foreground outline-none"
             onPointerDownCapture={(event) => {
               // A relayed board press dismisses overlays without taking the

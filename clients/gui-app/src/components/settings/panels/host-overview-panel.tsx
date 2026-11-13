@@ -1,7 +1,6 @@
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import {
-  SandboxCard,
   SandboxHeaderActions,
   SandboxHeaderCost,
   SandboxHeaderNotices,
@@ -59,7 +58,9 @@ import { useHostPortForwards } from "@/components/settings/panels/host-port-forw
 import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
 import { HostOverviewSimulatorsCount } from "@/components/settings/panels/host-overview-simulator-instances";
 import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
+import { HostOverviewCostsTab } from "@/components/settings/panels/host-overview-costs-tab";
 import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
+import { HostOverviewSecretsTab } from "@/components/settings/panels/host-overview-secrets-tab";
 import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
@@ -1682,8 +1683,9 @@ export function HostOverviewPanel(props: {
       teamOwned={host.sandbox?.teamOwned === true}
       activateBusy={scope.isActivating}
       onCopyHostId={() => hostIdCopy.copy(host.hostId)}
-      // Sandbox lifecycle and failure remedies own the single primary slot.
-      activateInMenu={host.sandbox !== null || primaryAction !== null}
+      // A sandbox's lifecycle owns the inline slot, so its binding stays in
+      // More. A computer keeps Active or Activate inline, beside Update now.
+      activateInMenu={host.sandbox !== null}
     />
   );
   let headerActions: ReactNode = null;
@@ -1954,9 +1956,8 @@ export function HostOverviewPanel(props: {
     <HostOverviewInstallationTab
       usable={usable}
       hostName={displayName}
-      // The account's record, so it reads with or without a route. "Online
-      // now" is the account's own reach, derived from that record; the
-      // timestamp is worded on the scope's clock.
+      // The account's record, so it reads with or without a route. Last seen
+      // is the account's stamp, worded on the scope's clock.
       about={
         registryItem === null
           ? null
@@ -1979,19 +1980,28 @@ export function HostOverviewPanel(props: {
       // feeds - so the override happens here, where both are in hand.
       service={usable ? { ...service, busy: anyPending } : null}
       showPackageManagerHint={props.hasLocalBridge}
-      // The header's running version. The registry copy alone is the last
-      // report, which is a different fact and goes stale while this process
-      // is up.
-      runningVersion={view.hostVersion ?? host.version}
+      sandbox={host.sandbox}
       scope={scope}
     />
   );
+  const secretsTab =
+    host.sandbox === null ? null : (
+      <HostOverviewSecretsTab
+        hostState={host.health.state}
+        sandbox={host.sandbox}
+      />
+    );
+  const costsTab =
+    host.sandbox === null ? null : (
+      <HostOverviewCostsTab sandbox={host.sandbox} />
+    );
 
   return (
     <>
       <HostIdentityCard
         host={host}
         displayName={displayName}
+        version={view.hostVersion ?? host.version}
         // What the HOST says about its own work, which is the fact that decides
         // whether Restart is safe to press. `null` until it answers.
         busy={view.busy}
@@ -2088,18 +2098,13 @@ export function HostOverviewPanel(props: {
             ) : null,
           }}
           bodies={{
-            sandbox:
-              host.sandbox === null ? null : (
-                <SandboxCard
-                  hostState={host.health.state}
-                  sandbox={host.sandbox}
-                />
-              ),
             installation: installationTab,
             updates: updatesTab,
             access: accessTab,
             data: dataTab,
             ports: portsTab,
+            secrets: secretsTab,
+            costs: costsTab,
             simulators: simulatorsTab,
           }}
         />

@@ -8,6 +8,10 @@ import type {
   LocalHostSnapshot,
   RegisteredHostsChange,
 } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostListItem,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostListItemToDirectoryEntry,
@@ -362,6 +366,58 @@ describe("HostDirectoryService", () => {
 
     const entries = await directory.list();
     expect(entries.map((e) => e.kind)).toEqual(["local", "remote"]);
+  });
+
+  it("publishes a refresh when only a physical remote host's owner changes", async () => {
+    const host = makeHost(null);
+    const registeredHost: HostListItem = {
+      hostId: "team-host",
+      displayName: "Team host",
+      platform: "macOS",
+      kind: "personal",
+      publicKey: "a".repeat(64),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity: "connectable",
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.5.0",
+        lastSeenAt: null,
+      },
+    };
+    let owner: HostOwnerPrincipal = { kind: "user", id: "user-a" };
+    const remoteFetcher: RemoteHostFetcher = () =>
+      Promise.resolve({
+        kind: "hosts",
+        entries: [
+          hostListItemToDirectoryEntry(
+            { ...registeredHost, owner },
+            "wss://relay.test/attach",
+          ),
+        ],
+      });
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher,
+    });
+    await directory.start();
+
+    const published: HostDirectoryEntry[][] = [];
+    directory.onChange((entries) => published.push([...entries]));
+    owner = { kind: "team", id: "team-a", name: "Alpha" };
+    await directory.refresh();
+
+    expect(published).toHaveLength(1);
+    expect(published[0][0]).toMatchObject({
+      hostId: "team-host",
+      sandbox: null,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    });
   });
 
   it("deduplicates the registered remote copy of the local host", async () => {

@@ -67,6 +67,8 @@ export interface SettingsAvailabilityContext {
    * whether this shell can save a recording of the music.
    */
   readonly soundtrackRecordingOffered: boolean;
+  /** Whether this staging desktop can read the private track catalog. */
+  readonly soundtrackSetPiecesOffered: boolean;
   /** `soundtrackEnabled`, subscribed: a row that needs Music on follows it. */
   readonly soundtrackOn: boolean;
 }
@@ -88,13 +90,16 @@ export function neverOffered(_context: SettingsAvailabilityContext): boolean {
 }
 
 /**
- * Voice input — the mobile app refuses dictation outright
- * (`useDictationAvailability`), so the toggle would control nothing.
+ * Voice input — the mobile app dictates through its own recognizer or not at
+ * all (`useDictationAvailability`), so without one the toggle would control
+ * nothing.
  */
 export function isVoiceInputRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
-  return !context.mobileApp;
+  return (
+    !context.mobileApp || (context.runnerHost?.deviceDictation ?? null) !== null
+  );
 }
 
 /**
@@ -242,5 +247,14 @@ export function isPushPermissionRowAvailable(
 ): boolean {
   return (
     context.runnerHost !== null && context.runnerHost.pushPermission !== null
+  );
+}
+
+/** Complete-track listening controls exist only on the staging source bridge. */
+export function isSetPiecesRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    isSoundtrackRowAvailable(context) && context.soundtrackSetPiecesOffered
   );
 }

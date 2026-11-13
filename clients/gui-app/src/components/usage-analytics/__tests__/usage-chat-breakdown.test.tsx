@@ -7,9 +7,10 @@ afterEach(cleanup);
 
 type UsageChatBucket = UsageSummaryResponse["summary"]["chatBuckets"][number];
 
-const titlesById: Record<string, string> = {
+const titlesById: Record<string, string | null> = {
   "chat-1": "Fix the flaky test",
   "chat-2": "Subagent: verify the fix",
+  "chat-untitled": null,
 };
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -53,12 +54,20 @@ describe("UsageChatBreakdown", () => {
     ]);
   });
 
-  it("falls back to the raw chatId when the chat is not in the open tree (e.g. swept)", () => {
+  it("uses a generic title when a chat is absent from the open tree", () => {
     render(<UsageChatBreakdown rows={[bucket({ chatId: "chat-unknown" })]} />);
     const rows = screen.getAllByRole("row").slice(1);
     expect(rows.map((row) => row.textContent)).toEqual([
-      expect.stringContaining("chat-unknown"),
+      expect.stringContaining("Untitled chat"),
     ]);
+    expect(rows[0].textContent).not.toContain("chat-unknown");
+  });
+
+  it("uses a generic title when the tree node has no title", () => {
+    render(<UsageChatBreakdown rows={[bucket({ chatId: "chat-untitled" })]} />);
+    const row = screen.getAllByRole("row")[1];
+    expect(row.textContent).toContain("Untitled chat");
+    expect(row.textContent).not.toContain("chat-untitled");
   });
 
   it("sorts rows by cost descending", () => {

@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -161,25 +162,48 @@ const partlyMoved = environmentStatusFixture({
   // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
   // fixture that sets it here invites a reader to key on it.
 });
+const applyingStalled = environmentStatusFixture({
+  principal: null,
+  planes: { records: "moved", broker: "moved", room: "moved" },
+  setup: { stage: "applying", state: "stalled" },
+});
 const running = environmentStatusFixture({ principal: { kind: "personal" } });
 
-function renderPicker(windowHostId: string): void {
+function pickerElementForSection(
+  windowHostId: string,
+  activeSection: "mcp-servers" | "skills" | "sandboxes" | "storage" | "members",
+) {
   const hosts = [
     hostScopeOptionFixture({ hostId: "mac", name: "MacBook Pro" }),
     hostScopeOptionFixture({ hostId: "dev", name: "dev-box" }),
     hostScopeOptionFixture({ hostId: "old", name: "Old laptop" }),
     hostScopeOptionFixture({ hostId: "tiny", name: "Tiny" }),
   ];
-  render(
+  return (
     <EnvironmentPicker
       scope={hostScopeFixture({
         hosts,
         host: hosts[0],
         activeHostId: windowHostId,
       })}
-      activeSection="mcp-servers"
-    />,
+      activeSection={activeSection}
+    />
   );
+}
+
+function pickerElement(windowHostId: string) {
+  return pickerElementForSection(windowHostId, "mcp-servers");
+}
+
+function renderPicker(windowHostId: string) {
+  return render(pickerElement(windowHostId));
+}
+
+function renderPickerForSection(
+  windowHostId: string,
+  activeSection: "mcp-servers" | "skills" | "sandboxes" | "storage" | "members",
+) {
+  return render(pickerElementForSection(windowHostId, activeSection));
 }
 
 function runningHost(name: string, isThisComputer: boolean): RunningHost {
@@ -241,6 +265,49 @@ afterEach(() => {
 });
 
 describe("<EnvironmentPicker />", () => {
+  it("defaults a listed active sandbox to Personal without reading a Local status", () => {
+    const host = hostScopeOptionFixture({
+      hostId: "sandbox",
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: null,
+        teamOwned: false,
+        ownerKind: "unknown",
+      },
+    });
+    render(
+      <EnvironmentPicker
+        scope={hostScopeFixture({
+          hosts: [host],
+          host,
+          activeHostId: host.hostId,
+        })}
+        activeSection="skills"
+      />,
+    );
+    expect(screen.getByTestId("environment-picker-trigger").textContent).toBe(
+      "Personal",
+    );
+    expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
+      PERSONAL_PICK,
+    );
+  });
+
+  it("shows loading without claiming Personal until the window host answers", () => {
+    answer("mac", null, V11);
+    const view = renderPicker("mac");
+    const trigger = screen.getByTestId("environment-picker-trigger");
+    expect(screen.getByRole("button", { name: "Choose settings" })).toBe(
+      trigger,
+    );
+    expect(trigger.textContent).not.toContain("Personal");
+    expect(trigger.querySelector("[aria-hidden=true]")).not.toBeNull();
+    answer("mac", awaiting, V11);
+    view.rerender(pickerElement("mac"));
+    expect(trigger.textContent).toBe("MacBook ProRuns its own settings");
+  });
+
   it("draws an awaiting_consent host under its own-settings group and opens the move sheet", () => {
     answer("mac", running, V11);
     answer("dev", running, V11);
@@ -302,6 +369,44 @@ describe("<EnvironmentPicker />", () => {
     );
   });
 
+  it("shows the full name in a tooltip on the closed trigger", async () => {
+    const user = userEvent.setup();
+    answer("mac", running, V11);
+    renderPicker("mac");
+    await user.hover(
+      within(screen.getByTestId("environment-picker-trigger")).getByText(
+        "Personal",
+      ),
+    );
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Personal");
+    cleanup();
+
+    answer("old", awaiting, V11);
+    renderPicker("old");
+    await user.hover(
+      within(screen.getByTestId("environment-picker-trigger")).getByText(
+        "Old laptop",
+      ),
+    );
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Old laptop");
+    cleanup();
+
+    reads.environments = [
+      { environmentId: "env-a", ownerKind: "organization", label: "Acme" },
+    ];
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    answer("mac", running, V11);
+    renderPicker("mac");
+    await user.hover(
+      within(screen.getByTestId("environment-picker-trigger")).getByText(
+        "Acme",
+      ),
+    );
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Acme");
+  });
+
   it("draws a host whose consent is recorded as partly moved, and finish moving opens its Overview", () => {
     answer("old", partlyMoved, V11);
     renderPicker("mac");
@@ -357,6 +462,7 @@ describe("<EnvironmentPicker />", () => {
     cleanup();
 
     useSettingsEnvironmentPickStore.setState({ defaultPick: PERSONAL_PICK });
+    answer("mac", running, V11);
     renderPicker("mac");
     expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
       PERSONAL_PICK,
@@ -381,6 +487,48 @@ describe("<EnvironmentPicker />", () => {
     answer("old", running, V11);
     renderPicker("mac");
     expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+  });
+
+  it("keeps an unresolved setup computer selected until it reports Personal", async () => {
+    answer("mac", applyingStalled, V11);
+    const view = renderPicker("mac");
+
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual({
+        kind: "local",
+        hostId: "mac",
+        hostName: "MacBook Pro",
+      });
+    });
+    const trigger = screen.getByTestId("environment-picker-trigger");
+    expect(within(trigger).getByText("MacBook Pro")).toBeTruthy();
+    expect(within(trigger).getByText("Setup")).toBeTruthy();
+    expect(within(trigger).queryByText("Runs its own settings")).toBeNull();
+
+    openMenu();
+    const row = screen.getByTestId("environment-picker-local-mac");
+    expect(screen.getByText("Computers")).toBeTruthy();
+    expect(
+      within(row).getByText("Setup stopped while applying your settings."),
+    ).toBeTruthy();
+    expect(row.textContent).not.toContain("Runs its own settings");
+    fireEvent.click(row);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "local",
+      hostId: "mac",
+      hostName: "MacBook Pro",
+    });
+
+    answer("mac", running, V11);
+    view.rerender(pickerElement("mac"));
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+      expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual(
+        PERSONAL_PICK,
+      );
+    });
+    openMenu();
+    expect(screen.queryByTestId("environment-picker-local-mac")).toBeNull();
   });
 
   it("gives this window's own computer its Local row while the account's host list leaves it out, and no other unlisted computer", () => {
@@ -491,17 +639,35 @@ describe("<EnvironmentPicker />", () => {
     expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("other");
   });
 
-  // A press takes the surface with it, which is the whole point of pressing:
-  // the person is looking at Settings and asked for this. That is the opposite
-  // of what the removal gate does, so it is asserted as the command.
-  it("picking a row that hides the open page leaves it for Providers", () => {
+  it.each(["mcp-servers", "skills", "sandboxes", "storage"] as const)(
+    "keeps the selected %s page when a Local row is picked",
+    (section) => {
+      answer("old", awaiting, V11);
+      renderPickerForSection("mac", section);
+      openMenu();
+
+      act(() => {
+        fireEvent.click(screen.getByTestId("environment-picker-local-old"));
+      });
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "local",
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+      expect(surface.openSettings).not.toHaveBeenCalled();
+      expect(surface.setSection).not.toHaveBeenCalled();
+    },
+  );
+
+  it("moves from Members to Providers when a Local row is picked", () => {
     answer("old", awaiting, V11);
-    renderPicker("mac");
+    renderPickerForSection("mac", "members");
     openMenu();
 
     act(() => {
       fireEvent.click(screen.getByTestId("environment-picker-local-old"));
     });
+
     expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
       kind: "local",
       hostId: "old",

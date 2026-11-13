@@ -39,6 +39,7 @@ import type {
   BrowserSessionsHostDirectory,
   BrowserSessionsHostTransport,
 } from "./browser-sessions-transport";
+import { browserSessionsOwnerKey } from "./browser-sessions-transport";
 
 /**
  * Bound on one final capture at a window's close or at quit, end to end: the
@@ -252,12 +253,16 @@ export class BrowserSessionsRegistry {
   private readonly deps: BrowserSessionsRegistryDeps;
   private readonly stopLocalHostChanges: () => void;
   private readonly stopBearerRotations: () => void;
+  private readonly stopDirectoryChanges: () => void;
   private readonly primaryProfileDeltas: { dispose: () => void };
   private forgetLedgerAckOrder = 0;
   private disposed = false;
 
   constructor(deps: BrowserSessionsRegistryDeps) {
     this.deps = deps;
+    this.stopDirectoryChanges = deps.directory.subscribe(() => {
+      for (const stream of this.streams.values()) stream.retireIfOwnerChanged();
+    });
     this.primaryProfileDeltas = deps.jar.onPrimaryProfileDelta((delta) => {
       this.sendPrimaryProfileDelta(delta);
     });
@@ -490,6 +495,7 @@ export class BrowserSessionsRegistry {
     this.primaryProfileDeltas.dispose();
     this.stopLocalHostChanges();
     this.stopBearerRotations();
+    this.stopDirectoryChanges();
     for (const stream of this.streams.values()) stream.dispose();
     this.streams.clear();
   }
@@ -618,6 +624,24 @@ class BrowserSessionsStream {
    * attach.
    */
   private openedUserId: string | null = null;
+  /** The trusted directory owner this subscription and its frames belong to. */
+  private openedOwnerKey: string | null = null;
+
+  /** A registry refresh retires the old owner before another frame is used. */
+  retireIfOwnerChanged(): void {
+    if (this.openedOwnerKey !== null) this.ownerIsCurrent();
+  }
+
+  private ownerIsCurrent(): boolean {
+    if (this.disposed || this.openedOwnerKey === null) return false;
+    if (
+      browserSessionsOwnerKey(this.deps.directory.peek(this.hostId)) ===
+      this.openedOwnerKey
+    )
+      return true;
+    this.failToOpen("This host cannot be dialed.");
+    return false;
+  }
 
   /**
    * Has this stream actually opened for an identity? `false` while the desktop
@@ -742,6 +766,8 @@ class BrowserSessionsStream {
           this.failToOpen("This host is not in the directory.");
           return;
         }
+        this.openedOwnerKey = browserSessionsOwnerKey(target);
+        if (!this.ownerIsCurrent()) return;
         const transport = this.deps.openTransport(target, userId);
         if (transport === null) {
           this.failToOpen("This host cannot be dialed.");
@@ -771,6 +797,8 @@ class BrowserSessionsStream {
   }
 
   private attach(transport: BrowserSessionsHostTransport): void {
+    const generation = this.generation;
+    const ownerKey = this.openedOwnerKey;
     this.transport = transport;
     this.electronTabs = createElectronTabs({
       hostId: this.hostId,
@@ -801,9 +829,19 @@ class BrowserSessionsStream {
         scope: this.key.scope,
         callbacks: {
           onServerFrame: (frame) => {
+            if (
+              generation !== this.generation ||
+              ownerKey !== this.openedOwnerKey
+            )
+              return;
             this.handleServerFrame(frame);
           },
           onConnectionStatus: (status, reason, _retryCause, continuity) => {
+            if (
+              generation !== this.generation ||
+              ownerKey !== this.openedOwnerKey
+            )
+              return;
             this.handleConnectionStatus(status, reason, continuity);
           },
         },
@@ -848,6 +886,7 @@ class BrowserSessionsStream {
    * not open took nothing.
    */
   sendJarActionFrame(frame: BrowserSessionsClientFrame): boolean {
+    if (!this.ownerIsCurrent()) return false;
     if (this.connectionStatus !== "open" || this.client === null) return false;
     this.client.sendClientFrame(frame);
     return true;
@@ -855,6 +894,7 @@ class BrowserSessionsStream {
 
   get primaryProfileReady(): boolean {
     return (
+      this.ownerIsCurrent() &&
       (this.connectionStatus === "open" || this.streamHeld) &&
       this.lifecycleReadySent
     );
@@ -909,6 +949,13 @@ class BrowserSessionsStream {
         hostId: this.hostId,
       });
       this.start();
+      return;
+    }
+    // The registry cache was reset before this callback. Remote streams
+    // must resolve their owner again instead of retaining an unverifiable
+    // snapshot; local rows remain available and keep their warm socket.
+    if (this.deps.directory.peek(this.hostId) === null) {
+      this.restart();
       return;
     }
     this.transport?.wsStreamClient.notifyBearerRotated();
@@ -1073,6 +1120,7 @@ class BrowserSessionsStream {
     this.tearingDown = true;
     this.notifyPreparationsUnavailable();
     this.generation += 1;
+    this.openedOwnerKey = null;
     this.retireConnection();
     this.resolveCaptureAckWaiters();
     this.forgetLedgerChanges?.dispose();
@@ -1095,7 +1143,7 @@ class BrowserSessionsStream {
   }
 
   private sendClientFrame(frame: BrowserSessionsClientFrame): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.ownerIsCurrent()) return;
     this.client?.sendClientFrame(frame);
   }
 
@@ -1189,7 +1237,7 @@ class BrowserSessionsStream {
   }
 
   private handleServerFrame(frame: BrowserSessionsServerFrame): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.ownerIsCurrent()) return;
     // Membership in the protocol's exclusion set decides which half of the
     // stream a frame is on, so this dispatch and the UX projection below it
     // cannot drift from the type that separates them.
@@ -1402,6 +1450,7 @@ class BrowserSessionsStream {
     stillWanted: () => boolean,
     ordering: CaptureOrdering,
   ): Promise<"not-sent" | "sent" | "sent-no-jar"> {
+    const generation = this.generation;
     let frame: BrowserSessionsClientFrame;
     let carriesJar = false;
     try {
@@ -1450,7 +1499,7 @@ class BrowserSessionsStream {
         reason: "capture-failed",
       };
     }
-    if (!stillWanted()) return "not-sent";
+    if (generation !== this.generation || !stillWanted()) return "not-sent";
     if (!this.sendPrimaryProfileFrame(frame)) return "not-sent";
     return carriesJar ? "sent" : "sent-no-jar";
   }

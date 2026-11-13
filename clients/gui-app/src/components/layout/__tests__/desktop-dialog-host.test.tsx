@@ -338,6 +338,14 @@ function createBaseRunnerHost(): IRunnerHost {
     linkLoginDeepLinks: null,
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
+    setEnvironmentBotHost: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    mintTeamComputerInstallToken: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    releaseTeamComputer: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
@@ -363,8 +371,6 @@ function createBaseRunnerHost(): IRunnerHost {
     disconnectSlackApp: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     setSlackAppDms: () => Promise.resolve({ kind: "unauthorized" as const }),
-    mintTeamHostInstallToken: () =>
-      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
@@ -410,12 +416,15 @@ function createBaseRunnerHost(): IRunnerHost {
     },
     fileSave: null,
     tokenStore: {
+      getSignInStorageLow: () => Promise.resolve(false),
+      subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
       get: () => Promise.resolve(null),
-      signIn: () => Promise.resolve(),
+      signIn: () => Promise.resolve("saved" as const),
       rotate: () =>
         Promise.resolve({
           outcome: "deleted" as const,
           pair: null,
+          diskPressure: null,
           rejection: null,
         }),
       delete: () => Promise.resolve(),
@@ -451,6 +460,7 @@ function createBaseRunnerHost(): IRunnerHost {
     pushPermission: null,
     systemBack: null,
     statusBarTap: null,
+    deviceDictation: null,
   };
 }
 

@@ -1,10 +1,14 @@
 import {
+  use,
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
+import type { ChatBotThreadOpening } from "@/components/chat/chat-bot-presentation-context";
 import { X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
@@ -13,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import { BotTranscriptFlowAllShownContext } from "@/components/bots/bot-transcript-flow-context";
 import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
@@ -40,7 +45,6 @@ import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
-import { useBotSendTakesAnswers } from "@/hooks/bots/use-bot-send-version";
 import {
   failedOn,
   failedOnRequest,
@@ -48,19 +52,27 @@ import {
 } from "@/hooks/bots/use-bot-activity";
 import { useBotBoxEdit } from "@/hooks/bots/use-bot-box-edit";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
-import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
+import type {
+  BotAnswerReach,
+  BotImageReach,
+} from "@/hooks/bots/use-bot-send-version";
 import type {
   BotTranscriptFold,
   BotTranscriptLanding,
   BotTranscriptMark,
   QuestionAnswerSend,
+  QuestionAnswersSend,
 } from "@/components/bots/bot-chat-transcript";
-import type {
-  ChatBotPresentation,
-  ChatBotQuestions,
-  ChatBotTurnReceipt,
+import {
+  answerEntries,
+  type ChatBotPresentation,
+  type ChatBotQuestions,
+  type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
-import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  botMemberAvatarUrl,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
 import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
@@ -72,6 +84,10 @@ import type {
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
+import {
+  CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+  CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS,
+} from "@/components/chat/chat-navigation-highlight";
 
 /**
  * The open post's thread as the channel's thread list has it: listed; not
@@ -117,8 +133,8 @@ export type BotThreadPanelThread =
  * Where a thread's post, replies and box are drawn: in the panel beside the
  * channel, which scrolls them in the pane, or as a card on the Threads page
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
- * card's reply count opens the thread in its channel's panel
- * (`onOpenThread`), its post's time shows the post in the channel
+ * card's reply count, drawn while it folds replies away, opens the thread in
+ * its channel's panel (`onOpenThread`), its post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
  * in full), and the reply its reading would acknowledge is marked
  * (`readMark`, `null` for none).
@@ -170,6 +186,8 @@ export function BotThreadPanel(props: {
   readonly boundHostId: string | null;
   /** What the panel's box does with images. */
   readonly imageReach: BotImageReach;
+  /** How a question card's answers reach the bot. */
+  readonly answerReach: BotAnswerReach;
   readonly botTitle: string;
   /** The channel the thread's post is in. */
   readonly conversationId: string;
@@ -318,6 +336,7 @@ type ThreadPanelBodyProps = {
   readonly hostId: string;
   readonly boundHostId: string | null;
   readonly imageReach: BotImageReach;
+  readonly answerReach: BotAnswerReach;
   readonly botTitle: string;
   readonly conversationId: string;
   readonly originMessageId: string;
@@ -349,9 +368,11 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
   const { originMessageId, sent, anchorSenderLabel, resolveMember } = props;
   const anchor =
     props.thread.kind === "listed" ? props.thread.thread.anchor : null;
+  const viewer = useAuthStore((s) => s.profile);
   const senderAvatarUrl = useCallback(
-    (senderUserId: string) => resolveMember(senderUserId)?.avatarUrl ?? null,
-    [resolveMember],
+    (senderUserId: string) =>
+      botMemberAvatarUrl(senderUserId, viewer, resolveMember),
+    [resolveMember, viewer],
   );
   return (
     <ChannelPost
@@ -495,6 +516,8 @@ function ThreadOriginPost(
       viewerUserId,
       memberName: anchorSenderLabel,
       answer: null,
+      answerAll: null,
+      baseline: null,
       discuss: null,
     }),
     [anchorSenderLabel, botId, viewerUserId],
@@ -883,8 +906,10 @@ function KnownThread(
     botId,
     hostId,
     boundHostId,
+    answerReach,
     botTitle,
     conversationId,
+    originMessageId,
     threadId,
     listed,
     retry,
@@ -898,6 +923,11 @@ function KnownThread(
     layout,
   } = props;
   const client = useTabHostClient();
+  const {
+    opening,
+    ref: openingRef,
+    highlighted: openingHighlighted,
+  } = useThreadOpening(originMessageId, conversationId);
   const {
     mutate: send,
     mutateAsync: sendAsync,
@@ -947,8 +977,8 @@ function KnownThread(
   // A question card's answer or Skip, on a question asked in the thread, is
   // the person's next message in it; a failed one says so where a failed
   // message does, and the card keeps the draft. A host that cannot take the
-  // answer gets a card without actions.
-  const answersTaken = useBotSendTakesAnswers(hostId);
+  // answer gets a card without actions; where both hosts take a card's
+  // answers together, one Submit sends them as one message.
   const answerQuestion = useCallback<QuestionAnswerSend>(
     async (questionMessageId, given) => {
       clearSendFailure();
@@ -966,6 +996,26 @@ function KnownThread(
             questionIndex: given.questionIndex,
             skipped: given.skipped,
           },
+        },
+        { onError: () => failSend(null) },
+      );
+    },
+    [botId, clearSendFailure, conversationId, failSend, sendAsync, threadId],
+  );
+  const answerQuestions = useCallback<QuestionAnswersSend>(
+    async (questionMessageId, given) => {
+      clearSendFailure();
+      await sendAsync(
+        {
+          botId,
+          conversationId,
+          text: given.text,
+          threadId,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: null,
+          answers: { questionMessageId, entries: answerEntries(given) },
         },
         { onError: () => failSend(null) },
       );
@@ -997,15 +1047,20 @@ function KnownThread(
                 { onError: () => failSend(null) },
               );
             },
-      answerQuestion: sendable && answersTaken ? answerQuestion : null,
+      answerQuestion:
+        sendable && answerReach !== "none" ? answerQuestion : null,
+      answerQuestions:
+        sendable && answerReach === "together" ? answerQuestions : null,
       discussQuestion: onDiscuss,
       failedRequest: failedRequestShown,
       openTurn: onOpenTurn,
       sessionChatId: listed?.sessionChatId ?? null,
+      opening,
     }),
     [
       answerQuestion,
-      answersTaken,
+      answerQuestions,
+      answerReach,
       botId,
       clearSendFailure,
       conversationId,
@@ -1014,6 +1069,7 @@ function KnownThread(
       listed?.sessionChatId,
       onDiscuss,
       onOpenTurn,
+      opening,
       send,
       sendable,
       sending,
@@ -1029,29 +1085,20 @@ function KnownThread(
     () =>
       hasReplies ? (
         <>
-          {origin}
           <div
-            className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
-            data-testid="bot-thread-reply-count"
-          >
-            {openThread === null ? (
-              <span className="shrink-0">{replies}</span>
-            ) : (
-              <Button
-                type="button"
-                variant="link"
-                size="inline-xs"
-                data-testid="bot-thread-reply-count-open"
-                onClick={openThread}
-              >
-                {replies}
-              </Button>
+            ref={openingRef}
+            className={cn(
+              "rounded-md",
+              openingHighlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
             )}
-            <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
+            data-testid="bot-thread-opening"
+          >
+            {origin}
           </div>
+          <ThreadReplyCount replies={replies} onOpenThread={openThread} />
         </>
       ) : null,
-    [hasReplies, openThread, origin, replies],
+    [hasReplies, openThread, openingHighlighted, openingRef, origin, replies],
   );
   const flow = useMemo(
     () =>
@@ -1101,6 +1148,86 @@ function KnownThread(
       />
     </>
   );
+}
+
+/**
+ * The line between a thread's post and its replies: how many replies it has,
+ * which on a card opens the thread in its channel's panel (`onOpenThread`).
+ * Where the flow under it draws every reply, the line says nothing the
+ * replies do not, so only assistive technology is told the count.
+ */
+function ThreadReplyCount(props: {
+  readonly replies: string;
+  readonly onOpenThread: (() => void) | null;
+}): ReactNode {
+  const { replies, onOpenThread } = props;
+  const allShown = use(BotTranscriptFlowAllShownContext);
+  if (allShown) {
+    return (
+      <span className="sr-only" data-testid="bot-thread-reply-count-sr">
+        {replies}
+      </span>
+    );
+  }
+  return (
+    <div
+      className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
+      data-testid="bot-thread-reply-count"
+    >
+      {onOpenThread === null ? (
+        <span className="shrink-0">{replies}</span>
+      ) : (
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          data-testid="bot-thread-reply-count-open"
+          onClick={onOpenThread}
+        >
+          {replies}
+        </Button>
+      )}
+      <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
+    </div>
+  );
+}
+
+/**
+ * The post the thread opens on, as a reply's badge names it (T165): `ref`
+ * goes on the post at the top of the replies' list, and `show` scrolls it
+ * into view and highlights it for as long as a landed row is highlighted.
+ */
+function useThreadOpening(
+  messageId: string,
+  conversationId: string,
+): {
+  readonly opening: ChatBotThreadOpening;
+  readonly ref: RefObject<HTMLDivElement | null>;
+  readonly highlighted: boolean;
+} {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const timer = useRef<number | null>(null);
+  const [highlighted, setHighlighted] = useState(false);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  const show = useCallback(() => {
+    ref.current?.scrollIntoView({ block: "nearest" });
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    setHighlighted(true);
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      setHighlighted(false);
+    }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
+  }, []);
+  const opening = useMemo(
+    () => ({ messageId, conversationId, show }),
+    [conversationId, messageId, show],
+  );
+  return { opening, ref, highlighted };
 }
 
 /** A failed read of the thread list, with Retry; nothing while it has not failed. */

@@ -1,3 +1,9 @@
+import {
+  credentialHomeSchema,
+  credentialVersionSchema,
+  credentialIdentitySchema,
+  environmentPresenceCauseSchema,
+} from "./provider-credential-home-schemas";
 /**
  * Schemas for the `providers.*` host RPC surface. Manages the CLI binary
  * Traycer runs for each provider (Codex / Claude Code / OpenCode).
@@ -1608,13 +1614,120 @@ export const providerProfileSchema = lazySchema(() =>
       .optional(),
   }),
 );
-export type ProviderProfile = z.infer<typeof providerProfileSchema>;
+/**
+ * Unknown row discriminators (record version or readability) fail closed for
+ * the whole row. Unknown additive leaf facts fall back at their own field,
+ * preserving the rest of the inventory entry.
+ */
+export function buildUnreadableProviderProfile(input: {
+  readonly profileId: string;
+  readonly label: string;
+  readonly kind: ProviderProfileKind;
+  readonly reason: string;
+}) {
+  return {
+    profileId: input.profileId,
+    label: input.label,
+    kind: input.kind,
+    authType: "oauth" as const,
+    auth: UNKNOWN_PROVIDER_AUTH,
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown" as const,
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+    enabled: false,
+    readability: { kind: "unreadable" as const, reason: input.reason },
+  };
+}
+
+export const managedProfileDeliveryRefusalSchema = lazySchema(() =>
+  z.enum([
+    "no-custody-kind",
+    "credential-unusable",
+    "credential-account-mismatch",
+    "team-material-off-computers",
+    "sandbox-placeholder-only",
+  ]),
+);
+export type ManagedProfileDeliveryRefusal = z.infer<
+  typeof managedProfileDeliveryRefusalSchema
+>;
+
+/** Read projection: a future row is one disabled, explained row, never a lost inventory. */
+export const providerProfileProjectionSchema = lazySchema(() =>
+  providerProfileSchema
+    .extend({
+      recordVersion: z.literal(1).optional(),
+      credentialIdentity: credentialIdentitySchema.optional().catch(undefined),
+      credentialHome: credentialHomeSchema.optional().catch(undefined),
+      environmentProfileId: z.string().nullable().optional(),
+      deliveryRefusal: managedProfileDeliveryRefusalSchema
+        .nullable()
+        .catch(null)
+        .optional(),
+      presence: z
+        .discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("admitted"),
+            bindingVersion: credentialVersionSchema,
+          }),
+          z.object({
+            kind: z.literal("revoking"),
+            cause: environmentPresenceCauseSchema.nullable().catch(null),
+          }),
+          z.object({ kind: z.literal("no-home") }),
+          z.object({ kind: z.literal("placeholder-only") }),
+        ])
+        .optional()
+        .catch(undefined),
+      readability: z
+        .object({
+          kind: z.enum(["readable", "unreadable"]),
+          reason: z.string().nullable(),
+        })
+        .optional(),
+    })
+    .catch((context) => {
+      const input = context.input;
+      const row = typeof input === "object" && input !== null ? input : {};
+      return buildUnreadableProviderProfile({
+        profileId:
+          "profileId" in row && typeof row.profileId === "string"
+            ? row.profileId
+            : "unreadable",
+        label:
+          "label" in row && typeof row.label === "string"
+            ? row.label
+            : "Unreadable profile",
+        kind: "managed",
+        reason: "Profile row uses an unsupported or invalid shape",
+      });
+    }),
+);
+export type ProviderProfile = z.infer<typeof providerProfileProjectionSchema>;
 
 export function isProfileEnabled(profile: {
   readonly enabled?: boolean;
 }): boolean {
   return profile.enabled !== false;
 }
+
+/** The named row resolves an account; a brokered sign-out reaches every home for it. */
+export const providersSignOutProfileRequestSchema = lazySchema(() =>
+  z.object({ providerId: providerIdSchema, profileId: z.string().min(1) }),
+);
+export const providersSignOutProfileResponseSchema = lazySchema(() =>
+  z.object({ signedOut: z.literal(true) }),
+);
+export type ProvidersSignOutProfileRequest = z.infer<
+  typeof providersSignOutProfileRequestSchema
+>;
+export type ProvidersSignOutProfileResponse = z.infer<
+  typeof providersSignOutProfileResponseSchema
+>;
 
 export const providersSetProfileEnabledRequestSchema = lazySchema(() =>
   z.object({
@@ -2011,6 +2124,16 @@ const providerCliStateBaseShape = {
   // to say whether it can be enforced" - and the second is the one that must
   // hide the control.
   nativeMemorySupported: lazySchema(() => z.boolean().optional()),
+  // The upstream model providers (OpenCode's own provider ids, the
+  // `openCodeProviderId` its catalog rows carry) whose models Traycer's model
+  // pickers leave out. Visibility only: the catalog still lists them, a chat
+  // already on one keeps it, and nothing is written to OpenCode's config.
+  // Written one id at a time by `providers.setModelProviderHidden`, first
+  // published by `providers.list@10.10`, and present only on the row of a
+  // provider with a Model Providers tab - so absent means "host too old" there
+  // and "not applicable" everywhere else, and readers spell the `[]` default
+  // themselves.
+  hiddenModelProviders: lazySchema(() => z.array(z.string().min(1)).optional()),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -2075,12 +2198,25 @@ export const providerCliStateSchema = lazySchema(() =>
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
+ * The provider row `providers.list@10.8` and `@10.9` published: without
+ * `hiddenModelProviders`, which 10.10 added. 10.9 grew the envelope and the
+ * profile projection but not this row, so the two lines share it. Every older
+ * row derives from this one, so the key reaches no older reader.
+ */
+const providerCliStateSchemaV109 = lazySchema(() =>
+  providerCliStateSchema.omit({ hiddenModelProviders: true }),
+);
+
+/**
  * The provider row `providers.list@10.7` published: without the native-memory
  * pair, which 10.8 added. Every older row derives from this one, so neither
  * key reaches an older reader.
+ *
+ * Derived from the 10.9 row rather than the live one, for the reason the 10.6
+ * row gives.
  */
 const providerCliStateSchemaV107 = lazySchema(() =>
-  providerCliStateSchema.omit({
+  providerCliStateSchemaV109.omit({
     nativeMemory: true,
     nativeMemorySupported: true,
   }),
@@ -2480,17 +2616,13 @@ export type ProvidersListRequestV70 = z.infer<
 >;
 
 /**
- * Canonical (live) `providers.list` response. Always returns the classic
- * provider catalog; when the request carried a `native` query, `native` holds
- * the list/discover result (or a typed native error). Classic callers receive
- * `native: null`.
- *
- * Earlier lines each bind a frozen response; only the head binds this
- * live schema, so new fields do not widen a released line.
+ * Frozen `providers.list@10.8` response, before credential home projections.
+ * Its row is the frozen 10.9 one, so a key added to the live row cannot widen
+ * this line.
  */
-export const providersListResponseSchema = lazySchema(() =>
+export const providersListResponseSchemaV108Preimage = lazySchema(() =>
   z.object({
-    providers: z.array(providerCliStateSchema),
+    providers: z.array(providerCliStateSchemaV109),
     native: nativeListResultSchema.nullable().default(null),
     // True on a sandbox host: it stores no provider credential
     // (`SANDBOX_HOST_REFUSES_CREDENTIALS`), so API keys, logins and profiles
@@ -2522,6 +2654,38 @@ export const providersListResponseSchema = lazySchema(() =>
         }),
       )
       .optional(),
+  }),
+);
+/**
+ * Frozen `providers.list@10.9` response: the 10.9 envelope and profile
+ * projection over the 10.9 row (`providerCliStateSchemaV109`), before 10.10
+ * added `hiddenModelProviders` to the row.
+ */
+export const providersListResponseSchemaV109Preimage = lazySchema(() =>
+  providersListResponseSchemaV108Preimage.extend({
+    providers: z.array(
+      providerCliStateSchemaV109.extend({
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchema).catch([]),
+      }),
+    ),
+  }),
+);
+
+/**
+ * Canonical `providers.list` response. Classic callers receive `native: null`;
+ * a native query carries its list/discover result or typed error there.
+ * Home facts are additive keys; earlier lines retain their frozen decoders.
+ */
+export const providersListResponseSchema = lazySchema(() =>
+  providersListResponseSchemaV108Preimage.extend({
+    providers: z.array(
+      providerCliStateSchema.extend({
+        // Older hosts omit the key; current hosts report adapter capability.
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchema).catch([]),
+      }),
+    ),
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
@@ -3991,10 +4155,16 @@ export type ProvidersStartLoginResponseV13 = z.infer<
 // and the 2.0→2.1 upgrade fills `null`). The v2->v1 downgrade bridge in
 // registry.ts explicitly drops it before the strict v1.0 parse (see
 // `providersAwaitLoginDowngradeV22ToV10`).
-export const providersAwaitLoginRequestSchema = lazySchema(() =>
+export const providersAwaitLoginRequestSchemaV22 = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     profileId: z.string().nullable().default(null),
+  }),
+);
+export const providersAwaitLoginRequestSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginRequestSchemaV22.shape,
+    lastSeenReaderCount: z.number().int().nonnegative().nullable().optional(),
   }),
 );
 export const providersAwaitLoginRequestSchemaV10 = lazySchema(() =>
@@ -4066,7 +4236,7 @@ export const providersAwaitLoginResponseSchemaV21 = lazySchema(() =>
  * `providers.awaitLogin@2.2` response. Returns the re-probed `state`, and
  * `refusal` when the provider turned the sign-in away.
  */
-export const providersAwaitLoginResponseSchema = lazySchema(() =>
+export const providersAwaitLoginResponseSchemaV22 = lazySchema(() =>
   z.object({
     ...providersAwaitLoginResponseSchemaV21.shape,
     // Non-null when the provider refused the sign-in after the browser leg
@@ -4075,6 +4245,27 @@ export const providersAwaitLoginResponseSchema = lazySchema(() =>
     // before. A 2.1 caller drops the key and reads the null state as "the
     // sign-in did not complete", which is still true.
     refusal: providerLoginRefusalSchema.nullable().default(null),
+  }),
+);
+export const providerLoginInstallationSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("waiting-for-readers"),
+    admissionId: z.string(),
+    count: z.number().int().positive(),
+  }),
+);
+export type ProviderLoginInstallation = z.infer<
+  typeof providerLoginInstallationSchema
+>;
+
+/** A pending account change returns no authenticated state until its readers drain. */
+export const providersAwaitLoginResponseSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginResponseSchemaV22.shape,
+    installation: providerLoginInstallationSchema
+      .nullable()
+      .optional()
+      .catch(null),
   }),
 );
 export const providersAwaitLoginResponseSchemaV20 = lazySchema(() =>
@@ -5100,6 +5291,38 @@ export type ProvidersSetNativeMemoryResponse = z.infer<
   typeof providersSetNativeMemoryResponseSchema
 >;
 
+// ── Hidden model providers ─────────────────────────────────────────────────
+//
+// `providers.setModelProviderHidden` shows or hides ONE upstream model
+// provider in Traycer's model pickers (the row's `hiddenModelProviders`) - a
+// brand-new method at `@1.0`, registered `degrade: unsupported` like
+// `providers.setNativeSubagents`. One id per call rather than the whole list,
+// so two quick flips on different rows cannot overwrite each other: the host
+// applies each one to the list it has stored. The response echoes the stored
+// list so the Settings rows can settle on truth.
+//
+// Keyed by HARNESS on the wire like its neighbours; the host refuses a harness
+// with no Model Providers tab, the only place a person can make this choice.
+export const providersSetModelProviderHiddenRequestSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    modelProviderId: z.string().min(1),
+    hidden: z.boolean(),
+  }),
+);
+export type ProvidersSetModelProviderHiddenRequest = z.infer<
+  typeof providersSetModelProviderHiddenRequestSchema
+>;
+
+export const providersSetModelProviderHiddenResponseSchema = lazySchema(() =>
+  z.object({
+    hiddenModelProviders: z.array(z.string().min(1)),
+  }),
+);
+export type ProvidersSetModelProviderHiddenResponse = z.infer<
+  typeof providersSetModelProviderHiddenResponseSchema
+>;
+
 // ── On-demand pack discovery refresh ───────────────────────────────────────
 //
 // Another BRAND-NEW method name at `@1.0`, riding the same
@@ -5318,6 +5541,9 @@ export type DowngradableToV10ProviderState = (
   // enforce it, absent from earlier rows.
   nativeMemory?: ProviderCliState["nativeMemory"];
   nativeMemorySupported?: ProviderCliState["nativeMemorySupported"];
+  // (v10.10) the model providers hidden from Traycer's pickers, absent from
+  // earlier rows.
+  hiddenModelProviders?: ProviderCliState["hiddenModelProviders"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
   // strength of structural width: the v7.0 and v8.0 list lines are pinned to
   // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
@@ -5354,6 +5580,8 @@ export function downgradeProviderCliStateToV10(
   // - `chatsFollow` (v10.7) — whether existing chats follow the selection.
   // - `nativeMemory` / `nativeMemorySupported` (v10.8) — the per-provider
   //   native-memory switch and its enforceability.
+  // - `hiddenModelProviders` (v10.10) — the model providers hidden from
+  //   Traycer's pickers.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
   //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
@@ -5400,6 +5628,8 @@ export function downgradeProviderCliStateToV10(
     // (v10.8) the native-memory switch and its enforceability.
     nativeMemory: _nativeMemory,
     nativeMemorySupported: _nativeMemorySupported,
+    // (v10.10) the model providers hidden from Traycer's pickers.
+    hiddenModelProviders: _hiddenModelProviders,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({

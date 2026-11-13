@@ -39,9 +39,9 @@
  */
 import {
   epicStateSubscribeServerFrameSchemaV11,
-  epicStateSubscribeServerFrameSchemaV14,
+  epicStateSubscribeServerFrameSchemaV16,
   type EpicStateSubscribeServerFrameV11,
-  type EpicStateSubscribeServerFrameV14,
+  type EpicStateSubscribeServerFrameV16,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -55,11 +55,11 @@ import type { IStreamClient } from "./i-stream-client";
 export const EPIC_STATE_SUBSCRIBE_METHOD = "epic.state.subscribe";
 
 /**
- * Decode `@1.4` comment anchors and older records frames. Optional anchor
+ * Decode `@1.6` markdown body metadata and older records frames. Optional
  * fields remain absent on frames from older hosts.
  */
 export type EpicStateServerFrame =
-  | EpicStateSubscribeServerFrameV14
+  | EpicStateSubscribeServerFrameV16
   | EpicStateSubscribeServerFrameV11;
 
 type StateServerFrame<Kind extends EpicStateServerFrame["kind"]> = Extract<
@@ -140,10 +140,10 @@ export class EpicStateStreamClient {
     if (this.closed) return;
     // Text-only by contract; see the module doc.
     if (binaryPayload !== null) return;
-    // `@1.4` first: it accepts the new artifact kinds and preserves comment
+    // `@1.6` first: it preserves markdown body metadata and comment
     // anchors. Trying an older schema first can reject new kinds or silently
     // strip their metadata.
-    const latest = epicStateSubscribeServerFrameSchemaV14.safeParse(envelope);
+    const latest = epicStateSubscribeServerFrameSchemaV16.safeParse(envelope);
     const parsed = latest.success
       ? latest
       : epicStateSubscribeServerFrameSchemaV11.safeParse(envelope);

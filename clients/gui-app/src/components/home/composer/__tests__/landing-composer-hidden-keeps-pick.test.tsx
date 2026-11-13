@@ -20,6 +20,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import type { LandingOwnerTeam } from "@/components/home/composer/landing-owner-model";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { LandingStagedSandboxTaskArgs } from "@/components/home/hooks/use-landing-composer-actions";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
@@ -247,6 +248,7 @@ vi.mock(
 );
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
+    resolveOwnerForCreate: (owner: LandingOwnerTeam | null) => owner,
     submit: host.submit,
     selectTerminalAgent: vi.fn(),
     startTaskOnStagedSandbox: host.startTask,

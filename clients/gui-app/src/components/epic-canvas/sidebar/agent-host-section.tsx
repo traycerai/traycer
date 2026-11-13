@@ -112,17 +112,6 @@ function TaskHostSection(props: {
         .join(", "),
     "",
   );
-  const otherCount = useMaybeEpicStore(
-    (state) =>
-      [
-        ...Object.values(state.chats.byId),
-        ...Object.values(state.tuiAgents.byId),
-      ].filter(
-        (agent) =>
-          agent.hostId === props.host.hostId && agent.id !== props.nodeId,
-      ).length,
-    0,
-  );
   return (
     <section className="space-y-1 px-3 py-2 text-ui-xs" aria-label={HOST_LABEL}>
       <p className="font-medium text-muted-foreground">{HOST_LABEL}</p>
@@ -147,11 +136,10 @@ function TaskHostSection(props: {
           {reachSentence(REACH_UNNAMED_HOSTS)}
         </p>
       ) : null}
-      {otherCount === 0 ? null : (
-        <HostSessionDisclosure
-          names={others}
-          summary={hoverAlsoInTask(otherCount)}
-        />
+      {others.length === 0 ? null : (
+        <div className="max-h-40 min-w-0 max-w-full overflow-y-auto overscroll-contain break-words text-muted-foreground">
+          <p>{hoverAlsoInTask(others)}</p>
+        </div>
       )}
       {props.host.sandboxEnd === null ? (
         <HostFilesAction hostId={null} />
@@ -584,29 +572,5 @@ function HostActivityLines(props: {
       {props.names.length === 0 ? null : <p>{props.names}</p>}
       {props.more > 0 ? <p>{hoverMoreSessions(props.more)}</p> : null}
     </div>
-  );
-}
-
-/**
- * Other agents on a computer host. Closed, the line is only how many. Open,
- * their names, in a list that scrolls instead of growing the card.
- */
-function HostSessionDisclosure(props: {
-  readonly names: string;
-  readonly summary: string;
-}): ReactNode {
-  if (props.names.length === 0) return null;
-  return (
-    <details
-      data-testid="agent-host-sessions"
-      className="min-w-0 max-w-full break-words"
-    >
-      <summary className="w-fit max-w-full cursor-pointer text-start break-words">
-        {props.summary}
-      </summary>
-      <div className="max-h-40 space-y-1 overflow-y-auto overscroll-contain break-words text-muted-foreground">
-        <p>{props.names}</p>
-      </div>
-    </details>
   );
 }

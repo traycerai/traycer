@@ -1,6 +1,7 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { RunningHost } from "@/components/settings/environment/hosts-running-configuration-model";
+import type { ThisComputersMove } from "@/components/settings/move/use-this-computers-move";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +29,7 @@ const mocks = vi.hoisted(() => ({
     hostName: "this computer",
     client: null,
   },
-  thisComputersMove: "unknown" as "pending" | "unknown" | "not_moved" | "moved",
+  thisComputersMove: "unknown" as ThisComputersMove,
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -415,13 +416,11 @@ describe("GettingStartedSettingsPanel", () => {
     render(<GettingStartedSettingsPanel />);
 
     const card = screen.getByTestId("getting-started-card-move");
+    expect(card.textContent).toContain("Move this computer to Personal");
     expect(card.textContent).toContain(
-      "Move this computer's settings to Personal",
+      "So your settings follow you to every computer and sandbox.",
     );
-    expect(card.textContent).toContain(
-      "So they work on every computer and sandbox you use.",
-    );
-    expect(card.textContent).toContain("Show me what moves");
+    expect(card.textContent).toContain("Move to Personal");
 
     fireEvent.click(card);
 
@@ -442,8 +441,20 @@ describe("GettingStartedSettingsPanel", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Move this computer's settings to Personal, Complete",
+        name: "Move this computer to Personal, Complete",
       }),
     ).toBeTruthy();
+  });
+
+  it("does not show the move card for a team-owned computer", () => {
+    mocks.thisComputer = {
+      hostId: "old",
+      hostName: "Old laptop",
+      client: null,
+    };
+    mocks.thisComputersMove = "team";
+    render(<GettingStartedSettingsPanel />);
+
+    expect(screen.queryByTestId("getting-started-card-move")).toBeNull();
   });
 });

@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
@@ -15,6 +17,7 @@ import {
 } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -70,34 +73,16 @@ function presentText(value: string | null): string | null {
   return trimmed.length === 0 ? null : trimmed;
 }
 
-function sessionName(session: UserSessionListItem): string {
-  const label = presentText(session.displayLabel);
-  if (label !== null) {
-    return label;
-  }
-  // Nothing left to recognise the row by: platform, place, version and a
-  // name are all absent. Client kind still renders under the name, and the
-  // created time stays on the timeline.
-  if (
-    presentText(session.platform) === null &&
-    presentText(session.appVersion) === null &&
-    presentText(session.location) === null
-  ) {
-    return "Session details unavailable";
-  }
-  return "";
-}
-
-function sessionFactsLine(session: UserSessionListItem): string {
+function sessionDisplayLine(session: UserSessionListItem): string {
   const version = presentText(session.appVersion);
   const parts = [
-    sessionClientLabel(session),
+    presentText(session.displayLabel),
     presentText(session.platform),
     version === null ? null : `App ${version}`,
     // Coarse place is the strongest "is this me?" signal on the row.
     presentText(session.location),
   ].filter((part): part is string => part !== null);
-  return parts.join(" · ");
+  return parts.length === 0 ? "Session details unavailable" : parts.join(" / ");
 }
 
 function formatRelativeTime(value: string): string {
@@ -133,21 +118,13 @@ function sessionStatusLine(session: UserSessionListItem): string {
   return `Last seen ${formatRelativeTime(session.lastSeenAt)}`;
 }
 
-function sessionStatusDisplay(
-  session: UserSessionListItem,
-  pending: boolean,
-): string {
-  if (pending) return "Signing out";
-  const status = sessionStatusLine(session);
-  return session.current ? `This session · ${status}` : status;
-}
-
 function sessionTimelineLine(
   session: UserSessionListItem,
   pending: boolean,
 ): string {
   const created = `Created ${formatRelativeTime(session.createdAt)}`;
-  return `${created} · ${sessionStatusDisplay(session, pending)}`;
+  const status = pending ? "Signing out" : sessionStatusLine(session);
+  return `${created} · ${status}`;
 }
 
 function sortSessions(
@@ -185,6 +162,7 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
 }
 
 export function DevicesSessionsPanel() {
+  const queryClient = useQueryClient();
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const binding = useHostBinding();
   const query = useAuthFetchUserSessions();
@@ -263,7 +241,9 @@ export function DevicesSessionsPanel() {
           nowMs: () => Date.now(),
         });
         if (session.current && binding !== null) {
-          await binding.auth.signOut();
+          await useSignOutConfirmStore
+            .getState()
+            .signOut(queryClient, binding.auth);
         }
       } catch (error) {
         setActionError(actionErrorFromStepUpError(error));
@@ -271,7 +251,7 @@ export function DevicesSessionsPanel() {
         setActiveSessionFamilyId(null);
       }
     },
-    [activeSessionFamilyId, binding, requestStepUpCredential],
+    [activeSessionFamilyId, binding, queryClient, requestStepUpCredential],
   );
 
   const handleRevokeAll = useCallback(async (): Promise<void> => {
@@ -290,11 +270,13 @@ export function DevicesSessionsPanel() {
         await requestStepUpCredential("global-revoke");
         await revokeAllSessions.mutateAsync(undefined);
       }
-      await binding.auth.signOut();
+      await useSignOutConfirmStore
+        .getState()
+        .signOut(queryClient, binding.auth);
     } catch (error) {
       setActionError(actionErrorFromStepUpError(error));
     }
-  }, [binding, requestStepUpCredential, revokeAllSessions]);
+  }, [binding, queryClient, requestStepUpCredential, revokeAllSessions]);
 
   return (
     <>
@@ -304,8 +286,12 @@ export function DevicesSessionsPanel() {
       >
         <div className="flex flex-col">
           <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
+            <div className="min-w-0 space-y-1">
               <h2 className="text-ui font-medium">Signed-in sessions</h2>
+              <p className="wrap-anywhere text-ui-xs text-muted-foreground">
+                Browser, desktop, CLI, extension, and host access for this
+                account.
+              </p>
             </div>
             <Button
               type="button"
@@ -442,21 +428,19 @@ function SessionRow(props: {
       )}
     >
       <div className="flex min-w-0 flex-1 gap-3">
-        <div
-          className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground"
-          role="img"
-          aria-label={sessionClientLabel(session)}
-        >
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
           {sessionIcon(session)}
         </div>
         <div className="min-w-0 space-y-1">
-          {sessionName(session).length === 0 ? null : (
-            <p className="wrap-anywhere text-ui-sm font-medium text-foreground">
-              {sessionName(session)}
-            </p>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-ui-sm font-medium text-foreground">
+              {session.current ? "This session" : "Session"}
+            </span>
+            <Badge variant="outline">{sessionClientLabel(session)}</Badge>
+            {session.revoked ? <Badge variant="muted">Signed out</Badge> : null}
+          </div>
           <p className="wrap-anywhere text-ui-sm text-muted-foreground">
-            {sessionFactsLine(session)}
+            {sessionDisplayLine(session)}
           </p>
           <p className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground">
             <Clock className="mr-1.5 inline size-3.5 align-text-bottom" />

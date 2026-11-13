@@ -6,6 +6,10 @@
  * host's file-path resolution, the toast library, and the preparation
  * session's start, which a case holds open to see Send wait for it.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { useState, type ReactNode } from "react";
 import {
   act,
@@ -66,6 +70,15 @@ const mocks = vi.hoisted(() => ({
   /** While set, a preparation waits for it before it starts. */
   preparationGate: null as Promise<void> | null,
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ stub: "tab-host-client" }),

@@ -1,7 +1,7 @@
 /**
- * The modal palette's width and the tooltips on a row the column cuts.
- * A test RootList supplies the long task title; production is not edited
- * to inject one.
+ * The modal palette's width. A long label and hint truncate in the row
+ * and do not open a tooltip. A test RootList supplies the long task title;
+ * production is not edited to inject one.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -106,7 +106,7 @@ function renderOpenPalette(): void {
 }
 
 describe("CommandPaletteShell", () => {
-  it("widens past the dialog default and tooltips the full task title", async () => {
+  it("widens past the dialog default and truncates the task title without a tooltip", async () => {
     renderOpenPalette();
 
     const label = await screen.findByText(LONG_LABEL);
@@ -125,15 +125,20 @@ describe("CommandPaletteShell", () => {
     expect(list.classList.contains("min-h-0")).toBe(true);
     expect(list.classList.contains("overflow-y-auto")).toBe(true);
 
+    expect(label.tagName).toBe("SPAN");
+    expect(label.className).toContain("truncate");
     hover(label);
-    expect(screen.getByRole("tooltip").textContent).toBe(LONG_LABEL);
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("tooltips the full hint", async () => {
+  it("truncates the hint without a tooltip", async () => {
     renderOpenPalette();
 
     const hint = await screen.findByText(LONG_HINT);
+    expect(hint.getAttribute("data-slot")).toBe("command-item-hint");
+    expect(hint.className).toContain("max-w-1/2");
+    expect(hint.className).toContain("truncate");
     hover(hint);
-    expect(screen.getByRole("tooltip").textContent).toBe(LONG_HINT);
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 });

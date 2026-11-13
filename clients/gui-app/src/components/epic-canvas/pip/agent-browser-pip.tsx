@@ -470,6 +470,8 @@ function PipWindow(props: {
         type="button"
         aria-label={meta.available ? "Restore browser tile" : "Browser preview"}
         disabled={!meta.available}
+        // A web page, even one shown passively, is never the app's to swipe.
+        data-history-gesture-owner=""
         className="relative min-h-0 flex-1 overflow-hidden bg-background p-0 text-left disabled:cursor-default"
         onClick={() => {
           if (dragMovedRef.current) {

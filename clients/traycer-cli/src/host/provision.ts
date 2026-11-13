@@ -193,6 +193,10 @@ export interface ProvisionHostOptions {
   // registry default uses `implicit-registry-minimum` so a newer non-yanked
   // install is kept there too.
   readonly satisfaction: HostSatisfactionPolicy;
+  readonly bundledSource?: Extract<
+    InstallSourceArg,
+    { readonly kind: "bundled" }
+  > | null;
   // Recorded as the install version for a local-file install (the
   // bundled-host callers pass `config.version` so the recorded version is the
   // one their satisfaction policy asks for, and the next launch is a no-op
@@ -890,7 +894,7 @@ async function provisionInSegment(
  *
  * `presence` (a registry `latest`) names no version, so nothing can be gated
  * before the manifest resolves and the run carries ungated evidence to the
- * commit tail. `own-build-minimum` is this CLI's own bundled/`--from` archive:
+ * commit tail. `own-build-minimum` is an unpinned bundled/`--from` archive:
  * a build stamp with no manifest entry behind it, so the registry is not
  * consulted, and a target the fixed table cannot place waits for the archive's
  * own declaration at the commit tail. The two registry policies name a real
@@ -899,14 +903,13 @@ async function provisionInSegment(
 async function gateProvisionStoreFormatFloor(
   opts: ProvisionHostOptions,
 ): Promise<StoreFormatFloorEvidence> {
-  // `presence` and `viability` name no target version: the install branch is
-  // only reached when nothing viable is installed, and the archive that lands
-  // is whatever the source resolves to after staging. The commit tail gates
-  // it from the extracted tree instead.
-  if (
-    opts.satisfaction.kind === "presence" ||
+  const targetVersion =
+    opts.bundledSource?.descriptor.version ??
+    (opts.satisfaction.kind === "presence" ||
     opts.satisfaction.kind === "viability"
-  ) {
+      ? null
+      : opts.satisfaction.version);
+  if (targetVersion === null) {
     return ungatedStoreFormatFloorEvidence(
       "host ensure",
       opts.acceptStoreFormatLoss,
@@ -925,7 +928,7 @@ async function gateProvisionStoreFormatFloor(
   return await gateStoreFormatFloor({
     environment: opts.runtime.environment,
     surveyRoots: await resolveChatStoreSurveyRoots(opts.runtime.environment),
-    targetVersion: opts.satisfaction.version,
+    targetVersion,
     // Both operands from that ONE read, never the version from `fast` and the
     // formats from here: a mix could describe two different installs if a
     // concurrent actor swapped one in between. Being a read behind the fast
@@ -935,7 +938,16 @@ async function gateProvisionStoreFormatFloor(
     installedVersion: installed.version,
     installedStoreFormats: installed.storeFormats,
     installedProvenance: installed.provenance,
-    consultRegistry: opts.satisfaction.kind !== "own-build-minimum",
+    consultRegistry:
+      opts.bundledSource == null &&
+      opts.satisfaction.kind !== "own-build-minimum",
+    publishedEntry:
+      opts.bundledSource == null
+        ? null
+        : {
+            storeFormats: opts.bundledSource.descriptor.storeFormats,
+            archiveSha256: opts.bundledSource.descriptor.sha256,
+          },
     acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     site: "host ensure",
     logger: opts.runtime.logger,
@@ -1288,7 +1300,7 @@ async function prepareInstallStage(
   progress({
     stage: "host-provision",
     message:
-      source.kind === "local-file"
+      source.kind !== "registry"
         ? `installing host from ${source.path}`
         : `installing host (${source.versionRequest})`,
     percent: null,

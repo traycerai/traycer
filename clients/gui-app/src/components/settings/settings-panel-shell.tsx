@@ -6,7 +6,7 @@ import { SettingsPhoneScopeLine } from "@/components/settings/settings-phone-sco
 
 interface SettingsPanelShellProps {
   title: string;
-  description?: string;
+  description?: ReactNode;
   /** Optional control rendered at the top-right of the header (e.g. refresh). */
   headerAction?: ReactNode;
   /**

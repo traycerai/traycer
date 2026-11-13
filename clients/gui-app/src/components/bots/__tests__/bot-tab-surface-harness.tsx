@@ -7,7 +7,6 @@ import { cleanup } from "@testing-library/react";
 import { QueryClient } from "@tanstack/react-query";
 import { vi } from "vitest";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type {
   SandboxCatalogueFetchResult,
   TraycerModelsFetchResult,
@@ -145,7 +144,6 @@ export function trackingTask(taskId: string): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -175,8 +173,18 @@ function openSurfaceOn(botId: string): void {
  */
 export function setUpNewTeam(): void {
   mocks.state.environments = [
-    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
-    { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
+    {
+      environmentId: "env-team",
+      label: "Acme",
+      ownerKind: "organization",
+      providerHandle: "acme",
+    },
+    {
+      environmentId: "env-new",
+      label: "Newco",
+      ownerKind: "organization",
+      providerHandle: "newco",
+    },
   ];
   mocks.state.listedBotIds = [BOT_ID];
   openSurfaceOn(SETUP_BOT_ID);
@@ -214,14 +222,6 @@ export function scriptTeamControlPlane(): void {
         Promise.resolve<SandboxCatalogueFetchResult>({
           kind: "ok",
           catalogue: CATALOGUE,
-        }),
-      ),
-      mintTeamHostInstallToken: vi.fn<
-        (environmentId: string) => Promise<TeamHostInstallTokenResult>
-      >(() =>
-        Promise.resolve({
-          kind: "network-error",
-          detail: "mintTeamHostInstallToken was not scripted",
         }),
       ),
     },
@@ -279,7 +279,12 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.environmentsRefetch.mockReset();
   mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
   mocks.state.environments = [
-    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+    {
+      environmentId: "env-team",
+      label: "Acme",
+      ownerKind: "organization",
+      providerHandle: "acme",
+    },
   ];
   mocks.state.threads = [];
   mocks.state.threadsHeld = true;

@@ -47,7 +47,10 @@ import {
   useAdvanceWhilePresented,
   usePresented,
 } from "@/hooks/bots/use-bot-read-while-presented";
-import { useBotImageReach } from "@/hooks/bots/use-bot-send-version";
+import {
+  useBotAnswerReach,
+  useBotImageReach,
+} from "@/hooks/bots/use-bot-send-version";
 import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
 import { useBotSurfaceCards } from "@/hooks/bots/use-bot-surface-cards";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
@@ -812,6 +815,11 @@ function FullThread(props: {
     boundHostId,
     boundHostTakes: threadAnchorKinds,
   });
+  const answerReach = useBotAnswerReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
   const readMark = useCardRead({ botId, hostId, threadId, scroller });
   const unfolded = useBotThreadFoldStore((state) =>
     Object.hasOwn(state.unfolded, threadId),
@@ -876,6 +884,7 @@ function FullThread(props: {
             hostId={hostId}
             boundHostId={boundHostId}
             imageReach={imageReach}
+            answerReach={answerReach}
             botTitle={bot.title}
             conversationId={thread.conversationId}
             originMessageId={originMessageId}

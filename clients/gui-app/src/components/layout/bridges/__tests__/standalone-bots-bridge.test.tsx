@@ -61,6 +61,10 @@ const host = vi.hoisted(() => ({
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
 }));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => host.client,
+}));
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));

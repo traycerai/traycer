@@ -239,6 +239,9 @@ async function previewText(): Promise<string> {
 }
 
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   reads.statuses.clear();
@@ -297,6 +300,7 @@ describe("Remove's preview on Personal names the computers that hold a copy", ()
             state: null,
             frozen: false,
             summary: null,
+            ownerKind: "unknown",
             teamOwned: false,
           },
         }),

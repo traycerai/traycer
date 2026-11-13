@@ -285,7 +285,10 @@ function SurfaceQuestion(props: {
       asker={QUESTION_ASKER}
       questions={cardQuestions}
       onDraft={
-        busy ? null : (index, draft) => setAnswer(botId, keyOf(index), draft)
+        busy
+          ? null
+          : (index, draft) =>
+              setAnswer(botId, keyOf(index), { ...draft, unsureSince: null })
       }
       onAnswer={() => {
         const current = useBotDraftsStore.getState().answers[botId] ?? {};
@@ -300,6 +303,7 @@ function SurfaceQuestion(props: {
           ),
         );
       }}
+      onAnswerAll={null}
       onDiscuss={null}
     />
   );

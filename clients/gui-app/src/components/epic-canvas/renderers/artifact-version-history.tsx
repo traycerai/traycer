@@ -1,3 +1,5 @@
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { hostNameFromLabel } from "@/lib/host/host-name";
 import { useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangleIcon,
@@ -120,6 +122,15 @@ const CAPTURED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+const ACCESSIBLE_CAPTURED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
 const DAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
   weekday: "long",
   month: "long",
@@ -145,12 +156,16 @@ function dayLabel(value: number): string {
 
 type Provenance = ArtifactVersionObservationEntry["provenance"];
 
-function userSessionDetail(
-  provenance: Extract<Provenance, { readonly kind: "user_session" }>,
-): string {
-  return provenance.hostId === undefined
-    ? `User ${provenance.userId}`
-    : `User ${provenance.userId} · host ${provenance.hostId}`;
+function UserSessionDetail(props: {
+  readonly provenance: Extract<Provenance, { readonly kind: "user_session" }>;
+}): ReactNode {
+  const hostId = props.provenance.hostId;
+  const entry = useHostDirectoryEntry(hostId ?? null);
+  const detail =
+    hostId === undefined
+      ? "User edit"
+      : `User edit · ${hostNameFromLabel(entry?.label ?? null, hostId)}`;
+  return <p className="px-3 pb-3 text-ui-xs text-muted-foreground">{detail}</p>;
 }
 
 function multipleAgentsDetail(
@@ -158,7 +173,7 @@ function multipleAgentsDetail(
 ): string {
   if (provenance.agents.length === 0) return "Several agents";
   return provenance.agents
-    .map((agent) => agent.chatTitle ?? agent.chatId)
+    .map((agent) => agent.chatTitle?.trim() || "Untitled chat")
     .join(", ");
 }
 
@@ -171,34 +186,19 @@ function externalDetail(
   return `${count} attempted agent ${noun}`;
 }
 
-function restoreDetail(
-  provenance: Extract<Provenance, { readonly kind: "restore" }>,
-): string {
-  return provenance.restoredFromObservationId === null
-    ? "Restored from an earlier version."
-    : `Restored from version ${provenance.restoredFromObservationId}.`;
-}
-
-function reviveDetail(
-  provenance: Extract<Provenance, { readonly kind: "revive" }>,
-): string {
-  return provenance.deletionEventId === null
-    ? "Restored after deletion."
-    : `Restored after deletion event ${provenance.deletionEventId}.`;
-}
-
 function deleteDetail(
   provenance: Extract<Provenance, { readonly kind: "delete" }>,
-): string | null {
-  const actor = provenance.actorKind?.replaceAll("_", " ") ?? null;
-  if (actor === null) {
-    return provenance.deleteOpId === null
-      ? null
-      : `Deleted · operation ${provenance.deleteOpId}`;
+): string {
+  switch (provenance.actorKind) {
+    case "user_session":
+      return "Deleted by a person";
+    case "agent":
+      return "Deleted by an agent";
+    case "multiple_agents":
+      return "Deleted by agents";
+    default:
+      return "Deleted";
   }
-  return provenance.deleteOpId === null
-    ? `Deleted by ${actor}`
-    : `Deleted by ${actor} · operation ${provenance.deleteOpId}`;
 }
 
 function provenanceDetailText(provenance: Provenance): string | null {
@@ -206,23 +206,23 @@ function provenanceDetailText(provenance: Provenance): string | null {
     case "agent":
       return null;
     case "user_session":
-      return userSessionDetail(provenance);
+      return null;
     case "multiple_agents":
       return multipleAgentsDetail(provenance);
     case "external":
       return externalDetail(provenance);
     case "system":
-      return provenance.originalActorHint ?? provenance.trigger;
+      return null;
     case "remote_merge":
       return null;
     case "restore":
-      return restoreDetail(provenance);
+      return "Restored from an earlier version.";
     case "revive":
-      return reviveDetail(provenance);
+      return "Restored after deletion.";
     case "delete":
       return deleteDetail(provenance);
     case "clobber":
-      return provenance.source;
+      return null;
   }
 }
 
@@ -233,39 +233,41 @@ type AgentProvenance = Extract<
 
 function AgentProvenanceDetail(props: {
   readonly provenance: AgentProvenance;
+  readonly chatAccessibleName: string | undefined;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
+  const title = props.provenance.chatTitle?.trim() || "Untitled chat";
   return (
     <p className="px-3 pb-3 text-ui-xs text-muted-foreground">
       Agent ·{" "}
-      {props.provenance.chatTitle === null ? (
-        <span className="font-mono">{props.provenance.chatId}</span>
-      ) : (
-        <button
-          type="button"
-          className="font-medium underline underline-offset-2 hover:text-foreground"
-          aria-label={`Open chat ${props.provenance.chatTitle}`}
-          onClick={() => props.onOpenChat(props.provenance.chatId)}
-        >
-          {props.provenance.chatTitle}
-        </button>
-      )}{" "}
-      · turn {props.provenance.turnId}
+      <button
+        type="button"
+        className="font-medium underline underline-offset-2 hover:text-foreground"
+        aria-label={props.chatAccessibleName}
+        onClick={() => props.onOpenChat(props.provenance.chatId)}
+      >
+        {title}
+      </button>
     </p>
   );
 }
 
 function ObservationProvenanceDetail(props: {
   readonly provenance: Provenance;
+  readonly chatAccessibleName: string | undefined;
   readonly onOpenChat: (chatId: string) => void;
 }): ReactNode {
   if (props.provenance.kind === "agent") {
     return (
       <AgentProvenanceDetail
+        chatAccessibleName={props.chatAccessibleName}
         provenance={props.provenance}
         onOpenChat={props.onOpenChat}
       />
     );
+  }
+  if (props.provenance.kind === "user_session") {
+    return <UserSessionDetail provenance={props.provenance} />;
   }
   const detail = provenanceDetailText(props.provenance);
   if (detail === null) return null;
@@ -944,14 +946,58 @@ function VersionObservationList(props: {
 }): ReactNode {
   let previousDay: string | null = null;
   return props.entries.map((entry, index) => {
+    const olderEntry = props.entries.at(index + 1);
+    const badges: {
+      text: string;
+      variant: "info" | "destructive" | "success";
+    }[] = [];
+    if (
+      olderEntry !== undefined &&
+      entry.serializerVersion !== olderEntry.serializerVersion
+    ) {
+      badges.push({ text: "re-normalized by editor update", variant: "info" });
+    }
+    if (entry.degraded) {
+      badges.push({
+        text: "Body only — images missing",
+        variant: "destructive",
+      });
+    }
+    if (props.outcome?.observationId === entry.observationId) {
+      switch (props.outcome.status) {
+        case "clean":
+          badges.push({ text: "Restored", variant: "success" });
+          break;
+        case "renormalized":
+          badges.push({
+            text: "re-normalized by a newer editor version — review",
+            variant: "info",
+          });
+          break;
+        case "degraded":
+          badges.push({
+            text: "Restored with missing image content",
+            variant: "destructive",
+          });
+          break;
+      }
+    }
+    const capturedAt = ACCESSIBLE_CAPTURED_AT_FORMATTER.format(
+      entry.capturedAt,
+    );
+    const versionName = [
+      PROVENANCE_LABELS[entry.provenance.kind],
+      formatCapturedTime(entry.capturedAt),
+      ...badges.map((badge) => badge.text),
+      capturedAt,
+    ].join(", ");
+    const chatName =
+      entry.provenance.kind === "agent"
+        ? `${entry.provenance.chatTitle?.trim() || "Untitled chat"}, ${capturedAt}`
+        : undefined;
     const day = dayLabel(entry.capturedAt);
     const showDay = day !== previousDay;
     previousDay = day;
-    const olderEntry = props.entries.at(index + 1);
-    const renormalizedByEditorUpdate =
-      olderEntry !== undefined &&
-      entry.serializerVersion !== olderEntry.serializerVersion;
-    const isNewOutcome = props.outcome?.observationId === entry.observationId;
     return (
       <div key={entry.observationId}>
         {showDay ? (
@@ -968,7 +1014,7 @@ function VersionObservationList(props: {
         >
           <button
             type="button"
-            aria-label={`Select version ${entry.observationId}`}
+            aria-label={versionName}
             data-testid={`artifact-version-observation-${entry.observationId}`}
             onClick={() => props.onSelect(entry.observationId)}
             className="w-full px-3 py-2.5 text-left"
@@ -982,28 +1028,15 @@ function VersionObservationList(props: {
               </span>
             </span>
             <span className="mt-1.5 flex flex-wrap gap-1 empty:hidden">
-              {renormalizedByEditorUpdate ? (
-                <Badge variant="info">re-normalized by editor update</Badge>
-              ) : null}
-              {entry.degraded ? (
-                <Badge variant="destructive">Body only — images missing</Badge>
-              ) : null}
-              {isNewOutcome && props.outcome.status === "clean" ? (
-                <Badge variant="success">Restored</Badge>
-              ) : null}
-              {isNewOutcome && props.outcome.status === "renormalized" ? (
-                <Badge variant="info">
-                  re-normalized by a newer editor version — review
+              {badges.map((badge) => (
+                <Badge key={badge.text} variant={badge.variant}>
+                  {badge.text}
                 </Badge>
-              ) : null}
-              {isNewOutcome && props.outcome.status === "degraded" ? (
-                <Badge variant="destructive">
-                  Restored with missing image content
-                </Badge>
-              ) : null}
+              ))}
             </span>
           </button>
           <ObservationProvenanceDetail
+            chatAccessibleName={chatName}
             provenance={entry.provenance}
             onOpenChat={props.onOpenChat}
           />
@@ -1240,9 +1273,6 @@ function RestoreVersionDialog(props: {
         ) : null}
         {props.preflight === null || props.refreshing ? null : (
           <div className="space-y-3">
-            <p className="rounded-md bg-foreground/5 p-3 font-mono text-ui-xs break-all">
-              Current hash: {props.preflight.currentHash}
-            </p>
             {props.preflight.threadCount > 0 ? (
               <div className="flex gap-2 rounded-lg border p-3">
                 <InfoIcon className="mt-0.5 size-4 shrink-0 text-info-foreground" />

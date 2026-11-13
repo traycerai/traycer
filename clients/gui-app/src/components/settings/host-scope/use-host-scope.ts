@@ -1,5 +1,19 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import type { HostIdentityGetResponse } from "@traycer/protocol/host/identity/schemas";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  HostRpcError,
+  isTransientHostRpcFailure,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  TEAM_MEMBERSHIP_REQUIRED,
+  TEAM_MEMBERSHIP_REQUIRED_MESSAGE,
+  TEAM_MEMBERSHIP_UNAVAILABLE,
+  TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE,
+} from "@traycer-clients/shared/host-transport/local-open-auth";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { createLocalMaintenanceFallbackClient } from "@/lib/host/local-maintenance-fallback-client";
 import type {
   ActivateRefusalReason,
@@ -25,7 +39,10 @@ import {
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useHostsRunningConfiguration } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useSettingsHostEntry } from "@/components/settings/host-scope/use-settings-host-entry";
-import { environmentPickValue } from "@/lib/settings-environment-pages";
+import {
+  environmentPickValue,
+  type EnvironmentPick,
+} from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import {
   findHostOption,
@@ -100,6 +117,8 @@ export interface HostScope {
   readonly listsFailed: boolean;
   /** Re-request both host lists after a failure. */
   readonly retryLists: () => void;
+  /** Retry a failed status read while a Settings host entry stays pending. */
+  readonly retryEntryStatus: (() => void) | null;
   /** Reference "now" for relative timestamps; ticks once a minute. */
   readonly nowMs: number;
 }
@@ -133,11 +152,12 @@ export function useHostScope(): HostScope {
   );
   const selectHost = useSettingsHostScopeStore((s) => s.selectHost);
   const entry = useSettingsHostEntry();
+  const configurationPicked = pick.kind === "personal" || pick.kind === "team";
   const membership = useHostsRunningConfiguration(
-    pick.kind === "local" ? { kind: "personal" } : pick,
-    pick.kind !== "local",
+    configurationPicked ? pick : { kind: "personal" },
+    configurationPicked,
   );
-  const membershipState = pick.kind === "local" ? "ready" : membership.state;
+  const membershipState = settingsMembershipState(pick, membership.state);
   const ready = membershipState === "ready";
   const hosts = useMemo(() => {
     if (!ready || pendingHostId !== null) return [];
@@ -168,7 +188,7 @@ export function useHostScope(): HostScope {
     options.listsFailed || membershipState === "failed" || entry.failed;
   const scope = useHostScopeWithOptions(
     {
-      scopedHostId: selection?.hostId ?? hosts.at(0)?.hostId ?? null,
+      scopedHostId: (selection ?? hosts.at(0))?.hostId ?? null,
       setScopedHostId,
     },
     {
@@ -185,6 +205,7 @@ export function useHostScope(): HostScope {
   );
   return {
     ...scope,
+    retryEntryStatus: entry.retryStatus,
     activeHost: findHostOption(options.hosts, options.activeHostId),
     vanishedSelection:
       scope.vanishedHostId !== null && selection !== null
@@ -361,6 +382,7 @@ function useHostScopeWithOptions(
     isLoading: options.isLoading,
     listsFailed,
     retryLists: options.retryLists,
+    retryEntryStatus: null,
     nowMs,
   };
 }
@@ -406,6 +428,22 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
   readonly activatingHostId: string | null;
 } {
   const authority = useRunnerHost().selectionAuthority;
+  const hostClient = useHostClient();
+  const { mutateAsync: probeLocalHost } = useHostMutation<
+    HostRpcRegistry,
+    "host.identity.get",
+    unknown,
+    HostScopeOption
+  >({
+    client: (option) =>
+      option.entry === null ? null : hostClient.createRequester(option.entry),
+    method: "host.identity.get",
+    mapVariables: () => ({}),
+    options: {
+      mutationKey: hostMaintenanceMutationKeys.identityGet(),
+      retry: false,
+    },
+  });
   const activatingHostId = useSyncExternalStore(
     subscribePendingActivation,
     () => pendingActivations.get(authority) ?? null,
@@ -424,18 +462,89 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
       }
       pendingActivations.set(authority, hostId);
       notifyPendingActivation();
-      return requestActivate(authority, hostId, option).finally(() => {
+      const activation =
+        option?.connectable && option.entry?.kind === "local"
+          ? requestLocalHostActivation(
+              authority,
+              hostClient,
+              option,
+              probeLocalHost,
+            )
+          : requestActivate(authority, hostId, option);
+      return activation.finally(() => {
         pendingActivations.delete(authority);
         notifyPendingActivation();
       });
     },
-    [authority, hosts],
+    [authority, hostClient, hosts, probeLocalHost],
   );
   return {
     makeActive,
     isActivating: activatingHostId !== null,
     activatingHostId,
   };
+}
+
+/**
+ * An explicit local pick must ask the local door even when its old lease is
+ * dead. Persisting preference alone can keep a ready remote host serving, so
+ * the effective-host streams never try this computer and never explain its
+ * admission refusal. This one read uses the existing request authority and
+ * grant adapter; automatic selection and background work do not call it.
+ */
+async function requestLocalHostActivation(
+  authority: SelectionAuthorityClient,
+  client: HostClient<HostRpcRegistry>,
+  option: HostScopeOption,
+  probe: (option: HostScopeOption) => Promise<HostIdentityGetResponse>,
+): Promise<boolean> {
+  const context = client.getRequestContext();
+  if (context === null || option.entry === null) return false;
+  try {
+    await probe(option);
+  } catch (error: unknown) {
+    // A different account must not inherit this account's refusal or pick.
+    if (context.abortSignal.aborted || client.getRequestContext() !== context)
+      return false;
+    showLocalHostActivationFailure(error, option.name, () => {
+      if (
+        !context.abortSignal.aborted &&
+        client.getRequestContext() === context
+      )
+        useSignOutConfirmStore.getState().setOpen(true);
+    });
+    return false;
+  }
+  if (context.abortSignal.aborted || client.getRequestContext() !== context)
+    return false;
+  return requestActivate(authority, option.hostId, option);
+}
+
+function showLocalHostActivationFailure(
+  error: unknown,
+  hostName: string,
+  switchAccount: () => void,
+): void {
+  if (error instanceof HostRpcError) {
+    const code = error.fatalDetails?.code ?? error.code;
+    if (code === TEAM_MEMBERSHIP_REQUIRED) {
+      toast.error(TEAM_MEMBERSHIP_REQUIRED_MESSAGE, {
+        action: {
+          label: "Switch account",
+          onClick: switchAccount,
+        },
+      });
+      return;
+    }
+    if (
+      code === TEAM_MEMBERSHIP_UNAVAILABLE ||
+      isTransientHostRpcFailure(error)
+    ) {
+      toast.error(TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE);
+      return;
+    }
+  }
+  toast.error(activateRefusalMessage("unrecognized", hostName));
 }
 
 /**
@@ -529,4 +638,14 @@ function activateRefusalMessage(
   label: string,
 ): string {
   return ACTIVATE_REFUSAL_COPY[reason](label);
+}
+
+/** A Local pick needs no membership; an unresolved pick cannot claim its result. */
+function settingsMembershipState(
+  pick: EnvironmentPick,
+  state: "ready" | "loading" | "failed",
+): "ready" | "loading" | "failed" {
+  if (pick.kind === "local") return "ready";
+  if (pick.kind === "unresolved") return "loading";
+  return state;
 }

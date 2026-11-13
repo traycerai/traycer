@@ -16,7 +16,6 @@ import {
   MenubarItem,
 } from "@/components/ui/menubar";
 import { DesktopMenuEntries } from "@/components/layout/header/desktop-menu-entries";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 
 /** One active session: idle hover highlights, engaged hover switches menus. */
 export function DesktopMenuButtons(props: {
@@ -30,7 +29,6 @@ export function DesktopMenuButtons(props: {
   const restoreOnClose = useRef(true);
   const { snapshot, execute } = useDesktopMenu();
   const { refetch } = snapshot;
-  useTitleBarDragSuppression("application-menu", openMenu !== "");
 
   const changeMenu = useCallback(
     (next: string) => {

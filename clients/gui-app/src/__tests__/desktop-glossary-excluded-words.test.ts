@@ -85,6 +85,30 @@ const ALLOWED: readonly Allowed[] = [
     closedBy:
       "the environments redesign names the Settings sidebar group Environment",
   },
+  {
+    file: "gui-app/src/components/settings/panels/host-overview-settings-card.tsx",
+    text: "Environment",
+    closedBy:
+      "the owner ruled on board S03 (2026-11-09) that the host's settings row is named Environment, to match the Settings rail",
+  },
+  {
+    file: "gui-app/src/components/settings/panels/host-overview.definitions.ts",
+    text: "Environment",
+    closedBy:
+      "the owner ruled on board S03 (2026-11-09) that the host's settings row is named Environment, to match the Settings rail",
+  },
+  {
+    file: "gui-app/src/components/settings/panels/host-overview.definitions.ts",
+    text: "Which environment this host runs.",
+    closedBy:
+      "the owner ruled on board S03 (2026-11-09) that the host's settings row is named Environment, to match the Settings rail",
+  },
+  {
+    file: "gui-app/src/components/settings/panels/provider-profile-scoped-section.tsx",
+    text: "Used from the environment. Nothing is kept on this sandbox.",
+    closedBy:
+      "the owner approved the sandbox presence row on canvas Profile row · presence states (2026-11-10, task732222ed)",
+  },
 ];
 
 interface Hit {

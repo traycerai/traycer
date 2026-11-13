@@ -18,13 +18,13 @@ import {
   type ConfigurationWriteIssue,
 } from "./configuration-write-issue";
 import { ConfigurationReadFailed } from "./team-read-failed";
-import { MCP_PAGE_DESCRIPTION } from "./mcp-skills-copy";
+import { McpIntroduction } from "./configuration-introduction";
 
 export function TeamMcpServers(): ReactNode {
   return (
     <SettingsPanelShell
       title="MCP servers"
-      description={MCP_PAGE_DESCRIPTION}
+      description={<McpIntroduction />}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <TeamMcpItems providerId={null} />

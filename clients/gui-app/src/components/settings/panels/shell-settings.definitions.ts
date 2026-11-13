@@ -9,7 +9,7 @@ export const SHELL = defineSettingsSection("shell", {
     availableWhen: alwaysAvailable,
     label: "Variables & shells",
     description:
-      "Plain values every computer and sandbox running these settings gets, and the shell agents run in.",
+      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
     keywords: [
       "terminal",
       "bash",

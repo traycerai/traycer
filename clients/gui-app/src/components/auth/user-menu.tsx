@@ -30,7 +30,6 @@ import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import {
@@ -88,7 +87,6 @@ export function UserMenu(props: UserMenuProps) {
   const openLink = useOpenLink();
   const [open, setOpen] = useState<boolean>(false);
   const settingsChord = useBindingForAction("app.settings.open");
-  useTitleBarDragSuppression("user-menu", open);
   const manageSubscriptionUrl = usePlatformBillingUrl();
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -243,8 +241,8 @@ function isUserMenuHostPickable(
 }
 
 /**
- * One host in the account menu. Pickable rows explain the app-wide choice
- * on hover; cut-off names remain readable even on an unavailable host.
+ * One host in the account menu. A cut-off name's tooltip is that name.
+ * The every-window effect is stated once under the Host heading.
  */
 function UserMenuHostRow(props: {
   readonly host: HostScopeOption;
@@ -258,10 +256,7 @@ function UserMenuHostRow(props: {
     host.name,
   );
   const selectable = isUserMenuHostPickable(host, activatingHostId);
-  let tooltipLabel = isTruncated ? host.name : null;
-  if (selectable && !active) {
-    tooltipLabel = `${host.name} · Use for every window, including future windows.`;
-  }
+  const tooltipLabel = isTruncated ? host.name : null;
   return (
     <TooltipWrapper
       label={tooltipLabel}

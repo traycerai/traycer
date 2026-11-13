@@ -1,4 +1,5 @@
 export const providersMutationKeys = {
+  signOutProfile: () => ["providers.signOutProfile"] as const,
   setSelection: () => ["providers.setSelection"] as const,
   addCustomPath: () => ["providers.addCustomPath"] as const,
   removeCustomPath: () => ["providers.removeCustomPath"] as const,
@@ -24,6 +25,7 @@ export const providersMutationKeys = {
   setAutoJudge: () => ["providers.setAutoJudge"] as const,
   setNativeSubagents: () => ["providers.setNativeSubagents"] as const,
   setNativeMemory: () => ["providers.setNativeMemory"] as const,
+  setModelProviderHidden: () => ["providers.setModelProviderHidden"] as const,
   resetSettingsFile: () => ["providers.settingsFile.reset"] as const,
   resetProviderSettings: () =>
     ["providers.settingsFile.resetProvider"] as const,

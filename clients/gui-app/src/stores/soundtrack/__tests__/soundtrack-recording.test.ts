@@ -318,6 +318,7 @@ function harness(
     openPorts: () => ports,
     random: mulberry32(1),
     recordingChannel: () => channel,
+    openMediaSession: () => null,
   });
   store.getState().enable();
   store.getState().setSignals({
@@ -910,7 +911,6 @@ describe("session recorder: a late first frame, raced against the stop", () => {
 
     const stopGate = Promise.withResolvers<void>();
     h.capture.stopGate = stopGate.promise;
-    h.capture.stopSummary = { frames: null, droppedFrames: null };
     // Read synchronously, in the same tick `stopRecording` reads it for
     // `stoppedAtClock`: `startHeld`'s own `vi.waitFor` already advanced the
     // fake clock by its polling interval before this test's explicit
@@ -981,37 +981,39 @@ describe("session recorder: a capture that fails as the page goes away", () => {
     // rejection this test induces changing anything by itself.
     const warn = vi.spyOn(appLogger, "warn").mockReturnValue(undefined);
     const rejections = captureUnhandledRejections();
-    const h = harness(100, "lossless", MANIFEST);
-    await h.record();
-    h.capture.chunk(400);
-    await advance(0.1);
-    h.capture.stopFailure = new Error(
-      "the capture could not account for its audio",
-    );
+    try {
+      const h = harness(100, "lossless", MANIFEST);
+      await h.record();
+      h.capture.chunk(400);
+      await advance(0.1);
+      h.capture.stopFailure = new Error(
+        "the capture could not account for its audio",
+      );
 
-    window.dispatchEvent(new Event("pagehide"));
-    await advance(1);
-    await advance(0);
-    await advance(0);
-
-    expect(warn).toHaveBeenCalledWith(
-      "[soundtrack] a capture failed as the page went away",
-      expect.anything(),
-    );
-    expect(warn).not.toHaveBeenCalledWith(
-      "[soundtrack] a recording's capture did not finish",
-      expect.anything(),
-    );
-    // Not mutated to "failed" by this test's own rejection: the unload path
-    // never reads `capture.stop()`'s outcome at all, so nothing here could
-    // have mutated `failure` from it in the first place.
-    expect(h.store.getState().recording).toMatchObject({
-      kind: "saved",
-      problem: null,
-    });
-    expect(rejections.seen).toEqual([]);
-    rejections.stop();
-    warn.mockRestore();
+      window.dispatchEvent(new Event("pagehide"));
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          "[soundtrack] a capture failed as the page went away",
+          expect.anything(),
+        ),
+      );
+      expect(warn).not.toHaveBeenCalledWith(
+        "[soundtrack] a recording's capture did not finish",
+        expect.anything(),
+      );
+      // Not mutated to "failed" by this test's own rejection: the unload path
+      // never reads `capture.stop()`'s outcome at all, so nothing here could
+      // have mutated `failure` from it in the first place.
+      await vi.waitFor(() =>
+        expect(h.store.getState().recording).toMatchObject({
+          kind: "saved",
+          problem: null,
+        }),
+      );
+      expect(rejections.seen).toEqual([]);
+    } finally {
+      rejections.stop();
+    }
   });
 });
 

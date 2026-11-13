@@ -65,12 +65,36 @@ export function isJsonValue(value: unknown): value is JsonValue {
       // Rejects NaN / ±Infinity, which have no JSON representation.
       return Number.isFinite(value);
     case "object":
-      return Array.isArray(value)
-        ? value.every((entry) => isJsonValue(entry))
-        : isJsonObject(value);
+      return Array.isArray(value) ? isJsonArray(value) : isJsonObject(value);
     default:
       return false;
   }
+}
+
+/**
+ * Plain, dense arrays only, by the same rule as {@link isJsonObject}. Its own
+ * properties are exactly the indices `0..length-1`, each an enumerable data
+ * property holding JSON, plus `length`: `every()` skips a hole, and an extra
+ * own property is invisible to an element walk, yet `JSON.stringify` writes
+ * a hole as `null` and drops the property, so either would let a value
+ * through that does not round-trip as itself.
+ */
+function isJsonArray(value: unknown[]): boolean {
+  if (Object.getPrototypeOf(value) !== Array.prototype) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
+  if (Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined) return false;
+    if (!descriptor.enumerable) return false;
+    if (descriptor.get !== undefined || descriptor.set !== undefined) {
+      return false;
+    }
+    if (!isJsonValue(descriptor.value)) return false;
+  }
+  return true;
 }
 
 export function isJsonObject(value: unknown): value is JsonObject {

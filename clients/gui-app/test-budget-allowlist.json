@@ -25,5 +25,7 @@
   "src/components/home/host-workspace-selector/__tests__/in-epic-surface-primary-readonly.test.tsx": "44 cases mounting the in-task surface with its host and workspace selector; 6.1 to 11.1 s across five runs",
   "src/components/epics/__tests__/history-scope-integration.test.tsx": "76 cases on the full task history with its scope filters; 7.2 to 10.8 s across five runs",
   "src/components/layout/tabs/__tests__/side-tab-strip.test.tsx": "138 cases on the full side tab strip; 5.5 to 10.2 s across five runs",
-  "src/components/home/terminal-panel/__tests__/landing-terminal-panel.test.tsx": "154 cases on the full Start Page terminal panel; 6.0 to 11.0 s across six runs"
+  "src/components/home/terminal-panel/__tests__/landing-terminal-panel.test.tsx": "154 cases on the full Start Page terminal panel; 6.0 to 11.0 s across six runs",
+  "src/components/settings/panels/__tests__/sandboxes-settings-panel.test.tsx": "92 cases on the full Sandboxes settings panel, 3.4 s alone; 10.1 to 11.3 s on a loaded shard when over, under 10 s on two other runs",
+  "src/components/layout/header/__tests__/rate-limit-popover.test.tsx": "135 cases on the full rate-limit popover with its rail and host picker; 10.4 and 10.7 s on run 43248573260"
 }

@@ -11,6 +11,10 @@
  * indicators, the tab navigation and the browser's IntersectionObserver are
  * replaced.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -21,7 +25,15 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -31,10 +43,14 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type {
+  BotThreadAnchors,
   BotThreadSummary,
   BotTurnRef,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  BotQuestionItem,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type {
   BotNotificationLevel,
   BotReadCursorReadResponse,
@@ -42,14 +58,22 @@ import type {
   BotThreadFollow,
   BotThreadFollowSetRequest,
 } from "@traycer/protocol/host/bot/schemas";
-import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import {
+  botQuestionsText,
+  conversationRequestMessageId,
+} from "@traycer/protocol/persistence/epic/messages";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  negotiateBotSend,
   signInViewer,
   resetBotFailedRequestSupport,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
@@ -67,6 +91,8 @@ import {
 /** What the host answers for one bot. */
 type BotScript = {
   threads: BotThreadSummary[];
+  /** The rows the bot's bound host says it opens a thread under; `null` for a host that says none. */
+  threadAnchors: BotThreadAnchors | null;
   follows: Record<string, BotThreadFollow>;
   cursors: BotReadCursorReadResponse;
   levels: Record<string, BotNotificationLevel>;
@@ -102,6 +128,15 @@ const mocks = vi.hoisted(() => ({
   refetchBots: vi.fn<() => Promise<unknown>>(),
   back: vi.fn<() => void>(),
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -291,6 +326,7 @@ function script(
 ): BotScript {
   return {
     threads,
+    threadAnchors: null,
     follows,
     cursors: { cursors: {}, latest: {} },
     levels: {},
@@ -325,11 +361,11 @@ function mount(): void {
       handlers: {
         "bot.thread.list": (params) => {
           mocks.reads.push({ method: "bot.thread.list", params });
-          const { threads } = mocks.hosted[params.botId];
+          const { threads, threadAnchors } = mocks.hosted[params.botId];
           return {
             threads,
             trunkCostUsd: null,
-            threadAnchors: null,
+            threadAnchors,
             nextCursor: null,
             total: threads.length,
           };
@@ -495,6 +531,93 @@ function withReplies(
       ? { ...summary, replyCount: texts.length, lastReplyAt }
       : summary,
   );
+}
+
+/** A reply arrives: the host's list counts `count`, and the thread's session holds its row. */
+async function deliverReply(threadId: string, count: number): Promise<void> {
+  mocks.hosted[TEAM].threads = mocks.hosted[TEAM].threads.map((summary) =>
+    summary.threadId === threadId
+      ? { ...summary, replyCount: count, lastReplyAt: 4_000 }
+      : summary,
+  );
+  const session = mocks.threadSessions[threadId].store;
+  act(() => {
+    session.setState({
+      messages: [
+        ...session.getState().messages,
+        postRow(`${threadId}-reply-${String(count)}`, `reply ${String(count)}`),
+      ],
+    });
+  });
+  await act(() => queryClient.invalidateQueries());
+}
+
+/** The count a card gives assistive technology, where it draws no divider. */
+function screenReaderCount(threadId: string): HTMLElement | null {
+  return within(card(threadId)).queryByTestId("bot-thread-reply-count-sr");
+}
+
+/**
+ * The thread's session as a windowed transcript of `total` replies, of which
+ * the first `hydrated` have bodies and the rest are placeholders.
+ */
+function windowedReplies(
+  threadId: string,
+  total: number,
+  hydrated: number,
+): ChatSessionStoreHandle {
+  const handle = chatSessionWithThreadRows([]);
+  const derived: NonNullable<ChatSessionState["transcriptDerived"]> = {
+    latestAssistantUsage: null,
+    pinnedTodo: null,
+    pinnedTaskTodoItems: [],
+    latestForkableAssistantMessageId: null,
+    restorableSetupInterruption: null,
+    interviewAnswerability: [],
+    latestAssistantAuthFailureTurnKey: null,
+    setupCardWindows: [],
+  };
+  handle.store.setState({ transcriptDerived: derived });
+  mocks.threadSessions[threadId] = handle;
+  hydrateReplies(threadId, total, hydrated);
+  return handle;
+}
+
+/** Seats the first `hydrated` of the thread's `total` replies as hydrated rows. */
+function hydrateReplies(
+  threadId: string,
+  total: number,
+  hydrated: number,
+): void {
+  const session = mocks.threadSessions[threadId].store;
+  const ids = Array.from(
+    { length: hydrated },
+    (_, index) => `${threadId}-reply-${String(index + 1)}`,
+  );
+  act(() => {
+    session.setState({
+      messages: ids.map((id, index) =>
+        postRow(id, `reply ${String(index + 1)}`),
+      ),
+      transcriptWindow: {
+        ...session.getState().transcriptWindow,
+        rowCount: total,
+        spans:
+          hydrated === 0
+            ? []
+            : [
+                {
+                  fromOrdinal: 0,
+                  rowIds: ids,
+                  rowContext: {},
+                  messageIds: ids,
+                  eventIds: [],
+                  contextBytes: 0,
+                },
+              ],
+      },
+    });
+  });
 }
 
 function replyTexts(count: number): string[] {
@@ -726,9 +849,6 @@ describe("<BotThreadsView />", () => {
     expect(full.getByTestId("bot-thread-anchor").textContent).toContain(
       "Nightly train: what failed?",
     );
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "2 replies",
-    );
     expect(await full.findByText("reply 1")).toBeTruthy();
     expect(full.getByText("reply 2")).toBeTruthy();
     expect(full.getByTestId("bot-chat-transcript-flow")).toBeTruthy();
@@ -830,6 +950,204 @@ describe("<BotThreadsView />", () => {
     expect(drawnReplies("team-new")).toEqual(replyTexts(5));
     expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
     expect(full.getByTestId("bot-thread-anchor")).toBeTruthy();
+  });
+
+  it("counts the replies of a card that draws every one for assistive technology only, with no divider or link", async () => {
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByText("reply 2");
+    const count = await full.findByTestId("bot-thread-reply-count-sr");
+    expect(count.textContent).toBe("2 replies");
+    expect(count.classList.contains("sr-only")).toBe(true);
+    expect(count.tagName).not.toBe("BUTTON");
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
+  });
+
+  it("counts a single reply as 1 reply for assistive technology, with no divider", async () => {
+    withReplies(TEAM, "team-new", replyTexts(1), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByText("reply 1");
+    expect(
+      (await full.findByTestId("bot-thread-reply-count-sr")).textContent,
+    ).toBe("1 reply");
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+  });
+
+  it("draws neither a divider nor a count for a card with no replies", async () => {
+    withReplies(TEAM, "team-new", [], 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByTestId("bot-thread-anchor");
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count-sr")).toBeNull();
+  });
+
+  it("keeps the divider and its link on a folded card, and swaps it for the assistive count once the card is unfolded", async () => {
+    const user = userEvent.setup();
+    withReplies(TEAM, "team-new", replyTexts(8), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+
+    const unfold = await full.findByTestId("bot-chat-transcript-unfold");
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "8 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+
+    await user.click(unfold);
+
+    await waitFor(() =>
+      expect(full.queryByTestId("bot-thread-reply-count")).toBeNull(),
+    );
+    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
+    expect(screenReaderCount("team-new")?.textContent).toBe("8 replies");
+  });
+
+  it("updates the assistive count when a reply arrives and the card still draws every one", async () => {
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-thread-reply-count-sr");
+
+    await deliverReply("team-new", 3);
+
+    await waitFor(() =>
+      expect(screenReaderCount("team-new")?.textContent).toBe("3 replies"),
+    );
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+  });
+
+  it("keeps the divider hidden when a reply arrives in an unfolded card past the fold limit", async () => {
+    useBotThreadFoldStore.setState({ unfolded: { "team-new": true } });
+    withReplies(TEAM, "team-new", replyTexts(5), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-thread-reply-count-sr");
+
+    await deliverReply("team-new", 6);
+
+    await waitFor(() =>
+      expect(screenReaderCount("team-new")?.textContent).toBe("6 replies"),
+    );
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+  });
+
+  it("draws the divider with its link beside the unfold line when a reply pushes a card over the fold limit", async () => {
+    withReplies(TEAM, "team-new", replyTexts(5), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-thread-reply-count-sr");
+
+    await deliverReply("team-new", 6);
+
+    await full.findByTestId("bot-chat-transcript-unfold");
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "6 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("updates the divider's count when a reply arrives while some are hidden", async () => {
+    withReplies(TEAM, "team-new", replyTexts(8), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-chat-transcript-unfold");
+
+    await deliverReply("team-new", 9);
+
+    await waitFor(() =>
+      expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+        "9 replies",
+      ),
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("keeps the divider and its link while every reply of a windowed card is still a placeholder", async () => {
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    windowedReplies("team-new", 2, 0);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByTestId("bot-chat-transcript-row-loading");
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "2 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("keeps the divider and its link while a short windowed card still has a placeholder among its hydrated replies", async () => {
+    withReplies(TEAM, "team-new", replyTexts(3), 3_000);
+    windowedReplies("team-new", 3, 2);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByText("reply 2");
+    expect(full.getByTestId("bot-chat-transcript-row-loading")).toBeTruthy();
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "3 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("keeps the divider and its link on an unfolded long windowed card while a reply is still a placeholder", async () => {
+    useBotThreadFoldStore.setState({ unfolded: { "team-new": true } });
+    withReplies(TEAM, "team-new", replyTexts(8), 3_000);
+    windowedReplies("team-new", 8, 7);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByText("reply 7");
+    expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+    expect(full.getByTestId("bot-chat-transcript-row-loading")).toBeTruthy();
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "8 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("swaps the divider for the assistive count once the last placeholder reply is hydrated", async () => {
+    withReplies(TEAM, "team-new", replyTexts(3), 3_000);
+    windowedReplies("team-new", 3, 2);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-chat-transcript-row-loading");
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "3 replies",
+    );
+
+    hydrateReplies("team-new", 3, 3);
+
+    await waitFor(() =>
+      expect(screenReaderCount("team-new")?.textContent).toBe("3 replies"),
+    );
+    expect(full.queryByTestId("bot-chat-transcript-row-loading")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
   });
 
   it("folds a longer thread to the origin, a line counting the hidden replies and the last two replies, and the line shows the rest in place and keeps them shown", async () => {
@@ -1146,6 +1464,220 @@ describe("<BotThreadsView />", () => {
     expect(mocks.writes).toEqual([
       { botId: TRACY, threadId: "tracy-old", state: "unfollowed" },
     ]);
+  });
+
+  describe("a reply's badge in a card", () => {
+    const ANCHOR_ID = conversationRequestMessageId("req-team-new");
+
+    /**
+     * `count` rows alternating member, bot, member... as `m1`, `b2`, `m3`...
+     * (a reply row is never next to another, which would merge them), with
+     * the bot rows' `repliesTo` by row id.
+     */
+    function alternatingRows(
+      count: number,
+      repliesTo: Readonly<Partial<Record<string, string>>>,
+    ): Message[] {
+      return Array.from({ length: count }, (_, index) => {
+        const n = index + 1;
+        const text = `reply ${String(n)}`;
+        const timestamp = 2_000 + n;
+        if (n % 2 === 1) {
+          return { ...postRow(`m${String(n)}`, text), timestamp };
+        }
+        const id = `b${String(n)}`;
+        const to = repliesTo[id];
+        return {
+          ...botReply({ messageId: id, text, timestamp }),
+          ...(to === undefined ? {} : { repliesTo: to }),
+        };
+      });
+    }
+
+    /** The row that draws `text` as its own message, not as a badge's line. */
+    function rowOf(text: string): Element | null | undefined {
+      return within(card("team-new"))
+        .getAllByText(text)
+        .find(
+          (node) => node.closest('[data-testid="bot-reply-badge"]') === null,
+        )
+        ?.closest("[data-message-id]");
+    }
+
+    async function foldedCard(rows: Message[]): Promise<HTMLElement> {
+      mocks.posts[TEAM] = { [ANCHOR_ID]: "Ship the release?" };
+      mocks.replyRows["team-new"] = rows;
+      mount();
+      await waitFor(() => expect(listed()).toContain("team-new"));
+      return revealFull("team-new");
+    }
+
+    it("badges the first reply drawn when the message it answers is folded away behind the fold line", async () => {
+      // m7 is folded away; b8 and m9 are drawn.
+      const full = within(await foldedCard(alternatingRows(9, { b8: "m7" })));
+
+      expect(
+        (await full.findByTestId("bot-chat-transcript-unfold")).textContent,
+      ).toBe("Show 7 more replies");
+      expect(
+        full.getByRole("button", { name: /^Replying to .*: reply 7$/ }),
+      ).toBeTruthy();
+    });
+
+    it("badges the first reply drawn when it answers the thread's opening post, which the fold hides from above it", async () => {
+      const full = within(
+        await foldedCard(alternatingRows(9, { b8: ANCHOR_ID })),
+      );
+
+      await full.findByTestId("bot-chat-transcript-unfold");
+      expect(
+        full.getByRole("button", {
+          name: /^Replying to .*: Ship the release\?$/,
+        }),
+      ).toBeTruthy();
+    });
+
+    it("draws no badge on a drawn reply directly under the message it answers", async () => {
+      const full = within(await foldedCard(alternatingRows(8, { b8: "m7" })));
+
+      await full.findByTestId("bot-chat-transcript-unfold");
+      expect(full.getByText("reply 8")).toBeTruthy();
+      expect(full.queryByTestId("bot-reply-badge")).toBeNull();
+    });
+
+    it("unfolds a card to show the message a badge names when it is folded away, then scrolls to it and highlights it", async () => {
+      const user = userEvent.setup();
+      const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+      scrolled.mockImplementation(() => undefined);
+      onTestFinished(() => scrolled.mockRestore());
+      const full = within(await foldedCard(alternatingRows(9, { b8: "m3" })));
+
+      await user.click(
+        await full.findByRole("button", { name: /^Replying to .*: reply 3$/ }),
+      );
+
+      expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+      const answered = rowOf("reply 3");
+      await waitFor(() => expect(scrolled.mock.contexts).toEqual([answered]));
+      expect(scrolled).toHaveBeenCalledWith({ block: "nearest" });
+      for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
+        expect(answered?.classList.contains(token)).toBe(true);
+      }
+    });
+
+    it("scrolls to and highlights a drawn message a badge names, in a card with no fold", async () => {
+      const user = userEvent.setup();
+      const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+      scrolled.mockImplementation(() => undefined);
+      onTestFinished(() => scrolled.mockRestore());
+      const full = within(await foldedCard(alternatingRows(5, { b4: "m1" })));
+      await full.findByText("reply 5");
+      expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+
+      await user.click(
+        full.getByRole("button", { name: /^Replying to .*: reply 1$/ }),
+      );
+
+      const answered = rowOf("reply 1");
+      await waitFor(() => expect(scrolled.mock.contexts).toEqual([answered]));
+      for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
+        expect(answered?.classList.contains(token)).toBe(true);
+      }
+    });
+  });
+});
+
+describe("<BotThreadsView /> a card whose bot asks several questions at once", () => {
+  const BOUND_ELSEWHERE = "host-elsewhere";
+  const BOUND_EPOCH = 3;
+  const DEPLOY: BotQuestionItem = {
+    text: "Deploy to staging now or after the train?",
+    options: ["Now", "After the train"],
+    allowFreeText: false,
+    settlement: null,
+  };
+  const HOLD: BotQuestionItem = {
+    text: "Anything to hold back from the train?",
+    options: [],
+    allowFreeText: true,
+    settlement: null,
+  };
+
+  /** The bot's reply in the thread: a card of both questions, its text just the questions. */
+  function askedBoth(): Message {
+    const questions = [DEPLOY, HOLD];
+    return {
+      ...botReply({
+        messageId: "team-new-question",
+        text: botQuestionsText(questions),
+        timestamp: 3_000,
+      }),
+      question: { requestId: "req-question", questions },
+    };
+  }
+
+  /**
+   * The Team bot runs on a host other than the tab's, which lists `kinds` in
+   * its thread list, and its thread holds the card; the tab's host
+   * negotiated `bot.conversation.send` at 1.5. Mounts the view.
+   */
+  function mountCardOfBotBoundElsewhere(kinds: readonly string[]): void {
+    negotiateBotSend("host-1", { major: 1, minor: 5 });
+    mocks.bots = [
+      bot(TRACY, "Tracy"),
+      {
+        ...bot(TEAM, "Team Tracy"),
+        boundHostId: BOUND_ELSEWHERE,
+        hostEpoch: BOUND_EPOCH,
+      },
+    ];
+    mocks.hosted[TEAM] = {
+      ...script([thread(TEAM, "team-new", 3_000)], {
+        "team-new": FOLLOWING,
+      }),
+      threadAnchors: {
+        hostId: BOUND_ELSEWHERE,
+        epoch: BOUND_EPOCH,
+        kinds: [...kinds],
+      },
+    };
+    mocks.hosted[TRACY] = script([], {});
+    mocks.replyRows["team-new"] = [askedBoth()];
+    mount();
+  }
+
+  it("draws one Submit and the tally under the card, none under a question, when the bot's host lists answers and this host takes them", async () => {
+    mountCardOfBotBoundElsewhere(["answer", "answers"]);
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+    const questionCard = within(await full.findByTestId("question-card"));
+
+    expect(
+      (await questionCard.findByTestId("question-card-tally")).textContent,
+    ).toBe("0 of 2 answered. Answer or skip each one to submit.");
+    expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(1);
+    for (const item of questionCard.getAllByTestId("question-card-item")) {
+      expect(within(item).queryByTestId("question-card-submit")).toBeNull();
+    }
+  });
+
+  it("draws a Submit under each question, and no tally, when the bot's host does not list answers", async () => {
+    mountCardOfBotBoundElsewhere(["answer"]);
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+    const questionCard = within(await full.findByTestId("question-card"));
+
+    expect(questionCard.queryByTestId("question-card-tally")).toBeNull();
+    const items = questionCard.getAllByTestId("question-card-item");
+    expect(items).toHaveLength(2);
+    for (const item of items) {
+      expect(within(item).getAllByTestId("question-card-submit")).toHaveLength(
+        1,
+      );
+    }
+    expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(2);
   });
 });
 

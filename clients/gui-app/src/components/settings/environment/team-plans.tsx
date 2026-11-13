@@ -19,7 +19,6 @@ import {
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { PlansCard, type ConfigurationPlan } from "./plans-card";
-import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
@@ -51,6 +50,7 @@ export function TeamPlans(props: {
       return [
         {
           id: plan.profileId,
+          bindingVersion: plan.bindingVersion ?? null,
           linkedBy: plan.linkedBy?.name ?? null,
           status: plan.status,
           providerLabel: providerDisplayName(props.providerId),
@@ -72,13 +72,6 @@ export function TeamPlans(props: {
   return (
     <>
       <PlansCard
-        renderDetails={(plan) => (
-          <ProviderRowDetails
-            kind="plan"
-            itemKey={props.providerId}
-            title={`${plan.providerLabel} plan`}
-          />
-        )}
         teamName={name}
         plans={plans}
         canAdminister={canAdminister}
@@ -177,7 +170,11 @@ function TeamPlanUnlink(props: {
         onConfirm={() => {
           if (source.kind !== "pool") return;
           unlink.mutate(
-            { environmentId: source.environmentId, profileId: props.plan.id },
+            {
+              environmentId: source.environmentId,
+              profileId: props.plan.id,
+              expectedBindingVersion: props.plan.bindingVersion ?? null,
+            },
             {
               onSuccess: (result) => {
                 if (result.outcome !== "forbidden") props.onClose();

@@ -65,6 +65,9 @@ const FROZEN_LEVEL_KEYS: Readonly<Record<string, readonly string[]>> = {
     "agentMode",
     "profileId",
     "ultracode",
+    // Live 1.14 (unreleased; cli-v1.5.3 ships 1.12) models the optional
+    // portable account binding; older readers keep it in the residual bag.
+    "profileBinding",
   ],
   hostPrivate: ["revision", "data"],
 };

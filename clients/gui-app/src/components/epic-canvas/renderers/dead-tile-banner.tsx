@@ -490,7 +490,7 @@ export interface ChatDeadTileBannerProps {
   readonly cloneTargetLabel: string | null;
   /**
    * Whether the source chat's owner is one of the viewer's team environments:
-   * a team sandbox's chat. Outranks `ownedByViewer` on the same reasons: the
+   * a team host's chat. Outranks `ownedByViewer` on the same reasons: the
    * foreign-owner sentence would call a team chat another collaborator's, and
    * the own-chat ones name a machine. Those reasons swap to the environment
    * sentence instead.
@@ -633,7 +633,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
  * a live response), so nothing downstream may describe them as a connectivity
  * failure - that would invert the evidence of a host that just spoke.
  *
- * Shared by the foreign-owner sentence and its report metadata deliberately:
+ * Shared by the owner-specific sentences and their report metadata deliberately:
  * they were split before, and the report went on claiming a disconnected host
  * under a sentence that said the opposite.
  * One predicate means the two cannot disagree again.
@@ -675,18 +675,22 @@ function foreignOwnerMessage(input: {
 }
 
 /**
- * A team environment's chat: what is out is its sandbox, whichever reason
- * brought the banner up, and whether this is the last published copy. Nothing
- * else: the clone clause's "your own agent" may be false when the active host
- * is itself a team's.
+ * Team ownership does not identify the host as a computer or a sandbox.
+ * Keep the unavailability sentence kind-neutral and say whether this is the
+ * last published copy. The clone clause's "your own agent" may be false when
+ * the active host is itself a team's.
  */
 function environmentOwnerMessage(input: {
+  readonly reason: ChatDeadTileBannerReason;
   readonly showsPublishedCopy: boolean;
 }): string {
+  const fact = hostAnsweredForReason(input.reason)
+    ? "This agent's history isn't available here."
+    : "This chat's host isn't available.";
   const copyClause = input.showsPublishedCopy
     ? " Showing the last published copy."
     : "";
-  return `This chat's sandbox isn't available.${copyClause}`;
+  return `${fact}${copyClause}`;
 }
 
 /** The published-copy and clone clauses the collaborator sentence ends with. */
@@ -702,8 +706,8 @@ function copyClauses(input: {
 }
 
 const ENVIRONMENT_OWNER_REPORT = {
-  reportTitle: "Chat sandbox isn't available",
-  reportMessage: "The chat's team sandbox isn't available.",
+  reportTitle: "Chat host isn't available",
+  reportMessage: "The chat's host isn't available.",
 };
 
 const FOREIGN_OWNER_UNREACHABLE_REPORT = {
@@ -776,7 +780,9 @@ function ownerSwappedCopy(props: ChatDeadTileBannerProps): {
   if (props.environmentOwned) {
     return {
       message: environmentOwnerMessage(props),
-      report: ENVIRONMENT_OWNER_REPORT,
+      report: hostAnsweredForReason(props.reason)
+        ? CHAT_DEAD_TILE_BANNER_COPY[props.reason]
+        : ENVIRONMENT_OWNER_REPORT,
     };
   }
   if (!props.ownedByViewer) {

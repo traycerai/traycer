@@ -26,6 +26,9 @@ function pair(token: string): StoredCredentials {
   };
 }
 
+const DISK_FULL_MESSAGE =
+  "Disk is full: could not save your sign-in. Free up some space and run the command again.\n";
+
 function storeReturning(
   rotate: () => Promise<MutationResult>,
 ): CredentialsMutationStore {
@@ -41,6 +44,7 @@ function revalidatorFor(
     outcome,
     credentials,
     rejection: null,
+    diskPressure: outcome === "applied" ? "clear" : null,
   }));
   const reval = createStoreBackedRevalidator({ store, lease, signal: null });
   return { revalidate: () => reval.revalidateCurrentContext(), lease };
@@ -48,9 +52,51 @@ function revalidatorFor(
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("createStoreBackedRevalidator", () => {
+  it("prints the disk-full instruction once when rotation stops before spending", async () => {
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    const lease = new MutableBearerLease("old-token", "u1");
+    const store = storeReturning(async () => ({
+      outcome: "disk-full",
+      credentials: null,
+      rejection: null,
+      diskPressure: "low",
+    }));
+    const reval = createStoreBackedRevalidator({ store, lease, signal: null });
+
+    expect(await reval.revalidateCurrentContext()).toBe("network-error");
+    expect(lease.getBearerToken()).toBe("old-token");
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(DISK_FULL_MESSAGE);
+  });
+
+  it("prints once after revalidator continuation retries end with commit-failed+low", async () => {
+    vi.useFakeTimers();
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    const lease = new MutableBearerLease("old-token", "u1");
+    const store = storeReturning(async () => ({
+      outcome: "commit-failed",
+      credentials: pair("minted"),
+      rejection: null,
+      diskPressure: "low",
+    }));
+    const reval = createStoreBackedRevalidator({ store, lease, signal: null });
+    const pending = reval.revalidateCurrentContext();
+    await vi.runAllTimersAsync();
+
+    expect(await pending).toBe("rotated");
+    expect(lease.getBearerToken()).toBe("minted");
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(DISK_FULL_MESSAGE);
+  });
+
   it("reports rotated and adopts the refreshed token on applied", async () => {
     const { revalidate, lease } = revalidatorFor("applied", pair("fresh"));
     expect(await revalidate()).toBe("rotated");
@@ -69,6 +115,7 @@ describe("createStoreBackedRevalidator", () => {
       outcome: "applied",
       credentials: pair("fresh"),
       rejection: null,
+      diskPressure: "clear",
     }));
     const reval = createStoreBackedRevalidator({ store, lease, signal: null });
     await reval.revalidateCurrentContext();
@@ -93,6 +140,7 @@ describe("createStoreBackedRevalidator", () => {
       outcome: "applied",
       credentials: pair("fresh"),
       rejection: null,
+      diskPressure: "clear",
     }));
     const reval = createStoreBackedRevalidator({
       store,
@@ -117,6 +165,7 @@ describe("createStoreBackedRevalidator", () => {
       outcome: "commit-failed",
       credentials: pair("minted"),
       rejection: null,
+      diskPressure: null,
     }));
     const reval = createStoreBackedRevalidator({ store, lease, signal: null });
     const pending = reval.revalidateCurrentContext();
@@ -178,11 +227,76 @@ describe("createStoreBackedRevalidator", () => {
 });
 
 describe("withCommitRetry", () => {
+  it("prints the disk-full instruction for a no-space result", async () => {
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    const result = await withCommitRetry(
+      async () => ({
+        outcome: "disk-full",
+        credentials: null,
+        rejection: null,
+        diskPressure: "low",
+      }),
+      null,
+    );
+
+    expect(result.outcome).toBe("disk-full");
+    expect(write).toHaveBeenCalledWith(DISK_FULL_MESSAGE);
+  });
+
+  it("does not print disk-full after the continuation lands", async () => {
+    vi.useFakeTimers();
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    const op = vi
+      .fn<() => Promise<MutationResult>>()
+      .mockResolvedValueOnce({
+        outcome: "commit-failed",
+        credentials: pair("minted"),
+        rejection: null,
+        diskPressure: "low",
+      })
+      .mockResolvedValueOnce({
+        outcome: "applied",
+        credentials: pair("minted"),
+        rejection: null,
+        diskPressure: "low",
+      });
+
+    const pending = withCommitRetry(op, null);
+    await vi.runAllTimersAsync();
+
+    expect((await pending).outcome).toBe("applied");
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("prints the disk-full instruction when the bounded retries end with commit-failed+low", async () => {
+    vi.useFakeTimers();
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    const op = vi.fn(async (): Promise<MutationResult> => ({
+      outcome: "commit-failed",
+      credentials: pair("minted"),
+      rejection: null,
+      diskPressure: "low",
+    }));
+    const pending = withCommitRetry(op, null);
+    await vi.runAllTimersAsync();
+
+    expect((await pending).outcome).toBe("commit-failed");
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(DISK_FULL_MESSAGE);
+  });
+
   it("returns immediately on a non-commit-failed outcome", async () => {
     const op = vi.fn(async (): Promise<MutationResult> => ({
       outcome: "applied",
       credentials: pair("x"),
       rejection: null,
+      diskPressure: "clear",
     }));
     const result = await withCommitRetry(op, null);
     expect(result.outcome).toBe("applied");
@@ -197,11 +311,13 @@ describe("withCommitRetry", () => {
         outcome: "commit-failed",
         credentials: pair("m"),
         rejection: null,
+        diskPressure: null,
       })
       .mockResolvedValueOnce({
         outcome: "superseded",
         credentials: pair("m"),
         rejection: null,
+        diskPressure: null,
       });
     const pending = withCommitRetry(op, null);
     await vi.runAllTimersAsync();
@@ -215,6 +331,7 @@ describe("withCommitRetry", () => {
       outcome: "commit-failed",
       credentials: pair("m"),
       rejection: null,
+      diskPressure: null,
     }));
     const pending = withCommitRetry(op, null);
     await vi.runAllTimersAsync();
@@ -237,6 +354,7 @@ describe("withCommitRetry", () => {
       outcome: "commit-failed",
       credentials: pair("m"),
       rejection: null,
+      diskPressure: null,
     }));
 
     const result = await withCommitRetry(op, controller.signal);
@@ -254,6 +372,7 @@ describe("withCommitRetry", () => {
       outcome: "commit-failed",
       credentials: pair("m"),
       rejection: null,
+      diskPressure: null,
     }));
 
     const pending = withCommitRetry(op, controller.signal);

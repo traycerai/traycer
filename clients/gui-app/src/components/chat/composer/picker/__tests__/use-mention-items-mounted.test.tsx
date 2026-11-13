@@ -35,6 +35,17 @@ const workspaceMock = vi.hoisted((): { result: WorkspaceResult } => ({
   },
 }));
 
+const mentionDirectory = vi.hoisted(() => ({
+  data: [] as Array<{ hostId: string; label: string; kind: string }>,
+  subscribed: false,
+}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryListQuery: (active: boolean) => {
+    mentionDirectory.subscribed = active;
+    return { data: mentionDirectory.data, isPending: false, isError: false };
+  },
+}));
+
 const hostSupportMock = vi.hoisted(() => ({ supportsArtifactIndex: false }));
 
 // The picker reads `handle.store.getState()` and nothing else of the handle,
@@ -289,6 +300,7 @@ function openEpicHandleHoldingArtifacts(
 
 afterEach(() => {
   cleanup();
+  mentionDirectory.data = [];
   stableMocks.epicMentionRequests.length = 0;
   stableMocks.authState.status = "signed-out";
   hostSupportMock.supportsArtifactIndex = false;
@@ -297,6 +309,48 @@ afterEach(() => {
 });
 
 describe("useMentionItems mounted publication", () => {
+  it("subscribes to the host directory only while the picker is active", async () => {
+    const pickerStore = createComposerPickerStore();
+    renderMentionItems(pickerStore, null);
+    expect(mentionDirectory.subscribed).toBe(false);
+    act(() => openMention(pickerStore, 1, ""));
+    await waitFor(() => expect(mentionDirectory.subscribed).toBe(true));
+    act(() => pickerStore.getState().closeSession(1));
+    await waitFor(() => expect(mentionDirectory.subscribed).toBe(false));
+  });
+
+  it("omits pool entries while retaining an unavailable host", async () => {
+    mentionDirectory.data = [
+      { hostId: "offline-1", label: "Studio Offline", kind: "personal" },
+      { hostId: "pool-1", label: "Studio Pool", kind: "pool" },
+    ];
+    const pickerStore = createComposerPickerStore();
+    openMention(pickerStore, 1, "studio");
+    renderMentionItems(pickerStore, null);
+    await waitFor(() => {
+      expect(pickerStore.getState().items.map((item) => item.id)).toEqual([
+        "provider:hosts",
+      ]);
+    });
+    act(() =>
+      pickerStore.getState().setStep({
+        kind: "provider",
+        providerId: "hosts",
+        stepId: "root",
+        workspacePath: null,
+      }),
+    );
+    await waitFor(() =>
+      expect(pickerStore.getState().items.map((item) => item.id)).toEqual([
+        "mention-back",
+        "host:offline-1",
+      ]),
+    );
+    expect(pickerStore.getState().items[1]).toMatchObject({
+      entry: { action: { kind: "complete", mention: { hostId: "offline-1" } } },
+    });
+  });
+
   it("publishes a fresh non-empty @config result during a background refetch, including StrictMode", async () => {
     const rows = [fileEntry("file:config", "config.ts", "/repo")];
     setWorkspaceResult(rows, { isLoading: false, isFetching: true });

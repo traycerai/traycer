@@ -103,15 +103,10 @@ export interface RemoteSessionIdentity {
    */
   readonly authEpoch: string;
   /**
-   * What `OPEN` presents: the user bearer (a personal host) or a host-bound
-   * session grant (a `kind: sandbox` host). Part of the identity
-   * because the factory wires the grant provider and a cache hit never re-runs
-   * it: a sandbox row that briefly projects as a personal host (a stale
-   * directory read) would otherwise build a user-bearer session that every
-   * later session-grant consumer adopts, sending the user's bearer to a
-   * machine whose kernel the user does not own. A host's kind is fixed for
-   * its life, so a mismatch means the other entry came from a stale read, and
-   * it is superseded like a rotated key.
+   * What `OPEN` presents: a user bearer for a personal computer, or a
+   * host-bound session grant for a sandbox or team-owned computer. The factory
+   * wires the provider only on a cache miss, so a changed credential choice
+   * must supersede the earlier session instead of adopting it.
    *
    * `pool-bearer` is a session to the server pool (`createPoolHostTransport`):
    * the user bearer on a direct leg with no grant behind it. It never shares a

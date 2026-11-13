@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -74,6 +76,20 @@ vi.mock("@/lib/analytics", () => ({
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useHostScopeFor } from "@/components/settings/host-scope/use-host-scope";
 
+function renderHookWithQueryClient<Result>(callback: () => Result) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  return renderHook(callback, {
+    wrapper: ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
 function makeClient(input: {
   readonly hostId: string;
   readonly rpcCalls: string[] | undefined;
@@ -138,7 +154,7 @@ function remoteHost(): HostScopeOption {
 }
 
 function renderScope(scopedHostId: string | null) {
-  return renderHook(() =>
+  return renderHookWithQueryClient(() =>
     useHostScopeFor({
       scopedHostId,
       setScopedHostId: () => undefined,

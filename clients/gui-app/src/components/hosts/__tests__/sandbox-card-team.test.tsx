@@ -14,7 +14,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type {
-  SandboxCost,
   SandboxPod,
   SandboxSummary,
   UserSandboxCost,
@@ -153,11 +152,12 @@ vi.mock("@/components/settings/environment/open-environment-page", () => ({
 }));
 
 import {
-  SandboxCard,
   SandboxHeaderActions,
   SandboxHeaderCost,
   SandboxHeaderNotices,
+  SandboxInstallationGroup,
 } from "@/components/hosts/sandbox-card";
+import { HostOverviewSecretsTab } from "@/components/settings/panels/host-overview-secrets-tab";
 import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 
 /**
@@ -170,23 +170,6 @@ import type { HostScopeSandbox } from "@/components/settings/host-scope/host-sco
 const NAME = "build-box";
 const VIEWER = "user-viewer";
 const ENV = "env_team";
-
-const COST: SandboxCost = {
-  sandboxId: "sbx_1",
-  currentRateMillicreditsPerHour: 120,
-  state: "awake",
-  frozen: false,
-  charged: {
-    computeMillicredits: 5_000,
-    storageMillicredits: 1_000,
-    sinceCreatedAt: new Date(2026, 9, 1, 12).getTime(),
-  },
-  pendingMillicredits: 500,
-  segments: [],
-  todayMillicredits: 0,
-  todayAwakeMs: null,
-  history: [],
-};
 
 function renderCard(sandbox: HostScopeSandbox, teamOwned: boolean): void {
   const queryClient = new QueryClient({
@@ -205,7 +188,13 @@ function renderCard(sandbox: HostScopeSandbox, teamOwned: boolean): void {
         sandbox={{ ...sandbox, teamOwned }}
         teamName="Acme"
       />
-      <SandboxCard hostState="online" sandbox={{ ...sandbox, teamOwned }} />
+      <SandboxInstallationGroup sandbox={{ ...sandbox, teamOwned }} />
+      {sandbox.summary === null ? null : (
+        <HostOverviewSecretsTab
+          hostState="online"
+          sandbox={{ ...sandbox, teamOwned }}
+        />
+      )}
     </QueryClientProvider>,
   );
 }
@@ -243,6 +232,7 @@ function sandboxOf(
       frozen,
       ...overrides,
     }),
+    ownerKind: "unknown",
     teamOwned: false,
   };
 }
@@ -277,7 +267,7 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
-describe("<SandboxCard /> team creator and wake payer", () => {
+describe("team creator and wake payer", () => {
   it("names the creator and the wake payer on a team card, as 'you' for the viewer", () => {
     renderCard(
       sandboxOf("awake", false, {
@@ -347,7 +337,13 @@ describe("<SandboxCard /> team creator and wake payer", () => {
 
   it("uses neutral payer wording when team sandbox details are unavailable", () => {
     renderCard(
-      { state: "suspended", frozen: true, summary: null, teamOwned: true },
+      {
+        state: "suspended",
+        frozen: true,
+        summary: null,
+        ownerKind: "team",
+        teamOwned: true,
+      },
       true,
     );
     expect(text("sandbox-card-state-line")).toBe(
@@ -363,7 +359,7 @@ describe("<SandboxCard /> team creator and wake payer", () => {
   });
 });
 
-describe("<SandboxCard /> team cost view", () => {
+describe("team cost view", () => {
   it("opens the team Secrets page from Manage", () => {
     mocks.grantsData = { version: 3, grants: [], github: null };
     renderCard(sandboxOf("awake", false, { environmentId: ENV }), true);
@@ -404,17 +400,17 @@ describe("<SandboxCard /> team cost view", () => {
 
   describe("with no ledger, each state's own rate", () => {
     const PRICE = { awakeMc: 120, suspendedMc: 40, stoppedMc: 20 };
-    const HEADER_RATE: Record<HostSandboxState, string> = {
+    const HEADER_RATE: Record<HostSandboxState, string | null> = {
       creating: "Not billing",
       awake: "$0.12 an hour",
-      suspending: "$0.04 an hour",
+      suspending: null,
       suspended: "$0.04 an hour",
-      resuming: "$0.12 an hour",
-      stopping: "$0.02 an hour",
+      resuming: null,
+      stopping: null,
       stopped: "$0.02 an hour",
-      starting: "$0.12 an hour",
+      starting: null,
       released: "Not billing",
-      destroying: "Not billing",
+      destroying: null,
       destroyed: "Not billing",
       failed: "Not billing",
     };
@@ -425,12 +421,13 @@ describe("<SandboxCard /> team cost view", () => {
           <SandboxHeaderCost sandbox={{ ...sandbox, teamOwned: true }} />
         </div>,
       );
-      return text("header-rate").replace("·", "");
+      return text("header-rate");
     }
 
-    it.each(HOST_SANDBOX_STATES)("reads %s from its own tier", (state) => {
+    it.each(HOST_SANDBOX_STATES)("shows the rate fragment for %s", (state) => {
       const sandbox = sandboxOf(state, false, { priceMcPerHour: PRICE });
-      expect(headerRate(sandbox)).toBe(HEADER_RATE[state]);
+      const rate = HEADER_RATE[state];
+      expect(headerRate(sandbox)).toBe(rate === null ? "" : `·${rate}`);
     });
 
     it("reads the summary's state when the host list has none yet", () => {
@@ -438,66 +435,33 @@ describe("<SandboxCard /> team cost view", () => {
         state: "destroyed",
         priceMcPerHour: PRICE,
       });
-      expect(headerRate(sandbox)).toBe("Not billing");
+      expect(headerRate(sandbox)).toBe("·Not billing");
     });
 
     it.each([
-      ["suspending", "Awake rate", "$0.12 an hour"],
-      ["stopping", "Awake rate", "$0.12 an hour"],
-      ["resuming", "Storage rate", "$0.04 an hour"],
-      ["starting", "Storage rate", "$0.04 an hour"],
-    ] as const)(
-      "labels the other rate of a %s card as %s",
-      (state, label, rate) => {
-        renderCard(sandboxOf(state, false, { priceMcPerHour: PRICE }), true);
-        expect(screen.getByText(label)).toBeTruthy();
-        expect(text("sandbox-card-other-rate")).toBe(rate);
-      },
-    );
+      "suspending",
+      "resuming",
+      "stopping",
+      "starting",
+      "destroying",
+      "destroyed",
+    ] as const)("hides the other-state rate during %s", (state) => {
+      renderCard(sandboxOf(state, false, { priceMcPerHour: PRICE }), true);
+      expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
+      expect(screen.queryByText("Storage rate")).toBeNull();
+      expect(screen.queryByText("Awake rate")).toBeNull();
+    });
 
-    it.each(["destroying", "destroyed"] as const)(
-      "states no other rate on a %s card, which accrues nothing",
-      (state) => {
-        renderCard(sandboxOf(state, false, { priceMcPerHour: PRICE }), true);
-        expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
-        expect(screen.queryByText("Storage rate")).toBeNull();
-        expect(screen.queryByText("Awake rate")).toBeNull();
-      },
-    );
-  });
+    it("keeps a known zero visible on a frozen team transition", () => {
+      renderCard(sandboxOf("resuming", true, { priceMcPerHour: PRICE }), true);
 
-  it("mounts no cost view on a team card, and the personal view on a personal one", () => {
-    mocks.costs = {
-      sandboxes: [COST],
-      awakeBurnMillicreditsPerHour: 120,
-      todayYoursMillicredits: 0,
-      todayByEnvironment: [],
-    };
-
-    renderCard(sandboxOf("awake", false, {}), true);
-    expect(screen.queryByTestId("sandbox-card-cost")).toBeNull();
-    cleanup();
-
-    renderCard(sandboxOf("awake", false, {}), false);
-    expect(screen.getByTestId("sandbox-card-cost")).toBeDefined();
-  });
-
-  it("mounts no cost view on a team pod either", () => {
-    mocks.costs = {
-      sandboxes: [COST],
-      awakeBurnMillicreditsPerHour: 120,
-      todayYoursMillicredits: 0,
-      todayByEnvironment: [],
-    };
-    renderCard(
-      sandboxOf("awake", false, { kind: "automation", environmentId: ENV }),
-      true,
-    );
-    expect(screen.queryByTestId("sandbox-card-cost")).toBeNull();
+      expect(screen.getByText("Not billing", { exact: true })).toBeTruthy();
+      expect(screen.queryByTestId("sandbox-card-other-rate")).toBeNull();
+    });
   });
 });
 
-describe("<SandboxCard /> team pod room", () => {
+describe("team pod room", () => {
   function scriptPods(
     pods: (summary: SandboxSummary) => readonly SandboxPod[],
     summary: SandboxSummary,
@@ -614,7 +578,7 @@ describe("<SandboxCard /> team pod room", () => {
   });
 });
 
-describe("<SandboxCard /> team destroy", () => {
+describe("team destroy", () => {
   function openDestroy(): void {
     fireEvent.click(screen.getByTestId("sandbox-card-destroy"));
   }
@@ -683,7 +647,7 @@ describe("<SandboxCard /> team destroy", () => {
   });
 });
 
-describe("<SandboxCard /> waking a team sandbox", () => {
+describe("waking a team sandbox", () => {
   it("runs Resume at once on a team card: no confirm stands between the click and the verb", async () => {
     renderCard(sandboxOf("suspended", false, {}), true);
     fireEvent.click(screen.getByTestId("sandbox-card-resume"));
@@ -733,7 +697,7 @@ describe("<SandboxCard /> waking a team sandbox", () => {
   });
 });
 
-describe("<SandboxCard /> footer", () => {
+describe("footer", () => {
   it("offers no New sandbox like this on a card with no lifecycle actions", () => {
     renderCard(sandboxOf("creating", false, {}), true);
 

@@ -55,6 +55,7 @@ import {
   HostTransportFailureError,
   markMayHaveReachedHost,
   negotiatedVersionMeetsRequirement,
+  transportFailureBeforeSend,
   RetryableTransportError,
   type RequestOfMethod,
   type RequiredHostMethodVersion,
@@ -952,6 +953,8 @@ interface ActiveConnection {
   readonly generation: number;
   /** The grant this relay attach presented; `null` on a direct pool leg. */
   attachGrant: AttachGrant | null;
+  /** When {@link attachGrant} expires, by {@link attachGrantExpiresAt}. */
+  attachGrantExpiresAt: number | null;
   /**
    * The relay leg, or the direct leg to the pool. The one thing that outlives
    * nothing: a relink replaces it and keeps the rest of this record, which is
@@ -2128,17 +2131,15 @@ export class RemoteSession<
       // connection deduplicates the key. This connection does not - either
       // the caller never had a key, or the re-dial landed on a host
       // incarnation whose handshake omits the capability - so dispatching
-      // would execute a mutation the host may already have run. Ambiguous
-      // (`HostTransportFailureError`, not the retryable subclass) is the
-      // honest answer: the first attempt genuinely may have committed, and
-      // this session must not turn "may have" into "did, twice".
+      // would execute a mutation the host may already have run. Non-retryable,
+      // and this attempt sent nothing, so it reads as not reached. An earlier
+      // attempt's uncertainty is the retry messenger's wrapper, which engages
+      // because these details are non-null.
       return Promise.reject(
-        new HostTransportFailureError({
-          code: "RPC_ERROR",
+        transportFailureBeforeSend({
           message: `Remote session cannot honour the idempotency key a replay of '${method}' requires`,
           requestId,
           method,
-          fatalDetails: null,
         }),
       );
     }
@@ -2665,6 +2666,7 @@ export class RemoteSession<
       this.attachDirect(generation, dial.poolUrl);
       return;
     }
+    const grantRequestedAt = Date.now();
     const provision = await dial.grantProvider();
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
@@ -2674,6 +2676,7 @@ export class RemoteSession<
       return;
     }
     const grant = provision.grant;
+    const grantExpiresAt = attachGrantExpiresAt(grant, grantRequestedAt);
 
     const noise = await NoiseChannel.begin(dial.hostStaticPublicKey);
     if (generation !== this.connectGeneration || this.isClosed()) {
@@ -2688,7 +2691,13 @@ export class RemoteSession<
       webSocketFactory: this.options.webSocketFactory,
       handlers: this.socketHandlers((): RelaySocket => relaySocket),
     });
-    this.installConnection(generation, grant, relaySocket, noise);
+    this.installConnection(
+      generation,
+      grant,
+      grantExpiresAt,
+      relaySocket,
+      noise,
+    );
   }
 
   /** A mint that produced no grant: authn refused, or none is available now. */
@@ -2723,6 +2732,7 @@ export class RemoteSession<
     // prevent. A host that really is down still produces its refusal at the
     // `handleConnectionLost` funnel, which observes the host's own plane.
     this.reportEvidenceOutcome(this.dialAttemptId(generation), "indeterminate");
+    this.markStreamsReconnecting(provision.retryCause ?? null);
     const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({
       cause: `could not mint an attach grant: ${provision.detail}`,
@@ -2767,12 +2777,18 @@ export class RemoteSession<
       startedAt: Date.now(),
     };
     void (async () => {
+      const grantRequestedAt = Date.now();
       const provision = await grantProvider();
       if (!ownsSession()) {
         return;
       }
       if (provision.kind === "ok") {
-        this.dialClaim(generation, connection, attachBaseUrl, provision.grant);
+        this.dialClaim(
+          connection,
+          attachBaseUrl,
+          provision.grant,
+          grantRequestedAt,
+        );
         return;
       }
       connection.activeClaimDial = null;
@@ -2792,10 +2808,10 @@ export class RemoteSession<
   }
 
   private dialClaim(
-    generation: number,
     connection: ActiveConnection,
     attachBaseUrl: string,
     grant: AttachGrant,
+    grantRequestedAt: number,
   ): void {
     const relaySocket: RelaySocket = new RelaySocket({
       attachBaseUrl,
@@ -2807,9 +2823,14 @@ export class RemoteSession<
     });
     connection.socket = relaySocket;
     connection.attachGrant = grant;
+    connection.attachGrantExpiresAt = attachGrantExpiresAt(
+      grant,
+      grantRequestedAt,
+    );
     connection.legEnd = null;
     connection.legAttached = false;
-    this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
+    // The attach_ack budget starts at open: see `onLegOpen`.
+    this.clearPhaseTimer();
   }
 
   /**
@@ -2823,7 +2844,7 @@ export class RemoteSession<
       webSocketFactory: this.options.webSocketFactory,
       handlers: this.socketHandlers((): RelaySocket => socket),
     });
-    this.installConnection(generation, null, socket, PLAIN_MUX_CHANNEL);
+    this.installConnection(generation, null, null, socket, PLAIN_MUX_CHANNEL);
   }
 
   /**
@@ -2850,6 +2871,7 @@ export class RemoteSession<
     return {
       onAttachAck: (sid, resumeKey) =>
         deliver((generation) => this.onAttachAck(generation, sid, resumeKey)),
+      onOpen: () => deliver((generation) => this.onLegOpen(generation)),
       onData: (bytes) => {
         // Count delivery before any filtering: a late socket frame still
         // consumed incoming bytes, even when it cannot enter the current mux.
@@ -2890,10 +2912,13 @@ export class RemoteSession<
           if (this.connection !== null) {
             this.connection.legEnd = { code: info.code, reason: info.reason };
           }
+          const provenance = this.legEndProvenance(socket());
           this.handleLegLost(
             generation,
-            describeSocketClose(this.phase, info),
-            "host-transport-plane",
+            provenance === "host-transport-plane"
+              ? describeSocketClose(this.phase, info)
+              : `${describeSocketClose(this.phase, info)} after its attach grant expired`,
+            provenance,
           );
           if (immediateRedialEarned) {
             // A user is watching this recovery happen; sleeping out the
@@ -2909,6 +2934,7 @@ export class RemoteSession<
   private installConnection(
     generation: number,
     attachGrant: AttachGrant | null,
+    attachGrantExpiresAt: number | null,
     socket: RelaySocket,
     channel: MuxChannel,
   ): ActiveConnection {
@@ -2928,6 +2954,7 @@ export class RemoteSession<
     const connection: ActiveConnection = {
       generation,
       attachGrant,
+      attachGrantExpiresAt,
       socket,
       channel,
       scheduler,
@@ -2963,8 +2990,44 @@ export class RemoteSession<
     };
     this.connection = connection;
     this.parkedRefusals = 0;
-    this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
+    // The attach_ack budget starts at open: see `onLegOpen`.
+    this.clearPhaseTimer();
     return connection;
+  }
+
+  /**
+   * A leg that ended before it opened, at or after its attach grant expired,
+   * says nothing about the host: the relay refuses an expired grant, and the
+   * grant can expire while the dial waits for a slot (`ws-dial-gate.ts`), a
+   * wait with no bound of its own. The redial mints a fresh grant, which can
+   * expire in the queue as well. A host that never connects can therefore
+   * stay connecting with only indeterminate outcomes for as long as its dials
+   * keep outliving their grants: one discarded attempt per grant bounds
+   * neither the discarded attempts in a row nor the detection time.
+   */
+  private legEndProvenance(socket: RelaySocket): ConnectionLossProvenance {
+    const expiresAt = this.connection?.attachGrantExpiresAt ?? null;
+    if (!socket.hasOpened() && expiresAt !== null && Date.now() >= expiresAt) {
+      return "not-host-evidence";
+    }
+    return "host-transport-plane";
+  }
+
+  /**
+   * The current leg reached WebSocket open. `ATTACH_ACK_TIMEOUT_MS` is the
+   * relay budget after the socket opens (`config.ts`), so it starts here and
+   * not at the dial: until open, the dial timer of the socket bounds the wait
+   * from the dial gate grant, and time this client spent queued behind its
+   * own dials is never reported as a host refusal.
+   */
+  private onLegOpen(generation: number): void {
+    if (this.isCurrent(generation)) {
+      this.armPhaseTimer(
+        generation,
+        ATTACH_ACK_TIMEOUT_MS,
+        "attach-ack-timeout",
+      );
+    }
   }
 
   private onAttachAck(
@@ -5537,7 +5600,7 @@ export class RemoteSession<
     if (dial.kind !== "relay") {
       return;
     }
-    const { socket, attachGrant } = connection;
+    const { socket, attachGrant, attachGrantExpiresAt } = connection;
     const lostAttempt = `${this.dialAttemptId(generation)}-lost`;
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) rebuilding: the relay no longer holds this session`,
@@ -5562,6 +5625,7 @@ export class RemoteSession<
         const installed = this.installConnection(
           nextGeneration,
           attachGrant,
+          attachGrantExpiresAt,
           socket,
           noise,
         );
@@ -7518,6 +7582,26 @@ function indexMethodRegistry(
 ): MethodVersionRegistry {
   const entry = registry[method];
   return entry as MethodVersionRegistry;
+}
+
+/**
+ * When an attach grant expires, by this client clock. Authn mints the grant
+ * after it was requested, stamps `iat` in whole seconds rounded down, and sets
+ * the JWT `exp` to `iat` plus the `expiresInSeconds` it returns; the relay
+ * refuses the grant from `exp` on, with no tolerance. So, read on one clock,
+ * the request time rounded down to its second plus that lifetime is at or
+ * before `exp`: a leg the relay refused for an expired grant is never counted
+ * as the host. The error runs the other way: a leg that failed for a host
+ * reason from this until `exp` is discarded instead, at most once per grant.
+ * That interval is the mint's second minus the request's second: none when
+ * both fall in the same second, and less than the request-to-mint time plus
+ * one second otherwise. It is wall-clock time (`Date.now`): a backward clock
+ * change can count a leg on an already expired grant as the host, and a
+ * forward one can discard the failure of a leg on a live grant; so can a
+ * difference between this clock and the authn or relay clock.
+ */
+function attachGrantExpiresAt(grant: AttachGrant, requestedAt: number): number {
+  return (Math.floor(requestedAt / 1000) + grant.expiresInSeconds) * 1000;
 }
 
 /**

@@ -2,6 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -9,9 +10,6 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import {
   registerDetailsProvider,
@@ -22,7 +20,6 @@ import { providerState, reachableHost } from "./mcp-skills-test-support";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import {
-  configurationItem,
   mountTeamPage,
   personalPoolSource,
   poolSource,
@@ -30,9 +27,19 @@ import {
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
 import {
-  RETIRED_PROVIDER_VARIABLES,
-  RETIRED_SECRET_ROW_FIELDS,
-} from "@traycer/protocol/host/released-wire-rows";
+  profile,
+  envOverride,
+  pack,
+  cursorProviderListRow,
+  cursorProfile,
+  cursorKey,
+  publishSettingsApi,
+  railButton,
+  railPieces,
+  accessibleName,
+  profileTriggerName,
+  handlers,
+} from "./team-providers-test-support";
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -66,157 +73,6 @@ afterEach(() => {
   setSystemTabModalApi(null);
 });
 
-const profile = (enabled: boolean, revision: number) =>
-  configurationItem({
-    kind: "managed_profile",
-    key: "claude:prof-1",
-    value: {
-      name: "Work",
-      color: null,
-      harnessId: "claude",
-      accountIdentity: "ada@example.com",
-      needsLink: false,
-      enabled,
-    },
-    revision,
-  });
-
-const envOverride = (value: string, revision: number) =>
-  configurationItem({
-    kind: "env_override",
-    key: "claude:ANTHROPIC_BASE_URL",
-    os: "any",
-    value: { value },
-    revision,
-  });
-
-const pack = (pinnedVersion: string | null, revision: number) =>
-  configurationItem({
-    kind: "pack_policy",
-    key: "claude-pack",
-    value: { pinnedVersion, autoDownload: true },
-    revision,
-  });
-
-const environments = {
-  environments: [
-    {
-      environmentId: "env-a",
-      ownerKind: "organization" as const,
-      ownerId: "team-a",
-      roomId: "room-a",
-      label: "Acme",
-      effectiveRole: "editor" as const,
-      kind: "team" as const,
-      hostCount: 0,
-      providerHandle: "handle-a",
-    },
-  ],
-};
-
-/** A `providers.list` row whose Env override only reaches Traycer's own
- *  native config (MCP setup), never the provider's conversations - Cursor's
- *  actual `envOverrideScope`, as `providerNativeConfigOnlyEnvSubtitle` names
- *  it. */
-function cursorProviderListRow(): ProviderCliState {
-  return {
-    providerId: "cursor",
-    enabled: true,
-    disabledBy: null,
-    nativeCapabilities: {
-      ...DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-      envOverrideScope: "native-config-only",
-    },
-    selected: { kind: "bundled" },
-    candidates: [],
-    auth: { status: "unknown", badgeText: null, label: null, detail: null },
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
-    envOverrides: [],
-    loginCapability: null,
-    availabilityPending: false,
-    profiles: [],
-  };
-}
-
-const cursorProfile = (name: string, revision: number) =>
-  configurationItem({
-    kind: "managed_profile",
-    key: `cursor:${name}`,
-    value: {
-      name,
-      color: null,
-      harnessId: "cursor",
-      accountIdentity: null,
-      needsLink: false,
-      enabled: true,
-    },
-    revision,
-  });
-
-const cursorKey = {
-  secretId: "secret-cursor",
-  name: "CURSOR_API_KEY",
-  kind: "provider" as const,
-  protocol: null,
-  destinations: [],
-  ...RETIRED_SECRET_ROW_FIELDS,
-  providerVariables: [...RETIRED_PROVIDER_VARIABLES],
-  currentVersionId: "v1",
-  revoked: false,
-  updatedAt: 1,
-  variables: [],
-};
-
-function publishSettingsApi(
-  setSection: (section: SettingsSectionId) => void,
-): void {
-  setSystemTabModalApi({
-    active: null,
-    openSettings: () => undefined,
-    openHistory: () => undefined,
-    close: () => undefined,
-    setSection,
-    replaceOwnedSettingsRoute: () => undefined,
-    promoteToTab: () => undefined,
-    isOverlayActive: () => true,
-  });
-}
-
-function railButton(name: string): HTMLElement {
-  const rail = screen.getByRole("navigation", { name: "Providers" });
-  return within(rail).getByRole("button", { name: new RegExp(`^${name}`) });
-}
-
-/** Name and subtitle are sibling spans, so `textContent` has no space between them. */
-function railPieces(name: string): { title: string; subtitle: string | null } {
-  const spans = [...railButton(name).querySelectorAll(":scope > span")];
-  const title = (spans[0]?.textContent ?? "").replace(/\s+/g, " ").trim();
-  const subtitle =
-    spans.length < 2
-      ? null
-      : (spans[1]?.textContent ?? "").replace(/\s+/g, " ").trim();
-  return { title, subtitle };
-}
-
-function handlers(items: () => EnvironmentConfigurationItem[]) {
-  return {
-    "environment.configuration.items": () => ({ items: items() }),
-    "environment.list": () => environments,
-    "environment.host.list": () => ({ hosts: [] }),
-    "environment.plans.list": () => ({ plans: [] }),
-    "environment.secrets.list": () => ({ secrets: [], removed: [] }),
-    "environment.members": () => ({
-      members: [],
-      nextCursor: null,
-      legacyRoleNoticeSeenAt: null,
-      legacyMembers: [],
-    }),
-  } as const;
-}
-
 describe("TeamProviders items", () => {
   it("shows every provider and follows the first configured row until a click", async () => {
     const setSection = vi.fn<(section: SettingsSectionId) => void>();
@@ -241,25 +97,28 @@ describe("TeamProviders items", () => {
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     expect(
-      await screen.findByText(
-        "Sign-ins, keys and tools for each coding agent.",
-      ),
+      await screen.findByRole("combobox", { name: "Provider" }),
     ).toBeTruthy();
-    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(
+      screen.getByText("Sign-ins, keys and tools for each coding agent."),
+    ).toBeTruthy();
     const rail = await screen.findByRole("navigation", {
       name: "Providers",
     });
+    expect(rail.className).toContain("hidden");
+    expect(rail.className).toContain("lg:flex");
     await waitFor(() => {
       expect(railButton("Codex").getAttribute("aria-current")).toBe("true");
     });
+    expect(screen.getByRole("combobox", { name: "Linked plan" })).toBeTruthy();
     expect(railPieces("Codex")).toEqual({ title: "Codex", subtitle: null });
-    expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: null });
+    expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: "key" });
     expect(
       within(rail).queryByRole("button", { name: /^Claude Code/ }),
     ).toBeTruthy();
     expect(rail.textContent).not.toContain("plan");
-    expect(rail.textContent).not.toContain("key");
     expect(rail.textContent).not.toContain("No profiles");
+    expect(screen.queryByRole("button", { name: "Open Secrets" })).toBeNull();
     expect(
       within(rail).queryByRole("button", { name: "Add provider" }),
     ).toBeNull();
@@ -271,8 +130,7 @@ describe("TeamProviders items", () => {
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
     expect(railButton("Codex").getAttribute("aria-current")).toBeNull();
     expect(railButton("Claude Code")).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Open Secrets" }));
-    expect(setSection).toHaveBeenCalledWith("secrets");
+    expect(setSection).not.toHaveBeenCalled();
     expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
       environmentId: "env-a",
     });
@@ -330,7 +188,7 @@ describe("TeamProviders items", () => {
     });
     expect(railPieces("Cursor")).toEqual({
       title: "Cursor",
-      subtitle: "2 profiles",
+      subtitle: null,
     });
     expect(
       within(rail).queryByRole("button", { name: /^Claude Code/ }),
@@ -362,7 +220,7 @@ describe("TeamProviders items", () => {
     await waitFor(() => {
       expect(railButton("Cursor").getAttribute("aria-current")).toBe("true");
     });
-    expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: null });
+    expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: "key" });
     expect(
       within(rail).queryByRole("button", { name: /^Claude Code/ }),
     ).toBeTruthy();
@@ -428,7 +286,7 @@ describe("TeamProviders items", () => {
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
   });
 
-  it("orders Plans & limits as Key, Plans, Profiles, then rate limits", async () => {
+  it("orders Plans & limits as Plans, Profiles, then rate limits", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => [cursorProfile("Cursor Work", 1)]),
       "environment.secrets.list": () => ({
@@ -441,9 +299,10 @@ describe("TeamProviders items", () => {
     await waitFor(() => {
       expect(railButton("Cursor").getAttribute("aria-current")).toBe("true");
     });
-    expect(screen.queryByRole("heading", { name: "Key" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Key" })).toBeNull();
+    expect(screen.queryByText("CURSOR_API_KEY")).toBeNull();
     const panel = screen.getByRole("tabpanel");
-    const labels = ["Key", "Plans", "Profiles", "Rate limits"].map((name) =>
+    const labels = ["Plans", "Profiles", "Rate limits"].map((name) =>
       within(panel).getByRole("heading", { name }),
     );
     expect(
@@ -454,98 +313,11 @@ describe("TeamProviders items", () => {
       labels[1]?.compareDocumentPosition(labels[2] ?? labels[1]) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      labels[2]?.compareDocumentPosition(labels[3] ?? labels[2]) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(within(panel).getByRole("region", { name: "Key" })).toBeTruthy();
+    expect(within(panel).queryByRole("region", { name: "Key" })).toBeNull();
     expect(within(panel).getByRole("region", { name: "Plans" })).toBeTruthy();
     expect(harness.paramsOf("environment.secrets.list").length).toBeGreaterThan(
       0,
     );
-  });
-
-  it("toggles a profile against the displayed revision, and a conflict rereads it beside the changed-by line", async () => {
-    let current = profile(true, 4);
-    const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers(() => [current]),
-      "environment.configuration.items.put": () => {
-        current = profile(false, 5);
-        return {
-          outcome: "conflict",
-          current: { revision: 5, changedBy: "Grace", changedAt: 2 },
-        };
-      },
-    });
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("Work")).toBeTruthy();
-    const checkboxItem = screen.getByRole("switch", {
-      name: "Use Work",
-    });
-    expect(checkboxItem.getAttribute("aria-checked")).toBe("true");
-    await userEvent.click(checkboxItem);
-
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "managed_profile",
-        key: "claude:prof-1",
-        os: null,
-        value: {
-          name: "Work",
-          color: null,
-          harnessId: "claude",
-          accountIdentity: "ada@example.com",
-          needsLink: false,
-          enabled: false,
-        },
-        revision: 4,
-      },
-    ]);
-    expect(
-      await screen.findByText("Changed by Grace a moment ago"),
-    ).toBeTruthy();
-    expect(screen.getByText("Off")).toBeTruthy();
-    if (screen.queryByRole("menu") !== null) {
-      await userEvent.keyboard("{Escape}");
-    }
-    await waitFor(() => {
-      const updatedCheckboxItem = screen.getByRole("switch", {
-        name: "Use Work",
-      });
-      expect(updatedCheckboxItem.getAttribute("aria-checked")).toBe("false");
-    });
-  });
-
-  it("gives a viewer On/Off for a profile with no switch, plus the member-only verbs withheld", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
-      ...handlers(() => [profile(true, 4)]),
-      "environment.secrets.list": () => ({
-        secrets: [
-          cursorKey,
-          { ...cursorKey, secretId: "second-key", name: "OPENAI_API_KEY" },
-        ],
-        removed: [],
-      }),
-    });
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
-    const name = await screen.findByText("Work");
-    expect(name.className).toContain("whitespace-normal");
-    expect(name.className).toContain("break-words");
-    expect(name.className).not.toContain("truncate");
-    expect(screen.getByText("ada@example.com").className).toContain(
-      "whitespace-normal",
-    );
-    expect(screen.queryByText("Off")).toBeNull();
-    expect(screen.getByRole("heading", { name: "Key" })).toBeTruthy();
-    expect(screen.getByText("On")).toBeTruthy();
-    const keys = screen.getByRole("region", { name: "Key" });
-    expect(await within(keys).findByText("CURSOR_API_KEY")).toBeTruthy();
-    expect(within(keys).getByText("OPENAI_API_KEY")).toBeTruthy();
-    expect(screen.queryByRole("switch")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Add a key" })).toBeNull();
   });
 
   it("saves a variable override under the provider's prefix at the displayed revision", async () => {
@@ -561,29 +333,26 @@ describe("TeamProviders items", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
     await userEvent.click(
       await screen.findByRole("textbox", {
-        name: "claude:ANTHROPIC_BASE_URL value",
+        name: "Value for ANTHROPIC_BASE_URL",
       }),
     );
-    const field = await screen.findByLabelText(
-      "claude:ANTHROPIC_BASE_URL value",
-    );
+    const field = await screen.findByLabelText("Value for ANTHROPIC_BASE_URL");
     await userEvent.clear(field);
     await userEvent.type(field, "https://new.example");
-    const row = screen.getByRole("region", {
-      name: "claude:ANTHROPIC_BASE_URL",
-    });
-    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+    fireEvent.blur(field);
 
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "env_override",
-        key: "claude:ANTHROPIC_BASE_URL",
-        os: "any",
-        value: { value: "https://new.example" },
-        revision: 7,
-      },
-    ]);
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "env_override",
+          key: "claude:ANTHROPIC_BASE_URL",
+          os: "any",
+          value: { value: "https://new.example" },
+          revision: 7,
+        },
+      ]);
+    });
   });
 
   it("shows a provider override's awaiting-readback line and Retry only on the provider it belongs to", async () => {
@@ -605,17 +374,16 @@ describe("TeamProviders items", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
     await userEvent.click(
       await screen.findByRole("textbox", {
-        name: "claude:ANTHROPIC_BASE_URL value",
+        name: "Value for ANTHROPIC_BASE_URL",
       }),
     );
-    const field = await screen.findByLabelText(
-      "claude:ANTHROPIC_BASE_URL value",
-    );
+    const field = await screen.findByLabelText("Value for ANTHROPIC_BASE_URL");
     await userEvent.clear(field);
     await userEvent.type(field, "https://new.example");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.blur(field);
     const refreshed = "Saved, but latest settings haven't refreshed.";
     expect(await screen.findByText(refreshed)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
     await userEvent.click(railButton("Cursor"));
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
@@ -625,6 +393,7 @@ describe("TeamProviders items", () => {
     await userEvent.click(railButton("Claude Code"));
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
     expect(screen.getByText(refreshed)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("says on its Env tab that the team's variables reach every host running the team", async () => {
@@ -643,9 +412,7 @@ describe("TeamProviders items", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
 
     const subtitle = await screen.findByTestId("team-provider-env-subtitle");
-    expect(subtitle.textContent).toMatch(
-      /^Set for .+ each time it starts, on every host running Acme\. Unset removes a variable .+ would otherwise get from the shell\.$/,
-    );
+    expect(subtitle.textContent).toBe("Variables for the selected provider.");
     expect(subtitle.textContent).not.toContain("Personal");
   });
 
@@ -659,9 +426,7 @@ describe("TeamProviders items", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
 
     const subtitle = await screen.findByTestId("team-provider-env-subtitle");
-    expect(subtitle.textContent).toBe(
-      "Set for Claude Code on every host running Acme. Unset removes a variable Claude Code would otherwise get from the shell.",
-    );
+    expect(subtitle.textContent).toBe("Variables for the selected provider.");
     expect(subtitle.textContent).not.toContain("each time it starts");
     expect(subtitle.textContent).not.toContain("conversations");
   });
@@ -683,9 +448,8 @@ describe("TeamProviders items", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
 
     const subtitle = await screen.findByTestId("team-provider-env-subtitle");
-    expect(subtitle.textContent).toBe(
-      "Set for Cursor when Traycer sets up its tools, such as MCP servers, on every host running Acme. Cursor's conversations don't get them. Unset removes a variable Cursor would otherwise get from the shell.",
-    );
+    expect(subtitle.textContent).toBe("Variables for the selected provider.");
+    expect(subtitle.textContent).not.toContain("conversations");
   });
 
   it("edits a pack policy against its revision for an editor and shows a viewer the text", async () => {
@@ -773,29 +537,45 @@ describe("TeamProviders items", () => {
     );
   });
 
-  it("opens a profile's Details on its actual item key", async () => {
+  it("opens a variable row's Details on its actual item key, and the profile picker has none", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
-    // No provider of evidence is registered by the page itself, so the test
-    // registers one for the kind and reads the subject the page mounted.
     const provider = vi.fn<DetailsProvider>(() =>
       Promise.reject(new Error("no evidence")),
     );
-    const unregister = registerDetailsProvider("managed_profile", provider);
+    const unregister = registerDetailsProvider("env_override", provider);
     try {
       const harness = mountTeamPage(
         poolSource("viewer"),
-        handlers(() => [profile(true, 4)]),
+        handlers(() => [
+          profile(true, 4),
+          envOverride("https://old.example", 7),
+        ]),
       );
       render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-      expect(await screen.findByText("Work")).toBeTruthy();
+      expect(await screen.findByText("On")).toBeTruthy();
+      const profileCombobox = screen.queryByRole("combobox", {
+        name: "Profile",
+      });
+      const profileTrigger = screen.queryByRole("button", {
+        name: profileTriggerName("Work", false),
+      });
+      expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+      expect(screen.queryByText("Signed in")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Manage profile" }),
+      ).toBeNull();
+
+      await userEvent.click(await screen.findByRole("tab", { name: "Env" }));
       await userEvent.click(screen.getByRole("button", { name: "Details" }));
 
       const drawer = await screen.findByRole("dialog");
       expect(
-        within(drawer).getByRole("heading", { name: "Work" }),
+        within(drawer).getByRole("heading", {
+          name: "claude:ANTHROPIC_BASE_URL",
+        }),
       ).toBeTruthy();
       expect(screen.queryByRole("menu")).toBeNull();
 
@@ -804,11 +584,46 @@ describe("TeamProviders items", () => {
       });
       expect(provider.mock.calls[0]?.[0]).toEqual({
         environmentId: "env-a",
-        kind: "managed_profile",
-        key: "claude:prof-1",
+        kind: "env_override",
+        key: "claude:ANTHROPIC_BASE_URL",
       });
+      expect(profileCombobox).toBeNull();
+      expect(profileTrigger).toBeTruthy();
     } finally {
       unregister();
     }
+  });
+
+  it("lists every rail row in the Provider select, including one that is not configured", async () => {
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers(() => []),
+    );
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    const rail = await screen.findByRole("navigation", { name: "Providers" });
+    const trigger = screen.getByRole("combobox", { name: "Provider" });
+    let wrapper: HTMLElement | null = trigger;
+    let phone = false;
+    while (wrapper !== null) {
+      if (wrapper.className.includes("lg:hidden")) {
+        phone = true;
+        break;
+      }
+      wrapper = wrapper.parentElement;
+    }
+    expect(phone).toBe(true);
+    const railNames = within(rail)
+      .getAllByRole("button")
+      .map((button) => accessibleName(button));
+    await userEvent.click(trigger);
+    const options = (await screen.findAllByRole("option")).map((option) =>
+      accessibleName(option),
+    );
+    expect(options).toEqual(railNames);
+    expect(options).toContain("Command Code");
+    expect(
+      harness.paramsOf("environment.configuration.items").length,
+    ).toBeGreaterThan(0);
   });
 });

@@ -248,6 +248,7 @@ function renderPanel(input: {
     listRef,
     listKey: "list",
     visibleRows: [rowOf(input.browsed)],
+    hiddenModelProviders: new Set(),
     selectedRowId: "",
     effectiveActiveRowId: "",
     hoveredRowId: "",

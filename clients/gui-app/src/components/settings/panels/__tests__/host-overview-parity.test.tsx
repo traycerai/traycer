@@ -348,10 +348,7 @@ async function renderOverviewSnapshot(options: {
   // (the whole point of `removalTestIds`) would silently compare two empty
   // lists.
   for (const tab of HOST_OVERVIEW_TABS) {
-    if (
-      tab === "sandbox" &&
-      screen.queryByTestId("host-overview-tab-sandbox") === null
-    ) {
+    if (screen.queryByTestId(`host-overview-tab-${tab}`) === null) {
       continue;
     }
     await selectHostOverviewTab(tab);
@@ -469,18 +466,20 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     // `MockRunnerHost` carries.
     expect(local.testIds).toEqual(
       expect.arrayContaining([
+        "host-overview-about",
         "host-overview-about-added",
         "host-overview-about-facts",
         "host-overview-about-host-id",
+        "host-overview-about-last-seen",
         "host-overview-about-version",
         "host-overview-about-platform",
-        "host-overview-about-architecture",
-        "settings-host-install-version",
+        "host-overview-install-record",
         "host-overview-installation-empty",
         "host-overview-service",
       ]),
     );
-    expect(local.testIds).not.toContain("host-overview-install-record");
+    expect(local.testIds).not.toContain("host-overview-about-architecture");
+    expect(local.testIds).not.toContain("settings-host-install-version");
     expect(local.testIds).not.toContain("host-overview-command-line-tools");
 
     // The name came from `host.identity.get`'s `effectiveName` in BOTH cases —
@@ -548,7 +547,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(local.removalTestIds).toEqual([]);
   });
 
-  it("keeps build versions out of the header and shows the registry version in inline Installation facts", async () => {
+  it("shows the running version on the fact line and the registry version in About", async () => {
     // The defect: both a `host.status.hostVersion` and the
     // registry row's `version` used to render as the host's version at once.
     // The registry says "1.4.2" here twice over — the scope row's `version`
@@ -630,12 +629,13 @@ function localOnlyNodes(root: HTMLElement): readonly Element[] {
 /**
  * The version invariant, read off the page currently rendered: neither the
  * RPC's `running` version nor the registry's `reported` one is on the
- * header's health line, and `reported` appears exactly once on the whole page
- * (every tab is mounted, the Updates tab's answer card and version list
- * included) — as the value of Installation's "Last reported version" row.
+ * fact line carries the running version, and `reported` appears exactly once
+ * on the whole page (every tab is mounted, the Updates tab's answer card and
+ * version list included) — as the value of Installation's "Last reported
+ * version" row, with no freshness suffix.
  *
  * The scope fixture's clock is `nowMs: 0` and the registry stamp is
- * `2026-01-01`, so the elapsed words are "just now".
+ * `2026-01-01`, so Last seen reads "Just now".
  */
 async function expectVersionPlacement(versions: {
   readonly running: string;
@@ -648,7 +648,7 @@ async function expectVersionPlacement(versions: {
   if (healthLine === null) {
     throw new Error("expected the health word inside the health line");
   }
-  expect(healthLine.textContent).not.toContain(versions.running);
+  expect(healthLine.textContent).toContain(`v${versions.running}`);
   expect(healthLine.textContent).not.toContain(versions.reported);
 
   // `host.status` is what makes the running version differ from the registry.
@@ -656,9 +656,7 @@ async function expectVersionPlacement(versions: {
   // absent.
   const aboutVersion = await waitFor(() => {
     const row = screen.getByTestId("host-overview-about-version");
-    expect(row.textContent).toBe(
-      `v${versions.reported} · last account report, just now`,
-    );
+    expect(row.textContent).toBe(`v${versions.reported}`);
     return row;
   });
   expect(aboutVersion.closest("dd")?.previousElementSibling?.textContent).toBe(
@@ -682,16 +680,15 @@ function readKindLabel(root: HTMLElement): string | null {
   return labels.length === 1 ? labels[0].textContent.trim() : null;
 }
 
-/** The kind label in the identity card's state-and-kind row. */
+/** The kind label on the identity card's name row. */
 function kindLabelNodes(root: HTMLElement): readonly Element[] {
   const nameRow = root.querySelector('[data-testid="host-identity-name-row"]');
-  const statusRow = nameRow?.parentElement?.nextElementSibling ?? null;
-  if (statusRow === null) return [];
-  return Array.from(statusRow.children).filter(
+  if (nameRow === null) return [];
+  return Array.from(nameRow.querySelectorAll("span")).filter(
     (child) =>
-      child.tagName === "SPAN" &&
       child.children.length === 0 &&
       (child.textContent.trim() === "Computer" ||
-        child.textContent.trim() === "Host"),
+        child.textContent.trim() === "Host" ||
+        child.textContent.trim() === "Sandbox"),
   );
 }

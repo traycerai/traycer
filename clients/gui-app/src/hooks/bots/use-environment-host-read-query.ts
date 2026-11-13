@@ -8,6 +8,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
@@ -15,9 +16,41 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
+import {
+  hostStatusAnswer,
+  readsHostBindingsFromPool,
+  type HostStatusAnswer,
+} from "@/hooks/bots/use-host-environment-bindings-query";
 
 const EMPTY_PARAMS = {};
+/**
+ * The host's status gates the binding read, and this read turns on only
+ * after a caller has read that status itself (the Overview, the sign-in
+ * dialogs). So it takes the entry that read just filled instead of asking
+ * the host again; a move invalidates the entry either way.
+ */
+const STATUS_STALE_MS = 5 * 60_000;
+
+/**
+ * Where a host is placed, as the binding read answers it:
+ *
+ * - `own_settings`: its own `environment.status` says it runs its own
+ *   settings (the picker's Local row). It is in no environment, so there is
+ *   no binding to read: never Personal, and never a failure.
+ * - `pending`: its status has not answered yet.
+ * - `failed`: its status read failed. Nothing is known, so the pool's
+ *   answer, which names an unbound host Personal, is not used.
+ * - `binding`: anything else, with the binding read itself. A host that
+ *   predates the method lands here, as before.
+ */
+export type EnvironmentHostRead =
+  | { readonly kind: "own_settings" }
+  | { readonly kind: "pending" }
+  | { readonly kind: "failed"; readonly retry: () => void }
+  | {
+      readonly kind: "binding";
+      readonly query: UseQueryResult<EnvironmentHostBinding, HostRpcError>;
+    };
 
 /**
  * The one environment `hostId`, the host behind `client`, is bound to, for
@@ -33,13 +66,25 @@ const EMPTY_PARAMS = {};
  * `useHostEnvironmentBindings` reads for the same host, and a bind writes
  * through to it. Both reads are declared because hooks cannot be called
  * conditionally; the build's arm is the only one ever enabled.
+ *
+ * The host's own `environment.status` comes first (`EnvironmentHostRead`):
+ * the pool answers a host that runs its own settings as Personal, and the
+ * host refuses to answer at all. Without a pool the host is asked for its
+ * binding only after its status has said it is in an environment; with one,
+ * the pool's answer waits for that status. With no client there is no
+ * status to wait for.
  */
 export function useEnvironmentHostReadQuery(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): UseQueryResult<EnvironmentHostBinding, HostRpcError> {
+): EnvironmentHostRead {
   const fromPool = readsHostBindingsFromPool();
+  const { answer: statusAnswer, retry: retryStatus } = useHostStatusAnswer(
+    client,
+    hostId,
+    enabled,
+  );
   const poolClient = useMemo(
     () => (client === null ? null : resolvePoolTierHostClient(client)),
     [client],
@@ -75,7 +120,41 @@ export function useEnvironmentHostReadQuery(
     client,
     method: "environment.host.read",
     params: EMPTY_PARAMS,
-    options: { enabled: !fromPool && enabled, refetchOnWindowFocus: false },
+    options: {
+      enabled: !fromPool && enabled && statusAnswer === "other",
+      refetchOnWindowFocus: false,
+    },
   });
-  return fromPool ? pooled : own;
+  if (statusAnswer === "own_settings") return { kind: "own_settings" };
+  if (statusAnswer === "failed") return { kind: "failed", retry: retryStatus };
+  if (enabled && statusAnswer === "unsettled") return { kind: "pending" };
+  return { kind: "binding", query: fromPool ? pooled : own };
+}
+
+/**
+ * The host's own `environment.status`, as it bears on its binding, and how to
+ * ask it again. With no client, or on a host without the method, there is
+ * nothing to wait for.
+ */
+function useHostStatusAnswer(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  enabled: boolean,
+): { readonly answer: HostStatusAnswer; readonly retry: () => void } {
+  const supported = useHostMethodSupport(hostId, "environment.status");
+  const status = useHostQuery<HostRpcRegistry, "environment.status">({
+    cacheKeyIdentity: undefined,
+    client,
+    method: "environment.status",
+    params: EMPTY_PARAMS,
+    options: {
+      enabled: enabled && supported === true,
+      refetchOnWindowFocus: false,
+      staleTime: STATUS_STALE_MS,
+    },
+  });
+  return {
+    answer: hostStatusAnswer(status, client !== null && supported !== false),
+    retry: () => void status.refetch(),
+  };
 }

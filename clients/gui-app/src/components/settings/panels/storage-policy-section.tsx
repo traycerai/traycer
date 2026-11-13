@@ -45,7 +45,6 @@ type StorageField = keyof StoragePolicyValue;
 
 const ANALYTICS_SETTING = {
   chats: "storageChats",
-  artifacts: "storageArtifacts",
   idleTaskDays: "storageIdleTasks",
   archivedChatHours: "storageArchivedChats",
 } as const satisfies Record<StorageField, AnalyticsSetting>;
@@ -69,9 +68,8 @@ function afterHours(hours: number): string {
 
 /**
  * Environment ▸ Storage: the picked configuration's `storage_policy` item, as
- * two groups: tasks nobody has used (two switches, chats and artifacts, and
- * their window) and archived chats (their own window). Every control writes
- * the whole value.
+ * two groups: tasks nobody has used (the chats switch and its window) and
+ * archived chats (their own window). Every control writes the whole value.
  *
  * Rendered only when the surface's host advertises the item write
  * (`environment.configuration.items.put`, answered by the pool in a pool
@@ -175,22 +173,6 @@ function StoragePolicySectionBody(props: {
           }
         />
         <SettingsRow
-          row={STORAGE.definitions.artifacts}
-          control={
-            <div className="flex items-center gap-2">
-              {spinner("artifacts")}
-              <Switch
-                checked={shown.artifacts}
-                disabled={disabled}
-                aria-label={STORAGE.definitions.artifacts.label}
-                onCheckedChange={(artifacts) => {
-                  write("artifacts", artifacts);
-                }}
-              />
-            </div>
-          }
-        />
-        <SettingsRow
           row={STORAGE.definitions.idleTaskWindow}
           control={
             <div className="flex items-center gap-2">
@@ -204,8 +186,8 @@ function StoragePolicySectionBody(props: {
                 presets={IDLE_TASK_PRESETS}
                 format={afterDays}
                 value={shown.idleTaskDays}
-                // The window cleans whichever kinds are on.
-                disabled={disabled || !(shown.chats || shown.artifacts)}
+                // The window cleans only while chats are on.
+                disabled={disabled || !shown.chats}
                 onWindowChange={(days) => {
                   write("idleTaskDays", days);
                 }}
@@ -254,12 +236,9 @@ function windowLabel(group: string, row: string): string {
   return `${group}: ${row}`;
 }
 
-/** The line under the groups, or `null` when nothing can be cleaned. */
+/** The line under the groups, or `null` while Chats is off. */
 function storageFootnote(policy: StoragePolicyValue): string | null {
-  if (policy.chats || policy.archivedChatHours !== null) {
-    return `${APPLIES_EVERYWHERE} ${CHAT_COMES_BACK}`;
-  }
-  return policy.artifacts ? APPLIES_EVERYWHERE : null;
+  return policy.chats ? `${APPLIES_EVERYWHERE} ${CHAT_COMES_BACK}` : null;
 }
 
 /**

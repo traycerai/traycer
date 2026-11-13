@@ -9,7 +9,8 @@
  * socket frozen across a device sleep. Pairing the longer ceiling with the
  * bounded transport-retry wrapper (`createRetryingMessenger`) absorbs those
  * blips without hanging a user gesture: an unreachable host still surfaces a
- * transport failure within one backoff budget.
+ * transport failure within one backoff budget. The clock starts when the dial
+ * gate grants a slot (`ws-dial-gate.ts`): time in its queue is not counted.
  */
 export const DEFAULT_DIAL_TIMEOUT_MS = 10_000;
 

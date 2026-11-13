@@ -555,6 +555,45 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
     },
   );
 
+  const V14: SchemaVersion = { major: 1, minor: 4 };
+  const V15: SchemaVersion = { major: 1, minor: 5 };
+  const ANSWER_SET: BotConversationSendRequest = {
+    ...SEND,
+    text: "Now",
+    answer: null,
+    answers: {
+      questionMessageId: "bot-question:req-q",
+      entries: [
+        { questionIndex: 0, skipped: false, selected: ["Now"], text: null },
+        { questionIndex: 1, skipped: true, selected: [], text: null },
+      ],
+    },
+  };
+
+  it("refuses a card's answers sent together on a host that negotiated 1.4 before they leave, so they are never taken as a plain post", async () => {
+    const f = floorFixture(V14);
+
+    const failure = await act(() => f.send(ANSWER_SET));
+
+    expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(f.handled).toEqual([]);
+    expect(f.messenger.dispatched).toEqual([]);
+    expect(f.messenger.calls).toEqual([]);
+  });
+
+  it("sends a card's answers sent together, floor attached, to a host that negotiated 1.5", async () => {
+    const f = floorFixture(V15);
+
+    const failure = await act(() => f.send(ANSWER_SET));
+
+    expect(failure).toBeNull();
+    expect(f.handled).toEqual([ANSWER_SET]);
+    expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "bot.conversation.send",
+      version: { major: 1, minor: 5 },
+    });
+  });
+
   it("sends a plain post to a 1.0 host with no floor, which has always been allowed to take it", async () => {
     const f = floorFixture(V10);
 

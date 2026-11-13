@@ -162,6 +162,7 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     publicKey,
     relayFuseGrace: false,
     sandbox: null,
+    owner: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -442,6 +443,46 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     });
     expect(tracked.records()).toHaveLength(2);
     expect(tracked.records()[0].closeCount).toBe(1);
+  });
+
+  it("builds the session that replaces an evicted one for the same chat with a later sessionGeneration, so a card's baseline tells the two apart", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-generation-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const evicted = result.current;
+    if (evicted === null) {
+      throw new Error("expected initial handle");
+    }
+
+    hostEntryRef.value = remoteTarget("pubkey-b");
+    rerender();
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+      expect(result.current).not.toBe(evicted);
+    });
+    const replacement = result.current;
+    if (replacement === null) {
+      throw new Error("expected the replacement handle");
+    }
+
+    expect(tracked.records()[0].closeCount).toBe(1);
+    expect([replacement.epicId, replacement.chatId]).toEqual([
+      evicted.epicId,
+      evicted.chatId,
+    ]);
+    expect(replacement.sessionGeneration).toBeGreaterThan(
+      evicted.sessionGeneration,
+    );
   });
 });
 

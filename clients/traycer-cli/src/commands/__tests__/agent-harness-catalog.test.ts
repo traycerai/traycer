@@ -122,6 +122,7 @@ describe("agent harness catalog commands", () => {
       models: [
         {
           id: "gpt-5.6-codex",
+          resolvedModel: "gpt-5.6-codex-2026",
           reasoningEfforts: ["high"],
           fastModeAvailable: true,
           serviceTiers: ["priority"],
@@ -135,6 +136,9 @@ describe("agent harness catalog commands", () => {
       profileId: "profile-work",
     })(makeCtx());
     expect(result.human).toContain("[serviceTier: priority]");
+    expect(result.human).toContain(
+      "gpt-5.6-codex [resolvesTo: gpt-5.6-codex-2026]",
+    );
     expect(dispatchMock).toHaveBeenCalledWith(
       "agent.listHarnessModels",
       expect.objectContaining({ profileId: "profile-work" }),

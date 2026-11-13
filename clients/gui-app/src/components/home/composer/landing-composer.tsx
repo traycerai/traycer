@@ -1,4 +1,5 @@
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
+import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -47,7 +48,6 @@ import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-pro
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
 import { LANDING_COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
-import { cn } from "@/lib/utils";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -970,21 +970,26 @@ export function LandingComposer(props: LandingComposerProps) {
         editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
         pickerStore.getState().knownSlashCommands,
       );
+      const stillCurrent = (): boolean =>
+        stagedSubmitAttempt.current === attempt &&
+        readStagedSandbox(composerSurfaceKey) === staged &&
+        signedInUserId() === account &&
+        JSON.stringify(pickedRunSettings(toolbarStore.getState())) ===
+          settingsKey &&
+        generation.stillCurrent();
 
       // An agent the sandbox does not offer is refused here,
       // before anything is created or woken; the draft and the chip stay.
-      return stagedSignInCheck
-        .beforeSend(staged)
-        .then((signedOut) => {
-          if (
-            stagedSubmitAttempt.current !== attempt ||
-            readStagedSandbox(composerSurfaceKey) !== staged ||
-            signedInUserId() !== account ||
-            JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
-              settingsKey ||
-            !generation.stillCurrent()
-          )
-            return false;
+      const run = async (): Promise<boolean> => {
+        try {
+          const ownerResolution = actions.resolveOwnerForCreate(owner);
+          const resolvedOwner =
+            ownerResolution instanceof Promise
+              ? await ownerResolution
+              : ownerResolution;
+          if (!stillCurrent()) return false;
+          const signedOut = await stagedSignInCheck.beforeSend(staged);
+          if (!stillCurrent()) return false;
           if (signedOut !== null) {
             raiseSendRefusal();
             return false;
@@ -999,7 +1004,7 @@ export function LandingComposer(props: LandingComposerProps) {
           }
           const refusal = actions.startTaskOnStagedSandbox({
             draftId: draftId ?? createdUnboundDraftIdRef.current,
-            owner,
+            owner: resolvedOwner,
             sandboxTeamId:
               staged.target.configuration.kind === "team"
                 ? staged.target.configuration.teamId
@@ -1022,10 +1027,14 @@ export function LandingComposer(props: LandingComposerProps) {
           );
           if (refusal === null) setComposerExpanded(false);
           return refusal === null;
-        })
-        .finally(() => {
-          stagedSubmitAttempt.current = null;
-        });
+        } catch (error) {
+          if (error instanceof SupersededAuthEraError) return false;
+          throw error;
+        }
+      };
+      return run().finally(() => {
+        stagedSubmitAttempt.current = null;
+      });
     },
     [
       actions,
@@ -1230,11 +1239,8 @@ export function LandingComposer(props: LandingComposerProps) {
         toolbarStore={toolbarStore}
         composerMode={composerMode}
         chatEditorIsActive={chatComposerActive}
-        // Leave room for Current tasks while long prompts scroll in the editor.
-        editorClassName={cn(
-          LANDING_COMPOSER_EDITOR_CLASSNAME,
-          "md:max-h-[40dvh]",
-        )}
+        // Long prompts scroll inside the shared editor cap, min(50vh, 15rem).
+        editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
         initialContent={initialContent}
         initialSelection={initialSelection}
         canSubmit={canSubmit}

@@ -403,7 +403,8 @@ class OpusCapture implements MixCapture {
     if (this.openCluster.length > CLUSTER_PACKETS) {
       const full = this.openCluster.slice(0, -1);
       this.openCluster = this.openCluster.slice(-1);
-      this.deliver(webmOpusCluster(full, null));
+      const cluster = webmOpusCluster(full, null);
+      this.handlers?.onChunk(cluster);
     }
   }
 
@@ -424,7 +425,8 @@ class OpusCapture implements MixCapture {
     const opusHead = copyOf(description);
     const preSkipSamples = readOpusPreSkip(opusHead);
     this.preSkipSamples = preSkipSamples;
-    this.deliver(webmOpusHeader({ opusHead, preSkipSamples }));
+    const header = webmOpusHeader({ opusHead, preSkipSamples });
+    this.handlers?.onChunk(header);
   }
 
   /**
@@ -463,17 +465,12 @@ class OpusCapture implements MixCapture {
         `The encoder's ${String(this.packets)} packets leave ${String(padding)} samples of padding, which is not within one frame`,
       );
     }
-    this.deliver(
-      webmOpusCluster(
-        this.openCluster,
-        Math.round((padding * 1e9) / OPUS_RATE),
-      ),
+    const cluster = webmOpusCluster(
+      this.openCluster,
+      Math.round((padding * 1e9) / OPUS_RATE),
     );
+    this.handlers?.onChunk(cluster);
     this.openCluster = [];
-  }
-
-  private deliver(bytes: Uint8Array): void {
-    this.handlers?.onChunk(bytes);
   }
 
   private throwIfFailed(): void {

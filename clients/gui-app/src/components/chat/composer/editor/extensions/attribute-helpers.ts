@@ -35,6 +35,7 @@ export function dataAttributeMap(
 export const MENTION_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   "contextType",
   "id",
+  "hostId",
   "path",
   "pathKind",
   "relPath",

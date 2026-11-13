@@ -62,6 +62,7 @@ import {
   botConversationSendRequestSchemaV11,
   botConversationSendRequestSchemaV12,
   botConversationSendRequestSchemaV13,
+  botConversationSendRequestSchemaV14,
   botConversationSendResponseSchema,
   botConversationSearchRequestSchema,
   botConversationSearchResponseSchema,
@@ -215,7 +216,7 @@ export const botUpdateReplyModeV10 = defineRpcContract({
 });
 
 /**
- * `bot.updateAppearance@1.0` (T147): the bot's icon, its swatch and its
+ * `bot.updateAppearance@1.0` (T147): the bot's icon, its colour and its
  * channel's background, each kept, set or cleared. Same optional posture as
  * the namespace: a host without it offers none of the three.
  */
@@ -417,7 +418,7 @@ export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
 export const botConversationSendV14 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 4 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV14,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
@@ -426,6 +427,27 @@ export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
 >({
   from: botConversationSendV13.schemaVersion,
   to: botConversationSendV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.5` (T167): a member's answers to every open
+ * question of a bot's card in one send (`answers`). A 1.4 request answers at
+ * most one question (`answer`).
+ */
+export const botConversationSendV15 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV14ToV15 = defineUpgradePath<
+  typeof botConversationSendV14,
+  typeof botConversationSendV15
+>({
+  from: botConversationSendV14.schemaVersion,
+  to: botConversationSendV15.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -698,10 +720,8 @@ export const botSubscribeV13 = defineStreamRpcContract({
 });
 
 /**
- * `bot.subscribe@1.4` (T86): each task entry carries its check-in history
- * (`checkins`), and each notification subscription when it started
- * (`since`). A 1.3 subscriber's snapshot carries neither, and reads the last
- * check-in alone. Grown in place by T92 (the namespace is unreleased): each
+ * `bot.subscribe@1.4`: each notification subscription carries when it started
+ * (`since`). A 1.3 subscriber's snapshot omits that field. Each
  * entry's pause, stop and pending Run now, each received check-in's
  * requester, each subscription's digests and the stopped watches, all
  * defaulted `null`.

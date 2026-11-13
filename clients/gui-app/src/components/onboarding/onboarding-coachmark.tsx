@@ -244,9 +244,14 @@ export function OnboardingCoachmark(props: CoachmarkProps) {
         paintSpotlight(target, halo, cutoutRef.current, portal);
         // `autoUpdate` re-runs this on every ancestor scroll, which is what
         // lets the card leave when its target does.
-        const occluded = String(targetOccluded(target));
+        const hidden = targetOccluded(target);
+        const occluded = String(hidden);
         floater.dataset.occluded = occluded;
         if (halo !== null) halo.dataset.occluded = occluded;
+        // The card stays mounted while out of sight; `inert` is how a dialog
+        // nobody can see stops counting as one, for focus and for the
+        // back/forward swipe alike.
+        floater.inert = hidden;
       });
     };
     reposition();

@@ -1,5 +1,6 @@
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -70,6 +71,33 @@ async function selectOs(user: UserEvent, name: string): Promise<void> {
   await user.click(await screen.findByRole("option", { name }));
 }
 
+function pageDescription(): HTMLElement {
+  const heading = screen.getByRole("heading", { level: 1 });
+  const header = heading.closest("header");
+  if (header === null) throw new Error("page heading has no header");
+  const paragraph = Array.from(header.querySelectorAll("p")).find(
+    (node) => node.dataset.testid !== "settings-phone-scope-line",
+  );
+  if (paragraph === undefined) {
+    throw new Error("page header has no description");
+  }
+  return paragraph;
+}
+
+async function expectSentence(
+  text: string,
+  name: string,
+  split: boolean,
+): Promise<void> {
+  await waitFor(() => {
+    expect(pageDescription().textContent).toBe(text);
+  });
+  if (!split) return;
+  const nameNode = within(pageDescription()).getByText(name);
+  expect(nameNode.tagName).toBe("SPAN");
+  expect(nameNode.className).toContain("truncate");
+}
+
 function shellEditor(): HTMLElement {
   const section = screen.getByLabelText("Shell path").closest("section");
   if (section === null) throw new Error("Shell path has no editor section");
@@ -87,15 +115,22 @@ describe("TeamVariablesAndShells", () => {
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
     const row = await screen.findByRole("region", { name: "NODE_ENV" });
-    expect(within(row).getByLabelText("NODE_ENV value")).toHaveProperty(
+    expect(within(row).getByLabelText("Value for NODE_ENV")).toHaveProperty(
       "value",
       "production",
     );
-    expect(within(row).getByRole("button", { name: "Save" })).toBeTruthy();
-    expect(within(row).getByRole("button", { name: "Delete" })).toBeTruthy();
-    expect(screen.getByLabelText("Variable name")).toBeTruthy();
+    expect(within(row).queryByRole("combobox")).toBeNull();
+    expect(
+      within(row).getByRole("button", { name: "Remove NODE_ENV" }),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("New variable name")).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add a variable" }),
+    );
+    expect(screen.getByRole("region", { name: "New variable" })).toBeTruthy();
+    expect(screen.getByLabelText("New variable name")).toBeTruthy();
     expect(screen.getByLabelText("New variable value")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Add a variable" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Apply variable" })).toBeTruthy();
     expect(screen.getByLabelText("Shell path")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reset" })).toBeTruthy();
   });
@@ -157,7 +192,7 @@ describe("TeamVariablesAndShells", () => {
       }
       const variableRow = screen.getByRole("region", { name: "NODE_ENV" });
       expect(
-        within(variableRow).getByLabelText("NODE_ENV value"),
+        within(variableRow).getByLabelText("Value for NODE_ENV"),
       ).toHaveProperty("value", "production");
       expect(screen.queryByText(/This host uses/)).toBeNull();
       expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
@@ -169,7 +204,7 @@ describe("TeamVariablesAndShells", () => {
       );
       expect(within(live).getByText("/bin/zsh -l")).toBeTruthy();
       await selectOs(user, "Linux");
-      expect(screen.getByLabelText("LINUX_URL value")).toHaveProperty(
+      expect(screen.getByLabelText("Value for LINUX_URL")).toHaveProperty(
         "value",
         "saved-linux",
       );
@@ -187,7 +222,7 @@ describe("TeamVariablesAndShells", () => {
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
+    expect(await screen.findByLabelText("Value for NODE_ENV")).toHaveProperty(
       "value",
       "production",
     );
@@ -227,11 +262,11 @@ describe("TeamVariablesAndShells", () => {
     const failure = await screen.findByText(
       "Couldn't read Acme's variables and shells.",
     );
-    expect(
-      await screen.findByText(
-        "Plain values every host running these settings gets, and the shell agents run in.",
-      ),
-    ).toBeTruthy();
+    await expectSentence(
+      "Plain values every host running Acme gets, and the shell agents run in.",
+      "Acme",
+      true,
+    );
     const reads = harness.paramsOf("environment.configuration.items").length;
 
     fail = false;
@@ -241,7 +276,7 @@ describe("TeamVariablesAndShells", () => {
       }),
     );
 
-    expect(await screen.findByLabelText("NODE_ENV value")).toBeTruthy();
+    expect(await screen.findByLabelText("Value for NODE_ENV")).toBeTruthy();
     expect(
       harness.paramsOf("environment.configuration.items").length,
     ).toBeGreaterThan(reads);
@@ -258,7 +293,13 @@ describe("TeamVariablesAndShells", () => {
 
     expect(await screen.findByText("production")).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
-    for (const verb of ["Save", "Delete", "Add a variable", "Remove"]) {
+    for (const verb of [
+      "Save",
+      "Delete",
+      "Add a variable",
+      "Apply variable",
+      "Remove NODE_ENV",
+    ]) {
       expect(screen.queryByRole("button", { name: verb })).toBeNull();
     }
   });
@@ -283,29 +324,22 @@ describe("TeamVariablesAndShells", () => {
       "environment.host.list": () => ({ hosts: [] }),
     });
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
-    const field = await screen.findByLabelText("NODE_ENV value");
+    const field = await screen.findByLabelText("Value for NODE_ENV");
     await userEvent.clear(field);
     await userEvent.type(field, "development");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
+    fireEvent.blur(screen.getByLabelText("Value for NODE_ENV"));
     expect(
       await screen.findByText("Changed by Grace a moment ago"),
     ).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+      expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
         "value",
         "development",
       );
-      expect(
-        within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-          "button",
-          { name: "Save" },
-        ),
-      ).toHaveProperty("disabled", false);
+      expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
+        "disabled",
+        false,
+      );
     });
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
       {
@@ -317,15 +351,10 @@ describe("TeamVariablesAndShells", () => {
         revision: 3,
       },
     ]);
-    await userEvent.type(screen.getByLabelText("NODE_ENV value"), "!");
-    await userEvent.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
+    await userEvent.type(screen.getByLabelText("Value for NODE_ENV"), "!");
+    fireEvent.blur(screen.getByLabelText("Value for NODE_ENV"));
     await waitFor(() => {
-      expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+      expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
         "disabled",
         false,
       );
@@ -333,7 +362,7 @@ describe("TeamVariablesAndShells", () => {
     expect(
       harness.paramsOf("environment.configuration.items.put")[1],
     ).toMatchObject({ revision: 4, value: { value: "development!" } });
-    expect(screen.getByLabelText("NODE_ENV value")).toHaveProperty(
+    expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
       "value",
       "development!",
     );
@@ -362,34 +391,32 @@ describe("TeamVariablesAndShells", () => {
     const user = userEvent.setup();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
 
-    expect(await screen.findByLabelText("NODE_ENV value")).toHaveProperty(
-      "value",
-      "production",
-    );
+    expect(
+      within(
+        await screen.findByRole("region", { name: "NODE_ENV" }),
+      ).getByLabelText("Value for NODE_ENV"),
+    ).toHaveProperty("value", "production");
     await user.click(
       screen.getByRole("combobox", { name: "Operating system" }),
     );
     await user.click(await screen.findByRole("option", { name: "Linux" }));
-    const field = screen.getByLabelText("NODE_ENV value");
+    const field = screen.getByLabelText("Value for NODE_ENV");
     expect(field).toHaveProperty("value", "linux-value");
 
     await user.type(field, "!");
-    await user.click(
-      within(screen.getByRole("region", { name: "NODE_ENV" })).getByRole(
-        "button",
-        { name: "Save" },
-      ),
-    );
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "variable",
-        key: "NODE_ENV",
-        os: "linux",
-        value: { value: "linux-value!" },
-        revision: 3,
-      },
-    ]);
+    fireEvent.blur(screen.getByLabelText("Value for NODE_ENV"));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "variable",
+          key: "NODE_ENV",
+          os: "linux",
+          value: { value: "linux-value!" },
+          revision: 3,
+        },
+      ]);
+    });
   });
 
   it("lists every operating system's variables under All, labels the ones scoped to one, and saves each under its own", async () => {
@@ -420,25 +447,29 @@ describe("TeamVariablesAndShells", () => {
     const row = await screen.findByRole("region", { name: "API_URL · macOS" });
     expect(within(row).getByText("macOS")).toBeTruthy();
     expect(screen.queryByText("No variables.")).toBeNull();
-    expect(within(row).getByRole("button", { name: "Save" })).toBeTruthy();
-    const field = within(row).getByLabelText("API_URL · macOS value");
+    expect(
+      within(row).getByRole("button", { name: "Remove API_URL" }),
+    ).toBeTruthy();
+    const field = within(row).getByLabelText("Value for API_URL");
     expect(field).toHaveProperty("value", "mac-value");
 
     await user.type(field, "!");
-    await user.click(within(row).getByRole("button", { name: "Save" }));
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "variable",
-        key: "API_URL",
-        os: "macos",
-        value: { value: "mac-value!" },
-        revision: 2,
-      },
-    ]);
+    fireEvent.blur(screen.getByLabelText("Value for API_URL"));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "variable",
+          key: "API_URL",
+          os: "macos",
+          value: { value: "mac-value!" },
+          revision: 2,
+        },
+      ]);
+    });
 
     await waitFor(() => {
-      expect(screen.getByLabelText("API_URL · macOS value")).toHaveProperty(
+      expect(screen.getByLabelText("Value for API_URL")).toHaveProperty(
         "disabled",
         false,
       );
@@ -463,8 +494,9 @@ describe("TeamVariablesAndShells", () => {
     const user = userEvent.setup();
     render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
     await selectOs(user, "Linux");
-    await user.type(screen.getByLabelText("Variable name"), "API_URL");
     await user.click(screen.getByRole("button", { name: "Add a variable" }));
+    await user.type(screen.getByLabelText("New variable name"), "API_URL");
+    await user.click(screen.getByRole("button", { name: "Apply variable" }));
     const refreshed = "Saved, but latest settings haven't refreshed.";
     expect(await screen.findByText(refreshed)).toBeTruthy();
     expect(screen.getByText("API_URL")).toBeTruthy();
@@ -880,7 +912,11 @@ describe("TeamMcpServers", () => {
     });
     render(<TeamMcpServers />, { wrapper: harness.Wrapper });
 
-    expect(await screen.findByText("Tools agents can call.")).toBeTruthy();
+    await expectSentence(
+      "Tools agents can call. Acme's servers reach every provider on its hosts.",
+      "Acme",
+      true,
+    );
   });
 
   it("toggles a tool against the displayed revision for an editor", async () => {
@@ -999,48 +1035,63 @@ describe("Environment page subtitles", () => {
   } as const;
 
   it.each([
-    [
-      "Providers",
-      <TeamProviders key="p" />,
-      "Sign-ins, keys and tools for each coding agent.",
-      "Sign-ins, keys and tools for each coding agent.",
-    ],
-    [
-      "MCP servers",
-      <TeamMcpServers key="m" />,
-      "Tools agents can call.",
-      "Tools agents can call.",
-    ],
-    [
-      "Skills",
-      <TeamSkillsPage key="s" />,
-      null,
-      "Instructions agents follow for a kind of task.",
-    ],
-    [
-      "Permissions",
-      <TeamPermissions key="x">{null}</TeamPermissions>,
-      "What agents may do without asking, on every host running these settings.",
-      "What your agents may do without asking, on every computer and sandbox running these settings.",
-    ],
-    [
-      "Variables & shells",
-      <TeamVariablesAndShells key="v" />,
-      "Plain values every host running these settings gets, and the shell agents run in.",
-      "Plain values every computer and sandbox running these settings gets, and the shell agents run in.",
-    ],
-  ])("%s names its configuration", async (_page, page, team, personal) => {
-    if (team !== null) {
-      const harness = mountTeamPage(poolSource("editor"), handlers);
-      render(page, { wrapper: harness.Wrapper });
-      expect(await screen.findByText(team)).toBeTruthy();
+    {
+      pageName: "Providers",
+      page: <TeamProviders key="p" />,
+      team: "Sign-ins, keys and tools for each coding agent.",
+      personal: "Sign-ins, keys and tools for each coding agent.",
+      teamSplit: false,
+      personalSplit: false,
+    },
+    {
+      pageName: "MCP servers",
+      page: <TeamMcpServers key="m" />,
+      team: "Tools agents can call. Acme's servers reach every provider on its hosts.",
+      personal:
+        "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
+      teamSplit: true,
+      personalSplit: false,
+    },
+    {
+      pageName: "Skills",
+      page: <TeamSkillsPage key="s" />,
+      team: "Instructions agents follow for a kind of task. Acme's skills reach every provider on its hosts.",
+      personal:
+        "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
+      teamSplit: true,
+      personalSplit: false,
+    },
+    {
+      pageName: "Permissions",
+      page: <TeamPermissions key="x">{null}</TeamPermissions>,
+      team: "What agents may do without asking, on every host running Acme.",
+      personal:
+        "What your agents may do without asking, on every computer and sandbox running Personal.",
+      teamSplit: false,
+      personalSplit: false,
+    },
+    {
+      pageName: "Variables & shells",
+      page: <TeamVariablesAndShells key="v" />,
+      team: "Plain values every host running Acme gets, and the shell agents run in.",
+      personal:
+        "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
+      teamSplit: true,
+      personalSplit: false,
+    },
+  ])(
+    "$pageName names its configuration",
+    async ({ page, team, personal, teamSplit, personalSplit }) => {
+      const teamHarness = mountTeamPage(poolSource("editor"), handlers);
+      render(page, { wrapper: teamHarness.Wrapper });
+      await expectSentence(team, "Acme", teamSplit);
       cleanup();
       resetTeamPageHarness();
-    }
-    const harness = mountTeamPage(personalPoolSource(), handlers);
-    render(page, { wrapper: harness.Wrapper });
-    expect(await screen.findByText(personal)).toBeTruthy();
-  });
+      const harness = mountTeamPage(personalPoolSource(), handlers);
+      render(page, { wrapper: harness.Wrapper });
+      await expectSentence(personal, "Personal", personalSplit);
+    },
+  );
 
   it.each([
     {
@@ -1050,7 +1101,9 @@ describe("Environment page subtitles", () => {
       source: poolSource("editor"),
       pick: { kind: "team", environmentId: "env-a" },
       environmentName: "Acme",
-      purpose: "Tools agents can call.",
+      sentence:
+        "Tools agents can call. Acme's servers reach every provider on its hosts.",
+      split: true,
     },
     {
       pageTitle: "MCP servers",
@@ -1059,7 +1112,9 @@ describe("Environment page subtitles", () => {
       source: personalPoolSource(),
       pick: { kind: "personal" },
       environmentName: "Personal",
-      purpose: "Tools agents can call.",
+      sentence:
+        "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
+      split: false,
     },
     {
       pageTitle: "Skills",
@@ -1068,7 +1123,9 @@ describe("Environment page subtitles", () => {
       source: poolSource("editor"),
       pick: { kind: "team", environmentId: "env-a" },
       environmentName: "Acme",
-      purpose: "Instructions agents follow for a kind of task.",
+      sentence:
+        "Instructions agents follow for a kind of task. Acme's skills reach every provider on its hosts.",
+      split: true,
     },
     {
       pageTitle: "Skills",
@@ -1077,7 +1134,9 @@ describe("Environment page subtitles", () => {
       source: personalPoolSource(),
       pick: { kind: "personal" },
       environmentName: "Personal",
-      purpose: "Instructions agents follow for a kind of task.",
+      sentence:
+        "Instructions agents follow for a kind of task. Personal's skills reach every provider on every computer and sandbox running Personal.",
+      split: false,
     },
     {
       pageTitle: "Permissions",
@@ -1086,8 +1145,9 @@ describe("Environment page subtitles", () => {
       source: poolSource("editor"),
       pick: { kind: "team", environmentId: "env-a" },
       environmentName: "Acme",
-      purpose:
-        "What agents may do without asking, on every host running these settings.",
+      sentence:
+        "What agents may do without asking, on every host running Acme.",
+      split: false,
     },
     {
       pageTitle: "Variables & shells",
@@ -1096,8 +1156,9 @@ describe("Environment page subtitles", () => {
       source: poolSource("editor"),
       pick: { kind: "team", environmentId: "env-a" },
       environmentName: "Acme",
-      purpose:
-        "Plain values every host running these settings gets, and the shell agents run in.",
+      sentence:
+        "Plain values every host running Acme gets, and the shell agents run in.",
+      split: true,
     },
   ] as const)(
     "$pageTitle · $environmentName shows its environment once in the phone caption",
@@ -1108,7 +1169,8 @@ describe("Environment page subtitles", () => {
       source,
       pick,
       environmentName,
-      purpose,
+      sentence,
+      split,
     }) => {
       useSettingsEnvironmentPickStore.setState({
         pick,
@@ -1123,18 +1185,24 @@ describe("Environment page subtitles", () => {
       const scopeLine = await screen.findByTestId("settings-phone-scope-line");
       await waitFor(() => {
         expect(scopeLine.textContent).toBe(environmentName);
+        expect(pageDescription().textContent).toBe(sentence);
       });
+      if (split) {
+        const nameNode = within(pageDescription()).getByText(environmentName);
+        expect(nameNode.tagName).toBe("SPAN");
+        expect(nameNode.className).toContain("truncate");
+      }
       const heading = screen.getByRole("heading", {
         level: 1,
         name: pageTitle,
       });
       const header = heading.closest("header");
-      expect(header).not.toBeNull();
-      if (header === null) return;
-      expect(
-        header.textContent.match(new RegExp(environmentName, "g")) ?? [],
-      ).toHaveLength(1);
-      expect(await screen.findByText(purpose)).toBeTruthy();
+      if (header === null) throw new Error("page heading has no header");
+      const namePattern = new RegExp(environmentName, "g");
+      const descriptionCount =
+        pageDescription().textContent.match(namePattern)?.length ?? 0;
+      const headerCount = header.textContent.match(namePattern)?.length ?? 0;
+      expect(headerCount - descriptionCount).toBe(1);
     },
   );
 });

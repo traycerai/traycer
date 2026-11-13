@@ -79,9 +79,10 @@ import {
 } from "../config";
 import type { AttachGrantProvider, AttachGrantProvision } from "../grant";
 import { NoiseChannel } from "../noise-channel";
-import type { RelaySocketHandlers, RelaySocketOptions } from "../relay-socket";
+import * as relaySocketModule from "../relay-socket";
 import { HostTransportFailureError } from "../rpc-types";
 import { RemoteSession, type RemoteSessionEvidence } from "../session";
+import { countWebCrypto, settleNoise } from "./web-crypto-completion-fixture";
 
 /**
  * Own-leg loss on a session that negotiated resume: the client keeps its Noise
@@ -102,77 +103,6 @@ const EMPTY_AD = new Uint8Array(0);
 const STATUS_METHOD = "host.status";
 const STREAM_METHOD = "cursor.subscribe";
 const RELINK_CLOSE_CODE = 4007;
-
-/** Captured before fake timers: a real turn lets WebCrypto's completions in. */
-const realSetImmediate = globalThis.setImmediate;
-
-/**
- * The fake clock moves everything here but Noise, which runs on WebCrypto's
- * thread pool. These count its operations, so a test awaits them finishing
- * rather than sleeping for as long as they usually take.
- */
-let webCryptoInFlight = 0;
-
-function countedWebCrypto<T>(operation: Promise<T>): Promise<T> {
-  webCryptoInFlight += 1;
-  return operation.finally(() => {
-    webCryptoInFlight -= 1;
-  });
-}
-
-function countWebCrypto(): void {
-  const subtle = globalThis.crypto.subtle;
-  const decrypt = subtle.decrypt.bind(subtle);
-  const digest = subtle.digest.bind(subtle);
-  const encrypt = subtle.encrypt.bind(subtle);
-  const importKey = subtle.importKey.bind(subtle);
-  const sign = subtle.sign.bind(subtle);
-  vi.spyOn(subtle, "decrypt").mockImplementation((...args) =>
-    countedWebCrypto(decrypt(...args)),
-  );
-  vi.spyOn(subtle, "digest").mockImplementation((...args) =>
-    countedWebCrypto(digest(...args)),
-  );
-  vi.spyOn(subtle, "encrypt").mockImplementation((...args) =>
-    countedWebCrypto(encrypt(...args)),
-  );
-  vi.spyOn(subtle, "importKey").mockImplementation((...args) =>
-    countedWebCrypto(importKey(...args)),
-  );
-  vi.spyOn(subtle, "sign").mockImplementation((...args) =>
-    countedWebCrypto(sign(...args)),
-  );
-}
-
-/**
- * Returns once no Noise operation is running. It takes two quiet turns because
- * the continuation of a finished operation can start the next one.
- */
-async function settleNoise(): Promise<void> {
-  let quietTurns = 0;
-  while (quietTurns < 2) {
-    await new Promise((resolve) => {
-      realSetImmediate(resolve);
-    });
-    quietTurns = webCryptoInFlight === 0 ? quietTurns + 1 : 0;
-  }
-}
-
-/** The handlers the session gave each relay socket, in dial order. */
-const capturedLegs = vi.hoisted(() => ({
-  handlers: [] as RelaySocketHandlers[],
-}));
-
-vi.mock("../relay-socket", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../relay-socket")>();
-  class RecordingRelaySocket extends actual.RelaySocket {
-    constructor(options: RelaySocketOptions) {
-      super(options);
-      capturedLegs.handlers.push(options.handlers);
-    }
-  }
-  return { ...actual, RelaySocket: RecordingRelaySocket };
-});
 
 const statusContract = defineRpcContract({
   method: STATUS_METHOD,
@@ -1007,7 +937,6 @@ describe("RemoteSession relink on an own-leg loss", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     countWebCrypto();
-    capturedLegs.handlers.length = 0;
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
@@ -1716,12 +1645,20 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
   describe("leg identity", () => {
     it("ignores every late event from a superseded leg", async () => {
+      // A spy on the export, not `vi.mock`: files in this worker share one
+      // module cache, and a mock misses a session another file loaded first.
+      const OriginalRelaySocket = relaySocketModule.RelaySocket;
+      const dials = vi
+        .spyOn(relaySocketModule, "RelaySocket")
+        .mockImplementation(function (options) {
+          return new OriginalRelaySocket(options);
+        });
       const fixture = await readyFixture(LIVE);
       const { relay, session } = fixture;
       relay.dropLeg(1006, "net");
       await advanceUntil(() => relay.legs.length === 2, 30_000);
       await untilResumed(fixture, 1);
-      const old = capturedLegs.handlers[0];
+      const old = dials.mock.calls[0]?.[0].handlers;
       if (old === undefined) {
         throw new Error("the first leg's handlers were not captured");
       }

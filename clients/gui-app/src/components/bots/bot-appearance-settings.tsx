@@ -1,37 +1,28 @@
+import { useId, type CSSProperties, type ReactNode } from "react";
 import {
-  useId,
-  useMemo,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
-import {
-  BOT_SWATCH_COUNT,
+  BOT_COLOR_COUNT,
+  BOT_MASCOT_ACCESSORIES,
+  BOT_MASCOT_EYEWEAR,
   type BotAppearance,
-  type BotAppearanceMark,
   type BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { BotCreaturePreview } from "@/components/bots/bot-avatars";
+import { BotMascotPreview } from "@/components/bots/bot-avatars";
 import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useBotLook } from "@/hooks/bots/use-bot-appearance";
+import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
 import { useBotUpdateAppearanceMutation } from "@/hooks/bots/use-bot-mutations";
 import {
-  type CreatureChoice,
-  creatureSheet,
-  nextCreatureSheet,
-  ownCreature,
-} from "@/lib/bots/creature-mark";
-import {
-  botSwatchAt,
-  derivedBotSwatchIndex,
-} from "@/lib/providers/profile-accent-color";
+  MASCOT_SHAPES,
+  botMascot,
+  type MascotLook,
+} from "@/lib/bots/mascot-mark";
+import { botColorAt } from "@/lib/providers/profile-accent-color";
 
-/** The twelve hues' names, in the swatches' order; the deep tones follow. */
+/** The twelve hues' names, in the colours' order; the deep tones follow. */
 const HUE_NAMES: readonly string[] = [
   "Red",
   "Orange",
@@ -47,35 +38,42 @@ const HUE_NAMES: readonly string[] = [
   "Pink",
 ];
 
-function swatchName(index: number): string {
+function colorName(index: number): string {
   const hue = HUE_NAMES[index % HUE_NAMES.length] ?? "Colour";
   return index < HUE_NAMES.length ? hue : `Deep ${hue.toLowerCase()}`;
 }
 
-const SWATCHES: readonly number[] = Array.from(
-  { length: BOT_SWATCH_COUNT },
+const COLORS: readonly number[] = Array.from(
+  { length: BOT_COLOR_COUNT },
   (_, index) => index,
 );
 
-/** Which of the three a write changes, read off its request. */
-type AppearanceField = "mark" | "swatch" | "background";
+/** Which part of the look a write changes, read off its request. */
+type AppearanceField =
+  | "mark"
+  | "color"
+  | "eyewear"
+  | "accessory"
+  | "background";
 
 function fieldOf(request: BotUpdateAppearanceRequest): AppearanceField | null {
   if (request.mark !== undefined) return "mark";
-  if (request.swatch !== undefined) return "swatch";
+  if (request.color !== undefined) return "color";
+  if (request.eyewear !== undefined) return "eyewear";
+  if (request.accessory !== undefined) return "accessory";
   if (request.background !== undefined) return "background";
   return null;
 }
 
-function sameCreature(a: CreatureChoice, b: CreatureChoice): boolean {
-  return a.family === b.family && a.seed === b.seed;
+/** A part's name as its button reads it: "Blob", "Shades", "None". */
+function partName(part: string): string {
+  return part.charAt(0).toUpperCase() + part.slice(1);
 }
 
 /**
- * A bot's look, in its channel settings: its icon (a creature grown from its
- * id), the colour its icon sits on, and the background of its channel. Each starts on the look the bot's id gives it,
- * and "Use the default" brings that back. Drawn where the tab's host can
- * change it; the rename authority decides who may.
+ * A bot's icon, its colour, what it wears and its channel's background, in
+ * its channel settings. Each part starts as the one the bot's id gives it.
+ * Drawn where the tab's host can change it; the rename authority decides who may.
  */
 export function BotAppearanceSettings(props: {
   readonly botId: string;
@@ -87,11 +85,14 @@ export function BotAppearanceSettings(props: {
     useHostMethodSupport(hostId, "bot.updateAppearance") === true;
   const update = useBotUpdateAppearanceMutation(client);
   const look = useBotLook(botId);
+  const main = useBotIsMain(botId);
   if (!supported) return null;
   const appearance: BotAppearance = look ?? {
     mark: null,
-    swatch: null,
+    color: null,
     background: null,
+    eyewear: null,
+    accessory: null,
   };
   const pending = update.isPending ? fieldOf(update.variables) : null;
   const failed = update.isError ? fieldOf(update.variables) : null;
@@ -99,27 +100,60 @@ export function BotAppearanceSettings(props: {
     failed === field && update.error !== null ? update.error.message : null;
   const change = (request: Omit<BotUpdateAppearanceRequest, "botId">): void =>
     update.mutate({ botId, ...request });
+  const current = botMascot(botId, appearance, main);
   return (
     <>
-      <BotIconSection
-        botId={botId}
-        mark={appearance.mark}
-        swatch={appearance.swatch ?? derivedBotSwatchIndex(botId)}
+      <MascotPartSection
+        label="Icon"
+        testId="bot-settings-icon"
+        choiceTestId="bot-settings-icon-shape"
+        options={MASCOT_SHAPES}
+        chosen={current.shape}
+        isDefault={appearance.mark === null}
+        preview={(shape) => ({ ...current, shape })}
         pending={pending === "mark"}
         disabled={update.isPending}
         refusal={refusal("mark")}
-        onChange={(mark) => change({ mark })}
+        onChange={(shape) =>
+          change({ mark: shape === null ? null : { kind: "mascot", shape } })
+        }
       />
-      <SwatchSection
+      <ColorSection
         label="Colour"
         testId="bot-settings-colour"
-        chosen={appearance.swatch}
-        pending={pending === "swatch"}
+        chosen={appearance.color}
+        pending={pending === "color"}
         disabled={update.isPending}
-        refusal={refusal("swatch")}
-        onChange={(swatch) => change({ swatch })}
+        refusal={refusal("color")}
+        onChange={(color) => change({ color })}
       />
-      <SwatchSection
+      <MascotPartSection
+        label="Eyewear"
+        testId="bot-settings-eyewear"
+        choiceTestId="bot-settings-eyewear"
+        options={BOT_MASCOT_EYEWEAR}
+        chosen={current.eyewear}
+        isDefault={(appearance.eyewear ?? null) === null}
+        preview={(eyewear) => ({ ...current, eyewear })}
+        pending={pending === "eyewear"}
+        disabled={update.isPending}
+        refusal={refusal("eyewear")}
+        onChange={(eyewear) => change({ eyewear })}
+      />
+      <MascotPartSection
+        label="Accessory"
+        testId="bot-settings-accessory"
+        choiceTestId="bot-settings-accessory"
+        options={BOT_MASCOT_ACCESSORIES}
+        chosen={current.accessory}
+        isDefault={(appearance.accessory ?? null) === null}
+        preview={(accessory) => ({ ...current, accessory })}
+        pending={pending === "accessory"}
+        disabled={update.isPending}
+        refusal={refusal("accessory")}
+        onChange={(accessory) => change({ accessory })}
+      />
+      <ColorSection
         label="Background"
         testId="bot-settings-background"
         chosen={appearance.background}
@@ -179,105 +213,57 @@ const CHOICE_CLASS =
   "rounded-md p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 aria-pressed:ring-2 aria-pressed:ring-foreground";
 
 /**
- * The icon: the creature the bot shows now, a sheet of others to choose
- * from, and "Regenerate patterns" for the next sheet. Regenerating changes
- * only what is offered; choosing a creature is what writes.
+ * One part of the mascot: every option drawn on the bot as it looks now, the
+ * one it shows pressed, and "Use the default" for the one its id gives it.
  */
-function BotIconSection(props: {
-  readonly botId: string;
-  readonly mark: BotAppearanceMark | null;
-  /** The swatch the icon draws on now, chosen or the bot's own. */
-  readonly swatch: number;
+function MascotPartSection<Part extends string>(props: {
+  readonly label: string;
+  readonly testId: string;
+  /** Each option's button is `<choiceTestId>-<option>`. */
+  readonly choiceTestId: string;
+  readonly options: readonly Part[];
+  readonly chosen: Part;
+  /** Whether nobody chose this part, so the bot's id decides it. */
+  readonly isDefault: boolean;
+  readonly preview: (option: Part) => MascotLook;
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly refusal: string | null;
-  readonly onChange: (mark: BotAppearanceMark | null) => void;
+  readonly onChange: (option: Part | null) => void;
 }): ReactNode {
-  const { botId, mark, onChange } = props;
+  const { options, chosen, preview, onChange, testId, choiceTestId } = props;
   const labelId = useId();
-  const firstSheet = useMemo(() => creatureSheet(botId), [botId]);
-  // The last regenerated sheet, kept for the bot it was drawn for.
-  const [regenerated, setRegenerated] = useState<{
-    readonly botId: string;
-    readonly sheet: readonly CreatureChoice[];
-  } | null>(null);
-  const sheet = regenerated?.botId === botId ? regenerated.sheet : firstSheet;
-  const current: CreatureChoice =
-    mark === null
-      ? ownCreature(botId)
-      : { family: mark.family, seed: mark.seed };
-  const swatch = botSwatchAt(props.swatch);
   return (
     <section
       aria-labelledby={labelId}
-      data-testid="bot-settings-icon"
+      data-testid={testId}
       className="flex flex-col gap-2"
     >
-      <SectionLabel id={labelId} label="Icon" pending={props.pending} />
-      <div
-        data-testid="bot-settings-icon-current"
-        className="flex items-center gap-2"
-      >
-        <BotCreaturePreview
-          botId={botId}
-          choice={current}
-          swatch={swatch}
-          size="lg"
-        />
-        <span className="text-ui-xs text-muted-foreground">
-          Current creature
-        </span>
-      </div>
+      <SectionLabel id={labelId} label={props.label} pending={props.pending} />
       <div
         role="group"
         aria-labelledby={labelId}
         className="flex flex-wrap gap-1.5"
       >
-        {sheet.map((choice, index) => (
+        {options.map((option) => (
           <button
-            key={choice.seed}
+            key={option}
             type="button"
-            aria-label={`Creature ${String(index + 1)}`}
-            aria-pressed={sameCreature(choice, current)}
+            aria-label={partName(option)}
+            aria-pressed={option === chosen}
             className={CHOICE_CLASS}
-            data-testid={`bot-settings-icon-creature-${String(index)}`}
+            data-testid={`${choiceTestId}-${option}`}
             disabled={props.disabled}
-            onClick={() =>
-              onChange({
-                kind: "creature",
-                family: choice.family,
-                seed: choice.seed,
-              })
-            }
+            onClick={() => onChange(option)}
           >
-            <BotCreaturePreview
-              botId={botId}
-              choice={choice}
-              swatch={swatch}
-              size="default"
-            />
+            <BotMascotPreview mascot={preview(option)} size="default" />
           </button>
         ))}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          data-testid="bot-settings-icon-regenerate"
-          disabled={props.disabled}
-          onClick={() =>
-            setRegenerated({
-              botId,
-              sheet: nextCreatureSheet(botId, sheet, current),
-            })
-          }
-        >
-          Regenerate patterns
-        </Button>
+      <div>
         <UseDefaultButton
-          testId="bot-settings-icon-default"
-          disabled={props.disabled || mark === null}
+          testId={`${testId}-default`}
+          disabled={props.disabled || props.isDefault}
           onClick={() => onChange(null)}
         />
       </div>
@@ -286,15 +272,16 @@ function BotIconSection(props: {
   );
 }
 
-/** A row of the swatches, the chosen one pressed, and "Use the default". */
-function SwatchSection(props: {
+/** A row of the colours, the chosen one pressed, and "Use the default". */
+function ColorSection(props: {
   readonly label: string;
   readonly testId: string;
-  readonly chosen: number | null;
+  /** The chosen colour; one this client cannot read presses none. */
+  readonly chosen: BotAppearance["color"];
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly refusal: string | null;
-  readonly onChange: (swatch: number | null) => void;
+  readonly onChange: (color: number | null) => void;
 }): ReactNode {
   const { chosen, onChange, testId } = props;
   const labelId = useId();
@@ -310,11 +297,11 @@ function SwatchSection(props: {
         aria-labelledby={labelId}
         className="flex flex-wrap gap-1.5"
       >
-        {SWATCHES.map((index) => (
+        {COLORS.map((index) => (
           <button
             key={index}
             type="button"
-            aria-label={swatchName(index)}
+            aria-label={colorName(index)}
             aria-pressed={chosen === index}
             className={CHOICE_CLASS}
             data-testid={`${testId}-${String(index)}`}
@@ -323,8 +310,8 @@ function SwatchSection(props: {
           >
             <span
               aria-hidden="true"
-              className="block size-6 rounded-sm bg-(--swatch)"
-              style={{ "--swatch": botSwatchAt(index).color } as CSSProperties}
+              className="block size-6 rounded-sm bg-(--choice-color)"
+              style={{ "--choice-color": botColorAt(index) } as CSSProperties}
             />
           </button>
         ))}

@@ -33,12 +33,15 @@ import {
 } from "@/components/settings/panels/providers-settings-panel";
 import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
+import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { CreditsSettingsPanel } from "@/components/settings/panels/credits-settings-panel";
 import { SandboxesSettingsPanel } from "@/components/settings/environment/sandboxes-page-slot";
+import { EnvironmentPickUpkeep } from "@/components/settings/environment-picker";
+import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
 import { StorageSettingsPanel } from "@/components/settings/environment/storage-settings-panel";
 import { MembersSettingsPanel } from "@/components/settings/environment/members-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -121,6 +124,7 @@ const SETTINGS_PANELS = {
   "machine-setup": MachineSetupSettingsPanel,
   notifications: NotificationsSettingsPanel,
   permissions: PermissionsSettingsPanel,
+  "agent-memories": AgentMemoriesSettingsPanel,
   agents: AgentsSettingsPanel,
   fallback: FallbackSettingsPanel,
   keybindings: KeybindingsSettingsPanel,
@@ -151,9 +155,13 @@ export function SettingsPanelForSection(props: {
   const Panel = SETTINGS_PANELS[section];
   return (
     <SettingsSectionContext value={section}>
-      <PersonalPageFrame section={section}>
-        <Panel />
-      </PersonalPageFrame>
+      <EnvironmentPickUpkeep />
+      {/* Outside the frame: a Local pick's offer page reads no configuration. */}
+      <LocalMovePageOr section={section}>
+        <PersonalPageFrame section={section}>
+          <Panel />
+        </PersonalPageFrame>
+      </LocalMovePageOr>
     </SettingsSectionContext>
   );
 }

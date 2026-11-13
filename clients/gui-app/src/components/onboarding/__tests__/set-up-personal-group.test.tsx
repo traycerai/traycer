@@ -36,7 +36,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   EnvironmentSecretV12,
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
 import type {
   ProviderCliState,
@@ -76,7 +76,7 @@ afterEach(() => {
 interface HostFacts {
   readonly providers: ProviderCliState[];
   readonly secrets: EnvironmentSecretV12[];
-  readonly status: EnvironmentStatusResponseV11;
+  readonly status: EnvironmentStatusResponseV12;
   /** The methods the host advertises. */
   readonly methods: readonly string[];
 }
@@ -125,7 +125,7 @@ function storedKey(): ProviderCliState {
   };
 }
 
-function guideStatus(): EnvironmentStatusResponseV11 {
+function guideStatus(): EnvironmentStatusResponseV12 {
   return environmentStatusFixture({
     items: [itemStatusFixture({ kind: "agent_selection_guide", key: "guide" })],
   });
@@ -356,7 +356,7 @@ describe("<SetUpPersonalGroup />", () => {
       const facts: {
         providers: ProviderCliState[];
         secrets: EnvironmentSecretV12[];
-        status: EnvironmentStatusResponseV11;
+        status: EnvironmentStatusResponseV12;
         methods: readonly string[];
       } = {
         providers: [],

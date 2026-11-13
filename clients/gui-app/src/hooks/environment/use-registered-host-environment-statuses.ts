@@ -4,7 +4,7 @@ import {
   useQueries,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -12,6 +12,7 @@ import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { queryKeys } from "@/lib/query-keys";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 
 const METHOD = "environment.status";
 const EMPTY_PARAMS = {};
@@ -39,14 +40,14 @@ export function useRegisteredHostEnvironmentStatuses(
     readonly hostId: string;
     readonly connectable: boolean;
   }>,
-): ReadonlyMap<string, EnvironmentStatusResponseV11 | null> {
+): ReadonlyMap<string, EnvironmentStatusResponseV12 | null> {
   const binding = useHostBinding();
   const combine = useCallback(
     (
       results: Array<
-        UseQueryResult<EnvironmentStatusResponseV11, HostRpcError>
+        UseQueryResult<EnvironmentStatusResponseV12, HostRpcError>
       >,
-    ): ReadonlyMap<string, EnvironmentStatusResponseV11 | null> =>
+    ): ReadonlyMap<string, EnvironmentStatusResponseV12 | null> =>
       new Map(
         results.map((result, index) => [
           hosts[index]?.hostId ?? "",
@@ -57,27 +58,45 @@ export function useRegisteredHostEnvironmentStatuses(
   );
   return useQueries({
     queries: hosts.map((host) =>
-      // `binding` only resolves the requester, whose host the key already
-      // names; adding it would refetch on binding identity drift alone.
-      // eslint-disable-next-line @tanstack/query/exhaustive-deps
-      queryOptions<EnvironmentStatusResponseV11, HostRpcError>({
-        queryKey: queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(
-          host.hostId,
-          METHOD,
-          EMPTY_PARAMS,
-        ),
-        queryFn: ({ signal }): Promise<EnvironmentStatusResponseV11> =>
-          withHostQueryErrorBoundary(METHOD, async () => {
-            const client = resolveNamedHostClient(binding, host.hostId);
-            if (client === null) throw hostClientUnavailableError(METHOD);
-            return client.requestWithSignal(METHOD, EMPTY_PARAMS, signal);
-          }),
-        meta: stampHostRpcMethod(undefined, METHOD),
-        enabled: host.connectable && binding !== null,
-        staleTime: STATUS_STALE_MS,
-        refetchOnWindowFocus: false,
-      }),
+      environmentStatusQueryOptions(
+        binding,
+        host.hostId,
+        host.connectable && binding !== null,
+      ),
     ),
     combine,
+  });
+}
+
+/**
+ * One host's `environment.status` read through that host's own requester,
+ * unpolled, under the key `useHostQuery` files it. Shared with the binding
+ * producers (`use-host-environment-bindings-query.ts`), which ask a host's
+ * status before its binding.
+ */
+export function environmentStatusQueryOptions(
+  binding: Pick<HostRuntimeBinding<HostRpcRegistry>, "hostClient"> | null,
+  hostId: string,
+  enabled: boolean,
+) {
+  // `binding` only resolves the requester, whose host the key already
+  // names; adding it would refetch on binding identity drift alone.
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
+  return queryOptions<EnvironmentStatusResponseV12, HostRpcError>({
+    queryKey: queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(
+      hostId,
+      METHOD,
+      EMPTY_PARAMS,
+    ),
+    queryFn: ({ signal }): Promise<EnvironmentStatusResponseV12> =>
+      withHostQueryErrorBoundary(METHOD, async () => {
+        const client = resolveNamedHostClient(binding, hostId);
+        if (client === null) throw hostClientUnavailableError(METHOD);
+        return client.requestWithSignal(METHOD, EMPTY_PARAMS, signal);
+      }),
+    meta: stampHostRpcMethod(undefined, METHOD),
+    enabled,
+    staleTime: STATUS_STALE_MS,
+    refetchOnWindowFocus: false,
   });
 }

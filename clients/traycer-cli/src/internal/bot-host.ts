@@ -1,3 +1,7 @@
+import {
+  createCliLocalOpenAuth,
+  localTeamAdmissionCliError,
+} from "./local-open-auth";
 /**
  * What the `traycer bot` commands share: finding a bot by id or title,
  * reading the environments the bots are grouped under, one `bot.subscribe`
@@ -187,10 +191,12 @@ export async function openLocalStreamClient(): Promise<{
   const endpoint = await resolveEndpoint();
   const lease = new MutableBearerLease(auth.token, auth.userId);
   const client = new WsStreamClient<HostStreamRpcRegistry>({
+    localOpenAuth: createCliLocalOpenAuth(auth.authnBaseUrl),
     registry: hostStreamRpcRegistry,
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
     bearer: () => lease,
+    userId: lease.identity.userId,
     auth: null,
     clock: null,
     hostCredentialMint: null,
@@ -265,14 +271,28 @@ export function readBotSnapshot(
       }
       if (frame.kind === "deleted") finish(() => resolve(null));
     });
-    session.onStatusChange((status, reason) => {
+    session.onStatusChange((status, reason, retryCause) => {
       if (status === "connecting" || status === "open") return;
+      if (retryCause) {
+        const admissionError = localTeamAdmissionCliError(retryCause);
+        if (admissionError !== null) {
+          finish(() => reject(admissionError));
+          return;
+        }
+      }
       if (
         client.getMethodSupport("bot.subscribe") === "unsupported" ||
         isIncompatibleCloseForMethod(reason, "bot.subscribe")
       ) {
         finish(() => reject(botHostUpdateError()));
         return;
+      }
+      if (reason?.kind === "fatalError") {
+        const admissionError = localTeamAdmissionCliError(reason.details);
+        if (admissionError !== null) {
+          finish(() => reject(admissionError));
+          return;
+        }
       }
       const detail =
         reason !== null && reason.kind === "fatalError"

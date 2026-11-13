@@ -76,10 +76,13 @@ function latestStreamServerFrameSchema<
 // `requestMock` is declared via `vi.hoisted` so it exists when the hoisted
 // `vi.mock` factory below captures it. `WsRpcClient` is mocked as a class so
 // `new WsRpcClient(...)` is constructable; every instance shares `requestMock`.
-const { requestMock, rpcClientConstructorMock } = vi.hoisted(() => ({
-  requestMock: vi.fn(),
-  rpcClientConstructorMock: vi.fn(),
-}));
+const { requestMock, rpcClientConstructorMock, releaseIdleMock } = vi.hoisted(
+  () => ({
+    requestMock: vi.fn(),
+    rpcClientConstructorMock: vi.fn(),
+    releaseIdleMock: vi.fn(),
+  }),
+);
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -114,6 +117,7 @@ vi.mock(
         }
 
         request = requestMock;
+        releaseIdleLocalSessions = releaseIdleMock;
       },
     };
   },
@@ -237,6 +241,7 @@ describe("callHostRpc", () => {
     // The per-run store is always disposed on the success path (finally), so a
     // `commit-failed` continuation timer can't outlive the command.
     expect(fakeStore.dispose).toHaveBeenCalledTimes(1);
+    expect(releaseIdleMock).toHaveBeenCalledTimes(1);
   });
 
   it("dials with an attestation window that outlasts the host's post-openAck deadline", async () => {
@@ -330,6 +335,8 @@ describe("callHostRpc", () => {
         savedAt: "2026-01-01T00:00:00.000Z",
         user: { id: "u1", email: "a@b.c", name: "A" },
       },
+      rejection: null,
+      diskPressure: "clear",
     });
 
     const result = await callHostRpc(METHOD, {
@@ -362,6 +369,7 @@ describe("callHostRpc", () => {
       outcome: "refresh-rejected-credential",
       credentials: null,
       rejection: null,
+      diskPressure: null,
     });
 
     await expect(
@@ -594,6 +602,75 @@ describe("callHostRpc", () => {
     });
     expect(EXPECTED_CLI_ERROR_CODES.has("E_PROVIDER_DISABLED")).toBe(true);
   });
+
+  // The team-transfer refusals reach the CLI as typed wire codes through
+  // `callHostRpc`. Each ends as its own expected CLI code with a fixed,
+  // actionable message: the host's raw text may name the caller's account, so
+  // it is never passed through to the message, the details or the log.
+  it.each([
+    {
+      wire: "E_ENVIRONMENT_NOT_A_MEMBER" as const,
+      cli: CLI_ERROR_CODES.ENVIRONMENT_NOT_A_MEMBER,
+      message: "Join the team before adding this computer.",
+    },
+    {
+      wire: "E_ENVIRONMENT_SEAT_NOT_ACCEPTED" as const,
+      cli: CLI_ERROR_CODES.ENVIRONMENT_SEAT_NOT_ACCEPTED,
+      message: "Accept your team invitation before adding this computer.",
+    },
+    {
+      wire: "E_ENVIRONMENT_SEAT_WITHOUT_WRITE" as const,
+      cli: CLI_ERROR_CODES.ENVIRONMENT_SEAT_WITHOUT_WRITE,
+      message: "Ask a team admin for permission to add computers.",
+    },
+    {
+      wire: "E_HOST_IS_SANDBOX" as const,
+      cli: CLI_ERROR_CODES.HOST_IS_SANDBOX,
+      message:
+        "A sandbox cannot be given to a team. Run this command on the computer you want to add.",
+    },
+    {
+      wire: "E_HOST_IN_ANOTHER_TEAM" as const,
+      cli: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
+      message:
+        "Claim this computer from its current team before adding it to another.",
+    },
+  ])(
+    "maps the host's $wire refusal to an expected CLI code with a fixed message that omits the host's text",
+    async ({ wire, cli, message }) => {
+      const hostText =
+        "refused for user 11111111-2222-3333-4444-555555555555 (someone@example.test) on team 99999999-8888-7777-6666-555555555555";
+      requestMock.mockRejectedValue(
+        new HostRpcError({
+          code: wire,
+          message: hostText,
+          requestId: "r1",
+          method: METHOD,
+          fatalDetails: null,
+        }),
+      );
+
+      const mapped = await toAgentCliError(
+        callHostRpc(METHOD, {
+          epicId: "e",
+          senderAgentId: "agent-1",
+          scope: "user",
+        }),
+      ).catch((error: unknown) => error);
+
+      expect(mapped).toMatchObject({
+        code: cli,
+        message,
+        details: null,
+        exitCode: 1,
+      });
+      expect(EXPECTED_CLI_ERROR_CODES.has(cli)).toBe(true);
+      const surfaced = JSON.stringify([mapped, loggerMock.warn.mock.calls]);
+      expect(surfaced).not.toContain("11111111-2222");
+      expect(surfaced).not.toContain("someone@example.test");
+      expect(surfaced).not.toContain("99999999-8888");
+    },
+  );
 
   // The arm keys on the typed wire code, never on the host's wording: the same
   // sentence arriving as an untyped `RPC_ERROR` stays a captured defect.

@@ -1,6 +1,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import {
   defineRpcContract,
   defineVersionedRpcRegistry,
@@ -69,6 +70,21 @@ const registry = defineVersionedRpcRegistry({
   },
 });
 
+const directoryRef = vi.hoisted(() => ({
+  value: null as LateArrivingDirectory | null,
+}));
+
+vi.mock("@/lib/host", () => ({
+  useHostDirectory: () => {
+    if (directoryRef.value === null) {
+      throw new Error("test directory not configured");
+    }
+    return directoryRef.value;
+  },
+}));
+
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+
 /** The host whose row has not arrived yet - a machine still booting. */
 const LATE_HOST_ID = "late-host";
 const LATE_HOST: HostDirectoryEntry = {
@@ -102,6 +118,7 @@ const rotatingHost = (publicKey: string): RemoteHostDirectoryEntry => ({
   publicKey,
   relayFuseGrace: false,
   sandbox: null,
+  owner: null,
   remoteStatus: {
     connectivity: "connectable",
     viewerReachability: "ok",
@@ -110,6 +127,13 @@ const rotatingHost = (publicKey: string): RemoteHostDirectoryEntry => ({
     appVersion: null,
     lastSeenAt: null,
   },
+});
+
+const physicalHostWithOwner = (
+  owner: HostOwnerPrincipal,
+): RemoteHostDirectoryEntry & { readonly owner: HostOwnerPrincipal } => ({
+  ...rotatingHost("same-key"),
+  owner,
 });
 
 class NoopInvalidator implements IHostQueryInvalidator {
@@ -166,6 +190,11 @@ class LateArrivingDirectory {
     this.emit();
   }
 
+  publishPhysicalHostOwner(owner: HostOwnerPrincipal): void {
+    this.entries = [physicalHostWithOwner(owner)];
+    this.emit();
+  }
+
   private emit(): void {
     for (const listener of [...this.listeners]) listener();
   }
@@ -203,6 +232,7 @@ describe("the registry's row-changed signal (P4.2 handoff)", () => {
   afterEach(() => {
     cleanup();
     resetHostConnectionRegistryForTest();
+    directoryRef.value = null;
   });
 
   it("reaches the consumer through the REGISTRY with bind() never called (the post-P4.1 world)", () => {
@@ -232,6 +262,46 @@ describe("the registry's row-changed signal (P4.2 handoff)", () => {
     expect(result.current.isReady).toBe(true);
     expect(result.current.hasRpcEndpoint).toBe(true);
     expect(result.current.canExecute).toBe(true);
+  });
+
+  it("publishes an owner-only change to cached remote directory entry consumers", () => {
+    const directory = new LateArrivingDirectory();
+    directory.publishPhysicalHostOwner({ kind: "user", id: "user-a" });
+    directoryRef.value = directory;
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => directory.findById(hostId),
+        onDirectoryChanged: (listener) => directory.onChange(listener),
+      },
+      leases: null,
+    });
+
+    const { result } = renderHook(() =>
+      useHostDirectoryEntry(ROTATING_HOST_ID),
+    );
+    expect(result.current).toMatchObject({
+      kind: "remote",
+      owner: { kind: "user", id: "user-a" },
+      sandbox: null,
+    });
+
+    act(() => {
+      directory.publishPhysicalHostOwner({
+        kind: "team",
+        id: "team-a",
+        name: "Alpha",
+      });
+    });
+
+    expect(result.current).toMatchObject({
+      kind: "remote",
+      owner: {
+        kind: "team",
+        id: "team-a",
+        name: "Alpha",
+      },
+      sandbox: null,
+    });
   });
 
   it("keeps identity ready while a local row boots and enables execution when its endpoint lands", () => {

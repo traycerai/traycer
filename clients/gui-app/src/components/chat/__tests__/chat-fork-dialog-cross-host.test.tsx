@@ -1,3 +1,4 @@
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import {
   act,
   cleanup,
@@ -79,6 +80,7 @@ interface ChatForkMutationOptions {
 }
 
 interface CapturedWorkspaceProps {
+  readonly layout: "inline" | "stacked";
   readonly workspaceSeed: LandingDraftWorkspaceSnapshot | null;
   readonly seedIntent: WorktreeIntent | null;
   readonly seedIntentOverride: SeedIntentOverride | null;
@@ -592,6 +594,7 @@ function renderDialog(
       tabId="tab-test"
       onOpenChange={onOpenChange}
     />,
+    { wrapper: WithTestQueryClient },
   );
 }
 
@@ -893,11 +896,15 @@ describe("ChatForkDialog cross-host routing", () => {
   it("cross-host resets the workspace to an empty seed, drops A/B override, and does not apply the staged-preselection gate", async () => {
     renderDialog(abForkTarget(), ignoreOpenChange);
 
-    expect(
-      screen.getByText(
-        "Makes a second chat there. This one stays where it is.",
-      ),
-    ).toBeDefined();
+    const secondChat = screen.getByText(
+      "Makes a second chat there. This one stays where it is.",
+    );
+    expect(secondChat.tagName).toBe("P");
+    expect(secondChat.nextElementSibling).toBe(
+      screen.getByTestId("fork-workspace-controls"),
+    );
+    expect(dialogMocks.lastWorkspace?.layout).toBe("stacked");
+    expect(screen.queryByLabelText("Run location")).toBeNull();
     expect(screen.queryByText(/provider session stays/)).toBeNull();
     expect(dialogMocks.lastWorkspace?.workspaceSeed).toEqual(
       expect.objectContaining({
@@ -921,21 +928,24 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(dialogMocks.lastWorkspace?.workspaceSeed).not.toBeNull();
     expect(dialogMocks.lastWorkspace?.seedIntent).toBeNull();
     expect(dialogMocks.lastWorkspace?.seedIntentOverride).toBeNull();
-    expect(
-      screen.getByText(
-        "Folder paths don't travel between computers - pick this host's folder for the fork.",
-      ),
-    ).toBeDefined();
-    expect(
-      screen.getByTestId("chat-fork-carry-changes-disabled").textContent,
-    ).toContain(
+    const folder = screen.getByTestId("chat-fork-folder-notice");
+    const carry = screen.getByTestId("chat-fork-carry-changes-disabled");
+    const session = screen.getByTestId("chat-fork-provider-session");
+    expect(folder.tagName).toBe("P");
+    expect(carry.tagName).toBe("P");
+    expect(session.tagName).toBe("P");
+    expect(folder.textContent).toBe(
+      "Folder paths don't travel between computers - pick this host's folder for the fork.",
+    );
+    expect(carry.textContent).toContain(
       "Uncommitted changes stay on the source computer, so this fork starts from the folder you pick here.",
     );
-    expect(
-      screen.getByText(
-        "The fork copies the transcript; the provider session stays on the source computer.",
-      ),
-    ).toBeDefined();
+    expect(session.textContent).toBe(
+      "The fork copies the transcript; the provider session stays on the source computer.",
+    );
+    expect(folder.contains(carry)).toBe(false);
+    expect(folder.contains(session)).toBe(false);
+    expect(carry.contains(session)).toBe(false);
     expect(forkButton().disabled).toBe(false);
 
     const request = await submitFork();
@@ -1652,6 +1662,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const target = forkTarget({ sourceChatTitle: "Source chat" });
     const view = render(
       <ChatForkDialog {...dialogProps(target, ignoreOpenChange, false)} />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog {...dialogProps(target, ignoreOpenChange, true)} />,
@@ -1677,6 +1688,7 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog
         {...dialogProps(remoteTarget, ignoreOpenChange, false)}
       />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog {...dialogProps(remoteTarget, ignoreOpenChange, true)} />,
@@ -1704,6 +1716,7 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog
         {...dialogProps(remoteTarget, ignoreOpenChange, false)}
       />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog {...dialogProps(remoteTarget, ignoreOpenChange, true)} />,
@@ -1739,6 +1752,7 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog
         {...dialogProps(remoteLatestTarget, ignoreOpenChange, false)}
       />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog
@@ -1815,6 +1829,7 @@ describe("ChatForkDialog cross-host routing", () => {
       <ChatForkDialog
         {...dialogProps(explicitTarget, ignoreOpenChange, false)}
       />,
+      { wrapper: WithTestQueryClient },
     );
     view.rerender(
       <ChatForkDialog

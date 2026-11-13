@@ -1,3 +1,8 @@
+import {
+  createCliLocalOpenAuth,
+  localTeamAdmissionCliError,
+} from "./local-open-auth";
+import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
 import type { ZodType } from "zod";
@@ -362,20 +367,23 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     signal: null,
   });
 
+  const localOpenAuth = createCliLocalOpenAuth(auth.authnBaseUrl);
+  const client = new WsRpcClient<HostRpcRegistry>({
+    localOpenAuth,
+    registry: hostRpcRegistry,
+    requestId: () => randomUUID(),
+    webSocketFactory: createWhatwgWebSocketFactory(),
+    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+    frameTimeoutMs: FRAME_TIMEOUT_MS,
+    hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
+    // The CLI has no selection authority to feed: there is no window, no
+    // kernel, and nothing that could act on a failover verdict.
+    evidence: NO_TRANSPORT_EVIDENCE,
+    clientIdentity: CLI_CLIENT_IDENTITY,
+  });
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(
-      new WsRpcClient<HostRpcRegistry>({
-        registry: hostRpcRegistry,
-        requestId: () => randomUUID(),
-        webSocketFactory: createWhatwgWebSocketFactory(),
-        dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-        frameTimeoutMs: FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
-        // The CLI has no selection authority to feed: there is no window, no
-        // kernel, and nothing that could act on a failover verdict.
-        evidence: NO_TRANSPORT_EVIDENCE,
-        clientIdentity: CLI_CLIENT_IDENTITY,
-      }),
+      client,
       revalidator,
       dispatch.reauthenticate,
     ),
@@ -433,6 +441,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   } finally {
     dispatch.signal?.removeEventListener("abort", abortWithCaller);
     callLifetime.abort("cli-call-settled");
+    client.releaseIdleLocalSessions();
     store.dispose();
   }
 }
@@ -460,8 +469,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -477,8 +485,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     );
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -490,8 +497,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -768,6 +774,11 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  const admissionError =
+    err.fatalDetails === null
+      ? null
+      : localTeamAdmissionCliError(err.fatalDetails);
+  if (admissionError !== null) return admissionError;
   // Ahead of the unreachable arm below, and the two must never share a code:
   // this is the failure the transport could not prove was pre-dispatch, so
   // the host may have run the call and answered into a connection that was
@@ -815,6 +826,17 @@ function mapHostRpcError(err: HostRpcError): CliError {
     return cliError({
       code: CLI_ERROR_CODES.AGENT_NOT_FOUND,
       message: `traycer: ${err.message} Check --agent-id (or $TRAYCER_AGENT_ID).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  const teamRefusal = TEAM_TRANSFER_REFUSALS.find(
+    ({ code }) => code === err.code,
+  );
+  if (teamRefusal !== undefined) {
+    return cliError({
+      code: teamRefusal.code,
+      message: teamRefusal.message,
       details: null,
       exitCode: 1,
     });

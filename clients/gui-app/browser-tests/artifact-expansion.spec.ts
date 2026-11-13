@@ -152,10 +152,6 @@ test("nothing the reader can reach behind the surface takes focus", async ({
   // painted on top, and which never sees a frame's own document at all. The
   // accessibility tree follows the same inertness, so a screen reader cannot
   // wander behind the surface either.
-  // Inertness refuses focus outright - not a listener that catches focus and
-  // puts it back, which is what a surface that is merely painted on top needs.
-  // The accessibility tree follows the same inertness, so a screen reader
-  // cannot wander behind the surface either.
   expect(await focusBehindButton(page)).toBe(false);
   expect(await focusHere(page)).toMatch(/^in:/);
 

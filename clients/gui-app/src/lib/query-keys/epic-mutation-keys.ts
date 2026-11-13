@@ -41,4 +41,5 @@ export const epicMutationKeys = {
   clearArtifactVersionHistory: () =>
     ["epic.clearArtifactVersionHistory"] as const,
   deleteArtifact: () => ["epic.deleteArtifact"] as const,
+  deleteAgentSubtree: () => ["epic.deleteAgentSubtree"] as const,
 };

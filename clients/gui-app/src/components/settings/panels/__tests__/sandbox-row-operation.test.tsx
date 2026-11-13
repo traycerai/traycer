@@ -1,3 +1,4 @@
+import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 import { StoppedSandboxSendReceiptStrip } from "@/components/sandboxes/stopped-sandbox-send-receipts";
 import {
   stoppedReceiptPicks,
@@ -25,10 +26,7 @@ import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxLifecycleVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
-import {
-  SandboxCard,
-  SandboxHeaderActions,
-} from "@/components/hosts/sandbox-card";
+import { SandboxHeaderActions } from "@/components/hosts/sandbox-card";
 import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
@@ -491,10 +489,11 @@ describe("sandbox row operations", () => {
 
   it("shows the Settings dialog's pending operation and its failure on the card too", async () => {
     const { answer, client, main } = setup(SUSPEND_CASE, null);
-    const sandbox = {
+    const sandbox: HostScopeSandbox = {
       state: main.state,
       frozen: false,
       summary: main,
+      ownerKind: "unknown",
       teamOwned: false,
     };
     render(
@@ -507,7 +506,6 @@ describe("sandbox row operations", () => {
             renderActions={null}
           />
         </div>
-        <SandboxCard hostState="online" sandbox={sandbox} />
       </QueryClientProvider>,
     );
     const headerActions = screen.getByTestId("sandbox-header-actions");
@@ -551,8 +549,9 @@ describe("sandbox row operations", () => {
     });
     const failure = await within(headerActions).findByRole("alert");
     expect(failure.textContent).toContain(
-      "Couldn't suspend build-box · SBX-0601",
+      "Couldn't suspend build-box. It's in use (an agent turn or a running shell), so it stays awake.",
     );
+    expect(failure.textContent).toContain("Support reference: SBX-0601");
     await userEvent.click(
       within(failure).getByRole("button", { name: "Details" }),
     );
@@ -593,10 +592,11 @@ describe("sandbox row operations", () => {
     async ({ testCase, frozen, pending }) => {
       const { answer, client, main } = setup(testCase, { frozen });
       const row = await press(testCase);
-      const sandbox = {
+      const sandbox: HostScopeSandbox = {
         state: testCase.initial,
         frozen,
         summary: main,
+        ownerKind: "unknown",
         teamOwned: false,
       };
       render(
@@ -609,7 +609,6 @@ describe("sandbox row operations", () => {
               renderActions={null}
             />
           </div>
-          <SandboxCard hostState="online" sandbox={sandbox} />
         </QueryClientProvider>,
       );
 
@@ -787,10 +786,11 @@ describe("sandbox row operations", () => {
   it("drops a Stop refused as a conflict, on the row and the card, once neither offers Stop", async () => {
     const { answer, binding, client, main, other } = setup(STOP_CASE, null);
     const card = (state: HostSandboxState) => {
-      const sandbox = {
+      const sandbox: HostScopeSandbox = {
         state,
         frozen: false,
         summary: { ...main, state },
+        ownerKind: "unknown",
         teamOwned: false,
       };
       return (
@@ -803,7 +803,6 @@ describe("sandbox row operations", () => {
               renderActions={null}
             />
           </div>
-          <SandboxCard hostState="online" sandbox={sandbox} />
         </QueryClientProvider>
       );
     };
@@ -815,12 +814,15 @@ describe("sandbox row operations", () => {
     });
     // While the list still reads awake, Stop is offered and so is its Retry.
     const failure = await within(row).findByRole("alert");
-    expect(failure.textContent).toContain("Couldn't stop build-box · SBX-0701");
+    expect(failure.textContent).toContain(
+      "Couldn't stop build-box. This sandbox is changing state. Try again in a moment.",
+    );
+    expect(failure.textContent).toContain("Support reference: SBX-0701");
     expect(within(failure).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(
       within(screen.getByTestId("sandbox-header-actions")).getByRole("alert")
         .textContent,
-    ).toContain("Couldn't stop build-box · SBX-0701");
+    ).toContain("Couldn't stop build-box. This sandbox is changing state.");
 
     binding.auth.listSandboxes.mockResolvedValue({
       kind: "ok",
@@ -841,9 +843,11 @@ describe("sandbox row operations", () => {
       answer.resolve(refusal(503, "provider-error"));
       await answer.promise;
     });
-    expect((await within(row).findByRole("alert")).textContent).toContain(
-      "Couldn't suspend build-box · SBX-0413",
+    const failure = await within(row).findByRole("alert");
+    expect(failure.textContent).toContain(
+      "Couldn't suspend build-box. Traycer refused that request.",
     );
+    expect(failure.textContent).toContain("Support reference: SBX-0413");
   });
 
   it("keeps a pending operation and its later refusal with the account that started it", async () => {
@@ -949,8 +953,13 @@ describe("sandbox row operations", () => {
         await answer.promise;
       });
       const line = await within(row).findByRole("alert");
-      const sentence = `Couldn't ${testCase.verb} build-box · ${testCase.reference}`;
+      const reason =
+        "It's in use (an agent turn or a running shell), so it stays awake.";
+      const sentence = `Couldn't ${testCase.verb} build-box. ${reason}`;
       expect(line.textContent).toContain(sentence);
+      expect(line.textContent).toContain(
+        `Support reference: ${testCase.reference}`,
+      );
       // An identical list refresh must not erase the local outcome.
       await act(async () => {
         await client.invalidateQueries();
@@ -966,10 +975,10 @@ describe("sandbox row operations", () => {
         within(line).getByRole("button", { name: "Details" }),
       );
       const history = await screen.findByRole("region", { name: "History" });
-      expect(history.textContent).toContain(sentence);
       expect(history.textContent).toContain(
-        "It's in use (an agent turn or a running shell), so it stays awake.",
+        `Couldn't ${testCase.verb} build-box`,
       );
+      expect(history.textContent).toContain(reason);
       // Details shows the SBX code; the raw code goes only in the export.
       expect(history.textContent).not.toContain("Failure code");
       expect(history.textContent).not.toContain("sandbox_busy");

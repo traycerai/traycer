@@ -107,6 +107,11 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
+  // The toolbar store asks which `providers.list` line this host speaks, to
+  // know whether its rows carry the hidden model providers. No line is
+  // negotiated here, so the panel sees the whole catalog, which is what these
+  // cases are about.
+  useHostMethodSchemaVersion: () => null,
 }));
 vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
   useUsageSummarySupported: () => false,

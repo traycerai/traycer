@@ -133,6 +133,14 @@ function buildFakeBridge(
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
+    readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
+    setEnvironmentBotHost: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    mintTeamComputerInstallToken: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    releaseTeamComputer: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     deregisterHostFromAccount: async () => ({ kind: "network-error" as const }),
     listSandboxes: async () => ({
       kind: "network-error" as const,
@@ -216,10 +224,6 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
-    mintTeamHostInstallToken: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
     getSandboxGrants: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -243,6 +247,8 @@ function buildFakeBridge(
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {
+        getSignInStorageLow: async () => false,
+        subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
         get: async () => stored,
         signIn: async (tokens, identity) => {
           stored = {
@@ -251,10 +257,12 @@ function buildFakeBridge(
             savedAt: new Date().toISOString(),
             user: identity,
           };
+          return "saved";
         },
         rotate: async () => ({
           outcome: "deleted",
           pair: null,
+          diskPressure: null,
           rejection: null,
         }),
         delete: async () => {

@@ -180,12 +180,19 @@ function bootstrapMain(config: BootstrapConfig): void {
     });
   });
 
+  // The app is pulling its own navigation preview over this page, so nothing
+  // in the page may scroll until it says otherwise.
+  let heldStill = false;
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.source !== host) return;
     const data = event.data;
     if (!isObject(data)) return;
     if (data.method === "ui/notifications/host-context-changed") {
       if (isObject(data.params)) applyHostContext(data.params);
+      return;
+    }
+    if (data.method === "traycer/history-gesture/hold") {
+      heldStill = isObject(data.params) && data.params.held === true;
       return;
     }
     if (data.method !== "ping") return;
@@ -235,7 +242,9 @@ function bootstrapMain(config: BootstrapConfig): void {
   // A wheel nothing in the page can scroll by is cancelled and handed to the
   // app, which notes the reader's gesture before it scrolls: a relayed note
   // alone can lose the race to the chained scroll. A page that handled the
-  // wheel itself (`preventDefault`) keeps it.
+  // wheel itself (`preventDefault`) keeps it. The hand-over also says whether
+  // the cancel took and which way the page could still scroll, which is what
+  // lets the app's back/forward swipe treat this page like its own content.
   const canScrollInside = (
     target: EventTarget | null,
     vertical: boolean,
@@ -262,6 +271,10 @@ function bootstrapMain(config: BootstrapConfig): void {
   window.addEventListener(
     "wheel",
     (event) => {
+      if (heldStill) {
+        event.preventDefault();
+        return;
+      }
       if (event.defaultPrevented || event.ctrlKey) return;
       const vertical = Math.abs(event.deltaY) >= Math.abs(event.deltaX);
       const delta = vertical ? event.deltaY : event.deltaX;
@@ -273,6 +286,9 @@ function bootstrapMain(config: BootstrapConfig): void {
         deltaX: event.deltaX,
         deltaY: event.deltaY,
         deltaMode: event.deltaMode,
+        cancelable: event.cancelable,
+        ownsBack: canScrollInside(event.target, false, -1),
+        ownsForward: canScrollInside(event.target, false, 1),
       });
     },
     { passive: false },
@@ -724,6 +740,28 @@ function bootstrapMain(config: BootstrapConfig): void {
     );
   };
 
+  // A root-absolute link resolves against the site and drops the mount. This
+  // puts it back, so the link names a place under this frame's own mount.
+  const throughOwnMount = (url: URL): URL => {
+    if (
+      mountPrefix === "" ||
+      url.protocol !== location.protocol ||
+      url.host !== location.host ||
+      url.pathname.startsWith(`${mountPrefix}/`)
+    )
+      return url;
+    const mounted = new URL(url.href);
+    mounted.pathname = mountPrefix + url.pathname;
+    return mounted;
+  };
+
+  const stayInFrame = (anchor: Element, authored: URL, target: URL): void => {
+    if (target !== authored) anchor.setAttribute("href", target.href);
+    // The sandbox has no popup permission. Override explicit and inherited
+    // targets so a page inside this artifact always stays in its frame.
+    anchor.setAttribute("target", "_self");
+  };
+
   // Bubble phase on window, so a page that handles its own clicks (and calls
   // preventDefault) keeps them.
   window.addEventListener("click", (event) => {
@@ -731,28 +769,45 @@ function bootstrapMain(config: BootstrapConfig): void {
     const target = event.target;
     const anchor = target instanceof Element ? target.closest("a[href]") : null;
     if (anchor === null) return;
-    let url: URL;
+    const linkHref = anchor.getAttribute("href") ?? "";
+    let authored: URL;
     try {
-      url = new URL(anchor.getAttribute("href") ?? "", document.baseURI);
+      authored = new URL(linkHref, document.baseURI);
     } catch {
       return;
     }
-    // A root-absolute link resolves against the site and drops the mount.
-    // Put it back, so the page loads through this frame's own mount.
-    const lostMount =
-      mountPrefix !== "" &&
-      url.protocol === location.protocol &&
-      url.host === location.host &&
-      !url.pathname.startsWith(`${mountPrefix}/`);
-    if (lostMount) url.pathname = mountPrefix + url.pathname;
+    const url = throughOwnMount(authored);
     if (followsInFrame(url)) {
-      if (lostMount) anchor.setAttribute("href", url.href);
-      // The sandbox has no popup permission. Override explicit and inherited
-      // targets so a page inside this artifact always stays in its frame.
-      anchor.setAttribute("target", "_self");
+      stayInFrame(anchor, authored, url);
       return;
     }
     event.preventDefault();
+    // Another place in the artifacts tree, or a file of this artifact that is
+    // not a page. The app opens it: it can see the tree, and the frame cannot
+    // load another artifact's page with this prelude in it. The href goes as
+    // authored, because the resolved URL has already lost any `../` that
+    // walked above the tree's root. A link to this same page (`#`, `?tab=2`)
+    // leads nowhere else and is dropped. Either way it never reaches
+    // `ui/open-link`, whose `https:` it shares on Android.
+    //
+    // Only a trusted click is reported, so a page that calls `click()` or
+    // `dispatchEvent` opens nothing; Enter on a focused link is trusted.
+    // That is no proof the reader clicked: the page's own script can read
+    // the nonce and post this report itself.
+    if (
+      config.artifactPage !== null &&
+      url.protocol === location.protocol &&
+      url.host === location.host
+    ) {
+      if (url.pathname !== location.pathname && event.isTrusted) {
+        notify("traycer/notifications/artifact-link", {
+          nonce: config.nonce,
+          href: linkHref,
+          page: location.href,
+        });
+      }
+      return;
+    }
     if (url.protocol !== "http:" && url.protocol !== "https:") return;
     linkRequestId += 1;
     send({

@@ -24,6 +24,7 @@ import {
   type FileAssetRequest,
   type UseFileAssetResult,
 } from "@/hooks/assets/use-file-asset";
+import { historyGestureOwnerAttribute } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
 import { fitInstance } from "./fit-instance";
 import {
@@ -501,6 +502,9 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     <div
       className={cn("flex min-h-0 w-full flex-col", rootSizing.className)}
       style={rootSizing.style}
+      // The shared toolbar drives both pannable sides and sits beside them,
+      // so their own markers cannot reach it.
+      data-history-gesture-owner={historyGestureOwnerAttribute(!props.compact)}
     >
       {props.compact ? null : (
         <div

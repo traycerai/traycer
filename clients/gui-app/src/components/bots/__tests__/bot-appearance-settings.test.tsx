@@ -1,11 +1,18 @@
 /**
- * A bot's icon, colour and channel background (Tracy Bots T147): the real
+ * A bot's icon, colour, eyewear, accessory and channel background (Tracy Bots
+ * T147): the real
  * section, hooks and HostClient over a mock messenger whose host records each
  * `bot.updateAppearance` it is sent and answers it with the row it would
  * store. Nothing is faked but the tab's host binding and its method support.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,18 +24,24 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type {
-  BotAppearance,
-  BotDirectoryRecord,
-  BotUpdateAppearanceRequest,
+import {
+  BOT_MASCOT_ACCESSORIES,
+  BOT_MASCOT_EYEWEAR,
+  BOT_UNRECOGNISED_MARK,
+  type BotAppearance,
+  type BotDirectoryRecord,
+  type BotListResponse,
+  type BotMascotShape,
+  type BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
 import {
-  chosenCreatureMark,
-  creatureSheet,
-  drawCreatureMark,
-  nextCreatureSheet,
-  ownCreature,
-} from "@/lib/bots/creature-mark";
+  DEFAULT_MASCOT_SHAPE,
+  MASCOT_AT_REST,
+  MASCOT_SHAPES,
+  botMascot,
+  drawMascotMark,
+  ownMascotShape,
+} from "@/lib/bots/mascot-mark";
 
 const mocks = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
@@ -63,7 +76,7 @@ import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const BARE: BotAppearance = { mark: null, swatch: null, background: null };
+const BARE: BotAppearance = { mark: null, color: null, background: null };
 
 function botRow(appearance: BotAppearance): BotDirectoryRecord {
   return {
@@ -94,11 +107,17 @@ function applied(
 ): BotAppearance {
   return {
     mark: request.mark === undefined ? appearance.mark : request.mark,
-    swatch: request.swatch === undefined ? appearance.swatch : request.swatch,
+    color: request.color === undefined ? appearance.color : request.color,
     background:
       request.background === undefined
         ? appearance.background
         : request.background,
+    eyewear:
+      request.eyewear === undefined ? appearance.eyewear : request.eyewear,
+    accessory:
+      request.accessory === undefined
+        ? appearance.accessory
+        : request.accessory,
   };
 }
 
@@ -106,6 +125,18 @@ let rerenderWith: (appearance: BotAppearance) => void = () => {};
 
 /** The section and the bot's own avatar, over what the surface's list names. */
 function mount(appearance: BotAppearance): void {
+  mountListing(appearance, null);
+}
+
+/** The same, the surface's list naming the bot as its environment's main bot. */
+function mountMain(appearance: BotAppearance): void {
+  mountListing(appearance, { "env-1": BOT_ID });
+}
+
+function mountListing(
+  appearance: BotAppearance,
+  mainBotIds: BotListResponse["mainBotIds"],
+): void {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
@@ -135,7 +166,9 @@ function mount(appearance: BotAppearance): void {
   mocks.client = spine.createRequester(mockLocalHostEntry);
   const tree = (looks: BotAppearance): ReactElement => (
     <QueryClientProvider client={queryClient}>
-      <BotLooksContext value={botLooksOf([botRow(looks)])}>
+      <BotLooksContext
+        value={botLooksOf({ bots: [botRow(looks)], mainBotIds })}
+      >
         <NamedBotAvatar botId={BOT_ID} size="sm" />
         <BotAppearanceSettings botId={BOT_ID} />
       </BotLooksContext>
@@ -156,26 +189,51 @@ afterEach(() => {
   cleanup();
 });
 
-/** The path a creature preview or avatar draws, which says which creature it is. */
-function pathIn(root: HTMLElement): string {
-  const path = root.querySelector('[data-slot="bot-creature"] path');
-  if (path === null) throw new Error("no creature drawn");
-  return path.getAttribute("d") ?? "";
+/** The paths a mascot in `root` draws, which say which shape it is. */
+function pathsIn(root: HTMLElement): string[] {
+  const paths = root.querySelectorAll('[data-slot="bot-mascot"] path');
+  if (paths.length === 0) throw new Error("no mascot drawn");
+  return [...paths].map((path) => path.getAttribute("d") ?? "");
 }
 
-/** The creature each candidate button draws, in order. */
-function candidatePaths(): string[] {
-  return screen
-    .getAllByRole("button", { name: /^Creature \d+$/ })
-    .map((button) => pathIn(button));
+/** The paths the avatar draws at 24 px for a bot showing `look`. */
+function avatarPathsFor(look: BotAppearance): string[] {
+  return drawMascotMark(
+    botMascot(BOT_ID, look, false),
+    24,
+    MASCOT_AT_REST,
+  ).layers.map((layer) => layer.path);
 }
 
-function currentPath(): string {
-  return pathIn(screen.getByTestId("bot-settings-icon-current"));
+/** A choice's button name: "Blob", "Shades", "None". */
+function partName(part: string): string {
+  return part.charAt(0).toUpperCase() + part.slice(1);
+}
+
+/** The choice a section shows pressed. */
+function pressedIn(section: "icon" | "eyewear" | "accessory"): string {
+  const [pressed, ...rest] = within(
+    screen.getByTestId(`bot-settings-${section}`),
+  ).getAllByRole("button", { pressed: true });
+  expect(rest).toEqual([]);
+  return pressed.getAttribute("aria-label") ?? "";
+}
+
+/** The shape the icon section shows pressed. */
+function pressedShape(): string {
+  return pressedIn("icon");
+}
+
+/** A shape other than the one the bot's id gives it. */
+function chosenShape(): BotMascotShape {
+  const own = ownMascotShape(BOT_ID);
+  const other = MASCOT_SHAPES.find((shape) => shape !== own);
+  if (other === undefined) throw new Error("only one shape");
+  return other;
 }
 
 describe("<BotAppearanceSettings />", () => {
-  it("names the three sections Icon, Colour and Background", () => {
+  it("names the five sections Icon, Colour, Eyewear, Accessory and Background", () => {
     mount(BARE);
 
     expect(screen.getByTestId("bot-settings-icon").textContent).toContain(
@@ -184,10 +242,16 @@ describe("<BotAppearanceSettings />", () => {
     expect(screen.getByTestId("bot-settings-colour").textContent).toContain(
       "Colour",
     );
+    expect(screen.getByTestId("bot-settings-eyewear").textContent).toContain(
+      "Eyewear",
+    );
+    expect(screen.getByTestId("bot-settings-accessory").textContent).toContain(
+      "Accessory",
+    );
     expect(screen.getByTestId("bot-settings-background").textContent).toContain(
       "Background",
     );
-    expect(screen.getAllByText("Use the default")).toHaveLength(3);
+    expect(screen.getAllByText("Use the default")).toHaveLength(5);
   });
 
   it("is absent when the host does not support bot.updateAppearance", () => {
@@ -199,24 +263,22 @@ describe("<BotAppearanceSettings />", () => {
     expect(screen.queryByTestId("bot-settings-background")).toBeNull();
   });
 
-  it("offers the sheet's twelve creatures and writes the chosen family and seed alone", async () => {
+  it("offers exactly the shapes it draws and writes the chosen one alone", async () => {
     const user = userEvent.setup();
     mount(BARE);
-    const sheet = creatureSheet(BOT_ID);
-    expect(candidatePaths()).toHaveLength(sheet.length);
+    expect(
+      within(screen.getByTestId("bot-settings-icon"))
+        .getAllByRole("button", { name: /^[A-Z][a-z]+$/ })
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Blob", "Flame", "Ghost", "Capsule", "Cat", "Sun"]);
 
-    await user.click(screen.getByTestId("bot-settings-icon-creature-3"));
+    await user.click(
+      screen.getByTestId(`bot-settings-icon-shape-${chosenShape()}`),
+    );
 
     await waitFor(() => {
       expect(mocks.appearanceWrites).toEqual([
-        {
-          botId: BOT_ID,
-          mark: {
-            kind: "creature",
-            family: sheet[3].family,
-            seed: sheet[3].seed,
-          },
-        },
+        { botId: BOT_ID, mark: { kind: "mascot", shape: chosenShape() } },
       ]);
     });
   });
@@ -235,17 +297,48 @@ describe("<BotAppearanceSettings />", () => {
     });
 
     expect(mocks.appearanceWrites).toEqual([
-      { botId: BOT_ID, swatch: 14 },
+      { botId: BOT_ID, color: 14 },
       { botId: BOT_ID, background: 5 },
+    ]);
+  });
+
+  it("offers every eyewear and accessory and writes the chosen one alone", async () => {
+    const user = userEvent.setup();
+    mount(BARE);
+    for (const [section, options] of [
+      ["eyewear", BOT_MASCOT_EYEWEAR],
+      ["accessory", BOT_MASCOT_ACCESSORIES],
+    ] as const) {
+      expect(
+        within(screen.getByTestId(`bot-settings-${section}`))
+          .getAllByRole("button", { name: /^[A-Z][a-z]+$/ })
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual(options.map(partName));
+    }
+
+    await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(1);
+    });
+    await user.click(screen.getByTestId("bot-settings-accessory-halo"));
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(2);
+    });
+
+    expect(mocks.appearanceWrites).toEqual([
+      { botId: BOT_ID, eyewear: "shades" },
+      { botId: BOT_ID, accessory: "halo" },
     ]);
   });
 
   it("sends null for each Use the default, and only for its own field", async () => {
     const user = userEvent.setup();
     mount({
-      mark: { kind: "creature", family: "ears", seed: 4 },
-      swatch: 2,
+      mark: { kind: "mascot", shape: "cat" },
+      color: 2,
       background: 9,
+      eyewear: "visor",
+      accessory: "bow",
     });
 
     await user.click(screen.getByTestId("bot-settings-icon-default"));
@@ -256,20 +349,30 @@ describe("<BotAppearanceSettings />", () => {
     await waitFor(() => {
       expect(mocks.appearanceWrites).toHaveLength(2);
     });
-    await user.click(screen.getByTestId("bot-settings-background-default"));
+    await user.click(screen.getByTestId("bot-settings-eyewear-default"));
     await waitFor(() => {
       expect(mocks.appearanceWrites).toHaveLength(3);
+    });
+    await user.click(screen.getByTestId("bot-settings-accessory-default"));
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(4);
+    });
+    await user.click(screen.getByTestId("bot-settings-background-default"));
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(5);
     });
 
     expect(mocks.appearanceWrites).toEqual([
       { botId: BOT_ID, mark: null },
-      { botId: BOT_ID, swatch: null },
+      { botId: BOT_ID, color: null },
+      { botId: BOT_ID, eyewear: null },
+      { botId: BOT_ID, accessory: null },
       { botId: BOT_ID, background: null },
     ]);
   });
 
   it("offers Use the default only where a choice stands", () => {
-    mount({ mark: null, swatch: 2, background: null });
+    mount({ mark: null, color: 2, background: null, eyewear: "glasses" });
 
     expect(
       screen.getByTestId<HTMLButtonElement>("bot-settings-icon-default")
@@ -280,9 +383,15 @@ describe("<BotAppearanceSettings />", () => {
         .disabled,
     ).toBe(false);
     expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-background-default")
+      screen.getByTestId<HTMLButtonElement>("bot-settings-eyewear-default")
         .disabled,
-    ).toBe(true);
+    ).toBe(false);
+    for (const section of ["accessory", "background"]) {
+      expect(
+        screen.getByTestId<HTMLButtonElement>(`bot-settings-${section}-default`)
+          .disabled,
+      ).toBe(true);
+    }
   });
 
   it("offers no upload: neither a button nor a file input", () => {
@@ -293,87 +402,60 @@ describe("<BotAppearanceSettings />", () => {
     expect(document.querySelector('input[type="file"]')).toBeNull();
   });
 
-  it("shows a different sheet on Regenerate patterns, writing nothing", async () => {
-    const user = userEvent.setup();
+  it("presses the shape the bot shows: its own, the chosen one, or the default for one it cannot read", () => {
     mount(BARE);
-    const before = candidatePaths();
+    expect(pressedShape()).toBe(partName(ownMascotShape(BOT_ID)));
+    cleanup();
 
-    await user.click(screen.getByTestId("bot-settings-icon-regenerate"));
+    mount({ ...BARE, mark: { kind: "mascot", shape: chosenShape() } });
+    expect(pressedShape()).toBe(partName(chosenShape()));
+    cleanup();
 
-    const after = candidatePaths();
-    expect(after).toHaveLength(before.length);
-    for (const path of after) {
-      expect(before).not.toContain(path);
-    }
-    expect(new Set(after).size).toBe(after.length);
-    expect(mocks.appearanceWrites).toEqual([]);
+    mount({ ...BARE, mark: BOT_UNRECOGNISED_MARK });
+    expect(pressedShape()).toBe(partName(DEFAULT_MASCOT_SHAPE));
   });
 
-  it("keeps the current creature's preview through Regenerate patterns", async () => {
-    const user = userEvent.setup();
-    const stored = creatureSheet(BOT_ID)[4];
-    mount({
-      ...BARE,
-      mark: { kind: "creature", family: stored.family, seed: stored.seed },
-    });
-    const expected = drawCreatureMark(
-      chosenCreatureMark(BOT_ID, stored),
-      40,
-    ).path;
-    expect(currentPath()).toBe(expected);
+  it("presses Blob, None and None for a main bot nothing was chosen for, where another bot shows its own", () => {
+    expect(ownMascotShape(BOT_ID)).not.toBe(DEFAULT_MASCOT_SHAPE);
+    mount(BARE);
+    expect(pressedShape()).not.toBe(partName(DEFAULT_MASCOT_SHAPE));
+    cleanup();
 
-    await user.click(screen.getByTestId("bot-settings-icon-regenerate"));
-    await user.click(screen.getByTestId("bot-settings-icon-regenerate"));
+    mountMain(BARE);
 
-    expect(currentPath()).toBe(expected);
-    expect(candidatePaths()).not.toContain(
-      drawCreatureMark(chosenCreatureMark(BOT_ID, stored), 32).path,
-    );
+    expect(pressedShape()).toBe(partName(DEFAULT_MASCOT_SHAPE));
+    expect(pressedIn("eyewear")).toBe("None");
+    expect(pressedIn("accessory")).toBe("None");
   });
 
-  it("writes a regenerated candidate's family and seed, and a reload shows that creature as the current one and on the avatar", async () => {
+  it("writes a chosen shape, and a reload shows that shape pressed and on the avatar", async () => {
     const user = userEvent.setup();
     mount(BARE);
-    const regenerated = nextCreatureSheet(
-      BOT_ID,
-      creatureSheet(BOT_ID),
-      ownCreature(BOT_ID),
-    );
-    const choice = regenerated[2];
 
-    await user.click(screen.getByTestId("bot-settings-icon-regenerate"));
-    await user.click(screen.getByTestId("bot-settings-icon-creature-2"));
+    await user.click(
+      screen.getByTestId(`bot-settings-icon-shape-${chosenShape()}`),
+    );
 
     await waitFor(() => {
-      expect(mocks.appearanceWrites).toEqual([
-        {
-          botId: BOT_ID,
-          mark: { kind: "creature", family: choice.family, seed: choice.seed },
-        },
-      ]);
+      expect(mocks.stored).not.toBeNull();
     });
     const returned = mocks.stored;
     if (returned === null) throw new Error("the host stored nothing");
     rerenderWith(returned);
 
-    const mask = chosenCreatureMark(BOT_ID, choice);
-    expect(currentPath()).toBe(drawCreatureMark(mask, 40).path);
-    expect(pathIn(screen.getByTestId("bot-avatar"))).toBe(
-      drawCreatureMark(mask, 24).path,
+    expect(pressedShape()).toBe(partName(chosenShape()));
+    expect(pathsIn(screen.getByTestId("bot-avatar"))).toEqual(
+      avatarPathsFor(returned),
+    );
+    expect(pathsIn(screen.getByTestId("bot-avatar"))).not.toEqual(
+      avatarPathsFor(BARE),
     );
   });
 
-  it("sends null for Use the default, and a reload shows the bot's own creature again", async () => {
+  it("sends null for Use the default, and a reload shows the bot's own shape again", async () => {
     const user = userEvent.setup();
-    const stored = creatureSheet(BOT_ID)[5];
-    mount({
-      ...BARE,
-      mark: { kind: "creature", family: stored.family, seed: stored.seed },
-    });
-    expect(currentPath()).not.toBe(
-      drawCreatureMark(chosenCreatureMark(BOT_ID, ownCreature(BOT_ID)), 40)
-        .path,
-    );
+    mount({ ...BARE, mark: { kind: "mascot", shape: chosenShape() } });
+    expect(pressedShape()).toBe(partName(chosenShape()));
 
     await user.click(screen.getByTestId("bot-settings-icon-default"));
 
@@ -384,37 +466,32 @@ describe("<BotAppearanceSettings />", () => {
     if (returned === null) throw new Error("the host stored nothing");
     rerenderWith(returned);
 
-    const own = drawCreatureMark(
-      chosenCreatureMark(BOT_ID, ownCreature(BOT_ID)),
-      40,
-    ).path;
-    expect(currentPath()).toBe(own);
-    expect(pathIn(screen.getByTestId("bot-avatar"))).toBe(
-      drawCreatureMark(chosenCreatureMark(BOT_ID, ownCreature(BOT_ID)), 24)
-        .path,
+    expect(pressedShape()).toBe(partName(ownMascotShape(BOT_ID)));
+    expect(pathsIn(screen.getByTestId("bot-avatar"))).toEqual(
+      avatarPathsFor(BARE),
     );
   });
 
-  it("holds Regenerate patterns while a write is pending", async () => {
+  it("holds the shapes while a write is pending", async () => {
     let release: () => void = () => {};
     mocks.writeGate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const user = userEvent.setup();
     mount(BARE);
-    const regenerate = screen.getByTestId<HTMLButtonElement>(
-      "bot-settings-icon-regenerate",
+    const shape = screen.getByTestId<HTMLButtonElement>(
+      `bot-settings-icon-shape-${chosenShape()}`,
     );
-    expect(regenerate.disabled).toBe(false);
+    expect(shape.disabled).toBe(false);
 
-    await user.click(screen.getByTestId("bot-settings-icon-creature-3"));
+    await user.click(shape);
 
     await waitFor(() => {
-      expect(regenerate.disabled).toBe(true);
+      expect(shape.disabled).toBe(true);
     });
     release();
     await waitFor(() => {
-      expect(regenerate.disabled).toBe(false);
+      expect(shape.disabled).toBe(false);
     });
   });
 });

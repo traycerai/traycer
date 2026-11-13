@@ -82,6 +82,7 @@ function createDeliveryPolicyHandle(
     epicId: "epic-1",
     chatId: "chat-1",
     userId: null,
+    sessionGeneration: 1,
     store,
     deliveredNotices: {
       notices: new WeakSet(),

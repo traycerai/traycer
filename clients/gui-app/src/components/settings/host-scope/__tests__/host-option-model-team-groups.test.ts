@@ -5,7 +5,14 @@ import type {
 } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
+  appWideHostOptions,
+  credentialTargetHostOptions,
+  groupComposerHostOptions,
   groupHostOptions,
+  hostOptionCanActivate,
+  hostOptionPickerGroup,
+  hostOptionTeamOwner,
+  hostTakesCredentials,
   pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -74,6 +81,7 @@ function sandboxRow(
       frozen: false,
       summary:
         summary === null ? null : sandboxSummaryFixture({ hostId, ...summary }),
+      ownerKind: "unknown",
       teamOwned: owner?.kind === "team",
     },
   });
@@ -89,11 +97,57 @@ function personalRow(
   });
 }
 
+function physicalTeamRow(
+  hostId: string,
+  owner: HostOwnerPrincipal,
+): HostScopeOption {
+  return hostScopeOptionFixture({
+    hostId,
+    kind: "machine",
+    isLocalMachine: false,
+    item: { ...registryItem(hostId, owner), kind: "machine" },
+    sandbox: null,
+  });
+}
+
 function ids(rows: readonly HostScopeOption[]): readonly string[] {
   return rows.map((row) => row.hostId);
 }
 
 describe("groupHostOptions teams", () => {
+  it("assigns a physical team host to its owner group while keeping its sandbox facts null", () => {
+    const machine = physicalTeamRow("team-machine", TEAM_A);
+    const groups = groupHostOptions([machine], true, null, null);
+
+    expect(machine.sandbox).toBeNull();
+    expect(hostOptionTeamOwner(machine)).toEqual({
+      teamId: "team-a",
+      teamName: "Alpha",
+    });
+    expect(hostOptionPickerGroup(machine, false, null)).toBe("team-computer");
+    expect(hostOptionCanActivate(machine)).toBe(true);
+    expect(hostTakesCredentials(machine)).toBe(true);
+    expect(credentialTargetHostOptions([machine])).toEqual([machine]);
+    expect(appWideHostOptions([machine], null)).toEqual([machine]);
+    expect(groups.personal).toEqual([]);
+    expect(
+      groups.teams.map(({ teamId, teamName }) => [teamId, teamName]),
+    ).toEqual([["team-a", "Alpha"]]);
+    expect(ids(groups.teams[0].computers)).toEqual(["team-machine"]);
+    expect(
+      pickableHostOptions([machine], null).map((host) => host.hostId),
+    ).toEqual(["team-machine"]);
+    const composer = groupComposerHostOptions(
+      [machine],
+      { userId: "user-me" },
+      null,
+    );
+    expect(
+      composer.teams.map(({ teamId, teamName }) => [teamId, teamName]),
+    ).toEqual([["team-a", "Alpha"]]);
+    expect(ids(composer.teams[0].computers)).toEqual(["team-machine"]);
+  });
+
   it("is an empty list when no row is team-owned", () => {
     const groups = groupHostOptions(
       [
@@ -242,6 +296,7 @@ describe("groupHostOptions teams", () => {
         state: "awake",
         frozen: false,
         summary: sandboxSummaryFixture({ hostId: "no-item" }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -256,6 +311,7 @@ describe("groupHostOptions teams", () => {
           hostId: "no-item-burst",
           burst: true,
         }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -293,15 +349,18 @@ describe("groupHostOptions teams", () => {
     expect(ids(groups.agentSandboxes)).toEqual(["mine-burst"]);
   });
 
-  it("keeps a personal host in personal, whatever its owner says", () => {
+  it("groups a legacy personal-kind row by its known team owner", () => {
+    const teamComputer = personalRow("p-team", TEAM_A);
     const groups = groupHostOptions(
-      [personalRow("p-team", TEAM_A), personalRow("p-me", ME)],
+      [teamComputer, personalRow("p-me", ME)],
       true,
       null,
       null,
     );
-    expect(ids(groups.personal)).toEqual(["p-team", "p-me"]);
-    expect(groups.teams).toEqual([]);
+    expect(ids(groups.personal)).toEqual(["p-me"]);
+    expect(ids(groups.teams[0].computers)).toEqual(["p-team"]);
+    expect(hostOptionCanActivate(teamComputer)).toBe(true);
+    expect(hostTakesCredentials(teamComputer)).toBe(true);
   });
 
   it("lists a team row that has not answered (summary null) on the host list, and hides it from a picker", () => {

@@ -15,6 +15,7 @@
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
+import { emptyBotMentionHostListsMock } from "@/components/bots/__tests__/bot-mention-host-test-support";
 import {
   botListChangedMock,
   botListQueryMock,
@@ -65,7 +66,10 @@ import type {
   BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
-import { __setAgentActivityStateForTests } from "@/stores/agent-activity-store";
+import {
+  __setAgentActivityPlaneAnsweringForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
 import {
   BOT,
   BOT_ID,
@@ -75,6 +79,11 @@ import {
   TAB_HOST,
   trackingTask,
 } from "./bot-tab-surface-harness";
+
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
@@ -109,9 +118,15 @@ vi.mock(
   () => hostClientForHostIdMock,
 );
 vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
+// The Activity count needs the notification host to read as reachable before
+// a quiet task may leave the list.
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable" }),
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -379,12 +394,27 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: (props: {
     boundHere: boolean;
     active: { rows: ReadonlyArray<{ task: { taskId: string } }> };
+    trunkChatId: string;
+    onOpenSession: BotSessionOpen;
   }) => (
     <div
       data-testid="stub-activity"
       data-is-this-host={String(props.boundHere)}
       data-row-ids={props.active.rows.map((row) => row.task.taskId).join(",")}
-    />
+    >
+      <button
+        type="button"
+        data-testid="stub-activity-open-trunk"
+        onClick={() =>
+          props.onOpenSession({
+            chatId: props.trunkChatId,
+            threadId: null,
+            messageId: null,
+            sendPostId: null,
+          })
+        }
+      />
+    </div>
   ),
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
@@ -441,6 +471,8 @@ import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   boxInput,
   typeInto,
@@ -483,7 +515,21 @@ beforeEach(() => {
   resetBotTabSurfaceMocks();
 });
 
+/** The Activity count over a cloud feed that is connected with its snapshot, so a quiet seen task has been proved quiet by every source. */
+function renderOverCloudFeed(): void {
+  useCloudNotificationsStore.setState({
+    hasSnapshot: true,
+    connectionState: "connected",
+  });
+  render(
+    <NotificationFeedModeContext.Provider value="cloud">
+      {surface()}
+    </NotificationFeedModeContext.Provider>,
+  );
+}
+
 afterEach(() => {
+  useCloudNotificationsStore.getState().reset();
   endBotTabSurfaceCase(queryClient);
 });
 
@@ -638,6 +684,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Olive Owner",
             ownerKind: "user",
+            providerHandle: null,
           },
         ];
 
@@ -654,6 +701,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Acme",
             ownerKind: "organization",
+            providerHandle: null,
           },
         ];
 
@@ -687,6 +735,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Olive Owner",
             ownerKind: "user",
+            providerHandle: null,
           },
         ];
         useStandaloneBotsStore.setState({
@@ -869,15 +918,24 @@ describe("<BotTabSurface /> views", () => {
         },
         { ...trackingTask("task-unseen"), cadence: { kind: "on-completion" } },
         trackingTask("task-periodic"),
-        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          // Known to wait on no one: `null` would say the host cannot tell.
+          inputNeeded: [],
+        },
       ],
     };
+    __setAgentActivityPlaneAnsweringForTests();
     __setAgentActivityStateForTests(
       { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
-      "local",
-      null,
+      "cloud",
+      "connected",
     );
-    render(surface());
+    renderOverCloudFeed();
     await user.click(activityTab());
 
     const shown = screen
@@ -898,16 +956,54 @@ describe("<BotTabSurface /> views", () => {
   });
 
   it("rule 6: shows no count when no task is active", () => {
+    // The indicator read is made for a signed-in member.
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "user-ada",
+        userName: "Ada",
+        email: "ada@example.com",
+      },
+      contextMetadata: { userId: "user-ada", username: "ada" },
+    });
     mocks.state.snapshot = {
       ...snapshot(),
       tasks: [
-        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          // Known to wait on no one: `null` would say the host cannot tell.
+          inputNeeded: [],
+        },
       ],
     };
-    render(surface());
+    // The whole fleet is vouched, so the quiet task may leave the list.
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests({}, "cloud", "connected");
+    renderOverCloudFeed();
 
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
     expect(visibleTabText()).toBe("Activity");
+  });
+
+  it("the Activity tab's trunk door swaps the whole Tabs view for the trunk's own session, not a thread", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(activityTab());
+    expect(screen.getByTestId("stub-activity")).toBeTruthy();
+
+    await user.click(screen.getByTestId("stub-activity-open-trunk"));
+
+    const session = screen.getByTestId("stub-session");
+    expect(session.getAttribute("data-chat-id")).toBe(
+      snapshot().bot.trunkChatId,
+    );
+    expect(session.getAttribute("data-thread-id")).toBe("none");
+    expect(screen.queryByTestId("stub-activity")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toEqual([]);
   });
 
   it("shows Threads from the column in place of the channel and its views, through the tab's host, and its own channel row lands back where it was", async () => {

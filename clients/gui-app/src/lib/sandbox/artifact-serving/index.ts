@@ -6,6 +6,7 @@ export {
   type ArtifactAddressParts,
 } from "./artifact-address";
 export {
+  artifactPagePaths,
   resolveManifestPath,
   type ArtifactManifest,
   type ArtifactManifestEntry,

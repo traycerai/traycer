@@ -17,7 +17,11 @@ import {
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
-import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
+import type {
+  SandboxArtifactLink,
+  SandboxBridgeHost,
+} from "@/lib/sandbox/bridge-host";
+import { HtmlArtifactLinkContext } from "@/components/html-artifact/html-artifact-link-context";
 
 /**
  * The page is a sandboxed iframe on a custom scheme, which jsdom will not
@@ -30,6 +34,7 @@ import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 const frames = vi.hoisted(() => ({
   latest: null as SandboxFrameProps | null,
   bridge: null as SandboxBridgeHost | null,
+  toast: vi.fn(),
 }));
 
 vi.mock("@/components/sandbox/sandbox-frame", () => ({
@@ -50,8 +55,13 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
   },
 }));
 
+vi.mock("sonner", () => ({ toast: frames.toast }));
+
 import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
-import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
+import {
+  ArtifactPagesFrame,
+  type ProvenPage,
+} from "@/components/html-artifact/artifact-pages-frame";
 
 function manifestOf(pages: readonly string[]): ArtifactManifest {
   const files: Record<string, ArtifactManifest["files"][string]> = {};
@@ -73,8 +83,14 @@ interface PagesOptions {
   readonly height: number | null;
   /** The caller's rows for the chip's "More actions" menu. */
   readonly menuItems: ReactNode;
-  /** The comment tool, which only the entry page is ever put into. */
+  /** The comment tool. An artifact page on show is put into it. */
   readonly commenting: boolean;
+  /** Layers over the page. The frame shows them on every page it is given. */
+  readonly overlay: ReactNode;
+  /** What the frame reports as the page comments go on. */
+  readonly onCommentPage: ((page: ProvenPage | null) => void) | null;
+  /** What the surface around the frame provides to open a page's link; `null` provides none. */
+  readonly openArtifactLink: ((link: SandboxArtifactLink) => void) | null;
 }
 
 const FILLING_ONE_PAGE: PagesOptions = {
@@ -82,11 +98,14 @@ const FILLING_ONE_PAGE: PagesOptions = {
   height: null,
   menuItems: undefined,
   commenting: false,
+  overlay: null,
+  onCommentPage: null,
+  openArtifactLink: null,
 };
 
 function renderPages(overrides: Partial<PagesOptions>) {
   const options = { ...FILLING_ONE_PAGE, ...overrides };
-  render(
+  const frame = (
     // The frame is not a surface on its own: every call site renders it inside
     // the expansion that raises it, and that is what its Expand toggle asks.
     <ArtifactExpansion title="Report">
@@ -112,11 +131,21 @@ function renderPages(overrides: Partial<PagesOptions>) {
         onBridge={null}
         onTextSelection={null}
         onFrame={null}
-        renderOverlay={null}
+        onCommentPage={options.onCommentPage}
+        overlay={options.overlay}
         sourceEquivalent={undefined}
         menuItems={options.menuItems}
       />
-    </ArtifactExpansion>,
+    </ArtifactExpansion>
+  );
+  render(
+    options.openArtifactLink === null ? (
+      frame
+    ) : (
+      <HtmlArtifactLinkContext value={options.openArtifactLink}>
+        {frame}
+      </HtmlArtifactLinkContext>
+    ),
   );
   const navigation = (): NonNullable<SandboxFrameProps["pageNavigation"]> => {
     const value = frames.latest?.pageNavigation ?? null;
@@ -136,11 +165,13 @@ function renderPages(overrides: Partial<PagesOptions>) {
 
 const UNREACHABLE = "Couldn't load this page from its host.";
 const MISSING = "This page is not in the artifact.";
+const UNCOMMENTABLE = "Comments can't be added on this page.";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  frames.toast.mockClear();
   frames.latest = null;
   frames.bridge = null;
   disposeBridges();
@@ -462,8 +493,81 @@ describe("the room a filling page keeps for the controls", () => {
   });
 });
 
-describe("commenting on the entry page", () => {
-  it("tells only the entry page to edit, and keeps the served source", async () => {
+const COMMENT_OVERLAY = <div data-testid="comment-overlay">Comment tools</div>;
+
+/** Records each page the frame says comments go on. */
+function watchCommentPage(): {
+  readonly record: (page: ProvenPage | null) => void;
+  readonly last: () => ProvenPage | null;
+} {
+  const reports: (ProvenPage | null)[] = [];
+  return {
+    record: (page) => {
+      reports.push(page);
+    },
+    last: () => reports.at(-1) ?? null,
+  };
+}
+
+describe("commenting on an artifact page", () => {
+  it("reports each artifact page that proves itself", () => {
+    const watched = watchCommentPage();
+    const { report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      overlay: COMMENT_OVERLAY,
+      onCommentPage: watched.record,
+    });
+
+    // Nothing has proved itself yet, so comments have no page.
+    expect(watched.last()).toBeNull();
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    const entry = watched.last();
+    expect(entry?.path).toBe("index.html");
+    expect(screen.getByTestId("comment-overlay")).toBeTruthy();
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+
+    report((page) => {
+      page.onNavigate("report.html");
+      frameProps().onStatus("ready");
+    });
+
+    // The overlay belongs to the caller now: a sub page does not lose it,
+    // and it is a page comments can go on.
+    const sub = watched.last();
+    expect(sub?.path).toBe("report.html");
+    expect(sub).not.toBe(entry);
+    expect(screen.getByTestId("comment-overlay")).toBeTruthy();
+
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+
+    // A fresh object per document, so a page loaded again is not the one
+    // that was on show before.
+    const again = watched.last();
+    expect(again?.path).toBe("index.html");
+    expect(again).not.toBe(entry);
+  });
+
+  it("does not show the comment notice on a sub-page when commenting is off", () => {
+    const { report } = renderPages({ pages: TWO_PAGES });
+
+    report((page) => {
+      page.onNavigate("report.html");
+      frameProps().onStatus("ready");
+    });
+
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Go home" })).toBeNull();
+  });
+
+  it("tells every artifact page to edit, and the page being left stays out of edit", async () => {
     const user = userEvent.setup();
     const bridge = realBridge();
     frames.bridge = bridge;
@@ -489,18 +593,20 @@ describe("commenting on the entry page", () => {
     report((page) => page.onNavigate("report.html"));
 
     expect(frameProps().source).toBe(source);
-    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).toHaveBeenLastCalledWith("edit");
     expect(setHtmlView).toHaveBeenLastCalledWith({
       enabled: true,
       scale: 1,
-      commenting: false,
+      commenting: true,
     });
 
     setMode.mockClear();
     await user.click(button("Back"));
 
-    // The page being left is still the one loaded: it is not put in Edit.
+    // Back has moved the request, but the page being left is still the one
+    // loaded. It is not put in Edit while the destination proves itself.
     expect(setMode).not.toHaveBeenCalledWith("edit");
+    expect(setMode).toHaveBeenLastCalledWith("play");
 
     report((page) => {
       page.onNavigate("index.html");
@@ -517,9 +623,10 @@ describe("commenting on the entry page", () => {
     });
   });
 
-  // A page's own link back to the entry page reports where it landed and that
-  // it is ready in one go. The new document is told the entry page's mode,
-  // with no stale word from the page it left.
+  // A page's own link reports where it landed and that it is ready in one go.
+  // The new document is told that page's mode, with no stale word from the
+  // page it left. Both of the artifact's pages are commentable, so the word
+  // the page being left had is already edit.
   it("tells a page reached by its own link that page's mode, and only that", () => {
     const bridge = realBridge();
     frames.bridge = bridge;
@@ -530,7 +637,7 @@ describe("commenting on the entry page", () => {
       frameProps().onStatus("ready");
     });
     report((page) => page.onNavigate("report.html"));
-    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).toHaveBeenLastCalledWith("edit");
     setMode.mockClear();
 
     report((page) => {
@@ -540,6 +647,98 @@ describe("commenting on the entry page", () => {
     });
 
     expect(setMode.mock.calls).toEqual([["edit"]]);
+  });
+});
+
+describe("a page comments cannot go on", () => {
+  function commentingBridge() {
+    const bridge = realBridge();
+    frames.bridge = bridge;
+    return { setMode: vi.spyOn(bridge, "setMode") };
+  }
+
+  it("keeps a missing page on its stand-in and out of comment mode", () => {
+    const { setMode } = commentingBridge();
+    const watched = watchCommentPage();
+    const { report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      onCommentPage: watched.record,
+    });
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("gone.html");
+      page.onPageMissing();
+    });
+
+    expect(screen.getByText(MISSING)).toBeTruthy();
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+    expect(watched.last()).toBeNull();
+  });
+
+  it("keeps an unreachable page on its stand-in and out of comment mode", () => {
+    const { setMode } = commentingBridge();
+    const watched = watchCommentPage();
+    const { report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      onCommentPage: watched.record,
+    });
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("report.html");
+      page.onPageUnreachable();
+    });
+
+    expect(screen.getByText(UNREACHABLE)).toBeTruthy();
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+    expect(watched.last()).toBeNull();
+  });
+
+  it("tells a proven page that is not an artifact page to play, and offers home", async () => {
+    const user = userEvent.setup();
+    const { setMode } = commentingBridge();
+    const watched = watchCommentPage();
+    const { navigation, report } = renderPages({
+      pages: TWO_PAGES,
+      commenting: true,
+      onCommentPage: watched.record,
+    });
+    report((page) => {
+      page.onNavigate("index.html");
+      frameProps().onStatus("ready");
+    });
+    setMode.mockClear();
+
+    report((page) => {
+      page.onNavigate("notes.txt");
+      frameProps().onStatus("ready");
+    });
+
+    expect(screen.getByText(UNCOMMENTABLE)).toBeTruthy();
+    expect(setMode).toHaveBeenLastCalledWith("play");
+    expect(setMode).not.toHaveBeenCalledWith("edit");
+    expect(watched.last()).toBeNull();
+
+    await user.click(button("Go home"));
+
+    expect(navigation().path).toBe("index.html");
+    expect(screen.queryByText(UNCOMMENTABLE)).toBeNull();
   });
 });
 
@@ -590,5 +789,36 @@ describe("a page that is already showing when the surface is raised or lowered",
     expect(screen.getByTestId("page-frame").getAttribute("data-mode")).toBe(
       "inline",
     );
+  });
+});
+
+describe("a link on a page that leads out of the artifact", () => {
+  const LINK: SandboxArtifactLink = {
+    href: "../sibling/index.html",
+    pagePath: "site/index.html",
+    pageUrl: "traycer-artifact://artifact-a1--m1/site/index.html",
+  };
+  function clickLink(): void {
+    const onArtifactLink = frames.latest?.onArtifactLink;
+    if (onArtifactLink === undefined) throw new Error("expected a link hook");
+    act(() => onArtifactLink(LINK));
+  }
+
+  it("reaches the opener the surface around the frame provides", () => {
+    const open = vi.fn<(link: SandboxArtifactLink) => void>();
+    renderPages({ openArtifactLink: open });
+
+    clickLink();
+
+    expect(open).toHaveBeenCalledExactlyOnceWith(LINK);
+    expect(frames.toast).not.toHaveBeenCalled();
+  });
+
+  it("is answered with a toast where the surface provides no opener", () => {
+    renderPages({});
+
+    clickLink();
+
+    expect(frames.toast).toHaveBeenCalledExactlyOnceWith("Couldn't open link");
   });
 });

@@ -11,6 +11,8 @@ import {
   agentListHarnessModelsUpgradeV20ToV21,
   agentListHarnessModelsV20,
   agentListHarnessModelsV21,
+  agentListHarnessModelsV22,
+  agentListHarnessModelsUpgradeV21ToV22,
 } from "../contracts";
 import {
   agentRunConfigSchema,
@@ -23,6 +25,7 @@ import {
   listHarnessModelsRequestSchema,
   listHarnessModelsResponseSchema,
   listHarnessModelsResponseSchemaV20,
+  listHarnessModelsResponseSchemaV21,
 } from "../shared";
 import {
   agentGuiListModelsUpgradeV11ToV12,
@@ -83,7 +86,10 @@ describe("per-account speed protocol versions", () => {
     expect(hostRpcRegistry["agent.fork"][1].versions[1].contract).toBe(
       agentForkV11,
     );
-    expect(hostRpcRegistry["agent.listHarnessModels"][2].latestMinor).toBe(1);
+    expect(hostRpcRegistry["agent.listHarnessModels"][2].latestMinor).toBe(2);
+    expect(
+      hostRpcRegistry["agent.listHarnessModels"][2].versions[2].contract,
+    ).toBe(agentListHarnessModelsV22);
     expect(
       hostRpcRegistry["agent.listHarnessModels"][2].versions[1].contract,
     ).toBe(agentListHarnessModelsV21);
@@ -153,12 +159,14 @@ describe("per-account speed protocol versions", () => {
       harnessModelSummarySchema.parse({
         ...harnessModelsResponse.models[0],
         serviceTiers: ["priority", "flex"],
+        resolvedModel: null,
       }),
     ).toEqual({
       id: "gpt-5.6-codex",
       reasoningEfforts: ["high"],
       fastModeAvailable: true,
       serviceTiers: ["priority", "flex"],
+      resolvedModel: null,
     });
     expect(
       listHarnessModelsRequestSchema.parse({
@@ -190,12 +198,31 @@ describe("per-account speed protocol versions", () => {
     expect(
       listHarnessModelsResponseSchemaV20.parse(harnessModelsResponse).models[0],
     ).not.toHaveProperty("serviceTiers");
+    const frozenV21 = listHarnessModelsResponseSchemaV21.parse({
+      harnessId: "codex",
+      profileId: null,
+      models: [{ ...harnessModelsResponse.models[0], serviceTiers: [] }],
+    });
+    expect(frozenV21.models[0]).not.toHaveProperty("resolvedModel");
+    expect(
+      agentListHarnessModelsUpgradeV21ToV22.upgradeResponse(frozenV21).models,
+    ).toEqual([
+      {
+        ...harnessModelsResponse.models[0],
+        serviceTiers: [],
+        resolvedModel: null,
+      },
+    ]);
     expect(
       listHarnessModelsResponseSchema.parse({
         ...harnessModelsResponse,
         profileId: "profile-work",
         models: [
-          { ...harnessModelsResponse.models[0], serviceTiers: ["priority"] },
+          {
+            ...harnessModelsResponse.models[0],
+            serviceTiers: ["priority"],
+            resolvedModel: null,
+          },
         ],
       }).profileId,
     ).toBe("profile-work");

@@ -119,6 +119,7 @@ export type AnalyticsSettingsSection =
   | "getting-started"
   | "browser"
   | "browser-agent-access"
+  | "agent-memories"
   | "credits"
   | "mcp-servers"
   | "members"
@@ -327,6 +328,7 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
  * allowed-values pinning below. */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
+  | "agent-memories"
   | "command-theme"
   | "login-import"
   | "mobile-switcher"
@@ -386,6 +388,7 @@ export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "agentBrowserAccess"
   | "agentOfficeDefaultView"
+  | "useTraycerMemories"
   | "agentTabSurfacing"
   | "agentWorktreeCreate"
   | "artifactIconColorMode"
@@ -422,7 +425,6 @@ export type AnalyticsSetting =
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
   | "storageArchivedChats"
-  | "storageArtifacts"
   | "storageChats"
   | "storageIdleTasks"
   | "summonHotkeyChord"
@@ -1510,6 +1512,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "getting-started": true,
     browser: true,
     "browser-agent-access": true,
+    "agent-memories": true,
     "mcp-servers": true,
     skills: true,
     "agent-definitions": true,
@@ -1549,6 +1552,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     agentTabSurfacing: true,
     agentWorktreeCreate: true,
     allowPrereleaseUpdates: true,
+    useTraycerMemories: true,
     artifactIconColorMode: true,
     artifactIconColors: true,
     catalogProbeTimeout: true,
@@ -1580,7 +1584,6 @@ const ANALYTICS_SETTINGS = new Set<string>(
     startPageWallpaperTint: true,
     steerOnModEnterEnabled: true,
     storageArchivedChats: true,
-    storageArtifacts: true,
     storageChats: true,
     storageIdleTasks: true,
     summonHotkeyChord: true,
@@ -1624,6 +1627,7 @@ const ANALYTICS_THEMES = new Set<string>([
 
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
+  "agent-memories",
   "command-theme",
   "mobile-switcher",
   "mobile-tasks",

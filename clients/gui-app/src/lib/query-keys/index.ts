@@ -65,6 +65,7 @@ export {
 } from "@/lib/query-keys/auto-mode-write-scopes";
 export { providerNativeSubagentsWriteScope } from "@/lib/query-keys/providers-native-subagents-scope";
 export { providerNativeMemoryWriteScope } from "@/lib/query-keys/providers-native-memory-scope";
+export { providerModelProviderVisibilityWriteScope } from "@/lib/query-keys/providers-model-provider-visibility-scope";
 export { sessionNamesWriteScope } from "@/lib/query-keys/config-session-names-scope";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
@@ -80,6 +81,7 @@ export {
 } from "@/lib/query-keys/providers-native-query-keys";
 export { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-keys";
 export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
+export { speechQueryKeys } from "@/lib/query-keys/speech-query-keys";
 export { voiceMutationKeys } from "@/lib/query-keys/voice-mutation-keys";
 export { voiceQueryKeys } from "@/lib/query-keys/voice-query-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";

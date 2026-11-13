@@ -93,7 +93,12 @@ export function RetrospectiveSheet(props: {
   readonly onShown: () => void;
   readonly onAcknowledged: () => void;
   readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
-  readonly onMoveToPersonal: () => void;
+  /**
+   * `Move to Personal` under what is still on this computer; `null` hides it
+   * on a computer that runs a team's settings, which has nothing of the
+   * person's to move. The list stays.
+   */
+  readonly onMoveToPersonal: (() => void) | null;
   /**
    * `Stop using Personal on this computer`; `null` hides it, once the
    * computer has stopped (or its planes cannot say it still shares), leaving
@@ -189,15 +194,17 @@ export function RetrospectiveSheet(props: {
                       <li key={row.id}>{row.summary}</li>
                     ))}
                   </ul>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    data-testid="retrospective-move-to-personal"
-                    onClick={props.onMoveToPersonal}
-                  >
-                    {RETROSPECTIVE_MOVE_TO_PERSONAL}
-                  </Button>
+                  {props.onMoveToPersonal === null ? null : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      data-testid="retrospective-move-to-personal"
+                      onClick={props.onMoveToPersonal}
+                    >
+                      {RETROSPECTIVE_MOVE_TO_PERSONAL}
+                    </Button>
+                  )}
                 </div>
               </InventoryRow>
             ) : null}

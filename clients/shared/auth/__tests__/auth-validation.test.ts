@@ -234,6 +234,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "access",
       refreshToken: "refresh",
+      rotationCode: null,
       clientKind: null,
       signal: AbortSignal.abort(),
     });
@@ -256,6 +257,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: "R".repeat(43),
       clientKind: "desktop",
       signal: null,
     });
@@ -273,6 +275,7 @@ describe("refreshOnceAbortable", () => {
     expect(JSON.parse(calls[0].body ?? "null")).toEqual({
       refreshToken: "stale-refresh",
       clientKind: "desktop",
+      rotationCode: "R".repeat(43),
     });
   });
 
@@ -288,12 +291,16 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
 
     expect(result).toEqual({ kind: "network-error" });
     expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].body ?? "null")).toEqual({
+      refreshToken: "stale-refresh",
+    });
   });
 
   it("maps a 401 to rejected (dead refresh credential) in a single attempt", async () => {
@@ -303,6 +310,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "dead-refresh",
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
@@ -329,6 +337,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
@@ -378,6 +387,7 @@ describe("refreshOnceAbortable", () => {
         authnBaseUrl: AUTHN_BASE_URL,
         token: "stale-bearer",
         refreshToken: "stale-refresh",
+        rotationCode: null,
         clientKind: null,
         signal: null,
       });
@@ -397,6 +407,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
@@ -989,6 +1000,7 @@ describe("the abortable auth calls on a WebView without AbortSignal.timeout or A
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: null,
       clientKind: null,
     } as const;
 
@@ -1133,6 +1145,7 @@ describe("caller signal composition without AbortSignal.any", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "access",
       refreshToken: "refresh",
+      rotationCode: null,
       clientKind: null,
       signal: caller.signal,
     });
@@ -1173,6 +1186,7 @@ describe("refreshOnceAbortable on a fetch that ignores its signal", () => {
     authnBaseUrl: AUTHN_BASE_URL,
     token: "stale-bearer",
     refreshToken: "stale-refresh",
+    rotationCode: null,
     clientKind: null,
     signal: null,
   } as const;

@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 13
+              "const": 14
             }
           },
           "required": [
@@ -234,6 +234,89 @@ export const chatSyncSchemaSurfaceBaseline = {
                         },
                         {
                           "type": "null"
+                        }
+                      ]
+                    },
+                    "profileBinding": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "key"
+                            },
+                            "key": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "providerId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "accountId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "organizationId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "providerId",
+                                    "accountId",
+                                    "organizationId"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "providerId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "email": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "providerId",
+                                    "email"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "key"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "source-unidentified"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },
@@ -457,7 +540,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 13
+              "const": 14
             }
           },
           "required": [
@@ -681,6 +764,89 @@ export const chatSyncSchemaSurfaceBaseline = {
                         },
                         {
                           "type": "null"
+                        }
+                      ]
+                    },
+                    "profileBinding": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "key"
+                            },
+                            "key": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "providerId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "accountId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "organizationId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "providerId",
+                                    "accountId",
+                                    "organizationId"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "providerId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "email": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "providerId",
+                                    "email"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "key"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "source-unidentified"
+                            }
+                          },
+                          "required": [
+                            "kind"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },
@@ -1042,6 +1208,50 @@ export const chatSyncSchemaSurfaceBaseline = {
                                 "type": "null"
                               }
                             ]
+                          },
+                          "providerSelection": {
+                            "type": "object",
+                            "properties": {
+                              "homeAddress": {
+                                "type": "string"
+                              },
+                              "bindingVersion": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "string",
+                                    "const": "unknown"
+                                  }
+                                ]
+                              },
+                              "holderRevision": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "string",
+                                    "const": "self"
+                                  }
+                                ]
+                              },
+                              "dispatchedAt": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "homeAddress",
+                              "bindingVersion",
+                              "holderRevision",
+                              "dispatchedAt"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -1215,7 +1425,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 13
+              "const": 14
             }
           },
           "required": [
@@ -1290,7 +1500,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 13
+              "const": 14
             }
           },
           "required": [
@@ -2312,6 +2522,59 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "spoken": {
                             "type": "boolean",
                             "const": true
+                          },
+                          "questionAnswers": {
+                            "type": "object",
+                            "properties": {
+                              "questionMessageId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "answers": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "questionIndex": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "question": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "answer": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "skipped": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "questionIndex",
+                                    "question",
+                                    "answer",
+                                    "skipped"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "questionMessageId",
+                              "answers"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -6595,6 +6858,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             },
                                             "at": {
                                               "type": "number"
+                                            },
+                                            "requestId": {
+                                              "type": "string",
+                                              "minLength": 1
                                             }
                                           },
                                           "required": [
@@ -7278,6 +7545,50 @@ export const chatSyncSchemaSurfaceBaseline = {
                             "type": "null"
                           }
                         ]
+                      },
+                      "providerSelection": {
+                        "type": "object",
+                        "properties": {
+                          "homeAddress": {
+                            "type": "string"
+                          },
+                          "bindingVersion": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "string",
+                                "const": "unknown"
+                              }
+                            ]
+                          },
+                          "holderRevision": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "string",
+                                "const": "self"
+                              }
+                            ]
+                          },
+                          "dispatchedAt": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "homeAddress",
+                          "bindingVersion",
+                          "holderRevision",
+                          "dispatchedAt"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [

@@ -66,7 +66,7 @@ import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-s
 
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
-import { botSwatchAt } from "@/lib/providers/profile-accent-color";
+import { botColorAt } from "@/lib/providers/profile-accent-color";
 import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
@@ -126,6 +126,7 @@ vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -534,9 +535,9 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
     ).toEqual([
-      "Give the team a host",
+      "Give the team a computer",
       "Enable cloud for the team",
-      "Create a team host on a machine",
+      "Add a computer",
     ]);
     expect(within(card).queryAllByRole("link")).toHaveLength(0);
     expect(channel.textContent).not.toMatch(/github|starter|seat/i);
@@ -593,7 +594,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     ).toHaveProperty("disabled", true);
     expect(
       within(composer).getByTestId("team-setup-composer-reason").textContent,
-    ).toBe("Tracy can reply once the team has a host.");
+    ).toBe("Tracy can reply once the team has a computer.");
   });
 
   it("opens, subscribes to and closes nothing: the bot does not exist", () => {
@@ -750,7 +751,12 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
    */
   it("shows the channel could not be loaded, never opening or closing the tab, when the environment list's refresh failed over a list from before the team; Retry reads it again and the setup then shows", async () => {
     mocks.state.environments = [
-      { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+      {
+        environmentId: "env-team",
+        label: "Acme",
+        ownerKind: "organization",
+        providerHandle: null,
+      },
     ];
     mocks.state.environmentsStatus = "error";
     mocks.state.environmentsKept = true;
@@ -1253,16 +1259,16 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
     expect(within(post).getByText("Release Bot")).toBeTruthy();
     expect(post.textContent).toContain("I'm this team's main bot.");
     expect(post.textContent).toContain(
-      "Before I can run, the team needs a host",
+      "Before I can run, the team needs a computer for its bots.",
     );
     expect(
       within(within(post).getByTestId("team-host-options"))
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
     ).toEqual([
-      "Give the team a host",
+      "Give the team a computer",
       "Enable cloud for the team",
-      "Create a team host on a machine",
+      "Add a computer",
     ]);
     expect(within(post).queryAllByRole("button")).toEqual([]);
     expect(post.textContent).not.toContain("Not available yet.");
@@ -1279,7 +1285,7 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
 
     const channel = screen.getByTestId("stub-channel");
     expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
-      "Acme's machine joined · bots run on it",
+      "Acme's computer joined · bots run on it",
     );
     const option = within(channel).getByTestId("team-host-option-machine");
     expect(within(option).queryAllByRole("button")).toEqual([]);
@@ -1501,7 +1507,12 @@ describe("<BotTabSurface /> paused", () => {
     async (_name, ownerKind, expected) => {
       const user = userEvent.setup();
       mocks.state.environments = [
-        { environmentId: "env-team", label: "Acme", ownerKind },
+        {
+          environmentId: "env-team",
+          label: "Acme",
+          ownerKind,
+          providerHandle: null,
+        },
       ];
       render(surface());
 
@@ -1555,7 +1566,12 @@ describe("<BotTabSurface /> paused", () => {
         },
       });
       mocks.state.environments = [
-        { environmentId: "env-team", label: "Acme", ownerKind },
+        {
+          environmentId: "env-team",
+          label: "Acme",
+          ownerKind,
+          providerHandle: null,
+        },
       ];
       render(surface());
 
@@ -1571,7 +1587,12 @@ describe("<BotTabSurface /> paused", () => {
   it("treats the environment as not personal until the environment list names it", async () => {
     const user = userEvent.setup();
     mocks.state.environments = [
-      { environmentId: "env-other", label: "Mine", ownerKind: "user" },
+      {
+        environmentId: "env-other",
+        label: "Mine",
+        ownerKind: "user",
+        providerHandle: null,
+      },
     ];
     render(surface());
 
@@ -1848,7 +1869,7 @@ describe("<BotTabSurface /> channel background", () => {
 
   function chooseBackground(background: number | null): void {
     mocks.state.listAppearance = new Map([
-      [BOT_ID, { mark: null, swatch: null, background }],
+      [BOT_ID, { mark: null, color: null, background }],
     ]);
   }
 
@@ -1857,7 +1878,7 @@ describe("<BotTabSurface /> channel background", () => {
   });
 
   it.each([false, true])(
-    "tints the header with the chosen swatch at one low opacity (dark: %s)",
+    "tints the header with the chosen colour at one low opacity (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
       chooseBackground(7);
@@ -1866,7 +1887,7 @@ describe("<BotTabSurface /> channel background", () => {
       expect(header().classList.contains(TINT_CLASS)).toBe(true);
       expect(header().getAttribute("data-channel-background")).toBe("7");
       expect(header().style.getPropertyValue("--channel-tint")).toBe(
-        botSwatchAt(7).color,
+        botColorAt(7),
       );
     },
   );

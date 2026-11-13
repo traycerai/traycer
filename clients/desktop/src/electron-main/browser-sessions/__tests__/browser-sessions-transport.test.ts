@@ -78,12 +78,14 @@ const DEPS = {
   appVersion: "1.5.0",
 };
 
-function remoteEntry(kind: "personal" | "sandbox"): RemoteHostDirectoryEntry {
+function remoteEntry(
+  kind: "personal" | "sandbox" | "team",
+): RemoteHostDirectoryEntry {
   const item: HostListItem = {
     hostId: "host-r",
     displayName: "Remote",
     platform: "linux",
-    kind,
+    kind: kind === "sandbox" ? "sandbox" : "personal",
     publicKey: "cHVibGljS2V5",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatePolicy: "auto",
@@ -97,6 +99,9 @@ function remoteEntry(kind: "personal" | "sandbox"): RemoteHostDirectoryEntry {
     },
     ...(kind === "sandbox"
       ? { sandboxState: "awake", sandboxFrozen: false, profile: "agent" }
+      : {}),
+    ...(kind === "team"
+      ? { owner: { kind: "team", id: "team-a", name: "Alpha" } }
       : {}),
   };
   return hostListItemToDirectoryEntry(item, "wss://relay.test/attach");
@@ -160,6 +165,17 @@ describe("openBrowserSessionsTransport", () => {
       "user-1",
       DEPS,
     );
+
+    expect(transport).toBeNull();
+    expect(remote.createRemoteHostTransport).not.toHaveBeenCalled();
+    expect(remote.start).not.toHaveBeenCalled();
+  });
+
+  it("builds no cookie-jar transport for a physical team host", () => {
+    const entry = remoteEntry("team");
+    expect(entry.sandbox).toBeNull();
+
+    const transport = openBrowserSessionsTransport(entry, "user-1", DEPS);
 
     expect(transport).toBeNull();
     expect(remote.createRemoteHostTransport).not.toHaveBeenCalled();
