@@ -939,7 +939,7 @@ describe("alias look-up", () => {
   it("sends an id that one row owns and another row lists as an alias as typed", async () => {
     publishList(
       [
-        { profileId: "shared-id", aliases: [], otherNames: null },
+        { profileId: "shared-id", aliases: [], otherNames: ["Other"] },
         { profileId: "row-b", aliases: ["shared-id"], otherNames: null },
       ],
       [],
@@ -960,6 +960,11 @@ describe("alias look-up", () => {
         },
       }),
     );
+    expect(
+      dispatchMock.mock.calls.filter(
+        (call) => call[0] === "providers.answerProfileName",
+      ),
+    ).toHaveLength(0);
   });
 });
 

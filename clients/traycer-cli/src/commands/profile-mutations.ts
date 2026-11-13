@@ -157,7 +157,8 @@ export function buildProfileRemoveCommand(opts: {
   return async (ctx) => {
     const providerId = parseProviderArgument(opts.provider);
     const typed = parseProfileArgument(opts.profile);
-    // A refusal or a declined question sends nothing to the host.
+    // The typed-ambient refusal and the question both come before anything
+    // is sent to the host, so either one ending the command sends nothing.
     if (isAmbientProfileId(typed)) throw ambientNotRemovable();
     if (!opts.yes) {
       await confirmRemoval(ctx, providerId, typed);
