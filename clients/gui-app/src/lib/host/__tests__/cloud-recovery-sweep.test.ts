@@ -31,6 +31,18 @@ async function settled(client: QueryClient): Promise<void> {
   await vi.waitFor(() => expect(client.isFetching()).toBe(0));
 }
 
+/** One macrotask turn: what a settled attempt sets going has run. */
+function turn(): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+/** Lets what a settled attempt sets going run, and the cache go quiet. */
+async function quiet(client: QueryClient): Promise<void> {
+  await settled(client);
+  await turn();
+  await settled(client);
+}
+
 /** A read of `method` that has failed with `code`, still observed. */
 async function failedRead(
   client: QueryClient,
@@ -76,6 +88,29 @@ async function dataHoldingFailedRead(
   expect(read.calls).toBe(2);
   return read;
 }
+
+/** The stranded reads the in-flight cases run over: with data, and without. */
+const STRANDED_READS = [
+  {
+    label: "holds data",
+    method: "bot.thread.list",
+    /** Asks the read has had when it is stranded. */
+    base: 2,
+    strand: (client: QueryClient) => dataHoldingFailedRead(client, "o"),
+  },
+  {
+    label: "holds no data",
+    method: "bot.list",
+    base: 1,
+    strand: (client: QueryClient) =>
+      failedRead(client, {
+        hostId: HOST,
+        method: "bot.list",
+        name: "o",
+        code: "E_CLOUD_REQUEST_REFUSED",
+      }),
+  },
+];
 
 describe("sweepTransientCloudFailures", () => {
   it.each(["E_CLOUD_REQUEST_REFUSED", "E_CLOUD_UNREACHABLE"] as const)(
@@ -560,129 +595,89 @@ describe("sweepTransientCloudFailures", () => {
     });
   });
 
-  describe.each([
-    {
-      label: "holds data",
-      method: "bot.thread.list",
-      /** Asks the read has had when it is stranded. */
-      base: 2,
-      strand: (client: QueryClient) => dataHoldingFailedRead(client, "o"),
-    },
-    {
-      label: "holds no data",
-      method: "bot.list",
-      base: 1,
-      strand: (client: QueryClient) =>
-        failedRead(client, {
-          hostId: HOST,
-          method: "bot.list",
-          name: "o",
-          code: "E_CLOUD_REQUEST_REFUSED",
-        }),
-    },
-  ])("a ring that meets an attempt in flight, read $label", (variant) => {
-    const { method, base, strand } = variant;
-    const refused = (): Error => hostFailure("E_CLOUD_REQUEST_REFUSED", method);
+  describe.each(STRANDED_READS)(
+    "a ring that meets an attempt in flight, read $label",
+    (variant) => {
+      const { method, base, strand } = variant;
+      const refused = (): Error =>
+        hostFailure("E_CLOUD_REQUEST_REFUSED", method);
 
-    /** Lets what a settled attempt sets going run, and the cache go quiet. */
-    async function quiet(client: QueryClient): Promise<void> {
-      await settled(client);
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      await settled(client);
-    }
+      /** A sweep's own re-ask of the stranded read, held, once it has started asking. */
+      async function ownReAsk(
+        client: QueryClient,
+        answer: () => Promise<string>,
+      ): Promise<{ read: ScriptedRead; first: Promise<void> }> {
+        const read = await strand(client);
+        read.answer = answer;
+        const first = sweepTransientCloudFailures(client, HOST);
+        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        return { read, first };
+      }
 
-    /** A sweep's own re-ask of the stranded read, held, once it has started asking. */
-    async function ownReAsk(
-      client: QueryClient,
-      answer: () => Promise<string>,
-    ): Promise<{ read: ScriptedRead; first: Promise<void> }> {
-      const read = await strand(client);
-      read.answer = answer;
-      const first = sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => expect(read.calls).toBe(base + 1));
-      return { read, first };
-    }
+      it.each([1, 3])(
+        "asks once more, and then no more, when %i ring(s) arrive during the sweep's own re-ask and it fails transiently",
+        async (rings) => {
+          const client = freshClient();
+          const attempt = heldFailure(refused());
+          const { read, first } = await ownReAsk(client, attempt.answer);
 
-    it.each([1, 3])(
-      "asks once more, and then no more, when %i ring(s) arrive during the sweep's own re-ask and it fails transiently",
-      async (rings) => {
-        const client = freshClient();
-        const attempt = heldFailure(refused());
-        const { read, first } = await ownReAsk(client, attempt.answer);
+          const later = Array.from({ length: rings }, () =>
+            sweepTransientCloudFailures(client, HOST),
+          );
+          expect(read.calls).toBe(base + 1);
+          read.answer = rejects(refused());
+          attempt.release();
+          await Promise.all([first, ...later]);
+          await quiet(client);
 
-        const later = Array.from({ length: rings }, () =>
-          sweepTransientCloudFailures(client, HOST),
-        );
-        expect(read.calls).toBe(base + 1);
-        read.answer = rejects(refused());
-        attempt.release();
-        await Promise.all([first, ...later]);
-        await quiet(client);
+          expect(read.calls).toBe(base + 2);
+          expect(read.state.status).toBe("error");
+        },
+      );
 
-        expect(read.calls).toBe(base + 2);
-        expect(read.state.status).toBe("error");
-      },
-    );
-
-    it("asks once more after a refetch started elsewhere fails transiently, without cancelling it", async () => {
-      const client = freshClient();
-      const read = await strand(client);
-      const attempt = heldFailure(refused());
-      read.answer = attempt.answer;
-      const retry = client.refetchQueries({ queryKey: read.queryKey });
-      await vi.waitFor(() => expect(read.calls).toBe(base + 1));
-
-      const ring = sweepTransientCloudFailures(client, HOST);
-      expect(read.calls).toBe(base + 1);
-      read.answer = rejects(refused());
-      attempt.release();
-      await Promise.all([retry, ring]);
-      await quiet(client);
-
-      expect(read.calls).toBe(base + 2);
-      expect(read.state.status).toBe("error");
-    });
-
-    it.each([0, 2])(
-      "owes nothing to a ring that arrives %i microtask turns after a sweep chose the read, before its ask started",
-      async (turns) => {
+      it("asks once more after a refetch started elsewhere fails transiently, without cancelling it", async () => {
         const client = freshClient();
         const read = await strand(client);
         const attempt = heldFailure(refused());
         read.answer = attempt.answer;
-
-        const first = sweepTransientCloudFailures(client, HOST);
-        for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
-        const ring = sweepTransientCloudFailures(client, HOST);
+        const retry = client.refetchQueries({ queryKey: read.queryKey });
         await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+
+        const ring = sweepTransientCloudFailures(client, HOST);
+        expect(read.calls).toBe(base + 1);
+        read.answer = rejects(refused());
         attempt.release();
-        await Promise.all([first, ring]);
+        await Promise.all([retry, ring]);
         await quiet(client);
 
-        expect(read.calls).toBe(base + 1);
+        expect(read.calls).toBe(base + 2);
         expect(read.state.status).toBe("error");
-      },
-    );
+      });
 
-    it("asks no more when the attempt it met succeeds", async () => {
-      const client = freshClient();
-      const attempt = heldAnswer("recovered");
-      const { read, first } = await ownReAsk(client, attempt.answer);
+      it.each([0, 2])(
+        "owes nothing to a ring that arrives %i microtask turns after a sweep chose the read, before its ask started",
+        async (turns) => {
+          const client = freshClient();
+          const read = await strand(client);
+          const attempt = heldFailure(refused());
+          read.answer = attempt.answer;
 
-      const ring = sweepTransientCloudFailures(client, HOST);
-      attempt.release();
-      await Promise.all([first, ring]);
-      await quiet(client);
+          const first = sweepTransientCloudFailures(client, HOST);
+          for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
+          const ring = sweepTransientCloudFailures(client, HOST);
+          await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+          attempt.release();
+          await Promise.all([first, ring]);
+          await quiet(client);
 
-      expect(read.calls).toBe(base + 1);
-      expect(read.state.data).toBe("recovered");
-    });
+          expect(read.calls).toBe(base + 1);
+          expect(read.state.status).toBe("error");
+        },
+      );
 
-    it.each(["FORBIDDEN", "RPC_ERROR"] as const)(
-      "asks no more when the attempt it met fails with %s",
-      async (code) => {
+      it("asks no more when the attempt it met succeeds", async () => {
         const client = freshClient();
-        const attempt = heldFailure(hostFailure(code, method));
+        const attempt = heldAnswer("recovered");
         const { read, first } = await ownReAsk(client, attempt.answer);
 
         const ring = sweepTransientCloudFailures(client, HOST);
@@ -691,44 +686,303 @@ describe("sweepTransientCloudFailures", () => {
         await quiet(client);
 
         expect(read.calls).toBe(base + 1);
-        expect(read.state.status).toBe("error");
-      },
-    );
+        expect(read.state.data).toBe("recovered");
+      });
 
-    it("asks no more when no ring met the attempt and it fails transiently", async () => {
-      const client = freshClient();
-      const attempt = heldFailure(refused());
-      const { read, first } = await ownReAsk(client, attempt.answer);
+      it.each(["FORBIDDEN", "RPC_ERROR"] as const)(
+        "asks no more when the attempt it met fails with %s",
+        async (code) => {
+          const client = freshClient();
+          const attempt = heldFailure(hostFailure(code, method));
+          const { read, first } = await ownReAsk(client, attempt.answer);
 
-      attempt.release();
-      await first;
-      await quiet(client);
+          const ring = sweepTransientCloudFailures(client, HOST);
+          attempt.release();
+          await Promise.all([first, ring]);
+          await quiet(client);
 
-      expect(read.calls).toBe(base + 1);
-      expect(read.state.status).toBe("error");
-    });
-
-    it("asks nothing, and leaves nothing subscribed on the cache, when the read is removed before the attempt it met ends", async () => {
-      const client = freshClient();
-      const read = await strand(client);
-      const listening = client.getQueryCache().hasListeners();
-      const attempt = heldFailure(refused());
-      read.answer = attempt.answer;
-      const first = sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => expect(read.calls).toBe(base + 1));
-      const ring = sweepTransientCloudFailures(client, HOST);
-
-      read.release();
-      client.removeQueries({ queryKey: read.queryKey });
-      attempt.release();
-      await Promise.all([first, ring]);
-      await quiet(client);
-
-      expect(read.calls).toBe(base + 1);
-      expect(client.getQueryCache().find({ queryKey: read.queryKey })).toBe(
-        undefined,
+          expect(read.calls).toBe(base + 1);
+          expect(read.state.status).toBe("error");
+        },
       );
-      expect(client.getQueryCache().hasListeners()).toBe(listening);
-    });
-  });
+
+      it("asks no more when no ring met the attempt and it fails transiently", async () => {
+        const client = freshClient();
+        const attempt = heldFailure(refused());
+        const { read, first } = await ownReAsk(client, attempt.answer);
+
+        attempt.release();
+        await first;
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 1);
+        expect(read.state.status).toBe("error");
+      });
+
+      it("asks nothing, and leaves nothing subscribed on the cache, when the read is removed before the attempt it met ends", async () => {
+        const client = freshClient();
+        const read = await strand(client);
+        const listening = client.getQueryCache().hasListeners();
+        const attempt = heldFailure(refused());
+        read.answer = attempt.answer;
+        const first = sweepTransientCloudFailures(client, HOST);
+        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        const ring = sweepTransientCloudFailures(client, HOST);
+
+        read.release();
+        client.removeQueries({ queryKey: read.queryKey });
+        attempt.release();
+        await Promise.all([first, ring]);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 1);
+        expect(client.getQueryCache().find({ queryKey: read.queryKey })).toBe(
+          undefined,
+        );
+        expect(client.getQueryCache().hasListeners()).toBe(listening);
+      });
+    },
+  );
+
+  describe.each(STRANDED_READS)(
+    "a removed read's sweep continuation, read $label",
+    ({ method, base, strand }) => {
+      const refused = (): Error =>
+        hostFailure("E_CLOUD_REQUEST_REFUSED", method);
+
+      /** A read R whose sweep re-ask is held, with a second ring owed to it. */
+      async function staleSweepOverRead(client: QueryClient): Promise<{
+        old: ScriptedRead;
+        oldAnswer: { readonly release: () => void };
+        first: Promise<void>;
+        second: Promise<void>;
+        listening: boolean;
+      }> {
+        const old = await strand(client);
+        const listening = client.getQueryCache().hasListeners();
+        const oldAnswer = heldFailure(refused());
+        old.answer = oldAnswer.answer;
+        const first = sweepTransientCloudFailures(client, HOST);
+        await vi.waitFor(() => expect(old.calls).toBe(base + 1));
+        const second = sweepTransientCloudFailures(client, HOST);
+        return { old, oldAnswer, first, second, listening };
+      }
+
+      /** What unmounting R's reader and gc do to its cache entry. */
+      function retire(client: QueryClient, old: ScriptedRead): void {
+        old.release();
+        client.removeQueries({ queryKey: old.queryKey, exact: true });
+      }
+
+      it("neither restarts the replacement's pending request nor spends its owed ring", async () => {
+        const client = freshClient();
+        const { old, oldAnswer, first, second } =
+          await staleSweepOverRead(client);
+        const replacementAnswer = heldFailure(refused());
+
+        retire(client, old);
+        const replacement = new ScriptedRead(
+          client,
+          old.queryKey,
+          replacementAnswer.answer,
+        );
+        const ring = sweepTransientCloudFailures(client, HOST);
+        await turn();
+
+        // The old continuation has run: the replacement still has its one request.
+        expect(replacement.calls).toBe(1);
+        replacement.answer = resolves("recovered");
+        replacementAnswer.release();
+        oldAnswer.release();
+        await Promise.all([first, second, ring]);
+        await vi.waitFor(() =>
+          expect(replacement.state.data).toBe("recovered"),
+        );
+        await quiet(client);
+
+        // Its owed ring was spent on one re-ask when its refusal settled.
+        expect(replacement.calls).toBe(2);
+      });
+
+      it("leaves nothing behind when the read is removed and not replaced", async () => {
+        const client = freshClient();
+        const { old, oldAnswer, first, second, listening } =
+          await staleSweepOverRead(client);
+
+        retire(client, old);
+        oldAnswer.release();
+        await Promise.all([first, second]);
+        await quiet(client);
+
+        expect(old.calls).toBe(base + 1);
+        expect(client.getQueryCache().find({ queryKey: old.queryKey })).toBe(
+          undefined,
+        );
+        expect(client.getQueryCache().hasListeners()).toBe(listening);
+        const later = await failedRead(client, {
+          hostId: HOST,
+          method: "bot.list",
+          name: "later",
+          code: "E_CLOUD_REQUEST_REFUSED",
+        });
+        later.answer = resolves("ok");
+        await sweepTransientCloudFailures(client, HOST);
+        expect(later.calls).toBe(2);
+        expect(later.state.data).toBe("ok");
+      });
+
+      it("treats a replacement mounted after the continuation unwound as any read", async () => {
+        const client = freshClient();
+        const { old, oldAnswer, first, second } =
+          await staleSweepOverRead(client);
+        retire(client, old);
+        oldAnswer.release();
+        await Promise.all([first, second]);
+        await quiet(client);
+
+        const replacementAnswer = heldFailure(refused());
+        const replacement = new ScriptedRead(
+          client,
+          old.queryKey,
+          replacementAnswer.answer,
+        );
+        await vi.waitFor(() => expect(replacement.calls).toBe(1));
+        const ring = sweepTransientCloudFailures(client, HOST);
+        expect(replacement.calls).toBe(1);
+        replacement.answer = resolves("recovered");
+        replacementAnswer.release();
+        await ring;
+        await vi.waitFor(() =>
+          expect(replacement.state.data).toBe("recovered"),
+        );
+        await quiet(client);
+
+        expect(replacement.calls).toBe(2);
+      });
+
+      it("retires when the read is removed while its sweep is still cancelling, leaving the replacement's request alone", async () => {
+        const client = freshClient();
+        const read = await strand(client);
+        const replacementAnswer = heldFailure(refused());
+
+        const first = sweepTransientCloudFailures(client, HOST);
+        retire(client, read);
+        const replacement = new ScriptedRead(
+          client,
+          read.queryKey,
+          replacementAnswer.answer,
+        );
+        await turn();
+
+        expect(replacement.calls).toBe(1);
+        expect(replacement.state.fetchStatus).toBe("fetching");
+        // Not invalidated either: an invalidate by key would have marked it.
+        expect(replacement.state.isInvalidated).toBe(false);
+        replacementAnswer.release();
+        await first;
+        await quiet(client);
+
+        expect(replacement.calls).toBe(1);
+      });
+
+      it("retires when a cache subscriber replaces the read as its owed ring is spent, leaving the replacement's request alone", async () => {
+        const client = freshClient();
+        const read = await strand(client);
+        const attempt = heldFailure(refused());
+        read.answer = attempt.answer;
+        const retry = client.refetchQueries({ queryKey: read.queryKey });
+        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        const ring = sweepTransientCloudFailures(client, HOST);
+
+        // Registered after the sweep's own listener, so it hears the end of
+        // the attempt after the sweep has claimed the read to re-ask it.
+        const replacementAnswer = heldFailure(refused());
+        const replaced: { read: ScriptedRead | null } = { read: null };
+        const stopReplacing = client.getQueryCache().subscribe((event) => {
+          if (
+            replaced.read !== null ||
+            event.type !== "updated" ||
+            event.query.queryKey !== read.queryKey ||
+            event.query.state.fetchStatus === "fetching"
+          ) {
+            return;
+          }
+          retire(client, read);
+          replaced.read = new ScriptedRead(
+            client,
+            read.queryKey,
+            replacementAnswer.answer,
+          );
+        });
+        attempt.release();
+        await Promise.all([retry, ring]);
+        await turn();
+        stopReplacing();
+
+        const mounted = replaced.read;
+        if (mounted === null) throw new Error("the read was not replaced");
+        expect(mounted.calls).toBe(1);
+        expect(mounted.state.fetchStatus).toBe("fetching");
+        replacementAnswer.release();
+        await quiet(client);
+        expect(mounted.calls).toBe(1);
+      });
+
+      it("keeps the replacement's owed ring when the removed read is only now dropped by gc", async () => {
+        const client = freshClient();
+        client.setQueryDefaults(hostReadKey(HOST, method, "o"), { gcTime: 0 });
+        const read = await strand(client);
+        // Removed from the cache while its reader still holds it.
+        client.removeQueries({ queryKey: read.queryKey, exact: true });
+        const replacementAnswer = heldFailure(refused());
+        const replacement = new ScriptedRead(
+          client,
+          read.queryKey,
+          replacementAnswer.answer,
+        );
+        await vi.waitFor(() => expect(replacement.calls).toBe(1));
+        const ring = sweepTransientCloudFailures(client, HOST);
+
+        // The old reader lets go: gc announces its removal though the
+        // replacement now holds the slot.
+        read.release();
+        await turn();
+        replacement.answer = resolves("recovered");
+        replacementAnswer.release();
+        await ring;
+        await vi.waitFor(() =>
+          expect(replacement.state.data).toBe("recovered"),
+        );
+        await quiet(client);
+
+        expect(replacement.calls).toBe(2);
+      });
+
+      it("does not touch a read under another key", async () => {
+        const client = freshClient();
+        const { old, oldAnswer, first, second } =
+          await staleSweepOverRead(client);
+        const otherAnswer = heldFailure(refused());
+        const other = new ScriptedRead(
+          client,
+          hostReadKey(HOST, method, "another-key"),
+          otherAnswer.answer,
+        );
+
+        retire(client, old);
+        const ring = sweepTransientCloudFailures(client, HOST);
+        await turn();
+
+        expect(other.calls).toBe(1);
+        other.answer = resolves("recovered");
+        otherAnswer.release();
+        oldAnswer.release();
+        await Promise.all([first, second, ring]);
+        await vi.waitFor(() => expect(other.state.data).toBe("recovered"));
+        await quiet(client);
+
+        expect(other.calls).toBe(2);
+      });
+    },
+  );
 });

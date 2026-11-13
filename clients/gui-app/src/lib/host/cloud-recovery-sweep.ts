@@ -81,6 +81,10 @@ function sweepStateOf(client: QueryClient): SweepState {
  * transient failure. It is dropped when the attempt succeeds, fails for any
  * other reason, or a later ring chooses the read first. A read claimed whose
  * ask has not started yet owes nothing: that ask comes after the ring.
+ *
+ * Claims and remembered rings belong to the Query object, not to its key. A
+ * read removed from the cache while its re-ask is in flight retires that
+ * re-ask: it acts on nothing a same-key replacement owns.
  */
 export async function sweepTransientCloudFailures(
   client: QueryClient,
@@ -106,7 +110,7 @@ export async function sweepTransientCloudFailures(
     }
   }
   for (const query of chosen) {
-    state.owed.delete(query.queryHash);
+    takeOwedRing(state, query);
     state.claimed.set(query, false);
   }
   stopListeningWhenNothingOwed(state);
@@ -116,6 +120,11 @@ export async function sweepTransientCloudFailures(
 /**
  * Re-asks one claimed read, and again for each ring that reached it while an
  * ask was in flight and found it failed transiently; then releases it.
+ *
+ * It works by key, so before each step it checks that its read is still the
+ * cache's entry for that key: once the read is removed, a cancel or an
+ * invalidate by key would reach a same-key replacement, and the re-ask
+ * retires instead.
  */
 async function reAsk(
   client: QueryClient,
@@ -125,27 +134,39 @@ async function reAsk(
   const filters = { queryKey: query.queryKey, exact: true };
   try {
     for (;;) {
+      if (!isCurrentEntry(client, query)) return;
       state.claimed.set(query, false);
       // A read in TanStack's retry backoff is still `fetching`; invalidating
       // it alone would only mark it stale. Cancel first, as the recovery
       // sweep does.
       await client.cancelQueries(filters);
+      if (!isCurrentEntry(client, query)) return;
       state.claimed.set(query, true);
       await client.invalidateQueries(filters);
-      if (
-        !state.owed.delete(query.queryHash) ||
-        !isTransientlyFailedRead(query)
-      ) {
-        break;
+      if (!isCurrentEntry(client, query)) return;
+      if (!takeOwedRing(state, query) || !isTransientlyFailedRead(query)) {
+        return;
       }
     }
   } finally {
     // Each read's own answer releases it: a read that failed again is the
     // next ring's to ask, however long another read of the sweep takes.
     state.claimed.delete(query);
-    state.owed.delete(query.queryHash);
+    takeOwedRing(state, query);
     stopListeningWhenNothingOwed(state);
   }
+}
+
+/** Whether `query` is still the cache's entry for its key. */
+function isCurrentEntry(client: QueryClient, query: Query): boolean {
+  return client.getQueryCache().get(query.queryHash) === query;
+}
+
+/** Takes the ring owed to `query` itself, if any; never another read's. */
+function takeOwedRing(state: SweepState, query: Query): boolean {
+  if (state.owed.get(query.queryHash) !== query) return false;
+  state.owed.delete(query.queryHash);
+  return true;
 }
 
 function oweRing(client: QueryClient, state: SweepState, query: Query): void {
@@ -167,7 +188,15 @@ function settleOwedRing(
 ): void {
   const hash: string = event.query.queryHash;
   const query = state.owed.get(hash);
-  if (query === undefined || state.claimed.has(query)) return;
+  // The event's read itself: another object under the same key owns nothing
+  // remembered here.
+  if (
+    query === undefined ||
+    event.query !== query ||
+    state.claimed.has(query)
+  ) {
+    return;
+  }
   if (event.type === "removed") {
     state.owed.delete(hash);
   } else if (
