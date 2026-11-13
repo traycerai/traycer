@@ -65,7 +65,7 @@ export function BotAppearanceSettings(props: {
   const hostId = useTabHostId();
   const supported =
     useHostMethodSupport(hostId, "bot.updateAppearance") === true;
-  const saver = useBotLookSaver(client, botId);
+  const saver = useBotLookSaver(client, hostId, botId);
   const look = useBotLook(botId);
   const main = useBotIsMain(botId);
   if (!supported) return null;

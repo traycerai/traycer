@@ -15,6 +15,7 @@ import {
 import {
   NO_BOT_LOOK_SAVE,
   botLookSaveOf,
+  dropBotLookSave,
   partsOf,
   setBotLookSave,
   useBotLookSaveStore,
@@ -24,10 +25,19 @@ import {
   type BotLookSave,
 } from "@/stores/bots/bot-look-save-store";
 
-type SendLook = (
-  botId: string,
-  change: BotLookChange,
-) => Promise<BotUpdateAppearanceResponse>;
+/** Who a run of saves sends as: the person and host its first choice had. */
+interface LookSender {
+  readonly queryClient: QueryClient;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly userId: string | null;
+  readonly hostId: string;
+  readonly send: (
+    botId: string,
+    change: BotLookChange,
+  ) => Promise<BotUpdateAppearanceResponse>;
+}
+
+let runs = 0;
 
 const BOT_LIST_READS = {
   predicate: (query: { readonly queryKey: readonly unknown[] }) =>
@@ -51,18 +61,7 @@ function settle(botId: string, save: BotLookSave): void {
     setBotLookSave(botId, save);
     return;
   }
-  useBotLookSaveStore.setState((state) => ({
-    saves: withoutBot(state.saves, botId),
-  }));
-}
-
-function withoutBot(
-  saves: Readonly<Record<string, BotLookSave>>,
-  botId: string,
-): Record<string, BotLookSave> {
-  return Object.fromEntries(
-    Object.entries(saves).filter(([id]) => id !== botId),
-  );
+  dropBotLookSave(botId);
 }
 
 /**
@@ -91,49 +90,73 @@ async function keepAnsweredLook(
  * Sends `change` and, when it is answered, whatever was chosen meanwhile, one
  * save at a time. A part stays chosen until the last save naming it is
  * answered, so an earlier answer never draws over a later choice.
+ *
+ * The run belongs to the person who started it. When the client signs in as
+ * anyone else the run is retired at once: its choices stop being drawn, and
+ * what it had waiting is never sent as the next person.
  */
 async function sendInOrder(
-  queryClient: QueryClient,
-  send: SendLook,
+  sender: LookSender,
   botId: string,
+  run: number,
   change: BotLookChange,
 ): Promise<void> {
-  let next: BotLookChange | null = change;
-  while (next !== null) {
-    const sending: BotLookChange = next;
-    setBotLookSave(botId, { ...botLookSaveOf(botId), sending, waiting: null });
-    const refusal = await send(botId, sending).then(
-      async (response) => {
-        await keepAnsweredLook(
-          queryClient,
-          botId,
-          response.bot.appearance ?? null,
-        );
-        return null;
-      },
-      (error: unknown) =>
-        error instanceof Error ? error.message : "The change was not saved.",
-    );
-    const held = botLookSaveOf(botId);
-    // A part chosen again since this save left keeps that later choice.
-    const answered = partsOf(sending).filter(
-      (part) => held.waiting?.[part] === undefined,
-    );
-    const refusals: Partial<Record<BotLookPart, string>> = {
-      ...held.refusals,
-    };
-    if (refusal !== null && (openPanels.get(botId) ?? 0) > 0) {
-      for (const part of answered) refusals[part] = refusal;
+  const owned = (): boolean => botLookSaveOf(botId).run === run;
+  const stopWatching = sender.client?.onChange(() => {
+    if (sender.client?.getRequestContextUserId() === sender.userId) return;
+    if (owned()) dropBotLookSave(botId);
+  });
+  try {
+    let next: BotLookChange | null = change;
+    while (next !== null) {
+      const sending: BotLookChange = next;
+      setBotLookSave(botId, {
+        ...botLookSaveOf(botId),
+        sending,
+        waiting: null,
+      });
+      const answer = await sender.send(botId, sending).then(
+        (response) => ({
+          look: response.bot.appearance ?? null,
+          refusal: null,
+        }),
+        (error: unknown) => ({
+          look: null,
+          refusal:
+            error instanceof Error
+              ? error.message
+              : "The change was not saved.",
+        }),
+      );
+      if (!owned()) return;
+      if (answer.refusal === null) {
+        await keepAnsweredLook(sender.queryClient, botId, answer.look);
+        if (!owned()) return;
+      }
+      const held = botLookSaveOf(botId);
+      // A part chosen again since this save left keeps that later choice.
+      const answered = partsOf(sending).filter(
+        (part) => held.waiting?.[part] === undefined,
+      );
+      const refusals: Partial<Record<BotLookPart, string>> = {
+        ...held.refusals,
+      };
+      if (answer.refusal !== null && (openPanels.get(botId) ?? 0) > 0) {
+        for (const part of answered) refusals[part] = answer.refusal;
+      }
+      next = held.waiting;
+      settle(botId, {
+        ...held,
+        chosen: withoutParts(held.chosen, answered),
+        sending: null,
+        waiting: null,
+        refusals,
+      });
     }
-    next = held.waiting;
-    settle(botId, {
-      chosen: withoutParts(held.chosen, answered),
-      sending: null,
-      waiting: null,
-      refusals,
-    });
+  } finally {
+    stopWatching?.();
   }
-  invalidateBotLists(queryClient);
+  invalidateBotLists(sender.queryClient);
 }
 
 /** What a bot's settings read and do about its look's saves. */
@@ -153,6 +176,7 @@ export interface BotLookSaver {
  */
 export function useBotLookSaver(
   client: HostClient<HostRpcRegistry> | null,
+  hostId: string,
   botId: string,
 ): BotLookSaver {
   const queryClient = useQueryClient();
@@ -177,24 +201,40 @@ export function useBotLookSaver(
   return {
     choose: (change) => {
       const held = botLookSaveOf(botId);
-      const chosen: BotLookSave = {
-        ...held,
-        chosen: { ...held.chosen, ...change },
-        refusals: withoutParts(held.refusals, partsOf(change)),
-      };
-      if (held.sending !== null) {
+      const refusals = withoutParts(held.refusals, partsOf(change));
+      const chosen = { ...held.chosen, ...change };
+      if (held.sending !== null && held.hostId === hostId) {
         setBotLookSave(botId, {
-          ...chosen,
+          ...held,
+          chosen,
+          refusals,
           waiting: { ...held.waiting, ...change },
         });
         return;
       }
-      setBotLookSave(botId, chosen);
+      // Nothing is on its way, or a run through another host is: this host
+      // takes the bot over and sends that run's unanswered parts itself, so
+      // they are still saved, in order, by a host that can.
+      runs += 1;
+      setBotLookSave(botId, {
+        chosen,
+        refusals,
+        sending: null,
+        waiting: null,
+        run: runs,
+        hostId,
+      });
       void sendInOrder(
-        queryClient,
-        (id, parts) => mutateAsync({ botId: id, ...parts }),
+        {
+          queryClient,
+          client,
+          userId: client?.getRequestContextUserId() ?? null,
+          hostId,
+          send: (id, parts) => mutateAsync({ botId: id, ...parts }),
+        },
         botId,
-        change,
+        runs,
+        { ...held.sending, ...held.waiting, ...change },
       );
     },
     saving: (part) =>

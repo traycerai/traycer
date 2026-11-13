@@ -30,6 +30,13 @@ export interface BotLookSave {
   readonly waiting: BotLookChange | null;
   /** Why each part's last save was refused, until that part is chosen again. */
   readonly refusals: Readonly<Partial<Record<BotLookPart, string>>>;
+  /**
+   * Which run of saves owns this entry. A run that finds another number here
+   * was retired or taken over, and neither sends nor writes again.
+   */
+  readonly run: number;
+  /** The host that run sends through; `null` with no run. */
+  readonly hostId: string | null;
 }
 
 export const NO_BOT_LOOK_SAVE: BotLookSave = {
@@ -37,6 +44,8 @@ export const NO_BOT_LOOK_SAVE: BotLookSave = {
   sending: null,
   waiting: null,
   refusals: {},
+  run: 0,
+  hostId: null,
 };
 
 interface BotLookSaveState {
@@ -71,4 +80,13 @@ export function withoutParts<
 export function partsOf(change: BotLookChange | null): BotLookPart[] {
   if (change === null) return [];
   return BOT_LOOK_PARTS.filter((part) => change[part] !== undefined);
+}
+
+/** Forgets a bot's choices and saves. */
+export function dropBotLookSave(botId: string): void {
+  useBotLookSaveStore.setState((state) => ({
+    saves: Object.fromEntries(
+      Object.entries(state.saves).filter(([id]) => id !== botId),
+    ),
+  }));
 }
