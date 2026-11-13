@@ -213,6 +213,8 @@ import {
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useEmptyTerminalDefaultSettings } from "@/hooks/providers/use-empty-terminal-default-settings";
+import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
@@ -1144,9 +1146,21 @@ export function NewConversationModalBody(props: {
     resolvedHostId,
     "epic.createChat",
   );
+  // Until this draft holds settings of its own, nobody chose its account: a
+  // seed on an empty Terminal login starts on the one signed-in profile.
+  const draftSettingsChosen = useNewConversationModalStore(
+    (state) => (state.draftPatchesByEpicId[epicId]?.settings ?? null) !== null,
+  );
+  const surfaceActive = useSurfaceActivity();
+  const seedSettings = useEmptyTerminalDefaultSettings(
+    draftSettings,
+    !draftSettingsChosen,
+    surfaceActive,
+    hostClient,
+  );
   const toolbarStore = useComposerToolbarStore(
     null,
-    fallbackSeedSource(draftSettings, hostClient),
+    fallbackSeedSource(seedSettings, hostClient),
     handleToolbarSettingsChange,
     {
       hostClient,

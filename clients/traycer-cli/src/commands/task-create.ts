@@ -2,9 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { createEpicResponseSchemaV12 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 import { plainTextPromptContent } from "@traycer-clients/shared/epic/plain-text-content";
+import { soleSignedInProfileForEmptyTerminal } from "../../../shared/providers/provider-ambient-auth";
+import { providerIdFromHarnessOrProviderName } from "../../../shared/providers/provider-harness-ids";
 import {
   HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
@@ -25,6 +28,7 @@ import {
   isRequestVersionProjectionError,
   parseCanonicalHostResponse,
   parseUserInput,
+  PLAIN_DISPATCH,
   resolveEndpoint,
   type HostRpcDispatch,
 } from "../internal/host-rpc";
@@ -47,9 +51,11 @@ import type { CommandFn, CommandResult } from "../runner/runner";
  * It states the whole `epic.create` request the GUI's new-Task composer
  * states: the Task, a folded first chat and its initial message, sent by the
  * person, billed to their personal account. The host owns the rest (title
- * generation, the first turn), so nothing here resolves a profile, a catalog
- * default or a worktree; `--harness` and `--model` are required because
- * there is no host default model and a silent one would be a spend surprise.
+ * generation, the first turn), so nothing here resolves a catalog default or
+ * a worktree; `--harness` and `--model` are required because there is no host
+ * default model and a silent one would be a spend surprise. With no
+ * `--profile` the account is the host's default one (see
+ * `withDefaultAccount`).
  *
  * Exit 0 means the Task and its first agent exist and the host accepted the
  * message. It does not mean the first turn has started.
@@ -137,9 +143,16 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
     // this endpoint rather than a fresh read of it.
     const endpoint = await resolveEndpoint();
 
+    const profileNamed = opts.profile !== null;
+
     if (opts.idempotencyKey === null) {
       const ids = mintIds();
-      const outcome = await sendCreate(input, ids, auth, endpoint);
+      const outcome = await sendCreate(
+        await withDefaultAccount(input, profileNamed, endpoint, auth),
+        ids,
+        auth,
+        endpoint,
+      );
       if (outcome.kind !== "created") throw failureFor(outcome, ids, null);
       return created(ids, false);
     }
@@ -202,7 +215,12 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
         await clearTaskCreateKey(recordPath).catch(() => undefined);
         throw error;
       }
-      const outcome = await sendCreate(input, ids, auth, endpoint);
+      const outcome = await sendCreate(
+        await withDefaultAccount(input, profileNamed, endpoint, auth),
+        ids,
+        auth,
+        endpoint,
+      );
       if (outcome.kind === "not-created") {
         await clearTaskCreateKey(recordPath);
         throw failureFor(outcome, ids, null);
@@ -345,6 +363,48 @@ function fingerprintOf(input: TaskCreateInput): string {
       ]),
     )
     .digest("hex");
+}
+
+/**
+ * With no `--profile`, nobody chose the account, so it is the host's default:
+ * its Terminal login, or that provider's one signed-in profile when the
+ * Terminal login definitely holds no credential. `--profile ambient` is the
+ * Terminal login as chosen and is never moved. A list that cannot be read
+ * leaves the Terminal login. Applied to what is sent, never to the
+ * fingerprint, which records what the person asked for.
+ */
+async function withDefaultAccount(
+  input: TaskCreateInput,
+  profileNamed: boolean,
+  endpoint: HostTransportEndpoint,
+  auth: HostAuth,
+): Promise<TaskCreateInput> {
+  if (profileNamed) return input;
+  const providerId = providerIdFromHarnessOrProviderName(
+    input.settings.harnessId,
+  );
+  if (providerId === null) return input;
+  let providers: readonly ProviderCliState[];
+  try {
+    const response = await callHostRpcAtResolvedEndpoint(
+      "providers.list",
+      { native: null },
+      endpoint,
+      auth,
+      PLAIN_DISPATCH,
+    );
+    providers = response.providers;
+  } catch {
+    return input;
+  }
+  const provider = providers.find((entry) => entry.providerId === providerId);
+  const profileId =
+    provider === undefined
+      ? null
+      : soleSignedInProfileForEmptyTerminal(provider);
+  return profileId === null
+    ? input
+    : { ...input, settings: { ...input.settings, profileId } };
 }
 
 async function sendCreate(
