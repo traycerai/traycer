@@ -70,6 +70,7 @@ import {
   providersListResponseSchemaV107Preimage,
   providersListResponseSchemaV108Preimage,
   providersListResponseSchemaV109Preimage,
+  providersListResponseSchemaV1010Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -244,9 +245,11 @@ const FIXTURES = {
   "providers.list@10.8": dump(providersListResponseSchemaV108Preimage),
   // 10.9 froze when `hiddenModelProviders` opened 10.10.
   "providers.list@10.9": dump(providersListResponseSchemaV109Preimage),
+  // 10.10 froze when the profile-sync keys opened 10.11.
+  "providers.list@10.10": dump(providersListResponseSchemaV1010Preimage),
   // The head line. It dumps LIVE, so the next attempt to grow the provider
   // state goes red on this line.
-  "providers.list@10.10": dump(providersListResponseSchema),
+  "providers.list@10.11": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

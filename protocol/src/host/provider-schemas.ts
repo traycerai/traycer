@@ -1656,56 +1656,126 @@ export type ManagedProfileDeliveryRefusal = z.infer<
   typeof managedProfileDeliveryRefusalSchema
 >;
 
-/** Read projection: a future row is one disabled, explained row, never a lost inventory. */
+/**
+ * What a person is told about an account that cannot be used right now, first
+ * published by `providers.list@10.11`: `needs-sign-in` when only a sign-in can
+ * restore it, `waiting` when it can resolve by itself (a delayed renewal or an
+ * outage). A removed account is never a row; the list envelope's
+ * `removedProfiles` carries it.
+ */
+export const providerProfilePersonNoticeSchema = lazySchema(() =>
+  z.enum(["needs-sign-in", "waiting"]),
+);
+export type ProviderProfilePersonNotice = z.infer<
+  typeof providerProfilePersonNoticeSchema
+>;
+
+/**
+ * A pending "Which name should this account use?" question, first published by
+ * `providers.list@10.11`. `providers.answerProfileName` answers it by
+ * `revision`, so an answer to a question someone already answered changes
+ * nothing.
+ */
+export const providerProfileNameQuestionSchema = lazySchema(() =>
+  z.object({
+    revision: z.string().min(1),
+    choices: z.array(z.string().min(1)),
+  }),
+);
+export type ProviderProfileNameQuestion = z.infer<
+  typeof providerProfileNameQuestionSchema
+>;
+
+function unreadableProjectedProfile(input: unknown) {
+  const row = typeof input === "object" && input !== null ? input : {};
+  return buildUnreadableProviderProfile({
+    profileId:
+      "profileId" in row && typeof row.profileId === "string"
+        ? row.profileId
+        : "unreadable",
+    label:
+      "label" in row && typeof row.label === "string"
+        ? row.label
+        : "Unreadable profile",
+    kind: "managed",
+    reason: "Profile row uses an unsupported or invalid shape",
+  });
+}
+
+/**
+ * The profile row `providers.list@10.9` and `@10.10` published, before 10.11
+ * added aliases, the person notice, the Terminal flag and the name question.
+ * Frozen lines read it so none of the 10.11 keys reaches an older reader.
+ */
+const providerProfileProjectionObjectSchemaV1010 = lazySchema(() =>
+  providerProfileSchema.extend({
+    recordVersion: z.literal(1).optional(),
+    credentialIdentity: credentialIdentitySchema.optional().catch(undefined),
+    credentialHome: credentialHomeSchema.optional().catch(undefined),
+    environmentProfileId: z.string().nullable().optional(),
+    deliveryRefusal: managedProfileDeliveryRefusalSchema
+      .nullable()
+      .catch(null)
+      .optional(),
+    presence: z
+      .discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("admitted"),
+          bindingVersion: credentialVersionSchema,
+        }),
+        z.object({
+          kind: z.literal("revoking"),
+          cause: environmentPresenceCauseSchema.nullable().catch(null),
+        }),
+        z.object({ kind: z.literal("no-home") }),
+        z.object({ kind: z.literal("placeholder-only") }),
+      ])
+      .optional()
+      .catch(undefined),
+    readability: z
+      .object({
+        kind: z.enum(["readable", "unreadable"]),
+        reason: z.string().nullable(),
+      })
+      .optional(),
+  }),
+);
+
+/** Frozen 10.10 read projection: a future row is one disabled, explained row. */
+const providerProfileProjectionSchemaV1010 = lazySchema(() =>
+  providerProfileProjectionObjectSchemaV1010.catch((context) =>
+    unreadableProjectedProfile(context.input),
+  ),
+);
+
+/**
+ * Read projection: a future row is one disabled, explained row, never a lost
+ * inventory.
+ *
+ * The four 10.11 keys live here and nowhere else: not on `providerProfileSchema`,
+ * which every provider-state response shares, so the mutation echoes and the
+ * released lines never carry them. Each falls back at its own field, so an
+ * unknown value costs that key, not the row.
+ */
 export const providerProfileProjectionSchema = lazySchema(() =>
-  providerProfileSchema
+  providerProfileProjectionObjectSchemaV1010
     .extend({
-      recordVersion: z.literal(1).optional(),
-      credentialIdentity: credentialIdentitySchema.optional().catch(undefined),
-      credentialHome: credentialHomeSchema.optional().catch(undefined),
-      environmentProfileId: z.string().nullable().optional(),
-      deliveryRefusal: managedProfileDeliveryRefusalSchema
+      // Other ids that resolve to this row (the ids its folded duplicates
+      // had), so a chat, bot or interview pinned to one still finds it.
+      aliases: z.array(z.string().min(1)).optional().catch(undefined),
+      personNotice: providerProfilePersonNoticeSchema
         .nullable()
-        .catch(null)
-        .optional(),
-      presence: z
-        .discriminatedUnion("kind", [
-          z.object({
-            kind: z.literal("admitted"),
-            bindingVersion: credentialVersionSchema,
-          }),
-          z.object({
-            kind: z.literal("revoking"),
-            cause: environmentPresenceCauseSchema.nullable().catch(null),
-          }),
-          z.object({ kind: z.literal("no-home") }),
-          z.object({ kind: z.literal("placeholder-only") }),
-        ])
         .optional()
         .catch(undefined),
-      readability: z
-        .object({
-          kind: z.enum(["readable", "unreadable"]),
-          reason: z.string().nullable(),
-        })
-        .optional(),
+      // Whether this computer's Terminal login is the same account as this
+      // row.
+      terminalOnThisComputer: z.boolean().optional().catch(undefined),
+      nameQuestion: providerProfileNameQuestionSchema
+        .nullable()
+        .optional()
+        .catch(undefined),
     })
-    .catch((context) => {
-      const input = context.input;
-      const row = typeof input === "object" && input !== null ? input : {};
-      return buildUnreadableProviderProfile({
-        profileId:
-          "profileId" in row && typeof row.profileId === "string"
-            ? row.profileId
-            : "unreadable",
-        label:
-          "label" in row && typeof row.label === "string"
-            ? row.label
-            : "Unreadable profile",
-        kind: "managed",
-        reason: "Profile row uses an unsupported or invalid shape",
-      });
-    }),
+    .catch((context) => unreadableProjectedProfile(context.input)),
 );
 export type ProviderProfile = z.infer<typeof providerProfileProjectionSchema>;
 
@@ -1727,6 +1797,40 @@ export type ProvidersSignOutProfileRequest = z.infer<
 >;
 export type ProvidersSignOutProfileResponse = z.infer<
   typeof providersSignOutProfileResponseSchema
+>;
+
+/**
+ * Answers a row's `nameQuestion` (`providers.list@10.11`) with the name the
+ * account should use everywhere. `revision` is the question's, so the host
+ * applies the answer only while that question is still the open one.
+ */
+export const providersAnswerProfileNameRequestSchema = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    profileId: z.string().min(1),
+    revision: z.string().min(1),
+    // The same bounds as a rename's label.
+    label: z.string().min(1).max(64),
+  }),
+);
+export type ProvidersAnswerProfileNameRequest = z.infer<
+  typeof providersAnswerProfileNameRequestSchema
+>;
+
+/**
+ * `applied`: this answer was written. `conflict`: the revision is no longer
+ * the open question (someone already answered it, or it was replaced), so
+ * nothing was written. Both carry the name the account uses now, so a caller
+ * can show it without another read.
+ */
+export const providersAnswerProfileNameResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("applied"), label: z.string() }),
+    z.object({ outcome: z.literal("conflict"), label: z.string() }),
+  ]),
+);
+export type ProvidersAnswerProfileNameResponse = z.infer<
+  typeof providersAnswerProfileNameResponseSchema
 >;
 
 export const providersSetProfileEnabledRequestSchema = lazySchema(() =>
@@ -2666,7 +2770,25 @@ export const providersListResponseSchemaV109Preimage = lazySchema(() =>
     providers: z.array(
       providerCliStateSchemaV109.extend({
         usageReporting: z.boolean().optional(),
-        profiles: z.array(providerProfileProjectionSchema).catch([]),
+        profiles: z.array(providerProfileProjectionSchemaV1010).catch([]),
+      }),
+    ),
+  }),
+);
+
+/**
+ * Frozen `providers.list@10.10` response: the 10.10 envelope, row and profile
+ * projection, before 10.11 added four keys to the profile projection and
+ * `removedProfiles` to the envelope. The envelope is the hand-copied 10.8 one
+ * and the profile projection is the frozen 10.10 one, so neither 10.11 key
+ * set reaches this line.
+ */
+export const providersListResponseSchemaV1010Preimage = lazySchema(() =>
+  providersListResponseSchemaV108Preimage.extend({
+    providers: z.array(
+      providerCliStateSchema.extend({
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchemaV1010).catch([]),
       }),
     ),
   }),
@@ -2686,6 +2808,22 @@ export const providersListResponseSchema = lazySchema(() =>
         profiles: z.array(providerProfileProjectionSchema).catch([]),
       }),
     ),
+    // The accounts a person removed, one entry each, first published by
+    // `providers.list@10.11`. A removed account is never a row, so this is the
+    // only place "Was removed" can come from: an id found here, as `profileId`
+    // or among `aliases`, was removed by a person; an id found in no row, no
+    // row's aliases and not here is unknown, not removed. Ids only. On the
+    // envelope for the reason `onHostOnly` is, and `.optional()` for the same
+    // construction-site reason.
+    removedProfiles: z
+      .array(
+        z.object({
+          providerId: z.string().min(1),
+          profileId: z.string().min(1),
+          aliases: z.array(z.string().min(1)),
+        }),
+      )
+      .optional(),
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;

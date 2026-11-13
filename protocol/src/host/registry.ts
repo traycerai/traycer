@@ -1638,6 +1638,7 @@ import {
   providersListResponseSchemaV107Preimage,
   providersListResponseSchemaV108Preimage,
   providersListResponseSchemaV109Preimage,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
@@ -1713,6 +1714,8 @@ import {
   providersSetProfileEnabledRequestSchema,
   providersSignOutProfileRequestSchema,
   providersSignOutProfileResponseSchema,
+  providersAnswerProfileNameRequestSchema,
+  providersAnswerProfileNameResponseSchema,
   providersSetProfileEnabledResponseSchema,
   providersSetEnvOverrideRequestSchema,
   providersSetEnvOverrideRequestSchemaV10,
@@ -3242,7 +3245,7 @@ export const providersListV1010 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 10 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  responseSchema: providersListResponseSchemaV1010Preimage,
 });
 export const providersListUpgradeV109ToV1010 = defineUpgradePath<
   typeof providersListV109,
@@ -3254,6 +3257,47 @@ export const providersListUpgradeV109ToV1010 = defineUpgradePath<
   // Nothing to fill: a host below 10.10 stores no hidden list, so the key
   // stays absent and the client hides nothing and offers no switch.
   upgradeResponse: (response) => response,
+});
+
+/**
+ * `providers.list@10.11` - on the profile row, `aliases`, `personNotice`,
+ * `terminalOnThisComputer` and `nameQuestion`; on the envelope,
+ * `removedProfiles`.
+ *
+ * A MINOR with no `responseGrowthProjectionGated`: new KEYS only, stripped for
+ * an older peer by the within-major re-parse through the frozen 10.10
+ * projection and envelope.
+ */
+export const providersListV1011 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 11 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+export const providersListUpgradeV1010ToV1011 = defineUpgradePath<
+  typeof providersListV1010,
+  typeof providersListV1011
+>({
+  from: { major: 10, minor: 10 },
+  to: { major: 10, minor: 11 },
+  upgradeRequest: (request) => request,
+  // A host below 10.11 folds nothing and removes nothing from the list: every
+  // row is its own account with no other id, no notice and no open question,
+  // and its Terminal login is the ambient row.
+  upgradeResponse: (response) => ({
+    ...response,
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles.map((profile) => ({
+        ...profile,
+        aliases: [],
+        personNotice: null,
+        terminalOnThisComputer: profile.kind === "ambient",
+        nameQuestion: null,
+      })),
+    })),
+    removedProfiles: [],
+  }),
 });
 
 export const providersListUpgradeV102ToV103 = defineUpgradePath<
@@ -3963,10 +4007,10 @@ export function downgradeNativeListErrorForPublishedLines(
 }
 
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV92
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
@@ -3989,10 +4033,10 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV8 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV80
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4012,10 +4056,10 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV7 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV70
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4035,10 +4079,10 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV6 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV60
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4055,10 +4099,10 @@ export const providersListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV5 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV50
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4075,10 +4119,10 @@ export const providersListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV4 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV40
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4095,10 +4139,10 @@ export const providersListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV3 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV30
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4115,10 +4159,10 @@ export const providersListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV2 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV20
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4135,10 +4179,10 @@ export const providersListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV1 = defineDowngradePath<
-  typeof providersListV1010,
+  typeof providersListV1011,
   typeof providersListV10
 >({
-  from: { major: 10, minor: 10 },
+  from: { major: 10, minor: 11 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -5620,6 +5664,19 @@ export const providersSignOutProfileV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSignOutProfileRequestSchema,
   responseSchema: providersSignOutProfileResponseSchema,
+});
+
+/**
+ * Answer a row's pending name question (`providers.list@10.11`). A new name at
+ * `@1.0`, registered `degrade: unsupported` and off the released floor, so a
+ * host that predates it refuses this call alone and the handshake with a
+ * released peer is unchanged.
+ */
+export const providersAnswerProfileNameV10 = defineRpcContract({
+  method: "providers.answerProfileName",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersAnswerProfileNameRequestSchema,
+  responseSchema: providersAnswerProfileNameResponseSchema,
 });
 
 export const providersSetProfileEnabledV10 = defineRpcContract({
@@ -13198,6 +13255,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "providers.answerProfileName": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersAnswerProfileNameV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.setProfileEnabled": {
     degrade: { kind: "unsupported" },
     1: {
@@ -14541,14 +14611,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
 } as const;
 
 /**
- * `providers.list` major 10, named. Its eleven minors and nine bridges inline
+ * `providers.list` major 10, named. Its twelve minors and nine bridges inline
  * push `HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION` over TS7056's
  * declaration-serialization ceiling; a named slot type is emitted by name,
  * as `HostRpcNotificationMethodMap` is. The literal below is checked against
  * it, so the slot keeps every exact contract and bridge.
  */
 type ProvidersListMajor10 = {
-  readonly latestMinor: 10;
+  readonly latestMinor: 11;
   readonly versions: {
     readonly 0: {
       readonly contract: typeof providersListV100;
@@ -14596,6 +14666,10 @@ type ProvidersListMajor10 = {
       readonly contract: typeof providersListV1010;
       readonly upgradeFromPreviousVersion: typeof providersListUpgradeV109ToV1010;
     };
+    readonly 11: {
+      readonly contract: typeof providersListV1011;
+      readonly upgradeFromPreviousVersion: typeof providersListUpgradeV1010ToV1011;
+    };
   };
   readonly downgradePathsFromLatest: {
     readonly 1: typeof providersListDowngradeV10ToV1;
@@ -14611,7 +14685,7 @@ type ProvidersListMajor10 = {
 };
 
 const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
-  latestMinor: 10,
+  latestMinor: 11,
   versions: {
     0: {
       contract: providersListV100,
@@ -14667,6 +14741,12 @@ const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
     10: {
       contract: providersListV1010,
       upgradeFromPreviousVersion: providersListUpgradeV109ToV1010,
+    },
+    // Four keys on the profile row and `removedProfiles` on the envelope: new
+    // KEYS again.
+    11: {
+      contract: providersListV1011,
+      upgradeFromPreviousVersion: providersListUpgradeV1010ToV1011,
     },
   },
   downgradePathsFromLatest: {
