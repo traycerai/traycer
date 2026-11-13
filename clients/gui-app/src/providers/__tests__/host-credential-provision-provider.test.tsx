@@ -185,7 +185,8 @@ describe("<HostCredentialProvisionProvider /> silent provisioning", () => {
     expect(mintHostCredentialMock).not.toHaveBeenCalled();
   });
 
-  it("resolves unavailable on a superseded (409) mint response", async () => {
+  it("resolves unavailable on a superseded (409) mint response and logs the refusal", async () => {
+    const info = vi.spyOn(appLogger, "info").mockImplementation(() => {});
     mintHostCredentialMock.mockResolvedValueOnce({ kind: "superseded" });
     renderProvider();
 
@@ -193,15 +194,41 @@ describe("<HostCredentialProvisionProvider /> silent provisioning", () => {
       appHostCredentialMintFlow({ hostId: HOST_ID, reason: "missing" }),
     ).resolves.toEqual({ kind: "unavailable" });
     expect(mintHostCredentialMock).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith("Host credential mint refused", {
+      hostId: HOST_ID,
+      result: "superseded",
+    });
+    info.mockRestore();
   });
 
-  it("resolves unavailable when the mint call throws", async () => {
+  it("logs a network-error mint result as a refusal", async () => {
+    const info = vi.spyOn(appLogger, "info").mockImplementation(() => {});
+    mintHostCredentialMock.mockResolvedValueOnce({ kind: "network-error" });
+    renderProvider();
+
+    await expect(
+      appHostCredentialMintFlow({ hostId: HOST_ID, reason: "missing" }),
+    ).resolves.toEqual({ kind: "unavailable" });
+    expect(info).toHaveBeenCalledWith("Host credential mint refused", {
+      hostId: HOST_ID,
+      result: "network-error",
+    });
+    info.mockRestore();
+  });
+
+  it("resolves unavailable when the mint call throws and warns with the host", async () => {
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
     mintHostCredentialMock.mockRejectedValueOnce(new Error("network down"));
     renderProvider();
 
     await expect(
       appHostCredentialMintFlow({ hostId: HOST_ID, reason: "missing" }),
     ).resolves.toEqual({ kind: "unavailable" });
+    expect(warn).toHaveBeenCalledWith(
+      "Host credential mint request threw",
+      expect.objectContaining({ hostId: HOST_ID }),
+    );
+    warn.mockRestore();
   });
 
   describe("a host the cloud refuses on every mint", () => {
