@@ -20,6 +20,27 @@ export interface HeldTimer {
 }
 
 /**
+ * The frames kept of a timer's stack. Classifying by the immediate caller
+ * needs only the first few (a backoff needs about seven). The rest are kept so
+ * that a listener's own frames cannot push TanStack's out of the stack: a
+ * regression to searching every frame would then find them, and the guard case
+ * that sets a gc-length timer from a cache listener while a gc fires (2b in
+ * `...-interleavings-guards.test.ts`) fails.
+ */
+const STACK_FRAMES = 16;
+
+/** The stack of the call that sets a timer, deeper than the default limit. */
+function callStack(): string {
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = STACK_FRAMES;
+  try {
+    return new Error().stack ?? "";
+  } finally {
+    Error.stackTraceLimit = limit;
+  }
+}
+
+/**
  * Switches TanStack's timer provider. TanStack logs a console error when the
  * previous provider was used; that notice is the intended switch here, so it
  * alone is swallowed while the switch runs, and every other console error
@@ -117,7 +138,7 @@ export class HeldTimers {
       delay,
       callback,
       kind,
-      stack: new Error().stack ?? "",
+      stack: callStack(),
       cleared: false,
       fired: false,
     });

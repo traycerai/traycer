@@ -157,6 +157,15 @@ export type RetryPolicy = "off" | "app";
 /** The tries the app's policy allows an attempt: the first and one retry. */
 const TRIES_UNDER: Record<RetryPolicy, number> = { off: 1, app: 2 };
 
+/**
+ * The steps the tail of a sequence may take to answer every try and backoff
+ * left. Across all 31,293 sequences of the walk the most any tail uses is 2
+ * (6 under the app's retry policy, whose tries each add a backoff to end), so
+ * 24 is four times that: a sweep that never stops asking fails the walk
+ * instead of being cut short.
+ */
+const SETTLE_STEPS = 24;
+
 const GC_MS = 300_000;
 /**
  * The most an observer's staleness timer may wait: `staleTime` (60 s) + 1.
@@ -212,11 +221,46 @@ type Hook =
 
 type TimerSource = "gc" | "stale" | "backoff" | "unknown";
 
-/** Which TanStack module set `timer`, read from where it was set. */
+/** The frames of `stack` after the ones that only forward the call to the held provider. */
+function callerFrames(stack: string): string[] {
+  const frames = stack
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("at "));
+  const forwarded = /held-timers\.|query-core\/build\/[^/]+\/timeoutManager\./;
+  const first = frames.findIndex((frame) => !forwarded.test(frame));
+  return first === -1 ? [] : frames.slice(first);
+}
+
+function inTanstack(frame: string | undefined, file: string): boolean {
+  return (
+    frame !== undefined &&
+    new RegExp(`query-core/build/[^/]+/${file}\\.[cm]?js`).test(frame)
+  );
+}
+
+/**
+ * Which TanStack module set `timer`, read from its immediate caller alone: a
+ * listener that TanStack happens to be notifying (an observer's, or the
+ * cache's) has TanStack frames further down its stack, but its own frame is
+ * the immediate caller, and that is not TanStack's.
+ */
 function sourceOf(timer: HeldTimer): TimerSource {
-  if (/removable/.test(timer.stack)) return "gc";
-  if (/queryObserver/.test(timer.stack)) return "stale";
-  if (/retryer/.test(timer.stack)) return "backoff";
+  const frames = callerFrames(timer.stack);
+  const caller = frames.at(0);
+  const second = frames.at(1);
+  const third = frames.at(2);
+  const fourth = frames.at(3);
+  if (inTanstack(caller, "removable")) return "gc";
+  if (inTanstack(caller, "queryObserver")) return "stale";
+  if (
+    inTanstack(caller, "utils") &&
+    second?.includes("new Promise") &&
+    third?.includes("sleep") &&
+    inTanstack(fourth, "retryer")
+  ) {
+    return "backoff";
+  }
   return "unknown";
 }
 
@@ -647,7 +691,7 @@ export class Rig {
 
   /** Ends every try still pending, and every backoff, as a transient failure, checking after each. */
   async settleAll(check: () => string | null): Promise<string | null> {
-    for (let step = 0; step < 24; step += 1) {
+    for (let step = 0; step < SETTLE_STEPS; step += 1) {
       const oldest = this.pending().at(0);
       if (oldest !== undefined) {
         this.trace.push("endTransient");
@@ -666,7 +710,8 @@ export class Rig {
       const found = check();
       if (found !== null) return found;
     }
-    return null;
+    // A sweep that keeps asking, with nothing left to answer, would loop here.
+    return `(S) the tail did not settle in ${SETTLE_STEPS} steps`;
   }
 
   /** Each attempt and ring in order, for a failure message. */

@@ -6,5 +6,5 @@ describeInterleavings({
   retry: "off",
   variants: [VARIANTS[1]],
   passes: ["full"],
-  slice: "all",
+  slice: "a",
 });

@@ -4,7 +4,7 @@ import { describeInterleavings } from "@/lib/host/test-support/cloud-recovery-in
 /** See `cloud-recovery-interleavings.ts` for the events and the invariants. */
 describeInterleavings({
   retry: "off",
-  variants: [VARIANTS[0]],
+  variants: [VARIANTS[1]],
   passes: ["full"],
-  slice: "all",
+  slice: "b",
 });
