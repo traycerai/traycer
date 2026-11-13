@@ -4,6 +4,7 @@ import {
 } from "@tanstack/react-router";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  declareTracyPlaceLanding,
   historyEntryIdentity,
   observeTracyPlaceTraversals,
   takeTracyPlaceStep,
@@ -27,7 +28,21 @@ afterEach(() => {
 });
 
 describe("observeTracyPlaceTraversals", () => {
-  it("keeps the untaken entry the app started on across a replace of it by another Tracy entry, under its new identity", () => {
+  it("counts the Tracy entry the history starts on as a landing, taken once", () => {
+    const history = observed("/bot/bot-a?view=activity");
+    const started = identityOf(history);
+
+    expect(takeTracyPlaceStep(started)).toBe(true);
+    expect(takeTracyPlaceStep(started)).toBe(false);
+  });
+
+  it("does not count a start entry that is not Tracy's", () => {
+    const history = observed("/settings/general");
+
+    expect(takeTracyPlaceStep(identityOf(history))).toBe(false);
+  });
+
+  it("drops the untaken start entry when an app write replaces it, whatever the href", () => {
     const history = observed("/bot/bot-a?view=activity");
     const started = identityOf(history);
 
@@ -38,15 +53,7 @@ describe("observeTracyPlaceTraversals", () => {
 
     expect(replaced).not.toBe(started);
     expect(takeTracyPlaceStep(started)).toBe(false);
-    expect(takeTracyPlaceStep(replaced)).toBe(true);
-  });
-
-  it("drops the untaken entry when it is replaced by a path that is not Tracy's", () => {
-    const history = observed("/bot/bot-a");
-
-    history.replace("/settings/general", undefined, { ignoreBlocker: true });
-
-    expect(takeTracyPlaceStep(identityOf(history))).toBe(false);
+    expect(takeTracyPlaceStep(replaced)).toBe(false);
   });
 
   it("does not revive a step once it was taken, when the entry is replaced later", () => {
@@ -60,7 +67,7 @@ describe("observeTracyPlaceTraversals", () => {
     expect(takeTracyPlaceStep(identityOf(history))).toBe(false);
   });
 
-  it("makes no step of an entry that was never one: an app write replacing an entry stepped back onto", () => {
+  it("makes no step of an app write replacing an entry stepped back onto", () => {
     const history = observed("/");
     history.push("/bot/bot-a");
     expect(takeTracyPlaceStep(identityOf(history))).toBe(false);
@@ -69,6 +76,82 @@ describe("observeTracyPlaceTraversals", () => {
       ignoreBlocker: true,
     });
 
+    expect(takeTracyPlaceStep(identityOf(history))).toBe(false);
+  });
+
+  it("counts back and forward onto a Tracy entry as landings", () => {
+    const history = observed("/");
+    history.push("/bot/bot-a");
+    const tracyEntry = identityOf(history);
+    history.push("/settings/general");
+
+    history.back();
+    expect(identityOf(history)).toBe(tracyEntry);
+    expect(takeTracyPlaceStep(tracyEntry)).toBe(true);
+
+    history.forward();
+    history.back();
+    expect(takeTracyPlaceStep(tracyEntry)).toBe(true);
+  });
+
+  it("does not count a clamped step that does not move the entry", () => {
+    const history = observed("/");
+    history.push("/bot/bot-a");
+    const tracyEntry = identityOf(history);
+    expect(takeTracyPlaceStep(tracyEntry)).toBe(false);
+
+    history.forward();
+
+    expect(identityOf(history)).toBe(tracyEntry);
+    expect(takeTracyPlaceStep(tracyEntry)).toBe(false);
+  });
+
+  it("does not count a traversal onto an entry that is not Tracy's", () => {
+    const history = observed("/settings/general");
+    history.push("/bot/bot-a");
+
+    history.back();
+
+    expect(takeTracyPlaceStep(identityOf(history))).toBe(false);
+  });
+});
+
+describe("declareTracyPlaceLanding", () => {
+  it("makes the declared Tracy entry's identity a step, taken once", () => {
+    const history = observed("/");
+    history.replace("/bot/bot-a?view=memory", undefined, {
+      ignoreBlocker: true,
+    });
+
+    declareTracyPlaceLanding(history.location);
+
+    const identity = identityOf(history);
+    expect(takeTracyPlaceStep(identity)).toBe(true);
+    expect(takeTracyPlaceStep(identity)).toBe(false);
+  });
+
+  it("declares nothing for a location that is not Tracy's", () => {
+    const history = observed("/bot/bot-a");
+    history.replace("/settings/general", undefined, { ignoreBlocker: true });
+
+    declareTracyPlaceLanding(history.location);
+
+    expect(takeTracyPlaceStep(identityOf(history))).toBe(false);
+  });
+
+  it("is dropped by a later app write", () => {
+    const history = observed("/");
+    history.replace("/bot/bot-a?view=memory", undefined, {
+      ignoreBlocker: true,
+    });
+    declareTracyPlaceLanding(history.location);
+    const declared = identityOf(history);
+
+    history.replace("/bot/bot-a?view=activity", undefined, {
+      ignoreBlocker: true,
+    });
+
+    expect(takeTracyPlaceStep(declared)).toBe(false);
     expect(takeTracyPlaceStep(identityOf(history))).toBe(false);
   });
 });

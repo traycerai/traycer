@@ -56,7 +56,13 @@ import {
 } from "../../../../__tests__/mobile-level2-form-harness";
 import { StrictMode, useContext, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  render,
+  screen,
+  within,
+  type RenderResult,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1714,6 +1720,127 @@ describe("<BotTabSurface /> a bot's deleted frame against the list it was read w
 
     expect(historyOf(OTHER_HREF)).toEqual(ALIVE);
     expect(historyOf(BOT_HREF)).toEqual(ALIVE);
+  });
+});
+
+describe("<BotTabSurface /> a bot reported gone is never the default while its report stands", () => {
+  const BOT_HREF = `/bot/${BOT_ID}`;
+  const REPORTED_AT = 200;
+
+  function answeredAt(time: number): void {
+    mocks.state.list = { ...mocks.state.list, dataUpdatedAt: time };
+  }
+
+  function chosen(): ReadonlyArray<unknown> {
+    return mocks.activateTabIntent.mock.calls.map(([intent]) => intent);
+  }
+
+  const CHOSE_BOT = { kind: "tracy", botId: BOT_ID };
+  const CHOSE_OTHER = { kind: "tracy", botId: OTHER_BOT_ID };
+
+  /**
+   * The model sorts a section by title, so these titles put the bot first: it
+   * is the default channel unless something bars it.
+   */
+  function titleBotFirst(): void {
+    mocks.state.listTitles = new Map([
+      [BOT_ID, "Alpha"],
+      [OTHER_BOT_ID, "Zulu"],
+    ]);
+  }
+
+  /**
+   * The bot is shown deleted by its stream frame against a list that answered
+   * at `REPORTED_AT` and carries it first, which is what would make it the
+   * default. Returns the view, with the surface now selecting the other bot.
+   */
+  function reportDeleted(): RenderResult {
+    titleBotFirst();
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    answeredAt(REPORTED_AT);
+    mocks.state.deleted = true;
+    const view = render(surface());
+    expect(useTracySurfaceStore.getState().goneReports).toEqual({
+      [BOT_ID]: REPORTED_AT,
+    });
+    expect(chosen()).toContainEqual(CHOSE_OTHER);
+    mocks.activateTabIntent.mockClear();
+    mocks.state.deleted = false;
+    return view;
+  }
+
+  function expectStillGone(): void {
+    expect(isHistoryEntryDead(BOT_HREF)).toBe(true);
+    expect(
+      isHistoryEntryEligible(BOT_HREF, useEpicCanvasStore.getState()),
+    ).toBe(false);
+    expect(useTracySurfaceStore.getState().goneReports).toEqual({
+      [BOT_ID]: REPORTED_AT,
+    });
+  }
+
+  beforeEach(() => {
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTracySurfaceStore.setState({ goneReports: {}, visitedBotIds: [] });
+  });
+
+  it("is the default when nothing reports it gone", () => {
+    titleBotFirst();
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    answeredAt(100);
+
+    render(surfaceFor(null));
+
+    expect(chosen()).toContainEqual(CHOSE_BOT);
+    expect(chosen()).not.toContainEqual(CHOSE_OTHER);
+  });
+
+  it("does not choose it from the list it was reported against, with no channel selected", () => {
+    const view = reportDeleted();
+
+    view.rerender(surfaceFor(null));
+
+    expect(chosen()).toContainEqual(CHOSE_OTHER);
+    expect(chosen()).not.toContainEqual(CHOSE_BOT);
+    expectStillGone();
+  });
+
+  it("does not choose it from an older list that still carries it first", () => {
+    const view = reportDeleted();
+
+    answeredAt(100);
+    view.rerender(surfaceFor(null));
+
+    expect(chosen()).toContainEqual(CHOSE_OTHER);
+    expect(chosen()).not.toContainEqual(CHOSE_BOT);
+    expectStillGone();
+  });
+
+  it("does not choose it from an older list read by a surface mounted after the report", () => {
+    const view = reportDeleted();
+    view.unmount();
+
+    answeredAt(100);
+    render(surfaceFor(null));
+
+    expect(chosen()).toContainEqual(CHOSE_OTHER);
+    expect(chosen()).not.toContainEqual(CHOSE_BOT);
+    expectStillGone();
+  });
+
+  it("chooses it again once a list that answered later carries it, taking the report away", () => {
+    const view = reportDeleted();
+    view.unmount();
+    mocks.state.listedBotIds = [BOT_ID];
+
+    answeredAt(300);
+    render(surfaceFor(null));
+
+    expect(useTracySurfaceStore.getState().goneReports).toEqual({});
+    expect(chosen()).toContainEqual(CHOSE_BOT);
+    expect(
+      isHistoryEntryEligible(BOT_HREF, useEpicCanvasStore.getState()),
+    ).toBe(true);
   });
 });
 

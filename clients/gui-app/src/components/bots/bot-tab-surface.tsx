@@ -419,8 +419,10 @@ function useSenderLandingSpentOnDeparture(botId: string | null): void {
  * navigation to the surface is in flight (a channel someone opened, not yet
  * acknowledged) it waits, so it never supersedes that navigation, and a
  * selected bot that goes away meanwhile is only deselected. A bot reported
- * gone is never the default (`unavailable`) until a list read newer than the
- * report settles it: the list it was reported against still carries it.
+ * gone is never the default (`unavailable`) while its report stands: the
+ * list it was reported against still carries it, and so can a list another
+ * host answered earlier. Only a list that answered after the report and
+ * carries the bot takes the report away (`settleListedBots`).
  */
 function useTracyChannelUpkeep(input: {
   readonly botId: string | null;
@@ -439,13 +441,8 @@ function useTracyChannelUpkeep(input: {
   // one record the default below and the history's prune and skip both read.
   const goneReports = useTracySurfaceStore((state) => state.goneReports);
   const unavailable = useMemo(
-    () =>
-      new Set(
-        Object.entries(goneReports)
-          .filter(([, reportedAt]) => reportedAt === listedAt)
-          .map(([goneBotId]) => goneBotId),
-      ),
-    [goneReports, listedAt],
+    () => new Set(Object.keys(goneReports)),
+    [goneReports],
   );
   const forget = useCallback(
     (goneBotId: string): void => {

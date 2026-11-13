@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-router";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { isRecord } from "@/lib/editor/prosemirror-json";
+import { withStartupNavigationIntent } from "@/lib/host/startup-navigation-intent";
 import { openBotChannel } from "@/lib/bots/open-bot-channel";
 import {
   normalizeTracyPlaceSearch,
@@ -71,9 +72,16 @@ const rootRoute = createRootRoute({
     </>
   ),
 });
+/** The destination of a departure: its load is held while a test needs it. */
+let heldLoad: Promise<void> = Promise.resolve();
+let releaseHeldLoad: () => void = () => undefined;
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  loader: { handler: () => heldLoad, staleReloadMode: "blocking" },
+  // A match of this route cached from an earlier visit would otherwise be
+  // revalidated in the background and never hold the navigation pending.
+  shouldReload: true,
   component: () => null,
 });
 const tracyRoute = createRoute({
@@ -294,6 +302,7 @@ describe("the Tracy surface's place over the persisted history", () => {
     resetStores();
   });
   afterEach(() => {
+    releaseHeldLoad();
     current?.stop();
     current = null;
     cleanup();
@@ -568,6 +577,114 @@ describe("the Tracy surface's place over the persisted history", () => {
       (_name, arrange, expectPlace) =>
         restartAndRestore(arrange, expectPlace, false),
     );
+
+    /**
+     * The launch stands on `/`: the first run's stack is dropped by an initial
+     * route of `/` (`createPersistentMemoryHistory` discards the remembered
+     * stack for it, as the auth-fallback redirect of a protected launch does),
+     * and the bridge then replaces `/` with the route saved at shutdown. The
+     * restore is a landing, so the saved place stays and the stores follow it.
+     */
+    async function restartOnLandingAndRestore(
+      arrange: () => void,
+      expectPlace: (search: Record<string, unknown>) => void,
+    ): Promise<void> {
+      const first = await mountOnChannel(BOT_A);
+      act(arrange);
+      await settle(first, BOT_A);
+      const shown = first.router.state.location.href;
+      expect(shown).not.toBe("/");
+
+      first.stop();
+      current = null;
+      resetStores();
+      useTracySurfaceStore.setState({
+        open: true,
+        hostId: WINDOW_HOST,
+        botId: BOT_A,
+      });
+      seedRestoredRoute(shown);
+      const consumed = vi.mocked(
+        DesktopTabsPersistence.consumeDesktopRestoredRoute,
+      );
+
+      const second = await mount("/");
+      await waitFor(() => {
+        expect(consumed).toHaveBeenCalled();
+        expect(second.router.state.location.href).toBe(shown);
+        expect(storePlace(BOT_A)).toEqual(urlPlace(second));
+      });
+      await settle(second, BOT_A);
+      // A later overwrite of the restored place by the startup stores would
+      // land after the settle: give it every chance to.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(second.router.state.location.href).toBe(shown);
+      expectPlace(second.router.state.location.search);
+      const stack = liveStack(second);
+      const detail = describeStack(stack);
+      expect(stack.entries[stack.index], detail).toBe(shown);
+      expect(storedStack().entries[storedStack().index]).toBe(shown);
+    }
+
+    it.each(PLACES)(
+      "keeps %s when the launch stood on / and the bridge replaces it with the saved route",
+      (_name, arrange, expectPlace) =>
+        restartOnLandingAndRestore(arrange, expectPlace),
+    );
+
+    it("restores nothing under an explicit startup navigation intent, and the entry the app then writes is completed from the stores, not read as a landing", async () => {
+      seedRestoredRoute(`/bot/${BOT_A}?view=messages&thread=msg-1`);
+      const consumed = vi.mocked(
+        DesktopTabsPersistence.consumeDesktopRestoredRoute,
+      );
+      const later = await mountHydratingLater();
+      const { harness } = later;
+      act(() => {
+        void harness.router.navigate({
+          to: "/bot/$botId",
+          params: { botId: BOT_A },
+          state: (previous) =>
+            withStartupNavigationIntent(previous, "boot-card"),
+        });
+      });
+      await waitFor(() => {
+        expect(harness.router.state.location.pathname).toBe(`/bot/${BOT_A}`);
+        expect(harness.router.state.status).toBe("idle");
+      });
+
+      act(later.hydrate);
+      await waitFor(() => {
+        expect(consumed).toHaveBeenCalled();
+      });
+      expect(harness.router.state.location.pathname).toBe(`/bot/${BOT_A}`);
+      expect(harness.router.state.location.search).not.toMatchObject({
+        thread: "msg-1",
+      });
+
+      // The surface opens on the bot with Activity in its stores. Were the
+      // entry read as a landing, the URL's Messages would overwrite them.
+      act(() => {
+        useTracySurfaceStore.setState({
+          open: true,
+          hostId: WINDOW_HOST,
+          botId: BOT_A,
+        });
+        place().setView(BOT_A, "activity");
+      });
+      await settle(harness, BOT_A);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(harness.router.state.location.search).toMatchObject({
+        view: "activity",
+      });
+      expect(storePlace(BOT_A).view).toBe("activity");
+      expect(railOf(BOT_A)).toBeNull();
+    });
   });
 
   describe("two moves in quick succession", () => {
@@ -648,6 +765,159 @@ describe("the Tracy surface's place over the persisted history", () => {
       await settle(harness, BOT_A);
       expect(liveStack(harness).index).toBe(start.index);
       expect(storePlace(BOT_A)).toEqual(startPlace);
+    });
+  });
+
+  describe("a departure from the surface", () => {
+    /**
+     * Departs to `/` with its load held, and checks the router sits
+     * in the intermediate state: its location is the destination while the
+     * route still resolved is the surface's, so the place route stays mounted.
+     */
+    async function departHeld(
+      harness: Harness,
+      surfacePath: string,
+    ): Promise<() => void> {
+      heldLoad = new Promise<void>((resolve) => {
+        releaseHeldLoad = resolve;
+      });
+      act(() => {
+        void harness.router.navigate({ to: "/" });
+      });
+      await waitFor(() => {
+        expect(harness.router.state.location.pathname).toBe("/");
+      });
+      expect(harness.router.state.status).toBe("pending");
+      expect(harness.router.state.resolvedLocation?.pathname).toBe(surfacePath);
+      return releaseHeldLoad;
+    }
+
+    it("is not pulled back to the channel by a store change while its load is pending", async () => {
+      const harness = await mountOnChannel(BOT_A);
+      act(() => place().setView(BOT_A, "activity"));
+      await settle(harness, BOT_A);
+      const before = liveStack(harness);
+      const surfaceHref = harness.router.state.location.href;
+      expect(before.entries[before.index]).toBe(surfaceHref);
+
+      const release = await departHeld(harness, `/bot/${BOT_A}`);
+      expect(useTracySurfaceStore.getState()).toMatchObject({
+        open: true,
+        botId: BOT_A,
+      });
+      act(() => place().setView(BOT_A, "messages"));
+      act(() => rails().setRail(BOT_A, THREAD_A));
+      expect(harness.router.state.location.pathname).toBe("/");
+      expect(harness.router.state.status).toBe("pending");
+
+      release();
+      await waitFor(() => {
+        expect(harness.router.state.status).toBe("idle");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(harness.router.state.location.pathname).toBe("/");
+      const after = liveStack(harness);
+      const detail = describeStack(after);
+      expect(after.entries, detail).toHaveLength(before.entries.length + 1);
+      expect(after.index, detail).toBe(before.index + 1);
+      expect(after.entries.slice(0, before.entries.length), detail).toEqual(
+        before.entries,
+      );
+      expect(after.entries[after.index], detail).toBe("/");
+    });
+
+    it("is not pulled back to the surface by a store change while its load is pending", async () => {
+      const harness = await mount("/");
+      act(() => {
+        void harness.router.navigate({ to: "/bot" });
+      });
+      await waitFor(() => {
+        expect(harness.router.state.location.pathname).toBe("/bot");
+      });
+      useTracySurfaceStore.setState({
+        open: true,
+        hostId: WINDOW_HOST,
+        botId: null,
+      });
+      await waitFor(() => {
+        expect(harness.router.state.status).toBe("idle");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const before = liveStack(harness);
+
+      const release = await departHeld(harness, "/bot");
+      act(() => place().setThreadsShown(true));
+      expect(harness.router.state.location.pathname).toBe("/");
+      expect(harness.router.state.status).toBe("pending");
+
+      release();
+      await waitFor(() => {
+        expect(harness.router.state.status).toBe("idle");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(harness.router.state.location.pathname).toBe("/");
+      const after = liveStack(harness);
+      const detail = describeStack(after);
+      expect(after.entries, detail).toHaveLength(before.entries.length + 1);
+      expect(after.entries.slice(0, before.entries.length), detail).toEqual(
+        before.entries,
+      );
+      expect(after.entries[after.index], detail).toBe("/");
+    });
+  });
+
+  describe("an automatic move beside the hook's own write", () => {
+    it("a move by hand, then an automatic one landing with its commit, is one entry holding the automatic place", async () => {
+      const harness = await mountOnChannel(BOT_A);
+      const start = liveStack(harness);
+
+      // The router sets its location, which is the arrival of the hook's own
+      // push, and emits `onBeforeLoad` in the same synchronous run. The
+      // automatic move made in that listener reaches the hook in the same
+      // render as the arrival, so one effect run handles both.
+      let landings = 0;
+      const stopListening = harness.router.subscribe(
+        "onBeforeLoad",
+        (event) => {
+          if (
+            landings > 0 ||
+            tracyPlaceOfSearch(event.toLocation.search)?.view !== "activity"
+          ) {
+            return;
+          }
+          landings += 1;
+          place().markAutomaticMove();
+          rails().setRail(BOT_A, THREAD_A);
+        },
+      );
+      await act(async () => {
+        place().setView(BOT_A, "activity");
+        await Promise.resolve();
+      });
+      stopListening();
+      await settle(harness, BOT_A);
+
+      expect(landings).toBe(1);
+      const stack = liveStack(harness);
+      const detail = describeStack(stack);
+      expect(stack.entries, detail).toHaveLength(start.entries.length + 1);
+      expect(stack.index, detail).toBe(start.index + 1);
+      expect(stack.entries.slice(0, start.entries.length), detail).toEqual(
+        start.entries,
+      );
+      expect(harness.router.state.location.search, detail).toMatchObject({
+        view: "activity",
+        thread: "msg-1",
+      });
+      expect(urlPlace(harness)).toEqual(storePlace(BOT_A));
     });
   });
 });

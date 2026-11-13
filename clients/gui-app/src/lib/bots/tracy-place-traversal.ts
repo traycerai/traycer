@@ -35,17 +35,26 @@ export function takeTracyPlaceStep(identity: string): boolean {
 }
 
 /**
+ * Declares `location` an entry the surface lands on, as a step onto it is:
+ * the desktop's restoration of the route a window showed at shutdown, which
+ * arrives as a replace of whatever entry the launch stood on. Not a Tracy
+ * entry, it declares nothing.
+ */
+export function declareTracyPlaceLanding(location: {
+  readonly href: string;
+  readonly state: HistoryLocation["state"];
+}): void {
+  if (!isTracyPath(hrefPathname(location.href))) return;
+  steppedOnto = historyEntryIdentity(location);
+}
+
+/**
  * Observes every committed history traversal for the life of the router and
  * remembers a landing on a Tracy entry. Read off what happened, as
  * `observeNestedFocusTraversals` does and for its reasons: a traversal action
  * that did not move the entry (a clamped or refused step) is no landing, and a
  * write (`PUSH`, `REPLACE`) never is. The entry the history starts on counts
  * as one: a restart, or a pasted link, lands the surface where the entry says.
- *
- * A landing nobody has taken yet outlives a replace of its entry by another
- * Tracy entry: the desktop re-establishes the route a window showed at
- * shutdown by replacing the entry it started on, and the entry the person
- * landed on is still the one that says where the surface goes.
  *
  * Returns the unsubscribe, for a router that is torn down.
  */
@@ -61,15 +70,11 @@ export function observeTracyPlaceTraversals(
     const previous = lastIdentity;
     lastIdentity = identity;
     if (identity === previous) return;
-    const tracy = isTracyPath(hrefPathname(location.href));
-    if (action.type === "REPLACE" && steppedOnto === previous) {
-      steppedOnto = tracy ? identity : null;
-      return;
-    }
     const traversed =
       action.type === "BACK" ||
       action.type === "FORWARD" ||
       action.type === "GO";
-    steppedOnto = traversed && tracy ? identity : null;
+    steppedOnto =
+      traversed && isTracyPath(hrefPathname(location.href)) ? identity : null;
   });
 }

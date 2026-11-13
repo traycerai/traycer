@@ -2,8 +2,10 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import {
   useRouter,
   useRouterState,
+  type HistoryLocation,
   type NavigateOptions,
 } from "@tanstack/react-router";
+import { isTracyPath, readBotIdFromPath } from "@/lib/routes";
 import {
   railOfTracyPlace,
   tracyPlaceKey,
@@ -59,6 +61,33 @@ function readTracyPlace(botId: string | null): TracyPlace {
     session: tracySessionOf(place.sessionByBotId, botId),
     ...tracyPlaceRailOf(Object.hasOwn(byBotId, botId) ? byBotId[botId] : null),
   };
+}
+
+/**
+ * Whether `location`, the router's, is an entry of `botId`'s channel that the
+ * history is on too. Two ways it is not, and nothing is read or written then:
+ *
+ * - The route is still mounted while a navigation away from the surface
+ *   loads, and the router's location is already the destination: writing a
+ *   place there would take the person back to the surface.
+ * - The history is an entry ahead of the router: the desktop replaces the
+ *   entry a window starts on before the router has read it. That entry is
+ *   read when the router commits it, never under the one it replaced.
+ */
+function readsOwnEntry(
+  historyLocation: HistoryLocation,
+  location: {
+    readonly pathname: string;
+    readonly href: string;
+    readonly state: HistoryLocation["state"];
+  },
+  botId: string | null,
+): boolean {
+  return (
+    isTracyPath(location.pathname) &&
+    readBotIdFromPath(location.pathname) === botId &&
+    historyEntryIdentity(historyLocation) === historyEntryIdentity(location)
+  );
 }
 
 /** Whether `state` is the entry of a write still in `awaited`, taken once. */
@@ -169,15 +198,7 @@ export function useTracyPlaceRoute(botId: string | null): void {
 
   useEffect(() => {
     if (!surfaceOpen || surfaceBotId !== botId || navigating) return;
-    // The history can be an entry ahead of the router: the desktop replaces
-    // the entry a window starts on before the router has read it. That entry
-    // is read when the router commits it, never under the one it replaced.
-    if (
-      historyEntryIdentity(router.history.location) !==
-      historyEntryIdentity(location)
-    ) {
-      return;
-    }
+    if (!readsOwnEntry(router.history.location, location, botId)) return;
     const write = (place: TracyPlace, mode: "push" | "replace"): void => {
       placeWrites += 1;
       const seq = placeWrites;
@@ -243,8 +264,9 @@ export function useTracyPlaceRoute(botId: string | null): void {
       return;
     }
     // The person moved on while this hook's own write was committing: that
-    // move is a step. Any other entry the app wrote is corrected over itself.
-    write(here, own ? "push" : "replace");
+    // move is a step, unless the move since is nobody's own. Any other entry
+    // the app wrote is corrected over itself.
+    write(here, own && !automatic ? "push" : "replace");
   }, [
     automaticMoves,
     botId,
