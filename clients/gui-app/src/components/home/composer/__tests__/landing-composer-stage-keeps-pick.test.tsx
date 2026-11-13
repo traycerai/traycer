@@ -14,6 +14,11 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { LandingOwnerTeam } from "@/components/home/composer/landing-owner-model";
@@ -50,6 +55,8 @@ const host = vi.hoisted(() => ({
   startTask: vi.fn(),
   submit: vi.fn(),
   clearEditor: vi.fn(),
+  /** `undefined` leaves `providers.list` unread, as the other cases here do. */
+  providers: undefined as ReadonlyArray<ProviderCliState> | undefined,
 }));
 
 const PLACEMENT_CLIENT = vi.hoisted(() => ({ hostId: "host-test" }));
@@ -402,12 +409,23 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/providers/use-providers-list-query")
     >()),
-    useProvidersListForClient: () => ({ data: undefined, isError: false }),
+    useProvidersListForClient: () =>
+      host.providers === undefined
+        ? { data: undefined, isError: false }
+        : {
+            data: { providers: host.providers },
+            isError: false,
+            isPending: false,
+          },
   }),
 );
 
 import { LandingComposer } from "../landing-composer";
+import { queryClient } from "@/lib/query-client";
+import { queryKeys } from "@/lib/query-keys";
+import { providerRow } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
+import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { CHECKING_SANDBOX_AGENTS } from "@/lib/sandboxes/sandbox-strings";
 import { chipModelName } from "@/stores/composer/composer-toolbar-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
@@ -558,6 +576,8 @@ beforeEach(() => {
   host.traycerHostModels = [
     { slug: "traycer-default", label: "traycer-default" },
   ];
+  host.providers = undefined;
+  queryClient.removeQueries({ queryKey: PROVIDERS_LIST_KEY, exact: true });
   host.startTask.mockReset();
   host.startTask.mockImplementation(
     (args: LandingStagedSandboxTaskArgs): null => {
@@ -1027,5 +1047,174 @@ describe("a landing composer with a sandbox staged", () => {
       expect(host.startTask).not.toHaveBeenCalled();
       expect(screen.queryByText(/doesn't run on this sandbox/)).toBeNull();
     });
+  });
+});
+
+const PROVIDERS_LIST_KEY = queryKeys.hostMethod<
+  HostRpcRegistry,
+  "providers.list"
+>(HOST_ID, "providers.list", { native: null });
+
+const EMPTY_TERMINAL: ChatRunSettings = {
+  ...PICK,
+  harnessId: "claude",
+  model: "sonnet-5.5",
+  profileId: null,
+};
+
+const WORK_PROFILE = "work-profile";
+const HOME_PROFILE = "home-profile";
+
+function accountProfile(input: {
+  readonly profileId: string;
+  readonly kind: "ambient" | "managed";
+  readonly label: string;
+  readonly authenticated: boolean;
+}): ProviderProfile {
+  return {
+    profileId: input.profileId,
+    enabled: true,
+    kind: input.kind,
+    authType: "oauth",
+    label: input.label,
+    auth: {
+      status: input.authenticated ? "authenticated" : "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+function claudeListing(input: {
+  readonly terminalSignedIn: boolean;
+  readonly signedInProfileIds: readonly string[];
+}): ProviderCliState {
+  return {
+    ...providerRow("claude-code", null),
+    auth: {
+      status: input.terminalSignedIn ? "authenticated" : "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    profiles: [
+      accountProfile({
+        profileId: "terminal-login",
+        kind: "ambient",
+        label: "Terminal",
+        authenticated: input.terminalSignedIn,
+      }),
+      ...input.signedInProfileIds.map((profileId, index) =>
+        accountProfile({
+          profileId,
+          kind: "managed",
+          label: index === 0 ? "Work" : "Home",
+          authenticated: true,
+        }),
+      ),
+    ],
+  };
+}
+
+function publishProviders(providers: readonly ProviderCliState[]): void {
+  host.providers = providers;
+  queryClient.setQueryData(PROVIDERS_LIST_KEY, { providers });
+}
+
+async function mintEmptyTerminalDraft(): Promise<{
+  readonly mintedId: string;
+  readonly stored: ChatRunSettings | null;
+}> {
+  useComposerRunSettingsStore
+    .getState()
+    .setGlobalRunSettings(HOST_ID, EMPTY_TERMINAL, 2);
+  const stored = lastRunSettings();
+  mount(null, null);
+  await waitFor(() =>
+    expect(toolbar().getState().selection.harnessId).toBe("claude"),
+  );
+  act(() => {
+    host.editContent?.(TYPED, { from: 1, to: 1 });
+  });
+  const minted = useLandingDraftStore.getState().drafts;
+  expect(minted).toHaveLength(1);
+  const mintedId = minted[0].id;
+  return { mintedId, stored };
+}
+
+describe("an empty Terminal login on the landing composer", () => {
+  it("mints the one signed-in profile and leaves the stored last-run settings on Terminal", async () => {
+    publishProviders([
+      claudeListing({
+        terminalSignedIn: false,
+        signedInProfileIds: [WORK_PROFILE],
+      }),
+    ]);
+    const { mintedId, stored } = await mintEmptyTerminalDraft();
+
+    expect(draftSettings(mintedId)?.profileId).toBe(WORK_PROFILE);
+    expect(lastRunSettings()).toBe(stored);
+    expect(lastRunSettings()?.profileId).toBeNull();
+  });
+
+  it("keeps a Terminal pick on that draft", async () => {
+    publishProviders([
+      claudeListing({
+        terminalSignedIn: false,
+        signedInProfileIds: [WORK_PROFILE],
+      }),
+    ]);
+    const { mintedId } = await mintEmptyTerminalDraft();
+    expect(draftSettings(mintedId)?.profileId).toBe(WORK_PROFILE);
+
+    cleanup();
+    mount(mintedId, draftSettings(mintedId));
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe(WORK_PROFILE),
+    );
+
+    act(() => {
+      commitProfileSelection(toolbar(), null);
+    });
+
+    expect(draftSettings(mintedId)?.profileId).toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(draftSettings(mintedId)?.profileId).toBeNull();
+  });
+
+  it("mints Terminal when two profiles are signed in", async () => {
+    publishProviders([
+      claudeListing({
+        terminalSignedIn: false,
+        signedInProfileIds: [WORK_PROFILE, HOME_PROFILE],
+      }),
+    ]);
+    const { mintedId, stored } = await mintEmptyTerminalDraft();
+
+    expect(draftSettings(mintedId)?.profileId).toBeNull();
+    expect(lastRunSettings()).toBe(stored);
+  });
+
+  it("mints Terminal when the Terminal login is signed in", async () => {
+    publishProviders([
+      claudeListing({
+        terminalSignedIn: true,
+        signedInProfileIds: [WORK_PROFILE],
+      }),
+    ]);
+    const { mintedId, stored } = await mintEmptyTerminalDraft();
+
+    expect(draftSettings(mintedId)?.profileId).toBeNull();
+    expect(lastRunSettings()).toBe(stored);
   });
 });
