@@ -76,7 +76,7 @@ function HostCloudRecoveryDoorbell(props: {
         onRecovered: () => {
           if (currentClient !== client) return;
           reopenLane.resetBackoff();
-          sweepTransientCloudFailures(queryClient, hostId);
+          void sweepTransientCloudFailures(queryClient, hostId);
         },
         onConnectionStatus: (status, reason) => {
           if (currentClient !== client || status !== "closed") return;

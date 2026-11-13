@@ -30,11 +30,14 @@ export function isTransientlyFailedRead(query: Query): boolean {
  * one with none is marked stale and asks on its next mount. Mutations live in
  * the mutation cache and are never re-sent. Another host's reads are outside
  * the key scope, so a ring never re-asks a read its host did not answer.
+ *
+ * The reads are chosen when it is called. It resolves once their re-asks
+ * have answered, and never rejects.
  */
-export function sweepTransientCloudFailures(
+export async function sweepTransientCloudFailures(
   client: QueryClient,
   hostId: string,
-): void {
+): Promise<void> {
   const queryKey = queryKeys.hostScope(hostId);
   const stranded = new Set(
     client
@@ -49,8 +52,6 @@ export function sweepTransientCloudFailures(
   const predicate = (query: Query): boolean => stranded.has(query);
   // A read in TanStack's retry backoff is still `fetching`; invalidating it
   // alone would only mark it stale. Cancel first, as the recovery sweep does.
-  void (async (): Promise<void> => {
-    await client.cancelQueries({ queryKey, predicate });
-    await client.invalidateQueries({ queryKey, predicate });
-  })();
+  await client.cancelQueries({ queryKey, predicate });
+  await client.invalidateQueries({ queryKey, predicate });
 }

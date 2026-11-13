@@ -26,15 +26,6 @@ afterEach(() => {
   for (const client of clients.splice(0)) client.clear();
 });
 
-/**
- * One macrotask turn: the sweep's cancel-then-invalidate chain runs on
- * microtasks it does not hand back, so a check that no further ask follows
- * needs the turn that drains them.
- */
-function drainSweepChains(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 async function settled(client: QueryClient): Promise<void> {
   await vi.waitFor(() => expect(client.isFetching()).toBe(0));
 }
@@ -72,9 +63,7 @@ describe("sweepTransientCloudFailures", () => {
       });
       read.answer = resolves("recovered");
 
-      sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => expect(read.calls).toBe(2));
-      await settled(client);
+      await sweepTransientCloudFailures(client, HOST);
 
       expect(read.calls).toBe(2);
       expect(read.state.status).toBe("success");
@@ -98,9 +87,7 @@ describe("sweepTransientCloudFailures", () => {
     expect(read.state.data).toBe("first");
     read.answer = resolves("second");
 
-    sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() => expect(read.calls).toBe(3));
-    await settled(client);
+    await sweepTransientCloudFailures(client, HOST);
 
     expect(read.calls).toBe(3);
     expect(read.state.data).toBe("second");
@@ -123,9 +110,7 @@ describe("sweepTransientCloudFailures", () => {
     mine.answer = resolves("ok");
     theirs.answer = resolves("ok");
 
-    sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() => expect(mine.calls).toBe(2));
-    await settled(client);
+    await sweepTransientCloudFailures(client, HOST);
 
     expect(mine.calls).toBe(2);
     expect(theirs.calls).toBe(1);
@@ -151,9 +136,7 @@ describe("sweepTransientCloudFailures", () => {
       permanent.answer = resolves("ok");
       transient.answer = resolves("ok");
 
-      sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => expect(transient.calls).toBe(2));
-      await settled(client);
+      await sweepTransientCloudFailures(client, HOST);
 
       expect(transient.calls).toBe(2);
       expect(permanent.calls).toBe(1);
@@ -177,9 +160,7 @@ describe("sweepTransientCloudFailures", () => {
     });
     failed.answer = resolves("ok");
 
-    sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() => expect(failed.calls).toBe(2));
-    await settled(client);
+    await sweepTransientCloudFailures(client, HOST);
 
     expect(failed.calls).toBe(2);
     expect(fine.calls).toBe(1);
@@ -201,8 +182,8 @@ describe("sweepTransientCloudFailures", () => {
     });
     failed.answer = resolves("ok");
 
-    sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() => expect(failed.calls).toBe(2));
+    await sweepTransientCloudFailures(client, HOST);
+    expect(failed.calls).toBe(2);
 
     expect(inFlight.calls).toBe(1);
     held.release();
@@ -243,9 +224,8 @@ describe("sweepTransientCloudFailures", () => {
     });
     failed.answer = resolves("ok");
 
-    sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() => expect(failed.calls).toBe(2));
-    await settled(client);
+    await sweepTransientCloudFailures(client, HOST);
+    expect(failed.calls).toBe(2);
 
     expect(models.calls).toBe(1);
     expect(commands.calls).toBe(1);
@@ -270,9 +250,8 @@ describe("sweepTransientCloudFailures", () => {
     });
     active.answer = resolves("ok");
 
-    sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() => expect(active.calls).toBe(2));
-    await settled(client);
+    await sweepTransientCloudFailures(client, HOST);
+    expect(active.calls).toBe(2);
 
     expect(read.calls).toBe(1);
     expect(read.state.isInvalidated).toBe(true);
@@ -297,9 +276,8 @@ describe("sweepTransientCloudFailures", () => {
     });
     read.answer = resolves("ok");
 
-    sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() => expect(read.calls).toBe(2));
-    await settled(client);
+    await sweepTransientCloudFailures(client, HOST);
+    expect(read.calls).toBe(2);
 
     expect(mutationFn).toHaveBeenCalledTimes(1);
   });
@@ -320,19 +298,17 @@ describe("sweepTransientCloudFailures", () => {
     const held = heldAnswer("ok");
     for (const read of reads) read.answer = held.answer;
 
-    sweepTransientCloudFailures(client, HOST);
+    const first = sweepTransientCloudFailures(client, HOST);
     await vi.waitFor(() =>
       expect(reads.map((read) => read.calls)).toEqual([2, 2, 2, 2, 2]),
     );
-    sweepTransientCloudFailures(client, HOST);
-    sweepTransientCloudFailures(client, HOST);
-    await drainSweepChains();
-
-    expect(reads.map((read) => read.calls)).toEqual([2, 2, 2, 2, 2]);
+    const repeats = [
+      sweepTransientCloudFailures(client, HOST),
+      sweepTransientCloudFailures(client, HOST),
+    ];
     held.release();
-    await settled(client);
-    await drainSweepChains();
-    await settled(client);
+    await Promise.all([first, ...repeats]);
+
     expect(reads.map((read) => read.calls)).toEqual([2, 2, 2, 2, 2]);
   });
 
@@ -357,19 +333,17 @@ describe("sweepTransientCloudFailures", () => {
     const held = heldAnswer("ok");
     for (const read of reads) read.answer = held.answer;
 
-    sweepTransientCloudFailures(client, HOST);
+    const first = sweepTransientCloudFailures(client, HOST);
     await vi.waitFor(() =>
       expect(reads.map((read) => read.calls)).toEqual([3, 3, 3, 3, 3]),
     );
-    sweepTransientCloudFailures(client, HOST);
-    sweepTransientCloudFailures(client, HOST);
-    await drainSweepChains();
-
-    expect(reads.map((read) => read.calls)).toEqual([3, 3, 3, 3, 3]);
+    const repeats = [
+      sweepTransientCloudFailures(client, HOST),
+      sweepTransientCloudFailures(client, HOST),
+    ];
     held.release();
-    await settled(client);
-    await drainSweepChains();
-    await settled(client);
+    await Promise.all([first, ...repeats]);
+
     expect(reads.map((read) => read.calls)).toEqual([3, 3, 3, 3, 3]);
   });
 });
