@@ -34,7 +34,7 @@ const PROFILE_SYNC_KEYS = [
   "aliases",
   "personNotice",
   "terminalOnThisComputer",
-  "nameQuestion",
+  "otherNames",
   "removedProfiles",
 ] as const;
 
@@ -42,7 +42,7 @@ const ROW_KEYS = [
   "aliases",
   "personNotice",
   "terminalOnThisComputer",
-  "nameQuestion",
+  "otherNames",
 ] as const;
 
 const profileAuth = {
@@ -158,7 +158,7 @@ function expectUpgradeDefaults(upgraded: unknown): void {
       aliases: [],
       personNotice: null,
       terminalOnThisComputer: true,
-      nameQuestion: null,
+      otherNames: [],
     }),
     expect.objectContaining({
       profileId: "managed-1",
@@ -166,7 +166,7 @@ function expectUpgradeDefaults(upgraded: unknown): void {
       aliases: [],
       personNotice: null,
       terminalOnThisComputer: false,
-      nameQuestion: null,
+      otherNames: [],
     }),
   ]);
 }
@@ -180,14 +180,14 @@ const host1011Answer = {
       aliases: ["former-ambient"],
       personNotice: "waiting" as const,
       terminalOnThisComputer: false,
-      nameQuestion: { revision: "rev-ambient", choices: ["Ada"] },
+      otherNames: ["Personal"],
     },
     {
       ...managed,
       aliases: ["former-managed"],
       personNotice: "needs-sign-in" as const,
       terminalOnThisComputer: true,
-      nameQuestion: { revision: "rev-managed", choices: ["Work"] },
+      otherNames: ["Former"],
     },
   ]),
   removedProfiles: [
@@ -207,11 +207,12 @@ describe("providers.list@10.11 projected to an older minor", () => {
       aliases: ["former-ambient"],
       personNotice: "waiting",
       terminalOnThisComputer: false,
-      nameQuestion: { revision: "rev-ambient", choices: ["Ada"] },
+      otherNames: ["Personal"],
     });
     expect(live.providers[0]?.profiles[1]).toMatchObject({
       terminalOnThisComputer: true,
       personNotice: "needs-sign-in",
+      otherNames: ["Former"],
     });
   });
 
@@ -309,7 +310,7 @@ describe("providers.list upgrade to 10.11", () => {
 });
 
 describe("providers.list@10.11 field fallback", () => {
-  it("drops an unknown personNotice or a malformed name question and keeps the row", () => {
+  it("drops an unknown personNotice or a malformed otherNames and keeps the row", () => {
     const parsed = headResponse.parse(
       listResponse([
         {
@@ -317,14 +318,14 @@ describe("providers.list@10.11 field fallback", () => {
           aliases: ["former-ambient"],
           personNotice: "removed",
           terminalOnThisComputer: false,
-          nameQuestion: { revision: "rev-ambient", choices: ["Ada"] },
+          otherNames: ["Personal"],
         },
         {
           ...managed,
           aliases: ["former-managed"],
           personNotice: "needs-sign-in",
           terminalOnThisComputer: true,
-          nameQuestion: { revision: "", choices: ["Ada"] },
+          otherNames: [""],
         },
       ]),
     );
@@ -336,7 +337,7 @@ describe("providers.list@10.11 field fallback", () => {
       enabled: true,
       aliases: ["former-ambient"],
       terminalOnThisComputer: false,
-      nameQuestion: { revision: "rev-ambient", choices: ["Ada"] },
+      otherNames: ["Personal"],
     });
     expect(profiles?.[0]?.personNotice).toBeUndefined();
     expect(profiles?.[0]?.readability?.kind).not.toBe("unreadable");
@@ -348,7 +349,7 @@ describe("providers.list@10.11 field fallback", () => {
       terminalOnThisComputer: true,
       rateLimitStatus: "ok",
     });
-    expect(profiles?.[1]?.nameQuestion).toBeUndefined();
+    expect(profiles?.[1]?.otherNames).toBeUndefined();
     expect(profiles?.[1]?.readability?.kind).not.toBe("unreadable");
   });
 });
@@ -359,7 +360,7 @@ describe("providerProfileSchema mutation echo", () => {
     aliases: ["former-managed"],
     personNotice: "waiting" as const,
     terminalOnThisComputer: true,
-    nameQuestion: { revision: "rev-managed", choices: ["Work"] },
+    otherNames: ["Personal"],
   };
 
   it("strips the four keys from the shared profile schema", () => {
@@ -397,7 +398,6 @@ describe("providers.answerProfileName", () => {
   const validRequest = {
     providerId: "claude-code" as const,
     profileId: "managed-1",
-    revision: "rev-1",
     label: "n".repeat(64),
   };
 
@@ -474,7 +474,7 @@ describe("providers.answerProfileName", () => {
     });
   });
 
-  it("parses a 64-character label and rejects an empty one, a 65-character one, and a missing revision", () => {
+  it("parses a 64-character label and rejects an empty or 65-character one", () => {
     expect(answerRequest.parse(validRequest)).toEqual(validRequest);
     expect(
       answerRequest.safeParse({ ...validRequest, label: "" }).success,
@@ -483,25 +483,10 @@ describe("providers.answerProfileName", () => {
       answerRequest.safeParse({ ...validRequest, label: "n".repeat(65) })
         .success,
     ).toBe(false);
-    expect(
-      answerRequest.safeParse({
-        providerId: validRequest.providerId,
-        profileId: validRequest.profileId,
-        label: validRequest.label,
-      }).success,
-    ).toBe(false);
   });
 
-  it("parses each response arm and rejects an unknown outcome", () => {
-    expect(answerResponse.parse({ outcome: "applied", label: "Ada" })).toEqual({
-      outcome: "applied",
-      label: "Ada",
-    });
-    expect(answerResponse.parse({ outcome: "conflict", label: "Ada" })).toEqual(
-      { outcome: "conflict", label: "Ada" },
-    );
-    expect(
-      answerResponse.safeParse({ outcome: "replaced", label: "Ada" }).success,
-    ).toBe(false);
+  it("parses a label and rejects a response without one", () => {
+    expect(answerResponse.parse({ label: "Ada" })).toEqual({ label: "Ada" });
+    expect(answerResponse.safeParse({}).success).toBe(false);
   });
 });

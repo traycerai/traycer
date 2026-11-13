@@ -1670,22 +1670,6 @@ export type ProviderProfilePersonNotice = z.infer<
   typeof providerProfilePersonNoticeSchema
 >;
 
-/**
- * A pending "Which name should this account use?" question, first published by
- * `providers.list@10.11`. `providers.answerProfileName` answers it by
- * `revision`, so an answer to a question someone already answered changes
- * nothing.
- */
-export const providerProfileNameQuestionSchema = lazySchema(() =>
-  z.object({
-    revision: z.string().min(1),
-    choices: z.array(z.string().min(1)),
-  }),
-);
-export type ProviderProfileNameQuestion = z.infer<
-  typeof providerProfileNameQuestionSchema
->;
-
 function unreadableProjectedProfile(input: unknown) {
   const row = typeof input === "object" && input !== null ? input : {};
   return buildUnreadableProviderProfile({
@@ -1704,7 +1688,7 @@ function unreadableProjectedProfile(input: unknown) {
 
 /**
  * The profile row `providers.list@10.9` and `@10.10` published, before 10.11
- * added aliases, the person notice, the Terminal flag and the name question.
+ * added aliases, the person notice, the Terminal flag and the other names.
  * Frozen lines read it so none of the 10.11 keys reaches an older reader.
  */
 const providerProfileProjectionObjectSchemaV1010 = lazySchema(() =>
@@ -1770,10 +1754,9 @@ export const providerProfileProjectionSchema = lazySchema(() =>
       // Whether this computer's Terminal login is the same account as this
       // row.
       terminalOnThisComputer: z.boolean().optional().catch(undefined),
-      nameQuestion: providerProfileNameQuestionSchema
-        .nullable()
-        .optional()
-        .catch(undefined),
+      // The other names this account had before it became one row; empty once
+      // a person has chosen one (`providers.answerProfileName`).
+      otherNames: z.array(z.string().min(1)).optional().catch(undefined),
     })
     .catch((context) => unreadableProjectedProfile(context.input)),
 );
@@ -1800,15 +1783,14 @@ export type ProvidersSignOutProfileResponse = z.infer<
 >;
 
 /**
- * Answers a row's `nameQuestion` (`providers.list@10.11`) with the name the
- * account should use everywhere. `revision` is the question's, so the host
- * applies the answer only while that question is still the open one.
+ * Sets the account's name on every computer and clears its other names (the
+ * row's `otherNames`, `providers.list@10.11`). The name may be the one the
+ * account already uses, which keeps it and clears the others.
  */
 export const providersAnswerProfileNameRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     profileId: z.string().min(1),
-    revision: z.string().min(1),
     // The same bounds as a rename's label.
     label: z.string().min(1).max(64),
   }),
@@ -1817,17 +1799,9 @@ export type ProvidersAnswerProfileNameRequest = z.infer<
   typeof providersAnswerProfileNameRequestSchema
 >;
 
-/**
- * `applied`: this answer was written. `conflict`: the revision is no longer
- * the open question (someone already answered it, or it was replaced), so
- * nothing was written. Both carry the name the account uses now, so a caller
- * can show it without another read.
- */
+/** The name the account uses after the call, so a caller can show it without another read. */
 export const providersAnswerProfileNameResponseSchema = lazySchema(() =>
-  z.discriminatedUnion("outcome", [
-    z.object({ outcome: z.literal("applied"), label: z.string() }),
-    z.object({ outcome: z.literal("conflict"), label: z.string() }),
-  ]),
+  z.object({ label: z.string() }),
 );
 export type ProvidersAnswerProfileNameResponse = z.infer<
   typeof providersAnswerProfileNameResponseSchema
