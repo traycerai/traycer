@@ -37,36 +37,39 @@ const reAsking = new WeakMap<QueryClient, Set<Query>>();
  *
  * The reads are chosen, and claimed against later sweeps, synchronously when
  * it is called: a ring that arrives before this sweep's cancel resumes cannot
- * choose them again and restart their re-ask. It resolves once their re-asks
- * have answered, releasing them, and never rejects.
+ * choose them again and restart their re-ask. Each read is released when its
+ * own re-ask answers. It resolves once all of them have, and never rejects.
  */
 export async function sweepTransientCloudFailures(
   client: QueryClient,
   hostId: string,
 ): Promise<void> {
-  const queryKey = queryKeys.hostScope(hostId);
   const busy = reAsking.get(client) ?? new Set<Query>();
   reAsking.set(client, busy);
-  const stranded = new Set(
-    client
-      .getQueryCache()
-      .findAll({ queryKey })
-      .filter(
-        (query) =>
-          !busy.has(query) &&
-          isTransientlyFailedRead(query) &&
-          !attemptInFlightHasNotFailed(query),
-      ),
-  );
-  if (stranded.size === 0) return;
+  const stranded = client
+    .getQueryCache()
+    .findAll({ queryKey: queryKeys.hostScope(hostId) })
+    .filter(
+      (query) =>
+        !busy.has(query) &&
+        isTransientlyFailedRead(query) &&
+        !attemptInFlightHasNotFailed(query),
+    );
   for (const query of stranded) busy.add(query);
-  const predicate = (query: Query): boolean => stranded.has(query);
-  try {
-    // A read in TanStack's retry backoff is still `fetching`; invalidating it
-    // alone would only mark it stale. Cancel first, as the recovery sweep does.
-    await client.cancelQueries({ queryKey, predicate });
-    await client.invalidateQueries({ queryKey, predicate });
-  } finally {
-    for (const query of stranded) busy.delete(query);
-  }
+  await Promise.all(
+    stranded.map(async (query) => {
+      const filters = { queryKey: query.queryKey, exact: true };
+      try {
+        // A read in TanStack's retry backoff is still `fetching`; invalidating
+        // it alone would only mark it stale. Cancel first, as the recovery
+        // sweep does.
+        await client.cancelQueries(filters);
+        await client.invalidateQueries(filters);
+      } finally {
+        // Each read's own answer releases it: a read that failed again is
+        // the next ring's to ask, however long another read here takes.
+        busy.delete(query);
+      }
+    }),
+  );
 }

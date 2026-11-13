@@ -488,5 +488,74 @@ describe("sweepTransientCloudFailures", () => {
       expect(read.calls).toBe(4);
       expect(read.state.data).toBe("later");
     });
+
+    it("lets a later ring re-ask a read whose own re-ask has settled while another read's is still pending", async () => {
+      const client = freshClient();
+      const settledAgain = await dataHoldingFailedRead(client, "a");
+      const pending = await dataHoldingFailedRead(client, "b");
+      const held = heldAnswer("b-recovered");
+      settledAgain.answer = rejects(
+        hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
+      );
+      pending.answer = held.answer;
+
+      const first = sweepTransientCloudFailures(client, HOST);
+      await vi.waitFor(() => {
+        expect(settledAgain.calls).toBe(3);
+        expect(settledAgain.state.fetchStatus).toBe("idle");
+        expect(pending.calls).toBe(3);
+      });
+      expect(settledAgain.state.status).toBe("error");
+      settledAgain.answer = resolves("a-recovered");
+
+      const second = sweepTransientCloudFailures(client, HOST);
+      await vi.waitFor(() => expect(settledAgain.calls).toBe(4));
+      held.release();
+      await Promise.all([first, second]);
+
+      expect(settledAgain.calls).toBe(4);
+      expect(settledAgain.state.data).toBe("a-recovered");
+      expect(pending.calls).toBe(3);
+      expect(pending.state.data).toBe("b-recovered");
+    });
+
+    it("does the same for reads that hold no data", async () => {
+      const client = freshClient();
+      const settledAgain = await failedRead(client, {
+        hostId: HOST,
+        method: "bot.list",
+        name: "a",
+        code: "E_CLOUD_REQUEST_REFUSED",
+      });
+      const pending = await failedRead(client, {
+        hostId: HOST,
+        method: "bot.list",
+        name: "b",
+        code: "E_CLOUD_REQUEST_REFUSED",
+      });
+      const held = heldAnswer("b-recovered");
+      settledAgain.answer = rejects(
+        hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.list"),
+      );
+      pending.answer = held.answer;
+
+      const first = sweepTransientCloudFailures(client, HOST);
+      await vi.waitFor(() => {
+        expect(settledAgain.calls).toBe(2);
+        expect(settledAgain.state.fetchStatus).toBe("idle");
+        expect(pending.calls).toBe(2);
+      });
+      settledAgain.answer = resolves("a-recovered");
+
+      const second = sweepTransientCloudFailures(client, HOST);
+      await vi.waitFor(() => expect(settledAgain.calls).toBe(3));
+      held.release();
+      await Promise.all([first, second]);
+
+      expect(settledAgain.calls).toBe(3);
+      expect(settledAgain.state.data).toBe("a-recovered");
+      expect(pending.calls).toBe(2);
+      expect(pending.state.data).toBe("b-recovered");
+    });
   });
 });
