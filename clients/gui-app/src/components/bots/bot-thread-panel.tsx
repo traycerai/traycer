@@ -67,7 +67,10 @@ import {
   type ChatBotQuestions,
   type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
-import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  botMemberAvatarUrl,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
 import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
@@ -363,9 +366,11 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
   const { originMessageId, sent, anchorSenderLabel, resolveMember } = props;
   const anchor =
     props.thread.kind === "listed" ? props.thread.thread.anchor : null;
+  const viewer = useAuthStore((s) => s.profile);
   const senderAvatarUrl = useCallback(
-    (senderUserId: string) => resolveMember(senderUserId)?.avatarUrl ?? null,
-    [resolveMember],
+    (senderUserId: string) =>
+      botMemberAvatarUrl(senderUserId, viewer, resolveMember),
+    [resolveMember, viewer],
   );
   return (
     <ChannelPost
