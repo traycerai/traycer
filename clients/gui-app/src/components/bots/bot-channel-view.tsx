@@ -1337,8 +1337,13 @@ function useChannelSearch(args: {
   return {
     railOpen: args.railHeld || showing === "results",
     showing,
+    // A result's landing belongs to the search that opened its thread: once
+    // anything else holds the rail (a step back or forward, the memory, a
+    // thread opened by hand), the same thread shown again opens where it opens.
     threadLandingOn: (postId) =>
-      threadLanding?.postId === postId ? threadLanding.landing : null,
+      showing === "thread" && threadLanding?.postId === postId
+        ? threadLanding.landing
+        : null,
   };
 }
 
