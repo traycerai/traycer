@@ -8,8 +8,19 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  EpicListHtmlArtifactVersionsResponse,
+  HtmlArtifactVersion,
+} from "@traycer/protocol/host/epic/html-artifact-versions";
 import type {
   EpicReadArtifactObjectRequest,
   EpicReadArtifactObjectResponse,
@@ -23,7 +34,10 @@ import {
   type ChatAttachmentReadClient,
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
+import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import type { SandboxFrameProps } from "@/components/sandbox/sandbox-frame";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { SandboxStatus } from "@/lib/sandbox/bridge-host";
 import type {
   ArtifactProjection,
@@ -142,17 +156,66 @@ vi.mock("@/hooks/ui/use-coarse-pointer", () => ({
 // needs to know which bundle and host the row binds it to.
 vi.mock("@/components/html-artifact/html-artifact-download-button", () => ({
   HtmlArtifactDownloadButton: (props: {
-    source: { artifactId: string; manifest: unknown };
+    source: {
+      artifactId: string;
+      manifest: { files: Record<string, { sha256: string }> };
+    };
     title: string;
     hostId: string;
   }) => (
     <button
       type="button"
+      aria-label="Download"
       data-testid="download-stub"
       data-host-id={props.hostId}
       data-artifact-id={props.source.artifactId}
+      data-entry-sha256={props.source.manifest.files["index.html"].sha256}
     />
   ),
+}));
+
+// A task view's card reads its version history and the comment machinery
+// through the host; those boundaries are fed here and everything between them
+// runs for real.
+const historyMocks = vi.hoisted(() => ({
+  page: null as EpicListHtmlArtifactVersionsResponse | null,
+}));
+const commentsFlag = vi.hoisted(() => ({ enabled: true }));
+const NO_COMMENT_THREADS = vi.hoisted(() => []);
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
+  useHostSupportsMethod: () => true,
+}));
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/host/use-host-query")>()),
+  useHostQuery: (args: { readonly options: { readonly enabled: boolean } }) => {
+    const page = historyMocks.page;
+    if (page === null) throw new Error("This test fed no version history.");
+    return useQuery(
+      queryOptions({
+        queryKey: ["artifact-row-test-history"],
+        queryFn: () => Promise.resolve(page),
+        initialData: page,
+        staleTime: Infinity,
+        enabled: args.options.enabled,
+      }),
+    );
+  },
+}));
+vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
+  useFrameCommentsEnabled: () => commentsFlag.enabled,
+}));
+vi.mock("@/hooks/comments/use-frame-comment-threads", () => ({
+  useFrameCommentThreads: () => NO_COMMENT_THREADS,
+}));
+vi.mock("@/components/comments/anchored-draft-popover", () => ({
+  AnchoredDraftPopover: () => null,
 }));
 
 interface CapturedFrame {
@@ -341,6 +404,13 @@ function neverRespond(): Promise<EpicReadArtifactObjectResponse> {
   return new Promise(() => undefined);
 }
 
+function lastOpenedIntent(): TileOpenIntent {
+  const intent = expandMocks.openTile.mock.calls.at(-1)?.[0];
+  if (intent === undefined)
+    throw new Error("Expected Open in panel to open a tile.");
+  return intent;
+}
+
 beforeEach(() => {
   storeMocks.current = {
     artifacts: EMPTY_ARTIFACTS,
@@ -350,11 +420,83 @@ beforeEach(() => {
   sandboxFrameMocks.mounts = 0;
   expandMocks.openTile.mockClear();
   expandMocks.coarsePointer.current = false;
+  historyMocks.page = null;
+  commentsFlag.enabled = true;
 });
 
 afterEach(() => {
   cleanup();
 });
+
+function savedVersion(
+  versionNumber: number,
+  sha256: string,
+  byteLength: number,
+  capturedAt: number,
+): HtmlArtifactVersion {
+  return {
+    id: sha256,
+    versionNumber,
+    entryPath: "index.html",
+    manifest: {
+      files: {
+        "index.html": { sha256, byteLength, mediaType: "text/html" },
+      },
+      capturedAt,
+    },
+  };
+}
+
+/** The version the stamp captured, as the artifact's history lists it. */
+const V1 = savedVersion(1, STAMP_SHA, 100, 1_000);
+const V2 = savedVersion(2, OTHER_SHA, 20, 1_500);
+/** What `PROJECTION_WITH_HEAD` serves now. */
+const V3 = savedVersion(3, HEAD_SHA, HEAD_BYTES_LENGTH, 2_000);
+
+/** The history page the host answers with, newest first; the first row is the current version. */
+function historyOf(
+  versions: readonly HtmlArtifactVersion[],
+): EpicListHtmlArtifactVersionsResponse {
+  return {
+    versions: [...versions],
+    nextCursor: null,
+    currentVersionNumber: versions[0].versionNumber,
+  };
+}
+
+/** The row inside a task's view tab and tile host; `null` renders it outside a task view. */
+function taskTree(
+  viewTabId: string | null,
+  scope: ChatAttachmentScopeValue,
+  stamp: ToolCallArtifactStamp,
+): ReactNode {
+  return (
+    <QueryClientProvider client={new QueryClient()}>
+      <TooltipProvider>
+        <EpicViewTabContext.Provider value={viewTabId}>
+          <TabHostContext.Provider value="host-1">
+            <ChatAttachmentScopeContext.Provider value={scope}>
+              <ArtifactRow
+                artifact={stamp}
+                fallback={<div data-testid="fallback">fallback</div>}
+              />
+            </ChatAttachmentScopeContext.Provider>
+          </TabHostContext.Provider>
+        </EpicViewTabContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+}
+
+function toolbarButtons(): (string | null)[] {
+  return within(screen.getByRole("toolbar", { name: "HTML artifact controls" }))
+    .getAllByRole("button")
+    .map((button) => button.getAttribute("aria-label"));
+}
+
+function servedEntrySha256(): string {
+  return latestArtifactFrame().source.manifest.files["index.html"].sha256;
+}
 
 describe("<ArtifactRow />", () => {
   it("renders the fallback when there is no attachment scope", () => {
@@ -764,13 +906,6 @@ describe("<ArtifactRow />", () => {
     expect(sandboxFrameMocks.mounts).toBe(2);
   });
   describe("inline Open in panel", () => {
-    function lastOpenedIntent(): TileOpenIntent {
-      const intent = expandMocks.openTile.mock.calls.at(-1)?.[0];
-      if (intent === undefined)
-        throw new Error("Expected Open in panel to open a tile.");
-      return intent;
-    }
-
     function expectLatestExpand(): void {
       const intent = lastOpenedIntent();
       expect(intent).toMatchObject({
@@ -912,6 +1047,212 @@ describe("<ArtifactRow />", () => {
       expect(
         screen.getByRole("button", { name: "Open in panel" }).dataset.size,
       ).toBe("icon-touch");
+    });
+  });
+
+  describe("in a task view", () => {
+    function serveArtifact(projection: ArtifactProjection): void {
+      storeMocks.current = {
+        artifacts: {
+          byId: { [ARTIFACT_ID]: projection },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+    }
+
+    function serveCaptureAsCurrent(): void {
+      serveArtifact(PROJECTION_STAMP_IS_HEAD);
+      historyMocks.page = historyOf([V1]);
+    }
+
+    function serveChangedSinceCapture(): void {
+      serveArtifact(PROJECTION_WITH_HEAD);
+      historyMocks.page = historyOf([V3, V2, V1]);
+    }
+
+    function renderTaskRow(client: ChatAttachmentReadClient) {
+      return render(taskTree("tab-1", scopeWithClient(client), STAMP));
+    }
+
+    function versionButtonLabel(): string | null {
+      return screen
+        .getByRole("button", { name: /HTML version history/ })
+        .getAttribute("aria-label");
+    }
+
+    function commentsButton(): HTMLButtonElement {
+      const button = screen.getByRole("button", { name: "Comments" });
+      if (!(button instanceof HTMLButtonElement))
+        throw new Error("Comments is not a button");
+      return button;
+    }
+
+    async function pickFromVersionMenu(
+      user: UserEvent,
+      row: RegExp,
+    ): Promise<void> {
+      await user.click(
+        screen.getByRole("button", { name: /HTML version history/ }),
+      );
+      await user.click(screen.getByRole("menuitemradio", { name: row }));
+    }
+
+    it("opens on a capture that is the current version, with the picker and a live Comments toggle", () => {
+      serveCaptureAsCurrent();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+
+      expect(versionButtonLabel()).toBe("HTML version history: Latest");
+      expect(commentsButton().disabled).toBe(false);
+      expect(servedEntrySha256()).toBe(STAMP_SHA);
+      expect(toolbarButtons()).toEqual([
+        "HTML version history: Latest",
+        "Download",
+        "Open in panel",
+        "Comments",
+        "Expand",
+      ]);
+    });
+
+    it("keeps an older capture on show under its version number, with Comments unavailable", () => {
+      serveChangedSinceCapture();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+
+      expect(versionButtonLabel()).toBe("HTML version history: v1 of 3");
+      expect(commentsButton().disabled).toBe(true);
+      expect(servedEntrySha256()).toBe(STAMP_SHA);
+      expect(toolbarButtons()).toEqual([
+        "HTML version history: v1 of 3",
+        "Download",
+        "Open in panel",
+        "Comments",
+        "Expand",
+      ]);
+    });
+
+    it("moves to the current version when the reader picks Latest, and Open in panel then follows Latest", async () => {
+      serveChangedSinceCapture();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+
+      await pickFromVersionMenu(userEvent.setup(), /Latest/);
+
+      expect(servedEntrySha256()).toBe(HEAD_SHA);
+      expect(versionButtonLabel()).toBe("HTML version history: Latest");
+      expect(commentsButton().disabled).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
+      expect(lastOpenedIntent().node).not.toHaveProperty("htmlVersion");
+    });
+
+    it("moves to the version the reader picks, and Download and Open in panel follow it", async () => {
+      serveChangedSinceCapture();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+
+      await pickFromVersionMenu(userEvent.setup(), /Version 2/);
+
+      expect(servedEntrySha256()).toBe(OTHER_SHA);
+      expect(versionButtonLabel()).toBe("HTML version history: v2 of 3");
+      expect(commentsButton().disabled).toBe(true);
+      expect(screen.getByTestId("download-stub").dataset.entrySha256).toBe(
+        OTHER_SHA,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
+      expect(lastOpenedIntent().node).toMatchObject({
+        htmlVersion: {
+          manifest: { files: { "index.html": { sha256: OTHER_SHA } } },
+          entryPath: "index.html",
+        },
+      });
+    });
+
+    it("opens on the capture again after a remount, whatever the reader had picked", async () => {
+      serveChangedSinceCapture();
+      const client = makeArtifactReadClient(neverRespond);
+      const first = renderTaskRow(client);
+      await pickFromVersionMenu(userEvent.setup(), /Latest/);
+      expect(servedEntrySha256()).toBe(HEAD_SHA);
+
+      first.unmount();
+      renderTaskRow(client);
+
+      expect(versionButtonLabel()).toBe("HTML version history: v1 of 3");
+      expect(servedEntrySha256()).toBe(STAMP_SHA);
+    });
+
+    it("serves the current version, with the picker and a live Comments toggle, when the capture is evicted", async () => {
+      serveChangedSinceCapture();
+      renderTaskRow(makeEvictionClient());
+
+      await act(async () => {
+        await latestArtifactFrame().source.readSpan(
+          STAMP_SHA,
+          0,
+          10,
+          new AbortController().signal,
+        );
+      });
+
+      expect(screen.getByText("Showing latest")).toBeTruthy();
+      expect(versionButtonLabel()).toBe("HTML version history: Latest");
+      expect(commentsButton().disabled).toBe(false);
+      expect(servedEntrySha256()).toBe(HEAD_SHA);
+    });
+
+    it("offers the picker but no Comments control on an older version when frame comments are off", () => {
+      commentsFlag.enabled = false;
+      serveChangedSinceCapture();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+
+      expect(versionButtonLabel()).toBe("HTML version history: v1 of 3");
+      expect(screen.queryByRole("button", { name: "Comments" })).toBeNull();
+    });
+
+    it("keeps the same frame through Expand and carries the toolbar into the raised surface", () => {
+      serveCaptureAsCurrent();
+      renderTaskRow(makeArtifactReadClient(neverRespond));
+      expect(sandboxFrameMocks.mounts).toBe(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+
+      const dialog = screen.getByRole("dialog", { name: "My Artifact" });
+      expect(
+        within(dialog).getByRole("button", { name: "Zoom in" }),
+      ).toBeTruthy();
+      for (const name of [
+        "HTML version history: Latest",
+        "Download",
+        "Open in panel",
+        "Comments",
+        "More actions",
+      ]) {
+        expect(within(dialog).getByRole("button", { name })).toBeTruthy();
+      }
+      expect(sandboxFrameMocks.mounts).toBe(1);
+    });
+  });
+
+  describe("outside a task view", () => {
+    it("is the plain card, with Download, Open in panel and Expand and no picker or Comments", () => {
+      storeMocks.current = {
+        artifacts: {
+          byId: { [ARTIFACT_ID]: PROJECTION_STAMP_IS_HEAD },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+      historyMocks.page = historyOf([V1]);
+      render(
+        taskTree(
+          null,
+          scopeWithClient(makeArtifactReadClient(neverRespond)),
+          STAMP,
+        ),
+      );
+
+      expect(toolbarButtons()).toEqual(["Download", "Open in panel", "Expand"]);
+      expect(
+        screen.queryByRole("button", { name: /HTML version history/ }),
+      ).toBeNull();
+      expect(screen.queryByRole("button", { name: "Comments" })).toBeNull();
     });
   });
 });

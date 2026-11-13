@@ -196,6 +196,11 @@ function commentTile(onDownload: () => void) {
         hostId="host-1"
         viewTabId="tab-1"
         source={sourceNamed("html-1")}
+        caption={null}
+        height={null}
+        className="h-full w-full"
+        onSize={() => undefined}
+        onStatus={() => undefined}
         toolbarControls={<PickerControl initiallyOn={null} />}
         menuItems={
           <DropdownMenuItem onSelect={onDownload}>

@@ -262,13 +262,22 @@ export function CanvasSelectionProvider(
   const escapeSelection = useCallback((): void => {
     registry.view?.setCommenting(false);
     requestSequence.current += 1;
+    // Another view of the same artifact (a tile beside a chat card) keeps the
+    // selection it made; a selection nobody owns, such as a revealed comment's
+    // element, is this view's to clear.
     const state = useCanvasSelectionStore.getState();
     const hadElement =
-      state.selection?.artifactId === artifactId ||
+      (state.selection?.artifactId === artifactId &&
+        (state.selectionOwner === selectionOwner ||
+          state.selectionOwner === null)) ||
       state.pendingPick?.owner === selectionOwner;
     state.retire(selectionOwner, null);
-    if (useCanvasSelectionStore.getState().selection?.artifactId === artifactId)
-      useCanvasSelectionStore.getState().clear();
+    const left = useCanvasSelectionStore.getState();
+    if (
+      left.selection?.artifactId === artifactId &&
+      left.selectionOwner === null
+    )
+      left.clear();
     if (!hadElement) {
       registry.view?.clearNodeSelection();
       registry.selectBoard(null);

@@ -14,9 +14,15 @@ import { CanvasFrameEventsContext } from "@/components/canvas-artifact/canvas-su
 import type { CanvasFrameEvents } from "@/components/canvas-artifact/canvas-frame";
 import type { CanvasCommentView } from "@/components/canvas-artifact/canvas-frame-registry";
 import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
+import { FrameCommentsUnavailable } from "@/components/comments/frame-comments";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
+import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
 import { artifactPagePaths } from "@/lib/sandbox/artifact-serving";
-import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
+import type {
+  SandboxBridgeHost,
+  SandboxSize,
+  SandboxStatus,
+} from "@/lib/sandbox/bridge-host";
 import {
   ArtifactPagesFrame,
   type ArtifactPagesNavigator,
@@ -109,16 +115,31 @@ function pageSourcesFor(
   return new Map(ordered.map((page) => [page, { ...served, entryPath: page }]));
 }
 
-export function HtmlArtifactCommentSurface(props: {
-  readonly epicId: string;
-  readonly artifactId: string;
-  readonly artifactTitle: string;
-  readonly hostId: string;
-  readonly viewTabId: string;
-  readonly source: ArtifactSource;
-  readonly toolbarControls: ReactNode;
-  readonly menuItems: ReactNode;
-}) {
+/**
+ * The page sized the way its caller lays it out: a tile fills its panel
+ * (`height` null), a chat card follows its page's own height.
+ */
+interface CommentFrameSizing {
+  readonly height: number | null;
+  readonly className: string;
+  readonly onSize: (size: SandboxSize) => void;
+  readonly onStatus: (status: SandboxStatus) => void;
+}
+
+export function HtmlArtifactCommentSurface(
+  props: CommentFrameSizing & {
+    readonly epicId: string;
+    readonly artifactId: string;
+    readonly artifactTitle: string;
+    readonly hostId: string;
+    readonly viewTabId: string;
+    readonly source: ArtifactSource;
+    /** Shown above the page, inline and expanded alike. */
+    readonly caption: ReactNode;
+    readonly toolbarControls: ReactNode;
+    readonly menuItems: ReactNode;
+  },
+) {
   return (
     <CanvasSelectionProvider
       epicId={props.epicId}
@@ -131,6 +152,11 @@ export function HtmlArtifactCommentSurface(props: {
       <ProvidedCommentFrame
         source={props.source}
         title={props.artifactTitle}
+        caption={props.caption}
+        height={props.height}
+        className={props.className}
+        onSize={props.onSize}
+        onStatus={props.onStatus}
         toolbarControls={props.toolbarControls}
         menuItems={props.menuItems}
       />
@@ -138,9 +164,24 @@ export function HtmlArtifactCommentSurface(props: {
   );
 }
 
-interface CommentFrameProps {
+/**
+ * Comments anchor to the live page, so an older version cannot take one. The
+ * toggle stays in its place, unavailable, so the controls around it hold still.
+ */
+export function HtmlArtifactOlderVersionComments(props: {
+  readonly viewTabId: string | null;
+}) {
+  const commentsEnabled = useFrameCommentsEnabled();
+  if (props.viewTabId === null || !commentsEnabled) return null;
+  return (
+    <FrameCommentsUnavailable reason="Comments are on the latest version" />
+  );
+}
+
+interface CommentFrameProps extends CommentFrameSizing {
   readonly source: ArtifactSource;
   readonly title: string;
+  readonly caption: ReactNode;
   readonly toolbarControls: ReactNode;
   readonly menuItems: ReactNode;
 }
@@ -162,8 +203,8 @@ function HtmlArtifactCommentFrame(
   // stay blocked with nothing on screen to unblock it.
   const commenting = commentingRequested && commentsEnabled;
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
-  // The board comments go on is the page the frame shows. The tile shows one
-  // page at a time, so there is one board, and following a link moves it.
+  // The board comments go on is the page the frame shows. The surface shows
+  // one page at a time, so there is one board, and following a link moves it.
   const [board, setBoard] = useState<ProvenPage | null>(null);
   const page = board?.path ?? null;
   const pagesFrame = useRef<ArtifactPagesNavigator>(null);
@@ -269,18 +310,20 @@ function HtmlArtifactCommentFrame(
     // inert document, invisible and unreachable. Inside here it portals into
     // the surface, and the menus it raises resolve their container from it.
     <ArtifactExpansion title={props.title}>
+      {props.caption}
       <ArtifactPagesFrame
         ref={pagesFrame}
         source={served}
         title={props.title}
-        className="h-full w-full"
-        height={null}
+        className={props.className}
+        height={props.height}
         commenting={commenting}
         onCommentPage={setBoard}
-        onSize={noop}
-        // A page says it is ready before it becomes the board, so the board
-        // effect above tells the comment machinery instead.
-        onStatus={noop}
+        onSize={props.onSize}
+        // The caller's own watch (a crash). A page says it is ready before it
+        // becomes the board, so the board effect above tells the comment
+        // machinery instead.
+        onStatus={props.onStatus}
         onBridge={(bridge) => {
           bridgeRef.current = bridge;
         }}
