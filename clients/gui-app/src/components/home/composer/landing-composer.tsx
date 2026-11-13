@@ -1189,6 +1189,7 @@ export function LandingComposer(props: LandingComposerProps) {
               stagedTerminalLaunch,
               toolbarStore.getState(),
               providers,
+              stagedProviders.data?.removedProfiles ?? [],
             );
             if (launch === null) return false;
             return dispatchStartTerminal(launch)

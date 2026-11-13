@@ -35,7 +35,15 @@ import {
   profileInventoryAttributes,
   profileCommitId,
   profileDisplayLabel,
+  profilePersonNoticeText,
+  profileTerminalAccountLine,
+  removedProfilesForProvider,
+  resolveProfilePin,
+  type ProfilePinResolution,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { ProfileOtherNames } from "./provider-profile-other-names";
 import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 import {
   isRateLimitProfileFetchEligible,
@@ -98,6 +106,34 @@ function ownLoginLabel(providerLabel: string, hostName: string | null): string {
   return hostName === null
     ? `${providerLabel}'s own login`
     : `${providerLabel}'s own login on ${hostName}`;
+}
+
+/**
+ * What the section's selection names. The selection is this page's own
+ * state: a pin reaches it only through a focus intent. An alias selects its
+ * row; an id the list does not resolve to a row - removed by a person or
+ * unknown - shows the first row with none checked, as any id the page does
+ * not list always has.
+ */
+function settingsProfileSelection(
+  profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
+  selectedProfileId: string | null,
+): { readonly pin: ProfilePinResolution; readonly profile: ProviderProfile } {
+  const pin = resolveProfilePin(profiles, removedProfiles, selectedProfileId);
+  return pin.kind === "row"
+    ? { pin, profile: pin.profile }
+    : { pin: { kind: "unknown" }, profile: profiles[0] };
+}
+
+/** The dropdown's pin over the relabelled rows: the Terminal login's row is
+ *  drawn under its own-login name, so a pin on it carries that name too. */
+function labelledPin(
+  pin: ProfilePinResolution,
+  ownLogin: string,
+): ProfilePinResolution {
+  if (pin.kind !== "row" || pin.profile.kind !== "ambient") return pin;
+  return { kind: "row", profile: { ...pin.profile, label: ownLogin } };
 }
 
 /**
@@ -279,13 +315,19 @@ export function ProviderProfileScopedSection(
   const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
     startInReauth ? "sign-in" : "manage",
   );
+  const removedProfiles = removedProfilesForProvider(
+    useProvidersList({ enabled: true, subscribed: true }).data,
+    state.providerId,
+  );
 
   if (profiles.length === 0) return null;
 
-  const selectedProfile =
-    profiles.find(
-      (candidate) => profileCommitId(candidate) === selectedProfileId,
-    ) ?? profiles[0];
+  const selection = settingsProfileSelection(
+    profiles,
+    removedProfiles,
+    selectedProfileId,
+  );
+  const selectedProfile = selection.profile;
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile;
   const { signInUnavailableHint, cliSetupNeeded, managementHeldReason } =
@@ -351,7 +393,7 @@ export function ProviderProfileScopedSection(
         <ProfileDropdown
           providerLabel={providerLabel}
           profiles={labelledProfiles}
-          activeProfileId={selectedProfileId}
+          pin={labelledPin(selection.pin, ownLogin)}
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
           createProfileDisabled={addProfileDisabled}
@@ -379,6 +421,7 @@ export function ProviderProfileScopedSection(
           }
           admissionByProfileId={null}
           showTerminalBadge={false}
+          terminalComputerName={hostName}
         />
         <ProviderOnHostOnlyLine
           hostId={hostId}
@@ -388,11 +431,17 @@ export function ProviderProfileScopedSection(
         <SelectedProfileRow
           state={state}
           profile={selectedProfile}
+          computerName={hostName}
           canAddProfile={canAddProfile}
           signInUnavailableHint={signInUnavailableHint}
           managementHeldReason={managementHeldReason}
           onSignIn={openProfileSignIn}
           onManage={openProfileEditor}
+        />
+        <ProfileOtherNames
+          hostId={hostId}
+          providerId={state.providerId}
+          profile={selectedProfile}
         />
 
         <ProfileScopedSectionMessages
@@ -456,6 +505,7 @@ export function ProviderProfileScopedSection(
 function SelectedProfileRow(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
+  readonly computerName: string | null;
   readonly canAddProfile: boolean;
   readonly signInUnavailableHint: string | null;
   readonly managementHeldReason: string | null;
@@ -473,8 +523,9 @@ function SelectedProfileRow(props: {
         key={profile.profileId}
         state={props.state}
         profile={profile}
+        computerName={props.computerName}
       />
-      {profileReadsSignedOut(props.state, profile) ? (
+      {profileOffersSignIn(props.state, profile) ? (
         <TooltipWrapper
           label={props.canAddProfile ? null : props.signInUnavailableHint}
           side="top"
@@ -497,6 +548,21 @@ function SelectedProfileRow(props: {
         </TooltipWrapper>
       ) : null}
     </ProfileSummaryActions>
+  );
+}
+
+/**
+ * Sign in is offered on a row that reads signed out, and on a row the
+ * computer says needs a sign-in or is waiting, where a sign-in also restores
+ * it.
+ */
+function profileOffersSignIn(
+  state: ProviderCliState,
+  profile: ProviderProfile,
+): boolean {
+  return (
+    profilePersonNoticeText(profile) !== null ||
+    profileReadsSignedOut(state, profile)
   );
 }
 
@@ -563,14 +629,17 @@ function ProfileIdentity({
 function ProfileSummary({
   state,
   profile,
+  computerName,
 }: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
+  readonly computerName: string | null;
 }): ReactNode {
   const tier = profile.identity?.tier;
   const planText =
     tier === null || tier === undefined || tier.length === 0 ? null : tier;
   const inventory = profileInventorySummary(profile);
+  const terminalLine = profileTerminalAccountLine(profile, computerName);
 
   return (
     <div className="flex min-w-0 flex-auto flex-col gap-1 text-ui-xs text-muted-foreground">
@@ -586,7 +655,9 @@ function ProfileSummary({
           largely to itself. */}
         <ProfileIdentity profile={profile} />
         <Badge variant="outline" size="xs" className="shrink-0">
-          {profile.kind === "ambient" && isProviderAmbientSignedOut(state)
+          {profile.kind === "ambient" &&
+          isProviderAmbientSignedOut(state) &&
+          profilePersonNoticeText(profile) === null
             ? "Signed out"
             : inventory.badge}
         </Badge>
@@ -608,6 +679,11 @@ function ProfileSummary({
         ) : null}
       </div>
       <div>
+        {terminalLine === null ? null : (
+          <p className="min-w-0 whitespace-normal break-words">
+            {terminalLine}
+          </p>
+        )}
         {profile.presence?.kind === "no-home" ? (
           <p className="min-w-0 whitespace-normal break-words">
             Not on this device yet

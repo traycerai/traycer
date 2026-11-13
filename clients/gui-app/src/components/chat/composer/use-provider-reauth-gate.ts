@@ -4,6 +4,8 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
   type ProviderId,
+  type ProviderProfile,
+  type ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -17,6 +19,12 @@ import {
   isProviderAmbientAuthenticated,
   isProviderAmbientSignedOut,
 } from "@/lib/providers/provider-ambient-auth";
+import {
+  profileCommitId,
+  removedProfilesForProvider,
+  resolveProfilePin,
+  type ProfilePinResolution,
+} from "@/components/providers/provider-profile-model";
 
 /**
  * - `provider_unauthenticated`: the ambient/host login itself is signed out
@@ -118,9 +126,19 @@ function deriveReauthReason(input: {
   readonly settled: boolean;
   readonly profileId: string | null;
   readonly state: ProviderCliState | null;
-  readonly matchedProfile: ProviderCliState["profiles"][number] | null;
+  readonly matchedProfile: ProviderProfile | null;
+  /** The pin names an account a person removed on this computer. */
+  readonly pinRemoved: boolean;
 }): ProviderReauthReason | null {
   if (!input.enabled) return null;
+  if (input.profileId === null && input.matchedProfile !== null) {
+    // The Terminal login is a record's row on this computer, and the turn
+    // runs in that record's folder: the row's own state decides, never the
+    // Terminal login's probe.
+    return profileRowNeedsSignIn(input.matchedProfile)
+      ? "profile_unauthenticated"
+      : null;
+  }
   if (input.profileId === null) {
     // Ambient/terminal account: reconcile the provider-level probe with the
     // ambient profile row so a definitive logout on either source blocks send,
@@ -134,11 +152,26 @@ function deriveReauthReason(input: {
   }
   if (!input.settled) return null;
   if (input.matchedProfile === null) {
-    return input.authoritative ? "profile_missing" : null;
+    // A removed account is this computer's own evidence, not a guess about a
+    // default minted elsewhere, so it holds a fallback seed too: nothing
+    // starts on it, and nothing moves to the Terminal login unasked.
+    return input.authoritative || input.pinRemoved ? "profile_missing" : null;
   }
-  return input.matchedProfile.auth.status === "unauthenticated"
+  return profileRowNeedsSignIn(input.matchedProfile)
     ? "profile_unauthenticated"
     : null;
+}
+
+/**
+ * A row only a sign-in restores: its own probe is definitively signed out,
+ * or the computer says it needs a sign-in. "Waiting for Traycer" resolves by
+ * itself and never blocks a send.
+ */
+function profileRowNeedsSignIn(profile: ProviderProfile): boolean {
+  return (
+    profile.auth.status === "unauthenticated" ||
+    profile.personNotice === "needs-sign-in"
+  );
 }
 
 /** The send button's hint while either composer's gate refuses a send. */
@@ -151,26 +184,29 @@ export const SIGNED_OUT_SEND_HINT =
  * composer reads its placement's.
  */
 function resolveProviderReauthGate(input: {
-  readonly providers: readonly ProviderCliState[] | undefined;
+  readonly list: ProvidersListResponse | undefined;
   readonly providerId: ProviderId | null;
   readonly profileId: string | null;
   readonly enabled: boolean;
   readonly authoritative: boolean;
 }): ProviderReauthGate {
-  const { providers, providerId, profileId } = input;
+  const { list, providerId, profileId } = input;
+  const providers = list?.providers;
   // `providers.list` always returns every configured provider in one atomic
   // response, so `data !== undefined` is a trustworthy "this provider's entry
   // (or lack of one) is final" signal - mirrors
   // `useResolvedSeededProfileId`'s `settled` derivation.
   const settled = providers !== undefined;
   const state = providers?.find((p) => p.providerId === providerId) ?? null;
-  // `null` for ambient - a non-null `profileId` can only ever match a managed
-  // profile's own real id (never the wire array's "ambient" sentinel), so no
-  // normalization is needed here the way the rail/rate-limit prompt need it.
-  const matchedProfile =
-    profileId === null || state === null
+  const pin =
+    state === null
       ? null
-      : (state.profiles.find((p) => p.profileId === profileId) ?? null);
+      : resolveProfilePin(
+          state.profiles,
+          removedProfilesForProvider(list, state.providerId),
+          profileId,
+        );
+  const matchedProfile = gatedProfileRow(pin, profileId);
   const reason = deriveReauthReason({
     enabled: input.enabled,
     authoritative: input.authoritative,
@@ -178,15 +214,37 @@ function resolveProviderReauthGate(input: {
     profileId,
     state,
     matchedProfile,
+    pinRemoved: pin?.kind === "removed",
   });
   return {
     providerId,
-    profileId,
+    // A Terminal pin gated by a record's row names that row, so the banner's
+    // Sign in opens it.
+    profileId:
+      profileId === null && matchedProfile !== null
+        ? profileCommitId(matchedProfile)
+        : profileId,
     state,
     signedOut: reason !== null,
     reason,
     profileLabel: matchedProfile?.label ?? null,
   };
+}
+
+/**
+ * The row whose state gates the pin: the row a managed id or its alias
+ * resolves to, or, for the Terminal login (`null`), the record's row that is
+ * this computer's Terminal login. `null` otherwise - a removed or unknown id
+ * (`profile_missing`), and a Terminal login with a row of its own, which the
+ * provider-level probe reads.
+ */
+function gatedProfileRow(
+  pin: ProfilePinResolution | null,
+  profileId: string | null,
+): ProviderProfile | null {
+  if (pin === null || pin.kind !== "row") return null;
+  if (profileId === null && pin.profile.kind === "ambient") return null;
+  return pin.profile;
 }
 
 /**
@@ -209,7 +267,7 @@ export function useLandingProviderReauthGate(
     subscribed: enabled,
   });
   return resolveProviderReauthGate({
-    providers: query.data?.providers,
+    list: query.data,
     providerId,
     profileId,
     enabled,
@@ -236,7 +294,7 @@ export function useProviderReauthGate(
   const enabled = active && providerId !== null;
   const query = useTabProvidersList({ enabled, subscribed: enabled });
   const gate = resolveProviderReauthGate({
-    providers: query.data?.providers,
+    list: query.data,
     providerId,
     profileId,
     enabled,

@@ -78,7 +78,9 @@ import type { UltracodeFooterConfig } from "@/components/home/pickers/ultracode-
 import { useHarnessModelPickerState } from "@/components/home/pickers/harness-model-picker-state";
 import {
   EMPTY_PREPARING_BY_HARNESS_ID,
+  EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
   railHarnessDegraded,
+  removedProfilesForHarness,
   resolveActiveProfileForHarness,
   visibleRailEntries,
 } from "@/components/home/pickers/harness-rail-providers";
@@ -89,9 +91,12 @@ import {
 } from "@/components/providers/provider-pack-readiness";
 import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import {
-  profileCommitId,
   profileDisplayLabel,
+  removedProfilesForProvider,
+  resolveProfilePin,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
+import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-copy";
 import { usePickerLeaderScope } from "@/components/home/pickers/use-picker-leader-scope";
 import { handleHarnessModelPickerKeyDown } from "@/components/home/pickers/harness-model-picker-keyboard";
 import {
@@ -132,6 +137,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
   ProviderCliState,
   ProviderProfile,
+  ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   guiHarnessIdToProviderId,
@@ -615,6 +621,13 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         : profilesByHarnessIdFromProviderStates(providersQuery.data.providers),
     [providersQuery.data],
   );
+  const removedProfilesByHarnessId = useMemo(
+    () =>
+      providersQuery.data === undefined
+        ? EMPTY_REMOVED_PROFILES_BY_HARNESS_ID
+        : removedProfilesByHarnessIdFromList(providersQuery.data),
+    [providersQuery.data],
+  );
   // The create-profile gate's capability data must come from the SAME host
   // the add-profile flow will target - `ProviderProfileAddFlowHost` resolves
   // its client from this exact prop via `useHostClientForHostId`. Every caller
@@ -865,11 +878,16 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         selectedHarnessAvailable: selected.available,
         selectedHarnessProfiles:
           profilesByHarnessId.get(selection.harnessId) ?? [],
+        selectedHarnessRemovedProfiles: removedProfilesForHarness(
+          removedProfilesByHarnessId,
+          selection.harnessId,
+        ),
       }),
     [
       harnessesPending,
       modelsPending,
       profilesByHarnessId,
+      removedProfilesByHarnessId,
       reasoningFooter,
       selected.available,
       selectedModels,
@@ -921,6 +939,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () =>
       resolveActiveProfileForHarness(
         profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
+        removedProfilesForHarness(
+          removedProfilesByHarnessId,
+          resolvedActiveProviderId,
+        ),
         activeProfileId,
         selection.harnessId === resolvedActiveProviderId
           ? selection.profileId
@@ -929,6 +951,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     [
       activeProfileId,
       profilesByHarnessId,
+      removedProfilesByHarnessId,
       resolvedActiveProviderId,
       selection.harnessId,
       selection.profileId,
@@ -1051,6 +1074,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         degradedHarnessIds,
         preparingByHarnessId,
         profilesByHarnessId,
+        removedProfilesByHarnessId,
         activeProfileIdByHarnessId,
         offeredAgents,
       }),
@@ -1062,6 +1086,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       offeredAgents,
       preparingByHarnessId,
       profilesByHarnessId,
+      removedProfilesByHarnessId,
     ],
   );
   const rows = useMemo(
@@ -1176,6 +1201,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // provider's first selectable profile.
       const resolvedProfileId = resolveActiveProfileForHarness(
         profilesByHarnessId.get(providerId) ?? [],
+        removedProfilesForHarness(removedProfilesByHarnessId, providerId),
         providerId === activeProviderId ? activeProfileId : null,
         providerId === selection.harnessId ? selection.profileId : null,
       );
@@ -1213,6 +1239,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       onTeamSandbox,
       profilesByHarnessId,
       railEntries,
+      removedProfilesByHarnessId,
       selection.harnessId,
       selection.profileId,
       setActiveRailEntry,
@@ -1395,6 +1422,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       maxModeLabel={maxModeLabel(presentation.maxModeRequired)}
       profileLabel={profileTooltipLabel(
         profilesByHarnessId.get(selection.harnessId) ?? [],
+        removedProfilesForHarness(
+          removedProfilesByHarnessId,
+          selection.harnessId,
+        ),
         selection.profileId,
       )}
       shortcutLabel={
@@ -1451,6 +1482,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         fallbackHarnesses={harnesses}
         offeredAgents={offeredAgents}
         profilesByHarnessId={profilesByHarnessId}
+        removedProfilesByHarnessId={removedProfilesByHarnessId}
         resolvedActiveProviderId={resolvedActiveProviderId}
         activeProfileId={activePanelProfileId}
         activeProfileIdByHarnessId={activeProfileIdByHarnessId}
@@ -1836,13 +1868,13 @@ function serviceTierTooltip(
 
 function profileTooltipLabel(
   profiles: ReadonlyArray<ProviderProfile>,
+  removedProfiles: readonly RemovedProviderProfile[],
   selectedProfileId: string | null,
 ): string | null {
   if (profiles.length < 2) return null;
-  const activeProfile =
-    profiles.find(
-      (profile) => profileCommitId(profile) === selectedProfileId,
-    ) ?? profiles.at(0);
+  const pin = resolveProfilePin(profiles, removedProfiles, selectedProfileId);
+  if (pin.kind === "removed") return REMOVED_PROFILE_PIN_TEXT;
+  const activeProfile = pin.kind === "row" ? pin.profile : profiles.at(0);
   if (activeProfile === undefined) return null;
   return profileDisplayLabel(activeProfile);
 }
@@ -2170,6 +2202,17 @@ function degradedHarnessIdsFromProviderStates(
 // live providers on a transient probe state.
 function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
   return provider.enabled && isProviderAmbientSignedOut(provider);
+}
+
+function removedProfilesByHarnessIdFromList(
+  list: ProvidersListResponse,
+): ReadonlyMap<GuiHarnessId, readonly RemovedProviderProfile[]> {
+  return new Map(
+    list.providers.map((provider) => [
+      providerIdToGuiHarnessId(provider.providerId),
+      removedProfilesForProvider(list, provider.providerId),
+    ]),
+  );
 }
 
 function profilesByHarnessIdFromProviderStates(

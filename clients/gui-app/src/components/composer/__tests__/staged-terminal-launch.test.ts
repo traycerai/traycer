@@ -48,6 +48,7 @@ describe("stagedTerminalLaunchOnHost", () => {
         harnessRow("codex", { modes: ["gui", "tui"] }),
       ]),
       [providerRow("codex", null)],
+      [],
     );
 
     expect(launch).toEqual({
@@ -69,6 +70,7 @@ describe("stagedTerminalLaunchOnHost", () => {
           harnessRow("claude", { available: true }),
         ]),
         [],
+        [],
       ),
     ).toBeNull();
   });
@@ -78,7 +80,7 @@ describe("stagedTerminalLaunchOnHost", () => {
     ["runs only in chat", [harnessRow("codex", { modes: ["gui"] })]],
   ])("launches nothing when the captured harness %s", (_label, harnesses) => {
     expect(
-      stagedTerminalLaunchOnHost(CAPTURED, catalog(harnesses), []),
+      stagedTerminalLaunchOnHost(CAPTURED, catalog(harnesses), [], []),
     ).toBeNull();
   });
 });

@@ -36,10 +36,12 @@ import {
 } from "@/lib/report-issue-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
+import { ProfileOtherNameChips } from "@/components/providers/profile-other-name-chips";
 import {
   profileDisplayLabel,
   profileInventoryNotice,
   profileInventoryAttributes,
+  profileOtherNames,
   profileAuthStatusText,
   profileEligibilityToggleDisabledReason,
   profileEnablementTooltipText,
@@ -1934,9 +1936,12 @@ function UnmappedRateLimitProviderBlock(props: {
             {...profileInventoryAttributes(profile)}
             data-testid={`rate-limit-profile-card-${props.providerId}-${rateLimitProfileId(profile) ?? ""}`}
           >
-            <span className="text-ui-sm font-medium">
-              {profileDisplayLabel(profile)}
-            </span>
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="text-ui-sm font-medium">
+                {profileDisplayLabel(profile)}
+              </span>
+              <ProfileOtherNameChips otherNames={profileOtherNames(profile)} />
+            </div>
             <p className="text-ui-xs text-muted-foreground">
               {profileInventoryNotice(profile) ??
                 profileAuthStatusText(profile)}
@@ -2878,6 +2883,7 @@ function RateLimitProviderProfileStatusBadges({
       <span className="min-w-0 text-ui-sm font-medium whitespace-normal text-foreground wrap-anywhere">
         {profileDisplayLabel(profile)}
       </span>
+      <ProfileOtherNameChips otherNames={profileOtherNames(profile)} />
       {planLabel !== null ? (
         <Badge variant="secondary" wrap>
           {planLabel}

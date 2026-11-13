@@ -360,6 +360,9 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
       }),
     };
   },
+  // No directory row, so a record that is this computer's Terminal login
+  // draws no computer name.
+  useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({

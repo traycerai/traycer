@@ -19,8 +19,16 @@ import {
   profileEnablementTooltipText,
   profileAuthStatusText,
   profileRowStatusSuffix,
+  profileOtherNames,
+  profileTerminalAccountLine,
+  type ProfilePinResolution,
   type ProfileRowAdmission,
 } from "@/components/providers/provider-profile-model";
+import { ProfileOtherNameChips } from "@/components/providers/profile-other-name-chips";
+import {
+  otherNamesAccessibleText,
+  REMOVED_PROFILE_PIN_TEXT,
+} from "@/components/providers/profile-sync-copy";
 import {
   profileUsageAccessibleStatus,
   type ProfileDropdownUsageEntry,
@@ -84,7 +92,11 @@ interface ProfileDropdownProps {
   /** 2+ selectable profiles - progressive disclosure (no dropdown under 2) is
    *  the caller's gate, not this component's. */
   readonly profiles: ReadonlyArray<ProviderProfile>;
-  readonly activeProfileId: string | null;
+  /** What the selected or pinned id names in `profiles`
+   *  (`resolveProfilePin`): its row, an account a person removed (the
+   *  trigger says so and no row is checked), or an id the list does not
+   *  know (the trigger shows the first row and no row is checked). */
+  readonly pin: ProfilePinResolution;
   readonly onSelectProfile: (profileId: string | null) => void;
   readonly onCreateProfile: (() => void) | null;
   readonly createProfileDisabled: boolean;
@@ -125,6 +137,9 @@ interface ProfileDropdownProps {
   /** Whether the terminal login carries its `Terminal` badge. Settings names
    *  that row in its label instead, and passes `false`. */
   readonly showTerminalBadge: boolean;
+  /** The name of the computer whose list this is, for the second line of a
+   *  record's row that is also its Terminal login; `null` when unknown. */
+  readonly terminalComputerName: string | null;
 }
 
 /**
@@ -139,7 +154,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   const {
     providerLabel,
     profiles,
-    activeProfileId,
+    pin,
     onSelectProfile,
     onCreateProfile,
     createProfileDisabled,
@@ -152,13 +167,19 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     eligibilityControls,
     admissionByProfileId,
     showTerminalBadge,
+    terminalComputerName,
   } = props;
   const rowIdPrefix = useId();
   const triggerId = `${rowIdPrefix}-trigger`;
-  const activeProfile =
-    profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
-    profiles[0];
+  const pinnedRemoved = pin.kind === "removed";
+  // The row drawn checked: only the row the pin resolved to. A removed or
+  // unknown pin checks none, and the trigger draws the first row for an
+  // unknown one.
+  const checkedProfile = pin.kind === "row" ? pin.profile : null;
+  const activeProfile = checkedProfile ?? profiles[0];
   const activeCommitId = profileCommitId(activeProfile);
+  // A removed account has no row, so nothing to switch on or off.
+  const triggerEligibilityControls = pinnedRemoved ? null : eligibilityControls;
   const [open, setOpen] = useState(false);
   const [previewProfileId, setPreviewProfileId] = useState<string | null>(
     activeCommitId,
@@ -179,7 +200,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     setPreviewAnchor(anchor);
   };
   const rowContext: ProfileDropdownRowContext = {
-    activeProfileId,
+    checkedProfile,
     rowIdPrefix,
     previewProfileId,
     onPreview: preview,
@@ -191,6 +212,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     profileEnablementPending,
     onSelectProfile,
     showTerminalBadge,
+    terminalComputerName,
   };
 
   return (
@@ -211,34 +233,18 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           <button
             id={triggerId}
             type="button"
-            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile, showTerminalBadge)}${activeProfile.enabled ? "" : ", Disabled"}`}
+            aria-label={profileTriggerAccessibleLabel(
+              providerLabel,
+              pinnedRemoved ? null : activeProfile,
+              showTerminalBadge,
+            )}
             className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
           >
-            <AccentDot
-              profileId={activeProfile.profileId}
-              accentColor={activeProfile.accentColor}
-              label={null}
-              variant="inline"
-              size="default"
-              className={undefined}
+            <ProfileTriggerContents
+              profile={pinnedRemoved ? null : activeProfile}
+              besideSwitch={triggerEligibilityControls !== null}
+              showTerminalBadge={showTerminalBadge}
             />
-            <span
-              className={cn(
-                "flex min-w-0 flex-1 items-center gap-2",
-                eligibilityControls !== null && "pe-12",
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate text-left font-medium">
-                {profileDisplayLabel(activeProfile)}
-              </span>
-              <TerminalProfileBadge
-                profile={activeProfile}
-                show={showTerminalBadge}
-              />
-              {!activeProfile.enabled ? (
-                <span className="shrink-0 text-muted-foreground">Disabled</span>
-              ) : null}
-            </span>
             <ChevronDown
               data-slot="profile-dropdown-chevron"
               className="size-4 shrink-0 text-muted-foreground"
@@ -246,14 +252,14 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           </button>
         </DropdownMenuTrigger>
         <ProfileEnablementSwitch
-          controls={eligibilityControls}
+          controls={triggerEligibilityControls}
           profile={activeProfile}
           commitId={activeCommitId}
           label={profileDisplayLabel(activeProfile)}
           selectionId={triggerId}
-          pending={eligibilityControls?.pending(activeCommitId) ?? false}
+          pending={triggerEligibilityControls?.pending(activeCommitId) ?? false}
           disabledReason={
-            eligibilityControls?.disabledReason(activeProfile) ?? null
+            triggerEligibilityControls?.disabledReason(activeProfile) ?? null
           }
           className="absolute end-10 top-1/2 z-10 -translate-y-1/2"
         />
@@ -354,8 +360,67 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   );
 }
 
+/** The trigger's accessible name; `null` for a pin whose account a person
+ *  removed. */
+function profileTriggerAccessibleLabel(
+  providerLabel: string,
+  profile: ProviderProfile | null,
+  showTerminalBadge: boolean,
+): string {
+  if (profile === null) {
+    return `${providerLabel} profile: ${REMOVED_PROFILE_PIN_TEXT}`;
+  }
+  return `${providerLabel} profile: ${profileDisplayLabel(profile)}${terminalBadgeSuffix(profile, showTerminalBadge)}${profile.enabled ? "" : ", Disabled"}`;
+}
+
+/** What the closed trigger draws: the pinned row, or "Was removed" with no
+ *  dot and no badge for a pin whose account a person removed (`null`). */
+function ProfileTriggerContents(props: {
+  readonly profile: ProviderProfile | null;
+  readonly besideSwitch: boolean;
+  readonly showTerminalBadge: boolean;
+}): ReactNode {
+  const { profile } = props;
+  if (profile === null) {
+    return (
+      <span className="min-w-0 flex-1 truncate text-left font-medium">
+        {REMOVED_PROFILE_PIN_TEXT}
+      </span>
+    );
+  }
+  return (
+    <>
+      <AccentDot
+        profileId={profile.profileId}
+        accentColor={profile.accentColor}
+        label={null}
+        variant="inline"
+        size="default"
+        className={undefined}
+      />
+      <span
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2",
+          props.besideSwitch && "pe-12",
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate text-left font-medium">
+          {profileDisplayLabel(profile)}
+        </span>
+        <TerminalProfileBadge
+          profile={profile}
+          show={props.showTerminalBadge}
+        />
+        {!profile.enabled ? (
+          <span className="shrink-0 text-muted-foreground">Disabled</span>
+        ) : null}
+      </span>
+    </>
+  );
+}
+
 interface ProfileDropdownRowContext {
-  readonly activeProfileId: string | null;
+  readonly checkedProfile: ProviderProfile | null;
   readonly rowIdPrefix: string;
   readonly previewProfileId: string | null;
   readonly onPreview: (profileId: string | null, anchor: HTMLElement) => void;
@@ -367,6 +432,7 @@ interface ProfileDropdownRowContext {
   readonly profileEnablementPending: ProfileDropdownProps["profileEnablementPending"];
   readonly onSelectProfile: ProfileDropdownProps["onSelectProfile"];
   readonly showTerminalBadge: boolean;
+  readonly terminalComputerName: string | null;
 }
 
 interface ProfileDropdownRowState {
@@ -390,11 +456,12 @@ function ProfileDropdownRow(props: {
   const state = computeProfileRowState({
     profile: props.profile,
     index: props.shortcutIndex,
-    activeProfileId: props.context.activeProfileId,
+    checkedProfile: props.context.checkedProfile,
     shortcutHintForIndex: props.context.shortcutHintForIndex,
     usagePresentation: props.context.usagePresentation,
     admissionByProfileId: props.context.admissionByProfileId,
     showTerminalBadge: props.context.showTerminalBadge,
+    terminalComputerName: props.context.terminalComputerName,
   });
   const enablementPending =
     props.context.profileEnablementPending?.(state.commitId) ??
@@ -500,7 +567,7 @@ function ProfileSelectionControl(props: {
         profile={profile}
         state={state}
         enablementPending={props.enablementPending}
-        activeProfileId={context.activeProfileId}
+        terminalComputerName={context.terminalComputerName}
         showTerminalBadge={context.showTerminalBadge}
       />
       {visibleDisabledReason !== null ? (
@@ -516,10 +583,17 @@ function ProfileSelectionContents(props: {
   readonly profile: ProviderProfile;
   readonly state: ProfileDropdownRowState;
   readonly enablementPending: boolean;
-  readonly activeProfileId: string | null;
+  readonly terminalComputerName: string | null;
   readonly showTerminalBadge: boolean;
 }): ReactNode {
   const { profile, state } = props;
+  const terminalLine = profileTerminalAccountLine(
+    profile,
+    props.terminalComputerName,
+  );
+  const otherNames = profileOtherNames(profile);
+  // The chips take the name's spare width so they sit beside it.
+  const nameGrows = otherNames.length === 0;
   return (
     <span className="flex w-full min-w-0 items-center gap-1.5">
       <AccentDot
@@ -531,7 +605,23 @@ function ProfileSelectionContents(props: {
         className={undefined}
       />
       <span className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate">{state.label}</span>
+        {terminalLine === null ? (
+          <span className={cn("min-w-0 truncate", nameGrows && "flex-1")}>
+            {state.label}
+          </span>
+        ) : (
+          <span className={cn("flex min-w-0 flex-col", nameGrows && "flex-1")}>
+            <span className="truncate">{state.label}</span>
+            <span className="truncate text-overline text-muted-foreground">
+              {terminalLine}
+            </span>
+          </span>
+        )}
+        {nameGrows ? null : (
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <ProfileOtherNameChips otherNames={otherNames} />
+          </span>
+        )}
         <TerminalProfileBadge
           profile={profile}
           show={props.showTerminalBadge}
@@ -556,9 +646,7 @@ function ProfileSelectionContents(props: {
         enablementPending={props.enablementPending}
       />
       <span className="pointer-events-none flex size-4 shrink-0 items-center justify-center">
-        {state.commitId === props.activeProfileId ? (
-          <CheckIcon className="size-4" />
-        ) : null}
+        {state.selected ? <CheckIcon className="size-4" /> : null}
       </span>
     </span>
   );
@@ -706,7 +794,7 @@ function focusSiblingProfileSwitch(event: ReactKeyboardEvent<HTMLElement>) {
 function computeProfileRowState(input: {
   readonly profile: ProviderProfile;
   readonly index: number;
-  readonly activeProfileId: string | null;
+  readonly checkedProfile: ProviderProfile | null;
   readonly shortcutHintForIndex: (
     index: number,
   ) => ProfileDropdownShortcutHint | null;
@@ -716,13 +804,16 @@ function computeProfileRowState(input: {
     ProfileRowAdmission
   > | null;
   readonly showTerminalBadge: boolean;
+  readonly terminalComputerName: string | null;
 }): ProfileDropdownRowState {
   const statusSuffix = profileRowStatusSuffix(input.profile);
   const commitId = profileCommitId(input.profile);
   const label = profileDisplayLabel(input.profile);
   const shortcutHint = input.shortcutHintForIndex(input.index);
   const usageEntry = input.usagePresentation?.entries.get(commitId);
-  const selected = commitId === input.activeProfileId;
+  const selected =
+    input.checkedProfile !== null &&
+    commitId === profileCommitId(input.checkedProfile);
   const admission = input.admissionByProfileId?.get(commitId) ?? null;
   const rowDisabled = admission?.disabled === true;
   const accessibleLabel = profileRowAccessibleLabel({
@@ -734,6 +825,10 @@ function computeProfileRowState(input: {
     admissionReason: admission?.reason ?? null,
     enabled: input.profile.enabled,
     showTerminalBadge: input.showTerminalBadge,
+    terminalLine: profileTerminalAccountLine(
+      input.profile,
+      input.terminalComputerName,
+    ),
   });
   return {
     statusSuffix,
@@ -806,8 +901,14 @@ function profileRowAccessibleLabel(input: {
   readonly admissionReason: string | null;
   readonly enabled: boolean;
   readonly showTerminalBadge: boolean;
+  readonly terminalLine: string | null;
 }): string {
-  const label = `${input.label}${terminalBadgeSuffix(input.profile, input.showTerminalBadge)}`;
+  const terminalLine =
+    input.terminalLine === null ? "" : `, ${input.terminalLine}`;
+  const otherNames = profileOtherNames(input.profile);
+  const otherNamesText =
+    otherNames.length === 0 ? "" : `, ${otherNamesAccessibleText(otherNames)}`;
+  const label = `${input.label}${terminalBadgeSuffix(input.profile, input.showTerminalBadge)}${terminalLine}${otherNamesText}`;
   const base = profileRowAccessibleLabelBase(input, label);
   const eligibility = input.enabled ? base : `${base}, Disabled`;
   if (input.admissionReason === null) return eligibility;

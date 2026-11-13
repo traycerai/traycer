@@ -3,6 +3,7 @@ import type { HarnessOption } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import {
+  EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
   railHarnessDegraded,
   resolveActiveProfileForHarness,
   visibleRailEntries,
@@ -72,6 +73,7 @@ describe("visibleRailEntries", () => {
           ],
         ],
       ]),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: null,
     });
@@ -91,6 +93,7 @@ describe("visibleRailEntries", () => {
       profilesByHarnessId: new Map([
         ["codex", [profile("ambient", "ambient", "Codex Terminal account")]],
       ]),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: null,
     });
@@ -120,6 +123,7 @@ describe("visibleRailEntries", () => {
           ],
         ],
       ]),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: new Map<GuiHarnessId, string | null>([
         ["claude", "work-uuid"],
       ]),
@@ -148,6 +152,7 @@ describe("visibleRailEntries", () => {
           ],
         ],
       ]),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: null,
     });
@@ -188,6 +193,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
       degradedHarnessIds: new Set(),
       preparingByHarnessId: new Map([["claude", downloading]]),
       profilesByHarnessId: new Map(),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: null,
     });
@@ -215,6 +221,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
         ],
       ]),
       profilesByHarnessId: new Map(),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: null,
     });
@@ -235,6 +242,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
       degradedHarnessIds: new Set(),
       preparingByHarnessId: new Map([["codex", downloading]]),
       profilesByHarnessId: new Map(),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: null,
     });
@@ -273,6 +281,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
         degradedHarnessIds: new Set(),
         preparingByHarnessId: new Map([["codex", preparing]]),
         profilesByHarnessId: new Map(),
+        removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
         activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
         offeredAgents: null,
       }).map((entry) => entry.harness.id);
@@ -290,6 +299,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
       degradedHarnessIds: new Set(),
       preparingByHarnessId: new Map([["claude", downloading]]),
       profilesByHarnessId: new Map(),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: null,
     });
@@ -447,6 +457,7 @@ describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) 
       degradedHarnessIds: new Set(),
       preparingByHarnessId: new Map(),
       profilesByHarnessId: new Map(),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: ["traycer"],
     });
@@ -524,6 +535,7 @@ describe("visibleRailEntries: signed-out while available", () => {
       degradedHarnessIds: new Set<GuiHarnessId>(["codex"]),
       preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map(),
+      removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
       activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       offeredAgents: null,
     });
@@ -551,6 +563,7 @@ describe("resolveActiveProfileForHarness", () => {
     expect(
       resolveActiveProfileForHarness(
         [profile("ambient", "ambient", "Claude Terminal account")],
+        [],
         "anything",
         "anything",
       ),
@@ -559,7 +572,12 @@ describe("resolveActiveProfileForHarness", () => {
 
   it("prefers the browsed profile id when it belongs to this harness", () => {
     expect(
-      resolveActiveProfileForHarness(profilesWithAmbient, "work-uuid", null),
+      resolveActiveProfileForHarness(
+        profilesWithAmbient,
+        [],
+        "work-uuid",
+        null,
+      ),
     ).toBe("work-uuid");
   });
 
@@ -567,6 +585,7 @@ describe("resolveActiveProfileForHarness", () => {
     expect(
       resolveActiveProfileForHarness(
         profilesWithAmbient,
+        [],
         "stale-from-another-harness",
         "work-uuid",
       ),
@@ -575,13 +594,13 @@ describe("resolveActiveProfileForHarness", () => {
 
   it("falls back to the ambient profile (commit id null) when neither matches", () => {
     expect(
-      resolveActiveProfileForHarness(profilesWithAmbient, "nope", "nope-2"),
+      resolveActiveProfileForHarness(profilesWithAmbient, [], "nope", "nope-2"),
     ).toBeNull();
   });
 
   it("falls back to the first selectable profile for an all-managed harness", () => {
     expect(
-      resolveActiveProfileForHarness(managedOnlyProfiles, "nope", "nope-2"),
+      resolveActiveProfileForHarness(managedOnlyProfiles, [], "nope", "nope-2"),
     ).toBe("a-uuid");
   });
 });

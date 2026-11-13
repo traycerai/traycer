@@ -3,6 +3,10 @@ import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/schem
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { providerCliIdForHarness } from "@/lib/provider-ordering";
 import {
+  resolveProfilePin,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
+import {
   TombstonedProfileContext,
   type TombstonedProfileVerdict,
 } from "@/components/chat/use-tombstoned-profile-label";
@@ -10,6 +14,7 @@ import {
 function resolveTombstonedProfileLabel(
   anchor: ChatSessionAnchor,
   providers: ReadonlyArray<ProviderCliState>,
+  removedProfiles: readonly RemovedProviderProfile[],
   hostId: string,
 ): TombstonedProfileVerdict | null {
   if (anchor.profileId === null) return null;
@@ -37,10 +42,15 @@ function resolveTombstonedProfileLabel(
   // what makes that a property of the code instead of a property of uuids.
   // Do not "simplify" it back below the match.
   if (anchor.hostId !== hostId) return { label, removedOnThisHost: false };
-  const stillActive = state.profiles.some(
-    (p) => p.profileId === anchor.profileId,
+  // A profile still listed, or folded into a row that lists the anchor's id
+  // as an alias, is the same account and still active. A removed or unknown
+  // id says what it always has.
+  const pin = resolveProfilePin(
+    state.profiles,
+    removedProfiles.filter((entry) => entry.providerId === providerId),
+    anchor.profileId,
   );
-  if (stillActive) return null;
+  if (pin.kind === "row") return null;
   return { label, removedOnThisHost: true };
 }
 
@@ -56,17 +66,20 @@ function resolveTombstonedProfileLabel(
  */
 export function TombstonedProfileProvider({
   providers,
+  removedProfiles,
   hostId,
   children,
 }: {
   readonly providers: ReadonlyArray<ProviderCliState>;
+  /** The same answer's `removedProfiles`, every provider's. */
+  readonly removedProfiles: readonly RemovedProviderProfile[];
   readonly hostId: string;
   readonly children: ReactNode;
 }) {
   const resolve = (
     anchor: ChatSessionAnchor,
   ): TombstonedProfileVerdict | null =>
-    resolveTombstonedProfileLabel(anchor, providers, hostId);
+    resolveTombstonedProfileLabel(anchor, providers, removedProfiles, hostId);
   return (
     <TombstonedProfileContext.Provider value={resolve}>
       {children}

@@ -28,6 +28,9 @@ import { useSetProviderProfileApiKey } from "@/hooks/providers/use-set-provider-
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
+import { useProvidersAnswerProfileNameForClient } from "@/hooks/providers/use-providers-answer-profile-name-mutation";
+import { profileOtherNames } from "@/components/providers/provider-profile-model";
+import { useHostClient } from "@/lib/host";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { ProviderProfileReauthPanel } from "./provider-profile-reauth-panel";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
@@ -544,6 +547,46 @@ function ProfileSignOutAction(props: {
   );
 }
 
+interface ProfileRename {
+  readonly rename: (
+    providerId: ProviderId,
+    label: string,
+    onRenamed: (label: string) => void,
+  ) => void;
+  readonly isPending: boolean;
+  readonly error: Error | null;
+}
+
+/**
+ * Rename on an account with other names sets its name everywhere and clears
+ * them (`providers.answerProfileName`); `onRenamed` gets the name the account
+ * then uses. Anywhere else it renames as before.
+ */
+function useProfileRename(profile: ProviderProfile): ProfileRename {
+  const renameProfile = useRenameProviderProfile();
+  const answerProfileName =
+    useProvidersAnswerProfileNameForClient(useHostClient());
+  const answersName =
+    useHostSupportsMethod(
+      usePersonalPageHost().hostId,
+      "providers.answerProfileName",
+    ) && profileOtherNames(profile).length > 0;
+  return {
+    rename: (providerId, label, onRenamed) => {
+      const request = { providerId, profileId: profile.profileId, label };
+      if (answersName) {
+        answerProfileName.mutate(request, {
+          onSuccess: (data) => onRenamed(data.label),
+        });
+        return;
+      }
+      renameProfile.mutate(request, { onSuccess: () => onRenamed(label) });
+    },
+    isPending: renameProfile.isPending || answerProfileName.isPending,
+    error: renameProfile.error ?? answerProfileName.error,
+  };
+}
+
 export function ProfileEditDialog(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
@@ -566,7 +609,7 @@ export function ProfileEditDialog(props: {
 }): ReactNode {
   const providerId = props.state.providerId;
   const removeProfile = useRemoveProviderProfile();
-  const renameProfile = useRenameProviderProfile();
+  const renameProfile = useProfileRename(props.profile);
   const recolorProfile = useRecolorProviderProfile();
   const [switchingAccountOverride, setSwitchingAccount] = useState<
     boolean | null
@@ -639,19 +682,10 @@ export function ProfileEditDialog(props: {
       );
     };
     if (trimmedLabel !== committedLabel) {
-      renameProfile.mutate(
-        {
-          providerId,
-          profileId: props.profile.profileId,
-          label: trimmedLabel,
-        },
-        {
-          onSuccess: () => {
-            setCommittedLabel(trimmedLabel);
-            recolorIfNeeded();
-          },
-        },
-      );
+      renameProfile.rename(providerId, trimmedLabel, (renamed) => {
+        setCommittedLabel(renamed);
+        recolorIfNeeded();
+      });
       return;
     }
     recolorIfNeeded();

@@ -7,7 +7,11 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { ProfileDropdown } from "@/components/providers/profile-dropdown";
-import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
+import {
+  profileDisplayLabel,
+  resolveProfilePin,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import { ProfileSummaryActions } from "@/components/settings/panels/profile-summary-actions";
 import { ProfileEditDialogPresentation } from "@/components/settings/panels/profile-edit-dialog-presentation";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
@@ -17,6 +21,9 @@ import {
   useCanEditConfiguration,
   useConfigurationSource,
 } from "./configuration-source";
+
+/** A team's configuration lists no removed accounts. */
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 /** Configuration profiles have no live auth or usage standing. */
 function pickerProfile(item: ConfigurationItem): ProviderProfile {
@@ -92,7 +99,7 @@ export function ConfigurationProfiles(props: {
       <ProfileDropdown
         providerLabel={props.providerLabel}
         profiles={profiles}
-        activeProfileId={selected.key}
+        pin={resolveProfilePin(profiles, NO_REMOVED_PROFILES, selected.key)}
         onSelectProfile={setPickedKey}
         onCreateProfile={null}
         createProfileDisabled={false}
@@ -109,6 +116,7 @@ export function ConfigurationProfiles(props: {
         }}
         admissionByProfileId={null}
         showTerminalBadge={false}
+        terminalComputerName={null}
       />
       <ProfileSummaryActions
         onManage={

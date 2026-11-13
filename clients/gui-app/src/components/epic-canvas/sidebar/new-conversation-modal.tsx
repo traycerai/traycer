@@ -2537,6 +2537,7 @@ export function NewConversationModalBody(props: {
   // no agent there.
   useLayoutEffect(() => {
     const providers = stagedProviders.data?.providers;
+    const removedProfiles = stagedProviders.data?.removedProfiles ?? [];
     stagedSubmitRef.current =
       stagedTerminalLaunch === null
         ? () => false
@@ -2545,6 +2546,7 @@ export function NewConversationModalBody(props: {
               stagedTerminalLaunch,
               toolbarStore.getState(),
               providers,
+              removedProfiles,
             );
             if (launch === null) return false;
             return dispatchStartTerminal(launch)

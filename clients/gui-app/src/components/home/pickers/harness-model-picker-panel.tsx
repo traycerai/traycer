@@ -26,7 +26,10 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
+import type {
+  ProfileRowAdmission,
+  RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
@@ -72,6 +75,10 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly profilesByHarnessId: ReadonlyMap<
     GuiHarnessId,
     ReadonlyArray<ProviderProfile>
+  >;
+  readonly removedProfilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    readonly RemovedProviderProfile[]
   >;
   readonly resolvedActiveProviderId: ProviderId;
   readonly activeProfileId: string | null;
@@ -270,6 +277,7 @@ export function HarnessModelPickerPanelBody(
     fallbackHarnesses,
     offeredAgents,
     profilesByHarnessId,
+    removedProfilesByHarnessId,
     resolvedActiveProviderId,
     activeProfileId,
     activeProfileIdByHarnessId,
@@ -353,6 +361,7 @@ export function HarnessModelPickerPanelBody(
           harnesses={catalogHarnesses}
           fallbackHarnesses={fallbackHarnesses}
           profilesByHarnessId={profilesByHarnessId}
+          removedProfilesByHarnessId={removedProfilesByHarnessId}
           activeProviderId={resolvedActiveProviderId}
           activeProfileIdByHarnessId={activeProfileIdByHarnessId}
           lockedHarnessId={lockedHarnessId}
