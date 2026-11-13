@@ -255,13 +255,24 @@ describe("a run of look saves when the client's person changes", () => {
 
 describe("a run of look saves when a choice is made through another host", () => {
   const SHADES = { eyewear: "shades" } as const;
+  const CHOSEN = {
+    ...LISTED,
+    ...SHADES,
+    accessory: "halo",
+    color: 7,
+  } as const;
 
-  /** H1 holds a save of eyewear with an accessory waiting; H2 is then asked for a colour. */
+  function colourPressed(index: number): string | null {
+    return screen
+      .getByTestId(`bot-settings-colour-${String(index)}`)
+      .getAttribute("aria-pressed");
+  }
+
+  /** H1 holds a save of eyewear with an accessory waiting; H2 is then asked for a colour, and its write is not yet sent. */
   async function handOver(): Promise<{
     readonly first: FakeHost;
     readonly second: FakeHost;
     readonly held: HeldWrite;
-    readonly takenOver: HeldWrite;
   }> {
     const user = userEvent.setup();
     const first = fakeHost("user-A");
@@ -273,13 +284,46 @@ describe("a run of look saves when a choice is made through another host", () =>
     const second = fakeHost("user-A");
     pointPanelAt(second, "host-2");
     await user.click(screen.getByTestId("bot-settings-colour-7"));
-    const takenOver = await writeAt(second, 0);
-    return { first, second, held, takenOver };
+    return { first, second, held };
   }
 
-  it("sends one request through the new host carrying every part's latest value, and none more through the old", async () => {
-    const { first, second, takenOver } = await handOver();
+  it("holds the new host's request until the old host's save has ended, then sends one carrying every part's latest value, and none more through the old", async () => {
+    const { first, second, held } = await handOver();
 
+    expect(useBotLookSaveStore.getState().saves[BOT_ID]?.hostId).toBe("host-2");
+    expect(colourPressed(7)).toBe("true");
+    await userEvent.click(screen.getByTestId("bot-settings-background-2"));
+    expect(second.writes).toHaveLength(0);
+
+    held.answer({ ...LISTED, ...SHADES });
+    const takenOver = await writeAt(second, 0);
+
+    expect(takenOver.request).toEqual({
+      botId: BOT_ID,
+      ...SHADES,
+      accessory: "halo",
+      color: 7,
+      background: 2,
+    });
+    expect(second.writes).toHaveLength(1);
+    expect(first.writes).toHaveLength(1);
+    takenOver.answer({ ...CHOSEN, background: 2 });
+  });
+
+  it("shows no refusal when the old host's save is refused, keeps the parts drawn, and sends the new host's request", async () => {
+    const { second, held } = await handOver();
+    const run = useBotLookSaveStore.getState().saves[BOT_ID]?.run;
+
+    held.refuse("Old host refused.");
+    const takenOver = await writeAt(second, 0);
+
+    expect(screen.queryAllByRole("alert")).toEqual([]);
+    const entry = useBotLookSaveStore.getState().saves[BOT_ID];
+    expect(entry.hostId).toBe("host-2");
+    expect(entry.run).toBe(run);
+    expect(pressedIn("eyewear")).toBe("Shades");
+    expect(pressedIn("accessory")).toBe("Halo");
+    expect(colourPressed(7)).toBe("true");
     expect(takenOver.request).toEqual({
       botId: BOT_ID,
       ...SHADES,
@@ -287,52 +331,31 @@ describe("a run of look saves when a choice is made through another host", () =>
       color: 7,
     });
     expect(second.writes).toHaveLength(1);
-    expect(first.writes).toHaveLength(1);
-    expect(useBotLookSaveStore.getState().saves[BOT_ID]?.hostId).toBe("host-2");
-    takenOver.answer({ ...LISTED, ...SHADES, accessory: "halo", color: 7 });
-  });
 
-  it("shows no refusal when the old host's save is refused, and keeps the parts drawn until the new host answers", async () => {
-    const { held, takenOver } = await handOver();
-    const run = useBotLookSaveStore.getState().saves[BOT_ID]?.run;
-
-    held.refuse("Old host refused.");
-
-    await settledMutations(1);
-    expect(screen.queryAllByRole("alert")).toEqual([]);
-    const entry = useBotLookSaveStore.getState().saves[BOT_ID];
-    expect(entry.hostId).toBe("host-2");
-    expect(entry.run).toBe(run);
-    expect(pressedIn("eyewear")).toBe("Shades");
-    expect(pressedIn("accessory")).toBe("Halo");
-    expect(
-      screen.getByTestId("bot-settings-colour-7").getAttribute("aria-pressed"),
-    ).toBe("true");
-
-    takenOver.answer({ ...LISTED, ...SHADES, accessory: "halo", color: 7 });
+    takenOver.answer(CHOSEN);
     await waitFor(() => {
       expect(useBotLookSaveStore.getState().saves[BOT_ID]).toBeUndefined();
     });
   });
 
   it("keeps the chosen values drawn when the old host answers with the old look, and clears them only on the new host's answer", async () => {
-    const { held, takenOver } = await handOver();
-    const chosen = {
-      ...LISTED,
-      ...SHADES,
-      accessory: "halo",
-      color: 7,
-    } as const;
+    const { second, held } = await handOver();
 
     held.answer(LISTED);
+    const takenOver = await writeAt(second, 0);
 
-    await settledMutations(1);
     expect(useBotLookSaveStore.getState().saves[BOT_ID]?.hostId).toBe("host-2");
     expect(pressedIn("eyewear")).toBe("Shades");
     expect(pressedIn("accessory")).toBe("Halo");
-    expect(avatarPaths()).toEqual(avatarPathsFor(chosen));
+    expect(avatarPaths()).toEqual(avatarPathsFor(CHOSEN));
+    expect(takenOver.request).toEqual({
+      botId: BOT_ID,
+      ...SHADES,
+      accessory: "halo",
+      color: 7,
+    });
 
-    takenOver.answer(chosen);
+    takenOver.answer(CHOSEN);
     await waitFor(() => {
       expect(useBotLookSaveStore.getState().saves[BOT_ID]).toBeUndefined();
     });

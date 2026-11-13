@@ -39,6 +39,13 @@ interface LookSender {
 
 let runs = 0;
 
+/**
+ * Each bot's save now with a host, settled when it is answered or refused. A
+ * run that takes a bot over waits for it: the cloud keeps whichever write
+ * arrives last, so two must never be on their way at once.
+ */
+const flights = new Map<string, Promise<unknown>>();
+
 const BOT_LIST_READS = {
   predicate: (query: { readonly queryKey: readonly unknown[] }) =>
     hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, "bot.list"),
@@ -108,6 +115,13 @@ async function sendInOrder(
   });
   try {
     let next: BotLookChange | null = change;
+    const earlier = flights.get(botId);
+    if (earlier !== undefined) {
+      setBotLookSave(botId, { ...botLookSaveOf(botId), sending: change });
+      await earlier;
+      if (!owned()) return;
+      next = { ...change, ...botLookSaveOf(botId).waiting };
+    }
     while (next !== null) {
       const sending: BotLookChange = next;
       setBotLookSave(botId, {
@@ -115,7 +129,7 @@ async function sendInOrder(
         sending,
         waiting: null,
       });
-      const answer = await sender.send(botId, sending).then(
+      const flight = sender.send(botId, sending).then(
         (response) => ({
           look: response.bot.appearance ?? null,
           refusal: null,
@@ -128,6 +142,9 @@ async function sendInOrder(
               : "The change was not saved.",
         }),
       );
+      flights.set(botId, flight);
+      const answer = await flight;
+      if (flights.get(botId) === flight) flights.delete(botId);
       if (!owned()) return;
       if (answer.refusal === null) {
         await keepAnsweredLook(sender.queryClient, botId, answer.look);
@@ -213,8 +230,9 @@ export function useBotLookSaver(
         return;
       }
       // Nothing is on its way, or a run through another host is: this host
-      // takes the bot over and sends that run's unanswered parts itself, so
-      // they are still saved, in order, by a host that can.
+      // takes the bot over and, once that run's save has ended, sends its
+      // unanswered parts itself, so they are still saved, in order, by a
+      // host that can.
       runs += 1;
       setBotLookSave(botId, {
         chosen,
