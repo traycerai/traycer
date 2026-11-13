@@ -25,7 +25,7 @@ import {
   botMascot,
   drawMascotMark,
 } from "@/lib/bots/mascot-mark";
-import { useBotLook } from "@/hooks/bots/use-bot-appearance";
+import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
 
 type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
 
@@ -105,10 +105,11 @@ function BotIdentityAvatar(props: {
 }): ReactElement {
   const { botId, expression, size, testId } = props;
   const look = useBotLook(botId);
+  const main = useBotIsMain(botId);
   const beat = useWorkingBeat(expression === "working");
   return (
     <BotMascotFrame
-      mascot={botMascot(botId, look)}
+      mascot={botMascot(botId, look, main)}
       pose={{ expression, beat }}
       size={size}
       testId={testId}

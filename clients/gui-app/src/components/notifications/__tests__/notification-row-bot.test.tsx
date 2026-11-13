@@ -257,9 +257,11 @@ describe("<NotificationRow /> about a bot", () => {
         (path) => path.getAttribute("d"),
       ),
     ).toEqual(
-      drawMascotMark(botMascot(BOT_ID, null), 24, MASCOT_AT_REST).layers.map(
-        (layer) => layer.path,
-      ),
+      drawMascotMark(
+        botMascot(BOT_ID, null, false),
+        24,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
     );
     expect(mocks.listEnabled).toContain(true);
   });
