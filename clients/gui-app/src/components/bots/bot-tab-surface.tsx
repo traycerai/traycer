@@ -72,6 +72,7 @@ import {
 } from "@/lib/tab-navigation";
 import { defaultTracyChannelOf } from "@/lib/bots/tracy-channel";
 import {
+  goneReportStands,
   handTracyLandingToChannel,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
@@ -440,10 +441,20 @@ function useTracyChannelUpkeep(input: {
   // Each bot reported gone, with the list read it was reported against: the
   // one record the default below and the history's prune and skip both read.
   const goneReports = useTracySurfaceStore((state) => state.goneReports);
-  const unavailable = useMemo(
-    () => new Set(Object.keys(goneReports)),
-    [goneReports],
-  );
+  // Read against the list in hand, not only the reports as last settled: a
+  // list that takes a report away is in this render before the effect below
+  // has taken it out of the store, and the default must not pass the bot over
+  // meanwhile.
+  const unavailable = useMemo(() => {
+    const listedIds = new Set(listed?.map((bot) => bot.botId));
+    return new Set(
+      Object.entries(goneReports)
+        .filter(([goneBotId, reportedAt]) =>
+          goneReportStands(reportedAt, listedIds.has(goneBotId), listedAt),
+        )
+        .map(([goneBotId]) => goneBotId),
+    );
+  }, [goneReports, listed, listedAt]);
   const forget = useCallback(
     (goneBotId: string): void => {
       const surface = useTracySurfaceStore.getState();

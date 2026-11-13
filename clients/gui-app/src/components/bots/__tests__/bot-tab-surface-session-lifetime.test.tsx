@@ -1828,6 +1828,34 @@ describe("<BotTabSurface /> a bot reported gone is never the default while its r
     expectStillGone();
   });
 
+  function expectChosenAlone(): void {
+    expect(chosen()).toContainEqual(CHOSE_BOT);
+    expect(chosen()).not.toContainEqual(CHOSE_OTHER);
+    expect(useTracySurfaceStore.getState().goneReports).toEqual({});
+    expect(
+      isHistoryEntryEligible(BOT_HREF, useEpicCanvasStore.getState()),
+    ).toBe(true);
+  }
+
+  it("chooses it, and never the other bot on the way, when a later list that carries both arrives with no channel selected", () => {
+    const view = reportDeleted();
+
+    answeredAt(300);
+    view.rerender(surfaceFor(null));
+
+    expectChosenAlone();
+  });
+
+  it("chooses it, and never the other bot on the way, when a later list that carries both is read by a surface mounted after the report", () => {
+    const view = reportDeleted();
+    view.unmount();
+
+    answeredAt(300);
+    render(surfaceFor(null));
+
+    expectChosenAlone();
+  });
+
   it("chooses it again once a list that answered later carries it, taking the report away", () => {
     const view = reportDeleted();
     view.unmount();

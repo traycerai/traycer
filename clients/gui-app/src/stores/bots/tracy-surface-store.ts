@@ -155,9 +155,8 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
       settleListedBots: (botIds, listedAt) => {
         const gone = get().goneReports;
         const kept = Object.fromEntries(
-          Object.entries(gone).filter(
-            ([botId, reportedAt]) =>
-              !(botIds.has(botId) && listedAt > reportedAt),
+          Object.entries(gone).filter(([botId, reportedAt]) =>
+            goneReportStands(reportedAt, botIds.has(botId), listedAt),
           ),
         );
         if (Object.keys(kept).length === Object.keys(gone).length) return;
@@ -257,6 +256,19 @@ function closeBotState(botId: string): void {
   useBotDraftsStore.getState().closeBot(botId);
   useBotSurfaceActionsStore.getState().forgetBot(botId);
   useBotTabLandingStore.getState().clear(botId);
+}
+
+/**
+ * Whether a bot's gone report, made against the list that answered at
+ * `reportedAt`, stands against the list that answered at `listedAt`: only a
+ * list that answered later and carries the bot takes it away.
+ */
+export function goneReportStands(
+  reportedAt: number,
+  carried: boolean,
+  listedAt: number,
+): boolean {
+  return !(carried && listedAt > reportedAt);
 }
 
 /** All the bot's state, its message boxes' drafts included: it is gone. */
