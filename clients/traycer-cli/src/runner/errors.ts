@@ -66,10 +66,6 @@ export const CLI_ERROR_CODES = {
   WORKTREE_BUSY: "E_WORKTREE_BUSY",
   WORKSPACE_BINDING_REQUIRED: "E_WORKSPACE_BINDING_REQUIRED",
   HOST_STORAGE_FULL: "E_HOST_STORAGE_FULL",
-  // A regular file sits where the host folder (or a folder above it in the
-  // data folder) belongs, so the update lock cannot be taken. Only the person
-  // can clear it; the message names the remedy.
-  HOST_HOME_UNUSABLE: "E_HOST_HOME_UNUSABLE",
   ENVIRONMENT_NOT_A_MEMBER: "E_ENVIRONMENT_NOT_A_MEMBER",
   ENVIRONMENT_SEAT_NOT_ACCEPTED: "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
   ENVIRONMENT_SEAT_WITHOUT_WRITE: "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
@@ -148,6 +144,10 @@ export const CLI_ERROR_CODES = {
   // while the command reports success. Retryable once the directory is
   // writable.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
+  // A regular file sits where the host folder (or a folder above it in the
+  // data folder) belongs, so the update lock cannot be taken. Only the person
+  // can clear it; the message names the remedy.
+  HOST_HOME_UNUSABLE: "E_HOST_HOME_UNUSABLE",
   // A plain or `--if-idle` stop asked the service manager to stop the host,
   // and the host running is not the service's: `traycer host start` in a
   // terminal (a `foreground` run). The service stop reached nothing, so the
@@ -320,6 +320,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
     CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
+    CLI_ERROR_CODES.HOST_HOME_UNUSABLE,
     CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
     CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
@@ -371,7 +372,6 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.WORKTREE_BUSY,
     CLI_ERROR_CODES.WORKSPACE_BINDING_REQUIRED,
     CLI_ERROR_CODES.HOST_STORAGE_FULL,
-    CLI_ERROR_CODES.HOST_HOME_UNUSABLE,
     CLI_ERROR_CODES.ENVIRONMENT_NOT_A_MEMBER,
     CLI_ERROR_CODES.ENVIRONMENT_SEAT_NOT_ACCEPTED,
     CLI_ERROR_CODES.ENVIRONMENT_SEAT_WITHOUT_WRITE,
