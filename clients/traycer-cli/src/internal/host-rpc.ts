@@ -12,6 +12,8 @@ import {
 } from "@traycer/protocol/host/registry";
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import type { AuthorityBoundAuthRevalidator } from "../../../shared/auth/bearer-revalidator";
+import { markRefusalAfterRejectedSignIn } from "./sign-in-rejection";
 import {
   createAuthAwareMessenger,
   type AuthRecoveryScope,
@@ -367,6 +369,17 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     signal: null,
   });
 
+  // The messenger rethrows the host's own refusal when the refresh is
+  // rejected, so the rejection is recorded here and put back on that refusal.
+  let signInRejected = false;
+  const trackedRevalidator: AuthorityBoundAuthRevalidator = {
+    revalidateExpectedBearer: async (expected) => {
+      const outcome = await revalidator.revalidateExpectedBearer(expected);
+      if (outcome === "rejected") signInRejected = true;
+      return outcome;
+    },
+  };
+
   const localOpenAuth = createCliLocalOpenAuth(auth.authnBaseUrl);
   const client = new WsRpcClient<HostRpcRegistry>({
     localOpenAuth,
@@ -384,7 +397,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(
       client,
-      revalidator,
+      trackedRevalidator,
       dispatch.reauthenticate,
     ),
     retryPolicy,
@@ -429,6 +442,14 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     });
     return response;
   } catch (err) {
+    const refusal = finalRefusalOf(err);
+    if (
+      signInRejected &&
+      refusal instanceof HostRpcError &&
+      refusal.code === "UNAUTHORIZED"
+    ) {
+      markRefusalAfterRejectedSignIn(refusal);
+    }
     const error = errorFromUnknown(err);
     logger.debug("Host RPC failed; propagating to command boundary", {
       environment: config.environment,
