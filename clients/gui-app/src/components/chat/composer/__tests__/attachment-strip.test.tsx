@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { AttachmentStrip } from "../attachments/attachment-strip";
@@ -43,6 +50,43 @@ describe("AttachmentStrip", () => {
     expect(strip?.className).toContain("flex-1");
     expect(strip?.firstElementChild?.className).toContain("w-max");
     expect(strip?.firstElementChild?.className).not.toContain("flex-wrap");
+  });
+
+  it("opens the viewer at the clicked chip and steps to the next image", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AttachmentStrip
+          content={duplicateImageContent()}
+          onRemoveImage={() => undefined}
+          fetcher={{
+            scopeKey: "test-scope",
+            fetch: () => Promise.reject(new Error("unused")),
+          }}
+          sessionObjectUrl={() => null}
+        />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Image#1: image.png" }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("status", { name: "Image 1 of 3" }),
+    ).toBeTruthy();
+    expect(within(dialog).getByRole("img").getAttribute("src")).toBe(
+      "data:image/png;base64,img-1",
+    );
+
+    fireEvent.keyDown(dialog, { key: "ArrowRight" });
+
+    expect(
+      within(dialog).getByRole("status", { name: "Image 2 of 3" }),
+    ).toBeTruthy();
+    expect(within(dialog).getByRole("img").getAttribute("src")).toBe(
+      "data:image/png;base64,img-2",
+    );
   });
 
   it("keeps leading annotation chips on the same one-row image scroller", () => {

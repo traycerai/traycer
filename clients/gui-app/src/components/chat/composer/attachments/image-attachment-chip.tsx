@@ -1,9 +1,8 @@
-import { useRef } from "react";
+import type { ReactNode } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import {
-  ExpandedImageDialogContent,
+  ExpandedImageBody,
   type ExpandedImageState,
 } from "@/components/chat/expanded-image-dialog";
 import type { ComposerImageAtom } from "@/lib/composer/image-atoms";
@@ -13,26 +12,29 @@ import type { ImageAttachmentDisplayLabel } from "@/lib/composer/image-attachmen
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-export interface ImageAttachmentChipProps {
+
+/** Where a draft image's bytes come from; the chip and the expanded view share it. */
+interface ComposerImageSource {
   atom: ComposerImageAtom;
-  displayLabel: ImageAttachmentDisplayLabel | undefined;
-  onRemove: (id: string) => void;
   /** Streams a hash's bytes when no synchronous source is available, scoped to the subject those bytes are authorized against. */
   fetcher: ScopedImageBytesFetcher;
   /** Same-session synchronous object-URL for a hash, or null if unseen. */
   sessionObjectUrl: (hash: string) => string | null;
 }
 
-export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
-  const { atom, displayLabel, onRemove, fetcher, sessionObjectUrl } = props;
-  const label =
-    displayLabel ??
-    fallbackImageAttachmentDisplayLabel({
-      id: atom.id,
-      fileName: atom.fileName,
-    });
-  const alt = atom.fileName.length > 0 ? atom.fileName : "Pasted image";
-  const wrapperRef = useRef<HTMLDivElement>(null);
+export interface ImageAttachmentChipProps extends ComposerImageSource {
+  displayLabel: ImageAttachmentDisplayLabel | undefined;
+  onRemove: (id: string) => void;
+  /** Opens the strip's viewer at this image. */
+  onOpen: () => void;
+}
+
+function composerImageAlt(atom: ComposerImageAtom): string {
+  return atom.fileName.length > 0 ? atom.fileName : "Pasted image";
+}
+
+function useComposerImage(source: ComposerImageSource): ExpandedImageState {
+  const { atom, fetcher, sessionObjectUrl } = source;
   const dataUrl =
     atom.b64content === null
       ? null
@@ -52,94 +54,94 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
     sessionUrl === null && blob.status === "ready"
       ? blob.mediaType
       : atom.mimeType;
-  let expandedImage: ExpandedImageState;
-  if (src !== null) {
-    expandedImage = { status: "ready", src, mediaType };
-  } else if (blob.status === "unavailable") {
-    expandedImage = { status: "unavailable" };
-  } else {
-    expandedImage = { status: "loading" };
-  }
+  if (src !== null) return { status: "ready", src, mediaType };
+  return blob.status === "unavailable"
+    ? { status: "unavailable" }
+    : { status: "loading" };
+}
+
+export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
+  const { atom, displayLabel, onRemove, onOpen } = props;
+  const label =
+    displayLabel ??
+    fallbackImageAttachmentDisplayLabel({
+      id: atom.id,
+      fileName: atom.fileName,
+    });
+  const image = useComposerImage(props);
   return (
-    <Dialog>
-      <div
-        ref={wrapperRef}
-        className="group relative size-14 shrink-0 overflow-hidden rounded-md border border-border/70 bg-foreground/5"
+    <div className="group relative size-14 shrink-0 overflow-hidden rounded-md border border-border/70 bg-foreground/5">
+      <span
+        className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
+        data-composer-image-strip-badge={label.badgeLabel}
       >
-        <span
-          className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
-          data-composer-image-strip-badge={label.badgeLabel}
-        >
-          {label.badgeLabel}
-        </span>
-        {/* Scoped to the open/zoom trigger, not the chip: the chip also
-              holds the Remove button, and a chip-wide trigger meant focusing
-              Remove surfaced the filename tooltip. */}
-        <TooltipWrapper
-          label={label.title}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <DialogTrigger asChild>
-            <button
-              type="button"
-              aria-label={`Open ${label.ariaLabel}`}
-              className="block size-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {src === null ? (
-                <div
-                  className="size-full animate-pulse bg-foreground/10"
-                  aria-hidden
-                />
-              ) : (
-                <img
-                  src={src}
-                  alt={alt}
-                  className="size-full object-cover"
-                  draggable={false}
-                />
-              )}
-            </button>
-          </DialogTrigger>
-        </TooltipWrapper>
-        <Button
+        {label.badgeLabel}
+      </span>
+      {/* Scoped to the open/zoom trigger, not the chip: the chip also
+            holds the Remove button, and a chip-wide trigger meant focusing
+            Remove surfaced the filename tooltip. */}
+      <TooltipWrapper
+        label={label.title}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <button
           type="button"
-          size="icon"
-          variant="secondary"
-          aria-label={`Remove ${label.ariaLabel}`}
-          onPointerDown={(event) => {
-            event.stopPropagation();
-          }}
-          onMouseDown={(event) => {
-            event.stopPropagation();
-          }}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onRemove(atom.id);
-          }}
-          className="absolute right-0.5 top-0.5 z-10 size-4 rounded-full opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
+          aria-label={`Open ${label.ariaLabel}`}
+          aria-haspopup="dialog"
+          onClick={onOpen}
+          className="block size-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <X className="size-3" aria-hidden />
-        </Button>
-      </div>
-      <ExpandedImageDialogContent
-        title={label.title}
-        alt={alt}
-        image={expandedImage}
-        suggestedName={atom.fileName.length > 0 ? atom.fileName : null}
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          const shell = wrapperRef.current?.closest<HTMLElement>(
-            "[data-composer-shell]",
-          );
-          const editor = shell?.querySelector<HTMLElement>(
-            "[data-composer-editor]",
-          );
-          editor?.focus();
+          {image.status === "ready" ? (
+            <img
+              src={image.src}
+              alt={composerImageAlt(atom)}
+              className="size-full object-cover"
+              draggable={false}
+            />
+          ) : (
+            <div
+              className="size-full animate-pulse bg-foreground/10"
+              aria-hidden
+            />
+          )}
+        </button>
+      </TooltipWrapper>
+      <Button
+        type="button"
+        size="icon"
+        variant="secondary"
+        aria-label={`Remove ${label.ariaLabel}`}
+        onPointerDown={(event) => {
+          event.stopPropagation();
         }}
-      />
-    </Dialog>
+        onMouseDown={(event) => {
+          event.stopPropagation();
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onRemove(atom.id);
+        }}
+        className="absolute right-0.5 top-0.5 z-10 size-4 rounded-full opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
+      >
+        <X className="size-3" aria-hidden />
+      </Button>
+    </div>
+  );
+}
+
+/** The strip's shown image, resolved the way its chip resolves the thumbnail. */
+export function ExpandedComposerImage(props: ComposerImageSource): ReactNode {
+  const image = useComposerImage(props);
+  return (
+    <ExpandedImageBody
+      alt={composerImageAlt(props.atom)}
+      image={image}
+      suggestedName={
+        props.atom.fileName.length > 0 ? props.atom.fileName : null
+      }
+    />
   );
 }
