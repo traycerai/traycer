@@ -1,0 +1,422 @@
+import { describe, expect, it } from "vitest";
+import {
+  SERVES_EVERY_INSTALLED_MAJOR,
+  splitConnectionManifest,
+  validateVersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
+import { upgradeResponseToVersion } from "@traycer/protocol/framework/versioned-rpc";
+import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build";
+import { checkSurfaceCompatibility } from "@traycer/protocol/framework/surface-compat";
+import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import { providerProfileSchema } from "@traycer/protocol/host/provider-schemas";
+import { resolveUnavailableMethodDegrade } from "@traycer/protocol/host-transport/remote/unavailable-method-degrade";
+
+/**
+ * `providers.list@10.11` publishes four profile keys and `removedProfiles`.
+ * A 10.10 peer parses the frozen line, so none of them survive. A 10.11
+ * client upgrades an older host's answer to the documented defaults.
+ * `providers.answerProfileName@1.0` stays off the released floor.
+ */
+const METHOD = "providers.answerProfileName";
+const listLine = hostRpcRegistry["providers.list"][10];
+const peer1010 = listLine.versions[10].contract.responseSchema;
+const headResponse = listLine.versions[11].contract.responseSchema;
+const answerLine = hostRpcRegistry[METHOD];
+const answerRequest = answerLine[1].versions[0].contract.requestSchema;
+const answerResponse = answerLine[1].versions[0].contract.responseSchema;
+
+const PROFILE_SYNC_KEYS = [
+  "aliases",
+  "personNotice",
+  "terminalOnThisComputer",
+  "nameQuestion",
+  "removedProfiles",
+] as const;
+
+const ROW_KEYS = [
+  "aliases",
+  "personNotice",
+  "terminalOnThisComputer",
+  "nameQuestion",
+] as const;
+
+const profileAuth = {
+  status: "authenticated" as const,
+  badgeText: null,
+  label: null,
+  detail: null,
+};
+
+const profileFields = {
+  authType: "oauth" as const,
+  auth: profileAuth,
+  identity: null,
+  usageUpdatedAt: null,
+  rateLimitStatus: "ok" as const,
+  rateLimitLimitedScopes: null,
+  duplicateOfProfileId: null,
+  accentColor: null,
+  ambientDriftNotice: null,
+  enabled: true,
+};
+
+const ambient = {
+  ...profileFields,
+  profileId: "ambient",
+  kind: "ambient" as const,
+  label: "Terminal account",
+};
+
+const managed = {
+  ...profileFields,
+  profileId: "managed-1",
+  kind: "managed" as const,
+  label: "Work",
+};
+
+function providerRow<Profile extends object>(profiles: readonly Profile[]) {
+  return {
+    providerId: "claude-code" as const,
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" as const },
+    candidates: [],
+    auth: {
+      status: "unknown" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    profiles,
+  };
+}
+
+function listResponse<Profile extends object>(profiles: readonly Profile[]) {
+  return { providers: [providerRow(profiles)], native: null };
+}
+
+function keysAtAnyDepth(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(keysAtAnyDepth);
+  if (typeof value !== "object" || value === null) return [];
+  return Object.entries(value).flatMap(([key, child]) => [
+    key,
+    ...keysAtAnyDepth(child),
+  ]);
+}
+
+function expectUpgradeDefaults(upgraded: unknown): void {
+  const parsed = headResponse.parse(upgraded);
+  expect(parsed.removedProfiles).toEqual([]);
+  expect(parsed.providers[0]?.profiles).toEqual([
+    expect.objectContaining({
+      profileId: "ambient",
+      kind: "ambient",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: true,
+      nameQuestion: null,
+    }),
+    expect.objectContaining({
+      profileId: "managed-1",
+      kind: "managed",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: false,
+      nameQuestion: null,
+    }),
+  ]);
+}
+
+const olderHost = listResponse([ambient, managed]);
+
+const host1011Answer = {
+  ...listResponse([
+    {
+      ...ambient,
+      aliases: ["former-ambient"],
+      personNotice: "waiting" as const,
+      terminalOnThisComputer: false,
+      nameQuestion: { revision: "rev-ambient", choices: ["Ada"] },
+    },
+    {
+      ...managed,
+      aliases: ["former-managed"],
+      personNotice: "needs-sign-in" as const,
+      terminalOnThisComputer: true,
+      nameQuestion: { revision: "rev-managed", choices: ["Work"] },
+    },
+  ]),
+  removedProfiles: [
+    {
+      providerId: "claude-code",
+      profileId: "removed-1",
+      aliases: ["removed-alias"],
+    },
+  ],
+};
+
+describe("providers.list@10.11 projected to a 10.10 peer", () => {
+  it("keeps the four row keys and removedProfiles on the 10.11 line", () => {
+    const live = headResponse.parse(host1011Answer);
+    expect(live.removedProfiles).toEqual(host1011Answer.removedProfiles);
+    expect(live.providers[0]?.profiles[0]).toMatchObject({
+      aliases: ["former-ambient"],
+      personNotice: "waiting",
+      terminalOnThisComputer: false,
+      nameQuestion: { revision: "rev-ambient", choices: ["Ada"] },
+    });
+    expect(live.providers[0]?.profiles[1]).toMatchObject({
+      terminalOnThisComputer: true,
+      personNotice: "needs-sign-in",
+    });
+  });
+
+  it("gives a 10.10 peer neither the row keys nor removedProfiles", () => {
+    const received = peer1010.parse(host1011Answer);
+    for (const key of PROFILE_SYNC_KEYS) {
+      expect(keysAtAnyDepth(received), key).not.toContain(key);
+    }
+    expect(received.providers[0]?.profiles).toEqual([
+      expect.objectContaining({
+        profileId: "ambient",
+        kind: "ambient",
+        label: "Terminal account",
+      }),
+      expect.objectContaining({
+        profileId: "managed-1",
+        kind: "managed",
+        label: "Work",
+      }),
+    ]);
+  });
+});
+
+describe("providers.list upgrade to 10.11", () => {
+  it("fills the defaults when a 10.11 client reads a 10.10 host", () => {
+    const parsed = peer1010.parse(olderHost);
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 10, minor: 10 },
+      { major: 10, minor: 11 },
+      parsed,
+    );
+    expectUpgradeDefaults(upgraded);
+  });
+
+  it("ends on the same defaults when the host is on 10.8", () => {
+    const parsed =
+      listLine.versions[8].contract.responseSchema.parse(olderHost);
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 10, minor: 8 },
+      { major: 10, minor: 11 },
+      parsed,
+    );
+    expectUpgradeDefaults(upgraded);
+  });
+});
+
+describe("providers.list@10.11 field fallback", () => {
+  it("drops an unknown personNotice or a malformed name question and keeps the row", () => {
+    const parsed = headResponse.parse(
+      listResponse([
+        {
+          ...ambient,
+          aliases: ["former-ambient"],
+          personNotice: "removed",
+          terminalOnThisComputer: false,
+          nameQuestion: { revision: "rev-ambient", choices: ["Ada"] },
+        },
+        {
+          ...managed,
+          aliases: ["former-managed"],
+          personNotice: "needs-sign-in",
+          terminalOnThisComputer: true,
+          nameQuestion: { revision: "", choices: ["Ada"] },
+        },
+      ]),
+    );
+    const profiles = parsed.providers[0]?.profiles;
+    expect(profiles).toHaveLength(2);
+    expect(profiles?.[0]).toMatchObject({
+      profileId: "ambient",
+      kind: "ambient",
+      enabled: true,
+      aliases: ["former-ambient"],
+      terminalOnThisComputer: false,
+      nameQuestion: { revision: "rev-ambient", choices: ["Ada"] },
+    });
+    expect(profiles?.[0]?.personNotice).toBeUndefined();
+    expect(profiles?.[0]?.readability?.kind).not.toBe("unreadable");
+    expect(profiles?.[1]).toMatchObject({
+      profileId: "managed-1",
+      kind: "managed",
+      enabled: true,
+      personNotice: "needs-sign-in",
+      terminalOnThisComputer: true,
+      rateLimitStatus: "ok",
+    });
+    expect(profiles?.[1]?.nameQuestion).toBeUndefined();
+    expect(profiles?.[1]?.readability?.kind).not.toBe("unreadable");
+  });
+});
+
+describe("providerProfileSchema mutation echo", () => {
+  const echoedProfile = {
+    ...managed,
+    aliases: ["former-managed"],
+    personNotice: "waiting" as const,
+    terminalOnThisComputer: true,
+    nameQuestion: { revision: "rev-managed", choices: ["Work"] },
+  };
+
+  it("strips the four keys from the shared profile schema", () => {
+    const parsed = providerProfileSchema.parse(echoedProfile);
+    for (const key of ROW_KEYS) {
+      expect(parsed).not.toHaveProperty(key);
+    }
+    expect(parsed).toMatchObject({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "Work",
+      enabled: true,
+    });
+  });
+
+  it("strips the four keys from a providers.setEnabled echo", () => {
+    const echo =
+      hostRpcRegistry["providers.setEnabled"][2].versions[1].contract
+        .responseSchema;
+    const parsed = echo.parse({
+      state: providerRow([echoedProfile]),
+    });
+    const profile = parsed.state.profiles[0];
+    expect(profile).toMatchObject({
+      profileId: "managed-1",
+      label: "Work",
+    });
+    for (const key of ROW_KEYS) {
+      expect(profile).not.toHaveProperty(key);
+    }
+  });
+});
+
+describe("providers.answerProfileName", () => {
+  const validRequest = {
+    providerId: "claude-code" as const,
+    profileId: "managed-1",
+    revision: "rev-1",
+    label: "n".repeat(64),
+  };
+
+  it("is registered at 1.0 off the released floor", () => {
+    expect(() =>
+      validateVersionedRpcRegistry({
+        [METHOD]: hostRpcRegistry[METHOD],
+      }),
+    ).not.toThrow();
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(METHOD);
+    expect(answerLine.degrade).toEqual({ kind: "unsupported" });
+    expect(answerLine[1].latestMinor).toBe(0);
+
+    const split = splitConnectionManifest(
+      hostRpcRegistry,
+      RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    expect(split.optionalManifest[METHOD]).toEqual({ major: 1, minor: 0 });
+    expect(split.manifest[METHOD]).toBeUndefined();
+  });
+
+  it("is an advisory finding against a peer that does not advertise it", () => {
+    const mine = buildProtocolSurface({
+      unary: { [METHOD]: hostRpcRegistry[METHOD] },
+      unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
+      stream: {},
+    });
+    const theirs = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
+      stream: {},
+    });
+    const result = checkSurfaceCompatibility({
+      mine,
+      theirs,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+    expect(result.blocking).toEqual([]);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        method: METHOD,
+        family: "unary",
+        severity: "advisory",
+      }),
+    ]);
+    expect(result.findings[0]?.detail).toContain("unsupported");
+  });
+
+  it("answers unsupported when the peer does not advertise the method", async () => {
+    await expect(
+      resolveUnavailableMethodDegrade({
+        registry: hostRpcRegistry,
+        method: METHOD,
+        methodRegistry: answerLine,
+        clientCanonical: { major: 1, minor: 0 },
+        clientManifest: { [METHOD]: { major: 1, minor: 0 } },
+        hostManifest: {},
+        params: validRequest,
+        requestId: "req-answer-name",
+        execute: () => Promise.reject(new Error("fallback must not run")),
+      }),
+    ).rejects.toMatchObject({
+      code: "E_HOST_UNSUPPORTED",
+      method: METHOD,
+      fatalDetails: {
+        code: "E_HOST_UNSUPPORTED",
+        upgradeGuidance: {
+          clientShouldUpgrade: false,
+          hostShouldUpgrade: true,
+        },
+      },
+    });
+  });
+
+  it("parses a 64-character label and rejects an empty one, a 65-character one, and a missing revision", () => {
+    expect(answerRequest.parse(validRequest)).toEqual(validRequest);
+    expect(
+      answerRequest.safeParse({ ...validRequest, label: "" }).success,
+    ).toBe(false);
+    expect(
+      answerRequest.safeParse({ ...validRequest, label: "n".repeat(65) })
+        .success,
+    ).toBe(false);
+    expect(
+      answerRequest.safeParse({
+        providerId: validRequest.providerId,
+        profileId: validRequest.profileId,
+        label: validRequest.label,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses each response arm and rejects an unknown outcome", () => {
+    expect(answerResponse.parse({ outcome: "applied", label: "Ada" })).toEqual({
+      outcome: "applied",
+      label: "Ada",
+    });
+    expect(answerResponse.parse({ outcome: "conflict", label: "Ada" })).toEqual(
+      { outcome: "conflict", label: "Ada" },
+    );
+    expect(
+      answerResponse.safeParse({ outcome: "replaced", label: "Ada" }).success,
+    ).toBe(false);
+  });
+});
