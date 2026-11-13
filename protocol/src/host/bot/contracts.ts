@@ -63,6 +63,7 @@ import {
   botConversationSendRequestSchemaV12,
   botConversationSendRequestSchemaV13,
   botConversationSendRequestSchemaV14,
+  botConversationSendRequestSchemaV15,
   botConversationSendResponseSchema,
   botConversationSearchRequestSchema,
   botConversationSearchResponseSchema,
@@ -439,7 +440,7 @@ export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
 export const botConversationSendV15 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 5 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV15,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV14ToV15 = defineUpgradePath<
@@ -448,6 +449,26 @@ export const botConversationSendUpgradeV14ToV15 = defineUpgradePath<
 >({
   from: botConversationSendV14.schemaVersion,
   to: botConversationSendV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.6` (T166): the message a member chose to reply to
+ * (`replyTo`). A 1.5 request replies to none.
+ */
+export const botConversationSendV16 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV15ToV16 = defineUpgradePath<
+  typeof botConversationSendV15,
+  typeof botConversationSendV16
+>({
+  from: botConversationSendV15.schemaVersion,
+  to: botConversationSendV16.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

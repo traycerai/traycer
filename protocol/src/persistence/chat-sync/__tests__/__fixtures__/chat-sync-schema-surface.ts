@@ -2575,6 +2575,11 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "answers"
                             ],
                             "additionalProperties": false
+                          },
+                          "repliesTo": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255
                           }
                         },
                         "required": [

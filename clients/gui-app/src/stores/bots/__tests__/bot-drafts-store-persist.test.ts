@@ -91,6 +91,7 @@ describe("the boxes' drafts through the persisted store", () => {
       text: "Ship it @Ada",
       content,
       seedId: 0,
+      replyTo: null,
     });
   });
 

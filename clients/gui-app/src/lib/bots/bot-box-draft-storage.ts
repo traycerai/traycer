@@ -19,6 +19,10 @@ import {
   sha256Hex,
 } from "@/lib/composer/landing-image-store";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
+import {
+  storedBotReplyTargetOf,
+  type BotReplyTarget,
+} from "@/lib/bots/bot-reply-target";
 import { isJsonContent, isRecord } from "@/lib/editor/prosemirror-json";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
@@ -28,6 +32,11 @@ export interface StoredBoxDraft {
   readonly text: string;
   readonly content: JsonContent | null;
   readonly seedId: number;
+  /**
+   * The message the box replies to (T166); `null` for none. A draft stored
+   * before replies reads back with none.
+   */
+  readonly replyTo: BotReplyTarget | null;
 }
 
 /** By bot, then by the box's conversation key. */
@@ -452,10 +461,12 @@ function takeOutGoneImages(
     // A box stored without those images stays as it is: an empty one is
     // another window's draft written ahead of its images, which its retry needs.
     if (content === draft.content) continue;
-    const empty =
-      draft.text.length === 0 &&
-      (content === null || !containsImageAtoms(content));
-    putBox(threadBoxes, botId, key, empty ? null : { ...draft, content });
+    putBox(
+      threadBoxes,
+      botId,
+      key,
+      emptyDraft(draft, content) ? null : { ...draft, content },
+    );
   }
 }
 
@@ -604,8 +615,36 @@ function sameDraft(
   return (
     a.text === b.text &&
     a.seedId === b.seedId &&
+    sameReplyTarget(a.replyTo, b.replyTo) &&
     (a.content === b.content ||
       JSON.stringify(a.content) === JSON.stringify(b.content))
+  );
+}
+
+function sameReplyTarget(
+  a: BotReplyTarget | null,
+  b: BotReplyTarget | null,
+): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.messageId === b.messageId && a.author === b.author && a.line === b.line
+  );
+}
+
+/**
+ * Whether a box's draft holds nothing to keep: no text, no image, and no
+ * message it replies to. `content` is the draft's document as it is about to
+ * be written or was read back.
+ */
+function emptyDraft(
+  draft: StoredBoxDraft,
+  content: JsonContent | null,
+): boolean {
+  return (
+    draft.text.length === 0 &&
+    draft.replyTo === null &&
+    (content === null || !containsImageAtoms(content))
   );
 }
 
@@ -701,12 +740,7 @@ function storedDraft(
       ],
     };
   }
-  if (
-    draft.text.length === 0 &&
-    (content === null || !containsImageAtoms(content))
-  ) {
-    return null;
-  }
+  if (emptyDraft(draft, content)) return null;
   return { ...draft, content };
 }
 
@@ -799,7 +833,7 @@ async function inlineStoredImages(
         hashes: new Set(out.gone),
       });
     }
-    if (draft.text.length === 0 && !containsImageAtoms(content)) return null;
+    if (emptyDraft(draft, content)) return null;
     return {
       ...draft,
       content: (content.content?.length ?? 0) === 0 ? null : content,
@@ -937,10 +971,10 @@ export function storedBoxDraftsOf(value: unknown): StoredBoxDrafts {
 
 function storedDraftOf(value: unknown): StoredBoxDraft | null {
   if (!isRecord(value)) return null;
-  const { text, content, seedId } = value;
+  const { text, content, seedId, replyTo } = value;
   if (typeof text !== "string" || typeof seedId !== "number") return null;
   if (content !== null && !isJsonContent(content, 0)) return null;
-  return { text, content, seedId };
+  return { text, content, seedId, replyTo: storedBotReplyTargetOf(replyTo) };
 }
 
 function readStoredValue(

@@ -728,7 +728,7 @@ describe("<BotChannelView tiles={null} /> a question the bot asks without waitin
 
     await user.click(
       within(screen.getByTestId("bot-reply-row")).getByTestId(
-        "bot-message-reply-in-thread",
+        "bot-message-thread",
       ),
     );
 

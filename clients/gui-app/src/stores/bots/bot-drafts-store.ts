@@ -11,6 +11,7 @@ import {
   storedBoxDraftsOf,
   type PersistedBotBoxDrafts,
 } from "@/lib/bots/bot-box-draft-storage";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions } from "@/lib/persist";
 
@@ -67,6 +68,12 @@ export interface BotThreadBoxDraft {
    * question card), never by typing, so the box loads each one once.
    */
   readonly seedId: number;
+  /**
+   * The message of the box's conversation the member chose to reply to
+   * (T166), kept with the draft until it is sent or the reply is cancelled;
+   * `null` for none. A box holding nothing else keeps it too.
+   */
+  readonly replyTo: BotReplyTarget | null;
 }
 
 /** A message a box sent that never reached the conversation. */
@@ -81,6 +88,8 @@ export interface BotUnsentMessage {
   readonly supersedes: string | null;
   /** The box's document as it was sent: its chips, and its images' bytes. */
   readonly content: JsonContent;
+  /** The message it replied to, as the box named it; `null` for none. */
+  readonly replyTo: BotReplyTarget | null;
 }
 
 /** A lookup misses for a bot or key with nothing kept. */
@@ -113,12 +122,21 @@ interface BotDraftsState {
     anchorMessageId: string,
     text: string,
   ) => void;
-  /** Keeps what the person put in that box; an empty box keeps nothing. */
+  /**
+   * Keeps what the person put in that box, with the message it replies to;
+   * an empty box that replies to none keeps nothing.
+   */
   readonly typeThreadBox: (
     botId: string,
     anchorMessageId: string,
     text: string,
     content: JsonContent | null,
+  ) => void;
+  /** Sets the message that box replies to, its draft left as it is; `null` cancels the reply. */
+  readonly setReplyTarget: (
+    botId: string,
+    anchorMessageId: string,
+    target: BotReplyTarget | null,
   ) => void;
   /** Offers `unsent` back in that box; `null` takes the offer away. */
   readonly offerUnsent: (
@@ -201,14 +219,17 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         })),
       seedThreadBox: (botId, anchorMessageId, text) => {
         noteBoxChange(botId, anchorMessageId);
-        set((state) => ({
-          threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
-            text,
-            content: null,
-            seedId:
-              (state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0) + 1,
-          }),
-        }));
+        set((state) => {
+          const current = state.threadBoxes[botId]?.[anchorMessageId];
+          return {
+            threadBoxes: withEntry(state.threadBoxes, botId, anchorMessageId, {
+              text,
+              content: null,
+              seedId: (current?.seedId ?? 0) + 1,
+              replyTo: current?.replyTo ?? null,
+            }),
+          };
+        });
       },
       typeThreadBox: (botId, anchorMessageId, text, content) => {
         const current = get().threadBoxes[botId]?.[anchorMessageId];
@@ -222,6 +243,31 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         const cleared = text.length === 0 && content === null;
         // Cleared or sent: what it kept that this window could not show goes too.
         if (cleared) botBoxDraftCleared(botId, anchorMessageId);
+        set((state) => {
+          const kept = state.threadBoxes[botId]?.[anchorMessageId];
+          const replyTo = kept?.replyTo ?? null;
+          return {
+            threadBoxes: withEntry(
+              state.threadBoxes,
+              botId,
+              anchorMessageId,
+              cleared && replyTo === null
+                ? null
+                : { text, content, seedId: kept?.seedId ?? 0, replyTo },
+            ),
+          };
+        });
+      },
+      setReplyTarget: (botId, anchorMessageId, target) => {
+        const current = get().threadBoxes[botId]?.[anchorMessageId];
+        if ((current?.replyTo ?? null) === target) return;
+        noteBoxChange(botId, anchorMessageId);
+        const text = current?.text ?? "";
+        const content = current?.content ?? null;
+        const cleared =
+          target === null && text.length === 0 && content === null;
+        // A reply cancelled in an empty box empties it, as clearing it does.
+        if (cleared) botBoxDraftCleared(botId, anchorMessageId);
         set((state) => ({
           threadBoxes: withEntry(
             state.threadBoxes,
@@ -232,8 +278,8 @@ export const useBotDraftsStore = create<BotDraftsState>()(
               : {
                   text,
                   content,
-                  seedId:
-                    state.threadBoxes[botId]?.[anchorMessageId]?.seedId ?? 0,
+                  seedId: current?.seedId ?? 0,
+                  replyTo: target,
                 },
           ),
         }));

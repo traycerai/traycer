@@ -1433,6 +1433,25 @@ describe("useRenderedMessages", () => {
     });
   });
 
+  it("carries the message a member's row replies to onto the row, and leaves the key off a row that replies to none", () => {
+    const replying = {
+      ...userMessageAt("message-reply", 1000),
+      repliesTo: "message-target",
+    };
+    const plain = userMessageAt("message-plain", 2000);
+
+    const { result } = renderRenderedMessages({ messages: [replying, plain] });
+
+    expect(result.current[0]).toMatchObject({
+      persistentMessageId: "message-reply",
+      repliesTo: "message-target",
+    });
+    expect(result.current[1]).toMatchObject({
+      persistentMessageId: "message-plain",
+    });
+    expect(result.current[1]).not.toHaveProperty("repliesTo");
+  });
+
   it("threads per-turn run metadata onto the assistant row's assistantMeta", () => {
     // Distinct turnId so this turn doesn't reuse another test's cached model
     // (the per-turn cache keys on the shared display context + turnKey).

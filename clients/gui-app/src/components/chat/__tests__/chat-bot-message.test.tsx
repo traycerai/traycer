@@ -92,6 +92,7 @@ function channelPresentation(
     openAnnouncementThread: null,
     threadAnchorKinds: [],
     chooseOption: null,
+    reply: null,
     questions: null,
     failedRequest: null,
     failedRecovery: null,
@@ -347,7 +348,7 @@ describe("<ChatMessage /> in a bot channel", () => {
     },
   );
 
-  it("offers Reply in thread among a member post's hover actions, with no thread line until the thread has a reply", async () => {
+  it("offers a member post's thread among its hover actions, as Create thread until it is listed and Open thread after, with no thread line until the thread has a reply", async () => {
     const user = userEvent.setup();
     const openThread = vi.fn<(postMessageId: string) => void>();
     renderRow(
@@ -367,14 +368,12 @@ describe("<ChatMessage /> in a bot channel", () => {
       ),
     );
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    expect(
-      screen.queryByText("Reply in thread", { selector: "span" }),
-    ).toBeNull();
+    expect(screen.queryByText("Open thread", { selector: "span" })).toBeNull();
     const actions = screen.getByTestId("bot-message-actions");
     expect(openThread).not.toHaveBeenCalled();
 
     await user.click(
-      within(actions).getByRole("button", { name: "Reply in thread" }),
+      within(actions).getByRole("button", { name: "Open thread" }),
     );
 
     expect(openThread).toHaveBeenCalledTimes(1);
@@ -386,7 +385,11 @@ describe("<ChatMessage /> in a bot channel", () => {
       channelPresentation(NO_THREAD_LINE, openThread),
     );
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    expect(screen.getByTestId("bot-message-reply-in-thread")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Create thread" })
+        .getAttribute("data-testid"),
+    ).toBe("bot-message-thread");
   });
 
   it("shows the thread line while the bot answers in a thread that has no reply yet", () => {
@@ -599,6 +602,7 @@ describe("<ChatMessage /> in a bot thread", () => {
         openAnnouncementThread: null,
         threadAnchorKinds: [],
         chooseOption: null,
+        reply: null,
         questions: null,
         failedRequest: null,
         failedRecovery: null,
@@ -782,7 +786,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       actions
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["Reply in thread"]);
+    ).toEqual(["Create thread"]);
   });
 
   it("says a held answer in the warning colour, with Retry alone on the line and on hover", () => {
@@ -811,7 +815,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       actions
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["Retry", "Reply in thread"]);
+    ).toEqual(["Retry", "Create thread"]);
   });
 
   it("says only that it was not answered when the host gave no reason, and holds the line's Retry while one is sent", () => {
@@ -839,7 +843,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     ).toBe(true);
   });
 
-  it("offers Retry and Edit beside Reply in thread, each handing the message's own text back", async () => {
+  it("offers Retry and Edit beside Create thread, each handing the message's own text back", async () => {
     const user = userEvent.setup();
     const retry = vi.fn<(text: string) => void>();
     const edit = vi.fn<(text: string) => void>();
@@ -850,7 +854,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       actions
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["Retry", "Edit", "Reply in thread"]);
+    ).toEqual(["Retry", "Edit", "Create thread"]);
 
     await user.click(actions.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledWith("Please review the release");
@@ -871,7 +875,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       actions
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["Retry", "Reply in thread"]);
+    ).toEqual(["Retry", "Create thread"]);
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
 
     await user.click(actions.getByRole("button", { name: "Retry" }));
@@ -907,7 +911,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       actions
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["Retry", "Reply in thread"]);
+    ).toEqual(["Retry", "Create thread"]);
 
     await user.click(actions.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledWith("Please review the release");
@@ -922,7 +926,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(screen.queryByTestId("bot-message-retry")).toBeNull();
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
     expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
-    expect(screen.getByTestId("bot-message-reply-in-thread")).toBeTruthy();
+    expect(screen.getByTestId("bot-message-thread")).toBeTruthy();
     cleanup();
 
     renderRow(botRow(undefined), failing(vi.fn(), false, vi.fn()));
@@ -940,6 +944,7 @@ describe("<ChatMessage /> bot rows", () => {
     openAnnouncementThread: null,
     threadAnchorKinds: [],
     chooseOption: null,
+    reply: null,
     questions: null,
     failedRequest: null,
     failedRecovery: null,
@@ -1067,6 +1072,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       openAnnouncementThread: input.openAnnouncementThread,
       threadAnchorKinds: [],
       chooseOption: input.chooseOption,
+      reply: null,
       questions: null,
       failedRequest: null,
       failedRecovery: null,
@@ -1214,7 +1220,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(ANNOUNCEMENT_ID, null);
@@ -1248,7 +1254,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
       });
 
       expect(threadLine).toHaveBeenCalledWith(ANNOUNCEMENT_ID);
-      await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+      await user.click(screen.getByRole("button", { name: "Open thread" }));
       await user.click(screen.getByTestId("bot-thread-line"));
 
       expect(openAnnouncementThread.mock.calls).toEqual([
@@ -1311,6 +1317,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     openAnnouncementThread: null,
     threadAnchorKinds: [],
     chooseOption: null,
+    reply: null,
     questions: null,
     failedRequest: null,
     failedRecovery: null,
@@ -1341,7 +1348,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
       { ...CHANNEL, openThread, openAnnouncementThread },
     );
 
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID, null);
@@ -1361,7 +1368,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
       { ...CHANNEL, openThread, openAnnouncementThread },
     );
 
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openThread).toHaveBeenCalledTimes(1);
     expect(openThread).toHaveBeenCalledWith(POST_ID);
@@ -1394,7 +1401,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(
@@ -1429,8 +1436,9 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    expect(threadLine).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    // The action reads the thread it opens, the post's, never the reply's own.
+    expect(threadLine).not.toHaveBeenCalledWith("reply-row-1");
+    await user.click(screen.getByRole("button", { name: "Open thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID, null);
@@ -1506,7 +1514,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
       },
     );
 
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledWith(
       "reply-row-2",
@@ -1548,6 +1556,122 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(
       true,
     );
+  });
+});
+
+describe("<ChatMessage /> Reply on a row", () => {
+  type BotReply = NonNullable<ChatBotPresentation["reply"]>;
+
+  function replying(reply: ChatBotPresentation["reply"]): ChatBotPresentation {
+    return { ...channelPresentation(NO_THREAD_LINE, vi.fn()), reply };
+  }
+
+  /** A presentation of a thread's rows: no thread opens from them. */
+  function inThread(reply: ChatBotPresentation["reply"]): ChatBotPresentation {
+    return { ...replying(reply), threadLine: null, openThread: null };
+  }
+
+  function storedBotRow(): ChatMessageModel {
+    return {
+      ...botRow(undefined),
+      persistentMessageId: "reply-row-1",
+      content: "The bot says hello\nand a second line",
+    };
+  }
+
+  it("offers Reply and Create thread as icon buttons among a stored row's hover actions, naming Reply in a tooltip", async () => {
+    const user = userEvent.setup();
+    renderRow(memberPost(undefined), replying(vi.fn()));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    const buttons = actions.getAllByRole("button");
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Reply",
+      "Create thread",
+    ]);
+    expect(buttons.map((button) => button.textContent)).toEqual(["", ""]);
+    expect(buttons.map((button) => button.getAttribute("data-testid"))).toEqual(
+      ["bot-message-reply", "bot-message-thread"],
+    );
+
+    await user.hover(buttons[0]);
+    expect(
+      await screen.findByRole("tooltip", { name: "Reply" }, { timeout: 3000 }),
+    ).toBeTruthy();
+  });
+
+  it("offers no Reply on a row where the presentation carries none", () => {
+    renderRow(memberPost(undefined), replying(null));
+
+    expect(screen.queryByTestId("bot-message-reply")).toBeNull();
+    expect(screen.getByTestId("bot-message-thread")).toBeTruthy();
+  });
+
+  it("offers no hover actions on a member's row that is not stored yet", () => {
+    renderRow(
+      { ...memberPost(undefined), persistentMessageId: null },
+      replying(vi.fn()),
+    );
+
+    expect(screen.queryByTestId("bot-message-actions")).toBeNull();
+  });
+
+  it.each<readonly [string, ChatMessageModel]>([
+    ["a member's row", memberPost(undefined)],
+    [
+      "a bot's row",
+      { ...botRow(undefined), persistentMessageId: "reply-row-1" },
+    ],
+  ])(
+    "offers Reply alone on %s in a thread, which opens no thread of its own",
+    (_row, message) => {
+      renderRow(message, inThread(vi.fn()));
+
+      const actions = within(screen.getByTestId("bot-message-actions"));
+      expect(
+        actions
+          .getAllByRole("button")
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual(["Reply"]);
+    },
+  );
+
+  it("names a member's message in the box when Reply is chosen, by its id, the writer's name and its first line", async () => {
+    const user = userEvent.setup();
+    const reply = vi.fn<BotReply>();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    renderRow(
+      {
+        ...memberPost(undefined),
+        content: "Please review the release\nand the notes",
+      },
+      { ...replying(reply), openThread },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      messageId: POST_ID,
+      author: "Tess Teammate",
+      line: "Please review the release",
+    });
+    expect(openThread).not.toHaveBeenCalled();
+  });
+
+  it("names a bot's message in the box when Reply is chosen, by the bot's title", async () => {
+    const user = userEvent.setup();
+    const reply = vi.fn<BotReply>();
+    renderRow(storedBotRow(), replying(reply));
+
+    await user.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      messageId: "reply-row-1",
+      author: "Release Bot",
+      line: "The bot says hello",
+    });
   });
 });
 
@@ -1835,6 +1959,7 @@ describe("<ChatEmptyState /> in a bot channel", () => {
       openAnnouncementThread: null,
       threadAnchorKinds: [],
       chooseOption: null,
+      reply: null,
       questions: null,
       failedRequest: null,
       failedRecovery: null,

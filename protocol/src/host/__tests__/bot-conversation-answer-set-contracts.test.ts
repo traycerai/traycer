@@ -44,8 +44,7 @@ const ENTRIES = [
 const ANSWERS = { questionMessageId: "bot-question:req-q", entries: ENTRIES };
 
 describe("bot.conversation.send@1.5", () => {
-  it("is the latest line, and upgrades a 1.4 request carrying no answers", () => {
-    expect(send.latestMinor).toBe(5);
+  it("upgrades a 1.4 request carrying no answers", () => {
     const parsed = sendV14.requestSchema.parse(REQUEST);
     const upgraded =
       send.versions[5].upgradeFromPreviousVersion.upgradeRequest(parsed);

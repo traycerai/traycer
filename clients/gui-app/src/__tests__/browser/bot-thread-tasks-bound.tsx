@@ -441,6 +441,7 @@ function PaneBody(): ReactElement {
                   boundHostId={HOST_ID}
                   imageReach="none"
                   answerReach="each"
+                  replyReach="none"
                   botTitle="Release Bot"
                   conversationId="channel-1"
                   originMessageId="post-1"

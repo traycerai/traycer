@@ -3,6 +3,7 @@ import type { StackedIdentity } from "@/components/bots/bot-avatars";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
 import type { QuestionCardEntry } from "@/components/chat/question-card-view";
 import type { BotConversationQuestionAnswerEntry } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import type { BotTranscriptBaseline } from "@/stores/bots/bot-drafts-store";
 
 /**
@@ -217,6 +218,13 @@ export interface ChatBotPresentation {
    * nothing can post it.
    */
   readonly chooseOption: ((choice: string) => void) | null;
+  /**
+   * Replies to a row where it stands (T166): the box of the row's own
+   * conversation, the channel's or the thread's, names the message, and its
+   * send links the two. `null` where nothing can carry a reply: the tab's
+   * host or the bot's does not take one, or the box edits a failed message.
+   */
+  readonly reply: ((target: BotReplyTarget) => void) | null;
   /**
    * The question card under a bot's row that asks; `null` draws the row as an
    * older client does, its text and its first question's options.

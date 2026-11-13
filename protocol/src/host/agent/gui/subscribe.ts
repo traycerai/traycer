@@ -9274,6 +9274,11 @@ export const chatSubscribeV142 = defineStreamRpcContract({
  * row's text and the settled card it always did; `1.42` and every older line
  * bind the rows without them.
  *
+ * A member's row may say `repliesTo`, the message of its conversation the
+ * member chose to reply to (T166). Optional, so a peer below 1.43 strips it on
+ * decode and draws the row without its badge; `1.42` and every older line
+ * bind the user row without it.
+ *
  * A resume divider's trigger may carry `conversationMessage`, the member's
  * message a bot conversation delivery carried. Defaulted `null`, so a peer
  * below 1.43 drops it on decode and draws the divider it always did; `1.42`

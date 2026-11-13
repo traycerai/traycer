@@ -153,6 +153,7 @@ export function Dock(props: {
         seed={null}
         keptDraft={null}
         quote={null}
+        reply={{ reach: "none", chosen: 0 }}
         onSent={() => false}
       />
     </div>

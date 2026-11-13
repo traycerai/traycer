@@ -23,7 +23,10 @@ import {
   MockHostMessenger,
   type MockHandlerMap,
 } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -76,6 +79,8 @@ const SEND: BotConversationSendRequest = {
   answer: null,
 };
 
+const REPLY: BotConversationSendRequest = { ...SEND, replyTo: "message-1" };
+
 function hostOver(
   entry: HostDirectoryEntry,
   queryClient: QueryClient,
@@ -102,6 +107,7 @@ function hostOver(
 /** A send through host B with `bot.thread.list` cached under both hosts. */
 function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
   readonly send: () => Promise<void>;
+  readonly sendRequest: (request: BotConversationSendRequest) => Promise<void>;
   readonly isStale: (hostId: string, method: string) => boolean;
 } {
   const queryClient = new QueryClient();
@@ -143,12 +149,16 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
     () => useBotConversationSendMutation(sendingHost),
     { wrapper },
   );
+  const sendRequest = async (
+    request: BotConversationSendRequest,
+  ): Promise<void> => {
+    await act(async () => {
+      await result.current.mutateAsync(request).catch(() => undefined);
+    });
+  };
   return {
-    send: async () => {
-      await act(async () => {
-        await result.current.mutateAsync(SEND).catch(() => undefined);
-      });
-    },
+    send: () => sendRequest(SEND),
+    sendRequest,
     isStale: (hostId, method) =>
       queryClient
         .getQueryCache()
@@ -216,6 +226,25 @@ describe("useBotConversationSendMutation", () => {
     await mounted.send();
 
     expect(mounted.isStale(SENDING_HOST_ID, "bot.thread.list")).toBe(false);
+  });
+
+  it("makes the thread list stale on the host the send went through, and on no other host, when the bot's host does not take replies", async () => {
+    const mounted = mountSend({
+      "bot.conversation.send": () => {
+        throw new HostRpcError({
+          code: "E_BOT_REPLIES_UNSUPPORTED",
+          message: "The bot's host does not take replies",
+          requestId: "request-refused",
+          method: "bot.conversation.send",
+          fatalDetails: null,
+        });
+      },
+    });
+
+    await mounted.sendRequest(REPLY);
+
+    expect(mounted.isStale(SENDING_HOST_ID, "bot.thread.list")).toBe(true);
+    expect(mounted.isStale(OTHER_HOST_ID, "bot.thread.list")).toBe(false);
   });
 });
 
@@ -591,6 +620,32 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
     expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
       method: "bot.conversation.send",
       version: { major: 1, minor: 5 },
+    });
+  });
+
+  const V16: SchemaVersion = { major: 1, minor: 6 };
+
+  it("refuses a reply on a host that negotiated 1.5 before it leaves, so it is never taken as a plain post", async () => {
+    const f = floorFixture(V15);
+
+    const failure = await act(() => f.send(REPLY));
+
+    expect(failure).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(f.handled).toEqual([]);
+    expect(f.messenger.dispatched).toEqual([]);
+    expect(f.messenger.calls).toEqual([]);
+  });
+
+  it("sends a reply, floor attached, to a host that negotiated 1.6", async () => {
+    const f = floorFixture(V16);
+
+    const failure = await act(() => f.send(REPLY));
+
+    expect(failure).toBeNull();
+    expect(f.handled).toEqual([REPLY]);
+    expect(f.messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "bot.conversation.send",
+      version: { major: 1, minor: 6 },
     });
   });
 
