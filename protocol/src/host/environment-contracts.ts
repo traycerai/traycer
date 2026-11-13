@@ -437,11 +437,53 @@ export const providersLinkCompleteUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+export const providersLinkV12 = defineRpcContract({
+  method: "providers.link",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: schemas.providersLinkRequestSchemaV12,
+  responseSchema: schemas.providersLinkResponseSchemaV12,
+});
+
+export const providersLinkUpgradeV11ToV12 = defineUpgradePath<
+  typeof providersLinkV11,
+  typeof providersLinkV12
+>({
+  from: providersLinkV11.schemaVersion,
+  to: providersLinkV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    createProfile: null,
+    replaceAccount: false,
+  }),
+  upgradeResponse: (response) => ({ ...response, environmentProfileId: null }),
+});
+
+export const providersLinkCompleteV12 = defineRpcContract({
+  method: "providers.linkComplete",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: schemas.providersLinkCompleteRequestSchemaV11,
+  responseSchema: schemas.providersLinkCompleteResponseSchemaV12,
+});
+
+export const providersLinkCompleteUpgradeV11ToV12 = defineUpgradePath<
+  typeof providersLinkCompleteV11,
+  typeof providersLinkCompleteV12
+>({
+  from: providersLinkCompleteV11.schemaVersion,
+  to: providersLinkCompleteV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    environmentProfileId: null,
+    profileId: null,
+  }),
+});
+
 export const ENVIRONMENT_RPC_METHODS = {
   "providers.link": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersLinkV10,
@@ -451,6 +493,10 @@ export const ENVIRONMENT_RPC_METHODS = {
           contract: providersLinkV11,
           upgradeFromPreviousVersion: providersLinkUpgradeV10ToV11,
         },
+        2: {
+          contract: providersLinkV12,
+          upgradeFromPreviousVersion: providersLinkUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -458,7 +504,7 @@ export const ENVIRONMENT_RPC_METHODS = {
   "providers.linkComplete": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersLinkCompleteV10,
@@ -467,6 +513,28 @@ export const ENVIRONMENT_RPC_METHODS = {
         1: {
           contract: providersLinkCompleteV11,
           upgradeFromPreviousVersion: providersLinkCompleteUpgradeV10ToV11,
+        },
+        2: {
+          contract: providersLinkCompleteV12,
+          upgradeFromPreviousVersion: providersLinkCompleteUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.linkCancel": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: defineRpcContract({
+            method: "providers.linkCancel",
+            schemaVersion: { major: 1, minor: 0 },
+            requestSchema: schemas.providersLinkCancelRequestSchema,
+            responseSchema: schemas.providersLinkCancelResponseSchema,
+          }),
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},

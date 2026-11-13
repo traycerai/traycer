@@ -142,7 +142,7 @@ add an API key (Providers), add a secret your agents will need (Secrets),
 choose how agents are picked (Agent selection) - under "Optional. An agent can
 run as soon as one provider is set up." with its own "n of 3 done". Each step
 is checked off by what the person's settings already hold, read through the
-window's own host (`providers.list`: a stored API key or a signed-in linked
+window's own host (`providers.list`: a stored API key or a signed-in
 plan, never this computer's own sign-in; `environment.secrets.list`: a
 secret not revoked; `environment.status`: an agent selection item), so a step
 done in the dashboard is checked here too.
@@ -917,13 +917,13 @@ Providers, on cloud-backed Personal or a team, lists every provider in the
 rail from `lg` up. Below `lg` that rail is one full-width `SettingsMasterSelect`
 labelled **Provider**. The header does not link to Secrets, and the pane has
 no keys list. Tabs are **Plans & limits**, **Env**, **MCP**, **Skills**, and
-**Pack version** when the provider has pack ids. Plans is one **Linked plan**
-picker, plus **Link a plan** and **Unlink** when the viewer can administer, and
-**No plans linked.** when none are. Profiles is one **Profile** picker under
+**Pack version** when the provider has pack ids. Plans is one **Plan**
+picker, plus **Sign in** and **Unlink** when the viewer can edit, and
+**No plans yet.** when none are. Profiles is one **Profile** picker under
 **Profiles**; the selected profile's account name stays under it, and Use is a
 switch when the person can edit, otherwise On or Off as text. The executable
 path and version stay inside the rate-limit card. A rail subtitle reads **key**
-only when a live team key is set; a linked plan and "no plan" show no subtitle.
+only when a live team key is set; a signed-in plan and "no plan" show no subtitle.
 Only controls with a persisted team store are rendered. MCP rows expose the
 server id and tool toggles; declarations and Add are absent. Provider Details
 uses the persisted kind and key. Personal rows offer it only when applied-item
@@ -1090,7 +1090,7 @@ working.** on this computer, or **The fork uses the latest usable cloud backup
 available when you click Fork. Work still in progress may not be included. The
 original agent continues working.** on another computer. A fork from one turn
 has no snapshot sentence. Code identifiers remain workspace-based. Invitation review,
-Invite, Link a plan and Add an MCP server name the team or environment once in
+Invite, Sign in and Add an MCP server name the team or environment once in
 the heading; subsequent copy uses the team or this environment and keeps every
 grant, seat and sharing consequence. The first tab a member opens on a team
 host is three paragraphs at rest: agents here run as the host and can read what
@@ -6753,8 +6753,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
        "<Provider> terminal account" for screen readers,
        under "This computer's own sign-in, which stays on this computer. Sign
        in on Providers to use one everywhere." (a team host: "This host's own
-       sign-in, which stays on this host. An admin can link a plan on
-       <Team>'s Providers to use one everywhere."), with a switch over
+       sign-in, which stays on this host. Sign in on Providers to use one everywhere."), with a switch over
        `providers.setProfileEnabled` (`profileId: "ambient"`). No rename: no
        wire method renames a profile.
     5. **This host's own values** (`environment.localOverrides`): each value
