@@ -947,5 +947,8 @@ function applyArgumentCommand(
 }
 
 function assertNever(command: never): never {
-  throw new Error(`Unhandled runtime command ${JSON.stringify(command)}`);
+  // The command is not serialised: a value reaching here crossed the worker
+  // bridge unvalidated, and sinks log whole error objects.
+  void command;
+  throw new Error("Unhandled runtime command");
 }

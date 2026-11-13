@@ -732,5 +732,8 @@ export function startEpicRuntimeWorkerHost(
 }
 
 function assertNever(value: never): never {
-  throw new Error(`Unhandled runtime worker event ${JSON.stringify(value)}`);
+  // The event is not serialised: a value reaching here crossed the worker
+  // bridge unvalidated, and sinks log whole error objects.
+  void value;
+  throw new Error("Unhandled runtime worker event");
 }

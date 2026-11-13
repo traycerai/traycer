@@ -274,7 +274,14 @@ export function createStreamProxyHost(
  * kind this build does not know. Its job is at compile time - the parameter
  * `never` is what turns an unhandled member into a type error - and the throw
  * exists only so the arm is not empty.
+ *
+ * The value is deliberately NOT serialised into the message. The only way to
+ * reach this throw is a value that slipped past the type system at runtime,
+ * which means it came off the wire or out of an unvalidated parse - exactly
+ * the content that must not travel in an error message, since sinks log whole
+ * error objects. The call site in the stack identifies the switch.
  */
 function assertNever(value: never): never {
-  throw new Error(`Unhandled stream proxy event ${JSON.stringify(value)}`);
+  void value;
+  throw new Error("Unhandled stream proxy event");
 }

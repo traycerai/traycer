@@ -9,5 +9,7 @@
  * which is the same shape the three other `assertNever`s in this app take.
  */
 export function assertNever(value: never): never {
-  throw new Error(`unhandled layout section member: ${JSON.stringify(value)}`);
+  // The member is not serialised into the message; the stack names the switch.
+  void value;
+  throw new Error("unhandled layout section member");
 }

@@ -2030,8 +2030,18 @@ function openSession(options: SessionOptions): Session {
     } catch (cause) {
       void cause;
       const malformed = new HostRpcError({
+        // The frame's own text is NOT rendered here. This message reaches
+        // callers through `failAll` and `notifyMultiplex`, and several sinks
+        // log a whole error object, so any identifier the frame carried would
+        // be published at ordinary severity. The size and which of the two
+        // parse failures occurred are what a reader actually needs, and
+        // naming the failure is new: both arms used to emit the same text.
+        //
+        // "length", not "bytes": `event.data` is a JS string, so `.length`
+        // counts UTF-16 code units. A non-ASCII frame has more bytes on the
+        // wire than this number, and claiming bytes would be false for it.
         code: "RPC_ERROR",
-        message: `Malformed host frame: ${truncate(event.data)}`,
+        message: `Malformed host frame: not valid JSON (length ${event.data.length})`,
         requestId,
         method,
         fatalDetails: null,
@@ -2047,8 +2057,10 @@ function openSession(options: SessionOptions): Session {
     const frameParse = hostFrameSchema.safeParse(parsed);
     if (!frameParse.success) {
       const malformed = new HostRpcError({
+        // Frame text withheld, and "length" not "bytes", for the same reasons
+        // as the parse failure above.
         code: "RPC_ERROR",
-        message: `Malformed host frame: ${truncate(event.data)}`,
+        message: `Malformed host frame: failed schema validation (length ${event.data.length})`,
         requestId,
         method,
         fatalDetails: null,
@@ -2377,14 +2389,6 @@ function closedBeforeAdopt(
     fatalDetails: null,
     replaySafetyFromKey: false,
   });
-}
-
-function truncate(raw: string): string {
-  const limit = 120;
-  if (raw.length <= limit) {
-    return raw;
-  }
-  return `${raw.slice(0, limit)}...`;
 }
 
 /**
