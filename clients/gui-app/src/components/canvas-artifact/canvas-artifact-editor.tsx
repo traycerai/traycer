@@ -64,7 +64,10 @@ import {
 } from "./canvas-selection-store";
 import { CanvasFullscreen } from "./canvas-fullscreen";
 import { useCanvasPresentation } from "./use-canvas-presentation";
-import { useCanvasWheelCamera } from "./use-canvas-wheel-camera";
+import {
+  CANVAS_BACKDROP_CLASS,
+  useCanvasWheelCamera,
+} from "./use-canvas-wheel-camera";
 import {
   FrameFullscreenContext,
   FrameCommentPortalContext,
@@ -1215,9 +1218,10 @@ function CanvasEditorSurface({
                   // The stage clips the canvas, not React Flow: a zoom-out
                   // in progress shrinks the zoom layer inside it, and the
                   // boards around the old view must show past its edges.
-                  activeFullscreen === null
-                    ? "overflow-hidden"
-                    : "overflow-auto",
+                  // Clip, not hidden: a hidden box still scrolls when a
+                  // board scrolls something of its own into view, and
+                  // nothing would scroll the canvas back.
+                  activeFullscreen === null ? "overflow-clip" : "overflow-auto",
                 )}
                 onPointerMove={(event) =>
                   pointer.publish(
@@ -1234,8 +1238,12 @@ function CanvasEditorSurface({
                   }}
                 >
                   <ReactFlow<CanvasFlowNode>
+                    // Transparent as well: React Flow's own fill would show
+                    // as a box scaling with the layer. The backdrop below
+                    // paints the same fill and stays put.
                     className={cn(
-                      !presentation.fullscreen && "overflow-visible!",
+                      !presentation.fullscreen &&
+                        "overflow-visible! bg-transparent!",
                     )}
                     nodes={nodes}
                     edges={[]}
@@ -1347,7 +1355,10 @@ function CanvasEditorSurface({
                   >
                     <Background
                       color="var(--border)"
-                      className={presentation.backgroundClassName}
+                      className={cn(
+                        CANVAS_BACKDROP_CLASS,
+                        presentation.backgroundClassName,
+                      )}
                     />
                     <CanvasShownViewport onShown={onShownViewport} />
                   </ReactFlow>

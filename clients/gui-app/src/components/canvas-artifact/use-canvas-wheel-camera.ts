@@ -13,6 +13,22 @@ import {
   type CanvasWheelStep,
 } from "./canvas-wheel";
 
+const BACKDROP_TRANSFORM = "--canvas-backdrop-transform";
+const BACKDROP_WILL_CHANGE = "--canvas-backdrop-will-change";
+/**
+ * For the canvas's backdrop, the dot grid and fill that sit inside the zoom
+ * layer but belong to the stage. While a gesture transforms the layer the
+ * backdrop takes the inverse, so it stays where it is and no edge of the
+ * layer shows around the boards as they shrink. It becomes a compositor
+ * layer of its own for the gesture, or countering the zoom layer would
+ * repaint that layer's pixels on every frame.
+ *
+ * The two properties are the ones above, spelled out because Tailwind reads
+ * class names as literal text. Unset, they leave the backdrop untransformed.
+ */
+export const CANVAS_BACKDROP_CLASS =
+  "origin-top-left transform-(--canvas-backdrop-transform) will-change-(--canvas-backdrop-will-change)";
+
 /** How long a zoom gesture stays quiet before the canvas redraws at its scale. */
 const ZOOM_COMMIT_QUIET_MS = 120;
 /** How long any wheel gesture stays quiet before the live boards are picked again. */
@@ -49,7 +65,7 @@ export interface CanvasWheelCamera {
  * React Flow is not told at all. The frame only transforms `layerRef`, which
  * scales the pixels already drawn, and React Flow gets the final viewport
  * once the gesture has been quiet for {@link ZOOM_COMMIT_QUIET_MS}. The
- * layer lets go in the commit that draws that viewport, so nothing jumps.
+ * layer lets go in the commit that draws the next viewport, so nothing jumps.
  */
 export function useCanvasWheelCamera({
   flow,
@@ -83,9 +99,6 @@ export function useCanvasWheelCamera({
   const zooming = useRef(false);
   // The viewport the layer is showing ahead of React Flow.
   const held = useRef<Viewport | null>(null);
-  // Set once the wheel no longer owns the camera: whatever React Flow draws
-  // next is the picture, whether or not it is the viewport the layer held.
-  const releaseOnShown = useRef(false);
 
   const paintLayer = useCallback((): void => {
     const layer = layerRef.current;
@@ -96,15 +109,21 @@ export function useCanvasWheelCamera({
     // again at every step.
     layer.style.willChange = "transform";
     layer.style.transform = viewportLayerTransform(shown.current, held.current);
+    layer.style.setProperty(
+      BACKDROP_TRANSFORM,
+      viewportLayerTransform(held.current, shown.current),
+    );
+    layer.style.setProperty(BACKDROP_WILL_CHANGE, "transform");
   }, [layerRef]);
   const releaseLayer = useCallback((): void => {
     held.current = null;
-    releaseOnShown.current = false;
     const layer = layerRef.current;
     if (layer === null) return;
     layer.style.transform = "";
     layer.style.willChange = "";
     layer.style.transformOrigin = "";
+    layer.style.removeProperty(BACKDROP_TRANSFORM);
+    layer.style.removeProperty(BACKDROP_WILL_CHANGE);
   }, [layerRef]);
 
   const applyQueued = useCallback((): void => {
@@ -136,8 +155,9 @@ export function useCanvasWheelCamera({
     held.current = camera.current;
     paintLayer();
     commit();
-    // React Flow may have nothing to draw: the gesture came back to where it
-    // began. Otherwise the layer waits for `onShown`.
+    // React Flow redraws only a viewport that changed. A gesture that ends
+    // where it began, such as a pinch that carries on at a zoom limit, has
+    // no redraw to wait for; any other waits for `onShown`.
     if (
       shown.current !== null &&
       held.current !== null &&
@@ -178,7 +198,6 @@ export function useCanvasWheelCamera({
     dropQueued();
     stopTimers();
     camera.current = null;
-    if (held.current !== null) releaseOnShown.current = true;
   }, [applyQueued, commitZoom, dropQueued, stopTimers]);
 
   // Unmounting has no viewport left to hand over, and takes the layer along.
@@ -239,24 +258,22 @@ export function useCanvasWheelCamera({
       if (settleTimer.current === null && !zooming.current)
         camera.current = null;
       if (held.current === null) return;
-      // Once the zoom is the one the layer held, React Flow has drawn it; a
-      // pan still on its way shows up a frame later, as any pan does.
-      const drawn =
-        !zooming.current &&
-        Math.abs(viewport.zoom - held.current.zoom) <= ZOOM_EPSILON;
-      if (releaseOnShown.current || drawn) releaseLayer();
-      else paintLayer();
+      // A zoom still in progress keeps its picture over the new drawing.
+      // Once React Flow has been handed the viewport, whatever it draws next
+      // is the picture, even if it is not the viewport the layer held: a
+      // layer kept over a drawing it does not match shows the canvas twice
+      // transformed.
+      if (zooming.current) paintLayer();
+      else releaseLayer();
     },
     [paintLayer, releaseLayer],
   );
   return { push, cancel, settling, onShown };
 }
 
-const ZOOM_EPSILON = 1e-9;
-
 function sameViewport(a: Viewport, b: Viewport): boolean {
   return (
-    Math.abs(a.zoom - b.zoom) <= ZOOM_EPSILON &&
+    Math.abs(a.zoom - b.zoom) <= 1e-9 &&
     Math.abs(a.x - b.x) <= 1e-6 &&
     Math.abs(a.y - b.y) <= 1e-6
   );

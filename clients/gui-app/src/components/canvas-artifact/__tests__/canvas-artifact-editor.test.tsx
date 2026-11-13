@@ -1990,16 +1990,21 @@ describe("CanvasArtifactEditor zoom gestures", () => {
     if (element === null) throw new Error("could not find the zoom layer");
     return element;
   }
-  function layerTransform(): { x: number; y: number; scale: number } {
-    const match = /^translate\((.+)px, (.+)px\) scale\((.+)\)$/.exec(
-      layer().style.transform,
-    );
-    if (match === null) throw new Error("the zoom layer is not transformed");
+  function transformOf(value: string): {
+    x: number;
+    y: number;
+    scale: number;
+  } {
+    const match = /^translate\((.+)px, (.+)px\) scale\((.+)\)$/.exec(value);
+    if (match === null) throw new Error(`not a layer transform: "${value}"`);
     return {
       x: Number(match[1]),
       y: Number(match[2]),
       scale: Number(match[3]),
     };
+  }
+  function layerTransform(): { x: number; y: number; scale: number } {
+    return transformOf(layer().style.transform);
   }
   function frame(): void {
     act(() => {
@@ -2035,6 +2040,69 @@ describe("CanvasArtifactEditor zoom gestures", () => {
     expect(flow.viewport?.zoom).toBeCloseTo(0.6 * STEP, 10);
     expect(flow.viewport?.x).toBeCloseTo(200 - 140 * STEP, 10);
     // The layer lets go in the render that draws the real viewport.
+    expect(layer().style.transform).toBe("");
+    expect(layer().style.willChange).toBe("");
+  });
+
+  it("gives the backdrop the inverse of the layer's transform, so the dot grid and fill stay on the stage", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY: 100 });
+    frame();
+
+    const scaled = layerTransform();
+    const countered = transformOf(
+      layer().style.getPropertyValue("--canvas-backdrop-transform"),
+    );
+    expect(scaled.scale).toBeCloseTo(1 / STEP, 10);
+    // The backdrop sits inside the layer: its transform runs first, then
+    // the layer's. Together they must leave it exactly where it was.
+    expect(scaled.scale * countered.scale).toBeCloseTo(1, 10);
+    expect(scaled.scale * countered.x + scaled.x).toBeCloseTo(0, 8);
+    expect(scaled.scale * countered.y + scaled.y).toBeCloseTo(0, 8);
+
+    wait(120);
+    expect(layer().style.getPropertyValue("--canvas-backdrop-transform")).toBe(
+      "",
+    );
+  });
+
+  it.each([
+    ["minimum", 4000, 0.05],
+    ["maximum", -4000, 4],
+  ])(
+    "lets go of the layer after a gesture runs into the %s zoom, and after pinching on at it",
+    (_limit, deltaY, zoom) => {
+      mountEditor();
+      for (let step = 0; step < 6; step += 1)
+        fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY });
+      frame();
+      wait(120);
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      expect(flow.viewport?.zoom).toBe(zoom);
+      expect(layer().style.transform).toBe("");
+
+      // Nothing changes at the limit, so React Flow has nothing to redraw.
+      fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY });
+      frame();
+      wait(120);
+      expect(flow.viewport?.zoom).toBe(zoom);
+      expect(layer().style.transform).toBe("");
+      expect(layer().style.willChange).toBe("");
+    },
+  );
+
+  it("lets go of the layer when React Flow draws a viewport other than the one it was handed", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    // React Flow settles somewhere else: a limit of its own, a rounding.
+    flow.reportedViewport = { x: 10, y: 20, zoom: 0.7 };
+
+    wait(120);
+
+    // Kept over a drawing it does not match, the layer would show the
+    // canvas transformed twice.
+    expect(flow.setViewport).toHaveBeenCalledOnce();
     expect(layer().style.transform).toBe("");
     expect(layer().style.willChange).toBe("");
   });
