@@ -43,16 +43,17 @@ interface SessionEntry {
 const session = new Map<string, SessionEntry>();
 
 /**
- * Every hash whose bytes are reachable in THIS window's partition (session cache
- * or IndexedDB) as far as we have observed this session. Seeded on write
- * (`putImage`) and on any successful read (`getImageBytes`, which the
- * restored-draft fetcher drives when an image renders), and pruned on
- * `reclaimImageBytes`. Backs the synchronous landing paste presence predicate
- * (`hasLandingImageBytes`): unlike the session map alone, it also reports a
- * restored draft's IndexedDB-backed hash as present once its image has rendered,
- * so a same-window copy→paste of that image is not falsely stripped.
+ * Every hash whose bytes this window has seen in its partition's CURRENT
+ * database: written there (`putImage`), read from it (`getImageBytes`, which the
+ * restored-draft fetcher drives when an image renders) or listed in it
+ * (`imageHashKeys`). A deletion of that database empties it, and a reclaim or a
+ * delete of the bytes takes the hash out. With the bytes held in memory it backs
+ * the synchronous landing paste presence predicate (`hasLandingImageBytes`):
+ * unlike the session map alone, it also reports a restored draft's
+ * IndexedDB-backed hash as present once its image has rendered, so a same-window
+ * copy→paste of that image is not falsely stripped.
  */
-const knownHashes = new Set<string>();
+const durableHashes = new Set<string>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -189,28 +190,39 @@ export function landingImageDeletions(): number {
 }
 
 /**
- * Whether an operation that started at deletion count `since` may publish
- * presence or a size for `hash`: nothing was deleted since, or this window
- * holds the bytes in memory, which a deletion keeps (`forgetDeletedImages`).
+ * An operation that started at deletion count `since` found `hash`'s bytes in
+ * the database or wrote them there. That makes the hash present, with its size,
+ * only if nothing was deleted since; returns whether it did.
  */
-function publishable(hash: string, since: number): boolean {
-  return since === deletions || session.has(hash) || reclaimCustody.has(hash);
+function observedDurable(
+  hash: string,
+  byteLength: number,
+  since: number,
+): boolean {
+  if (since !== deletions) return false;
+  durableHashes.add(hash);
+  rememberMeasuredSize(hash, byteLength);
+  return true;
 }
 
 /**
- * This window's image store was deleted: only the bytes held in memory, the
- * session's and those a reclaim holds, are still to be had, so presence and
- * the measured sizes keep those alone.
+ * Whether this window holds `hash`'s bytes in memory: the session's, or a
+ * reclaim's.
+ */
+function heldInMemory(hash: string): boolean {
+  return session.has(hash) || reclaimCustody.has(hash);
+}
+
+/**
+ * This window's image store was deleted: nothing seen in it is there any more.
+ * Only the bytes held in memory are still to be had, and presence reads those
+ * live, so the measured sizes keep those alone.
  */
 function forgetDeletedImages(): void {
   deletions += 1;
-  const held = (hash: string): boolean =>
-    session.has(hash) || reclaimCustody.has(hash);
-  for (const hash of knownHashes) {
-    if (!held(hash)) knownHashes.delete(hash);
-  }
+  durableHashes.clear();
   for (const hash of measuredSizes.keys()) {
-    if (!held(hash)) measuredSizes.delete(hash);
+    if (!heldInMemory(hash)) measuredSizes.delete(hash);
   }
   for (const listener of deletedListeners) listener();
 }
@@ -235,10 +247,13 @@ function rememberMeasuredSize(hash: string, byteLength: number): void {
 
 /**
  * The measured length of `hash`'s bytes, or `null` when this partition has
- * never measured them. `null` is NOT zero - see `landing-image-budget.ts`, which
- * charges an unmeasured root conservatively rather than free.
+ * never measured them or does not hold them now (`hasLandingImageBytes`): a
+ * size is claimed only with its bytes. `null` is NOT zero - see
+ * `landing-image-budget.ts`, which charges an unmeasured root conservatively
+ * rather than free.
  */
 export function measuredLandingImageSize(hash: string): number | null {
+  if (!hasLandingImageBytes(hash)) return null;
   return measuredSizes.get(hash) ?? null;
 }
 
@@ -313,27 +328,52 @@ async function writeImageUnderHash(
       objectUrl: URL.createObjectURL(new Blob([bytes])),
     });
   }
-  const seededKnown = !knownHashes.has(hash);
-  knownHashes.add(hash);
-  const since = deletions;
-  const store = imageStore();
   try {
-    if ((await get(hash, store)) === undefined) {
-      await set(hash, bytes, store);
-    }
-    // After the write, and on the dedupe path too: a hash whose bytes were
-    // already there may still be unmeasured (an older build wrote them).
-    if (publishable(hash, since)) rememberMeasuredSize(hash, bytes.byteLength);
+    await writeUntilDurable(hash, bytes);
   } catch (error) {
-    // The durable write failed: roll back the optimistic seeding THIS call added
-    // (a dedupe hit that found the hash already cached is left intact). Without
-    // this, `hasLandingImageBytes` would report present with no durable bytes, so
-    // a later paste of that hash would pass validation into a blank preview.
+    // The durable write failed: roll back the session seed THIS call added (a
+    // dedupe hit that found the hash already cached is left intact), and the
+    // presence it gave. Without this, `hasLandingImageBytes` would report
+    // present with no durable bytes, so a later paste of that hash would pass
+    // validation into a blank preview.
     if (seededSession) releaseSession(hash);
-    if (seededKnown) knownHashes.delete(hash);
     throw error;
   }
   return hash;
+}
+
+/**
+ * Write `bytes` under `hash`, skipped when the database already has them, until
+ * a write ends in the deletion generation it started in.
+ *
+ * Closing the connection for another window's deletion lets the transactions
+ * already running on it finish, so a write queued before the deletion can land
+ * in the deleted database, or its dedupe read can find the deleted database's
+ * copy and skip the write; and a write the closed connection refuses never
+ * lands. Either way the new database does not have the bytes, so the write
+ * goes again into it, with the bytes in hand. Only a deletion makes it go
+ * again, and it ends at the first write no deletion overtook: whoever awaits
+ * `putImage`, a joiner of its flight included, gets a hash whose bytes are in
+ * the current database.
+ */
+async function writeUntilDurable(
+  hash: string,
+  bytes: ImageBytes,
+): Promise<void> {
+  let since: number;
+  do {
+    since = deletions;
+    try {
+      const store = imageStore();
+      if ((await get(hash, store)) === undefined) {
+        await set(hash, bytes, store);
+      }
+    } catch (error: unknown) {
+      if (since === deletions) throw error;
+    }
+    // Measured on the dedupe path too: a hash whose bytes were already there
+    // may still be unmeasured (an older build wrote them).
+  } while (!observedDurable(hash, bytes.byteLength, since));
 }
 
 /**
@@ -345,26 +385,17 @@ export async function getImageBytes(
   hash: string,
 ): Promise<ImageBytes | undefined> {
   const fromSession = session.get(hash);
-  if (fromSession !== undefined) {
-    knownHashes.add(hash);
-    return fromSession.bytes;
-  }
+  if (fromSession !== undefined) return fromSession.bytes;
   // Custody FIRST, and before the durable read rather than after it. While a
   // reclaim holds these bytes the partition does not have them, so the read can
   // only miss - and it can do worse than miss: the case custody exists for
   // includes a database that is closing or refusing writes, where the read
   // THROWS and a reader that consults custody afterwards never gets there.
   const retained = reclaimCustody.get(hash);
-  if (retained !== undefined) {
-    knownHashes.add(hash);
-    return retained;
-  }
+  if (retained !== undefined) return retained;
   const since = deletions;
   const stored = await get<ImageBytes>(hash, imageStore());
-  if (stored !== undefined && publishable(hash, since)) {
-    knownHashes.add(hash);
-    rememberMeasuredSize(hash, stored.byteLength);
-  }
+  if (stored !== undefined) observedDurable(hash, stored.byteLength, since);
   return stored;
 }
 
@@ -425,7 +456,7 @@ export function reclaimImageBytes(
   // two of them can reach the same orphan - and the custody map is keyed by
   // hash, so the first to finish deleted the entry the second was still
   // relying on: its reader answered `undefined` mid-restore, and a restore
-  // that then failed left no copy anywhere while `knownHashes` still said
+  // that then failed left no copy anywhere while presence still said
   // present. Refcounting the entry would not fix it either; the two reclaims
   // disagree about what they are doing to the same bytes.
   //
@@ -464,7 +495,7 @@ async function runImageReclaim(
     // absent while the session is holding it, and the next paste of that hash
     // would be stripped as unbacked.
     if (session.has(hash)) return "kept";
-    knownHashes.delete(hash);
+    durableHashes.delete(hash);
     return "absent";
   }
   if (stillRooted(hash, isRooted)) return "kept";
@@ -473,36 +504,32 @@ async function runImageReclaim(
   // these bytes, so a read that arrives in that window answers `undefined` for
   // a hash that is about to be kept - and if the restore itself throws (a quota
   // refusal, a closing database) the only copy is a local in a rejected call.
+  // If the delete or the restore throws, custody is deliberately NOT released.
+  // The delete may have committed, so these bytes can be the only copy left;
+  // readers, presence included, keep finding them here and
+  // `flushReclaimCustody` re-attempts the durable write on the next sweep.
   reclaimCustody.set(hash, retained);
-  try {
-    await del(hash, store);
-    if (!stillRooted(hash, isRooted)) {
-      // Everything this partition knew about the hash goes with the bytes. A
-      // surviving measurement is not inert: the budget charges a root by its
-      // measured size, so a stale one made an ABSENT stash-only root cost the
-      // size it used to have, and a restore of the very bytes that were
-      // reclaimed was refused for the space it thought they still occupied.
-      knownHashes.delete(hash);
-      measuredSizes.delete(hash);
-      void del(hash, imageSizeStore()).catch(() => undefined);
-      reclaimCustody.delete(hash);
-      return "reclaimed";
-    }
-    await set(hash, retained, store);
-    knownHashes.add(hash);
-    rememberMeasuredSize(hash, retained.byteLength);
-    // A deletion since may have taken the write back with the database: then
-    // custody keeps the bytes, and the next sweep writes them again
-    // (`flushReclaimCustody`).
-    if (since === deletions) reclaimCustody.delete(hash);
-    return "kept";
-  } catch (error: unknown) {
-    // Custody is deliberately NOT released. The delete may have committed, so
-    // these bytes can be the only copy left; readers keep finding them here and
-    // `flushReclaimCustody` re-attempts the durable write on the next sweep.
-    knownHashes.add(hash);
-    throw error;
+  await del(hash, store);
+  if (!stillRooted(hash, isRooted)) {
+    // Everything this partition knew about the hash goes with the bytes. A
+    // surviving measurement is not inert: the budget charges a root by its
+    // measured size, so a stale one made an ABSENT stash-only root cost the
+    // size it used to have, and a restore of the very bytes that were
+    // reclaimed was refused for the space it thought they still occupied.
+    durableHashes.delete(hash);
+    measuredSizes.delete(hash);
+    void del(hash, imageSizeStore()).catch(() => undefined);
+    reclaimCustody.delete(hash);
+    return "reclaimed";
   }
+  await set(hash, retained, store);
+  // A deletion since may have taken the write back with the database: then
+  // custody keeps the bytes, and the next sweep writes them again
+  // (`flushReclaimCustody`).
+  if (observedDurable(hash, retained.byteLength, since)) {
+    reclaimCustody.delete(hash);
+  }
+  return "kept";
 }
 
 /**
@@ -531,10 +558,10 @@ export async function flushReclaimCustody(): Promise<number> {
     const since = deletions;
     try {
       await set(hash, bytes, imageStore());
-      knownHashes.add(hash);
-      rememberMeasuredSize(hash, bytes.byteLength);
       // As at a reclaim's restore: a deletion since may have taken the write.
-      if (since === deletions) reclaimCustody.delete(hash);
+      if (observedDurable(hash, bytes.byteLength, since)) {
+        reclaimCustody.delete(hash);
+      }
     } catch {
       // Still refused. Keep holding: dropping the entry here would destroy the
       // only copy of bytes something references.
@@ -550,7 +577,7 @@ export function reclaimCustodyHashesForTests(): ReadonlyArray<string> {
 
 /**
  * Delete `hash`'s persisted bytes with NO root check of any kind. Does not touch
- * the session cache.
+ * the session cache, so bytes held there stay present.
  *
  * Reclaiming unreferenced bytes goes through `reclaimImageBytes`, which is this
  * plus the retain-and-restore protocol above; reach for this one only where the
@@ -562,7 +589,7 @@ export async function deleteImageBytesUnchecked(hash: string): Promise<void> {
   // on a rejected `del`, report the still-present bytes as absent until a later
   // enumeration healed the set.
   await del(hash, imageStore());
-  knownHashes.delete(hash);
+  durableHashes.delete(hash);
   measuredSizes.delete(hash);
   void del(hash, imageSizeStore()).catch(() => undefined);
 }
@@ -581,12 +608,13 @@ export async function imageHashKeys(): Promise<string[]> {
   const since = deletions;
   const keysList = await keys<string>(imageStore());
   // Enumerating durable keys is the source of truth for presence, so fold them
-  // into `knownHashes`. This keeps `hasLandingImageBytes` honest even when a
+  // into `durableHashes`, unless the database they were listed from has been
+  // deleted since. This keeps `hasLandingImageBytes` honest even when a
   // restored image rendered from the app-wide blob cache (a cache hit never
   // calls the per-surface fetcher / `getImageBytes`, so that path wouldn't seed
   // it). Cheap and idempotent; the module also runs this once at init below.
-  for (const hash of keysList) {
-    if (publishable(hash, since)) knownHashes.add(hash);
+  if (since === deletions) {
+    for (const hash of keysList) durableHashes.add(hash);
   }
   return keysList;
 }
@@ -604,14 +632,17 @@ export function sessionObjectUrl(hash: string): string | null {
  * phantom-preview fail-open. Synchronous, mirroring the chat composer's predicate.
  *
  * Reflects durable IndexedDB bytes regardless of how the image was rendered:
- * `knownHashes` is seeded from the partition's stored keys at init (and on every
- * `imageHashKeys` enumeration), plus by `putImage`/`getImageBytes`. So a restored
- * image whose chip reused an app-wide blob-cache URL (never calling the
+ * `durableHashes` is seeded from the partition's stored keys at init (and on
+ * every `imageHashKeys` enumeration), plus by `putImage`/`getImageBytes`. So a
+ * restored image whose chip reused an app-wide blob-cache URL (never calling the
  * per-surface fetcher) still reports present, and a same-window copy→paste of it
  * is not a false negative.
+ *
+ * Bytes held in memory count while they are held, and no longer: a hash whose
+ * last copy was in memory stops being present when that copy goes.
  */
 export function hasLandingImageBytes(hash: string): boolean {
-  return knownHashes.has(hash);
+  return heldInMemory(hash) || durableHashes.has(hash);
 }
 
 /**
@@ -672,10 +703,10 @@ async function hydrateMeasuredImageSizes(): Promise<void> {
     // older build, which was never safe to import either.
     //
     // The enumeration above runs first and folds every durable key into
-    // `knownHashes`, so a legitimately resident hash is always in it by here;
-    // custody covers the narrower window where a reclaim is holding the only
-    // copy while the partition itself does not have it.
-    if (!knownHashes.has(hash) && !reclaimCustody.has(hash)) continue;
+    // `durableHashes`, so a legitimately resident hash is present by here; the
+    // bytes held in memory cover the narrower window where a reclaim is holding
+    // the only copy while the partition itself does not have it.
+    if (!hasLandingImageBytes(hash)) continue;
     measuredSizes.set(hash, byteLength);
   }
   for (const hash of resident) {
@@ -734,7 +765,7 @@ const measuredSizesHydration: Promise<void> = ensureMeasuredImageSizes();
  * Whether the cold-start measurement above has finished.
  *
  * Until it has, this module knows neither what a hash measures NOR whether the
- * partition holds it - `knownHashes` is seeded by that same pass. Admission has
+ * partition holds it - `durableHashes` is seeded by that same pass. Admission has
  * to read this rather than infer from an empty presence set, or a cold start
  * charges every restored image zero and admits work the partition cannot hold.
  */

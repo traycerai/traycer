@@ -125,6 +125,14 @@ function docWithImages(...nodes: ReadonlyArray<JsonContent>): JsonContent {
 
 // Flush a handful of microtask turns so `void deleteImageBytesUnchecked(...)` chains settle.
 // No real timers are involved in the delete path, so this is enough.
+/** The measured length the sizes database holds for `hash`. */
+function storedSizeRow(hash: string): unknown {
+  for (const [name, rows] of idb.byDb) {
+    if (name.endsWith("landing-image-sizes")) return rows.get(hash);
+  }
+  return undefined;
+}
+
 async function flush(): Promise<void> {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();
@@ -590,6 +598,13 @@ describe("landing-image-gc", () => {
 
     expect(m.store.measuredLandingImageSize(hash)).toBeNull();
     expect(m.store.hasLandingImageBytes(hash)).toBe(false);
+
+    // A size imported for bytes that are gone would also make a put of the same
+    // bytes skip writing its row, leaving a stored image with none.
+    expect(storedSizeRow(hash)).toBeUndefined();
+    await m.store.putImage(bytesOf([1, 2, 3, 4]));
+    await flush();
+    expect(storedSizeRow(hash)).toBe(4);
   });
 
   it("still reclaims a genuine orphan when no root appears (positive control)", async () => {

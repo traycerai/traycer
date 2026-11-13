@@ -24,6 +24,7 @@ import {
   deleteDatabaseOutcome,
   openHoldingConnection,
   rawGet,
+  stubDigestsOf,
 } from "@/lib/composer/__tests__/fake-idb";
 import { botBoxDraftsKey } from "@/lib/persist";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
@@ -1281,6 +1282,62 @@ describe("a wipe of the image database under a running window", () => {
       (stored) => stored?.[BOT_ID]?.channel?.text === "pic more",
     );
     expect(storedHash()).toBe(hash);
+    expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+
+    app = await restart();
+
+    expect(
+      JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
+    ).toContain(IMAGE_B64);
+  });
+
+  it("keeps a draft's image through a deletion that overtakes the put storing it, which the writer's retry joins", async () => {
+    const hash = await storeImageBytes();
+    // A start of its own, so the image is on disk alone and the put's read finds it there.
+    app = await restart();
+    const { base64ToBytes } = await import("@/lib/composer/image-base64");
+    const bytes = base64ToBytes(IMAGE_B64);
+    if (bytes === null) throw new Error("the fixture image decodes");
+    // The retry reaches the put in microtasks, so it joins the first put's
+    // flight, which the held transaction keeps running, whatever the machine.
+    await stubDigestsOf([bytes]);
+    const images = await import("@/lib/composer/landing-image-store");
+    const connection = await openHoldingConnection(IMAGES_DB, "bytes");
+    const held = connection.hold(hash);
+    onTestFinished(() => held.release());
+    await held.started;
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
+    await vi.advanceTimersByTimeAsync(
+      app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await vi.waitFor(() =>
+      expect(images.sessionImageBytes(hash)).not.toBeNull(),
+    );
+
+    const deletion = deleteAndAwaitInvalidation(
+      IMAGES_DB,
+      images.onLandingImagesDeleted,
+    );
+    await deletion.invalidated;
+    // The writer's own retry of the write the deletion overtook.
+    await vi.advanceTimersByTimeAsync(
+      app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    held.release();
+    await deletion.removed;
+
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic",
+    );
+    expect(storedHash()).toBe(hash);
+    // The session answers for the bytes until it lets go.
+    images.releaseSession(hash);
     expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
 
     app = await restart();

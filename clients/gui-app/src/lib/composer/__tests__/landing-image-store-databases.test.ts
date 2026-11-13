@@ -20,8 +20,10 @@ import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import {
   deleteAndAwaitInvalidation,
   deleteDatabaseOutcome,
+  deleteDatabaseWhenClosed,
   installFreshIndexedDb,
   openHoldingConnection,
+  rawDelete,
   rawGet,
   rawPut,
   type HeldTransaction,
@@ -36,6 +38,8 @@ const holds = vi.hoisted(() => ({
   readDone: (): void => undefined,
   /** While set, a write to a database is refused. */
   refuseWrites: false,
+  /** How many reads of the image database were started. */
+  reads: 0,
 }));
 
 // A read is held after the database answered it, which is the point between a
@@ -56,6 +60,7 @@ vi.mock("idb-keyval", async (importOriginal) => {
       key: IDBValidKey,
       store: UseStore | undefined,
     ): Promise<T | undefined> => {
+      holds.reads += 1;
       const value = await real.get<T>(key, store);
       const gate = holds.afterRead;
       if (gate !== null) {
@@ -90,6 +95,7 @@ afterEach(() => {
   holds.afterRead = null;
   holds.readDone = (): void => undefined;
   holds.refuseWrites = false;
+  holds.reads = 0;
 });
 
 describe("the landing image databases when another window deletes them", () => {
@@ -133,7 +139,7 @@ describe("the landing image databases when another window deletes them", () => {
     expect(windowB.measuredLandingImageSize(putHash)).toBe(4);
   });
 
-  it("rejects a put the deletion catches between its read and its write, and rolls the put's seed back", async () => {
+  it("writes a put the deletion catches between its read and its write again into the new database, which the closed connection refused", async () => {
     const windowB = await loadWindow();
     const bytes = new Uint8Array([4, 5, 6]);
     const hash = await windowB.sha256Hex(bytes);
@@ -144,18 +150,17 @@ describe("the landing image databases when another window deletes them", () => {
     const readDone = new Promise<void>((resolve) => {
       holds.readDone = resolve;
     });
-    const settled = windowB.putImage(bytes).then(
-      (stored) => stored,
-      (error: unknown) => error,
-    );
+    const settled = windowB.putImage(bytes);
     await readDone;
 
     expect(await deleteDatabaseOutcome(IMAGES_DB)).toBe("deleted");
     release();
 
-    expect(await settled).not.toBe(hash);
-    expect(windowB.hasLandingImageBytes(hash)).toBe(false);
-    expect(windowB.sessionObjectUrl(hash)).toBeNull();
+    expect(await settled).toBe(hash);
+    windowB.releaseSession(hash);
+    expect(windowB.hasLandingImageBytes(hash)).toBe(true);
+    expect(numbers(await windowB.getImageBytes(hash))).toEqual([4, 5, 6]);
+    expect(await storedBytes(hash)).toEqual([4, 5, 6]);
   });
 
   it("records a new image's size in the new sizes database once the sizes database was deleted", async () => {
@@ -314,22 +319,140 @@ describe("an operation of the window that a deletion of the image database overt
       return { window, hash };
     }
 
-    it("measures no size for it when the session let the bytes go after the deletion", async () => {
+    it("writes the bytes again into the new database, and claims them with their size, when the session let them go after the deletion", async () => {
       const { window, hash } = await putCaughtByDeletion((w, h) =>
         w.releaseSession(h),
       );
 
-      // Its presence is published before its first await, so only the size
-      // tells a put that published after the deletion from one that did not.
-      expect(window.measuredLandingImageSize(hash)).toBeNull();
-    });
-
-    it("measures its size when the session still holds the bytes, which a deletion keeps", async () => {
-      const { window, hash } = await putCaughtByDeletion(() => undefined);
-
-      expect(window.measuredLandingImageSize(hash)).toBe(3);
+      // The read found the deleted database's copy, so the put's first attempt
+      // wrote nothing: the claim is only true of the bytes the second one wrote.
+      expect(await storedBytes(hash)).toEqual([1, 2, 3]);
       expect(window.hasLandingImageBytes(hash)).toBe(true);
+      expect(window.measuredLandingImageSize(hash)).toBe(3);
+      expect(numbers(await window.getImageBytes(hash))).toEqual([1, 2, 3]);
     });
+
+    it("keeps the claim true of the bytes once the session lets them go, with the bytes written again into the new database", async () => {
+      const { window, hash } = await putCaughtByDeletion(() => undefined);
+      expect(window.measuredLandingImageSize(hash)).toBe(3);
+
+      window.releaseSession(hash);
+
+      expect(await storedBytes(hash)).toEqual([1, 2, 3]);
+      expect(window.hasLandingImageBytes(hash)).toBe(true);
+      expect(window.measuredLandingImageSize(hash)).toBe(3);
+      expect(numbers(await window.getImageBytes(hash))).toEqual([1, 2, 3]);
+      expect(await window.imageHashKeys()).toEqual([hash]);
+    });
+
+    it("claims no more once the session lets go of bytes the deletion took, when nothing wrote them again", async () => {
+      const window = await loadWindow();
+      await window.awaitLandingImageSizes();
+      const hash = await window.putImage(SEEDED);
+      expect(await storedBytes(hash)).toEqual([1, 2, 3]);
+
+      const deletion = deleteAndAwaitInvalidation(
+        IMAGES_DB,
+        window.onLandingImagesDeleted,
+      );
+      await deletion.invalidated;
+      await deletion.removed;
+      // The session still holds them, so they are still the window's to claim.
+      expect(window.hasLandingImageBytes(hash)).toBe(true);
+      window.releaseSession(hash);
+
+      expect(window.hasLandingImageBytes(hash)).toBe(false);
+      expect(window.measuredLandingImageSize(hash)).toBeNull();
+      expect(await window.getImageBytes(hash)).toBeUndefined();
+    });
+
+    it("writes the bytes again each time a deletion overtakes the put, and settles once, after the last", async () => {
+      const window = await loadWindow();
+      await window.awaitLandingImageSizes();
+      const hash = await window.sha256Hex(SEEDED);
+      const firstDeletions = window.landingImageDeletions();
+      const held1 = await holdImageDatabase(hash);
+      const settledAt: number[] = [];
+      const reads = holds.reads;
+      const put = window.putImage(SEEDED).then((stored) => {
+        settledAt.push(window.landingImageDeletions());
+        return stored;
+      });
+      await vi.waitFor(() =>
+        expect(window.sessionImageBytes(hash)).not.toBeNull(),
+      );
+
+      const deletion1 = deleteAndAwaitInvalidation(
+        IMAGES_DB,
+        window.onLandingImagesDeleted,
+      );
+      // Requested behind the pending deletion, so it opens before the put's
+      // second attempt does, and that attempt's read queues behind it.
+      const opening2 = openHoldingConnection(IMAGES_DB, "bytes");
+      await deletion1.invalidated;
+      held1.release();
+      const held2 = (await opening2).hold(hash);
+      onTestFinished(() => held2.release());
+      await held2.started;
+      await vi.waitFor(() => expect(holds.reads).toBe(reads + 2));
+
+      const deletion2 = deleteAndAwaitInvalidation(
+        IMAGES_DB,
+        window.onLandingImagesDeleted,
+      );
+      await deletion2.invalidated;
+      expect(window.landingImageDeletions()).toBe(firstDeletions + 2);
+      expect(settledAt).toEqual([]);
+      held2.release();
+
+      expect(await put).toBe(hash);
+      await deletion2.removed;
+      expect(settledAt).toEqual([firstDeletions + 2]);
+      expect(window.landingImageDeletions()).toBe(firstDeletions + 2);
+      expect(await storedBytes(hash)).toEqual([1, 2, 3]);
+      window.releaseSession(hash);
+      expect(window.hasLandingImageBytes(hash)).toBe(true);
+      expect(window.measuredLandingImageSize(hash)).toBe(3);
+      expect(numbers(await window.getImageBytes(hash))).toEqual([1, 2, 3]);
+    });
+  });
+
+  it("records a put image's size again in the new sizes database after the wipe deleted both databases, though the window had measured it", async () => {
+    const window = await loadWindow();
+    await window.awaitLandingImageSizes();
+    const hash = await window.putImage(SEEDED);
+    await vi.waitFor(async () =>
+      expect(await rawGet(SIZES_DB, "sizes", hash)).toBe(3),
+    );
+    window.releaseSession(hash);
+
+    // As the wipe does: the image database and the sizes database together.
+    const deletion = deleteAndAwaitInvalidation(
+      IMAGES_DB,
+      window.onLandingImagesDeleted,
+    );
+    await Promise.all([deletion.removed, deleteDatabaseWhenClosed(SIZES_DB)]);
+    await window.putImage(SEEDED);
+
+    await vi.waitFor(async () =>
+      expect(await rawGet(SIZES_DB, "sizes", hash)).toBe(3),
+    );
+  });
+
+  it("reports a reclaim absent, and claims neither presence nor a size, once another window's sweep removed the bytes it had seen", async () => {
+    const window = await loadWindow();
+    await window.awaitLandingImageSizes();
+    const hash = await window.putImage(SEEDED);
+    window.releaseSession(hash);
+    expect(numbers(await window.getImageBytes(hash))).toEqual([1, 2, 3]);
+    expect(window.measuredLandingImageSize(hash)).toBe(3);
+    // Between this window's listing and its reclaim, as on the shared partition.
+    await rawDelete(IMAGES_DB, "bytes", hash);
+
+    expect(await window.reclaimImageBytes(hash, () => false)).toBe("absent");
+
+    expect(window.hasLandingImageBytes(hash)).toBe(false);
+    expect(window.measuredLandingImageSize(hash)).toBeNull();
   });
 
   describe("a reclaim and a flush of the bytes it holds", () => {

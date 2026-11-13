@@ -3,6 +3,8 @@
  * (landing images, drafts, appearance cache, tab recovery). Installs a fresh
  * factory per test so prior DBs and connections cannot leak state.
  */
+import { onTestFinished, vi } from "vitest";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import {
   IDBFactory as FakeIDBFactory,
   IDBKeyRange as FakeIDBKeyRange,
@@ -93,6 +95,25 @@ export function rawGet(
           .get(key);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(failure(request.error));
+      }),
+  );
+}
+
+/** Deletes `key` from `dbName`'s `storeName`, over a connection of its own: the database stays, as when another window's sweep reclaims one image. */
+export function rawDelete(
+  dbName: string,
+  storeName: string,
+  key: string,
+): Promise<void> {
+  return withConnection(
+    dbName,
+    storeName,
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(storeName, "readwrite");
+        tx.objectStore(storeName).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(failure(tx.error));
       }),
   );
 }
@@ -204,4 +225,39 @@ export function openHoldingConnection(
       });
     };
   });
+}
+
+/** The bytes a digest was asked about, as numbers, whatever view they came in. */
+function digestKey(data: BufferSource): string {
+  const bytes = ArrayBuffer.isView(data)
+    ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+    : new Uint8Array(data);
+  return bytes.join(",");
+}
+
+/**
+ * Makes `crypto.subtle.digest` answer for each of `known` from its digest
+ * taken now, in a microtask, until the test ends. The real digest settles on a
+ * thread pool, so when an operation reaches the store after it is up to the
+ * machine; with this it depends on the fake IndexedDB alone, and a test can
+ * rely on "the operation has started" once a macrotask has passed. Bytes
+ * outside `known` are digested for real.
+ */
+export async function stubDigestsOf(
+  known: ReadonlyArray<ImageBytes>,
+): Promise<void> {
+  const real = crypto.subtle.digest.bind(crypto.subtle);
+  const digests = new Map<string, ArrayBuffer>();
+  for (const bytes of known) {
+    digests.set(digestKey(bytes), await real("SHA-256", bytes));
+  }
+  const spy = vi
+    .spyOn(crypto.subtle, "digest")
+    .mockImplementation((algorithm, data) => {
+      const digest = digests.get(digestKey(data));
+      return digest === undefined
+        ? real(algorithm, data)
+        : Promise.resolve(digest.slice(0));
+    });
+  onTestFinished(() => spy.mockRestore());
 }
