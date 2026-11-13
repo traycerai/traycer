@@ -2376,6 +2376,8 @@ interface SyncProfileSpec {
   readonly aliases: readonly string[];
   readonly personNotice: "needs-sign-in" | "waiting" | null;
   readonly terminalOnThisComputer: boolean;
+  /** Null omits the key. Login does not read it. */
+  readonly otherNames: readonly string[] | null;
 }
 
 interface RemovedEntry {
@@ -2436,6 +2438,9 @@ function syncList(spec: {
           aliases: [...profile.aliases],
           personNotice: profile.personNotice,
           terminalOnThisComputer: profile.terminalOnThisComputer,
+          ...(profile.otherNames === null
+            ? {}
+            : { otherNames: [...profile.otherNames] }),
         })),
       },
     ],
@@ -2478,6 +2483,7 @@ function workRow(
     aliases,
     personNotice: null,
     terminalOnThisComputer: false,
+    otherNames: null,
   };
 }
 
@@ -2647,6 +2653,7 @@ const TEN_ELEVEN_LOGIN_ROWS: readonly SyncProfileSpec[] = [
     aliases: [],
     personNotice: null,
     terminalOnThisComputer: true,
+    otherNames: null,
   },
   {
     profileId: "prof_work",
@@ -2657,6 +2664,7 @@ const TEN_ELEVEN_LOGIN_ROWS: readonly SyncProfileSpec[] = [
     aliases: [],
     personNotice: null,
     terminalOnThisComputer: false,
+    otherNames: null,
   },
 ];
 
@@ -2711,5 +2719,90 @@ describe("login prompts for nothing", () => {
     expect(withoutTerminal.exitCode).toBe(current.exitCode);
     expect(withoutTerminal.human).toBe(current.human);
     expect(withoutTerminal.data).toEqual(current.data);
+  });
+});
+
+function accountRows(
+  otherNames: readonly string[] | null,
+  terminalOnThisComputer: boolean,
+): readonly SyncProfileSpec[] {
+  return [
+    {
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal login",
+      email: "term@example.test",
+      authStatus: "authenticated",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: true,
+      otherNames: null,
+    },
+    {
+      profileId: "prof_work",
+      kind: "managed",
+      label: "Work",
+      email: "work@example.test",
+      authStatus: "authenticated",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer,
+      otherNames,
+    },
+  ];
+}
+
+describe("login on an account that has other names", () => {
+  it("prompts for nothing and exits as the same rows without other names, with or without a terminal", async () => {
+    const signIn = async (
+      otherNames: readonly string[] | null,
+      terminalOnThisComputer: boolean,
+      hasTerminal: boolean,
+    ): Promise<CommandResult> => {
+      const fake = makeIo(hasTerminal);
+      if (!hasTerminal) fake.stdinIsTerminal.mockReturnValue(false);
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+      scenario.listState = deviceList(
+        accountRows(otherNames, terminalOnThisComputer),
+        [],
+      );
+      scenario.laterListReads = null;
+      scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+      scenario.awaitLogin = () =>
+        Promise.resolve(awaitResult({ state: signedInState([WORK_PROFILE]) }));
+      const result = await runLogin(
+        existing("prof_work"),
+        fake,
+        makeCtx(false, false),
+      );
+      expect(fake.readLines).not.toHaveBeenCalled();
+      expect(
+        dispatchMock.mock.calls
+          .map((call) => call[0])
+          .slice()
+          .sort(),
+      ).toEqual([
+        "providers.awaitLogin",
+        "providers.list",
+        "providers.startLogin",
+      ]);
+      return result;
+    };
+
+    for (const terminalOnThisComputer of [false, true]) {
+      for (const hasTerminal of [true, false]) {
+        const plain = await signIn(null, terminalOnThisComputer, hasTerminal);
+        const named = await signIn(
+          ["A", "B"],
+          terminalOnThisComputer,
+          hasTerminal,
+        );
+        expect(named.exitCode).toBe(plain.exitCode);
+        expect(named.human).toBe(plain.human);
+        expect(named.data).toEqual(plain.data);
+      }
+    }
   });
 });

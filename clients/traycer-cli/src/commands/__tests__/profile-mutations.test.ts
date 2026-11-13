@@ -3,11 +3,15 @@ import { providersListUpgradeV1010ToV1011 } from "@traycer/protocol/host/registr
 import {
   providerCliStateSchema,
   providerMutationCliStateSchemaV21,
+  providersAnswerProfileNameRequestSchema,
+  providersAnswerProfileNameResponseSchema,
   providersListResponseSchema,
   providersListResponseSchemaV1010Preimage,
   type ProviderMutationCliStateV21,
+  type ProvidersAnswerProfileNameResponse,
   type ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
+import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import {
   callHostRpcWithDispatch,
   type HostRpcDispatch,
@@ -137,10 +141,19 @@ const EMPTY_LIST = providersListResponseSchema.parse({
 
 let listed: ProvidersListResponse = EMPTY_LIST;
 let mutationAnswer: object = { state: mutationState() };
+let nameAnswer: ProvidersAnswerProfileNameResponse | null = null;
+let nameRefusal: HostRpcError | null = null;
 
 function installHost(): void {
   dispatchMock.mockImplementation((method) => {
     if (method === "providers.list") return Promise.resolve(listed);
+    if (method === "providers.answerProfileName") {
+      if (nameRefusal !== null) return Promise.reject(nameRefusal);
+      if (nameAnswer !== null) return Promise.resolve(nameAnswer);
+      return Promise.reject(
+        new Error("unexpected providers.answerProfileName"),
+      );
+    }
     return Promise.resolve(mutationAnswer);
   });
 }
@@ -159,6 +172,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   listed = EMPTY_LIST;
   mutationAnswer = { state: mutationState() };
+  nameAnswer = null;
+  nameRefusal = null;
   installHost();
 });
 
@@ -533,6 +548,8 @@ describe("traycer profile remove", () => {
 interface ListedRowSpec {
   readonly profileId: string;
   readonly aliases: readonly string[];
+  /** Null omits the key. An empty array is a row rename still sends as today. */
+  readonly otherNames: readonly string[] | null;
 }
 
 interface RemovedSpec {
@@ -584,6 +601,9 @@ function publishList(
           aliases: [...row.aliases],
           personNotice: null,
           terminalOnThisComputer: false,
+          ...(row.otherNames === null
+            ? {}
+            : { otherNames: [...row.otherNames] }),
         })),
       },
     ],
@@ -599,6 +619,7 @@ function publishList(
 const ALIAS_ROW: ListedRowSpec = {
   profileId: "row-own",
   aliases: ["old-id"],
+  otherNames: null,
 };
 
 describe("alias look-up", () => {
@@ -837,8 +858,8 @@ describe("alias look-up", () => {
   it("does not guess an id listed in two rows' aliases", async () => {
     publishList(
       [
-        { profileId: "row-a", aliases: ["shared-id"] },
-        { profileId: "row-b", aliases: ["shared-id"] },
+        { profileId: "row-a", aliases: ["shared-id"], otherNames: null },
+        { profileId: "row-b", aliases: ["shared-id"], otherNames: null },
       ],
       [],
     );
@@ -1041,5 +1062,160 @@ describe("a 10.10 answer", () => {
       "providers.setProfileEnabled",
       { providerId: "claude-code", profileId: "prof_work", enabled: false },
     );
+  });
+});
+
+const NAMED_ROW: ListedRowSpec = {
+  profileId: "row-own",
+  aliases: ["old-id"],
+  otherNames: ["A", "B"],
+};
+
+function answeredName(label: string): ProvidersAnswerProfileNameResponse {
+  return providersAnswerProfileNameResponseSchema.parse({ label });
+}
+
+function renameProfile(profile: string, label: string): Promise<CommandResult> {
+  return buildProfileRenameCommand({
+    provider: "claude",
+    profile,
+    label,
+  })(makeCtx(false, false));
+}
+
+function expectAnswerProfileName(profileId: string, label: string): void {
+  const call = onlyCallTo("providers.answerProfileName");
+  const request = providersAnswerProfileNameRequestSchema.parse(call[1]);
+  expect(call[1]).toEqual({ providerId: "claude-code", profileId, label });
+  expect(request).toEqual(call[1]);
+  expect(call[2]).toEqual(PLAIN_DISPATCH);
+  expect(dispatchMock.mock.calls.map((entry) => entry[0])).toEqual([
+    "providers.list",
+    "providers.answerProfileName",
+  ]);
+}
+
+describe("rename on a row with other names", () => {
+  it("sends providers.answerProfileName for the row's own id and does not rename", async () => {
+    publishList([NAMED_ROW], []);
+    nameAnswer = answeredName("Chosen");
+
+    const result = await renameProfile("row-own", "Chosen");
+
+    expectAnswerProfileName("row-own", "Chosen");
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toBe(
+      'Renamed claude (Claude Code) profile row-own to "Chosen".',
+    );
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      profileId: "row-own",
+      label: "Chosen",
+    });
+  });
+
+  it("addressed to an alias still sends the row's own id", async () => {
+    publishList([NAMED_ROW], []);
+    nameAnswer = answeredName("Chosen");
+
+    const result = await renameProfile("old-id", "Chosen");
+
+    expectAnswerProfileName("row-own", "Chosen");
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toBe(
+      'Renamed claude (Claude Code) profile row-own to "Chosen".',
+    );
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      profileId: "row-own",
+      label: "Chosen",
+    });
+  });
+
+  it("prints the label the host answered when someone else chose just after", async () => {
+    publishList([NAMED_ROW], []);
+    nameAnswer = answeredName("Settled");
+
+    const result = await renameProfile("row-own", "Chosen");
+
+    expectAnswerProfileName("row-own", "Chosen");
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toBe(
+      'Renamed claude (Claude Code) profile row-own to "Settled".',
+    );
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      profileId: "row-own",
+      label: "Settled",
+    });
+  });
+
+  it("renames a row with no other names through providers.setEnabled", async () => {
+    publishList(
+      [
+        {
+          profileId: "row-plain",
+          aliases: [],
+          otherNames: [],
+        },
+      ],
+      [],
+    );
+
+    const result = await renameProfile("row-plain", "Chosen");
+
+    expect(onlyCallTo("providers.setEnabled")).toEqual([
+      "providers.setEnabled",
+      {
+        providerId: "claude-code",
+        enabled: true,
+        profileAction: {
+          type: "rename",
+          profileId: "row-plain",
+          label: "Chosen",
+        },
+      },
+      PROFILE_ACTION_DISPATCH,
+    ]);
+    expect(dispatchMock.mock.calls.map((entry) => entry[0])).toEqual([
+      "providers.list",
+      "providers.setEnabled",
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toBe(
+      'Renamed claude (Claude Code) profile row-plain to "Chosen".',
+    );
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      profileId: "row-plain",
+      label: "Chosen",
+    });
+  });
+
+  it("rejects with HOST_UNSUPPORTED when the host refuses the method, and does not rename", async () => {
+    publishList([NAMED_ROW], []);
+    const message =
+      "This host does not support 'providers.answerProfileName'. Upgrade the host to use this feature.";
+    nameRefusal = new HostRpcError({
+      code: "E_HOST_UNSUPPORTED",
+      message,
+      requestId: "req-1",
+      method: "providers.answerProfileName",
+      fatalDetails: null,
+    });
+
+    const error = await failureOf(renameProfile("row-own", "Chosen"));
+
+    expect(error.code).toBe(CLI_ERROR_CODES.HOST_UNSUPPORTED);
+    expect(error.exitCode).toBe(1);
+    expect(error.message).toBe(`traycer: ${message}`);
+    expect(error.details).toEqual({
+      hostShouldUpgrade: true,
+      method: "providers.answerProfileName",
+    });
+    expect(dispatchMock.mock.calls.map((entry) => entry[0])).toEqual([
+      "providers.list",
+      "providers.answerProfileName",
+    ]);
   });
 });
