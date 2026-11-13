@@ -192,6 +192,8 @@ function clusterTree(
         */}
         <Popover>
           <StatusBarRateLimitCluster
+            hostLabel="dev-box"
+            providersRead="answered"
             hostId="host-a"
             providers={props.providers ?? []}
             profileSelection={PROFILE_SELECTION}
@@ -360,6 +362,29 @@ describe("<StatusBarRateLimitCluster />", () => {
     expect(trigger.getAttribute("data-state")).toBe("open");
   });
 
+  // The connect sentence is the host's answer of "none". Before the host has
+  // answered, the strip names the host and says what is happening instead,
+  // and its click still opens the panel, which carries the retry.
+  it.each([
+    ["reading", "Reading usage on dev-box…"],
+    ["unreachable", "Can't reach dev-box"],
+    ["failed", "Couldn't read usage on dev-box"],
+  ] as const)(
+    "says %s, never the connect sentence, before the host has answered",
+    (read, line) => {
+      mocks.cluster = { kind: "unanswered", read, hostLabel: "dev-box" };
+      renderCluster({});
+
+      expect(screen.getByText(line)).not.toBeNull();
+      expect(
+        screen.queryByText("Connect a supported provider to see usage here."),
+      ).toBeNull();
+      const trigger = screen.getByTestId("status-bar-rate-limit-trigger");
+      fireEvent.click(trigger);
+      expect(trigger.getAttribute("data-state")).toBe("open");
+    },
+  );
+
   it("draws the glyph, not the connect sentence, for no-providers when Density is Compact", () => {
     useLayoutStore
       .getState()
@@ -506,6 +531,8 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
         <TooltipProvider delayDuration={0}>
           <Popover>
             <StatusBarRateLimitCluster
+              hostLabel="dev-box"
+              providersRead="answered"
               hostId={hostId}
               providers={[]}
               profileSelection={PROFILE_SELECTION}
@@ -1337,6 +1364,8 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
               <span data-testid="anchor-slot" />
             </PopoverAnchor>
             <StatusBarRateLimitCluster
+              hostLabel="dev-box"
+              providersRead="answered"
               hostId="host-a"
               providers={[]}
               profileSelection={PROFILE_SELECTION}

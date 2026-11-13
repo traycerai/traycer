@@ -119,6 +119,8 @@ function renderCluster(inSampleScene: boolean) {
         <SampleSceneContext.Provider value={inSampleScene}>
           <Popover>
             <StatusBarRateLimitCluster
+              hostLabel="dev-box"
+              providersRead="answered"
               hostId="host-a"
               providers={[]}
               profileSelection={PROFILE_SELECTION}

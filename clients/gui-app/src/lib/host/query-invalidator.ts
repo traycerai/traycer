@@ -141,9 +141,11 @@ function attemptInFlightHasNotFailed(query: Query): boolean {
  * Cancelling one threw its work away, and the same sweep re-issued it at once
  * into a host that was already behind: during the incident behind this rule
  * the renderer logged a sweep with `refetching: 140` every 10 s. Left alone,
- * such a read either answers or fails - at its own timeout, or when its
+ * such a read either answers or fails - at its own timeout, when its
  * transport drops, since both unary transports reject an in-flight request at
- * the drop - and once it has failed, a sweep reaches it. A read parked in
+ * the drop, or at the request coordinator's read ceiling
+ * (`hostReadCeilingMs`), which ends a read waiting on something with no timer
+ * of its own - and once it has failed, a sweep reaches it. A read parked in
  * retry backoff has already failed, so it still qualifies, and the cancel in
  * the sweep exists for exactly that read.
  *
@@ -225,14 +227,20 @@ export function createHostQueryInvalidator(
         // `recovery` and `inFlight` say which edge fired and how many reads
         // the sweep left to answer on their own: without them the line
         // cannot tell a reconnect's sweep from a stall's.
+        // `inFlightMethods` names what those reads are, method names only (the
+        // params can carry ids), so a read that never answers names itself.
+        const inFlight = inScope.filter(
+          (query) =>
+            attemptInFlightHasNotFailed(query) && !affectedQueries.has(query),
+        );
         appLogger.info("[stream] host-scope sweep", {
           hostId: hostId ?? "all",
           recovery: options.recovery,
           refetching: affectedQueries.size,
-          inFlight: inScope.filter(
-            (query) =>
-              attemptInFlightHasNotFailed(query) && !affectedQueries.has(query),
-          ).length,
+          inFlight: inFlight.length,
+          inFlightMethods: [
+            ...new Set(inFlight.map((query) => String(query.queryKey[2]))),
+          ].sort(),
         });
         const predicate = (query: Query): boolean => affectedQueries.has(query);
         // A query waiting in TanStack's retry backoff is still `fetchStatus:

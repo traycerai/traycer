@@ -39,7 +39,10 @@ const segments = vi.hoisted(() =>
 
 vi.mock("@/hooks/rate-limits/use-status-bar-rate-limit-segments", () => ({
   useStatusBarRateLimitSegments: segments,
-  useStatusBarWindowedProviders: () => [],
+  useStatusBarWindowedProviders: () => ({
+    read: { kind: "answered" },
+    providers: [],
+  }),
 }));
 
 /**

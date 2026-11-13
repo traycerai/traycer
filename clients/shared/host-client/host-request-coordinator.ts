@@ -11,6 +11,8 @@ import type {
   RpcSchedulingMode,
   RpcSchedulingPolicy,
 } from "./rpc-scheduling-policy";
+import type { TimerHandle } from "../host-transport/timer-handle";
+import { HostReadStrandedError, hostReadCeilingMs } from "./host-read-ceiling";
 
 export type HostRequestControlFlowReason =
   | "waiter-cancelled"
@@ -80,6 +82,7 @@ interface HostRequestWaiter<Response> {
 
 interface HostRequestJob {
   readonly mode: RpcSchedulingMode;
+  readonly method: string;
   readonly requestKey: string;
   readonly authority: HostRequestAuthority;
   readonly authorityDomain: HostRequestAuthorityDomain;
@@ -87,6 +90,9 @@ interface HostRequestJob {
   readonly execute: (authority: HostRequestAuthority) => Promise<unknown>;
   readonly waiters: Set<HostRequestWaiter<never>>;
   started: boolean;
+  /** A read's ceiling (`hostReadCeilingMs`); null for a FIFO command. */
+  readonly readCeilingMs: number | null;
+  ceilingTimer: TimerHandle | null;
 }
 
 interface HostRequestQueue {
@@ -267,6 +273,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     this.transitionSnapshots.clear();
     for (const queue of this.queues.values()) {
       if (queue.active !== null) {
+        clearJobCeiling(queue.active);
         queue.active.controller.abort("host-request-coordinator-disposed");
         this.settleJobControlFlow(queue.active, "coordinator-disposed");
       }
@@ -382,6 +389,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
   ): HostRequestJob {
     return {
       mode,
+      method: submission.method,
       requestKey,
       authority: submission.authority,
       authorityDomain: submission.authorityDomain,
@@ -389,6 +397,13 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
       execute: submission.execute,
       waiters: new Set(),
       started: false,
+      readCeilingMs:
+        mode === "fifo"
+          ? null
+          : hostReadCeilingMs(
+              this.schedulingPolicy.joinResponseTimeoutMs(submission.method),
+            ),
+      ceilingTimer: null,
     };
   }
 
@@ -441,6 +456,12 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     }
     queue.active = job;
     job.started = true;
+    const ceilingMs = job.readCeilingMs;
+    if (ceilingMs !== null) {
+      job.ceilingTimer = setTimeout(() => {
+        this.strandJob(key, queue, job, ceilingMs);
+      }, ceilingMs);
+    }
     const combined = combineAbortSignals([
       job.authority.abortSignal,
       this.disposalController.signal,
@@ -464,12 +485,42 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
       })
       .finally(() => {
         combined.dispose();
+        clearJobCeiling(job);
         job.waiters.clear();
         if (queue.active === job) {
           queue.active = null;
         }
         this.drain(key, queue);
       });
+  }
+
+  /**
+   * Ends a read that outlived its ceiling: every waiter fails with
+   * `HostReadStrandedError`, and the slot is freed before the raw call
+   * settles.
+   *
+   * Freeing it is the point. An aborted raw call holds its slot until it
+   * settles, so the next read of the key queues behind it - which for a call
+   * that ignores its abort and never settles is for ever, retry included. A
+   * late settle is harmless: its waiters are gone, and `drain`'s `finally`
+   * finds the slot no longer its own.
+   */
+  private strandJob(
+    key: string,
+    queue: HostRequestQueue,
+    job: HostRequestJob,
+    ceilingMs: number,
+  ): void {
+    job.ceilingTimer = null;
+    if (queue.active !== job) return;
+    const error = new HostReadStrandedError(job.method, ceilingMs);
+    for (const waiter of job.waiters) {
+      this.settleWaiterError(waiter, error);
+    }
+    job.waiters.clear();
+    job.controller.abort("host-read-stranded");
+    queue.active = null;
+    this.drain(key, queue);
   }
 
   private settleJobControlFlow(
@@ -523,11 +574,23 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     this.settleWaiterError(waiter, new HostRequestControlFlowError(reason));
   }
 
+  // Only the queue the key still maps to: a stranded job's late settle drains
+  // the queue it ran on, which a newer one may have replaced under the key.
   private removeQueueWhenDrained(key: string, queue: HostRequestQueue): void {
-    if (queue.active === null && queue.queued.length === 0) {
+    if (
+      queue.active === null &&
+      queue.queued.length === 0 &&
+      this.queues.get(key) === queue
+    ) {
       this.queues.delete(key);
     }
   }
+}
+
+function clearJobCeiling(job: HostRequestJob): void {
+  if (job.ceilingTimer === null) return;
+  clearTimeout(job.ceilingTimer);
+  job.ceilingTimer = null;
 }
 
 function createWaiter<Response>(

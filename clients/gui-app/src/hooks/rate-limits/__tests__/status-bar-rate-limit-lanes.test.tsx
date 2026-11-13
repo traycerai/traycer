@@ -57,7 +57,10 @@ vi.mock(
     return {
       ...actual,
       useConfiguredRateLimitProviders: () => configuredProviders,
-      useVisibleRateLimitProviders: () => configuredProviders,
+      useVisibleRateLimitProviders: () => ({
+        read: { kind: "answered" },
+        providers: configuredProviders,
+      }),
       // The inventory above IS this host's answer in these rows, which is what
       // the real hook reads the host's own account list for.
       useRateLimitAccountInventory: () => ({
@@ -149,9 +152,11 @@ function configuredProvider(
 // makes this an end-to-end proof of the real composition, not just of the
 // segments hook in isolation.
 function useLaneProbe(mode: StatusBarRateLimitMode, editing: boolean) {
-  const providers = useStatusBarWindowedProviders();
+  const { read, providers } = useStatusBarWindowedProviders();
   return useStatusBarRateLimitSegments({
     providers,
+    providersRead: read.kind,
+    hostLabel: "host-a",
     profileSelection: PROFILE_SELECTION,
     mode,
     editing,

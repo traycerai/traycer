@@ -39,14 +39,41 @@ export function StatusBarUsageReadings(props: {
         // One line, never wrapped: the box it sits in scrolls sideways, so a
         // sentence too long for a narrow strip scrolls like the segments do,
         // on the one row the strip has.
-        <span className="whitespace-nowrap">
-          {cluster.kind === "no-providers"
-            ? // The popover's own zero state says this at length; the strip
-              // says it once and opens that panel.
-              "Connect a supported provider to see usage here."
-            : "Usage hidden"}
-        </span>
+        <span className="whitespace-nowrap">{clusterSentence(cluster)}</span>
       )}
     </>
   );
+}
+
+/**
+ * The one line a cluster with no segments says. "Connect a provider" only when
+ * the host has answered with none: before its answer the strip says it is
+ * still asking, and the panel it opens carries the retry.
+ */
+function clusterSentence(
+  cluster: Exclude<StatusBarRateLimitCluster, { readonly kind: "segments" }>,
+): string {
+  switch (cluster.kind) {
+    case "no-providers":
+      // The popover's own zero state says this at length; the strip says it
+      // once and opens that panel.
+      return "Connect a supported provider to see usage here.";
+    case "hidden":
+      return "Usage hidden";
+    case "unanswered":
+      return unansweredSentence(cluster);
+  }
+}
+
+function unansweredSentence(
+  cluster: Extract<StatusBarRateLimitCluster, { readonly kind: "unanswered" }>,
+): string {
+  switch (cluster.read) {
+    case "reading":
+      return `Reading usage on ${cluster.hostLabel}…`;
+    case "unreachable":
+      return `Can't reach ${cluster.hostLabel}`;
+    case "failed":
+      return `Couldn't read usage on ${cluster.hostLabel}`;
+  }
 }

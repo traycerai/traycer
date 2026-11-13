@@ -13,7 +13,10 @@ import {
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
 import type { StatusBarRateLimitCluster as StatusBarRateLimitClusterModel } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
-import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import type {
+  ConfiguredRateLimitProvider,
+  RateLimitProviderRead,
+} from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -41,11 +44,19 @@ let scope: HostScope = hostScopeFixture({});
  * below).
  */
 let windowedProviders: ReadonlyArray<ConfiguredRateLimitProvider> = [];
+let windowedRead: RateLimitProviderRead = { kind: "answered" };
 let rateLimitCluster: StatusBarRateLimitClusterModel = { kind: "no-providers" };
+/** What the strip handed the segments hook, beside the providers. */
+let segmentsReadInput: {
+  readonly providersRead: string;
+  readonly hostLabel: string;
+} | null = null;
 
 function resetRateLimitMocks(): void {
   windowedProviders = [];
+  windowedRead = { kind: "answered" };
   rateLimitCluster = { kind: "no-providers" };
+  segmentsReadInput = null;
 }
 
 vi.mock(
@@ -57,19 +68,31 @@ vi.mock(
       >();
     return {
       ...actual,
-      useStatusBarWindowedProviders: () => windowedProviders,
-      useStatusBarRateLimitSegments: () => ({
-        cluster: rateLimitCluster,
-        mountTargets: [],
-        retryTargets: [],
-        refresh: {
-          ephemeralTargets: [],
-          ephemeralFetching: false,
-          httpRefetches: [],
-          httpFetching: false,
-        },
-        recordManualRetry: () => undefined,
+      useStatusBarWindowedProviders: () => ({
+        read: windowedRead,
+        providers: windowedProviders,
       }),
+      useStatusBarRateLimitSegments: (input: {
+        readonly providersRead: string;
+        readonly hostLabel: string;
+      }) => {
+        segmentsReadInput = {
+          providersRead: input.providersRead,
+          hostLabel: input.hostLabel,
+        };
+        return {
+          cluster: rateLimitCluster,
+          mountTargets: [],
+          retryTargets: [],
+          refresh: {
+            ephemeralTargets: [],
+            ephemeralFetching: false,
+            httpRefetches: [],
+            httpFetching: false,
+          },
+          recordManualRetry: () => undefined,
+        };
+      },
     };
   },
 );
@@ -447,6 +470,19 @@ describe("<AppStatusBar />", () => {
 
     expect(screen.getByTestId("status-bar-host-connecting")).not.toBeNull();
     expect(screen.queryByTestId("status-bar-host-return-to-active")).toBeNull();
+  });
+
+  it("tells the cluster whether the watched host has answered, and its name", () => {
+    scope = hostScopeFixture({ hostLabel: "Office Linux" });
+    windowedRead = { kind: "reading" };
+    render(<AppStatusBar />);
+
+    // The cluster says "connect a provider" only on an answered empty list;
+    // this is what lets it say it is still reading instead.
+    expect(segmentsReadInput).toEqual({
+      providersRead: "reading",
+      hostLabel: "Office Linux",
+    });
   });
 
   it("keeps the segments live for an unreachable ACTIVE host, with no pick", () => {

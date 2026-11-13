@@ -9,11 +9,17 @@ import {
   type HostQueryInvalidationOptions,
   type IHostQueryInvalidator,
 } from "@traycer-clients/shared/host-client/host-client";
+import { HostRequestCoordinator } from "@traycer-clients/shared/host-client/host-request-coordinator";
+import {
+  HostReadStrandedError,
+  hostReadCeilingMs,
+} from "@traycer-clients/shared/host-client/host-read-ceiling";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { buildHostKeyRotationSweep } from "@/lib/host/host-key-rotation-sweep";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createAppQueryClient } from "@/lib/query-client";
 import { appLogger } from "@/lib/logger";
 import { hostRpcRegistry } from "@/lib/host";
@@ -843,6 +849,96 @@ describe("createHostQueryInvalidator / what a recovery sweep re-asks", () => {
     await waitUntil(() => read.fetches.count === 2);
   });
 
+  it("re-issues a read the request coordinator ended at its read ceiling", async () => {
+    const ANSWERED_CAPABILITIES = {
+      available: true,
+      gitVersion: null,
+      reason: null,
+    } as const;
+    vi.useFakeTimers();
+    const coordinator = new HostRequestCoordinator({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+    });
+    const key = capabilitiesKey("/stranded");
+    // The first raw call never answers and ignores its abort; the second
+    // answers. Both through the real coordinator, as `useHostQuery` sends.
+    let rawCalls = 0;
+    const strandedReadQueryFn = (): Promise<unknown> =>
+      coordinator.request({
+        hostId: HOST_ID,
+        userId: "user-a",
+        method: "git.getCapabilities",
+        params: {
+          hostId: HOST_ID,
+          runningDir: "/stranded",
+          ignoreWhitespace: false,
+        },
+        authority: {
+          endpoint: { hostId: HOST_ID, websocketUrl: "ws://h1.invalid/rpc" },
+          bearer: {
+            getBearerToken: () => "bearer",
+            identity: { userId: "user-a" },
+          },
+          abortSignal: new AbortController().signal,
+        },
+        authorityDomain: { bindingToken: {}, requestContext: {} },
+        signal: undefined,
+        execute: () => {
+          rawCalls += 1;
+          return rawCalls === 1
+            ? new Promise<never>(() => undefined)
+            : Promise.resolve(ANSWERED_CAPABILITIES);
+        },
+      });
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    // The app's own retry policy, not a test override: a stranded read must
+    // fail at once rather than wait out a second ceiling.
+    const observer = new QueryObserver(queryClient, {
+      queryKey: key,
+      staleTime: 0,
+      queryFn: strandedReadQueryFn,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rawCalls).toBe(1);
+
+      // Young, it is left alone: the storm guard still holds.
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        recovery: "reconnect",
+      });
+      await vi.advanceTimersByTimeAsync(hostReadCeilingMs(null) - 1);
+      expect(rawCalls).toBe(1);
+      expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(queryClient.getQueryState(key)).toMatchObject({
+        status: "error",
+        fetchStatus: "idle",
+      });
+      expect(queryClient.getQueryState(key)?.error).toBeInstanceOf(
+        HostReadStrandedError,
+      );
+
+      // The next sweep re-issues it, into a slot the stranded call no longer
+      // holds.
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        recovery: "reconnect",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rawCalls).toBe(2);
+      expect(queryClient.getQueryData(key)).toEqual(ANSWERED_CAPABILITIES);
+    } finally {
+      unsubscribe();
+      coordinator.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("logs each sweep with its kind and the reads it left in flight", async () => {
     const infoSpy = vi.spyOn(appLogger, "info");
     const answer = deferred();
@@ -885,7 +981,15 @@ describe("createHostQueryInvalidator / what a recovery sweep re-asks", () => {
       expect(sweeps).toEqual([
         [
           "[stream] host-scope sweep",
-          { hostId: HOST_ID, recovery: "stall", refetching: 1, inFlight: 1 },
+          {
+            hostId: HOST_ID,
+            recovery: "stall",
+            refetching: 1,
+            inFlight: 1,
+            // The read it left in flight, by method, so a read that never
+            // answers names itself in the log.
+            inFlightMethods: ["git.getCapabilities"],
+          },
         ],
       ]);
     } finally {

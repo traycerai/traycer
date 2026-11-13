@@ -58,9 +58,6 @@ interface GlyphBar {
   readonly degraded: boolean;
 }
 
-/** The cluster the placeholder path draws: nothing to read yet. */
-const NO_CLUSTER: StatusBarRateLimitCluster = { kind: "no-providers" };
-
 /**
  * Header trigger for the provider rate-limit popover, scoped to the host the
  * popover's own picker selected.
@@ -175,9 +172,21 @@ function ScopedRateLimitIconButton({
         data-testid="rate-limit-header-button"
       >
         {scopedToOwnHost ? (
-          <LiveRateLimitGlyph profileSelection={profileSelection} form={form} />
+          <LiveRateLimitGlyph
+            profileSelection={profileSelection}
+            hostLabel={scope.hostLabel}
+            form={form}
+          />
         ) : (
-          <RateLimitTriggerContent cluster={NO_CLUSTER} form={form} />
+          // Nothing read from the picked host yet: no answer, never "none".
+          <RateLimitTriggerContent
+            cluster={{
+              kind: "unanswered",
+              read: "unreachable",
+              hostLabel: scope.hostLabel,
+            }}
+            form={form}
+          />
         )}
       </Button>
     </PopoverTrigger>
@@ -254,15 +263,19 @@ function usageButtonLook(
  */
 function LiveRateLimitGlyph({
   profileSelection,
+  hostLabel,
   form,
 }: {
   readonly profileSelection: RateLimitProfileSelection;
+  readonly hostLabel: string;
   readonly form: BarReadingForm;
 }): ReactNode {
-  const providers = useStatusBarWindowedProviders();
+  const { read, providers } = useStatusBarWindowedProviders();
   const sample = useSampleScene();
   const { cluster, mountTargets } = useStatusBarRateLimitSegments({
     providers,
+    providersRead: read.kind,
+    hostLabel,
     profileSelection,
     mode: "live",
     editing: false,

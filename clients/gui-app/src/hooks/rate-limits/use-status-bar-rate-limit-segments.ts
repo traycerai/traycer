@@ -24,6 +24,8 @@ import {
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
   type MappedVisibleRateLimitProvider,
+  type RateLimitProviderRead,
+  type RateLimitProviderReadKind,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import {
   resolveStatusBarProfileIds,
@@ -262,13 +264,20 @@ export interface StatusBarRateLimitHttpRefetch {
 }
 
 /**
- * The cluster as a whole. The three non-segment arms are distinct on purpose:
+ * The cluster as a whole. The non-segment arms are distinct on purpose:
  * "no provider reports windows" and "you hid them all" have different remedies,
  * and a single empty state would send a user to Settings ▸ Providers to fix
- * something they did in Settings ▸ Layout.
+ * something they did in Settings ▸ Layout. `unanswered` is the host not having
+ * said yet, which is neither: `no-providers` is only ever the host's answer.
  */
 export type StatusBarRateLimitCluster =
   | { readonly kind: "no-providers" }
+  | {
+      readonly kind: "unanswered";
+      readonly read: Exclude<RateLimitProviderReadKind, "answered">;
+      /** The host that has not answered, which the line names. */
+      readonly hostLabel: string;
+    }
   | { readonly kind: "hidden" }
   | {
       readonly kind: "segments";
@@ -307,15 +316,24 @@ export interface StatusBarRateLimitSegments {
  * otherwise reads `providers.list`, which the app-shell poll already keeps
  * subscribed on this window's host.
  */
-export function useStatusBarWindowedProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
-  const visibleProviders = useVisibleRateLimitProviders();
-  return sortProviderStatesByProviderOrder(
-    visibleProviders.filter(
-      (provider): provider is MappedVisibleRateLimitProvider =>
-        provider.lane !== null &&
-        isWindowedRateLimitProvider(provider.providerId),
+export function useStatusBarWindowedProviders(): StatusBarWindowedProviders {
+  const { read, providers } = useVisibleRateLimitProviders();
+  return {
+    read,
+    providers: sortProviderStatesByProviderOrder(
+      providers.filter(
+        (provider): provider is MappedVisibleRateLimitProvider =>
+          provider.lane !== null &&
+          isWindowedRateLimitProvider(provider.providerId),
+      ),
     ),
-  );
+  };
+}
+
+/** The watched host's windowed providers, and whether that list is its answer. */
+export interface StatusBarWindowedProviders {
+  readonly read: RateLimitProviderRead;
+  readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
 }
 
 interface StatusBarRateLimitTarget {
@@ -756,15 +774,22 @@ function toSegments(
 }
 
 /**
- * Which of the three empty states applies, if any. A provider inventory that is
- * empty is the host's answer; segments that all dropped out of the draw are the
+ * Which of the empty states applies, if any. A provider inventory that is
+ * empty is the host's answer only once the host has answered; before that it
+ * is no answer at all. Segments that all dropped out of the draw are the
  * user's own deny-list (or, rarely, every window having expired at once).
  */
 function clusterFor(
   providerCount: number,
   segments: ReadonlyArray<StatusBarProviderSegmentModel>,
+  providersRead: RateLimitProviderReadKind,
+  hostLabel: string,
 ): StatusBarRateLimitCluster {
-  if (providerCount === 0) return { kind: "no-providers" };
+  if (providerCount === 0) {
+    return providersRead === "answered"
+      ? { kind: "no-providers" }
+      : { kind: "unanswered", read: providersRead, hostLabel };
+  }
   if (segments.length === 0) return { kind: "hidden" };
   return { kind: "segments", segments };
 }
@@ -822,6 +847,10 @@ function applySegmentOrder(
  */
 export function useStatusBarRateLimitSegments(input: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  /** Whether `providers` is the host's answer (`useStatusBarWindowedProviders`). */
+  readonly providersRead: RateLimitProviderReadKind;
+  /** The watched host's name, for a cluster that has no answer from it. */
+  readonly hostLabel: string;
   readonly profileSelection: RateLimitProfileSelection;
   readonly mode: StatusBarRateLimitMode;
   /**
@@ -1044,7 +1073,12 @@ export function useStatusBarRateLimitSegments(input: {
   }, [existingEpisodeKeys]);
 
   return {
-    cluster: clusterFor(input.providers.length, segments),
+    cluster: clusterFor(
+      input.providers.length,
+      segments,
+      input.providersRead,
+      input.hostLabel,
+    ),
     retryTargets: targets.flatMap((target) => {
       const key = accountKey(target.provider.providerId, target.profileId);
       const episode = episodes.get(key) ?? NO_EPISODE;

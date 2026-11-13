@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -14,6 +14,7 @@ import {
   HostRequestCoordinator,
   type HostRequestAuthorityDomain,
 } from "../host-request-coordinator";
+import { HostReadStrandedError, hostReadCeilingMs } from "../host-read-ceiling";
 import type { RpcSchedulingPolicy } from "../rpc-scheduling-policy";
 import { HostClient, type IHostQueryInvalidator } from "../host-client";
 import { MockHostMessenger } from "../mock/mock-host-messenger";
@@ -803,5 +804,132 @@ describe("a join request after the active job was aborted", () => {
     expect(started).toHaveLength(2);
     executions[1].resolve({ value: "new" });
     await expect(second).resolves.toEqual({ value: "new" });
+  });
+});
+
+describe("a read past its ceiling", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A raw call that never answers and never honours its abort, as the read
+  // that held a remote computer's provider list for 23 minutes did.
+  function neverSettling(): {
+    readonly started: HostRequestAuthority[];
+    readonly executions: Deferred<{ value: string }>[];
+    readonly execute: (
+      capturedAuthority: HostRequestAuthority,
+    ) => Promise<{ value: string }>;
+  } {
+    const started: HostRequestAuthority[] = [];
+    const executions = [
+      deferred<{ value: string }>(),
+      deferred<{ value: string }>(),
+      deferred<{ value: string }>(),
+    ];
+    return {
+      started,
+      executions,
+      execute: (capturedAuthority) => {
+        started.push(capturedAuthority);
+        return executions[started.length - 1].promise;
+      },
+    };
+  }
+
+  it("fails and frees its slot, so the next read of the key dispatches and answers", async () => {
+    const coordinator = makeCoordinator();
+    const { started, executions, execute } = neverSettling();
+    const requestAuthority = authority("host-a", "user-a");
+    const requestDomain = domain("stranded");
+    const ceilingMs = hostReadCeilingMs(null);
+    const params = { path: "/providers" };
+
+    const stranded = submit(
+      coordinator,
+      "latest.read",
+      params,
+      requestAuthority,
+      requestDomain,
+      execute,
+    );
+    let strandedError: unknown = null;
+    stranded.catch((error: unknown) => {
+      strandedError = error;
+    });
+    await vi.advanceTimersByTimeAsync(ceilingMs - 1);
+    expect(strandedError).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(strandedError).toBeInstanceOf(HostReadStrandedError);
+    expect(started[0].abortSignal.aborted).toBe(true);
+
+    const reissued = submit(
+      coordinator,
+      "latest.read",
+      params,
+      requestAuthority,
+      requestDomain,
+      execute,
+    );
+    await flush();
+    expect(started).toHaveLength(2);
+    executions[1].resolve({ value: "fresh" });
+    await expect(reissued).resolves.toEqual({ value: "fresh" });
+
+    // The orphan settling late leaves the key's current queue alone: a read
+    // in flight on it still holds the slot against the next one.
+    const third = submit(
+      coordinator,
+      "latest.read",
+      params,
+      requestAuthority,
+      requestDomain,
+      execute,
+    );
+    await flush();
+    expect(started).toHaveLength(3);
+    executions[0].resolve({ value: "orphan" });
+    await flush();
+    let fourthStarted = false;
+    const fourth = submit(
+      coordinator,
+      "latest.read",
+      params,
+      requestAuthority,
+      requestDomain,
+      () => {
+        fourthStarted = true;
+        return Promise.resolve({ value: "fourth" });
+      },
+    );
+    await flush();
+    expect(fourthStarted).toBe(false);
+    executions[2].resolve({ value: "third" });
+    await expect(third).resolves.toEqual({ value: "third" });
+    await expect(fourth).resolves.toEqual({ value: "fourth" });
+  });
+
+  it("never ends a FIFO command, which may be waiting its turn", async () => {
+    const coordinator = makeCoordinator();
+    const { started, execute } = neverSettling();
+    const requestAuthority = authority("host-a", "user-a");
+    let settled = false;
+    void submit(
+      coordinator,
+      "fifo.command",
+      { value: 1 },
+      requestAuthority,
+      domain("fifo"),
+      execute,
+    ).finally(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(2 * hostReadCeilingMs(null));
+    expect(settled).toBe(false);
+    expect(started[0].abortSignal.aborted).toBe(false);
   });
 });

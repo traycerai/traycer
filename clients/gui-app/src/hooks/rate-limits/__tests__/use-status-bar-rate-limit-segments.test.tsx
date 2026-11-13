@@ -86,7 +86,10 @@ vi.mock(
     return {
       ...actual,
       useConfiguredRateLimitProviders: () => mocks.windowedProviders,
-      useVisibleRateLimitProviders: () => mocks.windowedProviders,
+      useVisibleRateLimitProviders: () => ({
+        read: { kind: "answered" },
+        providers: mocks.windowedProviders,
+      }),
       useRateLimitAccountInventory: () => mocks.inventory,
     };
   },
@@ -188,6 +191,8 @@ function renderSegmentsFor(
     mocks.batches = [];
     return useStatusBarRateLimitSegments({
       providers,
+      providersRead: "answered",
+      hostLabel: "dev-box",
       profileSelection,
       mode: "live",
       editing: false,
@@ -203,6 +208,8 @@ function renderSwitchingHostSegments(retryHostId: () => string | null) {
     mocks.batches = [];
     return useStatusBarRateLimitSegments({
       providers: [],
+      providersRead: "answered",
+      hostLabel: "dev-box",
       profileSelection: PROFILE_SELECTION,
       mode: "live",
       editing: false,
@@ -220,6 +227,8 @@ function renderEditorSegments(
     mocks.batches = [];
     return useStatusBarRateLimitSegments({
       providers,
+      providersRead: "answered",
+      hostLabel: "dev-box",
       profileSelection: PROFILE_SELECTION,
       mode: "live",
       editing: true,
@@ -237,6 +246,8 @@ function renderChangingSegments(
     mocks.batches = [];
     return useStatusBarRateLimitSegments({
       providers: providers(),
+      providersRead: "answered",
+      hostLabel: "dev-box",
       profileSelection: PROFILE_SELECTION,
       mode: "live",
       editing: false,
@@ -309,7 +320,7 @@ function segmentIdentities(
 }
 
 function renderWindowedProviders() {
-  return renderHook(() => useStatusBarWindowedProviders());
+  return renderHook(() => useStatusBarWindowedProviders().providers);
 }
 
 function configuredProvider(input: {
@@ -1807,6 +1818,8 @@ describe("useStatusBarRateLimitSegments", () => {
         (props: { readonly selection: RateLimitProfileSelection }) =>
           useStatusBarRateLimitSegments({
             providers: [codexWithAccounts()],
+            providersRead: "answered",
+            hostLabel: "dev-box",
             profileSelection: props.selection,
             mode: "live",
             editing: false,
@@ -2171,6 +2184,29 @@ describe("useStatusBarRateLimitSegments", () => {
       const { result } = renderSegments([]);
       expect(result.current.cluster).toEqual({ kind: "no-providers" });
     });
+
+    it.each(["reading", "unreachable", "failed"] as const)(
+      "is unanswered, never no-providers, while the host's list is %s",
+      (read) => {
+        const { result } = renderHook(() =>
+          useStatusBarRateLimitSegments({
+            providers: [],
+            providersRead: read,
+            hostLabel: "dev-box",
+            profileSelection: PROFILE_SELECTION,
+            mode: "live",
+            editing: false,
+            sample: false,
+            retryHostId: null,
+          }),
+        );
+        expect(result.current.cluster).toEqual({
+          kind: "unanswered",
+          read,
+          hostLabel: "dev-box",
+        });
+      },
+    );
 
     it("is hidden when every provider is hidden", () => {
       setResult("codex", {

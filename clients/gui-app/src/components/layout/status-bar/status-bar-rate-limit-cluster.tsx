@@ -15,7 +15,10 @@ import { StatusBarUsageReadings } from "@/components/layout/status-bar/status-ba
 import { StatusBarUsageScroller } from "@/components/layout/status-bar/status-bar-usage-scroller";
 import { STATUS_BAR_MENU_EXEMPT_ATTRIBUTE } from "@/components/layout/status-bar/status-bar-visibility-menu";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
-import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import type {
+  ConfiguredRateLimitProvider,
+  RateLimitProviderReadKind,
+} from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
 import {
@@ -74,7 +77,11 @@ import { cn } from "@/lib/utils";
 export function StatusBarRateLimitCluster(props: {
   /** The watched host, whose readings these are. */
   readonly hostId: string | null;
+  /** Its name, for the line that says it has not answered yet. */
+  readonly hostLabel: string;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  /** Whether `providers` is the host's answer. */
+  readonly providersRead: RateLimitProviderReadKind;
   readonly profileSelection: RateLimitProfileSelection;
   /** Whether a Customize session is live - hidden providers stay clickable. */
   readonly editing: boolean;
@@ -91,6 +98,8 @@ export function StatusBarRateLimitCluster(props: {
   const { cluster, mountTargets, retryTargets, refresh } =
     useStatusBarRateLimitSegments({
       providers: props.providers,
+      providersRead: props.providersRead,
+      hostLabel: props.hostLabel,
       profileSelection: props.profileSelection,
       // The strip is the surface that OWNS the fetching for these keys: the
       // http lane polls here, the ephemeral lane takes its cold start here, and
@@ -260,7 +269,7 @@ export function StatusBarUsageTrigger(props: {
         // the whole window list is what the panel this opens is for, and
         // a segment scrolled out of view is still in the name.
         aria-label={
-          props.sampleLabel && cluster.kind === "no-providers"
+          props.sampleLabel && clusterHasNoReadings(cluster)
             ? `Sample usage · ${SAMPLE_USAGE_USED_PERCENT}% used, ${100 - SAMPLE_USAGE_USED_PERCENT}% remaining`
             : `${props.sampleLabel ? "Sample readings · " : ""}${statusBarUsageTriggerName(cluster, display.percentMode)}`
         }
@@ -326,7 +335,7 @@ function UsageTriggerReadings(props: {
   readonly compact: boolean;
 }): ReactNode {
   const { cluster, display } = props;
-  if (props.sample && cluster.kind === "no-providers") {
+  if (props.sample && clusterHasNoReadings(cluster)) {
     return (
       <span>
         Usage ·{" "}
@@ -343,6 +352,16 @@ function UsageTriggerReadings(props: {
     return <UsageGlyph cluster={cluster} />;
   }
   return <StatusBarUsageReadings cluster={cluster} display={display} />;
+}
+
+/**
+ * No provider to draw, answered or not: the sample scene shows its invented
+ * reading either way, since neither is the user's to read.
+ */
+function clusterHasNoReadings(
+  cluster: StatusBarRateLimitClusterModel,
+): boolean {
+  return cluster.kind === "no-providers" || cluster.kind === "unanswered";
 }
 
 /**

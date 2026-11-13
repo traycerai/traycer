@@ -77,6 +77,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   useVisibleRateLimitProviders,
+  type RateLimitProviderRead,
   type ConfiguredRateLimitProvider,
   type MappedVisibleRateLimitProvider,
   type VisibleRateLimitProvider,
@@ -839,6 +840,7 @@ function RateLimitPopoverBody({
         onClose={onClose}
         header={header}
         hostId={displayedHost.hostId}
+        hostName={displayedHost.name}
       />
     );
   }
@@ -849,6 +851,7 @@ function RateLimitPopoverBody({
       profileSelection={profileSelection}
       header={header}
       displayedHostId={displayedHost?.hostId ?? null}
+      displayedHostName={displayedHost?.name ?? scope.hostLabel}
     />
   );
 }
@@ -858,6 +861,7 @@ function RateLimitPopoverFallbackBody(props: {
   readonly onClose: () => void;
   readonly header: ReactNode;
   readonly hostId: string;
+  readonly hostName: string;
 }): ReactNode {
   const profileSelection = useRateLimitProfileSelection(props.hostId);
   return (
@@ -866,6 +870,7 @@ function RateLimitPopoverFallbackBody(props: {
       profileSelection={profileSelection}
       header={props.header}
       displayedHostId={props.hostId}
+      displayedHostName={props.hostName}
     />
   );
 }
@@ -882,14 +887,17 @@ function RateLimitPopoverScopedBody({
   profileSelection,
   header,
   displayedHostId,
+  displayedHostName,
 }: {
   readonly onClose: () => void;
   readonly profileSelection: RateLimitProfileSelection;
   readonly header: ReactNode;
   /** The host this popover is SHOWING - pinned or followed - for deep links. */
   readonly displayedHostId: string | null;
+  /** Its name, for the states that say it has not answered. */
+  readonly displayedHostName: string;
 }): ReactNode {
-  const displayProviders = useVisibleRateLimitProviders();
+  const { read, providers: displayProviders } = useVisibleRateLimitProviders();
   // Rail order matches the app's standard provider order everywhere else.
   const providers = useMemo(
     () => sortProviderStatesByProviderOrder(displayProviders),
@@ -922,6 +930,8 @@ function RateLimitPopoverScopedBody({
   );
   const { cluster } = useStatusBarRateLimitSegments({
     providers: windowedProviders,
+    providersRead: read.kind,
+    hostLabel: displayedHostName,
     profileSelection,
     mode: "passive",
     editing: false,
@@ -973,8 +983,25 @@ function RateLimitPopoverScopedBody({
     [displayedHostId, onClose, openSettings],
   );
 
-  // Zero-state only when there is genuinely nothing to show: no host-RPC
-  // providers AND no eligible Traycer tab.
+  // Until the host answers, an empty list is no answer: say so, with the
+  // account's Traycer usage, which needs no host, below it.
+  if (read.kind !== "answered") {
+    return (
+      <RateLimitPopoverResizeSurface variant="content">
+        {header}
+        <div className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-y-auto p-3">
+          <RateLimitProvidersUnanswered
+            read={read}
+            hostName={displayedHostName}
+          />
+          <UnscopedTraycerUsage hostId={displayedHostId} />
+        </div>
+      </RateLimitPopoverResizeSurface>
+    );
+  }
+
+  // Zero-state only when there is genuinely nothing to show: the host
+  // answered with no host-RPC providers AND there is no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
     // Keep identity and recovery visible even when this host has no usage providers.
     return (
@@ -3424,6 +3451,66 @@ function RateLimitDetailSkeleton(): ReactNode {
       ))}
     </div>
   );
+}
+
+/**
+ * The host has not answered its provider list. Reading names the host over the
+ * skeleton the answer will replace; a failed read offers the retry; a host no
+ * read can reach says so. None of them is the zero state, which is the host's
+ * own answer.
+ */
+function RateLimitProvidersUnanswered({
+  read,
+  hostName,
+}: {
+  readonly read: Exclude<RateLimitProviderRead, { readonly kind: "answered" }>;
+  readonly hostName: string;
+}): ReactNode {
+  switch (read.kind) {
+    case "reading":
+      return (
+        <div
+          className="flex w-full flex-col gap-3"
+          data-testid="rate-limit-providers-reading"
+        >
+          <p className="text-ui-sm text-muted-foreground">
+            Reading providers on {hostName}…
+          </p>
+          <RateLimitDetailSkeleton />
+        </div>
+      );
+    case "unreachable":
+      return (
+        <div
+          role="status"
+          className="flex w-full flex-col gap-1"
+          data-testid="rate-limit-providers-unreachable"
+        >
+          <p className="text-ui-sm font-medium text-foreground">
+            Can't reach {hostName}
+          </p>
+          <p className="text-ui-sm text-muted-foreground">
+            Provider usage limits are read from the host itself, so they're
+            unavailable while it's offline.
+          </p>
+        </div>
+      );
+    case "failed":
+      return (
+        <div
+          role="status"
+          className="flex w-full flex-col items-start gap-2"
+          data-testid="rate-limit-providers-failed"
+        >
+          <p className="text-ui-sm text-muted-foreground">
+            Couldn't read providers on {hostName}.
+          </p>
+          <Button variant="outline" size="sm" onClick={read.retry}>
+            Try again
+          </Button>
+        </div>
+      );
+  }
 }
 
 /**
