@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
 import { sweepTransientCloudFailures } from "@/lib/host/cloud-recovery-sweep";
 import {
+  RetryingRead,
   ScriptedRead,
   heldFailure,
   hostFailure,
@@ -11,6 +12,10 @@ import {
 } from "@/lib/host/test-support/cloud-failure-reads";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
+  HeldTimers,
+  type HeldTimer,
+} from "@/lib/host/test-support/held-timers";
+import {
   HOST,
   STRANDED_READS,
   clearClients,
@@ -18,6 +23,7 @@ import {
   freshClient,
   quiet,
   turn,
+  waitUntil,
 } from "@/lib/host/test-support/cloud-recovery-sweep-support";
 
 afterEach(clearClients);
@@ -40,7 +46,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const oldAnswer = heldFailure(refused());
         old.answer = oldAnswer.answer;
         const first = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(old.calls).toBe(base + 1));
+        await waitUntil(() => expect(old.calls).toBe(base + 1));
         const second = sweepTransientCloudFailures(client, HOST);
         return { old, oldAnswer, first, second };
       }
@@ -72,9 +78,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         replacementAnswer.release();
         oldAnswer.release();
         await Promise.all([first, second, ring]);
-        await vi.waitFor(() =>
-          expect(replacement.state.data).toBe("recovered"),
-        );
+        await waitUntil(() => expect(replacement.state.data).toBe("recovered"));
         await quiet(client);
 
         // Its owed ring was spent on one re-ask when its refusal settled.
@@ -122,15 +126,13 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
           old.queryKey,
           replacementAnswer.answer,
         );
-        await vi.waitFor(() => expect(replacement.calls).toBe(1));
+        await waitUntil(() => expect(replacement.calls).toBe(1));
         const ring = sweepTransientCloudFailures(client, HOST);
         expect(replacement.calls).toBe(1);
         replacement.answer = resolves("recovered");
         replacementAnswer.release();
         await ring;
-        await vi.waitFor(() =>
-          expect(replacement.state.data).toBe("recovered"),
-        );
+        await waitUntil(() => expect(replacement.state.data).toBe("recovered"));
         await quiet(client);
 
         expect(replacement.calls).toBe(2);
@@ -167,7 +169,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const attempt = heldFailure(refused());
         read.answer = attempt.answer;
         const retry = client.refetchQueries({ queryKey: read.queryKey });
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const ring = sweepTransientCloudFailures(client, HOST);
 
         // The cache tells it about the attempt's end before the attempt's own
@@ -217,7 +219,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
           read.queryKey,
           replacementAnswer.answer,
         );
-        await vi.waitFor(() => expect(replacement.calls).toBe(1));
+        await waitUntil(() => expect(replacement.calls).toBe(1));
         const ring = sweepTransientCloudFailures(client, HOST);
 
         // The old reader lets go: gc announces its removal though the
@@ -227,9 +229,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         replacement.answer = resolves("recovered");
         replacementAnswer.release();
         await ring;
-        await vi.waitFor(() =>
-          expect(replacement.state.data).toBe("recovered"),
-        );
+        await waitUntil(() => expect(replacement.state.data).toBe("recovered"));
         await quiet(client);
 
         expect(replacement.calls).toBe(2);
@@ -255,7 +255,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         otherAnswer.release();
         oldAnswer.release();
         await Promise.all([first, second, ring]);
-        await vi.waitFor(() => expect(other.state.data).toBe("recovered"));
+        await waitUntil(() => expect(other.state.data).toBe("recovered"));
         await quiet(client);
 
         expect(other.calls).toBe(2);
@@ -275,7 +275,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const attempt = heldFailure(refused());
         read.answer = attempt.answer;
         const retry = client.refetchQueries({ queryKey: read.queryKey });
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const ring = sweepTransientCloudFailures(client, HOST);
 
         // The reset's refetch is refused too: a ring still remembered would
@@ -295,7 +295,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const attempt = heldFailure(refused());
         read.answer = attempt.answer;
         const first = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const second = sweepTransientCloudFailures(client, HOST);
 
         read.answer = rejects(refused());
@@ -324,7 +324,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const attempt = heldFailure(refused());
         read.answer = attempt.answer;
         const first = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const second = sweepTransientCloudFailures(client, HOST);
 
         // Used by the refetch's attempt, or by the ask the ring spends.
@@ -357,7 +357,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
           queryKey: read.queryKey,
           exact: true,
         });
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const ring = sweepTransientCloudFailures(client, HOST);
 
         read.answer = rejects(refused());
@@ -386,7 +386,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const attempt = heldFailure(refused());
         read.answer = attempt.answer;
         const first = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const second = sweepTransientCloudFailures(client, HOST);
 
         client.clear();
@@ -439,7 +439,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
           const attempt = heldFailure(refused());
           read.answer = attempt.answer;
           const first = sweepTransientCloudFailures(client, HOST);
-          await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+          await waitUntil(() => expect(read.calls).toBe(base + 1));
           const second = owed
             ? sweepTransientCloudFailures(client, HOST)
             : Promise.resolve();
@@ -466,7 +466,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
             queryKey: read.queryKey,
             exact: true,
           });
-          await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+          await waitUntil(() => expect(read.calls).toBe(base + 1));
           const ring = owed
             ? sweepTransientCloudFailures(client, HOST)
             : Promise.resolve();
@@ -527,7 +527,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
           const first = claimed
             ? sweepTransientCloudFailures(client, HOST)
             : client.refetchQueries({ queryKey: read.queryKey, exact: true });
-          await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+          await waitUntil(() => expect(read.calls).toBe(base + 1));
           if (owed) await sweepTransientCloudFailures(client, HOST);
           const y = heldFailure(refused());
           let restart: Promise<void> = Promise.resolve();
@@ -539,7 +539,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
             });
           });
           x.release();
-          await vi.waitFor(() => expect(hook.fired()).toBe(true));
+          await waitUntil(() => expect(hook.fired()).toBe(true));
           expect.soft(read.calls).toBe(base + 2);
           hook.stop();
           y.release();
@@ -556,7 +556,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const x = heldFailure(refused());
         read.answer = x.answer;
         const first = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const y = heldFailure(refused());
         let restart: Promise<void> = Promise.resolve();
         let ring: Promise<void> = Promise.resolve();
@@ -589,7 +589,7 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const x = heldFailure(refused());
         read.answer = x.answer;
         const first = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         let ring: Promise<void> = Promise.resolve();
         const hook = onNextSettle(client, read, () => {
           queueMicrotask(() => {
@@ -607,6 +607,70 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         expect.soft(read.state.data).toBe("recovered");
       });
 
+      it.each([
+        {
+          how: "throws",
+          fail: (): Promise<string> => {
+            throw refused();
+          },
+        },
+        { how: "rejects", fail: () => Promise.reject(refused()) },
+      ])(
+        "keeps a second sweep's claim owned while an attempt that $how at once unwinds the first",
+        async ({ fail }) => {
+          const client = freshClient();
+          const read = await strand(client);
+          const x = heldFailure(refused());
+          const z = heldFailure(refused());
+          const w = heldFailure(refused());
+          read.answer = x.answer;
+          let stage = 0;
+          let second: Promise<void> = Promise.resolve();
+          let secondDone = false;
+          // X fails, and a refetch whose ask fails at once starts; its failure
+          // starts a second sweep, whose re-ask asks Z.
+          const stop = client.getQueryCache().subscribe((event) => {
+            if (
+              event.type !== "updated" ||
+              event.query.queryKey !== read.queryKey ||
+              event.query.state.fetchStatus !== "idle"
+            ) {
+              return;
+            }
+            if (stage === 0) {
+              stage = 1;
+              read.answer = fail;
+              void client.refetchQueries({
+                queryKey: read.queryKey,
+                exact: true,
+              });
+            } else if (stage === 1) {
+              stage = 2;
+              read.answer = z.answer;
+              second = sweepTransientCloudFailures(client, HOST).then(() => {
+                secondDone = true;
+              });
+            }
+          });
+          const first = sweepTransientCloudFailures(client, HOST);
+          await waitUntil(() => expect(read.calls).toBe(base + 1));
+          x.release();
+          await first;
+          await waitUntil(() => expect(read.calls).toBe(base + 3));
+          stop();
+          await sweepTransientCloudFailures(client, HOST);
+          read.answer = w.answer;
+          z.release();
+          await waitUntil(() => expect(read.calls).toBe(base + 4));
+          expect.soft(secondDone).toBe(false);
+          w.release();
+          await second;
+
+          expect(secondDone).toBe(true);
+          expect(read.calls).toBe(base + 4);
+        },
+      );
+
       it("does not resolve a claimed sweep while its spent re-ask is held", async () => {
         const client = freshClient();
         const read = await strand(client);
@@ -617,11 +681,11 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
         const first = sweepTransientCloudFailures(client, HOST).then(() => {
           finished = true;
         });
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         await sweepTransientCloudFailures(client, HOST);
         read.answer = y.answer;
         x.release();
-        await vi.waitFor(() => expect(read.calls).toBe(base + 2));
+        await waitUntil(() => expect(read.calls).toBe(base + 2));
         expect.soft(finished).toBe(false);
         y.release();
         await first;
@@ -631,4 +695,88 @@ describe("sweepTransientCloudFailures over a read's lifecycle", () => {
       });
     },
   );
+});
+
+describe("sweepTransientCloudFailures under the app's retry policy", () => {
+  /** The backoff TanStack waits between a failed try and its retry. */
+  const BACKOFF_MS = 1000;
+  const timers = new HeldTimers();
+  const refused = (): Error =>
+    hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list");
+
+  beforeEach(() => {
+    timers.install();
+  });
+  afterEach(() => {
+    timers.restore();
+    clearClients();
+  });
+
+  function backoffs(): HeldTimer[] {
+    return timers.pending().filter((timer) => timer.delay === BACKOFF_MS);
+  }
+
+  /** Ends the one backoff that is held, as a named event. */
+  function endBackoff(): void {
+    const held = backoffs();
+    if (held.length !== 1)
+      throw new Error("exactly one backoff should be held");
+    timers.fire(held[0]);
+  }
+
+  it("lets a ring owed to an attempt in retry backoff wait for its retry", async () => {
+    const client = freshClient();
+    const read = new RetryingRead(
+      client,
+      hostReadKey(HOST, "bot.thread.list", "backoff"),
+      resolves("first"),
+    );
+    await waitUntil(() => expect(read.state.data).toBe("first"));
+    // A data-holding read whose refetch failed twice: its try, then its retry.
+    read.answer = rejects(refused());
+    const stranding = client.refetchQueries({ queryKey: read.queryKey });
+    await waitUntil(() => expect(backoffs()).toHaveLength(1));
+    endBackoff();
+    await stranding;
+    expect(read.state.status).toBe("error");
+    expect(read.calls).toBe(3);
+
+    // R1 asks A1; a refetch from elsewhere replaces it with A2; a ring is owed
+    // to A2.
+    const a1 = heldFailure(refused());
+    read.answer = a1.answer;
+    const sweep = sweepTransientCloudFailures(client, HOST);
+    await waitUntil(() => expect(read.calls).toBe(4));
+    const a2 = heldFailure(refused());
+    read.answer = a2.answer;
+    const refetch = client.refetchQueries({
+      queryKey: read.queryKey,
+      exact: true,
+    });
+    await waitUntil(() => expect(read.calls).toBe(5));
+    const owed = sweepTransientCloudFailures(client, HOST);
+
+    // A2's try fails and so does its retry: the ring is spent on A3, whose own
+    // try fails at once and leaves A3 in backoff.
+    read.answer = rejects(refused());
+    a2.release();
+    await waitUntil(() => expect(backoffs()).toHaveLength(1));
+    endBackoff();
+    await waitUntil(() => expect(read.calls).toBe(7));
+    await waitUntil(() => expect(backoffs()).toHaveLength(1));
+    await Promise.all([sweep, refetch, owed]);
+
+    // A ring met in A3's backoff is owed to A3: it neither cancels the retry
+    // nor asks, and the retry still goes out when the backoff ends.
+    void sweepTransientCloudFailures(client, HOST);
+    await turn();
+    expect(read.calls).toBe(7);
+    expect(backoffs()).toHaveLength(1);
+    endBackoff();
+    // The retry is the eighth ask; it fails too, which spends the ring on a
+    // ninth.
+    await waitUntil(() => expect(read.calls).toBe(9));
+    await turn();
+    expect(read.calls).toBe(9);
+  });
 });

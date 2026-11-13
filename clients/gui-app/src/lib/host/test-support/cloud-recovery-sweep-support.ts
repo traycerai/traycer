@@ -24,8 +24,16 @@ export function clearClients(): void {
   for (const client of clients.splice(0)) client.clear();
 }
 
+/**
+ * Waits until `assertion` holds, polling every millisecond: the wait is for an
+ * event the code emits, and a finer poll only ends it sooner.
+ */
+export function waitUntil(assertion: () => void): Promise<void> {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 export async function settled(client: QueryClient): Promise<void> {
-  await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+  await waitUntil(() => expect(client.isFetching()).toBe(0));
 }
 
 /** One macrotask turn: what a settled attempt sets going has run. */
@@ -56,7 +64,7 @@ export async function failedRead(
     hostReadKey(hostId, method, name),
     rejects(hostFailure(code, method)),
   );
-  await vi.waitFor(() => expect(read.state.status).toBe("error"));
+  await waitUntil(() => expect(read.state.status).toBe("error"));
   return read;
 }
 
@@ -75,7 +83,7 @@ export async function dataHoldingFailedRead(
     hostReadKey(HOST, "bot.thread.list", name),
     resolves("first"),
   );
-  await vi.waitFor(() => expect(read.state.data).toBe("first"));
+  await waitUntil(() => expect(read.state.data).toBe("first"));
   read.answer = rejects(
     hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
   );

@@ -23,6 +23,7 @@ import {
   quiet,
   settled,
   turn,
+  waitUntil,
 } from "@/lib/host/test-support/cloud-recovery-sweep-support";
 
 afterEach(clearClients);
@@ -55,7 +56,7 @@ describe("sweepTransientCloudFailures", () => {
       hostReadKey(HOST, "bot.thread.list", "a"),
       resolves("first"),
     );
-    await vi.waitFor(() => expect(read.state.data).toBe("first"));
+    await waitUntil(() => expect(read.state.data).toBe("first"));
     read.answer = rejects(
       hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
     );
@@ -128,7 +129,7 @@ describe("sweepTransientCloudFailures", () => {
       hostReadKey(HOST, "bot.list", "ok"),
       resolves("v"),
     );
-    await vi.waitFor(() => expect(fine.state.status).toBe("success"));
+    await waitUntil(() => expect(fine.state.status).toBe("success"));
     const failed = await failedRead(client, {
       hostId: HOST,
       method: "bot.list",
@@ -192,7 +193,7 @@ describe("sweepTransientCloudFailures", () => {
       }),
       rejects(hostFailure("E_CLOUD_UNREACHABLE", "epic.listTasks")),
     );
-    await vi.waitFor(() => expect(epicTasks.state.status).toBe("error"));
+    await waitUntil(() => expect(epicTasks.state.status).toBe("error"));
     const failed = await failedRead(client, {
       hostId: HOST,
       method: "bot.list",
@@ -276,7 +277,7 @@ describe("sweepTransientCloudFailures", () => {
     for (const read of reads) read.answer = held.answer;
 
     const first = sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() =>
+    await waitUntil(() =>
       expect(reads.map((read) => read.calls)).toEqual([2, 2, 2, 2, 2]),
     );
     const repeats = [
@@ -298,7 +299,7 @@ describe("sweepTransientCloudFailures", () => {
         hostReadKey(HOST, "bot.thread.list", name),
         resolves("ok"),
       );
-      await vi.waitFor(() => expect(read.state.data).toBe("ok"));
+      await waitUntil(() => expect(read.state.data).toBe("ok"));
       read.answer = rejects(
         hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
       );
@@ -311,7 +312,7 @@ describe("sweepTransientCloudFailures", () => {
     for (const read of reads) read.answer = held.answer;
 
     const first = sweepTransientCloudFailures(client, HOST);
-    await vi.waitFor(() =>
+    await waitUntil(() =>
       expect(reads.map((read) => read.calls)).toEqual([3, 3, 3, 3, 3]),
     );
     const repeats = [
@@ -333,7 +334,7 @@ describe("sweepTransientCloudFailures", () => {
 
       const first = sweepTransientCloudFailures(client, HOST);
       const second = sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => expect(read.calls).toBeGreaterThan(2));
+      await waitUntil(() => expect(read.calls).toBeGreaterThan(2));
       held.release();
       await Promise.all([first, second]);
 
@@ -354,7 +355,7 @@ describe("sweepTransientCloudFailures", () => {
 
       const first = sweepTransientCloudFailures(client, HOST);
       const second = sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => expect(read.calls).toBeGreaterThan(1));
+      await waitUntil(() => expect(read.calls).toBeGreaterThan(1));
       held.release();
       await Promise.all([first, second]);
 
@@ -374,7 +375,7 @@ describe("sweepTransientCloudFailures", () => {
       const sweeps = [1, 2, 3, 4, 5].map(() =>
         sweepTransientCloudFailures(client, HOST),
       );
-      await vi.waitFor(() =>
+      await waitUntil(() =>
         expect(reads.every((read) => read.calls > 2)).toBe(true),
       );
       held.release();
@@ -397,7 +398,7 @@ describe("sweepTransientCloudFailures", () => {
         const first = sweepTransientCloudFailures(client, HOST);
         for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
         const second = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(read.calls).toBeGreaterThan(2));
+        await waitUntil(() => expect(read.calls).toBeGreaterThan(2));
         held.release();
         await Promise.all([first, second]);
 
@@ -412,7 +413,7 @@ describe("sweepTransientCloudFailures", () => {
       const held = heldAnswer("from-retry");
       read.answer = held.answer;
       const retry = client.refetchQueries({ queryKey: read.queryKey });
-      await vi.waitFor(() => expect(read.calls).toBe(3));
+      await waitUntil(() => expect(read.calls).toBe(3));
 
       const sweeping = sweepTransientCloudFailures(client, HOST);
       held.release();
@@ -451,7 +452,7 @@ describe("sweepTransientCloudFailures", () => {
       pending.answer = held.answer;
 
       const first = sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => {
+      await waitUntil(() => {
         expect(settledAgain.calls).toBe(3);
         expect(settledAgain.state.fetchStatus).toBe("idle");
         expect(pending.calls).toBe(3);
@@ -460,7 +461,7 @@ describe("sweepTransientCloudFailures", () => {
       settledAgain.answer = resolves("a-recovered");
 
       const second = sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => expect(settledAgain.calls).toBe(4));
+      await waitUntil(() => expect(settledAgain.calls).toBe(4));
       held.release();
       await Promise.all([first, second]);
 
@@ -491,7 +492,7 @@ describe("sweepTransientCloudFailures", () => {
       pending.answer = held.answer;
 
       const first = sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => {
+      await waitUntil(() => {
         expect(settledAgain.calls).toBe(2);
         expect(settledAgain.state.fetchStatus).toBe("idle");
         expect(pending.calls).toBe(2);
@@ -499,7 +500,7 @@ describe("sweepTransientCloudFailures", () => {
       settledAgain.answer = resolves("a-recovered");
 
       const second = sweepTransientCloudFailures(client, HOST);
-      await vi.waitFor(() => expect(settledAgain.calls).toBe(3));
+      await waitUntil(() => expect(settledAgain.calls).toBe(3));
       held.release();
       await Promise.all([first, second]);
 
@@ -525,7 +526,7 @@ describe("sweepTransientCloudFailures", () => {
         const read = await strand(client);
         read.answer = answer;
         const first = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         return { read, first };
       }
 
@@ -556,7 +557,7 @@ describe("sweepTransientCloudFailures", () => {
         const attempt = heldFailure(refused());
         read.answer = attempt.answer;
         const retry = client.refetchQueries({ queryKey: read.queryKey });
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
 
         const ring = sweepTransientCloudFailures(client, HOST);
         expect(read.calls).toBe(base + 1);
@@ -580,7 +581,7 @@ describe("sweepTransientCloudFailures", () => {
           const first = sweepTransientCloudFailures(client, HOST);
           for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
           const ring = sweepTransientCloudFailures(client, HOST);
-          await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+          await waitUntil(() => expect(read.calls).toBe(base + 1));
           attempt.release();
           await Promise.all([first, ring]);
           await quiet(client);
@@ -600,7 +601,7 @@ describe("sweepTransientCloudFailures", () => {
           queryKey: read.queryKey,
           exact: true,
         });
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const firstRing = sweepTransientCloudFailures(client, HOST);
 
         // A read holding data restarts on a refetch, so the second ring meets
@@ -615,7 +616,7 @@ describe("sweepTransientCloudFailures", () => {
           queryKey: read.queryKey,
           exact: true,
         });
-        await vi.waitFor(() =>
+        await waitUntil(() =>
           expect(read.calls).toBe(replaced ? base + 2 : base + 1),
         );
         await turn();
@@ -680,7 +681,7 @@ describe("sweepTransientCloudFailures", () => {
         const attempt = heldFailure(refused());
         read.answer = attempt.answer;
         const first = sweepTransientCloudFailures(client, HOST);
-        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        await waitUntil(() => expect(read.calls).toBe(base + 1));
         const ring = sweepTransientCloudFailures(client, HOST);
 
         read.release();
