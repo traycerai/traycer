@@ -62,7 +62,10 @@ import {
   botQuestionsText,
   conversationRequestMessageId,
 } from "@traycer/protocol/persistence/epic/messages";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
@@ -554,6 +557,69 @@ function screenReaderCount(threadId: string): HTMLElement | null {
   return within(card(threadId)).queryByTestId("bot-thread-reply-count-sr");
 }
 
+/**
+ * The thread's session as a windowed transcript of `total` replies, of which
+ * the first `hydrated` have bodies and the rest are placeholders.
+ */
+function windowedReplies(
+  threadId: string,
+  total: number,
+  hydrated: number,
+): ChatSessionStoreHandle {
+  const handle = chatSessionWithThreadRows([]);
+  const derived: NonNullable<ChatSessionState["transcriptDerived"]> = {
+    latestAssistantUsage: null,
+    pinnedTodo: null,
+    pinnedTaskTodoItems: [],
+    latestForkableAssistantMessageId: null,
+    restorableSetupInterruption: null,
+    interviewAnswerability: [],
+    latestAssistantAuthFailureTurnKey: null,
+    setupCardWindows: [],
+  };
+  handle.store.setState({ transcriptDerived: derived });
+  mocks.threadSessions[threadId] = handle;
+  hydrateReplies(threadId, total, hydrated);
+  return handle;
+}
+
+/** Seats the first `hydrated` of the thread's `total` replies as hydrated rows. */
+function hydrateReplies(
+  threadId: string,
+  total: number,
+  hydrated: number,
+): void {
+  const session = mocks.threadSessions[threadId].store;
+  const ids = Array.from(
+    { length: hydrated },
+    (_, index) => `${threadId}-reply-${String(index + 1)}`,
+  );
+  act(() => {
+    session.setState({
+      messages: ids.map((id, index) =>
+        postRow(id, `reply ${String(index + 1)}`),
+      ),
+      transcriptWindow: {
+        ...session.getState().transcriptWindow,
+        rowCount: total,
+        spans:
+          hydrated === 0
+            ? []
+            : [
+                {
+                  fromOrdinal: 0,
+                  rowIds: ids,
+                  rowContext: {},
+                  messageIds: ids,
+                  eventIds: [],
+                  contextBytes: 0,
+                },
+              ],
+      },
+    });
+  });
+}
+
 function replyTexts(count: number): string[] {
   return Array.from(
     { length: count },
@@ -1013,6 +1079,75 @@ describe("<BotThreadsView />", () => {
       ),
     );
     expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("keeps the divider and its link while every reply of a windowed card is still a placeholder", async () => {
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    windowedReplies("team-new", 2, 0);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByTestId("bot-chat-transcript-row-loading");
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "2 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("keeps the divider and its link while a short windowed card still has a placeholder among its hydrated replies", async () => {
+    withReplies(TEAM, "team-new", replyTexts(3), 3_000);
+    windowedReplies("team-new", 3, 2);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByText("reply 2");
+    expect(full.getByTestId("bot-chat-transcript-row-loading")).toBeTruthy();
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "3 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("keeps the divider and its link on an unfolded long windowed card while a reply is still a placeholder", async () => {
+    useBotThreadFoldStore.setState({ unfolded: { "team-new": true } });
+    withReplies(TEAM, "team-new", replyTexts(8), 3_000);
+    windowedReplies("team-new", 8, 7);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByText("reply 7");
+    expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+    expect(full.getByTestId("bot-chat-transcript-row-loading")).toBeTruthy();
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "8 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("swaps the divider for the assistive count once the last placeholder reply is hydrated", async () => {
+    withReplies(TEAM, "team-new", replyTexts(3), 3_000);
+    windowedReplies("team-new", 3, 2);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-chat-transcript-row-loading");
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "3 replies",
+    );
+
+    hydrateReplies("team-new", 3, 3);
+
+    await waitFor(() =>
+      expect(screenReaderCount("team-new")?.textContent).toBe("3 replies"),
+    );
+    expect(full.queryByTestId("bot-chat-transcript-row-loading")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
   });
 
   it("folds a longer thread to the origin, a line counting the hidden replies and the last two replies, and the line shows the rest in place and keeps them shown", async () => {
