@@ -1,8 +1,12 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 
-import { Dialog, DialogTrigger } from "@/components/ui/dialog";
-import { ExpandedImageDialogContent } from "@/components/chat/expanded-image-dialog";
+import { Dialog } from "@/components/ui/dialog";
+import {
+  ExpandedImageBody,
+  ExpandedImageDialogContent,
+  type ImageSetViewerState,
+} from "@/components/chat/expanded-image-dialog";
 import {
   type AttachmentBlobSrcState,
   useChatAttachmentBlobSrc,
@@ -60,23 +64,65 @@ export function UserMessageAttachmentGallery({
       label: labels.get(String(index)),
     }));
   }, [attachments, browserAnnotations]);
+  const [viewer, setViewer] = useState<ImageSetViewerState>({
+    open: false,
+    index: 0,
+  });
+  const galleryRef = useRef<HTMLDivElement>(null);
   if (images.length === 0) return null;
+  const shown = images.at(viewer.index);
   return (
-    <div
-      className={cn(
-        "mb-2 flex w-full flex-wrap gap-1.5",
-        align === "start" ? "justify-start" : "justify-end",
-      )}
+    <Dialog
+      open={viewer.open}
+      onOpenChange={(open) => setViewer((current) => ({ ...current, open }))}
     >
-      {images.map((image) => (
-        <ImageAttachmentThumb
-          key={image.key}
-          attachment={image.attachment}
-          displayLabel={image.label}
-        />
-      ))}
-    </div>
+      <div
+        ref={galleryRef}
+        className={cn(
+          "mb-2 flex w-full flex-wrap gap-1.5",
+          align === "start" ? "justify-start" : "justify-end",
+        )}
+      >
+        {images.map((image, index) => (
+          <ImageAttachmentThumb
+            key={image.key}
+            attachment={image.attachment}
+            displayLabel={image.label}
+            onOpen={() => setViewer({ open: true, index })}
+          />
+        ))}
+      </div>
+      {shown === undefined ? null : (
+        <ExpandedImageDialogContent
+          title={imageAttachmentAlt(shown.attachment)}
+          navigation={{
+            index: viewer.index,
+            count: images.length,
+            onNavigate: (index) => setViewer({ open: true, index }),
+          }}
+          // Focus returns to the thumbnail of the image last shown, which
+          // after stepping through the set is not the one that opened it.
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            const thumbs = galleryRef.current?.querySelectorAll<HTMLElement>(
+              "[data-user-message-image-thumb]",
+            );
+            thumbs?.[viewer.index]?.focus();
+          }}
+        >
+          {/* Keyed so each image opens fitted, never at its neighbour's zoom. */}
+          <ExpandedAttachmentImage
+            key={shown.key}
+            attachment={shown.attachment}
+          />
+        </ExpandedImageDialogContent>
+      )}
+    </Dialog>
   );
+}
+
+function imageAttachmentAlt(attachment: ImageAttachment): string {
+  return attachment.name || "Image attachment";
 }
 
 function isImageAttachment(
@@ -114,11 +160,13 @@ function useImageAttachmentSrc(
 function ImageAttachmentThumb({
   attachment,
   displayLabel,
+  onOpen,
 }: {
   readonly attachment: ImageAttachment;
   readonly displayLabel: ImageAttachmentDisplayLabel | undefined;
+  readonly onOpen: () => void;
 }): ReactNode {
-  const alt = attachment.name || "Image attachment";
+  const alt = imageAttachmentAlt(attachment);
   const label =
     displayLabel ??
     fallbackImageAttachmentDisplayLabel({ id: "fallback", fileName: alt });
@@ -156,37 +204,48 @@ function ImageAttachmentThumb({
   }
 
   return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <TooltipWrapper
-          label={label.title}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
+    <TooltipWrapper
+      label={label.title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <button
+        type="button"
+        aria-label={triggerAriaLabel}
+        aria-haspopup="dialog"
+        data-user-message-image-thumb=""
+        onClick={onOpen}
+        // muted-fill-ok: thumb trigger sits on the chat canvas backdrop / user bubble, not a raised surface
+        className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span
+          className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
+          data-user-message-image-badge={label.badgeLabel}
         >
-          <button
-            type="button"
-            aria-label={triggerAriaLabel}
-            // muted-fill-ok: thumb trigger sits on the chat canvas backdrop / user bubble, not a raised surface
-            className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span
-              className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
-              data-user-message-image-badge={label.badgeLabel}
-            >
-              {label.badgeLabel}
-            </span>
-            {thumbnail}
-          </button>
-        </TooltipWrapper>
-      </DialogTrigger>
-      <ExpandedImageDialogContent
-        title={alt}
-        alt={alt}
-        image={image}
-        suggestedName={attachment.name ?? null}
-        onCloseAutoFocus={undefined}
-      />
-    </Dialog>
+          {label.badgeLabel}
+        </span>
+        {thumbnail}
+      </button>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * The shown image of the set. It resolves its own source, sharing the cache
+ * entry its thumbnail already holds, so only the image on screen is read.
+ */
+function ExpandedAttachmentImage({
+  attachment,
+}: {
+  readonly attachment: ImageAttachment;
+}): ReactNode {
+  const image = useImageAttachmentSrc(attachment);
+  return (
+    <ExpandedImageBody
+      alt={imageAttachmentAlt(attachment)}
+      image={image}
+      suggestedName={attachment.name ?? null}
+    />
   );
 }
