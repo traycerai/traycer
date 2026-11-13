@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   callHostRpc,
+  callHostRpcAtEndpoint,
   callHostRpcAtResolvedEndpoint,
   callHostRpcFastFail,
   canonicalResponseSchemaFor,
@@ -17,7 +18,11 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "../../../../shared/host-transport/host-messenger";
-import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
+import {
+  finalRefusalOf,
+  RetryEpisodeOutcomeUnknownError,
+} from "../../../../shared/host-transport/retrying-messenger";
+import { isRefusalAfterRejectedSignIn } from "../sign-in-rejection";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
@@ -382,6 +387,53 @@ describe("callHostRpc", () => {
     expect(rotateMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["the refresh is rejected", "refresh-rejected-credential", true],
+    ["the refresh rotates and the retry is refused again", "applied", false],
+    ["the refresh fails transiently", "refresh-network", false],
+  ] as const)(
+    "marks the host's refusal as a dead sign-in only when %s",
+    async (_label, rotateOutcome, marked) => {
+      const refusal = (requestId: string): HostRpcError =>
+        new HostRpcError({
+          code: "UNAUTHORIZED",
+          message: "Token expired",
+          requestId,
+          method: "host.status",
+          fatalDetails: null,
+        });
+      requestMock.mockRejectedValue(refusal("r1"));
+      rotateMock.mockResolvedValue({
+        outcome: rotateOutcome,
+        credentials:
+          rotateOutcome === "applied"
+            ? {
+                token: "tok-2",
+                refreshToken: "tok-2-refresh",
+                savedAt: "2026-01-01T00:00:00.000Z",
+                user: { id: "u1", email: "a@b.c", name: "A" },
+              }
+            : null,
+        rejection: null,
+        diskPressure: rotateOutcome === "applied" ? "clear" : null,
+      });
+
+      const failure = await callHostRpcAtEndpoint(
+        "host.status",
+        {},
+        { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+      ).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(finalRefusalOf(failure)).toBeInstanceOf(HostRpcError);
+      expect(isRefusalAfterRejectedSignIn(finalRefusalOf(failure))).toBe(
+        marked,
+      );
+    },
+  );
 
   it("does not rotate on a non-UNAUTHORIZED error", async () => {
     requestMock.mockRejectedValue(
