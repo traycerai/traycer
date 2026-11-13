@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { providersListUpgradeV1010ToV1011 } from "@traycer/protocol/host/registry";
 import {
   providerCliStateSchema,
   providerProfileSchema,
+  providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   type ProviderCliState,
   type ProviderId,
   type ProviderProfile,
+  type ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   callHostRpcWithDispatch,
@@ -376,5 +380,248 @@ describe("traycer profile list", () => {
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
     expect(error.message).toContain("not-a-provider");
     expect(rpcMock).not.toHaveBeenCalled();
+  });
+});
+
+interface ListedProfileSpec {
+  readonly profileId: string;
+  readonly kind: "ambient" | "managed";
+  readonly label: string;
+  readonly email: string | null;
+  readonly authStatus: "authenticated" | "unauthenticated";
+  readonly enabled: boolean;
+  readonly aliases: readonly string[];
+  readonly personNotice: "needs-sign-in" | "waiting" | null;
+  readonly terminalOnThisComputer: boolean;
+}
+
+function listedProfile(spec: ListedProfileSpec): object {
+  return {
+    profileId: spec.profileId,
+    kind: spec.kind,
+    authType: "oauth",
+    label: spec.label,
+    auth: {
+      status: spec.authStatus,
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity:
+      spec.email === null
+        ? null
+        : { email: spec.email, tier: null, accountUuid: null },
+    usageUpdatedAt: null,
+    rateLimitStatus: "ok",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+    enabled: spec.enabled,
+    aliases: [...spec.aliases],
+    personNotice: spec.personNotice,
+    terminalOnThisComputer: spec.terminalOnThisComputer,
+  };
+}
+
+function listedResponse(
+  profiles: readonly ListedProfileSpec[],
+): ProvidersListResponse {
+  return providersListResponseSchema.parse({
+    providers: [
+      {
+        providerId: "claude-code",
+        enabled: true,
+        disabledBy: null,
+        selected: { kind: "bundled" },
+        candidates: [],
+        authPending: false,
+        checkedAt: null,
+        apiKey: { supported: false, configured: false, source: null },
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+        profiles: profiles.map(listedProfile),
+      },
+    ],
+    native: null,
+    removedProfiles: [],
+  });
+}
+
+const TEN_ELEVEN_ROWS: readonly ListedProfileSpec[] = [
+  {
+    profileId: "ambient",
+    kind: "ambient",
+    label: "Terminal",
+    email: "term@example.test",
+    authStatus: "authenticated",
+    enabled: true,
+    aliases: [],
+    personNotice: null,
+    terminalOnThisComputer: true,
+  },
+  {
+    profileId: "row-plain",
+    kind: "managed",
+    label: "Plain",
+    email: null,
+    authStatus: "authenticated",
+    enabled: true,
+    aliases: [],
+    personNotice: null,
+    terminalOnThisComputer: false,
+  },
+  {
+    profileId: "row-sign-in",
+    kind: "managed",
+    label: "Signed out",
+    email: "work@example.test",
+    authStatus: "unauthenticated",
+    enabled: false,
+    aliases: [],
+    personNotice: "needs-sign-in",
+    terminalOnThisComputer: false,
+  },
+  {
+    profileId: "row-waiting",
+    kind: "managed",
+    label: "Held",
+    email: null,
+    authStatus: "unauthenticated",
+    enabled: true,
+    aliases: [],
+    personNotice: "waiting",
+    terminalOnThisComputer: false,
+  },
+  {
+    profileId: "row-term",
+    kind: "managed",
+    label: "Record",
+    email: "held@example.test",
+    authStatus: "authenticated",
+    enabled: true,
+    aliases: [],
+    personNotice: null,
+    terminalOnThisComputer: true,
+  },
+];
+
+describe("traycer profile list 10.11 keys", () => {
+  it("prints each person notice in place of the sign-in word, the terminal line, and only the sparse json keys", async () => {
+    const answer = listedResponse(TEN_ELEVEN_ROWS);
+    rpcMock.mockResolvedValue(answer);
+
+    const result = await buildProfileListCommand({ provider: null })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toBe(
+      [
+        "claude (Claude Code)",
+        "  PROFILE      LABEL       ACCOUNT            STATE     SIGN-IN              LIMIT",
+        "  ambient      Terminal    term@example.test  enabled   authenticated        ok",
+        "  row-plain    Plain       -                  enabled   authenticated        ok",
+        "  row-sign-in  Signed out  work@example.test  disabled  Needs a sign-in      ok",
+        "  row-waiting  Held        -                  enabled   Waiting for Traycer  ok",
+        "  row-term     Record      held@example.test  enabled   authenticated        ok",
+        "               Terminal account on this computer",
+      ].join("\n"),
+    );
+    expect(result.data).toEqual({
+      providers: [
+        {
+          providerId: "claude-code",
+          harnessId: "claude",
+          profiles: [
+            {
+              profileId: "ambient",
+              label: "Terminal",
+              kind: "ambient",
+              email: "term@example.test",
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
+            },
+            {
+              profileId: "row-plain",
+              label: "Plain",
+              kind: "managed",
+              email: null,
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
+            },
+            {
+              profileId: "row-sign-in",
+              label: "Signed out",
+              kind: "managed",
+              email: "work@example.test",
+              enabled: false,
+              authStatus: "unauthenticated",
+              rateLimitStatus: "ok",
+              personNotice: "needs-sign-in",
+            },
+            {
+              profileId: "row-waiting",
+              label: "Held",
+              kind: "managed",
+              email: null,
+              enabled: true,
+              authStatus: "unauthenticated",
+              rateLimitStatus: "ok",
+              personNotice: "waiting",
+            },
+            {
+              profileId: "row-term",
+              label: "Record",
+              kind: "managed",
+              email: "held@example.test",
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
+              terminalOnThisComputer: true,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("prints a 10.10 answer, after the upgrade, identically to today's list", async () => {
+    const today = [stateFixture("claude-code", CLAUDE_PROFILES)];
+    const upgraded = providersListUpgradeV1010ToV1011.upgradeResponse(
+      providersListResponseSchemaV1010Preimage.parse({
+        providers: today,
+        native: null,
+      }),
+    );
+    const ambient = upgraded.providers[0]?.profiles.find(
+      (profile) => profile.kind === "ambient",
+    );
+    const managed = upgraded.providers[0]?.profiles.find(
+      (profile) => profile.kind === "managed",
+    );
+    expect(ambient?.terminalOnThisComputer).toBe(true);
+    expect(ambient?.aliases).toEqual([]);
+    expect(ambient?.personNotice).toBeNull();
+    expect(managed?.terminalOnThisComputer).toBe(false);
+    expect(managed?.personNotice).toBeNull();
+    expect(upgraded.removedProfiles).toEqual([]);
+
+    respondWith(today);
+    const current = await buildProfileListCommand({ provider: null })(
+      makeCtx(),
+    );
+    rpcMock.mockResolvedValue(upgraded);
+    const fromOlderHost = await buildProfileListCommand({ provider: null })(
+      makeCtx(),
+    );
+
+    expect(fromOlderHost.exitCode).toBe(current.exitCode);
+    expect(fromOlderHost.human).toBe(current.human);
+    expect(fromOlderHost.data).toEqual(current.data);
   });
 });

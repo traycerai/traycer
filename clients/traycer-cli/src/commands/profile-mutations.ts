@@ -2,7 +2,6 @@ import { createInterface } from "node:readline/promises";
 import type {
   ProviderId,
   ProviderProfileAction,
-  ProvidersAnswerProfileNameResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   callHostRpcWithDispatch,
@@ -18,7 +17,6 @@ import {
   printable,
   readListedProfile,
 } from "../internal/profile-target";
-import { renameConflictLine } from "../internal/profile-words";
 import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 
@@ -55,32 +53,7 @@ async function applyProfileAction(
   );
 }
 
-/**
- * Answers a row's open "Which name should this account use?" question with
- * `label`, sending the question's `revision` back unchanged. The account's
- * name everywhere when it is `applied`; a `conflict` wrote nothing, and its
- * `label` is the name the account uses now.
- */
-export async function answerProfileName(
-  providerId: ProviderId,
-  profileId: string,
-  revision: string,
-  label: string,
-): Promise<ProvidersAnswerProfileNameResponse> {
-  return await toAgentCliError(
-    callHostRpcWithDispatch(
-      "providers.answerProfileName",
-      { providerId, profileId, revision, label },
-      PLAIN_DISPATCH,
-    ),
-  );
-}
-
-/**
- * `traycer profile rename <provider> <profile> <label>`. A row whose name is
- * an open question is renamed by answering it, so the answer is the name on
- * every computer and the question closes.
- */
+/** `traycer profile rename <provider> <profile> <label>`. */
 export function buildProfileRenameCommand(opts: {
   readonly provider: string;
   readonly profile: string;
@@ -90,32 +63,8 @@ export function buildProfileRenameCommand(opts: {
     const providerId = parseProviderArgument(opts.provider);
     const typed = parseProfileArgument(opts.profile);
     const label = parseProfileLabel(opts.label);
-    const row = await readListedProfile(providerId, typed);
-    const profileId = row?.profileId ?? typed;
-    const question = row?.nameQuestion ?? null;
-    if (question !== null) {
-      const answer = await answerProfileName(
-        providerId,
-        profileId,
-        question.revision,
-        label,
-      );
-      return {
-        data: {
-          providerId,
-          profileId,
-          label: answer.label,
-          nameQuestion: answer,
-        },
-        human:
-          answer.outcome === "applied"
-            ? renamedLine(providerId, profileId, answer.label)
-            : renameConflictLine(answer.label),
-        // A conflict leaves the account on a name other than the one asked
-        // for, so a script must not read it as renamed.
-        exitCode: answer.outcome === "applied" ? 0 : 1,
-      };
-    }
+    const profileId =
+      (await readListedProfile(providerId, typed))?.profileId ?? typed;
     await applyProfileAction(providerId, { type: "rename", profileId, label });
     return {
       data: { providerId, profileId, label },
@@ -134,7 +83,7 @@ function renamedLine(
 }
 
 /** The label cap both profile label fields carry on the wire. */
-export const PROFILE_LABEL_MAX_LENGTH = 64;
+const PROFILE_LABEL_MAX_LENGTH = 64;
 
 export function parseProfileLabel(value: string): string {
   const label = value.trim();

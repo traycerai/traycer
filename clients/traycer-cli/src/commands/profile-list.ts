@@ -13,14 +13,13 @@ import {
   type ProviderListState,
 } from "../internal/profile-target";
 import {
-  nameQuestionLine,
   PERSON_NOTICE_WORDS,
   TERMINAL_ACCOUNT_LINE,
 } from "../internal/profile-words";
 import type { CommandFn } from "../runner/runner";
 
 /**
- * The last three keys are present only when the computer says something
+ * The last two keys are present only when the computer says something
  * through them, so the row a computer that predates them answers with is
  * exactly the row it always was.
  */
@@ -39,8 +38,6 @@ export interface ProfileListRow {
    * Terminal login's own row, which is that login.
    */
   readonly terminalOnThisComputer?: true;
-  /** No name is chosen yet: the account's names on the computers that had it. */
-  readonly nameQuestion?: { readonly choices: readonly string[] };
 }
 
 export interface ProfileListProvider {
@@ -99,7 +96,6 @@ type ProfileSummarySource = Pick<
   readonly enabled?: boolean;
   readonly personNotice?: ProviderProfile["personNotice"];
   readonly terminalOnThisComputer?: boolean;
-  readonly nameQuestion?: ProviderProfile["nameQuestion"];
 };
 
 export function summarizeProfile(
@@ -119,9 +115,6 @@ export function summarizeProfile(
     ...(profile.terminalOnThisComputer === true && profile.kind !== "ambient"
       ? { terminalOnThisComputer: true }
       : {}),
-    ...(profile.nameQuestion === null || profile.nameQuestion === undefined
-      ? {}
-      : { nameQuestion: { choices: profile.nameQuestion.choices } }),
   };
 }
 
@@ -163,12 +156,7 @@ function cellsOf(row: ProfileListRow): string[] {
  * the LABEL column, outside the columns' widths.
  */
 function detailLinesOf(row: ProfileListRow): string[] {
-  return [
-    ...(row.terminalOnThisComputer === true ? [TERMINAL_ACCOUNT_LINE] : []),
-    ...(row.nameQuestion === undefined
-      ? []
-      : [nameQuestionLine(row.nameQuestion.choices)]),
-  ];
+  return row.terminalOnThisComputer === true ? [TERMINAL_ACCOUNT_LINE] : [];
 }
 
 function formatRows(profiles: readonly ProfileListRow[]): string[] {
