@@ -12,12 +12,19 @@ import {
   readProviderStates,
   type ProviderListState,
 } from "../internal/profile-target";
-import {
-  alsoNamedLine,
-  PERSON_NOTICE_WORDS,
-  TERMINAL_ACCOUNT_LINE,
-} from "../internal/profile-words";
 import type { CommandFn } from "../runner/runner";
+
+/** Printed in place of the raw sign-in word when the computer sets a notice. */
+const PERSON_NOTICE_WORDS: Record<ProviderProfilePersonNotice, string> = {
+  "needs-sign-in": "Needs a sign-in",
+  waiting: "Waiting for Traycer",
+};
+
+/**
+ * Under a row whose account is also this computer's Terminal login. The CLI
+ * only ever reaches the host on its own computer, so it names no computer.
+ */
+const TERMINAL_ACCOUNT_LINE = "Terminal account on this computer";
 
 /**
  * The last three keys are present only when the computer says something
@@ -165,7 +172,9 @@ function cellsOf(row: ProfileListRow): string[] {
 function detailLinesOf(row: ProfileListRow): string[] {
   return [
     ...(row.terminalOnThisComputer === true ? [TERMINAL_ACCOUNT_LINE] : []),
-    ...(row.otherNames === undefined ? [] : [alsoNamedLine(row.otherNames)]),
+    ...(row.otherNames === undefined
+      ? []
+      : [`Also named: ${row.otherNames.map(printable).join(", ")}`]),
   ];
 }
 

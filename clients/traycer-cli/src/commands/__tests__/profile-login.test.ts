@@ -260,6 +260,12 @@ interface Scenario {
   /** What the first `providers.list` read answers (the command's own pre-flight). */
   listState: ListedProvider;
   /**
+   * The whole `providers.list` envelope, when a test needs a key the provider
+   * row does not carry (`removedProfiles`). Null keeps the `{ providers:
+   * [listState], native: null }` answer.
+   */
+  listEnvelope: ProvidersListResponse | null;
+  /**
    * What every later `providers.list` read answers: the command's re-read when
    * the sign-in's echo lacks the profile it needs. Null keeps `listState`; an
    * Error makes that read fail.
@@ -294,6 +300,7 @@ let listReads = 0;
 function defaultScenario(): Scenario {
   return {
     listState: listState(NO_PROFILES),
+    listEnvelope: null,
     laterListReads: null,
     startFailure: null,
     startAnswers: [startAnswer({ profileId: "prof_new" })],
@@ -313,13 +320,14 @@ function nextStartAnswer(): ProvidersStartLoginResponseV13 {
   return answer;
 }
 
-function nextListAnswer(): Promise<{
-  providers: ListedProvider[];
-  native: null;
-}> {
+function nextListAnswer(): Promise<
+  ProvidersListResponse | { providers: ListedProvider[]; native: null }
+> {
   listReads += 1;
   const later = scenario.laterListReads;
   if (listReads === 1 || later === null) {
+    const envelope = scenario.listEnvelope;
+    if (envelope !== null) return Promise.resolve(envelope);
     return Promise.resolve({ providers: [scenario.listState], native: null });
   }
   if (later instanceof Error) return Promise.reject(later);
@@ -2395,20 +2403,11 @@ function syncList(spec: {
   const parsed = providersListResponseSchema.parse({
     providers: [
       {
-        providerId: "claude-code",
-        enabled: true,
-        disabledBy: null,
-        selected: { kind: "bundled" },
-        candidates: [],
-        authPending: false,
-        checkedAt: null,
-        apiKey: { supported: false, configured: false, source: null },
-        auth: {
-          status: "authenticated",
-          badgeText: null,
-          label: null,
-          detail: null,
-        },
+        ...stateInput({
+          auth: "authenticated",
+          authPending: false,
+          profiles: [],
+        }),
         loginCapability: {
           oauthArgs: [],
           token: null,
@@ -2418,23 +2417,13 @@ function syncList(spec: {
           selfOpensBrowser: spec.selfOpensBrowser ? {} : null,
         },
         profiles: spec.profiles.map((profile) => ({
-          profileId: profile.profileId,
-          kind: profile.kind,
-          authType: "oauth",
-          label: profile.label,
-          auth: {
-            status: profile.authStatus,
-            badgeText: null,
-            label: null,
-            detail: null,
-          },
-          identity:
-            profile.email === null
-              ? null
-              : { email: profile.email, tier: null, accountUuid: null },
-          usageUpdatedAt: null,
-          rateLimitStatus: "ok",
-          enabled: true,
+          ...profileInput({
+            profileId: profile.profileId,
+            kind: profile.kind,
+            label: profile.label,
+            email: profile.email,
+            authStatus: profile.authStatus,
+          }),
           aliases: [...profile.aliases],
           personNotice: profile.personNotice,
           terminalOnThisComputer: profile.terminalOnThisComputer,
@@ -2550,16 +2539,17 @@ describe("alias look-up on login", () => {
   });
 
   it("refuses an id found only in removedProfiles before asking the host to start", async () => {
-    scenario.listState = deviceList(
-      [workRow("row-own", [], "Work", WORK_EMAIL)],
-      [
+    scenario.listEnvelope = providersListResponseSchema.parse({
+      providers: [deviceList([workRow("row-own", [], "Work", WORK_EMAIL)], [])],
+      native: null,
+      removedProfiles: [
         {
           providerId: "claude-code",
           profileId: "gone-id",
           aliases: ["gone-alias"],
         },
       ],
-    );
+    });
 
     for (const id of ["gone-id", "gone-alias"]) {
       const error = await failureOf(
@@ -2575,6 +2565,24 @@ describe("alias look-up on login", () => {
     scenario.listState = deviceList(
       [
         workRow("row-a", ["shared-id"], "A", WORK_EMAIL),
+        workRow("row-b", ["shared-id"], "B", WORK_EMAIL),
+      ],
+      [],
+    );
+
+    const error = await failureOf(
+      runLogin(existing("shared-id"), makeIo(false), makeCtx(false, false)),
+    );
+
+    expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
+    expect(error.message).toContain("shared-id");
+    expect(callsTo("providers.startLogin")).toHaveLength(0);
+  });
+
+  it("refuses an id that one row owns and another row lists as an alias before asking the host to start", async () => {
+    scenario.listState = deviceList(
+      [
+        workRow("shared-id", [], "A", WORK_EMAIL),
         workRow("row-b", ["shared-id"], "B", WORK_EMAIL),
       ],
       [],
@@ -2643,19 +2651,16 @@ describe("login against a 10.10 answer", () => {
   });
 });
 
-const TEN_ELEVEN_LOGIN_ROWS: readonly SyncProfileSpec[] = [
-  {
-    profileId: "ambient",
-    kind: "ambient",
-    label: "Terminal login",
-    email: "term@example.test",
-    authStatus: "authenticated",
-    aliases: [],
-    personNotice: null,
-    terminalOnThisComputer: true,
-    otherNames: null,
-  },
-  {
+/**
+ * The record is this computer's Terminal login, or it is not. When it is, that
+ * row is the only one under the provider. When it is not, the Terminal login
+ * is its own ambient row and the only row with the flag.
+ */
+function accountRows(
+  otherNames: readonly string[] | null,
+  terminalOnThisComputer: boolean,
+): readonly SyncProfileSpec[] {
+  const work: SyncProfileSpec = {
     profileId: "prof_work",
     kind: "managed",
     label: "Work",
@@ -2663,69 +2668,10 @@ const TEN_ELEVEN_LOGIN_ROWS: readonly SyncProfileSpec[] = [
     authStatus: "authenticated",
     aliases: [],
     personNotice: null,
-    terminalOnThisComputer: false,
-    otherNames: null,
-  },
-];
-
-describe("login prompts for nothing", () => {
-  it("on a 10.11 answer, with or without a terminal, exits as it does today", async () => {
-    const today = listState({
-      ...NO_PROFILES,
-      profiles: [AMBIENT_PROFILE, WORK_PROFILE],
-    });
-    const listed = deviceList(TEN_ELEVEN_LOGIN_ROWS, []);
-
-    const signIn = async (
-      state: ListedProvider,
-      fake: FakeIo,
-    ): Promise<CommandResult> => {
-      dispatchMock.mockClear();
-      startIndex = 0;
-      listReads = 0;
-      scenario.listState = state;
-      scenario.laterListReads = null;
-      scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
-      scenario.awaitLogin = () =>
-        Promise.resolve(awaitResult({ state: signedInState([WORK_PROFILE]) }));
-      return runLogin(existing("prof_work"), fake, makeCtx(false, false));
-    };
-
-    const todayIo = makeIo(true);
-    const current = await signIn(today, todayIo);
-    expect(todayIo.readLines).not.toHaveBeenCalled();
-
-    const terminal = makeIo(true);
-    const fromList = await signIn(listed, terminal);
-    expect(terminal.readLines).not.toHaveBeenCalled();
-    expect(
-      dispatchMock.mock.calls
-        .map((call) => call[0])
-        .slice()
-        .sort(),
-    ).toEqual([
-      "providers.awaitLogin",
-      "providers.list",
-      "providers.startLogin",
-    ]);
-    expect(fromList.exitCode).toBe(current.exitCode);
-    expect(fromList.human).toBe(current.human);
-    expect(fromList.data).toEqual(current.data);
-
-    const headless = makeIo(false);
-    headless.stdinIsTerminal.mockReturnValue(false);
-    const withoutTerminal = await signIn(listed, headless);
-    expect(headless.readLines).not.toHaveBeenCalled();
-    expect(withoutTerminal.exitCode).toBe(current.exitCode);
-    expect(withoutTerminal.human).toBe(current.human);
-    expect(withoutTerminal.data).toEqual(current.data);
-  });
-});
-
-function accountRows(
-  otherNames: readonly string[] | null,
-  terminalOnThisComputer: boolean,
-): readonly SyncProfileSpec[] {
+    terminalOnThisComputer,
+    otherNames,
+  };
+  if (terminalOnThisComputer) return [work];
   return [
     {
       profileId: "ambient",
@@ -2738,17 +2684,7 @@ function accountRows(
       terminalOnThisComputer: true,
       otherNames: null,
     },
-    {
-      profileId: "prof_work",
-      kind: "managed",
-      label: "Work",
-      email: "work@example.test",
-      authStatus: "authenticated",
-      aliases: [],
-      personNotice: null,
-      terminalOnThisComputer,
-      otherNames,
-    },
+    work,
   ];
 }
 

@@ -399,27 +399,14 @@ interface ListedProfileSpec {
 
 function listedProfile(spec: ListedProfileSpec): object {
   return {
-    profileId: spec.profileId,
-    kind: spec.kind,
-    authType: "oauth",
-    label: spec.label,
-    auth: {
-      status: spec.authStatus,
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    identity:
-      spec.email === null
-        ? null
-        : { email: spec.email, tier: null, accountUuid: null },
-    usageUpdatedAt: null,
-    rateLimitStatus: "ok",
-    rateLimitLimitedScopes: null,
-    duplicateOfProfileId: null,
-    accentColor: null,
-    ambientDriftNotice: null,
-    enabled: spec.enabled,
+    ...profileFixture({
+      profileId: spec.profileId,
+      kind: spec.kind,
+      label: spec.label,
+      email: spec.email,
+      authStatus: spec.authStatus,
+      enabled: spec.enabled,
+    }),
     aliases: [...spec.aliases],
     personNotice: spec.personNotice,
     terminalOnThisComputer: spec.terminalOnThisComputer,
@@ -428,46 +415,49 @@ function listedProfile(spec: ListedProfileSpec): object {
 }
 
 function listedResponse(
-  profiles: readonly ListedProfileSpec[],
+  providers: readonly {
+    readonly providerId: ProviderId;
+    readonly profiles: readonly ListedProfileSpec[];
+  }[],
 ): ProvidersListResponse {
   return providersListResponseSchema.parse({
-    providers: [
-      {
-        providerId: "claude-code",
-        enabled: true,
-        disabledBy: null,
-        selected: { kind: "bundled" },
-        candidates: [],
-        authPending: false,
-        checkedAt: null,
-        apiKey: { supported: false, configured: false, source: null },
-        auth: {
-          status: "authenticated",
-          badgeText: null,
-          label: null,
-          detail: null,
-        },
-        profiles: profiles.map(listedProfile),
+    providers: providers.map((provider) => ({
+      providerId: provider.providerId,
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled" },
+      candidates: [],
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-    ],
+      profiles: provider.profiles.map(listedProfile),
+    })),
     native: null,
     removedProfiles: [],
   });
 }
 
+/** The Terminal login as its own row. A folded record is never beside it. */
+const AMBIENT_TERMINAL: ListedProfileSpec = {
+  profileId: "ambient",
+  kind: "ambient",
+  label: "Terminal",
+  email: "term@example.test",
+  authStatus: "authenticated",
+  enabled: true,
+  aliases: [],
+  personNotice: null,
+  terminalOnThisComputer: true,
+  otherNames: null,
+};
+
 const TEN_ELEVEN_ROWS: readonly ListedProfileSpec[] = [
-  {
-    profileId: "ambient",
-    kind: "ambient",
-    label: "Terminal",
-    email: "term@example.test",
-    authStatus: "authenticated",
-    enabled: true,
-    aliases: [],
-    personNotice: null,
-    terminalOnThisComputer: true,
-    otherNames: null,
-  },
   {
     profileId: "row-plain",
     kind: "managed",
@@ -520,7 +510,10 @@ const TEN_ELEVEN_ROWS: readonly ListedProfileSpec[] = [
 
 describe("traycer profile list 10.11 keys", () => {
   it("prints each person notice in place of the sign-in word, the terminal line, and only the sparse json keys", async () => {
-    const answer = listedResponse(TEN_ELEVEN_ROWS);
+    const answer = listedResponse([
+      { providerId: "claude-code", profiles: TEN_ELEVEN_ROWS },
+      { providerId: "codex", profiles: [AMBIENT_TERMINAL] },
+    ]);
     rpcMock.mockResolvedValue(answer);
 
     const result = await buildProfileListCommand({ provider: null })(makeCtx());
@@ -530,12 +523,15 @@ describe("traycer profile list 10.11 keys", () => {
       [
         "claude (Claude Code)",
         "  PROFILE      LABEL       ACCOUNT            STATE     SIGN-IN              LIMIT",
-        "  ambient      Terminal    term@example.test  enabled   authenticated        ok",
         "  row-plain    Plain       -                  enabled   authenticated        ok",
         "  row-sign-in  Signed out  work@example.test  disabled  Needs a sign-in      ok",
         "  row-waiting  Held        -                  enabled   Waiting for Traycer  ok",
         "  row-term     Record      held@example.test  enabled   authenticated        ok",
         "               Terminal account on this computer",
+        "",
+        "codex (Codex)",
+        "  PROFILE  LABEL     ACCOUNT            STATE    SIGN-IN        LIMIT",
+        "  ambient  Terminal  term@example.test  enabled  authenticated  ok",
       ].join("\n"),
     );
     expect(result.data).toEqual({
@@ -544,15 +540,6 @@ describe("traycer profile list 10.11 keys", () => {
           providerId: "claude-code",
           harnessId: "claude",
           profiles: [
-            {
-              profileId: "ambient",
-              label: "Terminal",
-              kind: "ambient",
-              email: "term@example.test",
-              enabled: true,
-              authStatus: "authenticated",
-              rateLimitStatus: "ok",
-            },
             {
               profileId: "row-plain",
               label: "Plain",
@@ -591,6 +578,21 @@ describe("traycer profile list 10.11 keys", () => {
               authStatus: "authenticated",
               rateLimitStatus: "ok",
               terminalOnThisComputer: true,
+            },
+          ],
+        },
+        {
+          providerId: "codex",
+          harnessId: "codex",
+          profiles: [
+            {
+              profileId: "ambient",
+              label: "Terminal",
+              kind: "ambient",
+              email: "term@example.test",
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
             },
           ],
         },
@@ -637,18 +639,6 @@ describe("traycer profile list 10.11 keys", () => {
 
   it("prints Also named under a row with other names, the terminal line first, and the list only on those json rows", async () => {
     const rows: readonly ListedProfileSpec[] = [
-      {
-        profileId: "ambient",
-        kind: "ambient",
-        label: "Terminal",
-        email: null,
-        authStatus: "authenticated",
-        enabled: true,
-        aliases: [],
-        personNotice: null,
-        terminalOnThisComputer: true,
-        otherNames: null,
-      },
       {
         profileId: "row-one",
         kind: "managed",
@@ -710,7 +700,12 @@ describe("traycer profile list 10.11 keys", () => {
         otherNames: null,
       },
     ];
-    rpcMock.mockResolvedValue(listedResponse(rows));
+    rpcMock.mockResolvedValue(
+      listedResponse([
+        { providerId: "claude-code", profiles: rows },
+        { providerId: "codex", profiles: [AMBIENT_TERMINAL] },
+      ]),
+    );
 
     const result = await buildProfileListCommand({ provider: null })(makeCtx());
 
@@ -718,17 +713,20 @@ describe("traycer profile list 10.11 keys", () => {
     expect(result.human).toBe(
       [
         "claude (Claude Code)",
-        "  PROFILE     LABEL     ACCOUNT  STATE    SIGN-IN        LIMIT",
-        "  ambient     Terminal  -        enabled  authenticated  ok",
-        "  row-one     One       -        enabled  authenticated  ok",
+        "  PROFILE     LABEL   ACCOUNT  STATE    SIGN-IN        LIMIT",
+        "  row-one     One     -        enabled  authenticated  ok",
         "              Also named: A",
-        "  row-two     Two       -        enabled  authenticated  ok",
+        "  row-two     Two     -        enabled  authenticated  ok",
         "              Also named: A, B",
-        "  row-both    Both      -        enabled  authenticated  ok",
+        "  row-both    Both    -        enabled  authenticated  ok",
         "              Terminal account on this computer",
         "              Also named: A, B",
-        "  row-empty   Empty     -        enabled  authenticated  ok",
-        "  row-absent  Absent    -        enabled  authenticated  ok",
+        "  row-empty   Empty   -        enabled  authenticated  ok",
+        "  row-absent  Absent  -        enabled  authenticated  ok",
+        "",
+        "codex (Codex)",
+        "  PROFILE  LABEL     ACCOUNT            STATE    SIGN-IN        LIMIT",
+        "  ambient  Terminal  term@example.test  enabled  authenticated  ok",
       ].join("\n"),
     );
     const listed = {
@@ -746,12 +744,6 @@ describe("traycer profile list 10.11 keys", () => {
           providerId: "claude-code",
           harnessId: "claude",
           profiles: [
-            {
-              ...listed,
-              profileId: "ambient",
-              label: "Terminal",
-              kind: "ambient",
-            },
             {
               ...listed,
               profileId: "row-one",
@@ -773,6 +765,21 @@ describe("traycer profile list 10.11 keys", () => {
             },
             { ...listed, profileId: "row-empty", label: "Empty" },
             { ...listed, profileId: "row-absent", label: "Absent" },
+          ],
+        },
+        {
+          providerId: "codex",
+          harnessId: "codex",
+          profiles: [
+            {
+              profileId: "ambient",
+              label: "Terminal",
+              kind: "ambient",
+              email: "term@example.test",
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
+            },
           ],
         },
       ],

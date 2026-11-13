@@ -41,21 +41,21 @@ export async function readProviderStates(): Promise<
 export type ProviderListState = ProvidersListResponse["providers"][number];
 
 /**
- * The row of one provider that `id` names: the row whose own `profileId` it
- * is, else the one row whose `aliases` holds it (the ids of rows folded into
- * it). An id that more than one row lists is not guessed. Null when no row
- * names it, so the caller keeps what it does today for an id it cannot find.
+ * The row of one provider that `id` names: the one row whose own `profileId`
+ * it is or whose `aliases` (the ids of rows folded into it) hold it. An id
+ * that more than one row lists is not guessed. Null when no row or several
+ * rows list it, so the caller keeps what it does today for an id it cannot
+ * find.
  */
 export function findProfileByIdOrAlias(
   profiles: readonly ProviderProfile[],
   id: string,
 ): ProviderProfile | null {
-  const own = profiles.find((profile) => profile.profileId === id);
-  if (own !== undefined) return own;
-  const aliased = profiles.filter(
-    (profile) => profile.aliases?.includes(id) === true,
+  const listing = profiles.filter(
+    (profile) =>
+      profile.profileId === id || profile.aliases?.includes(id) === true,
   );
-  return aliased.length === 1 ? (aliased[0] ?? null) : null;
+  return listing.length === 1 ? (listing[0] ?? null) : null;
 }
 
 /**

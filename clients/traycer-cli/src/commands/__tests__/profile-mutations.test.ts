@@ -502,9 +502,7 @@ describe("traycer profile remove", () => {
       expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
       expect(error.message).toBe("traycer: profile not removed.");
       expect(promptMock.close).toHaveBeenCalledTimes(1);
-      expect(dispatchMock.mock.calls.map((call) => call[0])).toEqual([
-        "providers.list",
-      ]);
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
 
     it("treats an answer other than yes as no, and removes nothing", async () => {
@@ -513,9 +511,7 @@ describe("traycer profile remove", () => {
       const error = await failureOf(removeAtPrompt());
 
       expect(error.message).toBe("traycer: profile not removed.");
-      expect(dispatchMock.mock.calls.map((call) => call[0])).toEqual([
-        "providers.list",
-      ]);
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
 
     it("removes the profile on a yes", async () => {
@@ -523,10 +519,22 @@ describe("traycer profile remove", () => {
 
       await removeAtPrompt();
 
-      expect(dispatchMock).toHaveBeenCalledTimes(2);
-      expect(onlyCallTo("providers.setEnabled")[0]).toBe(
+      const questionAt = promptMock.question.mock.invocationCallOrder[0];
+      const listAt = dispatchMock.mock.invocationCallOrder[0];
+      const removalAt = dispatchMock.mock.invocationCallOrder[1];
+      if (
+        questionAt === undefined ||
+        listAt === undefined ||
+        removalAt === undefined
+      ) {
+        throw new Error("unreachable");
+      }
+      expect(dispatchMock.mock.calls.map((call) => call[0])).toEqual([
+        "providers.list",
         "providers.setEnabled",
-      );
+      ]);
+      expect(questionAt).toBeLessThan(listAt);
+      expect(listAt).toBeLessThan(removalAt);
       expect(promptMock.close).toHaveBeenCalledTimes(1);
     });
   });
@@ -558,46 +566,64 @@ interface RemovedSpec {
   readonly aliases: readonly string[];
 }
 
+function profileRecord(row: {
+  readonly profileId: string;
+  readonly kind: "ambient" | "managed";
+  readonly label: string;
+  readonly email: string;
+}): object {
+  return {
+    profileId: row.profileId,
+    kind: row.kind,
+    authType: "oauth",
+    label: row.label,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: { email: row.email, tier: null, accountUuid: null },
+    usageUpdatedAt: null,
+    rateLimitStatus: "ok",
+    enabled: true,
+  };
+}
+
+function claudeProvider(profiles: readonly object[]): object {
+  return {
+    providerId: "claude-code",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    profiles,
+  };
+}
+
 function publishList(
   profiles: readonly ListedRowSpec[],
   removedProfiles: readonly RemovedSpec[],
 ): void {
   listed = providersListResponseSchema.parse({
     providers: [
-      {
-        providerId: "claude-code",
-        enabled: true,
-        disabledBy: null,
-        selected: { kind: "bundled" },
-        candidates: [],
-        authPending: false,
-        checkedAt: null,
-        apiKey: { supported: false, configured: false, source: null },
-        auth: {
-          status: "authenticated",
-          badgeText: null,
-          label: null,
-          detail: null,
-        },
-        profiles: profiles.map((row) => ({
-          profileId: row.profileId,
-          kind: "managed",
-          authType: "oauth",
-          label: "Work",
-          auth: {
-            status: "authenticated",
-            badgeText: null,
-            label: null,
-            detail: null,
-          },
-          identity: {
+      claudeProvider(
+        profiles.map((row) => ({
+          ...profileRecord({
+            profileId: row.profileId,
+            kind: "managed",
+            label: "Work",
             email: "work@example.test",
-            tier: null,
-            accountUuid: null,
-          },
-          usageUpdatedAt: null,
-          rateLimitStatus: "ok",
-          enabled: true,
+          }),
           aliases: [...row.aliases],
           personNotice: null,
           terminalOnThisComputer: false,
@@ -605,7 +631,7 @@ function publishList(
             ? {}
             : { otherNames: [...row.otherNames] }),
         })),
-      },
+      ),
     ],
     native: null,
     removedProfiles: removedProfiles.map((entry) => ({
@@ -909,59 +935,51 @@ describe("alias look-up", () => {
       expect.objectContaining({ profileId: "shared-id", enabled: false }),
     );
   });
+
+  it("sends an id that one row owns and another row lists as an alias as typed", async () => {
+    publishList(
+      [
+        { profileId: "shared-id", aliases: [], otherNames: null },
+        { profileId: "row-b", aliases: ["shared-id"], otherNames: null },
+      ],
+      [],
+    );
+
+    await buildProfileRenameCommand({
+      provider: "claude",
+      profile: "shared-id",
+      label: "Renamed",
+    })(makeCtx(false, false));
+
+    expect(onlyCallTo("providers.setEnabled")[1]).toEqual(
+      expect.objectContaining({
+        profileAction: {
+          type: "rename",
+          profileId: "shared-id",
+          label: "Renamed",
+        },
+      }),
+    );
+  });
 });
 
 function upgradedV1010List(): ProvidersListResponse {
-  const provider = providerCliStateSchema.parse({
-    providerId: "claude-code",
-    enabled: true,
-    disabledBy: null,
-    selected: { kind: "bundled" },
-    candidates: [],
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
-    auth: {
-      status: "authenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    profiles: [
-      {
+  const provider = providerCliStateSchema.parse(
+    claudeProvider([
+      profileRecord({
         profileId: "ambient",
         kind: "ambient",
-        authType: "oauth",
         label: "Terminal",
-        auth: {
-          status: "authenticated",
-          badgeText: null,
-          label: null,
-          detail: null,
-        },
-        identity: { email: "term@example.test", tier: null, accountUuid: null },
-        usageUpdatedAt: null,
-        rateLimitStatus: "ok",
-        enabled: true,
-      },
-      {
+        email: "term@example.test",
+      }),
+      profileRecord({
         profileId: "prof_work",
         kind: "managed",
-        authType: "oauth",
         label: "Work",
-        auth: {
-          status: "authenticated",
-          badgeText: null,
-          label: null,
-          detail: null,
-        },
-        identity: { email: "work@example.test", tier: null, accountUuid: null },
-        usageUpdatedAt: null,
-        rateLimitStatus: "ok",
-        enabled: true,
-      },
-    ],
-  });
+        email: "work@example.test",
+      }),
+    ]),
+  );
   return providersListUpgradeV1010ToV1011.upgradeResponse(
     providersListResponseSchemaV1010Preimage.parse({
       providers: [provider],

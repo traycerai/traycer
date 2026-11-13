@@ -157,15 +157,14 @@ export function buildProfileRemoveCommand(opts: {
   return async (ctx) => {
     const providerId = parseProviderArgument(opts.provider);
     const typed = parseProfileArgument(opts.profile);
-    // Both refused before the host is asked anything, as they always were.
+    // A refusal or a declined question sends nothing to the host.
     if (isAmbientProfileId(typed)) throw ambientNotRemovable();
-    if (!opts.yes) assertCanConfirm(ctx);
+    if (!opts.yes) {
+      await confirmRemoval(ctx, providerId, typed);
+    }
     const profileId =
       (await readListedProfile(providerId, typed))?.profileId ?? typed;
     if (isAmbientProfileId(profileId)) throw ambientNotRemovable();
-    if (!opts.yes) {
-      await confirmRemoval(providerId, profileId);
-    }
     await applyProfileAction(providerId, { type: "remove", profileId });
     return {
       data: { providerId, profileId, removed: true },
@@ -185,7 +184,11 @@ function ambientNotRemovable(): CliError {
   });
 }
 
-function assertCanConfirm(ctx: CommandContext): void {
+async function confirmRemoval(
+  ctx: CommandContext,
+  providerId: ProviderId,
+  profileId: string,
+): Promise<void> {
   const canPrompt =
     !ctx.runtime.json &&
     !ctx.runtime.nonInteractive &&
@@ -199,12 +202,6 @@ function assertCanConfirm(ctx: CommandContext): void {
       exitCode: 1,
     });
   }
-}
-
-async function confirmRemoval(
-  providerId: ProviderId,
-  profileId: string,
-): Promise<void> {
   const prompt = createInterface({
     input: process.stdin,
     output: process.stderr,
