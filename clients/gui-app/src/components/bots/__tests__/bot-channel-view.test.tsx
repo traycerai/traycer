@@ -585,7 +585,7 @@ function mount(options: MountOptions): {
     appearances: new Map([
       [BOT_ID, { mark: null, color: null, background: mountBackground }],
     ]),
-    mainBotIds: new Set(),
+    main: null,
   };
   const runnerHost = createFakeRunnerHost({});
   const tree = (openThread: BotOpenThread | null): ReactNode => (

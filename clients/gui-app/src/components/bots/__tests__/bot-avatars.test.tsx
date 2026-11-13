@@ -495,6 +495,28 @@ describe("an environment's main bot's picture", () => {
     );
     expect(drawn()[0].paths).not.toEqual(ownPaths());
   });
+
+  it("is the bot's own mascot where the surface's list names another main bot, whatever the app's directory says", () => {
+    act(() => {
+      useStandaloneBotsStore.setState({
+        directory: ONE_TEAM_MAIN_BOT_DIRECTORY,
+      });
+    });
+    render(
+      <BotLooksContext
+        value={botLooksOf({
+          bots: [botRow(DIRECTORY_MAIN_BOT_ID, undefined)],
+          mainBotIds: { "env-1": "bot_other" },
+        })}
+      >
+        <NamedBotAvatar botId={DIRECTORY_MAIN_BOT_ID} size="sm" />
+      </BotLooksContext>,
+    );
+
+    expect(drawn()[0].paths).toEqual(
+      pathsOf(DIRECTORY_MAIN_BOT_ID, null, MASCOT_AT_REST),
+    );
+  });
 });
 
 describe("a bot's picture while it works", () => {

@@ -13,7 +13,11 @@ import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
  */
 export interface BotLooks {
   readonly appearances: ReadonlyMap<string, BotAppearance>;
-  readonly mainBotIds: ReadonlySet<string>;
+  /**
+   * Whether each listed bot is its environment's main bot; `null` from a host
+   * whose list names no main bots.
+   */
+  readonly main: ReadonlyMap<string, boolean> | null;
 }
 
 /**
@@ -24,7 +28,7 @@ export const BotLooksContext = createContext<BotLooks | null>(null);
 
 /**
  * The looks a list's rows carry, a row without an appearance left out, and
- * the main bots it names; none from a host that predates naming them.
+ * which of its bots are main.
  */
 export function botLooksOf(
   list: Pick<BotListResponse, "bots" | "mainBotIds">,
@@ -34,9 +38,12 @@ export function botLooksOf(
     const look = bot.appearance ?? null;
     if (look !== null) appearances.set(bot.botId, look);
   }
+  const { mainBotIds } = list;
+  if (mainBotIds === null) return { appearances, main: null };
+  const mainIds = new Set(Object.values(mainBotIds));
   return {
     appearances,
-    mainBotIds: new Set(Object.values(list.mainBotIds ?? {})),
+    main: new Map(list.bots.map((bot) => [bot.botId, mainIds.has(bot.botId)])),
   };
 }
 
@@ -67,16 +74,18 @@ export function useBotLook(botId: string): BotAppearance | null {
 }
 
 /**
- * Whether a bot is its environment's main bot, as the surface's list or the
- * app's directory names it; `false` while neither does. A main bot's picture
- * starts plain.
+ * Whether a bot is its environment's main bot: what the surface's own list
+ * says of a bot it lists, else what the app's directory says, and `false`
+ * while neither names it. The surface's answer wins because the two are read
+ * through different hosts and the surface's is the one its settings change.
+ * A main bot's picture starts plain.
  */
 export function useBotIsMain(botId: string): boolean {
-  const surface = use(BotLooksContext)?.mainBotIds.has(botId) ?? false;
+  const surface = use(BotLooksContext)?.main?.get(botId);
   const directory = useStandaloneBotsStore((state) =>
     state.directory.model.groups.some((group) => group.mainBotId === botId),
   );
-  return surface || directory;
+  return surface ?? directory;
 }
 
 /**
