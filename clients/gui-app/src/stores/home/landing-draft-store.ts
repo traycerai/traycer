@@ -31,7 +31,7 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import { readComposerHostIdSnapshot } from "@/lib/composer/composer-host-snapshot";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { newDraftRunSettings } from "@/lib/composer/empty-terminal-default";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -718,10 +718,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           selection: null,
           lastTouchedAt: Date.now(),
           settings: copyChatRunSettings(
-            settings ??
-              useComposerRunSettingsStore
-                .getState()
-                .getGlobalRunSettings(hostId),
+            settings ?? newDraftRunSettings(hostId),
           ),
           // Seed from the global last-used mode; the draft owns it from here.
           composerMode: useSettingsStore.getState().composerMode,
@@ -739,9 +736,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         if (hostId === null) return false;
         const draft = get().drafts.find((d) => d.id === id);
         if (draft === undefined || !isUnseededLandingDraft(draft)) return false;
-        const settings = copyChatRunSettings(
-          useComposerRunSettingsStore.getState().getGlobalRunSettings(hostId),
-        );
+        const settings = copyChatRunSettings(newDraftRunSettings(hostId));
         const workspace = readLandingDraftWorkspaceSnapshotForHost(hostId);
         if (settings === null && workspace.folders.length === 0) return false;
         // `generation` from the row as read above: the workspace update bumps

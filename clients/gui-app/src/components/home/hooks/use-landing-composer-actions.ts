@@ -73,6 +73,7 @@ import {
 } from "@/stores/home/draft-runtime-registry";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { newDraftRunSettings } from "@/lib/composer/empty-terminal-default";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   markEpicCreatedThisSession,
@@ -1974,12 +1975,10 @@ function ensureSubmissionDraft(
 ): string {
   if (draftId !== null) return draftId;
   const createdDraftId = useLandingDraftStore.getState().createDraft(
-    useComposerRunSettingsStore
-      .getState()
-      // The placement host is the same one whose workspace is restored below;
-      // a pinned pristine composer must not seed either setting from the
-      // app-wide active host.
-      .getGlobalRunSettings(hostId),
+    // The placement host is the same one whose workspace is restored below;
+    // a pinned pristine composer must not seed either setting from the
+    // app-wide active host.
+    newDraftRunSettings(hostId),
   );
   useLandingDraftStore
     .getState()

@@ -1157,7 +1157,7 @@ export function NewConversationModalBody(props: {
     !draftSettingsChosen,
     surfaceActive,
     hostClient,
-  );
+  ).settings;
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(seedSettings, hostClient),

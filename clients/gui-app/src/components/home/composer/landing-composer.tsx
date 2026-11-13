@@ -140,6 +140,8 @@ import {
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useEmptyTerminalDefaultSettings } from "@/hooks/providers/use-empty-terminal-default-settings";
+import { newDraftRunSettings } from "@/lib/composer/empty-terminal-default";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
@@ -311,6 +313,16 @@ export function LandingComposer(props: LandingComposerProps) {
   const globalLastRunSettings = useComposerRunSettingsStore((state) =>
     selectGlobalLastRunSettings(state, activeHostId),
   );
+  // The last-run settings are nobody's choice for a NEW draft: on an empty
+  // Terminal login they start on the one signed-in profile. Kept loaded here
+  // so the drafts this composer mints (`newDraftRunSettings`) read the same
+  // list; a draft's own settings are never moved.
+  const lastRunDefault = useEmptyTerminalDefaultSettings(
+    globalLastRunSettings,
+    true,
+    activityEnabled,
+    hostClient,
+  );
   const setGlobalRunSettings = useComposerRunSettingsStore(
     (state) => state.setGlobalRunSettings,
   );
@@ -395,11 +407,14 @@ export function LandingComposer(props: LandingComposerProps) {
   const rememberedFolders = useWorkspaceFoldersStore(
     (state) => selectWorkspaceFoldersBucket(state, resolvedHostId).folders,
   );
+  // A draft seeded while that list loads would keep the Terminal login for good.
   useEffect(() => {
-    if (draftId !== null) seedUnseededDraft(draftId, resolvedHostId);
+    if (draftId !== null && !lastRunDefault.pending) {
+      seedUnseededDraft(draftId, resolvedHostId);
+    }
   }, [
     draftId,
-    globalLastRunSettings,
+    lastRunDefault,
     rememberedFolders,
     resolvedHostId,
     seedUnseededDraft,
@@ -424,9 +439,9 @@ export function LandingComposer(props: LandingComposerProps) {
       landingComposerSettingsSeedForDraft(
         draftId,
         props.initialSettings,
-        globalLastRunSettings,
+        lastRunDefault.settings,
       ),
-    [globalLastRunSettings, draftId, props.initialSettings],
+    [lastRunDefault.settings, draftId, props.initialSettings],
   );
   // `settingsSeed` may carry a frozen `profileId` from an old landing draft
   // (`landing-draft-store` persists a draft's settings snapshot indefinitely,
@@ -866,12 +881,9 @@ export function LandingComposer(props: LandingComposerProps) {
       props.pendingCreateId ?? uuidv4(),
       landingMintedDraftSettings(
         toolbarStore.getState(),
-        useComposerRunSettingsStore
-          .getState()
-          // The composer's own resolved placement host - not the app
-          // binding: the seed should describe the machine this draft
-          // will create on.
-          .getGlobalRunSettings(activeHostId),
+        // The composer's own resolved placement host - not the app binding:
+        // the seed should describe the machine this draft will create on.
+        newDraftRunSettings(activeHostId),
       ),
     );
     // Keep the workspace aligned with the caller's captured placement, which

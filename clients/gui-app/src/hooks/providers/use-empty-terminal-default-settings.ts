@@ -1,19 +1,24 @@
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { soleSignedInProfileForEmptyTerminal } from "@traycer-clients/shared/providers/provider-ambient-auth";
 import { useMemo } from "react";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { withEmptyTerminalDefault } from "@/lib/composer/empty-terminal-default";
 import type { HostRpcRegistry } from "@/lib/host";
-import { providerCliIdForHarness } from "@/lib/provider-ordering";
+
+export interface EmptyTerminalDefaultSettings {
+  readonly settings: ChatRunSettings | null;
+  /**
+   * The list that decides is still loading, so `settings` may still move. A
+   * caller that copies the default somewhere it stops being a default (a
+   * draft) waits this out; a failed list is not pending and leaves the input.
+   */
+  readonly pending: boolean;
+}
 
 /**
- * A new chat's DEFAULT settings (a seed nobody chose) moved off an empty
- * Terminal login: when they name the Terminal login (`profileId: null`) and
- * the `providers.list` of the host the chat is created on says that login
- * definitely holds no credential while exactly one profile of the provider is
- * signed in there, the default names that profile instead. Anything else -
- * settings someone chose, a named profile, a list still loading - passes
- * through untouched.
+ * `withEmptyTerminalDefault` for a seed nobody chose (`isDefault`), read from
+ * the `providers.list` of the host the chat is created on and kept loaded
+ * while it can move something. Settings someone chose pass through untouched.
  *
  * `client` is the host the chat is created on, for the reason
  * `useResolvedSeededProfileId` takes one.
@@ -23,32 +28,20 @@ export function useEmptyTerminalDefaultSettings(
   isDefault: boolean,
   active: boolean,
   client: HostClient<HostRpcRegistry> | null,
-): ChatRunSettings | null {
-  const providerId =
-    settings === null ? null : providerCliIdForHarness(settings.harnessId);
-  const applies =
-    isDefault &&
-    settings !== null &&
-    settings.profileId === null &&
-    providerId !== null;
+): EmptyTerminalDefaultSettings {
+  const applies = isDefault && settings !== null && settings.profileId === null;
+  const enabled = active && applies && client !== null;
   const providersQuery = useProvidersListForClient(client, {
-    enabled: active && applies,
-    subscribed: active && applies,
+    enabled,
+    subscribed: enabled,
   });
-  const provider = applies
-    ? providersQuery.data?.providers.find(
-        (entry) => entry.providerId === providerId,
-      )
-    : undefined;
-  const profileId =
-    provider === undefined
-      ? null
-      : soleSignedInProfileForEmptyTerminal(provider);
+  const providers = applies ? providersQuery.data?.providers : undefined;
+  const pending = enabled && providersQuery.isPending;
   return useMemo(
-    () =>
-      settings === null || profileId === null
-        ? settings
-        : { ...settings, profileId },
-    [settings, profileId],
+    () => ({
+      settings: withEmptyTerminalDefault(settings, providers),
+      pending,
+    }),
+    [settings, providers, pending],
   );
 }
