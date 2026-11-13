@@ -6,8 +6,8 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 
 /**
  * Settings ▸ Environment ▸ Storage: what the picked configuration's hosts keep
- * on disk. The row is not offered on a Local row (`PAGES_HIDDEN_BY_PICK`); a
- * remembered path there shows the page with nothing in it.
+ * on disk. On a Local row the page is the move's offer instead
+ * (`LocalMovePageOr`), so the policy only ever reads Personal or a team.
  */
 export function StorageSettingsPanel(): ReactNode {
   const pick = useEnvironmentPick();

@@ -17,12 +17,15 @@ export interface AttachGrantFailure {
  *  - `unavailable` — no grant this time (signed out, a rejected bearer, an
  *                    authn outage): reconnect backoff.
  *  - `refused`     — authn refused the mint with a verdict a retry cannot
- *                    change (a sandbox frozen for lack of credits): the
+ *                    change (membership or a frozen sandbox): the
  *                    session ends on `fatal`, exactly as on a host fatal.
  */
 export type AttachGrantProvision =
   | { readonly kind: "ok"; readonly grant: AttachGrant }
-  | ({ readonly kind: "unavailable" } & AttachGrantFailure)
+  | ({
+      readonly kind: "unavailable";
+      readonly retryCause?: FatalErrorDetails;
+    } & AttachGrantFailure)
   | ({
       readonly kind: "refused";
       readonly fatal: FatalErrorDetails;

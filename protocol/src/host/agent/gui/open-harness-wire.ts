@@ -132,6 +132,7 @@ export {
   openAgentSenderSchema,
   openAssistantMessageSchema,
   openChatEventSchema,
+  openChatEventSchemaPreProviderSelection,
   openChatSchema,
   openContentBlockSchema,
   openHarnessIdSchema,

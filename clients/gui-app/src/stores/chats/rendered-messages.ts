@@ -2156,11 +2156,11 @@ function buildNotificationAnchorMessages(
 /**
  * Project an auto-mode refusal that nobody was there to be asked about.
  *
- * Under the attendance rule a chat running for another agent is refused rather
- * than parked: the model reads a tool error and the human reads nothing, so a
- * person opening that chat tomorrow cannot tell "refused without asking
- * anyone" from "a judge refused". This row is the only reader that arm will
- * ever have.
+ * Hosts used to refuse, rather than park, a judge-escalated approval in a chat
+ * running for another agent: the model read a tool error and the human read
+ * nothing, so a person opening that chat later could not tell "refused without
+ * asking anyone" from "a judge refused". This row is the only reader those
+ * journaled denials have. Hosts now park the approval and write none.
  *
  * Filtered and identified THROUGH the projection's own helper, like the fork
  * link and the provenance marker above it - the host numbers this row's

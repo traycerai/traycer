@@ -1,6 +1,8 @@
+import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { ChevronRight, RefreshCw, Trash2 } from "lucide-react";
+import { ChevronRight, RefreshCw } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
@@ -9,7 +11,6 @@ import {
   type ProviderProfileApiKeyState,
 } from "@traycer/protocol/host/provider-schemas";
 import { CopyTextButton } from "@/components/copy-text-button";
-import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
 import {
   profileCommitId,
   profileDisplayLabel,
@@ -19,14 +20,6 @@ import {
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -42,11 +35,13 @@ import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refus
 import {
   usePersonalHostName,
   usePersonalHostState,
+  usePersonalPageHost,
 } from "@/components/settings/personal/personal-page-context";
 import {
   deviceProfileKeyCustodyLine,
   hostRunsPersonal,
 } from "@/lib/providers/provider-key-custody";
+import { ProfileEditDialogPresentation } from "./profile-edit-dialog-presentation";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -483,6 +478,72 @@ function ProfileEditAccountSection(props: {
   );
 }
 
+function ProfileSignOutAction(props: {
+  readonly providerId: ProviderId;
+  readonly profile: ProviderProfile;
+  readonly disabled: boolean;
+  readonly onSignedOut: () => void;
+}): ReactNode {
+  const signOut = useSignOutProviderProfile();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const host = usePersonalPageHost();
+  const supported = useHostSupportsMethod(
+    host.hostId,
+    "providers.signOutProfile",
+  );
+  const custodyClass = props.profile.credentialHome?.custodyClass;
+  if (
+    !supported ||
+    props.profile.kind !== "managed" ||
+    props.profile.presence?.kind !== "admitted" ||
+    (custodyClass !== "self-sufficient" && custodyClass !== "brokered")
+  )
+    return null;
+  const everyHost = custodyClass === "brokered";
+  const label = everyHost ? "Sign out on every host" : "Sign out";
+  const submit = (): void =>
+    signOut.mutate(
+      { providerId: props.providerId, profileId: props.profile.profileId },
+      {
+        onSuccess: () => {
+          setConfirmOpen(false);
+          props.onSignedOut();
+        },
+      },
+    );
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={props.disabled || signOut.isPending}
+        onClick={() => (everyHost ? setConfirmOpen(true) : submit())}
+      >
+        {signOut.isPending ? <MutedAgentSpinner /> : null}
+        {label}
+      </Button>
+      {everyHost ? (
+        <ConfirmDestructiveDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title="Sign this account out on every host?"
+          description="You’ll need to sign in again to use this account on any host."
+          cascadeSummary={null}
+          actionLabel={label}
+          isPending={signOut.isPending}
+          blockedReason={
+            props.disabled
+              ? "This profile is busy. Try again when it finishes."
+              : null
+          }
+          onConfirm={submit}
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function ProfileEditDialog(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
@@ -607,161 +668,95 @@ export function ProfileEditDialog(props: {
   };
 
   return (
-    <>
-      <Dialog
-        open={props.open}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen && (savePending || switchingAccount)) return;
-          props.onOpenChange(nextOpen);
-        }}
-      >
-        <DialogContent
-          layout="banded"
-          className="flex max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
-          showCloseButton={!switchingAccount}
-        >
-          <DialogHeader className="gap-1.5">
-            <DialogTitle>{dialogCopy.title}</DialogTitle>
-            <DialogDescription>{dialogCopy.description}</DialogDescription>
-          </DialogHeader>
-
-          <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
-            <ProviderProfileCard
-              key={props.profile.profileId}
-              profile={props.profile}
-              profiles={props.profiles}
-              label={label}
-              onLabelChange={setLabel}
-              selectedColor={accentColor}
-              onSelectColor={setAccentColor}
-              disabled={savePending || switchingAccount}
-            />
-
-            <ProfileEligibilityEditor
-              profile={props.profile}
-              available={props.profileEnablementAvailable}
-              pending={enablementPending}
-              disabledReason={eligibilityDisabledReason}
-              onSetEnabled={(enabled) =>
-                props.onSetProfileEnabled(
-                  profileCommitId(props.profile),
-                  enabled,
-                )
-              }
-            />
-
-            {apiKeyFormState === null ? null : (
-              <ProfileApiKeyForm
-                providerId={providerId}
-                profile={props.profile}
-                apiKey={apiKeyFormState}
-                disabled={savePending}
-                draft={apiKeyDraft}
-                onDraftChange={setApiKeyDraft}
-              />
-            )}
-
-            <ProfileEditAccountSection
-              providerId={providerId}
-              state={props.state}
-              profile={props.profile}
-              switchingAccount={switchingAccount}
-              startInReauth={props.startInReauth}
-              isLocalHost={props.isLocalHost}
-              canOauth={props.canOauth}
-              oauthUnavailableHint={props.oauthUnavailableHint}
-              savePending={savePending}
-              invalid={invalid}
-              onStartSwitchingAccount={() => setSwitchingAccount(true)}
-              onCancelSwitchingAccount={() => setSwitchingAccount(false)}
-              onCloseAfterSignIn={closeAfterSignIn}
-              onFinishSignIn={finishSignIn}
-            />
-
-            <ProfileEditErrors
-              renameError={renameProfile.error}
-              recolorError={recolorProfile.error}
-              removeError={removeProfile.error}
-            />
-          </div>
-
-          <DialogFooter className={switchingAccount ? "hidden" : ""}>
-            <div className="flex w-full flex-wrap items-center justify-between gap-2">
-              <TooltipWrapper
-                label={removeDisabledReason}
-                side="top"
-                sideOffset={6}
-                align="start"
-              >
-                <span className="inline-flex">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive-ghost"
-                    aria-label={removePresentation.ariaLabel}
-                    disabled={
-                      removeDisabledReason !== null ||
-                      removeProfile.isPending ||
-                      savePending
-                    }
-                    onClick={requestRemove}
-                  >
-                    <Trash2 className="size-3.5" />
-                    Remove profile
-                  </Button>
-                </span>
-              </TooltipWrapper>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={savePending}
-                  onClick={() => props.onOpenChange(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={savePending || invalid || !changed}
-                  onClick={() => commitProfile(() => props.onOpenChange(false))}
-                >
-                  {savePending ? <MutedAgentSpinner /> : null}
-                  Save changes
-                </Button>
-              </div>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <ConfirmDestructiveDialog
-        blockedReason={null}
-        open={confirmRemoveOpen}
-        onOpenChange={setConfirmRemoveOpen}
-        title={`Remove ${profileDisplayLabel(props.profile)}?`}
-        description={`Agents that ran on ${profileDisplayLabel(props.profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
-        cascadeSummary={null}
-        actionLabel="Remove"
-        isPending={removeProfile.isPending}
-        onConfirm={() =>
-          removeProfile.mutate(
-            { providerId, profileId: props.profile.profileId },
-            {
-              onSuccess: () => {
-                setConfirmRemoveOpen(false);
-                const nextProfile = props.remainingProfilesAfterRemoval.at(0);
-                props.onSelectedProfileIdChange(
-                  nextProfile === undefined
-                    ? null
-                    : profileCommitId(nextProfile),
-                );
-              },
+    <ProfileEditDialogPresentation
+      profile={props.profile}
+      profiles={props.profiles}
+      title={dialogCopy.title}
+      description={dialogCopy.description}
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      switchingAccount={switchingAccount}
+      label={label}
+      onLabelChange={setLabel}
+      accentColor={accentColor}
+      onSelectColor={setAccentColor}
+      savePending={savePending}
+      changed={changed}
+      invalid={invalid}
+      onSave={() => commitProfile(() => props.onOpenChange(false))}
+      footerAction={
+        <ProfileSignOutAction
+          providerId={providerId}
+          profile={props.profile}
+          disabled={savePending}
+          onSignedOut={() => props.onOpenChange(false)}
+        />
+      }
+      removePending={removeProfile.isPending}
+      removeDisabledReason={removeDisabledReason}
+      removeAriaLabel={removePresentation.ariaLabel}
+      onRequestRemove={requestRemove}
+      confirmRemoveOpen={confirmRemoveOpen}
+      onConfirmRemoveOpenChange={setConfirmRemoveOpen}
+      removeDescription={`Agents that ran on ${profileDisplayLabel(props.profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
+      onConfirmRemove={() =>
+        removeProfile.mutate(
+          { providerId, profileId: props.profile.profileId },
+          {
+            onSuccess: () => {
+              setConfirmRemoveOpen(false);
+              const nextProfile = props.remainingProfilesAfterRemoval.at(0);
+              props.onSelectedProfileIdChange(
+                nextProfile === undefined ? null : profileCommitId(nextProfile),
+              );
             },
-          )
+          },
+        )
+      }
+    >
+      <ProfileEligibilityEditor
+        profile={props.profile}
+        available={props.profileEnablementAvailable}
+        pending={enablementPending}
+        disabledReason={eligibilityDisabledReason}
+        onSetEnabled={(enabled) =>
+          props.onSetProfileEnabled(profileCommitId(props.profile), enabled)
         }
       />
-    </>
+
+      {apiKeyFormState === null ? null : (
+        <ProfileApiKeyForm
+          providerId={providerId}
+          profile={props.profile}
+          apiKey={apiKeyFormState}
+          disabled={savePending}
+          draft={apiKeyDraft}
+          onDraftChange={setApiKeyDraft}
+        />
+      )}
+
+      <ProfileEditAccountSection
+        providerId={providerId}
+        state={props.state}
+        profile={props.profile}
+        switchingAccount={switchingAccount}
+        startInReauth={props.startInReauth}
+        isLocalHost={props.isLocalHost}
+        canOauth={props.canOauth}
+        oauthUnavailableHint={props.oauthUnavailableHint}
+        savePending={savePending}
+        invalid={invalid}
+        onStartSwitchingAccount={() => setSwitchingAccount(true)}
+        onCancelSwitchingAccount={() => setSwitchingAccount(false)}
+        onCloseAfterSignIn={closeAfterSignIn}
+        onFinishSignIn={finishSignIn}
+      />
+
+      <ProfileEditErrors
+        renameError={renameProfile.error}
+        recolorError={recolorProfile.error}
+        removeError={removeProfile.error}
+      />
+    </ProfileEditDialogPresentation>
   );
 }

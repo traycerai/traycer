@@ -487,6 +487,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--no-service-register", mandatory: false },
       { flags: "--quiet", mandatory: false },
       { flags: "--release <version>", mandatory: false },
+      { flags: "--team <slug>", mandatory: false },
     ],
     args: [],
   },
@@ -508,19 +509,18 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--no-service-register", mandatory: false },
       { flags: "--quiet", mandatory: false },
       { flags: "--release <version>", mandatory: false },
+      { flags: "--team <slug>", mandatory: false },
     ],
     args: [],
   },
-  // A team's own machine joins with the app's one-time install token, which
-  // it asks for rather than taking as an argument.
   {
-    path: "host join",
+    path: "host use",
     options: [
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
     ],
-    args: [],
+    args: [{ name: "slug", required: true, variadic: false }],
   },
   {
     path: "host apply",

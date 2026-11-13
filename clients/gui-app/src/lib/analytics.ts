@@ -328,6 +328,7 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
  * allowed-values pinning below. */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
+  | "agent-memories"
   | "command-theme"
   | "login-import"
   | "mobile-switcher"
@@ -424,7 +425,6 @@ export type AnalyticsSetting =
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
   | "storageArchivedChats"
-  | "storageArtifacts"
   | "storageChats"
   | "storageIdleTasks"
   | "summonHotkeyChord"
@@ -1584,7 +1584,6 @@ const ANALYTICS_SETTINGS = new Set<string>(
     startPageWallpaperTint: true,
     steerOnModEnterEnabled: true,
     storageArchivedChats: true,
-    storageArtifacts: true,
     storageChats: true,
     storageIdleTasks: true,
     summonHotkeyChord: true,
@@ -1628,6 +1627,7 @@ const ANALYTICS_THEMES = new Set<string>([
 
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
+  "agent-memories",
   "command-theme",
   "mobile-switcher",
   "mobile-tasks",

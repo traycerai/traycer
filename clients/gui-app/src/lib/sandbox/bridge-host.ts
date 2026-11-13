@@ -127,6 +127,19 @@ export interface SandboxWheel {
   readonly ownsForward: boolean;
 }
 
+/**
+ * A link on a served html artifact page that leads out of its artifact, for
+ * the app to open against the artifacts tree.
+ */
+export interface SandboxArtifactLink {
+  /** As the page's author wrote it, `../` and all. */
+  readonly href: string;
+  /** The clicked page, from the artifacts tree root. */
+  readonly pagePath: string;
+  /** The clicked page's address, whose origin an href written out in full may share. */
+  readonly pageUrl: string;
+}
+
 /** One wheel event never moves the app further than this, whatever a page sends. */
 const MAX_WHEEL_DELTA_PX = 4000;
 const WHEEL_LINE_PX = 16;
@@ -140,6 +153,8 @@ export interface SandboxBridgeEvents {
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
   readonly onRelativeLink?: (href: string) => void;
+  /** Only from the proven page of a served plain-html artifact. */
+  readonly onArtifactLink?: (link: SandboxArtifactLink) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onSize: (size: SandboxSize) => void;
   /**
@@ -656,10 +671,12 @@ export class SandboxBridgeHost {
   }
 
   /**
-   * A page's pointer and layout reports are hints, not proof that the reader
-   * did anything: they count only from a commentable html page the app has
-   * put in Edit, and reach listeners at most once a frame per kind, so a page
-   * can neither open a comment on its own nor flood the overlay.
+   * These hints come from a nonce-proven page, not proven human input. Once
+   * the app enables Edit, page scripts can forge picks or hover reports that
+   * change selection or outlines, or open a draft. They cannot enable Edit,
+   * post a comment or invoke privileged host operations through this channel.
+   * Delivery keeps the latest report per kind per animation frame; incoming
+   * parsing is not rate-limited.
    */
   private receivePageActivity(activity: CanvasPageActivity): void {
     if (this.isCanvasBoard() || this.requestedMode !== "edit") return;
@@ -1179,11 +1196,42 @@ export class SandboxBridgeHost {
     if (this.canvasEnabled()) this.receivePageActivity({ kind: "layout" });
   }
 
+  /**
+   * A claim like any other a served page makes: it counts only from the page
+   * that proved itself with the armed nonce, and only where the frame shows a
+   * plain-html artifact's pages. A canvas board reports its own links, and an
+   * MCP App's links stay on `ui/open-link` and its confirm.
+   */
+  private relayArtifactLink(params: unknown): void {
+    if (
+      this.servedPages() === null ||
+      this.phase !== "ready" ||
+      this.crashed ||
+      !isRecord(params) ||
+      params.nonce !== this.options.document.nonce ||
+      typeof params.href !== "string" ||
+      params.href.length > MAX_LINK_URL_CHARS ||
+      typeof params.page !== "string"
+    ) {
+      return;
+    }
+    const page = parseArtifactAddress(params.page);
+    if (page === null) return;
+    this.options.events.onArtifactLink?.({
+      href: params.href,
+      pagePath: page.path,
+      pageUrl: params.page,
+    });
+  }
+
   private dispatch(message: InboundMessage): void {
     const { method, id, params } = message;
     switch (method) {
       case "traycer/notifications/document-ready":
         this.onDocumentReady(params);
+        return;
+      case "traycer/notifications/artifact-link":
+        this.relayArtifactLink(params);
         return;
       case "traycer/notifications/page-missing":
         this.reportStandInPage(params, (pages) => pages.onPageMissing());

@@ -4,11 +4,12 @@
  * the OS recognizer, which is told to work on the device only: a language it
  * cannot transcribe there is reported unavailable.
  *
- * The native half lives in the app project, not an npm package:
- * `ios/App/App/DeviceDictationPlugin.swift`. Android has none, so the entry
- * point builds this on iOS alone.
+ * The native halves live in the app projects, not an npm package:
+ * `ios/App/App/DeviceDictationPlugin.swift` and
+ * `android/app/src/main/java/com/traycer/app/DeviceDictationPlugin.java`.
  */
-import { registerPlugin } from "@capacitor/core";
+import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import { encodeBase64 } from "@traycer-clients/shared/cloud-chat/bytes";
 import type {
   DeviceDictationCallbacks,
   DeviceDictationSession,
@@ -35,11 +36,25 @@ export interface DeviceDictationPluginSlice {
     readonly sessionId: string;
     readonly audio: string;
   }): Promise<void>;
-  /** Ends the audio and resolves with the transcript of all of it. */
+  /**
+   * Ends the audio and resolves with the transcript of what `transcript` has
+   * not already raised.
+   */
   finish(options: {
     readonly sessionId: string;
   }): Promise<{ readonly text: string }>;
   cancel(options: { readonly sessionId: string }): Promise<void>;
+  /**
+   * What was said before a pause, raised while the session is still open.
+   * Android raises it; iOS answers everything at `finish`.
+   */
+  addListener(
+    eventName: "transcript",
+    listener: (event: {
+      readonly sessionId: string;
+      readonly text: string;
+    }) => void,
+  ): Promise<PluginListenerHandle>;
 }
 
 export const DeviceDictation =
@@ -56,16 +71,28 @@ function isPermissionDenied(error: unknown): boolean {
   );
 }
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 export class MobileDeviceDictation implements IDeviceDictationHost {
   private nextSessionId = 0;
+  /** The open session's id and where its mid-session transcripts go. */
+  private live: {
+    readonly sessionId: string;
+    readonly onTranscript: (text: string) => void;
+  } | null = null;
 
-  constructor(private readonly plugin: DeviceDictationPluginSlice) {}
+  constructor(private readonly plugin: DeviceDictationPluginSlice) {
+    void plugin
+      .addListener("transcript", (event) => {
+        if (this.live?.sessionId === event.sessionId) {
+          this.live.onTranscript(event.text);
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn(
+          "[mobile] dictation transcript listener unavailable",
+          error,
+        );
+      });
+  }
 
   async isAvailable(language: string): Promise<boolean> {
     const { available } = await this.plugin.isAvailable({ language });
@@ -85,12 +112,18 @@ export class MobileDeviceDictation implements IDeviceDictationHost {
     // reach a caller that has moved on to another session.
     let over = false;
     let started = false;
+    const live = { sessionId, onTranscript: callbacks.onTranscript };
+    this.live = live;
+    const end = (): void => {
+      over = true;
+      if (this.live === live) this.live = null;
+    };
     const cancel = (): void => {
       void plugin.cancel({ sessionId }).catch(() => undefined);
     };
     const fail = (error: unknown): void => {
       if (over) return;
-      over = true;
+      end();
       cancel();
       callbacks.onError({
         message: error instanceof Error ? error.message : String(error),
@@ -114,28 +147,28 @@ export class MobileDeviceDictation implements IDeviceDictationHost {
       sendAudio: (pcm) => {
         if (over) return;
         void plugin
-          .appendAudio({ sessionId, audio: toBase64(pcm) })
+          .appendAudio({ sessionId, audio: encodeBase64(pcm) })
           .catch(fail);
       },
       flush: () => {
         if (over) return;
         if (!started) {
           // Nothing was sent, so there is nothing to transcribe.
-          over = true;
+          end();
           cancel();
           queueMicrotask(callbacks.onFlushed);
           return;
         }
         void plugin.finish({ sessionId }).then(({ text }) => {
           if (over) return;
-          over = true;
+          end();
           callbacks.onTranscript(text);
           callbacks.onFlushed();
         }, fail);
       },
       close: () => {
         if (over) return;
-        over = true;
+        end();
         cancel();
       },
     };

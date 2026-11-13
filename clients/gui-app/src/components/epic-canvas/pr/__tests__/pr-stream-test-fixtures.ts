@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 /**
  * The one mock stream session + client the `pr.*` suites drive.
  *
@@ -101,6 +102,7 @@ export class MockWsStreamClient<
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,

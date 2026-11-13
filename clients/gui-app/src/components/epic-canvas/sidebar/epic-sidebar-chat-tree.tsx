@@ -1439,6 +1439,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
 
   return (
     <ChatIndicatorHostScopes
+      freshnessMode="base"
       scopes={indicatorScopes}
       chatEpicIds={indicatorChatEpicIds}
     >

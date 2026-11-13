@@ -1,5 +1,5 @@
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
-import { useId, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import type {
   SandboxCatalogue,
   SandboxCatalogueProvider,
@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { declineListSearchAutoFocus } from "@/hooks/ui/decline-list-search-autofocus";
 import {
   Select,
   SelectContent,
@@ -115,15 +116,28 @@ export function SandboxShapeSheet(props: {
   ) => void;
 }): ReactNode {
   const copy = stageConfigurationCopy(props.configuration);
+  const returnFocus = useRef<HTMLElement | null>(null);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         className="flex w-[min(92vw,30rem)] flex-col sm:max-w-[min(92vw,30rem)]"
         data-testid="sandbox-shape-sheet"
+        onOpenAutoFocus={(event) => {
+          returnFocus.current =
+            document.activeElement instanceof HTMLElement
+              ? document.activeElement
+              : null;
+          declineListSearchAutoFocus(event);
+        }}
+        onCloseAutoFocus={(event) => {
+          if (returnFocus.current?.isConnected) {
+            event.preventDefault();
+            returnFocus.current.focus();
+          }
+        }}
       >
         <DialogHeader>
           <DialogTitle>{newSandboxRowLabel(copy)}</DialogTitle>
-          <DialogDescription>{SHAPE_SHEET_DESCRIPTION}</DialogDescription>
         </DialogHeader>
         {props.open ? <ShapeSheetBody {...props} /> : null}
       </DialogContent>
@@ -153,16 +167,14 @@ function ShapeSheetBody(props: {
           testId="sandbox-shape-sheet-loading"
           variant={undefined}
         />
-        Loading sizes and regions…
+        <DialogDescription>Loading sizes and regions…</DialogDescription>
       </div>
     );
   }
   if (catalogue.isError) {
     return (
       <div className="flex flex-col items-start gap-2">
-        <p className="text-ui-sm text-muted-foreground">
-          {catalogue.error.message}
-        </p>
+        <DialogDescription>{catalogue.error.message}</DialogDescription>
         <Button
           type="button"
           variant="outline"
@@ -180,25 +192,24 @@ function ShapeSheetBody(props: {
     props.defaults,
   );
   if (shape === null) {
-    return (
-      <p className="text-ui-sm text-muted-foreground">
-        {SANDBOXES_CANT_BE_CREATED}
-      </p>
-    );
+    return <DialogDescription>{SANDBOXES_CANT_BE_CREATED}</DialogDescription>;
   }
   return (
-    <ShapeSheetForm
-      catalogue={catalogue.data}
-      initialShape={shape}
-      initialName={props.initialName}
-      configuration={props.configuration}
-      context={props.context}
-      onCancel={() => props.onOpenChange(false)}
-      onUseShape={(next, name, wake) => {
-        props.onUseShape(next, name, wake);
-        props.onOpenChange(false);
-      }}
-    />
+    <>
+      <DialogDescription>{SHAPE_SHEET_DESCRIPTION}</DialogDescription>
+      <ShapeSheetForm
+        catalogue={catalogue.data}
+        initialShape={shape}
+        initialName={props.initialName}
+        configuration={props.configuration}
+        context={props.context}
+        onCancel={() => props.onOpenChange(false)}
+        onUseShape={(next, name, wake) => {
+          props.onUseShape(next, name, wake);
+          props.onOpenChange(false);
+        }}
+      />
+    </>
   );
 }
 
@@ -342,7 +353,8 @@ function shapeOfForm(
     const amount = Number(form.restingAmount);
     if (!Number.isInteger(amount) || amount <= 0) {
       return {
-        problem: '"Destroyed after idle for" must be a whole number, or empty.',
+        problem:
+          '"Destroyed after suspended or stopped for" must be a whole number, or empty.',
       };
     }
     destroyAfterRestingMinutes = amount * UNIT_MINUTES[form.restingUnit];
@@ -577,7 +589,9 @@ function ShapeSheetForm(props: {
               onCommit={null}
             />
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor={`${ids}-resting`}>Destroyed after idle for</Label>
+              <Label htmlFor={`${ids}-resting`}>
+                Destroyed after suspended or stopped for
+              </Label>
               <div className="flex gap-2">
                 <Input
                   id={`${ids}-resting`}

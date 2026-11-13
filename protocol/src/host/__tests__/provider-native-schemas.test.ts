@@ -306,8 +306,8 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       modelProviders: null,
     });
     expect(upgraded.native).toBeNull();
-    // Parsed against the LIVE shape, which is what v7.0 binds now that it is
-    // the head line - the v7-era pin would accept a row missing the fill.
+    // The bridge's result also satisfies the current domain shape. Released
+    // v7.0 retains its preimage; its older shape alone would not check the fill.
     expect(() => providersListResponseSchema.parse(upgraded)).not.toThrow();
   });
 

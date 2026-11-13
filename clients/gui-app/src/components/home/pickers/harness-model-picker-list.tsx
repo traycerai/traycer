@@ -11,6 +11,7 @@ import { ModelRowsState } from "@/components/home/pickers/harness-model-picker-e
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { ReactNode, RefObject } from "react";
+import { Badge } from "@/components/ui/badge";
 
 interface HarnessModelPickerListProps {
   readonly idPrefix: string;
@@ -29,6 +30,11 @@ interface HarnessModelPickerListProps {
   readonly hostUnavailableLabel: string | null;
   readonly activeProvider: GuiHarnessCatalogEntry | null;
   readonly activeProviderState: ProviderCliState | null;
+  /**
+   * Model provider ids turned off in Settings. A hidden provider's group is
+   * listed only while the selected model is in it, and its header says so.
+   */
+  readonly hiddenModelProviders: ReadonlySet<string>;
   readonly onHover: (rowId: string) => void;
   readonly onActive: (rowId: string) => void;
   readonly onSelect: (row: HarnessModelRow) => void;
@@ -61,6 +67,7 @@ export function HarnessModelPickerList(
     hostUnavailableLabel,
     activeProvider,
     activeProviderState,
+    hiddenModelProviders,
     onHover,
     onActive,
     onSelect,
@@ -123,7 +130,13 @@ export function HarnessModelPickerList(
         return (
           <div className="px-1 py-0.5">
             {groupHeader === null ? null : (
-              <ProviderGroupHeader label={groupHeader} />
+              <ProviderGroupHeader
+                label={groupHeader}
+                hidden={
+                  row.providerGroupId !== null &&
+                  hiddenModelProviders.has(row.providerGroupId)
+                }
+              />
             )}
             <HarnessModelPickerItem
               idPrefix={idPrefix}
@@ -170,13 +183,23 @@ function providerGroupHeader(
   return row.providerGroupLabel;
 }
 
-function ProviderGroupHeader(props: { readonly label: string }): ReactNode {
+function ProviderGroupHeader(props: {
+  readonly label: string;
+  readonly hidden: boolean;
+}): ReactNode {
   return (
     <div
       role="presentation"
-      className="px-2 pb-1 pt-2 text-overline font-medium uppercase text-muted-foreground/70"
+      className="flex items-center gap-1.5 px-2 pb-1 pt-2"
     >
-      {props.label}
+      <span className="truncate text-overline font-medium uppercase text-muted-foreground/70">
+        {props.label}
+      </span>
+      {props.hidden ? (
+        <Badge variant="muted" size="xs">
+          Hidden
+        </Badge>
+      ) : null}
     </div>
   );
 }

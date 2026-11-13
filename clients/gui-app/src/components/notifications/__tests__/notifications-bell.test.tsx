@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import {
   act,
   cleanup,
@@ -199,6 +200,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,
@@ -440,28 +442,6 @@ describe("NotificationsBell", () => {
     });
     expect(document.activeElement).toBe(outside);
     outside.remove();
-  });
-
-  it("suppresses title-bar dragging only while the popover is open", async () => {
-    const runnerHost = createRunnerHost();
-    mountBell(runnerHost, undefined);
-
-    const isSuppressed = () =>
-      useTitleBarDragStore.getState().suppressors.has("notifications");
-
-    expect(isSuppressed()).toBe(false);
-
-    fireEvent.click(screen.getByTestId("notifications-bell"));
-    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
-    expect(isSuppressed()).toBe(true);
-
-    fireEvent.click(screen.getByTestId("notifications-bell"));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(isSuppressed()).toBe(false);
   });
 
   it("does not focus the first header action on pointer open", async () => {

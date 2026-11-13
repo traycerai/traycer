@@ -12,7 +12,10 @@ import {
   movesSectionRows,
   movesSummary,
   guideDiffersNote,
+  MOVE_SHEET_DESCRIPTION,
   notAwaitingLine,
+  nothingDeletedLine,
+  nothingToMoveLine,
   PLAN_CHANGED_TEXT,
   planMovesASecret,
   planMovesNothing,
@@ -64,8 +67,9 @@ const EMPTY_PARAMS = {};
  * Personal, computed by that computer (`environment.move.plan`), shown
  * before anything leaves it. `Move to Personal` accepts this list as shown
  * (`environment.move.accept` with the plan's hash and the key choices);
- * `Not now` closes and records nothing. A plan that moves nothing reads so,
- * with `Done` alone.
+ * `Not now` closes and records nothing. A plan that moves nothing says so in
+ * one line and offers the same two: the computer moves to Personal all the
+ * same, with an acceptance that carries no items.
  *
  * Mounted once, app-wide (`EnvironmentSheetsHost`); opened through
  * `useMoveSheetStore`. While open it names the computers running Personal,
@@ -150,7 +154,6 @@ function MoveSheetBody(props: {
       },
     });
   };
-  const movesNothing = plan.data !== undefined && planMovesNothing(plan.data);
   const reachedHostNames = runningPersonal.hosts
     .filter((host) => host.hostId !== target.hostId)
     .map((host) => host.name);
@@ -162,8 +165,7 @@ function MoveSheetBody(props: {
       <SheetHeader>
         <SheetTitle>Move {target.hostName} to Personal?</SheetTitle>
         <SheetDescription data-testid="move-sheet-description">
-          Your Personal settings start reaching it. The settings already on it
-          stay there — nothing is deleted. You can move it back any time.
+          {MOVE_SHEET_DESCRIPTION}
         </SheetDescription>
       </SheetHeader>
       <div
@@ -232,44 +234,32 @@ function MoveSheetBody(props: {
         )}
       </div>
       <SheetFooter className="flex-row justify-end gap-2">
-        {movesNothing ? (
-          <Button
-            type="button"
-            data-testid="move-sheet-done"
-            onClick={props.onClose}
-          >
-            Done
-          </Button>
-        ) : (
-          <>
-            <Button
-              type="button"
-              variant="ghost"
-              data-testid="move-sheet-not-now"
-              onClick={props.onClose}
-            >
-              Not now
-            </Button>
-            <Button
-              type="button"
-              data-testid="move-sheet-accept"
-              disabled={shownPlan === null || accept.isPending}
-              onClick={() => {
-                if (shownPlan !== null) send(shownPlan);
-              }}
-            >
-              Move to Personal
-              {accept.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                  tone="muted"
-                />
-              ) : null}
-            </Button>
-          </>
-        )}
+        <Button
+          type="button"
+          variant="ghost"
+          data-testid="move-sheet-not-now"
+          onClick={props.onClose}
+        >
+          Not now
+        </Button>
+        <Button
+          type="button"
+          data-testid="move-sheet-accept"
+          disabled={shownPlan === null || accept.isPending}
+          onClick={() => {
+            if (shownPlan !== null) send(shownPlan);
+          }}
+        >
+          Move to Personal
+          {accept.isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+              tone="muted"
+            />
+          ) : null}
+        </Button>
       </SheetFooter>
     </>
   );
@@ -321,6 +311,11 @@ function MovePlanRows(props: {
           {guideDiffersNote(props.hostName)}
         </p>
       ) : null}
+      {movesNothing ? (
+        <p className="text-ui-sm" data-testid="move-sheet-nothing-to-move">
+          {nothingToMoveLine(props.hostName)}
+        </p>
+      ) : null}
       {moving.length === 0 ? null : (
         <MovesSection plan={plan} rows={moving} onChoose={props.onChoose} />
       )}
@@ -329,7 +324,7 @@ function MovePlanRows(props: {
         const stays = section.rows === "staysOnThisComputer";
         const sectionRows = rows[section.rows];
         const chosen = stays ? leftHere : [];
-        // A sheet that moves nothing says so in its description instead.
+        // A sheet that moves nothing says so in its own line instead.
         const hidden =
           sectionRows.length + chosen.length === 0 &&
           (section.empty === null || movesNothing);
@@ -347,21 +342,34 @@ function MovePlanRows(props: {
           />
         );
       })}
+      {movesNothing && plan.personalHoldsSecrets ? (
+        <p
+          className="text-ui-sm text-muted-foreground"
+          data-testid="move-sheet-disclosure"
+        >
+          {existingSecretsArriveSentence(props.hostName)}
+        </p>
+      ) : null}
       {movesNothing ? null : (
-        <div className="flex flex-col gap-1">
-          <p
-            className="text-ui-sm text-muted-foreground"
-            data-testid="move-sheet-disclosure"
-          >
-            {disclosureText(
-              storesASecret,
-              plan.personalHoldsSecrets,
-              props.reachedHostNames,
-              props.hostName,
-            )}
+        <>
+          <p className="text-ui-sm" data-testid="move-sheet-nothing-deleted">
+            {nothingDeletedLine(props.hostName)}
           </p>
-          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
-        </div>
+          <div className="flex flex-col gap-1">
+            <p
+              className="text-ui-sm text-muted-foreground"
+              data-testid="move-sheet-disclosure"
+            >
+              {disclosureText(
+                storesASecret,
+                plan.personalHoldsSecrets,
+                props.reachedHostNames,
+                props.hostName,
+              )}
+            </p>
+            <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+          </div>
+        </>
       )}
     </>
   );

@@ -1,3 +1,21 @@
+import {
+  readHostOwnershipViaHttp,
+  type HostOwnershipResult,
+} from "../host-ownership";
+import {
+  listTeamComputersViaHttp,
+  setEnvironmentBotHostViaHttp,
+  type TeamComputersResult,
+  type SetEnvironmentBotHostResult,
+} from "../team-computers";
+import {
+  mintTeamComputerInstallTokenViaHttp,
+  type TeamComputerInstallTokenResult,
+} from "../team-computer-install";
+import {
+  releaseTeamComputerViaHttp,
+  type TeamComputerReleaseResult,
+} from "../team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   createSandboxViaHttp,
@@ -27,7 +45,6 @@ import type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "../slack-app";
-import type { TeamHostInstallTokenResult } from "../team-host";
 import {
   SLACK_APP_REFUSAL_APP_NOT_FOUND,
   SLACK_APP_REFUSAL_APP_TAKEN,
@@ -100,6 +117,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
   TraycerHostStatusSnapshot,
   TraycerDetectedShell,
   TraycerEnvOverride,
@@ -212,10 +230,6 @@ const MOCK_TOKEN_STORE_KEY = "traycer.token";
 const MOCK_SLACK_INSTALL_URL = "https://slack.mock.invalid/oauth/v2/authorize";
 /** The server's install-state life (`SLACK_INSTALL_STATE_TTL_MS`). */
 const MOCK_SLACK_INSTALL_TTL_MS = 600_000;
-/** The mock's team-host install token and the host it enrolls: fixed, so a dev walk reads the same every time. */
-const MOCK_TEAM_HOST_ID = "00000000-0000-4000-8000-000000000001";
-const MOCK_TEAM_HOST_INSTALL_TOKEN = "mock-team-host-install-token";
-const MOCK_TEAM_HOST_INSTALL_TTL_MS = 600_000;
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
 
 interface RetainedStepUpCredential {
@@ -683,6 +697,57 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult> {
+    return readHostOwnershipViaHttp(this.authnBaseUrl, bearer, hostId);
+  }
+
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult> {
+    return listTeamComputersViaHttp(this.authnBaseUrl, bearer, environmentId);
+  }
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult> {
+    return setEnvironmentBotHostViaHttp(
+      this.authnBaseUrl,
+      bearer,
+      environmentId,
+      hostId,
+      sharingGeneration,
+    );
+  }
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    return mintTeamComputerInstallTokenViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      environmentId,
+    );
+  }
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    return releaseTeamComputerViaHttp(
+      this.authnBaseUrl,
+      bearer,
+      hostId,
+      environmentId,
+    );
+  }
+
   deregisterHostFromAccount(
     bearerToken: string,
     hostId: string,
@@ -968,18 +1033,6 @@ export class MockRunnerHost implements IRunnerHost {
     return { kind: "ok", app: next };
   }
 
-  async mintTeamHostInstallToken(
-    _bearerToken: string,
-    _environmentId: string,
-  ): Promise<TeamHostInstallTokenResult> {
-    return {
-      kind: "ok",
-      hostId: MOCK_TEAM_HOST_ID,
-      installToken: MOCK_TEAM_HOST_INSTALL_TOKEN,
-      expiresAt: Date.now() + MOCK_TEAM_HOST_INSTALL_TTL_MS,
-    };
-  }
-
   /** Test/dev hook: Slack removed the bot's app (`app_uninstalled`). */
   uninstallSlackAppInSlack(botId: string): void {
     const app = this.slackApps.get(botId);
@@ -1113,6 +1166,8 @@ export class MockRunnerHost implements IRunnerHost {
   };
 
   readonly tokenStore: ITokenStore = {
+    getSignInStorageLow: async () => false,
+    subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
     get: async (): Promise<StoredCredentials | null> => {
       const value = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
       if (value === undefined) return null;
@@ -1123,7 +1178,7 @@ export class MockRunnerHost implements IRunnerHost {
     signIn: async (
       tokens: StoredAuthTokens,
       identity: StoredCredentialsIdentity,
-    ): Promise<void> => {
+    ): Promise<SignInSaveResult> => {
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
@@ -1131,6 +1186,7 @@ export class MockRunnerHost implements IRunnerHost {
         user: identity,
       });
       this.notifyTokenStoreChangedAfterMutation();
+      return "saved";
     },
     rotate: async (expected: {
       readonly userId: string;
@@ -1148,23 +1204,44 @@ export class MockRunnerHost implements IRunnerHost {
           ? null
           : raw;
       if (stored === null) {
-        return { outcome: "deleted", pair: null, rejection: null };
+        return {
+          outcome: "deleted",
+          pair: null,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (stored.user.id !== expected.userId) {
-        return { outcome: "user-mismatch", pair: stored, rejection: null };
+        return {
+          outcome: "user-mismatch",
+          pair: stored,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (stored.token !== expected.token) {
-        return { outcome: "superseded", pair: stored, rejection: null };
+        return {
+          outcome: "superseded",
+          pair: stored,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       const refreshed = await refreshOnceAbortable({
         authnBaseUrl: this.authnBaseUrl,
         token: stored.token,
         refreshToken: stored.refreshToken,
+        rotationCode: null,
         clientKind: "desktop",
         signal: null,
       });
       if (refreshed.kind === "network-error") {
-        return { outcome: "refresh-network", pair: null, rejection: null };
+        return {
+          outcome: "refresh-network",
+          pair: null,
+          diskPressure: null,
+          rejection: null,
+        };
       }
       if (refreshed.kind === "rejected") {
         return {
@@ -1173,6 +1250,7 @@ export class MockRunnerHost implements IRunnerHost {
               ? "refresh-rejected-account"
               : "refresh-rejected-credential",
           pair: null,
+          diskPressure: null,
           rejection: refreshed.rejection,
         };
       }
@@ -1184,7 +1262,12 @@ export class MockRunnerHost implements IRunnerHost {
       };
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, next);
       this.notifyTokenStoreChangedAfterMutation();
-      return { outcome: "applied", pair: next, rejection: null };
+      return {
+        outcome: "applied",
+        pair: next,
+        diskPressure: null,
+        rejection: null,
+      };
     },
     delete: async (): Promise<void> => {
       this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);
@@ -1242,6 +1325,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: legacy.token,
         refreshToken: legacy.refreshToken,
+        rotationCode: null,
         clientKind: "desktop",
         signal: null,
       });

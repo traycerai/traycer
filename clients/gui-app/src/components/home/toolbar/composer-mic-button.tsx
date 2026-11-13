@@ -9,6 +9,7 @@ import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { useRegionShown } from "@/lib/layout-overrides";
 import { DICTATION_ACTION_ID } from "@/hooks/composer/use-dictation-hotkey";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
+import { SPEECH_MODEL_INSUFFICIENT_DISK_MESSAGE } from "@traycer/protocol/host/speech/schemas";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
 import {
   useLayoutRegion,
@@ -115,7 +116,9 @@ function MicButtonIcon(props: {
 
 function preparingLabel(status: DictationPreparingStatus): string {
   if (status.downloadState === "error") {
-    return "Voice dictation setup failed - retrying";
+    return status.errorMessage === SPEECH_MODEL_INSUFFICIENT_DISK_MESSAGE
+      ? SPEECH_MODEL_INSUFFICIENT_DISK_MESSAGE
+      : "Voice dictation setup failed - retrying";
   }
   if (status.downloadState === "downloading" && status.progress !== null) {
     return `Setting up voice dictation… ${Math.round(status.progress * 100)}%`;

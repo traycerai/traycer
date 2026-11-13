@@ -8,7 +8,6 @@
  */
 import type { ReactNode } from "react";
 import { vi, type Mock } from "vitest";
-import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type {
   SandboxCatalogueFetchResult,
   TraycerModelsFetchResult,
@@ -40,9 +39,6 @@ export type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
  */
 export interface TeamCloudBinding extends FakeSandboxBinding {
   readonly auth: FakeSandboxAuth & {
-    readonly mintTeamHostInstallToken: Mock<
-      (environmentId: string) => Promise<TeamHostInstallTokenResult>
-    >;
     readonly getTraycerModels: Mock<() => Promise<TraycerModelsFetchResult>>;
     readonly getSandboxCatalogue: Mock<
       () => Promise<SandboxCatalogueFetchResult>
@@ -177,6 +173,7 @@ export const mocks = {
       environmentId: string;
       label: string;
       ownerKind: "organization" | "user";
+      providerHandle: string | null;
     }>,
   },
 };
@@ -309,6 +306,7 @@ export const hostQueriesMock = {
 export const hostEnvironmentBindingsMock = {
   useHostEnvironmentBindings: () => ({
     byHostId: {},
+    ownSettingsHostIds: [],
     failedHostIds: [],
     retryFailed: () => undefined,
   }),
@@ -354,6 +352,8 @@ export const botSubscriptionMock = {
     mocks.subscribed.push(input.botId);
     return {
       snapshot: mocks.state.snapshot,
+      // A held snapshot is one the live stream delivered.
+      snapshotFresh: mocks.state.snapshot !== null,
       deleted: mocks.state.deleted,
       error: mocks.state.error,
       isPending: mocks.state.snapshot === null,
@@ -369,12 +369,18 @@ export const connectableHostIdsMock = {
 // The directory still holds host labels: if the tab ever read it to say where
 // the bot runs, a label would reach the screen and the no-machine checks below
 // would catch it.
+const DIRECTORY_HOSTS = [
+  { hostId: "host-tab", label: "Laptop" },
+  { hostId: "host-bound", label: "Studio Mac" },
+];
+
 export const hostDirectoryListMock = {
-  useHostDirectoryList: () => ({
-    data: [
-      { hostId: "host-tab", label: "Laptop" },
-      { hostId: "host-bound", label: "Studio Mac" },
-    ],
+  useHostDirectoryList: () => ({ data: DIRECTORY_HOSTS }),
+  // The mention menu's host entries read the same list, answered.
+  useHostDirectoryListQuery: () => ({
+    data: DIRECTORY_HOSTS,
+    isPending: false,
+    isError: false,
   }),
 };
 

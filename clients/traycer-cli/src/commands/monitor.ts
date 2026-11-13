@@ -1,3 +1,8 @@
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  createCliLocalOpenAuth,
+  localTeamAdmissionCliError,
+} from "../internal/local-open-auth";
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
 import {
   hostStreamRpcRegistry,
@@ -225,6 +230,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   }, ENDPOINT_POLL_MS);
 
   const client = new WsStreamClient<HostStreamRpcRegistry>({
+    localOpenAuth: createCliLocalOpenAuth(auth.authnBaseUrl),
     registry: hostStreamRpcRegistry,
     // The host this endpoint resolves to, or `null` while it has resolved none
     // yet - which simply declines the seed. Safe even where `endpoint` is
@@ -234,6 +240,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     hostId: endpoint?.hostId ?? null,
     endpoint: () => endpoint,
     bearer: () => lease,
+    userId: lease.identity.userId,
     // `auth: null` opts out of the WsStreamClient's built-in stream-auth
     // recovery: the monitor runs its OWN refresh-on-UNAUTHORIZED loop in
     // `runInboxSubscription` (revalidate, then re-subscribe on `rotated` /
@@ -442,19 +449,24 @@ function runInboxSubscription(
           acknowledgements,
         );
       });
-      next.onStatusChange((status, reason) => {
-        void onStatusChange(status, reason);
+      next.onStatusChange((status, reason, retryCause) => {
+        void onStatusChange(status, reason, retryCause);
       });
     };
 
     const onStatusChange = async (
       status: StreamConnectionStatus,
       reason: StreamCloseReason | null,
+      retryCause: FatalErrorDetails | null,
     ): Promise<void> => {
       if (settled) {
         return;
       }
-      diag(`stream ${status}`);
+      const admissionError = retryCause
+        ? localTeamAdmissionCliError(retryCause)
+        : null;
+      if (admissionError !== null) diag(admissionError.message);
+      else diag(`stream ${status}`);
       clearHealthTimer();
       if (status === "open") {
         logger.debug("Monitor stream opened", {
@@ -471,6 +483,11 @@ function runInboxSubscription(
         reason === null ||
         reason.kind !== "fatalError"
       ) {
+        return;
+      }
+      const terminalAdmissionError = localTeamAdmissionCliError(reason.details);
+      if (terminalAdmissionError !== null) {
+        fail(terminalAdmissionError);
         return;
       }
       if (reason.details.code !== "UNAUTHORIZED") {

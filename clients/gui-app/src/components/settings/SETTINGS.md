@@ -164,11 +164,23 @@ Application. It uses the first settings leader digit; General uses the second.
 The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
-While this computer's settings are not in Personal, the move's own invitation
-stands there instead, under an id of its own
-(`MOVE_INVITATION_TOAST_ID`): "This computer's settings aren't in Personal." ·
-Show me what moves · Not now. Only the person takes it down - a status that
-stops naming a move does not, and the reminder never stands in its place.
+While this computer runs its own settings, the move's own invitation stands
+there instead, once, under an id of its own (`MOVE_INVITATION_TOAST_ID`), in
+the move card's words: "Move this computer to Personal" · "So your settings
+follow you to every computer and sandbox." · Move to Personal · Later, through
+the import announcement's `ActionToastContent`. On a fresh install Home is
+hidden, so this is where a new person first meets the move. Only the person
+takes it down - a status that stops naming a move does not, and the reminder
+never stands in its place. The answer is kept on the
+desktop in its own flag (`moveInvitationAnswered`), not the reminder's, so
+someone who dismissed the reminder long ago is still asked once; it settles
+the reminder too. Afterwards the checklist's move card is the only place the
+move waits. A computer that runs a team's settings, or has moved, is never
+asked (`useThisComputersMove` answers `team` or `moved`). One ask at a time:
+while the invitation is owed, or the move sheet is open, the session-import
+and login-import announcements are held, unclaimed, and show once it is
+answered (`useMoveAskHoldsAnnouncements`); otherwise following the invitation
+would open the sheet under an announcement at the toaster's corner.
 
 The Home tab draws the checklist itself, above its task sections
 (`home-focus/home-getting-started-section.tsx`), from the same cards
@@ -828,6 +840,25 @@ name, endpoint route and active byte counters inline with wrapping rows.
 
 ## Team configuration sources
 
+The Environment default stays unresolved until the window's own computer is
+listed and its status has answered. The picker shows a spinner, and every
+Environment page waits without mounting its editors. Failed host lists reuse
+`HostScopeGate`; failed status reads show the existing settings read error and
+Retry. An answered host keeps its Local or Personal default, and a window with
+no host keeps Personal. A listed sandbox defaults to Personal without a Local
+status read. The stored default belongs to the window host it was derived for;
+a host change makes readers unresolved immediately, before upkeep runs.
+An explicit choice still takes precedence.
+A pending Settings host entry waits for a reachable computer's failed status
+read before asking for bindings. A completed handshake that explicitly lacks
+`environment.status` keeps the legacy entry path, without a status retry; an
+unnegotiated method still waits. It keeps “Finding your hosts…” with “Try again” after a
+failed attempt; that action retries the target status. An error holds the entry
+through a retry with cached data. An offline target keeps the existing
+binding path and offers no status retry; its observer reads again when the
+route returns. Unresolved picks ignore Personal membership results, including
+cached hosts.
+
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the
 cloud. A Local row reads that computer's own host pages. Personal reads the
@@ -961,6 +992,11 @@ Account; the rest is the app itself.
     has not received yet overturns it - and neither is a revision from another
     configuration, which a rebind can serve without the host's id changing.
     The host applies the same test before it says `applied`.
+    The host row reads the getter every time it opens, however fresh the
+    cache, showing the cached answer until the read lands: the host may have
+    moved to another configuration, or the setting changed elsewhere, since
+    that answer. A write's read is cached only once the host has reached it,
+    so the read on opening agrees with it or is newer.
     The host row observes each write for at most 60 seconds from submission.
     One single-flight loop reads the getter, and while queued reads
     `environment.status` for an exact upload id, environment and item
@@ -1005,8 +1041,8 @@ payer exists. **Resuming changes the payer to you.** is its own line before
 the actions when that team row is resting and the payer is not the viewer.
 **Give it another {period}** is offered on a resting row inside its warning
 lead and precedes the primary action. **Details** stays inline. Setup failures
-show **Retry setup**,
-applicable **Open terminal** and **Stop** controls, **Choose another host**, and
+show **Retry applying** (or **Repair setup** on an older host), applicable
+**Open terminal** and **Stop** controls, **Choose another host**, and
 **Details** once; remaining secondary actions stay in **More**. Rows show
 starter and keeper, agent/task purpose, session counts and names, and setup
 evidence with support references. **Details** retains lifecycle status, settings
@@ -1180,7 +1216,8 @@ with **Replace**, **Remove** and **Details**; Details holds **Verify**
 on a revoked secret sent with `regrant`, Destroy behind a confirmation, refusals
 read by `secretChangeRefusalLine`) and the recovery order for a leaked secret,
 open beside the versions: "If this secret leaked", four steps, and "If Traycer
-can't be reached, stopping the sandbox ends its sessions." Empty, it reads
+can't be reached, finish or stop running agent turns and shells before stopping
+the sandbox to end its sessions." Empty, it reads
 "Values and logins your agents use. On your computers they are set as values; on
 sandboxes agents use them without seeing them." with Add a secret, and the page
 has no subtitle, which would say it twice. A failed read shows only "Couldn't
@@ -1256,7 +1293,10 @@ records acknowledgement (`environment.review.record`) and Escape does not. A
 Local picker row's subtitle (`its own settings, not in Personal yet`,
 `partly in Personal`, `stopped using Personal`) and `Move to Personal` /
 `Finish moving` verb come from those planes (E4's slot); the row's `Local`
-badge reads "Settings on this computer only" on hover. The Secrets page's
+badge reads "Settings on this computer only" on hover. A computer that runs a
+team's settings (`principal.kind === "team"`) has no Local row whatever its
+planes read, and the retrospective sheet lists what is still on it without
+`Move to Personal`. The Secrets page's
 `N commands from {host} are on hold until you choose · Review them` line
 (`1 command … is on hold until you choose · Review it`) opens the same sheet
 for that host's held rows, where Approve and Discard answer one row through
@@ -3871,15 +3911,36 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     - **NO scope picker**, unlike MCP. OpenCode's upstream auth is per-user;
       there are no project-scoped credentials for a `global`/`project` control
       to choose between. The sidebar host picker still scopes the tab.
-    - **ONE list, connected first** (`sortModelProviderEntries`), not a
-      "Connected" section above a searchable catalog. Search has to be able to
-      find a connected provider, and the two-section shape is precisely the one
-      where it cannot. ~180 rows flowing in the panel's own scroll (no internal
-      height cap - an inner `overflow-y-auto` nested a second scrollbar inside
-      the panel's); deliberately NOT virtualized
-      (single-line rows, no per-row queries - and a virtualizer renders an empty
-      viewport under jsdom's zero-height layout, which would put this list's
-      behavior beyond test).
+    - **Two cards, one search: Connected, then All providers**
+      (`ModelProviderCards`). One search and one filter run over the whole
+      catalog first and the result is split after, so a connected provider is
+      found exactly like any other (the earlier objection to a "Connected"
+      section was a section the search could not reach). Each card is one CSS
+      grid whose rows are `grid-cols-subgrid`, so the switch and the buttons line
+      up in every row with no fixed column width. A row is the mark, the name,
+      and one muted line: the id, then the sign-in source as text (its hint on
+      hover), not a badge. ~180 rows flowing in the panel's own scroll (no
+      internal height cap - an inner `overflow-y-auto` nested a second scrollbar
+      inside the panel's); deliberately NOT virtualized (no per-row queries -
+      and a virtualizer renders an empty viewport under jsdom's zero-height
+      layout, which would put this list's behavior beyond test).
+      - **The picker switch** (`use-model-provider-visibility.ts`) sits on
+        Connected rows only, between the name and the buttons, with no column
+        header. Off hides that model provider's models from Traycer's model
+        pickers and from `traycer_list_harness_models`; it stays connected in
+        OpenCode, nothing is written to OpenCode's config, and a chat already on
+        one of its models keeps it. Its tooltip reads "Shown in Traycer", or
+        "Hidden in Traycer. Still connected in OpenCode."; the tab description
+        gains one sentence saying the same, for touch, where there is no
+        tooltip. Stored per computer as `hiddenModelProviders` in
+        `provider-overrides.json`, read off the `providers.list@10.10` row and
+        written one id at a time by `providers.setModelProviderHidden` (an
+        optional method). A host without either draws no switch and no
+        sentence, and its pickers hide nothing. Each row holds its own echo
+        until `providers.list` reads back, as the Memories switch does. A
+        provider that is not connected never reaches a picker, so the All
+        providers card has no switch; a hidden provider that is disconnected and
+        later reconnected comes back with its switch off.
       - **One filter beside the search box**
         (`model-provider-filter.ts` + `model-provider-list-controls.tsx`):
         **All / Browser sign-in**, in the same `ListFilter` menu shape the
@@ -4176,15 +4237,16 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       reproduce a composited translucent parent it does not own the bounds of.
       The accepted trade is scrolling back up to search a long catalog — one
       gesture, versus an artifact on every frame.
-      **"Add custom provider" is the list's FIRST item** and scrolls with the
-      content. It stays rendered whatever the search or filter says — including
-      when they match nothing, which is why every empty state renders INSIDE the
-      list shell rather than instead of it. It is an affordance, not a result:
-      a query that hid it would remove the one row whose purpose is "what you
-      want isn't in this list", exactly when someone is typing. (It sat above
-      the search box for one round, for that same reason; the user's live pass
-      overruled the placement, and the always-first-row form keeps the property
-      without pinning it.)
+      **"Add custom provider" sits beside the search** (visible text "Custom
+      provider"), on the search row the list shell owns. It stays rendered
+      whatever the search or filter says — including when they match nothing,
+      which is why every empty state renders INSIDE the list shell rather than
+      instead of it, and on an empty catalog, where the row holds it alone. It
+      is an affordance, not a result: a query that hid it would remove the one
+      control whose purpose is "what you want isn't in this list", exactly when
+      someone is typing. (It was the list's first row while the list was one
+      card; with two cards a first row would sit inside Connected and read as a
+      provider.)
     - **Disconnect on a declared custom row is a DISABLE**, and says so. There
       is no separate remove verb on the wire: upstream's disconnect for a
       config-declared custom disables the block rather than deleting a
@@ -5938,22 +6000,23 @@ wrap`). Each row names the account its first usable match runs on, the
     feature; per-chat intervention is the actions on the cards themselves.
 - `Storage` (Environment, section id `storage`, route `/settings/storage`,
   `environment/storage-settings-panel.tsx`): what the picked configuration's
-  hosts keep on disk. It is offered for Personal and teams, and not on a
-  Local row (`PAGES_HIDDEN_BY_PICK`), since its settings are an environment
-  item. Later storage rows go here too.
+  hosts keep on disk. Its policy is offered for Personal and teams. On a
+  Local row, as for MCP servers, Skills and Sandboxes, the page stays in the
+  rail and shows the move's offer instead (`environment/local-move-page.tsx`):
+  one line on what the page gives, one on what moving adds, and Move to
+  Personal, which opens the move sheet. Later storage rows go here too.
   - **The storage policy** (`panels/storage-policy-section.tsx`,
     `data-testid="storage-policy"`), two groups:
-    - **Tasks you haven't used lately**, a card of three rows:
+    - **Tasks you haven't used lately**, a card of two rows:
       - **Chats**, a switch: "Keep them in the cloud instead of on disk."
-      - **Artifacts**, a switch, with the same description.
       - **When**, a select: "When to clean up a task nobody has used."
         Options "When the disk is getting full" (no window), "After 7 days",
-        "After 14 days", "After 30 days", "After 90 days". Disabled only while
-        both switches are off, since the window cleans whichever kinds are on.
+        "After 14 days", "After 30 days", "After 90 days". Disabled while
+        Chats is off, since the window cleans only chats.
     - **Archived chats**, a card of one row:
       - **When**, a select: "Counted from the chat's last activity." Options
         "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
-        days". It is independent of both switches, so no switch disables it.
+        days". It is independent of Chats, so the switch never disables it.
     - A stored window that is not one of the options is listed too, so the
       select shows what is in force: "After N days" for idle tasks, and for
       archived chats "After N hours" below 24 or when it is not a whole
@@ -5961,20 +6024,20 @@ wrap`). Each row names the account its first usable match runs on, the
       for one).
     - Each select's accessible name adds its group ("Archived chats: When"),
       since both rows read "When".
-    - A line under the groups says what applies. "Applies on every host in
-      this environment." shows while anything can be cleaned, and "A chat
-      comes back when an agent continues it." follows it only while Chats is
-      on or Archived chats is not Never. With nothing cleanable there is no
-      line.
+    - A line under the groups says what applies: "Applies on every host in
+      this environment. A chat comes back when an agent continues it." It
+      shows while Chats is on, and there is no line while it is off.
   - It is the configuration's `storage_policy` item (key `storage`, value
-    `{ chats, artifacts, idleTaskDays, archivedChatHours }`, the idle window
+    `{ chats, idleTaskDays, archivedChatHours }`, the idle window
     in whole days and the archived-chat window in whole hours, each or
     `null`; `hooks/environment/use-storage-policy.ts`), read through the pool
     tier like the sandbox defaults. The pick names the environment:
-    Personal's own, or the team's. **No item reads as the defaults**, both
-    switches on, no idle window and archived chats after 4 hours. An item
-    whose value does not parse reads as nothing cleanable, both switches off
-    and Archived chats Never, because the hosts then clean up nothing.
+    Personal's own, or the team's. **No item reads as the defaults**, Chats
+    on, no idle window and archived chats after 4 hours. An item whose value
+    does not parse reads as nothing cleanable, Chats off and Archived chats
+    Never, because the hosts then clean up nothing. A value saved while the
+    page still had an Artifacts switch carries `artifacts`; it reads as any
+    other value, and a save drops the key.
   - Every control writes the whole value through
     `environment.configuration.items.put` with the revision it read (`null`
     creates the item), so a concurrent edit of one field cannot lose
@@ -6551,9 +6614,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
   trailing "working" dropped, otherwise Idle or Busy); a health detail when
   the host is not live, or when it needs an update; this computer's lifecycle
   line; and the cost. A team sandbox's header cost is the rate only. A
-  personal sandbox adds "{amount} today", or **Free today** for an automation,
-  when a ledger row exists. The rate itself reads Free, Not billing, the
-  hourly rate, or Not priced here.
+  personal sandbox adds "{amount} today", or **Free today** for a personal
+  Automations host, when a ledger row exists. The rate itself reads Free for
+  personal Automations hosts, Not billing, or the hourly rate, and is left out
+  when no price is known. Team Automations hosts show the same rates as team
+  sandboxes. During a transition, the header omits the current rate until the
+  ledger supplies it; personal Automations remain Free and frozen sandboxes
+  show Not billing.
+  Installation omits the other rate during transitions.
 
   The header offers one primary action and one More menu. A sandbox's existing
   lifecycle verbs move here from the former sandbox card: Suspend while awake,
@@ -6660,7 +6728,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
        Applying your settings, each marked done, running or waiting, with
        "Step 2 of 3". Stalled or failed reads "Setup stopped while <step>."
        (a failed move: "Moving this host's settings to Personal failed.")
-       with Retry (`environment.setup.retry`). Gone once done.
+       with Retry (`environment.setup.retry`). Gone once done, and absent
+       while the state is `awaiting_consent`: the computer runs its own
+       settings until the person moves it, with no deadline, so nothing is
+       being set up.
     3. **Remote access** (`host-scope/remote-access-section.tsx`): On ("Other
        devices and agents signed in to your account can reach this
        computer."), Off ("Other devices and agents can't reach this computer.
@@ -6669,7 +6740,13 @@ set-state-in-effect` forbids the effect form, and an effect would also
 {enabled: false}` answers `turning_off` until the host has closed its
        sessions, and the section keeps saying so until the host's status
        reports `off` (`shownRemoteAccess`), even when a status read still says
-       `on`.
+       `on`. On a team's computer the wording names team members and agents.
+       Its switch is outside the otherwise read-only team sections and is
+       offered only when the bound team's current role is admin or editor,
+       using the host's binding and the environment list, not the selected
+       settings page. An unknown or failed role read offers no switch. A
+       refused change is shown inline and does not mark the question answered
+       or change the displayed state.
     4. **Terminal account**, one row per provider with an ambient profile,
        visibly labelled by provider name with Terminal account beneath it, with
        its switch named
@@ -6685,8 +6762,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
        the executable-write grant) and Clear, under "Agents started after a
        change use the new value; restart the host for the host itself to
        pick it up."
-       On a team's host every section is read-only (`inert`) under "These
-       settings belong to <team>."
+       On a team's host these sections remain read-only (`inert`) under "These
+       settings belong to <team>." Remote access is the separate exception above.
   - **The notices strip, top to bottom, drawing only what applies**
     (`host-overview-notices.tsx`, between the header and the tab bar; its
     decisions are in `host-overview-status-model.ts`, and the panel resolves
@@ -6728,11 +6805,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
        says it with Force update…, and while the host can't be reached,
        because it names live work. Its confirm and its refusal when the work
        changes under the open dialog are unchanged.
-       The unanswered Remote access question lives in Access and setup's Remote access
-       row: Allow other devices and agents on your account to reach this
-       computer?, with On and Not now. Its capability and ownership
-       gates, mutation and per-host remembered choice are unchanged. Once answered,
-       the same row shows On, Off or Turning off. It no longer occupies the header.
+       The unanswered Remote access question lives in Access and setup's Remote
+       access row only on a person's computer with remote access off: Allow other
+       devices and agents on your account to reach this computer?, with On and
+       Not now. A computer already on never asks, and a team's computer never
+       asks. Once answered, the same row shows On, Off or Turning off. The answer
+       is remembered for this computer on this desktop across transfer to a team
+       and return: it records the person's earlier answer, not permission to
+       change the team's switch. It no longer occupies the header.
        `HostEnvironmentSection` mounts the standard Settings row described above.
        The settings source (`panels/host-overview-settings-card.tsx`) uses the
        existing personal/local choices, move sheet and stop-sharing confirmation.

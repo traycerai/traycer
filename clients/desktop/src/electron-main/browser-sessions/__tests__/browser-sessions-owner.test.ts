@@ -9,13 +9,17 @@ import type {
   BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { log } from "../../app/logger";
+import { createBrowserSessionsHostDirectory } from "../browser-sessions-transport";
 import {
   BrowserSessionsRegistry,
   FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
 } from "../browser-sessions-owner";
 import {
   createRegistryHarness,
+  hostListResultForOwner,
   LOCAL_HOST_ENTRY,
   type FakeStreamSession,
   type RegistryHarness,
@@ -62,6 +66,22 @@ const SEED: BrowserStorageState = {
 function snapshotFrame(): BrowserSessionsServerFrame {
   return { kind: "snapshot", hasBinaryPayload: false, sessions: [] };
 }
+
+function observedProfileFrame(): BrowserSessionsServerFrame {
+  return {
+    kind: "primaryProfileObserved",
+    hasBinaryPayload: false,
+    domain: "example.com",
+    cookies: SEED.cookies,
+  };
+}
+
+const PERSONAL_OWNER: HostOwnerPrincipal = { kind: "user", id: "user-1" };
+const TEAM_OWNER: HostOwnerPrincipal = {
+  kind: "team",
+  id: "team-1",
+  name: "Team One",
+};
 
 function createTabFrame(): BrowserSessionsServerFrame {
   return {
@@ -1056,15 +1076,7 @@ describe("the browser.sessions jar plane lives in main", () => {
   it("applies an observed sign-in in main with the connection's provenance", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
 
-    session.emit(
-      {
-        kind: "primaryProfileObserved",
-        hasBinaryPayload: false,
-        domain: "example.com",
-        cookies: SEED.cookies,
-      },
-      null,
-    );
+    session.emit(observedProfileFrame(), null);
     await Promise.resolve();
 
     expect(harness.jar.observed).toHaveLength(1);
@@ -1074,6 +1086,112 @@ describe("the browser.sessions jar plane lives in main", () => {
     // Provenance is the connection's, and the connection is main's.
     expect(harness.jar.observed[0]?.connectionId).not.toBe("");
     expect(renderedFrameKinds(harness.emitted)).toEqual(["snapshot"]);
+  });
+
+  it("retires a jar stream when a trusted refresh changes its owner", async () => {
+    const hostId = "remote-host-1";
+    let owner: HostOwnerPrincipal = PERSONAL_OWNER;
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string): Promise<HostListFetchResult> =>
+        Promise.resolve(hostListResultForOwner(hostId, owner)),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "test-bearer",
+      listRegisteredHosts,
+      now: () => 1_000_000,
+    });
+    await directory.resolve(hostId);
+
+    registry.dispose();
+    registry = new BrowserSessionsRegistry({
+      ...harness.deps,
+      directory,
+    });
+    const nextClient = harness.nextClient();
+    registry.open("window-1", { ...OPEN_REQUEST, hostId });
+    const client = await nextClient;
+    const session = client.sessions[0];
+    if (session === undefined) throw new Error("no stream was subscribed");
+    session.emitStatus("open");
+    session.emit(snapshotFrame(), null);
+
+    directory.invalidate(hostId);
+    await directory.resolve(hostId);
+    expect(harness.closedTransports).toEqual([]);
+    expect(client.isClosed()).toBe(false);
+
+    session.emit(
+      {
+        kind: "primaryProfileObserved",
+        hasBinaryPayload: false,
+        domain: "example.com",
+        cookies: SEED.cookies,
+      },
+      null,
+    );
+    expect(harness.jar.observed).toHaveLength(1);
+
+    owner = TEAM_OWNER;
+    directory.invalidate(hostId);
+    await directory.resolve(hostId);
+
+    expect(harness.closedTransports).toEqual([0]);
+    session.emit(observedProfileFrame(), null);
+    expect(harness.jar.observed).toHaveLength(1);
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(3);
+  });
+
+  it("reopens after same-user bearer rotation clears the trusted owner cache", async () => {
+    const hostId = "remote-host-1";
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string): Promise<HostListFetchResult> =>
+        Promise.resolve(hostListResultForOwner(hostId, PERSONAL_OWNER)),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "test-bearer",
+      listRegisteredHosts,
+      now: () => 1_000_000,
+    });
+    await directory.resolve(hostId);
+
+    registry.dispose();
+    registry = new BrowserSessionsRegistry({
+      ...harness.deps,
+      directory,
+    });
+    const firstClientPromise = harness.nextClient();
+    registry.open("window-1", { ...OPEN_REQUEST, hostId });
+    const firstClient = await firstClientPromise;
+    const firstSession = firstClient.sessions[0];
+    if (firstSession === undefined) throw new Error("no stream was subscribed");
+    firstSession.emitStatus("open");
+    firstSession.emit(snapshotFrame(), null);
+    firstSession.emit(observedProfileFrame(), null);
+    expect(harness.jar.observed).toHaveLength(1);
+
+    const refreshedClientPromise = harness.nextClient();
+    harness.rotateBearer();
+
+    expect(harness.closedTransports).toEqual([0]);
+    const refreshedClient = await refreshedClientPromise;
+    const refreshedSession = refreshedClient.sessions[0];
+    if (refreshedSession === undefined)
+      throw new Error("no refreshed stream was subscribed");
+    refreshedSession.emitStatus("open");
+    refreshedSession.emit(snapshotFrame(), null);
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
+
+    firstSession.emit(observedProfileFrame(), null);
+    expect(harness.jar.observed).toHaveLength(1);
+
+    refreshedSession.emit(observedProfileFrame(), null);
+    expect(harness.jar.observed).toHaveLength(2);
   });
 
   it("sends a cookie delta from main and fans it out to no renderer", async () => {

@@ -1,3 +1,10 @@
+import type { HostOwnershipResult } from "../host-client/host-ownership";
+import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
+import type {
+  TeamComputersResult,
+  SetEnvironmentBotHostResult,
+} from "../host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxArtifactBridge } from "./sandbox-artifacts";
 import type {
@@ -28,6 +35,7 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
+import type { TeamComputerReleaseResult } from "../host-client/team-computer-release";
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
 import type {
   SandboxAutomationFetchResult,
@@ -58,7 +66,6 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import type { TeamHostInstallTokenResult } from "../host-client/team-host";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -142,7 +149,10 @@ export type SystemResumeEvent = {
 export interface DeviceDictationCallbacks {
   /** The recognizer accepts audio from now on. */
   readonly onReady: () => void;
-  /** The transcript of the audio sent before `flush`. */
+  /**
+   * A transcript of audio sent so far that no earlier call has covered. A
+   * recognizer may raise one at each pause; the last comes after `flush`.
+   */
   readonly onTranscript: (text: string) => void;
   /** Everything sent before `flush` has been transcribed; the session is over. */
   readonly onFlushed: () => void;
@@ -439,6 +449,31 @@ export interface IRunnerHost {
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
 
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult>;
+  setEnvironmentBotHost(
+    bearer: string,
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult>;
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult>;
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult>;
+
   /**
    * "Remove from account" — `POST /api/v3/hosts/:hostId/deregister` with the
    * user bearer. Desktop shells run this in Electron main for the same CORS
@@ -575,16 +610,6 @@ export interface IRunnerHost {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
-  /**
-   * Mints the one-time install token for a team environment's bot host
-   * (traycer-server `/api/environments/{id}/team-host/install-token`) with the
-   * person's bearer. Same placement as the Slack calls above; see
-   * `host-client/team-host.ts`. Never throws.
-   */
-  mintTeamHostInstallToken(
-    bearerToken: string,
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See
@@ -1023,7 +1048,7 @@ export interface IRunnerHost {
 
   /**
    * Speech recognition that runs on the device this renderer is on, or `null`
-   * where the shell has none (desktop, web, tests, Android): dictation then
+   * where the shell has none (desktop, web, tests): dictation then
    * goes to the person's own host or is not offered. See
    * {@link IDeviceDictationHost}.
    */
@@ -2017,6 +2042,7 @@ export type TokenRotateOutcome =
   | "user-mismatch"
   | "tombstoned"
   | "lock-busy"
+  | "disk-full"
   | "spend-pending"
   | "refresh-rejected-credential"
   | "refresh-rejected-account"
@@ -2024,10 +2050,11 @@ export type TokenRotateOutcome =
   | "commit-failed";
 
 export interface TokenRotateResult {
+  readonly diskPressure: DiskPressure | null;
   readonly outcome: TokenRotateOutcome;
   // The credentials the caller should act on: the committed/adopted/minted pair
   // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
-  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
+  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/`disk-full`/
   // `spend-pending`/`refresh-rejected-credential`/`refresh-rejected-account`/
   // `refresh-network`).
   readonly pair: StoredCredentials | null;
@@ -2110,6 +2137,8 @@ export function shouldWipeLegacyCredentials(
   return outcome !== "retryable" && outcome !== "commit-failed";
 }
 
+export type SignInSaveResult = "saved" | "disk-full";
+
 /**
  * Typed credential store owned by the shell, backed by the single machine-local
  * `~/.traycer/cli/<env>/credentials` file (tech plan §3). It carries the FULL
@@ -2134,10 +2163,12 @@ export function shouldWipeLegacyCredentials(
  */
 export interface ITokenStore {
   get(): Promise<StoredCredentials | null>;
+  getSignInStorageLow(): Promise<boolean>;
+  subscribeSignInStorageLow(listener: (low: boolean) => void): Disposable;
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void>;
+  ): Promise<SignInSaveResult>;
   rotate(expected: {
     readonly userId: string;
     readonly token: string;
@@ -3079,6 +3110,8 @@ export type MaintenanceDoctorProjection =
  * for every NDJSON `progress` event the CLI emits along the way.
  */
 export interface IHostManagement {
+  /** Clear cached local admission after the same host is claimed. */
+  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   // Two-lane canonical status (Host Update Layer Redesign Tech Plan). Read
   // once on mount to prime the shared query cache; live updates arrive via
   // the desktop-only `hostControllerStatus` push bridge (see

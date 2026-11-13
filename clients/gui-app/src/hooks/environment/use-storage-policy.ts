@@ -28,21 +28,28 @@ const ageWindowSchema = z.number().int().positive().nullable();
 
 /**
  * The item's value as authn validates it (`items.ts`): the idle window in
- * days, the archived-chat window in hours.
+ * days, the archived-chat window in hours. `artifacts` is retired: values
+ * saved before its removal carry it, so it still parses, and it is dropped
+ * here so a save never writes it back.
  */
-export const storagePolicyValueSchema = z.strictObject({
-  chats: z.boolean(),
-  artifacts: z.boolean(),
-  idleTaskDays: ageWindowSchema,
-  archivedChatHours: ageWindowSchema,
-});
+export const storagePolicyValueSchema = z
+  .strictObject({
+    chats: z.boolean(),
+    artifacts: z.boolean().optional(),
+    idleTaskDays: ageWindowSchema,
+    archivedChatHours: ageWindowSchema,
+  })
+  .transform(({ chats, idleTaskDays, archivedChatHours }) => ({
+    chats,
+    idleTaskDays,
+    archivedChatHours,
+  }));
 
 export type StoragePolicyValue = z.infer<typeof storagePolicyValueSchema>;
 
 /** What the hosts apply while no item is set. */
 export const STORAGE_POLICY_DEFAULTS: StoragePolicyValue = {
   chats: true,
-  artifacts: true,
   idleTaskDays: null,
   archivedChatHours: 4,
 };
@@ -51,7 +58,7 @@ export const STORAGE_POLICY_DEFAULTS: StoragePolicyValue = {
 export interface ConfigurationStoragePolicy {
   /**
    * What the configuration's hosts keep: the defaults when no item is set,
-   * and both kinds off for a value the hosts cannot read, since they then
+   * and everything off for a value the hosts cannot read, since they then
    * clean up nothing.
    */
   readonly value: StoragePolicyValue;
@@ -62,7 +69,6 @@ export interface ConfigurationStoragePolicy {
 /** An unparsable item: a host reads it as nothing to clean. */
 const NOTHING_CLEANABLE: StoragePolicyValue = {
   chats: false,
-  artifacts: false,
   idleTaskDays: null,
   archivedChatHours: null,
 };
@@ -91,6 +97,7 @@ function environmentOfPick(
   environments: ReadonlyMap<string, SandboxDefaultsEnvironment>,
   pick: Exclude<EnvironmentPick, { readonly kind: "local" }>,
 ): SandboxDefaultsEnvironment | null {
+  if (pick.kind === "unresolved") return null;
   if (pick.kind === "personal") return environments.get("personal") ?? null;
   for (const environment of environments.values()) {
     if (environment.environmentId === pick.environmentId) return environment;

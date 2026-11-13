@@ -213,6 +213,7 @@ async function migrateOntoAbsentFile(args: {
     case "refresh-network":
     case "lock-busy":
     case "spend-pending":
+    case "disk-full":
       return "retryable";
     case "commit-failed":
       return "commit-failed";
@@ -288,6 +289,7 @@ async function reconcileLiveFile(args: {
     case "refresh-network":
     case "lock-busy":
     case "spend-pending":
+    case "disk-full":
       return { kind: "outcome", outcome: "retryable" };
     case "commit-failed":
       return { kind: "outcome", outcome: "commit-failed" };

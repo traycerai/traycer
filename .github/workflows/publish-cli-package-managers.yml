@@ -114,8 +114,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+          if ! is_draft="$(gh release view "$TAG" --repo "$RELEASE_REPO" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
             echo "::error::Release '$TAG' does not exist on ${RELEASE_REPO}."
+            exit 1
+          fi
+          if [ "$is_draft" = "true" ]; then
+            echo "::error::Release '$TAG' is still draft; publish the release before publishing to package managers."
             exit 1
           fi
           tmp="$(mktemp -d)"
@@ -176,10 +180,12 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.oss_ref }}
           persist-credentials: false
+      # The action and its lock come from the checked-out release ref, so no
+      # `bun-version` is passed: the action's default at that ref is the Bun
+      # its own lock pins, which is the Bun that release was built with.
       - uses: ./.github/actions/bootstrap-ci-tools
         with:
           mirror-base-url: ${{ vars.CI_TOOLS_MIRROR_BASE_URL }}
-          bun-version: "1.3.14"
           tools: bun electron
           # Always fetch the pinned Bun fresh in this publish path rather than
           # restoring a cached executable.

@@ -293,6 +293,9 @@ function destroyCalls(harness: TeamPageHarness) {
 }
 
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   toastCall.mockClear();
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(2026, 9, 25, 12, 0));

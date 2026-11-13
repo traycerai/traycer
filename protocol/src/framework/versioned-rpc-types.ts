@@ -33,6 +33,15 @@ export const RPC_ERROR_CODES = [
   "WORKSPACE_BINDING_REQUIRED",
   "WORKTREE_REMOVE_LAST_ENTRY",
   "PROVIDER_DISABLED",
+  "DELEGATE_REQUIRED",
+  "PROFILE_BINDING_CHANGED",
+  "lane-retired",
+  "binding-changed",
+  "binding-version-unknown",
+  "custody-pending",
+  "host-left-environment",
+  "profile-account-changed",
+  "signed-out-by-person",
   "SENDER_TUI_UNSUPPORTED",
   // Caller-supplied input is structurally valid but semantically rejected
   // (e.g. minting the reserved `traycer:system` agent id). Additive and
@@ -85,6 +94,13 @@ export const RPC_ERROR_CODES = [
   // environment is bound to it, and a host belongs to exactly one
   // environment. Same additive degrade story as E_INVALID_ARGUMENT.
   "E_HOST_HAS_BOTS_OF_ANOTHER_ENVIRONMENT",
+  // Team-target bind refusals, carried through the ordinary error envelope.
+  // Older clients narrow unknown codes to RPC_ERROR and retain the message.
+  "E_ENVIRONMENT_NOT_A_MEMBER",
+  "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
+  "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
+  "E_HOST_IS_SANDBOX",
+  "E_HOST_IN_ANOTHER_TEAM",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may
   // retry with the SAME key once capacity returns. This meaning is part of the

@@ -105,8 +105,24 @@ function sandboxRow(
         hostId,
         ...summary,
       }),
+      ownerKind: "unknown",
       teamOwned: owner?.kind === "team",
     },
+  });
+}
+
+function physicalTeamRow(
+  hostId: string,
+  owner: HostOwnerPrincipal,
+): HostScopeOption {
+  return hostScopeOptionFixture({
+    hostId,
+    name: hostId,
+    kind: "machine",
+    isLocalMachine: false,
+    isActive: false,
+    item: { ...registryItem(hostId, owner), kind: "machine" },
+    sandbox: null,
   });
 }
 
@@ -169,6 +185,16 @@ function anyTeamGroup(): Element | null {
 }
 
 describe("<HostSwitcher /> team groups", () => {
+  it("draws a physical team host inside its owning team's group", () => {
+    renderSwitcher({
+      hosts: [PERSONAL, physicalTeamRow("team-machine", TEAM_A)],
+      action: HOST_LIST_ACTION,
+      intent: "view",
+    });
+
+    expect(teamGroup("team-a").contains(row("team-machine"))).toBe(true);
+  });
+
   it("draws one group per team, titled by the team's name, holding that team's sandboxes", () => {
     renderSwitcher({
       hosts: [

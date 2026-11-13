@@ -63,6 +63,7 @@ function remoteEntry(
     publicKey: "pubkey-a",
     relayFuseGrace: false,
     sandbox: null,
+    owner: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -200,6 +201,21 @@ describe("hostTransportKeyFor - what OPEN presents is identity", () => {
     expect(asPersonal).not.toBeNull();
     expect(asSandbox).not.toBeNull();
     expect(asSandbox).not.toBe(asPersonal);
+  });
+
+  it("changes transport identity when a physical host's owner changes from personal to team", () => {
+    const asPersonal = Object.assign(remoteEntry({ sandbox: null }), {
+      owner: { kind: "user" as const, id: "user-a" },
+    });
+    const asTeam = Object.assign(remoteEntry({ sandbox: null }), {
+      owner: { kind: "team" as const, id: "team-a", name: "Alpha" },
+    });
+
+    expect(hostTransportKeyFor(asPersonal, false)).not.toBeNull();
+    expect(hostTransportKeyFor(asTeam, false)).not.toBeNull();
+    expect(hostTransportKeyFor(asTeam, false)).not.toBe(
+      hostTransportKeyFor(asPersonal, false),
+    );
   });
 
   it("keeps one key across a same-content re-emit, and across a sandbox's state change", () => {

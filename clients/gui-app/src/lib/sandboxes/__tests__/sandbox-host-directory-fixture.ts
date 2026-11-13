@@ -29,6 +29,7 @@ export function sandboxHostEntry(
       lastSeenAt: null,
     },
     publicKey: `pubkey-${hostId}`,
+    owner: null,
     relayFuseGrace: false,
     sandbox: {
       state: "awake",

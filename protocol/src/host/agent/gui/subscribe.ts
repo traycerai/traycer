@@ -1,4 +1,7 @@
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreProfileBinding,
+} from "@traycer/protocol/persistence/epic/foundation";
 /**
  * `chat.subscribe` - versioned streaming-RPC contract for a single host-owned
  * GUI chat session. The LATEST minor is whatever `registry.ts` says it is
@@ -29,6 +32,7 @@ import {
   browserAnnotationRecordSchemaPreCanvas,
   browserAnnotationRecordSchema,
   chatEventSchema,
+  chatEventSchemaPreProviderSelection,
   chatEventSchemaPreInReplyTo,
   chatEventSchemaPreReasonix,
   chatRunSettingsSchemaPreUltracode,
@@ -116,6 +120,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   openChatEventSchema,
+  openChatEventSchemaPreProviderSelection,
   openChatSchema as openChatSchemaLive,
   openRuntimeEventSchema,
   openRuntimeEventSchemaPreNotApplied,
@@ -150,6 +155,7 @@ import {
   chatIndexChangeSchema,
   chatLoadRangeRequestSchema,
   chatRangeResponseSchema,
+  chatRangeResponseSchemaPreProviderSelection,
   chatRangeResponseSchemaPreMessageDelivery,
   chatRangeResponseSchemaPreBrowser,
   chatRangeResponseSchemaPreCommandCode,
@@ -162,8 +168,10 @@ import {
   chatTranscriptDerivedSchema,
   chatTranscriptDerivedSchemaPreSetupPlacement,
   chatTranscriptWindowSchema,
+  chatTranscriptWindowSchemaPreProviderSelection,
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
+  openChatRangeResponseSchemaPreProviderSelection,
   openChatRangeResponseSchemaPreFeedbackDraft,
   openChatRangeResponseSchemaPreSlack,
   openChatRangeResponseSchemaPreNotApplied,
@@ -176,6 +184,7 @@ import {
   openChatTranscriptWindowSchemaPreConversation,
   openChatTranscriptWindowSchemaPreMcpApp,
   openChatTranscriptWindowSchema,
+  openChatTranscriptWindowSchemaPreProviderSelection,
   openChatTranscriptWindowSchemaPreFeedbackDraft,
   openChatTranscriptWindowSchemaPreSlack,
   openChatTranscriptWindowSchemaPreNotApplied,
@@ -210,12 +219,14 @@ const chatSchema = lazySchema(() =>
   chatSchemaLive.extend({
     settings: chatRunSettingsSchemaPreUltracode.nullable().default(null),
     messages: z.array(messageSchemaPreSlack),
+    events: z.array(chatEventSchemaPreProviderSelection).default([]),
   }),
 );
 const openChatSchema = lazySchema(() =>
   openChatSchemaLive.extend({
     settings: chatRunSettingsSchemaPreUltracode.nullable().default(null),
     messages: z.array(openMessageSchemaPreSlack),
+    events: z.array(openChatEventSchemaPreProviderSelection).default([]),
   }),
 );
 const chatRecordSchema = lazySchema(() =>
@@ -2820,7 +2831,9 @@ export const chatThinkingTokensEstimateSchema = lazySchema(() =>
 // additions must not flow backwards into chat.subscribe 1.7.
 const chatSnapshotSchemaV17 = lazySchema(() =>
   z.object({
-    chat: chatSchemaV18,
+    chat: chatSchemaV18.extend({
+      events: z.array(chatEventSchemaPreProviderSelection).default([]),
+    }),
     access: chatAccessSchema,
     // Neither the shell host (`1.11`) nor `auto` (`1.13`).
     queue: chatQueueStateSchemaPreShellHostPreAuto,
@@ -3546,7 +3559,7 @@ const chatSubscribeCommonServerFrameSchemasV18 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPreShellHostPreAuto,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchemaV17ToV19,
     approval: chatApprovalStateSchemaPreAuto,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3627,7 +3640,7 @@ const chatSubscribeCommonServerFrameSchemasV110 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPreShellHostPreAuto,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3647,7 +3660,7 @@ const chatSubscribeCommonServerFrameSchemasV111 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPreAuto,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3670,7 +3683,7 @@ const chatSubscribeCommonServerFrameSchemasV112 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPreAuto,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3691,7 +3704,7 @@ const chatSubscribeCommonServerFrameSchemasV113 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPrePortForward,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreTier,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3711,7 +3724,7 @@ const chatSubscribeCommonServerFrameSchemasV114 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaV18,
     queue: chatQueueStateSchemaPreSentFromHost,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreTier,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3731,7 +3744,7 @@ const chatSubscribeCommonServerFrameSchemasV115 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPreSentFromHost,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchemaPreTier,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3751,7 +3764,7 @@ const chatSubscribeCommonServerFrameSchemasV116 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPreSentFromHost,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchemaPreDisplayFacts,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3772,7 +3785,7 @@ const chatSubscribeCommonServerFrameSchemasV117 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPrePausedReason,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchemaPreDisplayFacts,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3791,7 +3804,7 @@ const chatSubscribeCommonServerFrameSchemasV118 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPreConversation,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchemaPreDisplayFacts,
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
@@ -3812,7 +3825,7 @@ const chatSubscribeCommonServerFrameSchemasV121 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreConversation,
     queue: chatQueueStateSchemaPreConversation,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3832,7 +3845,7 @@ const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
     queue: chatQueueStateSchemaPreUltracode,
-    event: chatEventSchema,
+    event: chatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3851,7 +3864,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarness =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreMemoryCuration,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3871,7 +3884,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreMemoryCuration,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3891,7 +3904,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreNotificationDigest,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3911,7 +3924,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV139 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreUltracode,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3924,13 +3937,13 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV139 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.40`): `1.39`'s with the steer
+// The common frames frozen at `chat.subscribe@1.40`: `1.39`'s with the steer
 // restart reasons on a rejected `actionAck`.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV140 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreUltracode,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3952,7 +3965,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreConversation =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreConversation,
     queue: openChatQueueStateSchemaPreConversation,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3972,7 +3985,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreTaskCheckin,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -3992,7 +4005,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreTaskOverdue,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -4012,7 +4025,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreSignInParked =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreSignInParked,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -4034,7 +4047,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreCanvas,
     queue: openChatQueueStateSchemaPreCanvas,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -4244,7 +4257,7 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessV139 = [
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
-// The live shared frames (`chat.subscribe@1.40`): the live common set.
+// The shared frames frozen at `chat.subscribe@1.40`: its matching common set.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessV140 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessV140,
@@ -5045,7 +5058,7 @@ const [
   ...clientFrameOptionsAfterQueueSteerNow
 ] = chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm;
 
-// Live client frames (`chat.subscribe@1.40`): `queueSteerNow` says whether the
+// Current client frames: `queueSteerNow` says whether the
 // person confirmed ending the running turn. A host on this line refuses a
 // steer that would restart the turn unless it is confirmed, and names why
 // (`steerRestartReasons` on the rejected ack); the client confirms and sends
@@ -6159,15 +6172,12 @@ export const chatSubscribeFullSnapshotSchemaVersion =
 //
 // **It is `1.7` plus windowing, not an alternative to it.** This line was
 // drafted as `1.7` while `1.7` was still free, and the number was taken in the
-// meantime by the interview-settlement + Reasonix line. Re-basing it was not a
-// renumber: everything below binds the LIVE schemas by reference - the chat
-// record through `chatRecordSchema`, the transcript through `messageSchema` /
-// `chatEventSchema`, the aux frames through the shared frame lists - so a
-// windowed peer sees canonical interview outcomes, answer selection evidence,
-// saved drafts, the detached delivery projection, and the twentieth harness id
-// exactly as a `1.7` peer does. Binding by reference is what makes that
-// automatic, and it is the reason a released line must NOT do the same
-// (`chatSchemaV14`'s comment, and the `1.6` freeze above).
+// meantime by the interview-settlement + Reasonix line. The windowed contract
+// retained that line's interview outcomes, answer selection evidence, saved
+// drafts, detached delivery projection and harness vocabulary while changing
+// transcript delivery. Released bindings now retain their own frozen record,
+// message, event and auxiliary frame shapes. The separate current line carries
+// later additions; sharing a leaf must never grow a released contract.
 //
 // **Version implies behaviour.** There is no `windowed` flag and no
 // full-snapshot mode on this line. Two behaviours behind one version is the
@@ -6187,7 +6197,7 @@ const chatTranscriptWindowSchemaV18 = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaV18),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     // Overridden by the one line that binds this tail (`1.8`, with the
     // pre-Antigravity copy); a frozen copy here so nothing released names the
     // live row context.
@@ -6370,10 +6380,9 @@ const chatWindowedSnapshotSchemaV111 = lazySchema(() =>
 // that line's pre-shell-host `tail` and strip the shell host from the peer.
 //
 // Its queue is the pre-port-forward one and its approval card the pre-tier one.
-// Everything else it re-widens is still the live schema BY REFERENCE, which is
-// sound only while later lines leave those untouched: whoever next changes
-// `chatRecordSchema` or the tail freezes that axis here, the way the queue and
-// the card are frozen now.
+// The record, tail and fallback bindings retain the shapes this line shipped.
+// A shared leaf may remain shared only while its serialized shape is unchanged;
+// freeze it here before adding a field on the separate current line.
 const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
   chatWindowedSnapshotSchemaV111.extend({
     chat: chatRecordSchemaPreRouting,
@@ -6480,7 +6489,7 @@ const chatWindowedSnapshotSchemaV121 = lazySchema(() =>
 // 1.23's exact snapshot shape before the cron next-run key opened above it.
 const chatWindowedSnapshotSchemaV123 = lazySchema(() =>
   chatWindowedSnapshotSchemaV121.extend({
-    tail: chatTranscriptWindowSchema,
+    tail: chatTranscriptWindowSchemaPreProviderSelection,
     // The first line whose record may carry `routing`.
     chat: chatRecordSchema,
   }),
@@ -6760,7 +6769,7 @@ const chatSubscribeRangeServerFrameSchema = lazySchema(() =>
     kind: z.literal("range"),
     ...textFrameFields,
     ...chatReferenceFields,
-    range: chatRangeResponseSchema,
+    range: chatRangeResponseSchemaPreProviderSelection,
   }),
 );
 
@@ -6862,13 +6871,13 @@ const chatSubscribeRangeServerFrameSchemaPreReceipt = lazySchema(() =>
 const chatRangeResponseSchemaV18 = lazySchema(() =>
   z.object({
     // Reuse this unchanged scalar validator, not the live response's field set.
-    requestId: chatRangeResponseSchema.shape.requestId,
+    requestId: chatRangeResponseSchemaPreProviderSelection.shape.requestId,
     epoch: z.number().int().nonnegative(),
     fromOrdinal: z.number().int().nonnegative(),
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaV18),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     // Overridden by `1.8`, like the tail's above.
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
@@ -6927,10 +6936,9 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
  * `turnStateChanged` (no `waitResumesAt`, no `suggestedPrompt`, no cron item),
  * `range` (no notice `receipt`), the queue and approval frames, and
  * `blockDelta`'s `approval.requested` (no display facts, `cautious` or
- * `ruleForced`). There is no `thinkingTokens` arm. The arms no later line
- * touches are the live ones by reference - which is sound only while later
- * lines leave them untouched: whoever next changes one of them freezes that
- * axis here, the way these are frozen now.
+ * `ruleForced`). There is no `thinkingTokens` arm. Other arms retain their
+ * published shapes: freeze a shared arm here before extending it on the
+ * separate current line.
  */
 const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -7395,7 +7403,7 @@ const chatSubscribeServerFrameSchemaV132 = lazySchema(() =>
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
  * (the active turn, the fallback tuples) and the snapshot's record head - keep
  * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
- * is assignable to this type; the client parses with this schema.
+ * on this line is assignable to this type; its client parses with this schema.
  */
 const chatSubscribeServerFrameSchemaV133 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -7504,13 +7512,13 @@ const chatSubscribeServerFrameSchemaV139 = lazySchema(() =>
 );
 
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.40`): the
- * union above with the snapshot, the `range` response, the three
+ * The windowed reader union frozen at `chat.subscribe@1.40`: the union
+ * above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
  * (the active turn, the fallback tuples) and the snapshot's record head - keep
  * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
- * is assignable to this type; the client parses with this schema.
+ * on this line is assignable to this type; its client parses with this schema.
  */
 export const openChatSubscribeWindowedServerFrameSchemaPreUltracode =
   lazySchema(() =>
@@ -7544,8 +7552,8 @@ export type OpenChatSubscribeWindowedServerFrame = z.infer<
 // tail, on a `range` response, AND on a live `blockDelta` upsert. That is
 // round-4 finding F1, and it is why `chatTranscriptWindowSchemaPreFallback` /
 // `chatRangeResponseSchemaPreFallback` exist beside the frozen event union
-// rather than the upsert being frozen alone. Their `rowContext` stays live,
-// which is what lets an Antigravity anchor reach this line.
+// rather than the upsert being frozen alone. Their frozen `rowContext` keeps
+// the Antigravity anchor this line shipped.
 //
 // `chatRecordSchema` needs no FALLBACK freeze: it is `chatSchema` with
 // `messages` and `events` omitted, so no notice kind can reach a `1.9` peer
@@ -8067,8 +8075,8 @@ export const chatSubscribeV112 = defineStreamRpcContract({
  *
  * Unlike `1.9`, whose delta is one anchor arm, this line's delta is spread
  * across every frame that carries run settings or an approval card - so `1.8`
- * through `1.12` bind a `PreAuto` queue and approval card and only this line
- * binds live. The freezes compose: `1.8` is pre-Antigravity, pre-fallback,
+ * through `1.12` bind a `PreAuto` queue and approval card. `1.13` first carries
+ * auto through its own frozen bindings. The freezes compose: `1.8` is pre-Antigravity, pre-fallback,
  * pre-shell-host, pre-draft-cause AND pre-auto; `1.9` drops pre-Antigravity;
  * `1.10` is pre-shell-host, pre-draft-cause and pre-auto; `1.11` is
  * pre-draft-cause and pre-auto; `1.12` is pre-auto alone.
@@ -8716,11 +8724,12 @@ export const chatQueuedPromptItemSchema = lazySchema(() =>
 );
 const openChatQueuedPromptItemSchemaPreSlack = lazySchema(() =>
   openChatQueuedPromptItemSchemaPreUltracode.extend({
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreProfileBinding,
   }),
 );
 export const openChatQueuedPromptItemSchema = lazySchema(() =>
   openChatQueuedPromptItemSchemaPreSlack.extend({
+    settings: chatRunSettingsSchema,
     message: userMessagePayloadSchema,
   }),
 );
@@ -8776,6 +8785,29 @@ export const openChatQueueStateSchema = lazySchema(() =>
     items: z.array(openChatQueuedItemSchema),
   }),
 );
+const openChatQueuedPromptItemSchemaPreProfileBinding = lazySchema(() =>
+  openChatQueuedPromptItemSchema.extend({
+    settings: chatRunSettingsSchemaPreProfileBinding,
+  }),
+);
+const openChatQueuedItemSchemaPreProfileBinding = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
+    chatQueuedMemoryCurationItemSchema,
+    chatQueuedNotificationDigestItemSchema,
+    openChatQueuedPromptItemSchemaPreProfileBinding,
+  ]),
+);
+const openChatQueueStateSchemaPreProfileBinding = lazySchema(() =>
+  openChatQueueStateSchema.extend({
+    items: z.array(openChatQueuedItemSchemaPreProfileBinding),
+  }),
+);
+
 export const fallbackImpendingActionSchema = lazySchema(() =>
   fallbackImpendingActionSchemaPreUltracode.extend({
     target: chatRunSettingsSchema.nullable(),
@@ -8804,6 +8836,40 @@ const ultracodeFallbackFields = {
   pendingReturn: lazySchema(() => pendingReturnSchema.optional()),
   lastFailedAttempt: lazySchema(() => lastFailedAttemptSchema.optional()),
 };
+const fallbackImpendingActionSchemaPreProfileBinding = lazySchema(() =>
+  fallbackImpendingActionSchemaPreUltracode.extend({
+    target: chatRunSettingsSchemaPreProfileBinding.nullable(),
+  }),
+);
+const pendingFallbackSchemaPreProfileBinding = lazySchema(() =>
+  pendingFallbackSchemaPreUltracode.extend({
+    failedTuple: chatRunSettingsSchemaPreProfileBinding,
+    targetTuple: chatRunSettingsSchemaPreProfileBinding.nullable(),
+    impendingAction: fallbackImpendingActionSchemaPreProfileBinding.nullable(),
+  }),
+);
+const pendingReturnSchemaPreProfileBinding = lazySchema(() =>
+  pendingReturnSchemaPreUltracode.extend({
+    preferredTuple: chatRunSettingsSchemaPreProfileBinding,
+    fallbackTuple: chatRunSettingsSchemaPreProfileBinding,
+  }),
+);
+const lastFailedAttemptSchemaPreProfileBinding = lazySchema(() =>
+  lastFailedAttemptSchemaPreUltracode.extend({
+    failedTuple: chatRunSettingsSchemaPreProfileBinding.nullable(),
+  }),
+);
+const fallbackFieldsPreProfileBinding = {
+  pendingFallback: lazySchema(() =>
+    pendingFallbackSchemaPreProfileBinding.optional(),
+  ),
+  pendingReturn: lazySchema(() =>
+    pendingReturnSchemaPreProfileBinding.optional(),
+  ),
+  lastFailedAttempt: lazySchema(() =>
+    lastFailedAttemptSchemaPreProfileBinding.optional(),
+  ),
+};
 // The delivery with its worktree obligation (`chat.subscribe@1.42`).
 const deliveryWorktreeIntentFields = {
   messageDelivery: lazySchema(() =>
@@ -8828,6 +8894,7 @@ export const openChatSnapshotSchema = lazySchema(() =>
 );
 export const chatWindowedSnapshotSchema = lazySchema(() =>
   chatWindowedSnapshotSchemaPreUltracode.extend({
+    tail: chatTranscriptWindowSchema,
     chat: chatRecordSchemaLive,
     queue: chatQueueStateSchema,
     ...ultracodeFallbackFields,
@@ -8836,9 +8903,11 @@ export const chatWindowedSnapshotSchema = lazySchema(() =>
 );
 const openChatWindowedSnapshotSchemaV141 = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreUltracode.extend({
-    chat: chatRecordSchemaLive,
+    chat: chatRecordSchemaLive.extend({
+      settings: chatRunSettingsSchemaPreProfileBinding.nullable().default(null),
+    }),
     queue: openChatQueueStateSchemaPreSlack,
-    ...ultracodeFallbackFields,
+    ...fallbackFieldsPreProfileBinding,
   }),
 );
 /** The open windowed snapshot `chat.subscribe@1.42` ships: no `slack` row or queued payload. */
@@ -8848,9 +8917,18 @@ const openChatWindowedSnapshotSchemaPreSlack = lazySchema(() =>
     tail: openChatTranscriptWindowSchemaPreSlack,
   }),
 );
-export const openChatWindowedSnapshotSchema = lazySchema(() =>
+const openChatWindowedSnapshotSchemaPreProviderSelection = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreSlack.extend({
+    queue: openChatQueueStateSchemaPreProfileBinding,
+    tail: openChatTranscriptWindowSchemaPreProviderSelection,
+  }),
+);
+/** The live reader tail includes 1.44 dispatch provenance. */
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  openChatWindowedSnapshotSchemaPreProviderSelection.extend({
+    chat: chatRecordSchemaLive,
     queue: openChatQueueStateSchema,
+    ...ultracodeFallbackFields,
     tail: openChatTranscriptWindowSchema,
   }),
 );
@@ -8858,7 +8936,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV141 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreSlack,
-    event: openChatEventSchema,
+    event: openChatEventSchemaPreProviderSelection,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
     fileEditApproval: chatFileEditApprovalStateSchema,
@@ -8874,6 +8952,11 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV141 =
     },
   });
 const chatSubscribeTurnStateChangedServerFrameSchemaV141 = lazySchema(() =>
+  chatSubscribeTurnStateChangedServerFrameSchemaV134.extend(
+    fallbackFieldsPreProfileBinding,
+  ),
+);
+const chatSubscribeTurnStateChangedServerFrameSchemaV144 = lazySchema(() =>
   chatSubscribeTurnStateChangedServerFrameSchemaV134.extend(
     ultracodeFallbackFields,
   ),
@@ -8925,6 +9008,25 @@ const openChatSubscribeWindowedServerFrameSchemaPreSlack = lazySchema(() =>
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV143 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
+    queue: openChatQueueStateSchemaPreProfileBinding,
+    event: openChatEventSchemaPreProviderSelection,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {
+      sendWouldQueue: lazySchema(() => z.boolean().optional()),
+    },
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+      ...steerRestartAckFields,
+    },
+  });
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV144 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
     queue: openChatQueueStateSchema,
     event: openChatEventSchema,
     action: chatActionSchema,
@@ -8946,9 +9048,29 @@ const chatSubscribeRangeServerFrameSchemaOpenHarnessV143 = lazySchema(() =>
     kind: z.literal("range"),
     ...textFrameFields,
     ...chatReferenceFields,
-    range: openChatRangeResponseSchema,
+    range: openChatRangeResponseSchemaPreProviderSelection,
   }),
 );
+const openChatSubscribeWindowedServerFrameSchemaPreProviderSelection =
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
+        snapshot: openChatWindowedSnapshotSchemaPreProviderSelection,
+      }),
+      chatSubscribeSkeletonChunkServerFrameSchemaV119,
+      chatSubscribeAccumulatedChangesServerFrameSchema,
+      chatSubscribeIndexChangedServerFrameSchema,
+      chatSubscribeRangeServerFrameSchemaOpenHarnessV143,
+      chatSubscribeTurnStateChangedServerFrameSchemaV141,
+      chatSubscribeManagedCommandsChangedServerFrameSchema,
+      chatSubscribePortForwardsChangedServerFrameSchema,
+      chatSubscribeHeldUpdatesChangedServerFrameSchema,
+      chatSubscribeThinkingTokensServerFrameSchema,
+      messageDeliveryChangedServerFrameSchemaV142,
+      ...chatSubscribeCommonServerFrameSchemasOpenHarnessV143,
+      blockDeltaServerFrameSchema(openRuntimeEventSchema),
+    ]),
+  );
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
@@ -8957,14 +9079,16 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchemaOpenHarnessV143,
-    chatSubscribeTurnStateChangedServerFrameSchemaV141,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({
+      range: openChatRangeResponseSchema,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchemaV144,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchemaV142,
-    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV143,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV144,
     blockDeltaServerFrameSchema(openRuntimeEventSchema),
   ]),
 );
@@ -8973,7 +9097,7 @@ export const chatSubscribeServerFrameSchema = lazySchema(() =>
     chatSubscribeSnapshotServerFrameSchema.extend({
       snapshot: chatSnapshotSchema,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV141,
+    chatSubscribeTurnStateChangedServerFrameSchemaV144,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -8991,6 +9115,51 @@ const [
   ...clientFrameOptionsAfterSettingsV140
 ] = clientFrameOptionsAfterQueueSteerNow;
 const chatSubscribeClientFrameSchemaOptionsV141 = [
+  lazySchema(() =>
+    z.object({
+      ...sendClientFrameSchemaPreSteerRestartConfirm.shape,
+      settings: chatRunSettingsSchemaPreProfileBinding,
+    }),
+  ),
+  deleteMessageSuffixClientFrameSchemaLive,
+  lazySchema(() =>
+    z.object({
+      ...editUserMessageClientFrameSchemaLive.shape,
+      settings: chatRunSettingsSchemaPreProfileBinding,
+    }),
+  ),
+  stopClientFrameSchemaLive,
+  stopBackgroundItemClientFrameSchemaLive,
+  stopAllBackgroundItemsClientFrameSchemaLive,
+  resumeQueueClientFrameSchemaLive,
+  queueEditClientFrameSchemaLive,
+  queueCancelClientFrameSchemaLive,
+  queueReorderClientFrameSchemaLive,
+  lazySchema(() =>
+    z.object({
+      ...queueSteerNowClientFrameSchemaPreSteerRestartConfirm.shape,
+      newSettings: chatRunSettingsSchemaPreProfileBinding
+        .nullable()
+        .default(null),
+      restartConfirmed: z.boolean().default(false),
+    }),
+  ),
+  queueAbortSteerV140,
+  lazySchema(() =>
+    z.object({
+      ...queueSettingsUpdateV140.shape,
+      settings: chatRunSettingsSchemaPreProfileBinding,
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      ...queueSettingsRestampV140.shape,
+      settings: chatRunSettingsSchemaPreProfileBinding,
+    }),
+  ),
+  ...clientFrameOptionsAfterSettingsV140,
+] as const;
+const chatSubscribeClientFrameSchemaOptionsV144 = [
   lazySchema(() =>
     z.object({
       ...sendClientFrameSchemaPreSteerRestartConfirm.shape,
@@ -9033,12 +9202,19 @@ const chatSubscribeClientFrameSchemaOptionsV141 = [
   ),
   ...clientFrameOptionsAfterSettingsV140,
 ] as const;
+const chatSubscribeWindowedClientFrameSchemaV141 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...chatSubscribeClientFrameSchemaOptionsV141,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ]),
+);
 export const chatSubscribeClientFrameSchema = lazySchema(() =>
-  z.discriminatedUnion("kind", chatSubscribeClientFrameSchemaOptionsV141),
+  z.discriminatedUnion("kind", chatSubscribeClientFrameSchemaOptionsV144),
 );
 export const chatSubscribeWindowedClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    ...chatSubscribeClientFrameSchemaOptionsV141,
+    ...chatSubscribeClientFrameSchemaOptionsV144,
     loadRangeClientFrameSchema,
     resnapshotClientFrameSchema,
   ]),
@@ -9048,7 +9224,7 @@ export const chatSubscribeV141 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 41 } as const,
   openRequestSchema: chatSubscribeV140.openRequestSchema,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchemaV141,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaV141,
 });
 
 /**
@@ -9113,8 +9289,18 @@ export const chatSubscribeV143 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 43 } as const,
   openRequestSchema: chatSubscribeV142.openRequestSchema,
-  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  serverFrameSchema:
+    openChatSubscribeWindowedServerFrameSchemaPreProviderSelection,
   clientFrameSchema: chatSubscribeV142.clientFrameSchema,
+});
+
+/** Optional provider dispatch provenance on durable event carriers. */
+export const chatSubscribeV144 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 44 } as const,
+  openRequestSchema: chatSubscribeV143.openRequestSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
 
 const chatSubscribeCommonServerFrameSchemasV141 =
@@ -9144,8 +9330,10 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchemaV141,
+    chatSubscribeRangeServerFrameSchema.extend({
+      range: chatRangeResponseSchema,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchemaV144,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,

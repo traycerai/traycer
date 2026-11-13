@@ -27,7 +27,6 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import { UserMenu } from "@/components/auth/user-menu";
-import { ACTIVATE_HOST_HINT } from "@/components/settings/host-scope/host-option-model";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   hostRpcRegistry,
@@ -125,6 +124,7 @@ function sandboxOption(hostId: string, teamId: string | null): HostScopeOption {
       state: "awake",
       frozen: false,
       summary: sandboxSummaryFixture({ id: `sbx-${hostId}` }),
+      ownerKind: "unknown",
       teamOwned: teamId !== null,
     },
   });
@@ -353,10 +353,12 @@ describe("<UserMenu /> host section", () => {
 
     expect(screen.getByText("Host", { exact: true })).toBeTruthy();
     expect(screen.queryByText("Set the app's machine")).toBeNull();
-    const hint = screen.getByTestId("user-menu-host-hint");
-    expect(hint.textContent).toBe(ACTIVATE_HOST_HINT);
-    expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
-    expect(hint.closest("[data-testid^='user-menu-host-option-']")).toBeNull();
+    // OR-04: the Host heading has no sentence under it.
+    expect(
+      screen.queryByText(
+        "Every window follows, and the choice outlives this one.",
+      ),
+    ).toBeNull();
     const hostSection = screen.getByTestId("user-menu-host-section");
     expect(hostSection).toBeTruthy();
 
@@ -759,16 +761,10 @@ describe("<UserMenu /> host section", () => {
       const tooltip = await screen.findByRole("tooltip");
 
       expect(tooltip.textContent).toBe("Office Linux Workstation");
-      expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
-      expect(
-        screen
-          .getByTestId("user-menu-host-hint")
-          .closest("[data-testid^='user-menu-host-option-']"),
-      ).toBeNull();
       restore();
     });
 
-    it("shows no row tooltip when the name fits, and states the choice once under Host", async () => {
+    it("shows no row tooltip when the name fits", async () => {
       const active = hostScopeOptionFixture({
         hostId: "host-active",
         isActive: true,
@@ -801,12 +797,6 @@ describe("<UserMenu /> host section", () => {
           await vi.advanceTimersByTimeAsync(501);
         });
         expect(screen.queryByRole("tooltip")).toBeNull();
-        expect(screen.getAllByText(ACTIVATE_HOST_HINT)).toHaveLength(1);
-        expect(
-          screen
-            .getByTestId("user-menu-host-hint")
-            .closest("[data-testid^='user-menu-host-option-']"),
-        ).toBeNull();
       } finally {
         vi.useRealTimers();
         restore();

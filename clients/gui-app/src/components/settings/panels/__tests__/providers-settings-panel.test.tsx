@@ -1782,30 +1782,17 @@ vi.mock(
   }),
 );
 
-// MCP and Skills still mount LocalRowNote, which has its own suite. Keep its
-// status read independent of the host runtime and real environment queries
-// in this harness. Providers itself no longer mounts the note.
+// This file draws the Providers page of a Local row: the computer's own tabs.
+// The cases for Personal's MCP and Skills tabs set their own pick.
+// Skills initializes host-scoped configuration hooks even in render-only
+// cases, which have no host runtime to resolve a client from.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
-vi.mock("@/hooks/environment/use-environment-reads", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/hooks/environment/use-environment-reads")
-    >();
-  return {
-    ...actual,
-    useEnvironmentStatusRead: () => ({
-      supported: null,
-      data: null,
-      isError: false,
-    }),
-  };
-});
-
-// This file draws the Providers page of a Local row: the computer's own tabs.
-// The cases for Personal's MCP and Skills tabs set their own pick.
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: hostScopeMocks.hostId, hostName: "dev-box" },
   });
@@ -3688,8 +3675,7 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
       ],
     };
-    const personal =
-      "Sign-ins, keys and tools for each coding agent, on every computer and sandbox running Personal.";
+    const personal = "Sign-ins, keys and tools for each coding agent.";
     // The file's cases pick a Local row; this one starts on Personal.
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
 
@@ -3728,7 +3714,6 @@ describe("<ProvidersSettingsPanel />", () => {
   it("shows no move guidance while the host runs its own settings, on the phone and on the desktop", () => {
     const previousWidth = window.innerWidth;
     const expectNoMoveGuidance = (): void => {
-      expect(screen.queryByTestId("local-row-note")).toBeNull();
       expect(
         screen.queryByRole("button", { name: "Move to Personal" }),
       ).toBeNull();
@@ -5938,6 +5923,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
@@ -6607,6 +6593,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "ambient",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
@@ -6628,6 +6615,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(repollCall[0].request).toEqual({
       providerId: "codex",
       profileId: "ambient",
+      lastSeenReaderCount: null,
     });
     expect(repollCall[0].signal).toBeInstanceOf(AbortSignal);
     act(() => {
@@ -7813,6 +7801,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
+      lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {

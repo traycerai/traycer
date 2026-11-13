@@ -1,4 +1,9 @@
 import {
+  withTeamTokenInstall,
+  waitForTeamTokenInstall,
+} from "../host/team-install-token";
+import { readInstallToken } from "./host-join-token";
+import {
   currentInstallPlatform,
   discardStagedHostInstallSource,
   NO_INSTALL_PHASE_HOOKS,
@@ -11,6 +16,10 @@ import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
   runSignInPreflight,
+  runTeamInstallAuthPreflight,
+  completeTeamInstall,
+  warnIfTeamInstallSignInRemains,
+  type HostInstallAuthPreflight,
 } from "../host/install-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
@@ -95,6 +104,7 @@ import { holdVersionOnSwapCommitted } from "../host/held-host-version";
 // own `aud: "host"` credential instead of waiting for the first minting
 // client. Best-effort and deadline-bounded; failures warn.
 export interface HostInstallArgs {
+  readonly team: string | null;
   // Always a concrete version token - "latest" or a semver. A local
   // file is signalled by a non-null `fromPath` and supersedes
   // `versionRequest`. The entrypoint resolves "" / null at the
@@ -200,6 +210,15 @@ async function gateInstallStoreFormatFloor(
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    if (args.team !== null && args.noServiceRegister) {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message:
+          "--team needs the host running; leave out --no-service-register.",
+        details: null,
+        exitCode: 1,
+      });
+    }
     if (args.noServiceRegister && currentInstallPlatform() === "win32") {
       throw cliError({
         code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -229,229 +248,305 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       ifIdle: args.ifIdle,
       force: args.force,
     });
-    const authPreflight = await runSignInPreflight(ctx, args.noServiceRegister);
-    ctx.runtime.logger.info("Host install sign-in pre-flight resolved", {
-      environment: ctx.runtime.environment,
-      state: authPreflight.state,
-      reason: authPreflight.reason,
-    });
-    const source: InstallSourceArg =
-      args.fromPath !== null
-        ? { kind: "local-file", path: args.fromPath }
-        : {
-            kind: "registry",
-            versionRequest: args.versionRequest,
-          };
-
-    const storeFormatFloor = await gateInstallStoreFormatFloor(ctx, args);
-
-    // `--no-service-register` must be truly bytes-only: no stop, no
-    // register/rewrite, no start - even when a service is already
-    // registered. `createServiceInstallLifecycle`'s `bootstrap: null`
-    // does not satisfy that (it still rewrites and re-loads an EXISTING
-    // registration post-swap), so this skips the service lifecycle
-    // entirely and uses the same bytes-only shape `host ensure` uses
-    // for `registerService: false`.
-    const handle: ServiceInstallLifecycleHandle | null = args.noServiceRegister
-      ? null
-      : createServiceInstallLifecycle({
-          environment: ctx.runtime.environment,
-          bootstrap: {
-            enableLinger: args.enableLinger,
-            allowSelfInvocation: args.allowSelfInvocation,
-          },
-          force: args.force,
-          onWillStopHost: null,
-          // `host install` advances no attempt record - it is not an
-          // update - so it observes neither swap barrier.
-          hooks: NO_INSTALL_PHASE_HOOKS,
-        });
-    const lifecycle =
-      handle !== null
-        ? handle.lifecycle
-        : createBytesOnlyInstallLifecycle(
-            createServiceController(),
-            serviceLabelFor(ctx.runtime.environment),
-            NO_INSTALL_PHASE_HOOKS,
-          );
-    ctx.runtime.logger.debug("Host install command lifecycle created", {
-      environment: ctx.runtime.environment,
-      bytesOnly: handle === null,
-    });
-
-    const contenderOptions = {
-      environment: ctx.runtime.environment,
-      reason: "host-install",
-      waitMs: 30_000,
-      pollIntervalMs: 100,
-      admission: "legacy-update-shadow" as const,
-      adoption: await resolveAttemptAdoptionFromNonce(
-        hostHomeDir(ctx.runtime.environment),
-        args.attemptAdoption,
-        Date.now(),
-      ),
-    };
-    const result = await withCliUpdateExecutionSegment(
-      contenderOptions,
-      async (capability) => {
-        const verify = (): Promise<void> =>
-          requireCliUpdateMutationCapability(capability, contenderOptions);
-        // The outer attempt capability intentionally spans staging. This
-        // preserves the existing no-download-under-cli-lock rule while
-        // refusing active/corrupt attempt state before the first byte.
-        const staged = await stageHostInstallSource({
-          environment: ctx.runtime.environment,
-          source,
-          onProgress: (info) => ctx.progress(info),
-          recordVersionOverride: null,
-          verifyMutationCapability: verify,
-          // No attempt record to advance; see `hooks` above.
-          beforeExtract: async () => {},
-        });
+    return withTeamTokenInstall(
+      ctx.runtime.environment,
+      args.team,
+      process.stdin.isTTY !== true,
+      (canPrompt) => readInstallToken(process.stdin, process.stderr, canPrompt),
+      async (preparedTeamToken): Promise<CommandResult> => {
+        const teamSession =
+          args.team !== null && preparedTeamToken === null
+            ? await runTeamInstallAuthPreflight(ctx)
+            : null;
         try {
-          return await withCliAttemptMutation(
-            capability,
-            contenderOptions,
-            async () => {
-              // A desktop install never replaces a host a person started in a
-              // terminal: refused before the busy probe and the commit's stop,
-              // and the catch below scrubs the staged download. Bytes-only
-              // (`--no-service-register`) stops nothing and is not refused.
-              if (!args.noServiceRegister) {
-                await refuseDesktopDisruptionOfForegroundRun(
-                  "host install",
-                  ctx.runtime.environment,
-                  args.lifecycleOrigin,
-                );
-              }
-              if (args.ifIdle) {
-                await assertHostNotBusy(ctx.runtime.environment);
-              }
-              // Version hold recorded via the committer's post-swap observer,
-              // at the true successful-swap boundary under this mutation lock
-              // and keyed on the ACTUAL committed vs previous records: a `host
-              // install --release X` below the prior install (the desktop's
-              // rollback UI drives exactly this, ordinary AND bytes-only) is
-              // held, bound to the committed `installId`. A forward/equal
-              // install writes nothing.
-              return commitHostInstallSourceWithAttempt(
-                capability,
-                contenderOptions,
-                args.lifecycleOrigin,
-                {
+          const authPreflight: HostInstallAuthPreflight =
+            preparedTeamToken !== null
+              ? { state: "not-checked", reason: "team-install-token" }
+              : teamSession === null
+                ? await runSignInPreflight(ctx, args.noServiceRegister)
+                : teamSession.preflight;
+          ctx.runtime.logger.info("Host install sign-in pre-flight resolved", {
+            environment: ctx.runtime.environment,
+            state: authPreflight.state,
+            reason: authPreflight.reason,
+          });
+          const source: InstallSourceArg =
+            args.fromPath !== null
+              ? { kind: "local-file", path: args.fromPath }
+              : {
+                  kind: "registry",
+                  versionRequest: args.versionRequest,
+                };
+
+          const storeFormatFloor = await gateInstallStoreFormatFloor(ctx, args);
+
+          // `--no-service-register` must be truly bytes-only: no stop, no
+          // register/rewrite, no start - even when a service is already
+          // registered. `createServiceInstallLifecycle`'s `bootstrap: null`
+          // does not satisfy that (it still rewrites and re-loads an EXISTING
+          // registration post-swap), so this skips the service lifecycle
+          // entirely and uses the same bytes-only shape `host ensure` uses
+          // for `registerService: false`.
+          const handle: ServiceInstallLifecycleHandle | null =
+            args.noServiceRegister
+              ? null
+              : createServiceInstallLifecycle({
                   environment: ctx.runtime.environment,
+                  bootstrap: {
+                    enableLinger: args.enableLinger,
+                    allowSelfInvocation: args.allowSelfInvocation,
+                  },
+                  force: args.force,
+                  onWillStopHost: null,
+                  // `host install` advances no attempt record - it is not an
+                  // update - so it observes neither swap barrier.
+                  hooks: NO_INSTALL_PHASE_HOOKS,
+                });
+          const lifecycle =
+            handle !== null
+              ? handle.lifecycle
+              : createBytesOnlyInstallLifecycle(
+                  createServiceController(),
+                  serviceLabelFor(ctx.runtime.environment),
+                  NO_INSTALL_PHASE_HOOKS,
+                );
+          ctx.runtime.logger.debug("Host install command lifecycle created", {
+            environment: ctx.runtime.environment,
+            bytesOnly: handle === null,
+          });
+
+          const contenderOptions = {
+            environment: ctx.runtime.environment,
+            reason: "host-install",
+            waitMs: 30_000,
+            pollIntervalMs: 100,
+            admission: "legacy-update-shadow" as const,
+            adoption: await resolveAttemptAdoptionFromNonce(
+              hostHomeDir(ctx.runtime.environment),
+              args.attemptAdoption,
+              Date.now(),
+            ),
+          };
+          const result = await withCliUpdateExecutionSegment(
+            contenderOptions,
+            async (capability) => {
+              const verify = (): Promise<void> =>
+                requireCliUpdateMutationCapability(
+                  capability,
+                  contenderOptions,
+                );
+              // The outer attempt capability intentionally spans staging. This
+              // preserves the existing no-download-under-cli-lock rule while
+              // refusing active/corrupt attempt state before the first byte.
+              const staged = await stageHostInstallSource({
+                environment: ctx.runtime.environment,
+                source,
+                onProgress: (info) => ctx.progress(info),
+                recordVersionOverride: null,
+                verifyMutationCapability: verify,
+                // No attempt record to advance; see `hooks` above.
+                beforeExtract: async () => {},
+              });
+              try {
+                return await withCliAttemptMutation(
+                  capability,
+                  contenderOptions,
+                  async () => {
+                    // A desktop install never replaces a host a person started in a
+                    // terminal: refused before the busy probe and the commit's stop,
+                    // and the catch below scrubs the staged download. Bytes-only
+                    // (`--no-service-register`) stops nothing and is not refused.
+                    if (!args.noServiceRegister) {
+                      await refuseDesktopDisruptionOfForegroundRun(
+                        "host install",
+                        ctx.runtime.environment,
+                        args.lifecycleOrigin,
+                      );
+                    }
+                    if (args.ifIdle) {
+                      await assertHostNotBusy(ctx.runtime.environment);
+                    }
+                    // Version hold recorded via the committer's post-swap observer,
+                    // at the true successful-swap boundary under this mutation lock
+                    // and keyed on the ACTUAL committed vs previous records: a `host
+                    // install --release X` below the prior install (the desktop's
+                    // rollback UI drives exactly this, ordinary AND bytes-only) is
+                    // held, bound to the committed `installId`. A forward/equal
+                    // install writes nothing.
+                    return commitHostInstallSourceWithAttempt(
+                      capability,
+                      contenderOptions,
+                      args.lifecycleOrigin,
+                      {
+                        environment: ctx.runtime.environment,
+                        staged,
+                        onProgress: (info) => ctx.progress(info),
+                        lifecycle,
+                        onWillSwap: null,
+                        storeFormatFloor,
+                        onSwapCommitted: holdVersionOnSwapCommitted(
+                          ctx.runtime.environment,
+                        ),
+                      },
+                    );
+                  },
+                );
+              } catch (err) {
+                // A failed final mutation leaves the pre-staged temp owned by this
+                // execution segment. Scrub it before capability release.
+                await discardStagedHostInstallSource(
+                  ctx.runtime.environment,
                   staged,
-                  onProgress: (info) => ctx.progress(info),
-                  lifecycle,
-                  onWillSwap: null,
-                  storeFormatFloor,
-                  onSwapCommitted: holdVersionOnSwapCommitted(
-                    ctx.runtime.environment,
-                  ),
-                },
-              );
+                  verify,
+                );
+                throw err;
+              }
             },
           );
-        } catch (err) {
-          // A failed final mutation leaves the pre-staged temp owned by this
-          // execution segment. Scrub it before capability release.
-          await discardStagedHostInstallSource(
-            ctx.runtime.environment,
-            staged,
-            verify,
-          );
-          throw err;
+
+          ctx.runtime.logger.info("Host install command completed", {
+            environment: ctx.runtime.environment,
+            version: result.record.version,
+            previousVersion: result.previous?.version ?? null,
+            postSwapAction:
+              handle !== null ? handle.state.postSwapAction : "none",
+            hasPostSwapError:
+              handle !== null && handle.state.postSwapError !== null,
+          });
+
+          // Post-install credential provisioning: leave the just-started host
+          // holding its own `aud: "host"` credential rather than waiting for the
+          // first minting client to happen to connect. Only where it can help:
+          //   - the service lifecycle actually started/restarted a host
+          //     (`postSwapAction`), cleanly - a host that failed its post-swap
+          //     start has nothing to dial;
+          //   - the pre-flight left us signed in (the mint spends the bearer).
+          // Deliberately NOT gated on output mode - `--json` is the automation
+          // surface that most needs a credentialed host, and a Desktop shellout
+          // racing the GUI's own mint resolves inside the probe (a superseded mint
+          // verifies the winner's credential rather than failing).
+          // Best-effort throughout: any failure is a warning, never a failed
+          // install - an unprovisioned host self-heals on the next minting client.
+          // A registration refused or kept disabled started no host, so there is
+          // nothing for the credential probe to dial.
+          const credentialProvision =
+            preparedTeamToken === null
+              ? await maybeProvisionCredential(
+                  ctx,
+                  handle !== null &&
+                    handle.state.postSwapError === null &&
+                    handle.state.postSwapWarning === null
+                    ? handle.state.postSwapAction
+                    : "none",
+                  authPreflight,
+                )
+              : null;
+          const teamBinding =
+            args.team !== null &&
+            teamSession !== null &&
+            handle !== null &&
+            handle.state.postSwapError === null &&
+            handle.state.postSwapWarning === null
+              ? await completeTeamInstall(args.team, teamSession, ctx.progress)
+              : null;
+          const waitingForTeamInstall =
+            preparedTeamToken !== null &&
+            handle !== null &&
+            handle.state.postSwapError === null &&
+            handle.state.postSwapWarning === null;
+          if (waitingForTeamInstall) {
+            ctx.progress({
+              stage: "host-team",
+              message: "Waiting for this computer to join the team…",
+              percent: null,
+              bytes: null,
+              totalBytes: null,
+              workUnits: null,
+            });
+          }
+          const teamInstallReceipt = waitingForTeamInstall
+            ? await waitForTeamTokenInstall(
+                ctx.runtime.environment,
+                preparedTeamToken,
+                60_000,
+              )
+            : null;
+          const lifecycleData =
+            handle !== null
+              ? {
+                  priorServiceState: handle.state.priorState,
+                  stoppedBeforeSwap: handle.state.stoppedBeforeSwap,
+                  postSwapAction: handle.state.postSwapAction,
+                  postSwapError: handle.state.postSwapError,
+                  // Additive: a reader built before it sees the install succeed,
+                  // as it did.
+                  serviceWarning: handle.state.postSwapWarning,
+                }
+              : null;
+          let human = `installed host ${result.record.version} (executable=${result.record.executablePath})`;
+          if (handle !== null && handle.state.postSwapError !== null) {
+            human = `${human}; ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`;
+          }
+          if (handle !== null && handle.state.postSwapWarning !== null) {
+            human = `${human}; ${handle.state.postSwapWarning.message}`;
+          }
+          // Restate the unauthenticated warning on the terminal line - the
+          // pre-flight's copy printed before a potentially long download and
+          // may have scrolled away.
+          if (authPreflight.state === "unauthenticated") {
+            human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
+          }
+          const provisionNote =
+            formatCredentialProvisionNote(credentialProvision);
+          if (provisionNote !== null) {
+            human = `${human}; ${provisionNote}`;
+          }
+          if (teamBinding !== null) {
+            human = `${human}; belongs to ${teamBinding.environment.label}`;
+          } else if (teamInstallReceipt !== null) {
+            human = `${human}; this computer joined the team`;
+          } else if (args.team !== null) {
+            human = `${human}; the computer was not added to the team`;
+          }
+          return {
+            data: {
+              teamBinding,
+              teamInstallReceipt,
+              version: result.record.version,
+              runtimeVersion: result.record.runtimeVersion,
+              installedAt: result.record.installedAt,
+              executablePath: result.record.executablePath,
+              source: result.record.source,
+              archiveSha256: result.record.archiveSha256,
+              signatureKeyId: result.record.signatureKeyId,
+              sizeBytes: result.record.sizeBytes,
+              previousVersion: result.previous?.version ?? null,
+              serviceLifecycle: lifecycleData,
+              installGeneration: result.installGeneration,
+              authPreflight,
+              credentialProvision,
+            },
+            human,
+            // A post-swap start that failed is a failed install to a shell: the
+            // bytes are committed but nothing is serving them, and a script that
+            // gates on the exit status (the dev-desktop loops) used to go on to
+            // report "service registered". The payload is unchanged - Desktop
+            // trusts a terminal `ok` line over a non-zero exit on both of its
+            // runners and reads `serviceLifecycle.postSwapError` exactly as before.
+            // Not `host apply`'s contract: that primitive's exit 0 answers "did the
+            // swap commit?" by design (see host-apply.ts).
+            exitCode:
+              (handle !== null && handle.state.postSwapError !== null) ||
+              (args.team !== null &&
+                teamBinding === null &&
+                teamInstallReceipt === null)
+                ? 1
+                : 0,
+          };
+        } finally {
+          await warnIfTeamInstallSignInRemains(ctx, teamSession);
         }
       },
     );
-
-    ctx.runtime.logger.info("Host install command completed", {
-      environment: ctx.runtime.environment,
-      version: result.record.version,
-      previousVersion: result.previous?.version ?? null,
-      postSwapAction: handle !== null ? handle.state.postSwapAction : "none",
-      hasPostSwapError: handle !== null && handle.state.postSwapError !== null,
-    });
-
-    // Post-install credential provisioning: leave the just-started host
-    // holding its own `aud: "host"` credential rather than waiting for the
-    // first minting client to happen to connect. Only where it can help:
-    //   - the service lifecycle actually started/restarted a host
-    //     (`postSwapAction`), cleanly - a host that failed its post-swap
-    //     start has nothing to dial;
-    //   - the pre-flight left us signed in (the mint spends the bearer).
-    // Deliberately NOT gated on output mode - `--json` is the automation
-    // surface that most needs a credentialed host, and a Desktop shellout
-    // racing the GUI's own mint resolves inside the probe (a superseded mint
-    // verifies the winner's credential rather than failing).
-    // Best-effort throughout: any failure is a warning, never a failed
-    // install - an unprovisioned host self-heals on the next minting client.
-    // A registration refused or kept disabled started no host, so there is
-    // nothing for the credential probe to dial.
-    const credentialProvision = await maybeProvisionCredential(
-      ctx,
-      handle !== null &&
-        handle.state.postSwapError === null &&
-        handle.state.postSwapWarning === null
-        ? handle.state.postSwapAction
-        : "none",
-      authPreflight,
-    );
-    const lifecycleData =
-      handle !== null
-        ? {
-            priorServiceState: handle.state.priorState,
-            stoppedBeforeSwap: handle.state.stoppedBeforeSwap,
-            postSwapAction: handle.state.postSwapAction,
-            postSwapError: handle.state.postSwapError,
-            // Additive: a reader built before it sees the install succeed,
-            // as it did.
-            serviceWarning: handle.state.postSwapWarning,
-          }
-        : null;
-    let human = `installed host ${result.record.version} (executable=${result.record.executablePath})`;
-    if (handle !== null && handle.state.postSwapError !== null) {
-      human = `${human}; ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`;
-    }
-    if (handle !== null && handle.state.postSwapWarning !== null) {
-      human = `${human}; ${handle.state.postSwapWarning.message}`;
-    }
-    // Restate the unauthenticated warning on the terminal line - the
-    // pre-flight's copy printed before a potentially long download and
-    // may have scrolled away.
-    if (authPreflight.state === "unauthenticated") {
-      human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
-    }
-    const provisionNote = formatCredentialProvisionNote(credentialProvision);
-    if (provisionNote !== null) {
-      human = `${human}; ${provisionNote}`;
-    }
-    return {
-      data: {
-        version: result.record.version,
-        runtimeVersion: result.record.runtimeVersion,
-        installedAt: result.record.installedAt,
-        executablePath: result.record.executablePath,
-        source: result.record.source,
-        archiveSha256: result.record.archiveSha256,
-        signatureKeyId: result.record.signatureKeyId,
-        sizeBytes: result.record.sizeBytes,
-        previousVersion: result.previous?.version ?? null,
-        serviceLifecycle: lifecycleData,
-        installGeneration: result.installGeneration,
-        authPreflight,
-        credentialProvision,
-      },
-      human,
-      // A post-swap start that failed is a failed install to a shell: the
-      // bytes are committed but nothing is serving them, and a script that
-      // gates on the exit status (the dev-desktop loops) used to go on to
-      // report "service registered". The payload is unchanged - Desktop
-      // trusts a terminal `ok` line over a non-zero exit on both of its
-      // runners and reads `serviceLifecycle.postSwapError` exactly as before.
-      // Not `host apply`'s contract: that primitive's exit 0 answers "did the
-      // swap commit?" by design (see host-apply.ts).
-      exitCode: handle !== null && handle.state.postSwapError !== null ? 1 : 0,
-    };
   };
 }

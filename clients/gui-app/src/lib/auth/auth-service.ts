@@ -1,3 +1,14 @@
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import {
+  AUTH_ERROR_DISK_FULL,
+  isDiskFullSignInError,
+} from "@traycer-clients/shared/auth/sign-in-storage";
+import type {
+  TeamComputersResult,
+  SetEnvironmentBotHostResult,
+} from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type {
   CredentialsMigrationOutcome,
@@ -63,10 +74,6 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import {
-  TEAM_HOST_UNAVAILABLE_IN_STAGING,
-  type TeamHostInstallTokenResult,
-} from "@traycer-clients/shared/host-client/team-host";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -417,6 +424,7 @@ export const AUTH_ERROR_DEVICE_EXPIRED = "device-expired";
  * host runtime, and never writes/deletes the file.
  */
 export const AUTH_ERROR_STORE_UNAVAILABLE = "store-unavailable";
+export { AUTH_ERROR_DISK_FULL };
 
 /**
  * Record of the single in-flight sign-in attempt. Device flow is now the only
@@ -685,6 +693,8 @@ export class AuthService {
   private callbackDisposable: Disposable | null = null;
   // Owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
   private tokenStoreChangeDisposable: Disposable | null = null;
+  private signInStorageRevision = 0;
+  private signInStorageChangeDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
     null;
@@ -1083,6 +1093,27 @@ export class AuthService {
     this.applySignedIn(inboundToken, outcome.user, snapshot.profile);
   }
 
+  private async initializeSignInStorageStatus(): Promise<void> {
+    if (this.signInStorageChangeDisposable === null) {
+      this.signInStorageChangeDisposable =
+        this.tokenStore.subscribeSignInStorageLow((low) => {
+          this.signInStorageRevision += 1;
+          useAuthStore.getState().setSignInStorageLow(low);
+        });
+    }
+    const storageRevision = this.signInStorageRevision;
+    try {
+      const low = await this.tokenStore.getSignInStorageLow();
+      if (!this.disposed && storageRevision === this.signInStorageRevision) {
+        useAuthStore.getState().setSignInStorageLow(low);
+      }
+    } catch (error) {
+      appLogger.warn("[auth] sign-in storage status unavailable", {
+        error: describeLogError(error),
+      });
+    }
+  }
+
   async start(): Promise<void> {
     if (this.disposed) {
       return;
@@ -1116,6 +1147,8 @@ export class AuthService {
     }
 
     try {
+      await this.initializeSignInStorageStatus();
+      if (this.shouldStopStartFlow(startGeneration)) return;
       // One-time migration of the legacy per-window localStorage token pair
       // onto the shared file, BEFORE the first file read so the rehydrate below
       // adopts the migrated session. Bounded + single-flighted in main; on any
@@ -1129,6 +1162,9 @@ export class AuthService {
       try {
         stored = await this.tokenStore.get();
       } catch (error) {
+        if (this.shouldStopStartFlow(startGeneration)) {
+          return;
+        }
         // Unreadable store (EACCES/EIO/…) must never escape start() — the host
         // runtime provider would dispose the entire runtime. UI-only signed-out
         // + store-unavailable; no file write.
@@ -1658,6 +1694,7 @@ export class AuthService {
         return;
       case "lock-busy":
       case "spend-pending":
+      case "disk-full":
       case "refresh-network":
       case "applied":
       case "superseded":
@@ -2249,9 +2286,9 @@ export class AuthService {
     });
   }
 
-  async signOut(): Promise<void> {
+  async signOut(): Promise<boolean> {
     if (this.isDisposed()) {
-      return;
+      return false;
     }
     // Invalidate any sign-in finalization that already passed its epoch fence
     // and is now awaiting its token save - the sign-out wins.
@@ -2276,7 +2313,7 @@ export class AuthService {
     );
     // dispose() may have landed during the delete await — re-read fresh.
     if (this.isDisposed()) {
-      return;
+      return false;
     }
     if (deleteError !== null) {
       appLogger.warn(
@@ -2294,11 +2331,11 @@ export class AuthService {
         if (!this.sessionRecoveryTerminallyRejected) {
           this.scheduleSessionRecovery("sign-out-delete-failed");
         }
-        return;
+        return false;
       }
       // The session is still live - re-arm the proactive refresh we paused.
       this.refreshScheduler.start();
-      return;
+      return false;
     }
     this.setLastError(null);
     this.applySignedOut("retired");
@@ -2325,6 +2362,7 @@ export class AuthService {
     // finalization's signIn may have re-written the file and notified before
     // delete landed; its adopt must not resurrect signed-in after we cleared).
     this.reconcileGeneration += 1;
+    return true;
   }
 
   /**
@@ -3121,6 +3159,64 @@ export class AuthService {
     return this.runnerHost.updateHostVersionPolicy(bearer, hostId, input);
   }
 
+  async readHostOwnership(
+    hostId: string,
+    era: AuthEra,
+  ): Promise<HostOwnershipResult> {
+    const before = this.currentAuthEra();
+    if (
+      before.identity !== era.identity ||
+      before.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const result = await this.runnerHost.readHostOwnership(bearer, hostId);
+    const after = this.currentAuthEra();
+    if (
+      after.identity !== era.identity ||
+      after.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
+    return result;
+  }
+
+  async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.listTeamComputers(bearer, environmentId);
+  }
+  async setEnvironmentBotHost(
+    environmentId: string,
+    hostId: string,
+    sharingGeneration: number,
+  ): Promise<SetEnvironmentBotHostResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setEnvironmentBotHost(
+      bearer,
+      environmentId,
+      hostId,
+      sharingGeneration,
+    );
+  }
+  async mintTeamComputerInstallToken(
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintTeamComputerInstallToken(bearer, environmentId);
+  }
+
+  async releaseTeamComputer(
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to claim this computer.");
+    return this.runnerHost.releaseTeamComputer(bearer, hostId, environmentId);
+  }
+
   /**
    * "Remove from account": `POST /api/v3/hosts/:hostId/deregister` via the
    * runner host (run in Electron main for CORS, mirroring
@@ -3420,26 +3516,6 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.setSlackAppDms(bearer, request);
-  }
-
-  /**
-   * The one-time install token for a team environment's bot host, on
-   * traycer-server with the person's bearer. A build that cannot reach
-   * traycer-server at all (the Slack floor's signal) answers `unavailable`
-   * without a request; signed out, `unauthorized`.
-   */
-  async mintTeamHostInstallToken(
-    environmentId: string,
-  ): Promise<TeamHostInstallTokenResult> {
-    if (this.runnerHost.sandboxControlUnavailableReason !== null) {
-      return {
-        kind: "unavailable",
-        reason: TEAM_HOST_UNAVAILABLE_IN_STAGING,
-      };
-    }
-    const bearer = this.cloudBearer();
-    if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.mintTeamHostInstallToken(bearer, environmentId);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */
@@ -3850,6 +3926,7 @@ export class AuthService {
         );
       case "lock-busy":
       case "spend-pending":
+      case "disk-full":
       case "refresh-network":
         // Transient; the access token in hand stays valid for its TTL.
         return { status: "transient" };
@@ -3930,14 +4007,18 @@ export class AuthService {
     this.applySignedOut("retired");
   }
 
-  // Clear the UI session only when one is actually projected — avoids a redundant
-  // signed-out emit when reconcile just confirms an already-absent session.
-  private clearUiSessionIfSignedIn(): void {
-    if (
+  private hasProjectedSession(): boolean {
+    return (
       this.currentBearer !== null ||
       this.contextProvider.current() !== null ||
       useAuthStore.getState().status === "signed-in"
-    ) {
+    );
+  }
+
+  // Clear the UI session only when one is actually projected — avoids a redundant
+  // signed-out emit when reconcile just confirms an already-absent session.
+  private clearUiSessionIfSignedIn(): void {
+    if (this.hasProjectedSession()) {
       this.clearUiSession();
     }
   }
@@ -4400,7 +4481,11 @@ export class AuthService {
           "[auth] failed to persist accepted sign-in credentials",
           { error: describeLogError(signInError) },
         );
-        this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
+        this.applyFailure(
+          isDiskFullSignInError(signInError)
+            ? AUTH_ERROR_DISK_FULL
+            : AUTH_ERROR_SIGN_IN_FAILED,
+        );
         return "failed";
       }
 
@@ -4429,9 +4514,11 @@ export class AuthService {
    * this stale finalization wrote — any other window's `signIn` serializes
    * wholly before or after it, so a successor's pair can never be destroyed
    * by a stale comparison. A failed undo has a real consequence (the stale
-   * pair would rehydrate on a later launch if the successor fails), so it
-   * surfaces through the shared store-fault seam AND is remembered: the
-   * recovery loop completes the delete before adopting anything durable.
+   * pair would rehydrate on a later launch if the successor fails), so it is
+   * remembered and arms recovery, which completes the delete before adopting
+   * anything durable. When nothing newer is live (a sign-out or dispose
+   * superseded it and no attempt is in flight) it also surfaces through the
+   * shared store-fault seam.
    */
   private async undoSupersededCredentialSave(token: string): Promise<void> {
     // Recorded BEFORE the attempt, not on failure: the very write being
@@ -4446,6 +4533,17 @@ export class AuthService {
       await this.tokenStore.deleteIfToken(token);
       this.pendingUndoTokens.delete(token);
     } catch (error) {
+      // This finalization returned before projecting a session, so a live
+      // session or an attempt in flight now belongs to something newer and is
+      // not this failure's to clear.
+      if (this.hasProjectedSession() || this.isInteractiveAttemptInFlight()) {
+        appLogger.warn(
+          "[auth] superseded-save undo failed; keeping the newer session or attempt",
+          { error: describeLogError(error) },
+        );
+        this.scheduleSessionRecovery("undo-superseded-save:store-unavailable");
+        return;
+      }
       this.markStoreUnavailable("undo-superseded-save", error);
     }
   }
@@ -4910,6 +5008,8 @@ export class AuthService {
       this.tokenStoreChangeDisposable.dispose();
       this.tokenStoreChangeDisposable = null;
     }
+    this.signInStorageChangeDisposable?.dispose();
+    this.signInStorageChangeDisposable = null;
     this.reconcileQueued = false;
     this.currentReconcile = null;
     this.authStoreUnsubscribe();

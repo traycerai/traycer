@@ -15,7 +15,6 @@ import {
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import {
-  ACTIVATE_HOST_HINT,
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   appWideHostOptions,
   isHostOptionSelectable,
@@ -31,7 +30,6 @@ import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import {
@@ -89,7 +87,6 @@ export function UserMenu(props: UserMenuProps) {
   const openLink = useOpenLink();
   const [open, setOpen] = useState<boolean>(false);
   const settingsChord = useBindingForAction("app.settings.open");
-  useTitleBarDragSuppression("user-menu", open);
   const manageSubscriptionUrl = usePlatformBillingUrl();
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -342,12 +339,6 @@ function UserMenuHostSection(props: {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <DropdownMenuLabel className="shrink-0">Host</DropdownMenuLabel>
-      <p
-        className="shrink-0 px-1.5 pb-1 text-ui-xs text-pretty text-muted-foreground"
-        data-testid="user-menu-host-hint"
-      >
-        {ACTIVATE_HOST_HINT}
-      </p>
       <DropdownMenuRadioGroup
         value={activeHostId ?? ""}
         className="min-h-0 max-h-(--radix-dropdown-menu-content-available-height) overflow-y-auto overscroll-contain"

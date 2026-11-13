@@ -5,12 +5,14 @@ import {
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
+import { useHostOwnership } from "@/hooks/auth/use-host-ownership";
+
+const LOCAL_OWNER_SOURCE = Symbol("local-host-owner");
 
 /**
- * The team that owns a host, from the person's host directory (the registry
- * `owner`), or `null` for a host no team owns and while the directory cannot
- * say. Read through the context-free registry, since the picker also renders
- * where no host runtime is mounted.
+ * Remote ownership comes from the registry. Local ownership uses the same
+ * account-scoped read as Overview, which also works with Remote access off.
+ * An unresolved read does not invent an owner.
  */
 export function useHostOwnerTeamId(hostId: string | null): string | null {
   const subscribe = useCallback(
@@ -20,18 +22,30 @@ export function useHostOwnerTeamId(hostId: string | null): string | null {
         : subscribeHostRowChanged(hostId, callback),
     [hostId],
   );
-  const getSnapshot = useCallback(() => {
+  const getSnapshot = useCallback(():
+    | string
+    | typeof LOCAL_OWNER_SOURCE
+    | null => {
     if (hostId === null) return null;
     const entry = readHostDirectoryEntry(hostId);
-    if (entry === null || !isRemoteHostDirectoryEntry(entry)) return null;
+    if (entry === null) return null;
+    if (entry.kind === "local") return LOCAL_OWNER_SOURCE;
+    if (!isRemoteHostDirectoryEntry(entry)) return null;
+    if (entry.owner !== null)
+      return entry.owner.kind === "team" ? entry.owner.id : null;
     return entry.sandbox?.ownerTeamId ?? null;
   }, [hostId]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const source = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const local = source === LOCAL_OWNER_SOURCE;
+  const ownership = useHostOwnership(local ? hostId : null, local);
+  if (!local) return source;
+  const owner = ownership.data?.owner;
+  return owner?.kind === "team" ? owner.id : null;
 }
 
 /** Whether a host is a team's sandbox. */
 export function useOnTeamSandbox(hostId: string | null): boolean {
-  return useHostOwnerTeamId(hostId) !== null;
+  return useSandboxHostConfiguration(hostId)?.kind === "team";
 }
 
 /**

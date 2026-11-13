@@ -30,6 +30,7 @@ import type {
 } from "@traycer/protocol/host";
 import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
 import type {
+  ProviderAuthStatus,
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
@@ -93,7 +94,9 @@ type MockAuthUser = {
 type MockState = {
   configured: ReadonlyArray<{
     providerId: string;
-    lane: string;
+    lane: string | null;
+    authStatus?: ProviderAuthStatus;
+    usageReportingConfirmed?: boolean;
     profiles: ReadonlyArray<ProviderProfile> | undefined;
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
@@ -124,6 +127,7 @@ type MockState = {
   // a test can assert the button subscribes to EVERY configured httpFetch
   // provider's query state, not just the first.
   lastUseHostQueriesProviderIds: ReadonlyArray<string> | null;
+  activeProviderUsageRequestIds: ReadonlyArray<string>;
   settingsHost: HostScopeOption | null;
   settingsOverlayActive: boolean;
   routerPathname: string;
@@ -157,6 +161,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
+  activeProviderUsageRequestIds: [],
   settingsHost: null,
   settingsOverlayActive: false,
   routerPathname: "/",
@@ -200,6 +205,7 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      authStatus: provider.authStatus ?? "authenticated",
       fetchEligibility: provider.fetchEligibility ?? {
         ambient: true,
         managedProfiles: true,
@@ -209,6 +215,8 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useVisibleRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      authStatus: provider.authStatus ?? "authenticated",
+      usageReportingConfirmed: provider.usageReportingConfirmed ?? true,
       fetchEligibility: provider.fetchEligibility ?? {
         ambient: true,
         managedProfiles: true,
@@ -252,6 +260,15 @@ function mockUseHostQueriesImpl(args: {
     mocks.lastUseHostQueriesProviderIds = providerRequests.map(
       (request) => request.params.providerId,
     );
+    const queryIsEnabled =
+      args.options === null ||
+      !("enabled" in args.options) ||
+      args.options.enabled;
+    if (queryIsEnabled) {
+      mocks.activeProviderUsageRequestIds = providerRequests.map(
+        (request) => request.params.providerId,
+      );
+    }
   }
   return args.requests.map((request) => {
     if (!("providerId" in request.params)) {
@@ -369,6 +386,7 @@ import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popove
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import type { StatusBarShownProfiles } from "@/lib/layout/layout-arrangement";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import type { VisibleRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 
 const NOW = Date.now();
 
@@ -895,15 +913,6 @@ function expectMismatchSentence(
   expect(mismatch.getAttribute("role")).not.toBe("status");
 }
 
-function expectHostListQuiet(list: HTMLElement): void {
-  expect(list.querySelector("svg")).toBeNull();
-  expect(list.textContent).not.toContain("Online");
-  expect(list.textContent).not.toContain("Out of credits");
-  expect(screen.queryByTestId("settings-host-switcher-manage")).toBeNull();
-  expect(screen.queryByTestId("rate-limit-host-face")).toBeNull();
-  expect(screen.queryByTestId("rate-limit-host-header")).toBeNull();
-}
-
 function pointerEvent(
   type:
     | "pointerdown"
@@ -1104,6 +1113,7 @@ beforeEach(() => {
   mocks.consumeReset = vi.fn();
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
+  mocks.activeProviderUsageRequestIds = [];
   mocks.profileSelection = {
     shownProfiles: {},
     lastProfileByHarness: {},
@@ -2655,7 +2665,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     );
   }
 
-  it("shows one centered loading indicator, no per-provider sections, while nothing has resolved yet", () => {
+  it("shows all reporting inventory rows while usage is not yet reported", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
       {
@@ -2667,10 +2677,13 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     mocks.results = { codex: coldResult(), "claude-code": coldResult() };
     renderPopover();
 
-    expect(screen.getByText("Fetching usage limits")).toBeTruthy();
-    // Neither provider's own reading is visible yet - only the combined loader.
-    expect(screen.queryByText("Current session")).toBeNull();
-    expect(screen.queryByText("4% used")).toBeNull();
+    expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.getByText("Claude Code")).toBeTruthy();
+    for (const providerName of ["Codex", "Claude Code"]) {
+      expect(
+        screen.getByText(providerName).closest('[class*="gap-4"]')?.className,
+      ).not.toContain("hidden");
+    }
   });
 
   it("reveals an uncached signed-out provider with its signed-out message instead of leaving Overview loading forever", async () => {
@@ -2684,6 +2697,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: undefined,
+        authStatus: "unauthenticated",
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ];
@@ -2712,7 +2726,7 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     expect(screen.queryByTestId("rate-limit-detail-skeleton")).toBeNull();
   });
 
-  it("reveals a provider in place as it resolves, hiding still-cold siblings, and drops the combined loader", () => {
+  it("keeps a cold sibling visible when another provider reports usage", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
       {
@@ -2739,11 +2753,11 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     ).not.toContain("hidden");
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("4% used")).toBeTruthy();
-    // ...but Claude Code's still-cold section is hidden, not painted as its
-    // own blank/loading block.
+    // Claude Code's still-cold section remains in the popover inventory.
+    expect(screen.getByText("Claude Code")).toBeTruthy();
     expect(
       screen.getByText("Claude Code").closest('[class*="gap-4"]')?.className,
-    ).toContain("hidden");
+    ).not.toContain("hidden");
 
     // Claude Code resolves next - both sections are now visible.
     mocks.results = {
@@ -2758,6 +2772,44 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 });
 
 describe("<RateLimitPopover /> per-provider states", () => {
+  it("keeps every reporting account visible for an unmapped provider without requesting usage", () => {
+    const profiles = [
+      providerProfile({
+        profileId: "qwen-account-one",
+        kind: "managed",
+        label: "Qwen One",
+        tier: null,
+        usageUpdatedAt: null,
+      }),
+      providerProfile({
+        profileId: "qwen-account-two",
+        kind: "managed",
+        label: "Qwen Two",
+        tier: null,
+        usageUpdatedAt: null,
+      }),
+    ];
+    const provider: VisibleRateLimitProvider = {
+      providerId: "qwen",
+      lane: null,
+      usageReportingConfirmed: true,
+      profiles,
+      fetchEligibility: { ambient: false, managedProfiles: false },
+      authStatus: "authenticated",
+    };
+    mocks.configured = [provider];
+    mocks.fetchProviderRateLimits.mockClear();
+    mocks.lastUseHostQueriesProviderIds = null;
+
+    renderPopover();
+
+    expect(screen.getByText("Qwen One")).toBeTruthy();
+    expect(screen.getByText("Qwen Two")).toBeTruthy();
+    expect(screen.getAllByText("Not reporting usage yet.")).toHaveLength(2);
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
+    expect(mocks.activeProviderUsageRequestIds).not.toContain("qwen");
+  });
+
   it("closes before opening Model Providers for an OpenCode permission failure", () => {
     const events: string[] = [];
     onClose = vi.fn(() => {
@@ -2864,6 +2916,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
       },
     };
     renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const skeleton = screen.getByTestId("rate-limit-detail-skeleton");
     expect(skeleton).toBeTruthy();
     // Regression: every dark theme preset sets `--muted` equal to
@@ -2922,12 +2975,31 @@ describe("<RateLimitPopover /> per-provider states", () => {
   it("replaces the picture entirely (no dimmed data) for an authoritative unavailable reason, even with a lastGood on hand", () => {
     // `rate_limits_not_available` (and friends) are account-capability
     // reasons, not transient - they must never be shown alongside a stale
-    // reading the way a transient failure is.
+    // reading the way a transient failure is. The sibling keeps its own
+    // usage row while this account reports that limits are unavailable.
+    const unavailableProfile = providerProfile({
+      profileId: "unavailable-account",
+      kind: "managed",
+      label: "Unavailable account",
+      tier: null,
+      usageUpdatedAt: null,
+    });
+    const siblingProfile = providerProfile({
+      profileId: "sibling-account",
+      kind: "managed",
+      label: "Sibling account",
+      tier: null,
+      usageUpdatedAt: null,
+    });
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [unavailableProfile, siblingProfile],
+      },
     ];
     mocks.results = {
-      codex: {
+      "codex:unavailable-account": {
         data: {
           latest: {
             provider: "codex",
@@ -2946,14 +3018,22 @@ describe("<RateLimitPopover /> per-provider states", () => {
         dataUpdatedAt: NOW - 90_000,
         refetch: vi.fn(() => Promise.resolve({})),
       },
+      "codex:sibling-account": readyResult(codexReady()),
     };
     renderPopover();
+    const unavailableCard = screen.getByTestId(
+      "rate-limit-profile-card-codex-unavailable-account",
+    );
+    const siblingCard = screen.getByTestId(
+      "rate-limit-profile-card-codex-sibling-account",
+    );
     expect(
-      screen.getByText(
+      within(unavailableCard).getByText(
         "Usage limits unavailable - not available for this account",
       ),
     ).toBeTruthy();
-    expect(screen.queryByText("4% used")).toBeNull();
+    expect(within(unavailableCard).queryByText("4% used")).toBeNull();
+    expect(within(siblingCard).getByText("4% used")).toBeTruthy();
     expect(document.querySelectorAll(".opacity-60").length).toBe(0);
   });
 
@@ -3045,6 +3125,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
         providerId: "codex",
         lane: "ephemeralProcess",
         profiles: undefined,
+        authStatus: "unauthenticated",
         fetchEligibility: { ambient: false, managedProfiles: true },
       },
     ];
@@ -4180,7 +4261,6 @@ describe("<RateLimitPopover /> host picker", () => {
     });
     renderPopoverWithScope(hostScopeFixture({ host, hosts: [host] }), false);
     expect(screen.queryByTestId("rate-limit-host-picker-row")).toBeNull();
-    expect(screen.queryByTestId("rate-limit-host-list")).toBeNull();
     expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
     const identity = screen.getByTestId("rate-limit-host-identity");
     expect(identity.tagName).not.toBe("BUTTON");
@@ -4216,53 +4296,30 @@ describe("<RateLimitPopover /> host picker", () => {
     expect(identity.textContent).not.toContain("Team machine");
   });
 
-  it("lists each host's name and kind when there is more than one", () => {
-    renderPopoverWithScope(twoHostScope({}), false);
-
-    expect(screen.queryByTestId("rate-limit-host-picker-row")).toBeNull();
-    expect(screen.queryByTestId("rate-limit-host-identity")).toBeNull();
-    const list = screen.getByTestId("rate-limit-host-list");
-    const group = within(list).getByRole("group", { name: "Host" });
-    expect(group.className).toContain("max-h-40");
-    expect(group.className).toContain("overflow-y-auto");
-    expectHostListQuiet(list);
-
-    const alpha = screen.getByTestId("rate-limit-host-option-host-a");
-    const bravo = screen.getByTestId("rate-limit-host-option-host-b");
-    expect(alpha.textContent).toBe("Alpha · Computer");
-    expect(bravo.textContent).toBe("Bravo · Computer");
-    expect(alpha.getAttribute("aria-current")).toBe("true");
-    expect(bravo.getAttribute("aria-current")).toBe("false");
-    expect(alpha.parentElement?.className).toContain("bg-foreground/5");
-    expect(bravo.parentElement?.className).not.toContain("bg-foreground/5");
-  });
-
-  it("says more hosts are loading, and retries a partial list", () => {
-    const retryLists = vi.fn();
-    const loading = renderPopoverWithScope(
-      twoHostScope({ isLoading: true, listsFailed: false }),
-      false,
-    );
-    expect(
-      screen.getByTestId("rate-limit-host-loading-more").textContent,
-    ).toContain("Loading more hosts…");
-    expect(screen.queryByTestId("rate-limit-host-lists-failed")).toBeNull();
-    loading.unmount();
-
+  it("shows the watched sandbox's name and kind in the picker when there is more than one host", () => {
+    const sandbox = hostScopeOptionFixture({
+      hostId: "host-sandbox",
+      name: "quiet-harbor",
+      kind: "sandbox",
+    });
     renderPopoverWithScope(
-      twoHostScope({ isLoading: false, listsFailed: true, retryLists }),
+      twoHostScope({
+        host: sandbox,
+        hosts: [sandbox, hostScopeOptionFixture({ hostId: "host-a" })],
+      }),
       false,
     );
-    const failed = screen.getByTestId("rate-limit-host-lists-failed");
-    expect(failed.textContent).toContain("Some hosts may be missing");
-    fireEvent.click(within(failed).getByRole("button", { name: "Try again" }));
-    expect(retryLists).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
+    expect(screen.queryByTestId("rate-limit-host-identity")).toBeNull();
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "quiet-harbor Sandbox",
+    );
   });
 
   // The `vanished` exception: a pick that no longer resolves is not a choice,
   // it's the way OUT, so the row must stay reachable even though the account
   // is back down to one host.
-  it("opens the name-and-kind list when the pick vanished and one host remains", () => {
+  it("keeps the host picker row reachable when the pick vanished, even with only one host left", () => {
     const remaining = hostScopeOptionFixture({
       hostId: "host-a",
       name: "Alpha",
@@ -4276,12 +4333,7 @@ describe("<RateLimitPopover /> host picker", () => {
       isViewingActive: false,
     });
     renderPopoverWithScope(scope, true);
-    expect(screen.queryByTestId("rate-limit-host-picker-row")).toBeNull();
-    const list = screen.getByTestId("rate-limit-host-list");
-    const option = within(list).getByTestId("rate-limit-host-option-host-a");
-    expect(option.textContent).toBe("Alpha · Computer");
-    expect(option.getAttribute("aria-current")).toBe("false");
-    expectHostListQuiet(list);
+    expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
   });
 
   it("names a stale pin, shows active-host usage, and forgets the saved name", () => {
@@ -4318,10 +4370,9 @@ describe("<RateLimitPopover /> host picker", () => {
     });
     renderPopoverWithScope(scope, true);
 
-    const option = screen.getByTestId("rate-limit-host-option-host-a");
-    expect(option.textContent).toContain("Alpha");
-    expect(option.getAttribute("aria-current")).toBe("true");
-    expect(screen.queryByTestId("rate-limit-host-picker-row")).toBeNull();
+    expect(screen.getByTestId("settings-host-switcher").textContent).toBe(
+      "Alpha Computer",
+    );
     expect(
       screen.getByTestId("rate-limit-host-stale-pin").textContent,
     ).toContain("Bright Meadow is no longer here. You're seeing Alpha.");
@@ -4355,9 +4406,6 @@ describe("<RateLimitPopover /> host picker", () => {
       true,
     );
     expect(screen.getByTestId("rate-limit-host-picker-row")).toBeTruthy();
-    expect(screen.queryByTestId("rate-limit-host-list")).toBeNull();
-    expect(screen.queryByTestId("rate-limit-host-face")).toBeNull();
-    expect(screen.queryByTestId("rate-limit-host-header")).toBeNull();
     expect(
       screen.getByTestId("settings-host-switcher-empty").textContent,
     ).toContain("No hosts yet");
@@ -4468,7 +4516,7 @@ describe("<RateLimitPopover /> host picker", () => {
     expect(useSettingsHostScopeStore.getState().pendingHostId).toBeNull();
   });
 
-  it("wraps a long host name on the face and the mismatch button", () => {
+  it("wraps a long host name on the mismatch button", () => {
     const longName =
       "Windows sandbox — autonomous acceptance and integration workload";
     const usageHost = hostScopeOptionFixture({
@@ -4500,12 +4548,6 @@ describe("<RateLimitPopover /> host picker", () => {
       false,
     );
 
-    const option = screen.getByTestId("rate-limit-host-option-host-long");
-    expect(option.textContent).toContain(longName);
-    expect(option.textContent).toContain("Sandbox");
-    expect(classTokens(option)).toContain("break-words");
-    expect(option.querySelector(".truncate")).toBeNull();
-    expect(option.parentElement?.className).toContain("bg-foreground/5");
     expectMismatchSentence(
       screen.getByTestId("rate-limit-host-mismatch"),
       longName,
@@ -4524,10 +4566,26 @@ describe("<RateLimitPopover /> host picker", () => {
     const makeActive = vi.fn();
     renderPopoverWithScope(twoHostScope({ setHostId, makeActive }), false);
 
-    fireEvent.click(screen.getByTestId("rate-limit-host-option-host-b"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
 
     expect(setHostId).toHaveBeenCalledWith("host-b");
     expect(makeActive).not.toHaveBeenCalled();
+  });
+
+  it("'Manage hosts…' opens the Overview on Updates, not the retired Status tab", () => {
+    renderPopoverWithScope(twoHostScope({}), false);
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-manage"));
+
+    expect(mocks.openSettings).toHaveBeenCalledWith({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: null,
+    });
   });
 
   it("keeps Manage hosts on the empty picker row when the pin vanished", () => {

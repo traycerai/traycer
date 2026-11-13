@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { Fragment, type ReactNode, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -133,10 +139,18 @@ const EFFORT_FOOTER: ReasoningFooterConfig = {
   onChange: noop,
 };
 
-function renderPanel(
-  ultracodeFooter: UltracodeFooterConfig | null,
-  reasoningFooter: ReasoningFooterConfig | null,
-): void {
+function renderPanel(input: {
+  readonly ultracodeFooter: UltracodeFooterConfig | null;
+  readonly reasoningFooter: ReasoningFooterConfig | null;
+  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  readonly hiddenModelProviders: ReadonlySet<string>;
+}): void {
+  const {
+    ultracodeFooter,
+    reasoningFooter,
+    visibleRows,
+    hiddenModelProviders,
+  } = input;
   const browsed: GuiHarnessId = "claude";
   const inputRef: RefObject<HTMLInputElement | null> = { current: null };
   const listRef: RefObject<VirtuosoHandle | null> = { current: null };
@@ -177,7 +191,8 @@ function renderPanel(
     onClosePicker: noop,
     listRef,
     listKey: "list",
-    visibleRows: [rowOf(browsed)],
+    visibleRows,
+    hiddenModelProviders,
     selectedRowId: "",
     effectiveActiveRowId: "",
     hoveredRowId: "",
@@ -201,6 +216,37 @@ function renderPanel(
   render(<HarnessModelPickerPanelBody {...props} />);
 }
 
+function groupedRowOf(
+  harnessId: GuiHarnessId,
+  providerGroupId: string,
+  providerGroupLabel: string,
+): HarnessModelRow {
+  return { ...rowOf(harnessId), providerGroupId, providerGroupLabel };
+}
+
+it("marks only the hidden provider group header in the model list", () => {
+  renderPanel({
+    ultracodeFooter: null,
+    reasoningFooter: null,
+    visibleRows: [
+      groupedRowOf("claude", "openrouter", "OpenRouter"),
+      groupedRowOf("claude", "anthropic", "Anthropic"),
+    ],
+    hiddenModelProviders: new Set(["openrouter"]),
+  });
+
+  const hiddenHeader = screen
+    .getByText("Hidden")
+    .closest('[role="presentation"]');
+  const shownHeader = screen
+    .getByText("Anthropic")
+    .closest('[role="presentation"]');
+  expect(hiddenHeader?.textContent).toContain("OpenRouter");
+  expect(shownHeader?.textContent).toBe("Anthropic");
+  expect(within(shownHeader as HTMLElement).queryByText("Hidden")).toBeNull();
+  cleanup();
+});
+
 describe("the picker panel's Ultracode row with the global switch off", () => {
   beforeEach(() => {
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
@@ -211,16 +257,18 @@ describe("the picker panel's Ultracode row with the global switch off", () => {
 
   it("sits after the model list and directly before the effort footer, and reports a toggle", () => {
     const onChange = vi.fn<(next: boolean) => void>();
-    renderPanel(
-      {
+    renderPanel({
+      ultracodeFooter: {
         requested: false,
         offered: true,
         carried: true,
         modelLabel: "claude model",
         onChange,
       },
-      EFFORT_FOOTER,
-    );
+      reasoningFooter: EFFORT_FOOTER,
+      visibleRows: [rowOf("claude")],
+      hiddenModelProviders: new Set(),
+    });
 
     const row = screen.getByTestId("picker-ultracode-row");
     const list = screen.getByRole("option").closest("[role='listbox']");
@@ -241,7 +289,12 @@ describe("the picker panel's Ultracode row with the global switch off", () => {
   });
 
   it("shows no row without a config", () => {
-    renderPanel(null, EFFORT_FOOTER);
+    renderPanel({
+      ultracodeFooter: null,
+      reasoningFooter: EFFORT_FOOTER,
+      visibleRows: [rowOf("claude")],
+      hiddenModelProviders: new Set(),
+    });
     expect(screen.queryByTestId("picker-ultracode-row")).toBeNull();
   });
 });

@@ -106,6 +106,8 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly listKey: string;
   readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  /** The browsed provider's model providers hidden in Settings. */
+  readonly hiddenModelProviders: ReadonlySet<string>;
   readonly selectedRowId: string;
   readonly effectiveActiveRowId: string;
   readonly hoveredRowId: string;
@@ -289,6 +291,7 @@ export function HarnessModelPickerPanelBody(
     listRef,
     listKey,
     visibleRows,
+    hiddenModelProviders,
     selectedRowId,
     effectiveActiveRowId,
     hoveredRowId,
@@ -434,6 +437,7 @@ export function HarnessModelPickerPanelBody(
               listRef={listRef}
               listKey={listKey}
               rows={visibleRows}
+              hiddenModelProviders={hiddenModelProviders}
               maxModeContextKind={maxModeContextKind ?? "none"}
               selectedRowId={selectedRowId}
               activeRowId={effectiveActiveRowId}

@@ -322,21 +322,68 @@ describe("runSandboxVerbViaHttp", () => {
     });
   });
 
-  it("reads 401 and 403 as unauthorized, whatever the body says", async () => {
-    for (const status of [401, 403]) {
-      stubFetch(async () => jsonResponse(status, { code: "sandbox_busy" }));
-      expect(
-        await runSandboxVerbViaHttp(
-          BASE,
-          BEARER,
-          null,
-          "sbx_1",
-          "stop",
-          null,
-          VERB_TIMEOUT_MS,
-        ),
-      ).toEqual({ kind: "unauthorized" });
-    }
+  it("reads 401 as unauthorized", async () => {
+    stubFetch(async () => jsonResponse(401, { code: "sandbox_busy" }));
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "sbx_1",
+        "stop",
+        null,
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({ kind: "unauthorized" });
+  });
+
+  it.each([
+    [
+      "pod_add_admin_only",
+      "Only a team admin can add an Automations sandbox for this team.",
+    ],
+    [
+      "create_principal_mismatch",
+      "This sandbox can't be created for the selected owner.",
+    ],
+  ])("preserves typed 403 refusal %s", async (code, message) => {
+    stubFetch(async () => jsonResponse(403, { code, message }));
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "sbx_1",
+        "stop",
+        null,
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({
+      kind: "refused",
+      status: 403,
+      code,
+      reason: null,
+      shortfallMc: null,
+      creditSource: null,
+      newRateMcPerHour: null,
+      currentAwakeBurnMcPerHour: null,
+      message,
+    });
+  });
+
+  it("keeps an unrecognized typed 403 as unauthorized", async () => {
+    stubFetch(async () => jsonResponse(403, { code: "future_refusal" }));
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "sbx_1",
+        "stop",
+        null,
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({ kind: "unauthorized" });
   });
 
   it("collapses an untyped 5xx and an HTML body into a network error without echoing the body", async () => {

@@ -8,6 +8,7 @@ import type {
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import { AUTH_ERROR_DISK_FULL } from "@traycer-clients/shared/auth/sign-in-storage";
 
 /**
  * Renderer-side handle onto the shell's credentials-file token store.
@@ -50,12 +51,23 @@ export class AuthTokenStore {
     return this.tokenStore.get();
   }
 
+  subscribeSignInStorageLow(listener: (low: boolean) => void): Disposable {
+    return this.tokenStore.subscribeSignInStorageLow(listener);
+  }
+
+  getSignInStorageLow(): Promise<boolean> {
+    return this.tokenStore.getSignInStorageLow();
+  }
+
   /** Interactive create/replace — the device-flow sign-in. Main stamps the rest. */
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
   ): Promise<void> {
-    return this.enqueue(() => this.tokenStore.signIn(tokens, identity));
+    return this.enqueue(async () => {
+      const result = await this.tokenStore.signIn(tokens, identity);
+      if (result === "disk-full") throw new Error(AUTH_ERROR_DISK_FULL);
+    });
   }
 
   /** The locked adopt-or-refresh+commit; the refresh spend happens in main. */

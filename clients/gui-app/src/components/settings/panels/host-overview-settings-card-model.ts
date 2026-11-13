@@ -1,3 +1,4 @@
+import { unresolvedSetupText } from "@/components/settings/environment/environment-picker-model";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { planesOfferStopSharing } from "@/components/settings/move/status-planes";
@@ -71,7 +72,7 @@ export interface HostSettingsRowOption {
   readonly label: string;
   /** The sentence under the name in the menu. Hidden in the closed trigger. */
   readonly detail: string;
-  readonly action: "move" | "stop_sharing";
+  readonly action: "move" | "stop_sharing" | "none";
 }
 
 const RUNS_PERSONAL = "Runs Personal";
@@ -100,6 +101,7 @@ export type HostSettingsRowModel =
   | { readonly kind: "loading" }
   | {
       readonly kind: "team";
+      readonly environmentId: string;
       readonly label: string;
       readonly description: string;
     }
@@ -117,18 +119,37 @@ export type HostSettingsRowModel =
       readonly options: readonly HostSettingsRowOption[];
     };
 
-/** Settings place comes from status; the binding answers only which team. */
+/**
+ * Settings place comes from status; the binding answers only which team. A
+ * computer that runs its own settings is in no team, and no binding is read
+ * for it (`useEnvironmentHostReadQuery`), so its row does not wait for one.
+ */
 export function hostSettingsRowModel(
   status: EnvironmentStatusResponseV11 | null,
   binding: EnvironmentHostBinding | null,
   hostName: string,
 ): HostSettingsRowModel {
-  if (status === null || binding === null) return { kind: "loading" };
-  if (binding.explicit && binding.environment.ownerKind === "organization") {
+  if (status === null) return { kind: "loading" };
+  if (localRowCohort(status).kind !== "local") {
+    if (binding === null) return { kind: "loading" };
+    if (binding.explicit && binding.environment.ownerKind === "organization") {
+      return {
+        kind: "team",
+        environmentId: binding.environment.environmentId,
+        label: binding.environment.label,
+        description: `Runs ${binding.environment.label}`,
+      };
+    }
+  }
+  const setup = unresolvedSetupText(status);
+  if (setup !== null) {
     return {
-      kind: "team",
-      label: binding.environment.label,
-      description: `Runs ${binding.environment.label}`,
+      kind: "select",
+      value: "local",
+      description: setup,
+      options: [
+        { value: "local", label: hostName, detail: setup, action: "none" },
+      ],
     };
   }
   const state = hostSettingsCardState(status);

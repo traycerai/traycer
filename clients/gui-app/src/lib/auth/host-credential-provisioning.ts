@@ -245,7 +245,12 @@ const PENDING_ADOPTION_TTL_MS = 60_000;
  */
 const awaitingAdoptionByHostId = new Map<
   string,
-  { readonly mintedAt: number; readonly generation: number }
+  {
+    readonly mintedAt: number;
+    readonly generation: number;
+    readonly familyId: string;
+    readonly provisionedAt: string;
+  }
 >();
 
 /**
@@ -276,6 +281,24 @@ export function noteHostCredentialState(
   _state: HostCredentialState,
 ): void {
   // Intentionally empty. See above.
+}
+
+/** Releases only the credential whose same-socket intake a snapshot proved. */
+export function noteAppMemberCredentialAdopted(
+  hostId: string,
+  credential: MemberCredentialHandoff,
+): void {
+  const claim = awaitingAdoptionByHostId.get(hostId);
+  if (
+    claim?.generation === generation &&
+    claim.familyId === credential.familyId &&
+    claim.provisionedAt === credential.provisionedAt
+  ) {
+    awaitingAdoptionByHostId.delete(hostId);
+    // A proved handoff ends this mint-failure episode. Local data connections
+    // deliberately reprovision, so healthy reconnects must not escalate it.
+    mintBackoffByHostId.delete(hostId);
+  }
 }
 
 /**
@@ -392,6 +415,8 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
         awaitingAdoptionByHostId.set(hostId, {
           mintedAt: Date.now(),
           generation: startedAt,
+          familyId: outcome.familyId,
+          provisionedAt: outcome.provisionedAt,
         });
         recordCompletedMint(hostId);
         return outcome;

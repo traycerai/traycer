@@ -833,6 +833,7 @@ describe("AuthService provisional boot session", () => {
         rotateCalls += 1;
         return Promise.resolve({
           outcome: "lock-busy" as const,
+          diskPressure: null,
           pair: null,
           rejection: null,
         });

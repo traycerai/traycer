@@ -443,6 +443,26 @@ describe("remoteOpenAuthFor", () => {
   it("presents the user bearer to a personal host", () => {
     expect(
       remoteOpenAuthFor(
+        hostListItemToDirectoryEntry(
+          row({ owner: { kind: "user", id: "user-a" } }),
+          "wss://relay.invalid",
+        ),
+      ),
+    ).toBe("user-bearer");
+  });
+
+  it("presents a session grant to a known team-owned physical host", () => {
+    const entry = hostListItemToDirectoryEntry(
+      row({ owner: { kind: "team", id: "team-a", name: "Alpha" } }),
+      "wss://relay.invalid",
+    );
+    expect(entry.sandbox).toBeNull();
+    expect(remoteOpenAuthFor(entry)).toBe("session-grant");
+  });
+
+  it("keeps an ownerless physical host on the user bearer", () => {
+    expect(
+      remoteOpenAuthFor(
         hostListItemToDirectoryEntry(row({}), "wss://relay.invalid"),
       ),
     ).toBe("user-bearer");

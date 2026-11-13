@@ -131,18 +131,28 @@ function AccessTabBody(props: {
     );
   }
   const { principal } = status.data;
+  const remoteAccessSection = (
+    <RemoteAccessSection
+      client={props.client}
+      hostId={props.hostId}
+      status={status.data.remoteAccess}
+      principal={principal}
+    />
+  );
   const sections = (
     <AccessSections
       client={props.client}
       hostId={props.hostId}
       hostName={props.hostName}
       status={status.data}
+      remoteAccess={principal?.kind === "team" ? null : remoteAccessSection}
     />
   );
   if (principal?.kind !== "team") return sections;
   return (
     <>
       <TeamOwnedLine teamName={principal.teamName} />
+      {remoteAccessSection}
       <div inert className="flex flex-col gap-5 opacity-60">
         {sections}
       </div>
@@ -155,6 +165,7 @@ function AccessSections(props: {
   readonly hostId: string | null;
   readonly hostName: string;
   readonly status: EnvironmentStatusResponseV11;
+  readonly remoteAccess: ReactNode;
 }): ReactNode {
   const localHostId = useReactiveLocalHostId();
   return (
@@ -169,11 +180,7 @@ function AccessSections(props: {
         hostId={props.hostId}
         view={setupView(props.status.setup)}
       />
-      <RemoteAccessSection
-        client={props.client}
-        hostId={props.hostId}
-        status={props.status.remoteAccess}
-      />
+      {props.remoteAccess}
       <TerminalAccountsSection
         client={props.client}
         sentence={

@@ -1,3 +1,4 @@
+import type { LocalTeamAdmissionState } from "@traycer-clients/shared/host-transport/local-open-auth";
 import type {
   HostLeaseSnapshot,
   SelectionIncompatibility,
@@ -51,6 +52,9 @@ export type WindowNarrationCause = "no-usable-host" | "cold-start";
  */
 export type WindowNarrationVariant =
   | { readonly kind: "offline" }
+  | { readonly kind: "team-membership-checking" }
+  | { readonly kind: "team-membership-required" }
+  | { readonly kind: "team-membership-unavailable" }
   | {
       readonly kind: "update-host";
       readonly hostId: string;
@@ -104,6 +108,7 @@ export type WindowNarrationState =
     };
 
 export interface WindowNarrationInput {
+  readonly localTeamAdmission?: LocalTeamAdmissionState | null;
   /**
    * Whether this window's selection kernel has published a snapshot.
    *
@@ -352,6 +357,31 @@ export function hostUpdateActionApplies(
   );
 }
 
+/** Membership only owns the window when a remote host is not serving it. */
+function localTeamAdmissionVariant(
+  input: WindowNarrationInput,
+): WindowNarrationVariant | null {
+  if (
+    input.effectiveHostId !== null &&
+    input.effectiveHostId !== input.localHostId
+  ) {
+    return null;
+  }
+  if (input.localTeamAdmission === "required") {
+    return { kind: "team-membership-required" };
+  }
+  const alreadyServing =
+    input.hasBeenServed &&
+    isServingLease(findLease(input.leases, input.effectiveHostId));
+  if (alreadyServing) return null;
+  if (input.localTeamAdmission === "unavailable") {
+    return { kind: "team-membership-unavailable" };
+  }
+  return input.localTeamAdmission === "checking"
+    ? { kind: "team-membership-checking" }
+    : null;
+}
+
 /**
  * The whole window-narrator verdict.
  *
@@ -364,6 +394,10 @@ export function deriveWindowNarration(
   input: WindowNarrationInput,
 ): WindowNarrationState {
   if (!input.attached) return { kind: "silent" };
+  const admission = localTeamAdmissionVariant(input);
+  if (admission !== null) {
+    return { kind: "narrating", cause: "no-usable-host", variant: admission };
+  }
   // NOBODY HAS ASKED YET, so nothing may report a verdict. An ∅ derived from a
   // fleet no attempt has concluded for is indistinguishable from an ∅ derived
   // from an account that owns no hosts - both are an empty lease list - and on

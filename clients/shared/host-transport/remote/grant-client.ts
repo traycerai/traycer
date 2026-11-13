@@ -65,13 +65,15 @@ export type AttachGrantResult =
       readonly grant: AttachGrant;
       /**
        * The host-bound session grant authn mints beside the attach grant for a
-       * `kind: sandbox` target, or `null` for every other target. Presented in
+       * sandbox or team-principal target, or `null` for a personal computer. Presented in
        * `OPEN.authz` v2 instead of the user bearer; see
        * {@link createSandboxAttachGrantProvider}.
        */
       readonly sessionGrant: string | null;
     }
   | ({ readonly kind: "unauthorized" } & AttachGrantFailure)
+  | ({ readonly kind: "team-membership-required" } & AttachGrantFailure)
+  | ({ readonly kind: "team-membership-unavailable" } & AttachGrantFailure)
   | ({ readonly kind: "sandbox-frozen" } & AttachGrantFailure)
   | ({ readonly kind: "network-error" } & AttachGrantFailure);
 
@@ -253,15 +255,34 @@ export async function mintAttachGrantViaHttp(
   hostId: string,
   bearerToken: string,
 ): Promise<AttachGrantResult> {
+  return mintAttachGrantForPurpose(
+    authnBaseUrl,
+    hostId,
+    bearerToken,
+    "remote",
+    null,
+  );
+}
+
+type AttachGrantPurpose = "remote" | "local";
+
+async function mintAttachGrantForPurpose(
+  authnBaseUrl: string,
+  hostId: string,
+  bearerToken: string,
+  purpose: AttachGrantPurpose,
+  signal: AbortSignal | null,
+): Promise<AttachGrantResult> {
   // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
   // `request-abort.ts`. Cleared once the body is read, which the timeout also
   // bounds.
-  const abort = composeRequestAbort(null, GRANT_FETCH_TIMEOUT_MS);
+  const abort = composeRequestAbort(signal, GRANT_FETCH_TIMEOUT_MS);
   try {
     return await mintAttachGrantWithSignal(
       authnBaseUrl,
       hostId,
       bearerToken,
+      purpose,
       abort.signal,
     );
   } finally {
@@ -273,6 +294,7 @@ async function mintAttachGrantWithSignal(
   authnBaseUrl: string,
   hostId: string,
   bearerToken: string,
+  purpose: AttachGrantPurpose,
   signal: AbortSignal,
 ): Promise<AttachGrantResult> {
   let response: Response;
@@ -285,7 +307,11 @@ async function mintAttachGrantWithSignal(
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        body: JSON.stringify({ role: "client" }),
+        body: JSON.stringify(
+          purpose === "local"
+            ? { role: "client", purpose: "local" }
+            : { role: "client" },
+        ),
         signal,
       }),
       signal,
@@ -299,36 +325,25 @@ async function mintAttachGrantWithSignal(
     };
   }
 
-  if (response.status === 401 || response.status === 403) {
-    const bodyText = await readBodyText(response, signal);
-    return {
-      kind: "unauthorized",
-      detail: `authn rejected the mint with HTTP ${response.status}`,
-      context: authnSaid(bodyText),
-    };
-  }
-  if (response.status === 402) {
-    const bodyText = await readBodyText(response, signal);
-    if (isSandboxFrozenRefusal(bodyText)) {
-      return {
-        kind: "sandbox-frozen",
-        detail: `authn refused the mint: the sandbox is frozen (HTTP 402 ${SANDBOX_REFUSAL_CODE_FROZEN})`,
-        context: authnSaid(bodyText),
-      };
-    }
-    return {
-      kind: "network-error",
-      detail: `authn answered HTTP ${response.status}`,
-      context: authnSaid(bodyText),
-    };
-  }
+  // Membership codes precede generic auth statuses; 404 stays nondisclosing.
   if (response.status < 200 || response.status >= 300) {
     const bodyText = await readBodyText(response, signal);
-    return {
-      kind: "network-error",
-      detail: `authn answered HTTP ${response.status}`,
-      context: authnSaid(bodyText),
-    };
+    const code = membershipRefusalCode(bodyText);
+    if (response.status === 404 || code === "team_membership_required") {
+      return {
+        kind: "team-membership-required",
+        detail: "membership refused",
+        context: "",
+      };
+    }
+    if (code === "team_membership_unavailable") {
+      return {
+        kind: "team-membership-unavailable",
+        detail: "membership could not be checked",
+        context: "",
+      };
+    }
+    return classifyOtherRefusal(response.status, bodyText);
   }
 
   // NOTE: no body snippet from here down — a 2xx body carries the grant.
@@ -342,7 +357,6 @@ async function mintAttachGrantWithSignal(
       context: "",
     };
   }
-
   const parsed = attachGrantResponseSchema.safeParse(body);
   if (!parsed.success) {
     return {
@@ -358,6 +372,45 @@ async function mintAttachGrantWithSignal(
       expiresInSeconds: parsed.data.expires_in,
     },
     sessionGrant: parsed.data.session_grant ?? null,
+  };
+}
+
+function membershipRefusalCode(bodyText: string): string | null {
+  try {
+    const body: unknown = JSON.parse(bodyText);
+    return typeof body === "object" &&
+      body !== null &&
+      "code" in body &&
+      typeof body.code === "string"
+      ? body.code
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function classifyOtherRefusal(
+  status: number,
+  bodyText: string,
+): Exclude<AttachGrantResult, { readonly kind: "ok" }> {
+  if (status === 401 || status === 403) {
+    return {
+      kind: "unauthorized",
+      detail: `authn rejected the mint with HTTP ${status}`,
+      context: authnSaid(bodyText),
+    };
+  }
+  if (status === 402 && isSandboxFrozenRefusal(bodyText)) {
+    return {
+      kind: "sandbox-frozen",
+      detail: `authn refused the mint: the sandbox is frozen (HTTP 402 ${SANDBOX_REFUSAL_CODE_FROZEN})`,
+      context: authnSaid(bodyText),
+    };
+  }
+  return {
+    kind: "network-error",
+    detail: `authn answered HTTP ${status}`,
+    context: authnSaid(bodyText),
   };
 }
 
@@ -385,10 +438,44 @@ const SANDBOX_FROZEN_FATAL: FatalErrorDetails = {
   upgradeGuidance: null,
 };
 
-/** A failed mint as the session's provision: terminal only for a frozen sandbox. */
+const TEAM_MEMBERSHIP_REQUIRED: FatalErrorDetails = {
+  code: "TEAM_MEMBERSHIP_REQUIRED",
+  reason:
+    "This account cannot access this computer. Switch accounts to use it.",
+  retryable: false,
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
+
+const TEAM_MEMBERSHIP_UNAVAILABLE: FatalErrorDetails = {
+  code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+  reason:
+    "Membership could not be checked. Check your connection and try again.",
+  retryable: true,
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
+
+/** Preserve a membership verdict instead of retrying it as a network failure. */
 function provisionOfFailedMint(
   result: Exclude<AttachGrantResult, { readonly kind: "ok" }>,
 ): AttachGrantProvision {
+  if (result.kind === "team-membership-required") {
+    return {
+      kind: "refused",
+      fatal: TEAM_MEMBERSHIP_REQUIRED,
+      detail: result.detail,
+      context: "",
+    };
+  }
+  if (result.kind === "team-membership-unavailable") {
+    return {
+      kind: "unavailable",
+      retryCause: TEAM_MEMBERSHIP_UNAVAILABLE,
+      detail: result.detail,
+      context: "",
+    };
+  }
   if (result.kind === "sandbox-frozen") {
     return {
       kind: "refused",
@@ -405,12 +492,8 @@ function provisionOfFailedMint(
 }
 
 /**
- * Builds an `AttachGrantProvider` bound to a host + bearer source. Every
- * non-`ok` mint but one collapses to `unavailable` (reconnect backoff — a
- * transient CS blip must not hard-fail the session; the re-auth bound still
- * fail-closes a genuinely revoked host at its next relay deadline). The one is
- * a frozen sandbox, which is `refused`: no retry can mint for it until its
- * credits are topped up.
+ * Builds an attach-grant source. Membership and frozen-sandbox verdicts are
+ * terminal; an authn outage retains reconnect backoff.
  */
 export function createAttachGrantProvider(deps: {
   readonly authnBaseUrl: string;
@@ -440,7 +523,7 @@ export function createAttachGrantProvider(deps: {
   };
 }
 
-/** A sandbox target's grant provider plus the session grant it last minted. */
+/** A sandbox or team computer's provider and its latest session grant. */
 export interface SandboxAttachGrantSource {
   readonly provider: AttachGrantProvider;
   /**
@@ -453,7 +536,7 @@ export interface SandboxAttachGrantSource {
 }
 
 /**
- * The attach-grant provider for a `kind: sandbox` target.
+ * The session-grant provider for a sandbox or a team-owned computer.
  *
  * Differs from {@link createAttachGrantProvider} in two ways, both about
  * keeping the user's credential off a machine whose kernel the user does not
@@ -474,6 +557,8 @@ export function createSandboxAttachGrantProvider(deps: {
   readonly authnBaseUrl: string;
   readonly hostId: string;
   readonly getBearerToken: () => string | null;
+  readonly purpose: AttachGrantPurpose;
+  readonly signal?: AbortSignal;
 }): SandboxAttachGrantSource {
   let latestSessionGrant: string | null = null;
   const provider: AttachGrantProvider = async () => {
@@ -485,13 +570,18 @@ export function createSandboxAttachGrantProvider(deps: {
         context: "",
       };
     }
-    const result = await mintAttachGrantViaHttp(
+    const result = await mintAttachGrantForPurpose(
       deps.authnBaseUrl,
       deps.hostId,
       bearerToken,
+      deps.purpose,
+      deps.signal ?? null,
     );
     if (result.kind !== "ok") {
-      return provisionOfFailedMint(result);
+      const provision = provisionOfFailedMint(result);
+      return provision.kind === "unavailable"
+        ? { ...provision, retryCause: TEAM_MEMBERSHIP_UNAVAILABLE }
+        : provision;
     }
     if (result.sessionGrant === null) {
       return {

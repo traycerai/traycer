@@ -6,7 +6,7 @@
  * projected row through the real `<ChatMessage>`.
  */
 import { StrictMode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
@@ -129,6 +129,8 @@ import {
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
 import { PersonAvatar } from "@/components/bots/bot-avatars";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -440,14 +442,14 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       [directPost(DIRECT_REQUEST)],
       channel(null, () => null),
     );
-    const rowSwatch = within(
+    const rowFill = within(
       scrollStub().querySelector<HTMLElement>(
         '[data-testid="bot-member-row"]',
       ) ?? document.body,
     )
       .getByTestId("person-avatar")
       .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
-      ?.style.getPropertyValue("--swatch");
+      ?.style.getPropertyValue("--avatar-fill");
     cleanup();
 
     // The thread line's stack and the thread's anchor draw the member by id.
@@ -462,9 +464,9 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     const byId = screen
       .getByTestId("person-avatar")
       .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
-      ?.style.getPropertyValue("--swatch");
-    expect(rowSwatch).toBeTruthy();
-    expect(rowSwatch).toBe(byId);
+      ?.style.getPropertyValue("--avatar-fill");
+    expect(rowFill).toBeTruthy();
+    expect(rowFill).toBe(byId);
   });
 
   it("draws no link to a direct post's answer two rows below it, and keeps the post's thread line", () => {
@@ -647,4 +649,112 @@ describe("<BotChatTranscript /> a member's answers to a bot's question card", ()
       ).toBeTruthy();
     },
   );
+});
+
+describe("<BotChatTranscript /> the pictures on members' rows", () => {
+  const VIEWER_PICTURE = "https://example.com/viewer.png";
+  const TEAMMATE_PICTURE = "https://example.com/teammate.png";
+
+  function postBy(
+    messageId: string,
+    userId: string,
+  ): Extract<Message, { role: "user" }> {
+    return {
+      ...otherUserMessage(),
+      messageId,
+      sender: { type: "user", userId },
+    };
+  }
+
+  function signIn(userId: string, avatarUrl: string | null): void {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId,
+        userName: "Olive Owner",
+        email: "owner@example.com",
+        avatarUrl,
+      },
+      { userId, username: "Olive Owner" },
+      [],
+    );
+  }
+
+  function pictureOn(messageId: string): string | null {
+    const row = scrollStub().querySelector<HTMLElement>(
+      `[data-row-id="${messageId}"]`,
+    );
+    if (row === null) throw new Error(`no row ${messageId}`);
+    return (
+      within(row).getByTestId("person-avatar").querySelector("img")?.src ?? null
+    );
+  }
+
+  function channel(): BotTranscriptSurface {
+    return {
+      kind: "channel",
+      threadLine: () => null,
+      openThread: null,
+      openAnnouncementThread: null,
+      threadAnchorKinds: [],
+      chooseOption: null,
+      reply: null,
+      answerQuestion: null,
+      answerQuestions: null,
+      discussQuestion: null,
+      failedRequest: () => null,
+      openTurn: null,
+      sessionChatId: null,
+      intro: { botTitle: "Tracy", directive: null },
+      history: null,
+    };
+  }
+
+  beforeEach(() => {
+    stubImmediateImage();
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+    vi.unstubAllGlobals();
+  });
+
+  it("draws the viewer's own picture on their post in a personal channel, whose environment lists no members", () => {
+    signIn("owner-1", VIEWER_PICTURE);
+
+    mountTranscript([postBy("mine", "owner-1")], channel());
+
+    expect(pictureOn("mine")).toBe(VIEWER_PICTURE);
+  });
+
+  it("keeps another person's post as the directory draws it, a picture where it has one and initials where it has none", () => {
+    signIn("owner-1", VIEWER_PICTURE);
+    members = (userId) =>
+      userId === "teammate-1"
+        ? { displayName: "Tess Teammate", avatarUrl: TEAMMATE_PICTURE }
+        : null;
+
+    mountTranscript(
+      [postBy("theirs", "teammate-1"), postBy("unknown", "stranger-1")],
+      channel(),
+    );
+
+    expect(pictureOn("theirs")).toBe(TEAMMATE_PICTURE);
+    expect(pictureOn("unknown")).toBeNull();
+  });
+
+  it("stops drawing a viewer's picture on their posts once another account signs in, and after a sign-out", () => {
+    signIn("owner-1", VIEWER_PICTURE);
+    mountTranscript([postBy("mine", "owner-1")], channel());
+    expect(pictureOn("mine")).toBe(VIEWER_PICTURE);
+
+    act(() => {
+      signIn("someone-else", "https://example.com/other.png");
+    });
+    expect(pictureOn("mine")).toBeNull();
+
+    act(() => {
+      useAuthStore.getState().setSignedOut();
+    });
+    expect(pictureOn("mine")).toBeNull();
+  });
 });

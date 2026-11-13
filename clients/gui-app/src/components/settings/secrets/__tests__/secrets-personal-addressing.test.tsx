@@ -22,7 +22,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 }));
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentSecretV12,
   SecretVersion,
@@ -51,6 +51,12 @@ import {
 
 const PERSONAL_ENV = "env-personal";
 const NOT_SET_UP = "Your settings are not set up on this host yet.";
+
+beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
+});
 
 afterEach(() => {
   cleanup();

@@ -87,6 +87,9 @@ export function RetrospectiveSession(props: {
   const held = props.held ?? heldRowsFromReview(entries);
   const planes = status.data === null ? null : planesFromStatus(status.data);
   const { stillLocal, offerStop } = planeFacts(planes);
+  // A team's computer is the team's: its local planes are not the person's
+  // settings, so the sheet offers no move (`localRowCohort` has the same rule).
+  const teamOwned = status.data?.principal?.kind === "team";
   const statusItems = status.data?.items ?? [];
   const sharedInUse = sharedInUseFromItems(statusItems);
   const roomShared = roomSharedLine(planes, statusItems);
@@ -123,14 +126,18 @@ export function RetrospectiveSession(props: {
         onHeldApply={onHeldApply}
         // Each leads elsewhere, so the sheet closes first: what it says about
         // this computer is out of date once the move or the stop is done.
-        onMoveToPersonal={() => {
-          if (props.stopHostId === null) return;
-          props.onOpenChange(false);
-          openMoveSheet({
-            hostId: props.stopHostId,
-            hostName: props.hostName,
-          });
-        }}
+        onMoveToPersonal={
+          teamOwned
+            ? null
+            : () => {
+                if (props.stopHostId === null) return;
+                props.onOpenChange(false);
+                openMoveSheet({
+                  hostId: props.stopHostId,
+                  hostName: props.hostName,
+                });
+              }
+        }
         onStopSharing={
           offerStop
             ? () => {

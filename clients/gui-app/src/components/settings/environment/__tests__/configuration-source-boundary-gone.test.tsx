@@ -17,11 +17,27 @@ import type {
   EnvironmentDescriptorV11,
   EnvironmentInvitation,
 } from "@traycer/protocol/host/environment/contracts";
+import type { LocalTeamAdmissionState } from "@traycer-clients/shared/host-transport/local-open-auth";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  remoteEntry,
+  sandboxFacts,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+import {
+  ConfigurationSourceBoundary,
+  type CloudConfigurationTarget,
+} from "@/components/settings/environment/configuration-source-boundary";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
-import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import {
+  useCanAdministerConfiguration,
+  useCanEditConfiguration,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
 import {
   useInvitedTeamName,
   usePickedTeamLabel,
@@ -30,6 +46,10 @@ import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/h
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { SettingsSurface } from "@/components/settings/settings-surface";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   negotiateMethods,
@@ -149,11 +169,14 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 
 beforeEach(() => {
   hoisted.toasts.length = 0;
+  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
 });
 
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
+  useAuthStore.setState({ contextMetadata: null });
   resetNegotiatedManifests();
   surface.openSettings.mockClear();
   surface.setSection.mockClear();
@@ -196,6 +219,26 @@ function team(
     hostCount: 1,
     providerHandle: "handle-a",
   };
+}
+
+const TEAM_OWNER = { kind: "team", id: "team-a", name: "Acme" } as const;
+const PERSONAL_OWNER = { kind: "user", id: "user-me" } as const;
+const TEAM_OWNED_PHYSICAL_HOST = {
+  ...remoteEntry("host-team-physical", null),
+  owner: TEAM_OWNER,
+};
+const TEAM_OWNED_SANDBOX_HOST = {
+  ...remoteEntry("host-team-sandbox", sandboxFacts("team-a")),
+  owner: TEAM_OWNER,
+};
+const PERSONAL_PHYSICAL_HOST = {
+  ...remoteEntry("host-personal-physical", null),
+  owner: PERSONAL_OWNER,
+};
+
+interface LocalAdmissionFixture {
+  readonly userId: string;
+  readonly state: LocalTeamAdmissionState;
 }
 
 const INVITATION: EnvironmentInvitation = {
@@ -259,6 +302,58 @@ function Probe(): ReactNode {
   );
 }
 
+function ConfigurationPermissionProbe(): ReactNode {
+  const source = useConfigurationSource();
+  const canEdit = useCanEditConfiguration();
+  const canAdminister = useCanAdministerConfiguration();
+  return (
+    <p
+      data-testid="configuration-permission-probe"
+      data-effective-role={
+        source.kind === "pool" ? (source.effectiveRole ?? "none") : "host"
+      }
+      data-provider-handle={
+        source.kind === "pool" ? (source.providerHandle ?? "none") : "host"
+      }
+      data-can-edit={String(canEdit)}
+      data-can-administer={String(canAdminister)}
+    />
+  );
+}
+
+function mountConfigurationPermissionBoundary(options: {
+  readonly target: CloudConfigurationTarget;
+  readonly environments: readonly EnvironmentDescriptorV11[];
+  readonly activeHost: HostDirectoryEntry;
+  readonly localAdmissionByHost: ReadonlyMap<string, LocalAdmissionFixture>;
+}): void {
+  const harness = mountTeamPage(poolSource("admin"), {
+    "environment.list": () => ({ environments: [...options.environments] }),
+  });
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(harness.queryClient),
+    findHostById: (hostId) =>
+      hostId === options.activeHost.hostId ? options.activeHost : null,
+    messenger: harness.messenger,
+  });
+  client.setRequestContext(createRequestContextFixture({ origin: "renderer" }));
+  teamHostBoundary.client = client.createRequester(options.activeHost);
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-me", username: "user-me" },
+  });
+  useLocalTeamAdmissionStore.setState({
+    byHost: new Map(options.localAdmissionByHost),
+  });
+  render(
+    <ConfigurationSourceBoundary target={options.target} section={null}>
+      <ConfigurationPermissionProbe />
+    </ConfigurationSourceBoundary>,
+    { wrapper: harness.Wrapper },
+  );
+}
+
 /**
  * Mounts the boundary on `env-a` with the list the host answers. The list is
  * read again after `onListed`, so a removal is the same list changing under an
@@ -282,12 +377,14 @@ function mountBoundary(options: {
     }),
   });
   render(
-    <ConfigurationSourceBoundary
-      section={null}
-      target={{ kind: "team", environmentId: "env-a" }}
-    >
-      <Probe />
-    </ConfigurationSourceBoundary>,
+    <HeldValueHostRuntime>
+      <ConfigurationSourceBoundary
+        section={null}
+        target={{ kind: "team", environmentId: "env-a" }}
+      >
+        <Probe />
+      </ConfigurationSourceBoundary>
+    </HeldValueHostRuntime>,
     { wrapper: harness.Wrapper },
   );
   return {
@@ -1312,6 +1409,99 @@ describe("the viewer's standing line", () => {
       { wrapper: harness.Wrapper },
     );
     await screen.findByTestId("probe");
+    expect(screen.queryByText(/but not change them/)).toBeNull();
+  });
+});
+
+describe("transport-scoped configuration access", () => {
+  async function expectReadOnlyAdmin(): Promise<void> {
+    const probe = await screen.findByTestId("configuration-permission-probe");
+    expect(probe.getAttribute("data-effective-role")).toBe("admin");
+    expect(probe.getAttribute("data-provider-handle")).toBe("handle-a");
+    expect(probe.getAttribute("data-can-edit")).toBe("false");
+    expect(probe.getAttribute("data-can-administer")).toBe("false");
+    expect(
+      await screen.findByText(
+        "You can see Acme's settings but not change them.",
+      ),
+    ).toBeTruthy();
+  }
+
+  it("makes a team admin read-only on a team-owned physical remote host", async () => {
+    mountConfigurationPermissionBoundary({
+      target: { kind: "team", environmentId: "env-a" },
+      environments: [PERSONAL, team("admin")],
+      activeHost: TEAM_OWNED_PHYSICAL_HOST,
+      localAdmissionByHost: new Map(),
+    });
+
+    await expectReadOnlyAdmin();
+  });
+
+  it("keeps Personal's owner editable on the user's physical remote host", async () => {
+    mountConfigurationPermissionBoundary({
+      target: { kind: "personal" },
+      environments: [PERSONAL],
+      activeHost: PERSONAL_PHYSICAL_HOST,
+      localAdmissionByHost: new Map(),
+    });
+
+    const probe = await screen.findByTestId("configuration-permission-probe");
+    expect(probe.getAttribute("data-effective-role")).toBe("owner");
+    expect(probe.getAttribute("data-can-edit")).toBe("true");
+    expect(probe.getAttribute("data-can-administer")).toBe("true");
+    expect(screen.queryByText(/but not change them/)).toBeNull();
+  });
+
+  it("keeps a team admin editable on a team sandbox", async () => {
+    mountConfigurationPermissionBoundary({
+      target: { kind: "team", environmentId: "env-a" },
+      environments: [PERSONAL, team("admin")],
+      activeHost: TEAM_OWNED_SANDBOX_HOST,
+      localAdmissionByHost: new Map(),
+    });
+
+    const probe = await screen.findByTestId("configuration-permission-probe");
+    expect(probe.getAttribute("data-effective-role")).toBe("admin");
+    expect(probe.getAttribute("data-can-edit")).toBe("true");
+    expect(probe.getAttribute("data-can-administer")).toBe("true");
+    expect(screen.queryByText(/but not change them/)).toBeNull();
+  });
+
+  it.each(["admitted", "required", "unavailable"] as const)(
+    "makes team settings read-only on this user's local host with %s admission",
+    async (state) => {
+      mountConfigurationPermissionBoundary({
+        target: { kind: "team", environmentId: "env-a" },
+        environments: [PERSONAL, team("admin")],
+        activeHost: mockLocalHostEntry,
+        localAdmissionByHost: new Map([
+          [mockLocalHostEntry.hostId, { userId: "user-me", state }],
+        ]),
+      });
+
+      await expectReadOnlyAdmin();
+    },
+  );
+
+  it("ignores local admission records for another host or user", async () => {
+    mountConfigurationPermissionBoundary({
+      target: { kind: "team", environmentId: "env-a" },
+      environments: [PERSONAL, team("admin")],
+      activeHost: mockLocalHostEntry,
+      localAdmissionByHost: new Map([
+        [
+          mockLocalHostEntry.hostId,
+          { userId: "user-other", state: "admitted" },
+        ],
+        ["host-other", { userId: "user-me", state: "required" }],
+      ]),
+    });
+
+    const probe = await screen.findByTestId("configuration-permission-probe");
+    expect(probe.getAttribute("data-effective-role")).toBe("admin");
+    expect(probe.getAttribute("data-can-edit")).toBe("true");
+    expect(probe.getAttribute("data-can-administer")).toBe("true");
     expect(screen.queryByText(/but not change them/)).toBeNull();
   });
 });

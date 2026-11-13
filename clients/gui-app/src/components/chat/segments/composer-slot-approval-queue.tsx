@@ -457,10 +457,10 @@ function ApprovalInput(props: { readonly detail: ToolInputDetail }) {
  * How long this card has been waiting on a human, once that is long enough to
  * be worth saying.
  *
- * The card a returning human finds is the point of the attendance rule: a chat
- * a person merely looked away from PARKS rather than being refused, which is
- * the right answer and is not free - the turn is now blocked on somebody who
- * is not there. This is what tells them so when they get back.
+ * A card waits for a person whether or not anyone has the chat open, including
+ * in a chat another agent created. That is the right answer and is not free -
+ * the turn is now blocked on somebody who is not there. This is what tells
+ * them so when they get back.
  *
  * Its own leaf so the shared 60s clock repaints this line rather than the row
  * around it.

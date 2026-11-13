@@ -9,6 +9,7 @@ import {
   ONBOARDING_REMINDER_TOAST_ID,
 } from "@/lib/toast/onboarding-reminder-toast";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import { ActionToastContent } from "@/components/layout/bridges/action-toast-content";
 import {
   useOnboardingStore,
   onboardingCompletedCount,
@@ -24,6 +25,7 @@ import {
   type ThisComputer,
 } from "@/components/settings/move/this-computer";
 import { useThisComputersMove } from "@/components/settings/move/use-this-computers-move";
+import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { useEnvironmentReviewRead } from "@/hooks/environment/use-environment-reads";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import {
@@ -107,10 +109,19 @@ export function FirstTaskChatGuide(props: {
  * computer is on hold it reads `An earlier version shared this computer's
  * settings · Review` and opens the retrospective sheet, instead of the setup
  * reminder; it retires by itself once nothing is on hold.
+ *
+ * The move's invitation is asked once on a computer that runs its own
+ * settings, worded as the Getting started card is: on a fresh install Home is
+ * hidden, so this is where a new person first meets the move. Once answered,
+ * the card is the only place it waits. A computer that runs a team's settings
+ * (`team`) or has moved is never asked.
  */
 function GettingStartedToast() {
   const computer = useThisComputer();
   const completedAt = useOnboardingStore((state) => state.completedAt);
+  const invitationAnswered = useOnboardingStore(
+    (state) => state.moveInvitationAnswered,
+  );
   const remindersOn = completedAt !== null;
   const held = useHeldOnThisComputer(computer, remindersOn);
   const move = useThisComputersMove(computer, remindersOn);
@@ -119,7 +130,7 @@ function GettingStartedToast() {
   if (held === "pending" || move === "pending") return null;
   if (held === "held") return <HeldOnThisComputerToast computer={computer} />;
   const moveTarget =
-    move === "not_moved" && computer.hostId !== null
+    move === "not_moved" && !invitationAnswered && computer.hostId !== null
       ? { hostId: computer.hostId, hostName: computer.hostName }
       : null;
   return <StartToast completedAt={completedAt} moveTarget={moveTarget} />;
@@ -127,14 +138,16 @@ function GettingStartedToast() {
 
 /**
  * The Start page's two toasts, under two ids: the move's invitation while
- * this computer's settings are not in Personal, and the setup reminder
- * otherwise. The invitation wins while there is one - two things asking for
+ * this computer runs its own settings and the person has not answered it,
+ * and the setup reminder otherwise. The invitation wins while there is one - two things asking for
  * the next move at once is noise - and the reminder is held back for as long
  * as one has been shown and not answered.
  *
- * Once shown, the invitation stands until the person presses it, answers Not
- * now, or ×s it, or on a phone on its side until its time runs out, which is
- * no answer: it asks again the next time the Start page opens. A status that stops naming a move - a host swap, a version
+ * Once shown, the invitation stands until the person presses it, answers
+ * Later, or ×s it, or on a phone on its side until its time runs out, which is
+ * no answer: it asks again the next time the Start page opens. An answer is
+ * kept on this desktop (`moveInvitationAnswered`) and settles the reminder
+ * too, so nothing new appears after it. A status that stops naming a move - a host swap, a version
  * without the planes, a move accepted elsewhere - is not an answer from the
  * person: it neither withdraws the invitation nor lets the reminder take its
  * place. Both effects live here, the invitation's first, so the reminder's
@@ -152,6 +165,9 @@ function StartToast(props: {
   const hostName = props.moveTarget?.hostName ?? null;
   const dismissed = useOnboardingStore((state) => state.setupReminderDismissed);
   const dismiss = useOnboardingStore((state) => state.dismissSetupReminder);
+  const answerInvitation = useOnboardingStore(
+    (state) => state.answerMoveInvitation,
+  );
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   // Availability, not just completion: a guide this build cannot offer would
   // otherwise leave a nudge that can never be satisfied, pointing at a card
@@ -163,50 +179,51 @@ function StartToast(props: {
   );
   const remaining = onboardingGuideCount(shell) - complete;
   useEffect(() => {
-    if (dismissed || hostId === null || hostName === null) return;
+    if (hostId === null || hostName === null) return;
     markMoveInvitationShown();
     const identityIsCurrent = captureOnboardingReminderIdentity();
-    // The invitation's shape is the import announcement's
-    // (`session-import-announcement-controller.tsx`): outside a phone on its
-    // side it does not time out, and only the person takes it down - which is
-    // why there is nothing to undo here. ×, Not now and the action each dismiss
-    // it themselves, and a sign-out retires it (`retireOnboardingReminder`).
-    toast("This computer's settings aren't in Personal.", {
-      id: MOVE_INVITATION_TOAST_ID,
-      description: (
-        <span className="text-pretty">Move them to use them everywhere</span>
-      ),
-      duration: startToastDuration(),
-      closeButton: true,
-      onDismiss: () => {
-        if (!identityIsCurrent()) return;
-        markMoveInvitationAnswered();
-        dismiss();
-      },
-      // Off the screen, so it no longer holds the reminder back, and nothing
-      // the person said is recorded.
-      onAutoClose: () => {
-        if (identityIsCurrent()) markMoveInvitationAnswered();
-      },
-      action: {
-        label: "Show me what moves",
-        onClick: () => {
+    const answer = (): void => {
+      markMoveInvitationAnswered();
+      answerInvitation();
+      dismiss();
+    };
+    // The import announcement's component and call shape
+    // (`session-import-announcement-controller.tsx`): the action, its own
+    // Later and sonner's ×, each of which records the answer. Outside a phone
+    // on its side it does not time out, and a sign-out retires it
+    // (`retireOnboardingReminder`).
+    toast(
+      <ActionToastContent
+        toastId={MOVE_INVITATION_TOAST_ID}
+        eyebrow={null}
+        title={GETTING_STARTED.definitions.move.label}
+        description={GETTING_STARTED.definitions.move.description ?? ""}
+        actionLabel="Move to Personal"
+        onAction={() => {
           if (!identityIsCurrent()) return;
-          markMoveInvitationAnswered();
-          dismiss();
+          answer();
           openMoveSheet({ hostId, hostName });
+        }}
+        onLater={() => {
+          if (identityIsCurrent()) answer();
+        }}
+      />,
+      {
+        id: MOVE_INVITATION_TOAST_ID,
+        description: null,
+        duration: startToastDuration(),
+        cancel: null,
+        onDismiss: () => {
+          if (identityIsCurrent()) answer();
+        },
+        // Off the screen, so it no longer holds the reminder back, and
+        // nothing the person said is recorded.
+        onAutoClose: () => {
+          if (identityIsCurrent()) markMoveInvitationAnswered();
         },
       },
-      cancel: {
-        label: "Not now",
-        onClick: () => {
-          if (!identityIsCurrent()) return;
-          markMoveInvitationAnswered();
-          dismiss();
-        },
-      },
-    });
-  }, [dismissed, dismiss, hostId, hostName, openMoveSheet]);
+    );
+  }, [answerInvitation, dismiss, hostId, hostName, openMoveSheet]);
   useEffect(() => {
     if (completedAt === null || dismissed) return;
     if (remaining === 0) return;

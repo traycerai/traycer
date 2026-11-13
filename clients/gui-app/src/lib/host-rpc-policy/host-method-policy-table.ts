@@ -24,10 +24,11 @@ import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-s
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
 
-// Mounted configuration reads reuse the apply-status cadence.
+// Configuration reads keep their cadence only while the window is attended.
 const CONFIGURATION_READ_POLL = {
   kind: "fixed",
   intervalMs: 5 * SECOND_MS,
+  requiresWindowAttention: true,
 } as const;
 
 export type ConditionPollLane = {
@@ -49,7 +50,11 @@ export type ErasedConditionPollPolicy<
 
 type HostMethodPollPolicy<Method extends keyof HostRpcRegistry & string> =
   | null
-  | { readonly kind: "fixed"; readonly intervalMs: number }
+  | {
+      readonly kind: "fixed";
+      readonly intervalMs: number;
+      readonly requiresWindowAttention?: true;
+    }
   | ErasedConditionPollPolicy<Method>;
 
 type HostMethodScheduling<Method extends keyof HostRpcRegistry & string> = {
@@ -2265,6 +2270,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Hiding one OpenCode model provider: a per-provider write whose order
+  // matters, scoped by `providerModelProviderVisibilityWriteScope` on the hook.
+  "providers.setModelProviderHidden": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Whether the provider settings document is unusable as a whole: a plain
   // read, latest wins.
   "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },
@@ -2296,6 +2308,12 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Enabling a provider changes persisted provider configuration.
   "providers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Signing out revokes credentials; an identical repeat must not coalesce.
+  "providers.signOutProfile": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

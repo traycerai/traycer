@@ -12,7 +12,6 @@ import type {
   TeamEnvironmentFetchResult,
   SecretRequestDecideFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
-import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -210,28 +209,6 @@ describe("AuthService secrets-broker calls", () => {
       });
 
       expect(getEnvironmentProviders).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("team host install token", () => {
-    it("hands the runner host the bearer and the environment and returns its result", async () => {
-      const { service, host } = await signedInService();
-      const result: TeamHostInstallTokenResult = {
-        kind: "ok",
-        hostId: "6f1c2a4e-3b5d-4c7e-8f90-a1b2c3d4e5f6",
-        installToken: "install-token",
-        expiresAt: 1_791_000_000_000,
-      };
-      const mintTeamHostInstallToken = vi
-        .spyOn(host, "mintTeamHostInstallToken")
-        .mockResolvedValue(result);
-
-      await expect(service.mintTeamHostInstallToken("env-1")).resolves.toBe(
-        result,
-      );
-
-      expect(mintTeamHostInstallToken).toHaveBeenCalledTimes(1);
-      expect(mintTeamHostInstallToken).toHaveBeenCalledWith(BEARER, "env-1");
     });
   });
 

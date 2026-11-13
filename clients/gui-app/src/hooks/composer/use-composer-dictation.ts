@@ -7,10 +7,7 @@ import {
   type DictationPreparingStatus,
 } from "@/hooks/composer/use-dictation-availability";
 import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
-import {
-  useVoiceDictation,
-  type DictationFailureClass,
-} from "@/hooks/composer/use-voice-dictation";
+import { useVoiceDictation } from "@/hooks/composer/use-voice-dictation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -29,14 +26,6 @@ interface UseComposerDictationArgs {
 export interface ComposerDictation {
   readonly dictationControl: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;
-}
-
-function permissionReportMessage(
-  failureClass: DictationFailureClass | null,
-): string {
-  return failureClass === "speech_recognition_denied"
-    ? "Speech recognition permission was unavailable."
-    : "Microphone permission was unavailable.";
 }
 
 /**
@@ -72,6 +61,10 @@ export function useComposerDictation(
   const runnerHost = useRunnerHost();
   useEffect(() => {
     if (dictationError === null) return;
+    const permissionMessage =
+      dictationFailureClass === "speech_recognition_denied"
+        ? "Speech recognition permission was unavailable."
+        : "Microphone permission was unavailable.";
     reportableErrorToast(
       dictationError,
       dictationPermissionDenied
@@ -94,9 +87,7 @@ export function useComposerDictation(
       // real error text stays in the private capture.
       createReportIssueDraftContext({
         title: "Dictation failed",
-        message: dictationPermissionDenied
-          ? permissionReportMessage(dictationFailureClass)
-          : null,
+        message: dictationPermissionDenied ? permissionMessage : null,
         code: dictationFailureClass,
         source: "Dictation",
         capture:

@@ -40,6 +40,8 @@ import { NotificationsSettingsPanel } from "@/components/settings/panels/notific
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { CreditsSettingsPanel } from "@/components/settings/panels/credits-settings-panel";
 import { SandboxesSettingsPanel } from "@/components/settings/environment/sandboxes-page-slot";
+import { EnvironmentPickUpkeep } from "@/components/settings/environment-picker";
+import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
 import { StorageSettingsPanel } from "@/components/settings/environment/storage-settings-panel";
 import { MembersSettingsPanel } from "@/components/settings/environment/members-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -153,9 +155,13 @@ export function SettingsPanelForSection(props: {
   const Panel = SETTINGS_PANELS[section];
   return (
     <SettingsSectionContext value={section}>
-      <PersonalPageFrame section={section}>
-        <Panel />
-      </PersonalPageFrame>
+      <EnvironmentPickUpkeep />
+      {/* Outside the frame: a Local pick's offer page reads no configuration. */}
+      <LocalMovePageOr section={section}>
+        <PersonalPageFrame section={section}>
+          <Panel />
+        </PersonalPageFrame>
+      </LocalMovePageOr>
     </SettingsSectionContext>
   );
 }

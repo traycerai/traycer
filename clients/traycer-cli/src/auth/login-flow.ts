@@ -35,7 +35,7 @@ interface LoginSuccess {
 // retired: the CLI can run on a headless box (remote/SSH host) with no
 // co-located browser, so there is nowhere to redirect to. Instead the CLI
 // prints a short `user_code` + verification URL the human opens on ANY
-// device, then polls the authn service until the request is approved. The
+// device, then polls Traycer until the request is approved. The
 // resulting `{ token, refreshToken }` is persisted via the locked mutation
 // store (`store.signIn`, §7) in the exact `StoredCredentials` shape the host
 // reads - byte-compatible with every other login producer.
@@ -57,8 +57,7 @@ export async function runDeviceAuthFlow(
   if (authorization.kind === "network-error") {
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NETWORK,
-      message:
-        "Could not reach the authn service to start sign-in; check your network.",
+      message: "Could not reach Traycer to start sign-in; check your network.",
       details: null,
       exitCode: 2,
     });
@@ -117,7 +116,7 @@ export async function runDeviceAuthFlow(
   if (validation.kind === "network-error") {
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NETWORK,
-      message: "Sign-in succeeded but the authn service is unreachable.",
+      message: "Sign-in succeeded but Traycer is unreachable.",
       details: null,
       exitCode: 2,
     });
@@ -125,8 +124,7 @@ export async function runDeviceAuthFlow(
   if (validation.kind !== "valid") {
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
-      message:
-        "Sign-in succeeded but the token was rejected by the authn service.",
+      message: "Sign-in succeeded but the token was rejected by Traycer.",
       details: null,
       exitCode: 1,
     });

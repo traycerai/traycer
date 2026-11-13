@@ -15,6 +15,9 @@ import { moveIsPastTheAccept } from "@/lib/environment/move-in-progress";
  * - `not_moved`: a plane is still this computer's own, or stopped, and no
  *   move is running: there is something to invite.
  * - `moved`: the settings are in Personal, or a move into it is under way.
+ * - `team`: this computer runs a team's settings. It is the team's, so there
+ *   is nothing of the person's to move and nothing is invited, whatever its
+ *   planes read (a team-owned computer that never moved reports them local).
  *
  * The planes answer this, NOT `status.consent`. The consent on the wire is
  * the migration marker's, and `Stop sharing from this computer` keeps that
@@ -30,7 +33,12 @@ import { moveIsPastTheAccept } from "@/lib/environment/move-in-progress";
  * A re-read that fails keeps the last answer, which is what the status read
  * does: otherwise one failed read would take an unpressed invitation away.
  */
-export type ThisComputersMove = "pending" | "unknown" | "not_moved" | "moved";
+export type ThisComputersMove =
+  | "pending"
+  | "unknown"
+  | "not_moved"
+  | "moved"
+  | "team";
 
 export function useThisComputersMove(
   computer: ThisComputer,
@@ -44,6 +52,7 @@ export function useThisComputersMove(
   if (!enabled || computer.hostId === null) return "unknown";
   if (status.supported === false) return "unknown";
   if (status.data === null) return status.isError ? "unknown" : "pending";
+  if (status.data.principal?.kind === "team") return "team";
   const planes = planesFromStatus(status.data);
   if (planes === null) return "unknown";
   if (moveIsPastTheAccept(status.data)) return "moved";

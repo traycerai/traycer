@@ -20,6 +20,7 @@ import {
   TEARDOWN_GRACE_MS,
   type SandboxAppRequestHandler,
   type SandboxHostContext,
+  type SandboxArtifactLink,
   type SandboxScrollDirection,
   type SandboxServedPages,
   type SandboxShortcutPress,
@@ -56,6 +57,7 @@ interface Harness {
   readonly onShortcut: Mock<(press: SandboxShortcutPress) => void>;
   readonly onScrollGesture: Mock<(direction: SandboxScrollDirection) => void>;
   readonly onWheel: Mock<(wheel: SandboxWheel) => void>;
+  readonly onArtifactLink: Mock<(link: SandboxArtifactLink) => void>;
   /** Everything posted with this method. */
   readonly all: (method: string) => Sent[];
   /** The response posted for a request id. */
@@ -83,6 +85,7 @@ function createHarness(options: {
   const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
   const onScrollGesture = vi.fn<(direction: SandboxScrollDirection) => void>();
   const onWheel = vi.fn<(wheel: SandboxWheel) => void>();
+  const onArtifactLink = vi.fn<(link: SandboxArtifactLink) => void>();
   const host = new SandboxBridgeHost({
     document: {
       kind: "loader",
@@ -120,6 +123,7 @@ function createHarness(options: {
       onRequestTeardown,
       onScrollGesture,
       onWheel,
+      onArtifactLink,
     },
     appRequests: options.appRequests,
   });
@@ -135,6 +139,7 @@ function createHarness(options: {
     onShortcut,
     onScrollGesture,
     onWheel,
+    onArtifactLink,
     all: (method) => sent.filter((message) => message.method === method),
     responseTo: (id) => sent.find((message) => message.id === id),
   };
@@ -1079,6 +1084,7 @@ function createServedHarness(options: {
   const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
   const onScrollGesture = vi.fn<(direction: SandboxScrollDirection) => void>();
   const onWheel = vi.fn<(wheel: SandboxWheel) => void>();
+  const onArtifactLink = vi.fn<(link: SandboxArtifactLink) => void>();
   const host = new SandboxBridgeHost({
     document: {
       kind: "served",
@@ -1104,6 +1110,7 @@ function createServedHarness(options: {
       onRequestTeardown,
       onScrollGesture,
       onWheel,
+      onArtifactLink,
     },
     appRequests: options.appRequests,
   });
@@ -1119,6 +1126,7 @@ function createServedHarness(options: {
     onShortcut,
     onScrollGesture,
     onWheel,
+    onArtifactLink,
     all: (method) => sent.filter((message) => message.method === method),
     responseTo: (id) => sent.find((message) => message.id === id),
   };
@@ -1479,5 +1487,21 @@ describe("served document: a folder of pages", () => {
 
     expect(harness.host.status).toBe("crashed");
     expect(harness.statuses).toContain("crashed");
+  });
+});
+
+describe("artifact links from an MCP App document", () => {
+  it("drops an artifact-link report, even from the proven page with its nonce", () => {
+    const harness = ready(null, OPENS);
+
+    harness.host.receive(
+      notification("traycer/notifications/artifact-link", {
+        nonce: NONCE,
+        href: "../sibling/index.html",
+        page: "traycer-artifact://artifact-a1--m1/a/b/index.html",
+      }),
+    );
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
   });
 });

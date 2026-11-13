@@ -846,7 +846,11 @@ export const autoJudgeRecentEntrySchema = lazySchema(() =>
      * for a provider-native decision.
      */
     judgeSource: z.enum(["selection", "default", "fallback"]).nullable(),
-    /** No person could be asked: the chat was running for another agent. */
+    /**
+     * No person could be asked: the chat was running for another agent. Hosts
+     * that park every approval for a person always write `false`; older
+     * entries can still carry `true`.
+     */
     unattended: z.boolean(),
     /**
      * Why no judge could decide, as the host names it. A CHECKED STRING, not

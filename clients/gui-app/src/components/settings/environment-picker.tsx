@@ -21,7 +21,11 @@ import {
 } from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
 import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
 import { InviteAcceptDialog } from "@/components/settings/members/invite-accept-dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
@@ -73,8 +77,8 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
   // Syncs host-reported state into the window's pick: the store is read by
   // pages that do not mount this hook.
   useEffect(() => {
-    setDefaultPick(defaultPick);
-  }, [defaultPick, setDefaultPick]);
+    setDefaultPick(defaultPick, scope.activeHostId);
+  }, [defaultPick, setDefaultPick, scope.activeHostId]);
   useEffect(() => {
     if (stale) setPick(null);
   }, [stale, setPick]);
@@ -82,8 +86,21 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
 }
 
 /**
+ * The dropdown's pick upkeep for while the dropdown is not on screen: a phone
+ * shows a section's page without the rail, and a running settings search
+ * replaces the rail's list. Without it a Local pick whose computer has since
+ * moved, or turned out to be a team's, would keep its page offering the move.
+ * Mounted with every Settings page (`SettingsPanelForSection`); with the
+ * dropdown on screen too, both write the same answer.
+ */
+export function EnvironmentPickUpkeep(): ReactNode {
+  useEnvironmentPickerModel(useHostScopeFor(WINDOW_HOST_SELECTION));
+  return null;
+}
+
+/**
  * Settings ▸ Environment's dropdown: Personal, teams and invitations, then
- * computers running their own settings, each a sibling group.
+ * computers running their own settings or still setting up.
  * The pick decides what every page below it
  * shows; it never changes which host this window works on.
  */
@@ -96,7 +113,7 @@ export function EnvironmentPicker(props: {
   const running = useHostsRunningPersonal(true);
   const openAddHost = useAddHostDialogStore((state) => state.openDialog);
   const pick = useSettingsEnvironmentPickStore(
-    (state) => state.pick ?? state.defaultPick,
+    (state) => state.pick ?? model.defaultPick,
   );
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
@@ -121,7 +138,12 @@ export function EnvironmentPicker(props: {
   return (
     <>
       <DropdownMenu>
-        <EnvironmentPickerTrigger pick={pick} />
+        <EnvironmentPickerTrigger
+          pick={pick}
+          row={model.localRows.find(
+            (row) => pick.kind === "local" && row.hostId === pick.hostId,
+          )}
+        />
         <DropdownMenuContent
           align="start"
           className="w-[min(28rem,calc(100vw-2rem))]"
@@ -162,7 +184,11 @@ export function EnvironmentPicker(props: {
             {model.localRows.length > 0 ? (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuLabel>Runs its own settings</DropdownMenuLabel>
+                <DropdownMenuLabel>
+                  {model.localRows.some((row) => row.kind === "setup")
+                    ? "Computers"
+                    : "Runs its own settings"}
+                </DropdownMenuLabel>
               </>
             ) : null}
             {model.localRows.map((row) => (
@@ -271,6 +297,7 @@ function localRowVerb(
 
 function EnvironmentPickerTrigger(props: {
   readonly pick: EnvironmentPick;
+  readonly row: LocalPickerRow | undefined;
 }): ReactNode {
   const { pick } = props;
   const teamLabel = usePickedTeamLabel(
@@ -279,7 +306,10 @@ function EnvironmentPickerTrigger(props: {
   let label: ReactNode = "Personal";
   let title = "Personal";
   let local = false;
-  if (pick.kind === "local") {
+  if (pick.kind === "unresolved") {
+    label = <AgentSpinningDotsLabel />;
+    title = "";
+  } else if (pick.kind === "local") {
     label = pick.hostName;
     title = pick.hostName;
     local = true;
@@ -299,6 +329,7 @@ function EnvironmentPickerTrigger(props: {
         variant="outline"
         size="sm"
         className="w-full justify-between"
+        aria-label={pick.kind === "unresolved" ? "Choose settings" : undefined}
         data-testid="environment-picker-trigger"
       >
         <span className="flex min-w-0 items-center gap-1.5">
@@ -312,13 +343,19 @@ function EnvironmentPickerTrigger(props: {
           </TooltipWrapper>
           {local ? (
             <TooltipWrapper
-              label={LOCAL_BADGE_TOOLTIP}
+              label={
+                props.row?.kind === "setup"
+                  ? props.row.subtitle
+                  : LOCAL_BADGE_TOOLTIP
+              }
               side="top"
               sideOffset={undefined}
               align={undefined}
             >
               <Badge variant="secondary" size="xs">
-                Runs its own settings
+                {props.row?.kind === "setup"
+                  ? "Setup"
+                  : "Runs its own settings"}
               </Badge>
             </TooltipWrapper>
           ) : null}

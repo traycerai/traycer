@@ -317,7 +317,11 @@ export function TabStrip(props: TabStripProps) {
   );
 
   return (
-    <ChatIndicatorHostScopes scopes={indicatorScopes} chatEpicIds={chatEpicIds}>
+    <ChatIndicatorHostScopes
+      freshnessMode="base"
+      scopes={indicatorScopes}
+      chatEpicIds={chatEpicIds}
+    >
       <div
         ref={stripRef}
         data-testid="tab-strip"

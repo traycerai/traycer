@@ -117,7 +117,7 @@ export function collapsedConfigurationsLabel(
 }
 
 /** The search field above a host list. */
-export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
+export const SEARCH_HOSTS_PLACEHOLDER = "Search computers";
 
 /** A computer row's status: it answers. */
 export const COMPUTER_ACTIVE = "Active";
@@ -144,7 +144,7 @@ export function computerSubLine(parts: readonly (string | null)[]): string {
 }
 
 /** The sub-line of a computer whose settings are not in Personal yet. */
-export const LOCAL_SUB_LINE = "Local · its own settings, not in Personal yet";
+export const LOCAL_SUB_LINE = "Local · runs its own settings, not Personal's";
 
 /** The search found nothing of the viewer's. */
 export function noHostMatchesLine(term: string): string {
@@ -302,7 +302,7 @@ export function wakeString(suspendFidelity: string): string | null {
   }
 }
 
-/** `Suspends after 30 idle min · destroyed after 7 idle days`. */
+/** `Suspends after 30 idle min · destroyed after 7 days suspended or stopped`. */
 export function idleAndRestingLine(
   idleMinutes: number,
   destroyAfterRestingMinutes: number | null,
@@ -311,7 +311,7 @@ export function idleAndRestingLine(
   // `0` is never, as the server spells it.
   return destroyAfterRestingMinutes === null || destroyAfterRestingMinutes === 0
     ? `${idle} · ${KEPT_UNTIL_YOU_DESTROY_IT}`
-    : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)}`;
+    : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)} suspended or stopped`;
 }
 
 /**
@@ -323,17 +323,17 @@ export function idleLine(idleMinutes: number): string {
   return `Suspends after ${idleMinutes} idle min`;
 }
 
-/** `7 idle days`, `12 idle hours`, `45 idle minutes`. */
+/** `7 days`, `12 hours`, `45 minutes`. */
 export function restingPeriodLabel(minutes: number): string {
   if (minutes % (24 * 60) === 0) {
     const days = minutes / (24 * 60);
-    return `${days} idle ${days === 1 ? "day" : "days"}`;
+    return `${days} ${days === 1 ? "day" : "days"}`;
   }
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
-    return `${hours} idle ${hours === 1 ? "hour" : "hours"}`;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
   }
-  return `${minutes} idle ${minutes === 1 ? "minute" : "minutes"}`;
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
 export const KEPT_UNTIL_YOU_DESTROY_IT = "kept until you destroy it";
@@ -630,11 +630,8 @@ export function sandboxVerbPendingLine(
 export function sandboxVerbFailureLine(
   verb: SandboxLifecycleVerb | "destroy",
   name: string,
-  reference: string,
 ): string {
-  const sentence =
-    verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
-  return `${sentence} · ${reference}`;
+  return verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
 }
 
 export const RETRY_APPLYING = "Retry applying";

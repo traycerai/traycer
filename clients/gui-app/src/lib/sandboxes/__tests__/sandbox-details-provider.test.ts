@@ -55,7 +55,10 @@ describe("sandboxDetailsEntry", () => {
       now: NOW,
     });
     const rows = entry.status.map((row) => [row.label, row.value]);
-    expect(rows).toContainEqual(["Failed", "Failed to start (SBX-0412)"]);
+    expect(rows).toContainEqual([
+      "Failed",
+      "Failed to start · The sandbox service couldn't start it. · SBX-0412",
+    ]);
     expect(rows).toContainEqual([
       "Support reference",
       "SBX-0412 · sbx_support_42",
@@ -65,6 +68,53 @@ describe("sandboxDetailsEntry", () => {
       "create:kube-create-service-account",
     );
   });
+
+  it.each([
+    ["boot-timeout", "The sandbox took too long to start."],
+    ["boot-token-delivery", "The sandbox couldn't sign in to Traycer."],
+    ["grant_set_failed", "The sandbox couldn't get access to its settings."],
+    [
+      "environment_placement_failed",
+      "The sandbox couldn't join the selected environment.",
+    ],
+    ["provider-unavailable", "Sandboxes aren't available right now."],
+    ["provider-pending", "The sandbox service hasn't finished starting it."],
+    ["create", "The sandbox service couldn't start it."],
+  ])("explains a failed start at %s in Details", (stage, reason) => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        state: "failed",
+        failureCode: `${stage}:provider-detail`,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: true,
+      now: NOW,
+    });
+
+    expect(entry.status.find((row) => row.label === "Failed")?.value).toContain(
+      reason,
+    );
+  });
+
+  it.each([null, "unknown-stage:provider-detail"] as const)(
+    "keeps the generic failed-start sentence for an unrecognized code (%s)",
+    (failureCode) => {
+      const entry = sandboxDetailsEntry({
+        summary: sandboxSummaryFixture({ state: "failed", failureCode }),
+        cost: null,
+        wakeString: null,
+        viewerUserId: null,
+        personal: true,
+        now: NOW,
+      });
+
+      const value = entry.status.find((row) => row.label === "Failed")?.value;
+      expect(value).toContain("Failed to start");
+      if (failureCode !== null) expect(value).not.toContain(failureCode);
+    },
+  );
 
   it("shows the region label the server sends in the Region row", () => {
     const entry = sandboxDetailsEntry({
@@ -203,40 +253,25 @@ describe("sandboxDetailsEntry", () => {
     expect(mine.export().status["Started by"]).toBe("you");
   });
 
-  it("shows the agent that started a kept sandbox, and keeps its name out of the export", () => {
-    const input = {
-      cost: null,
-      wakeString: null,
-      viewerUserId: "u-me",
-      personal: false,
-      now: NOW,
-    };
-    const named = sandboxDetailsEntry({
-      ...input,
+  it("reads a kept sandbox's member starter, and keeps the agent's name out of the status and the export", () => {
+    const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
         createdBy: null,
         burst: false,
         createdByAgentId: "agent-planner",
         createdByAgentName: "Planner",
       }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: "u-me",
+      personal: true,
+      now: NOW,
     });
-    expect(named.status.find((row) => row.label === "Started by")?.value).toBe(
-      "Planner",
-    );
-    expect(named.export().status["Started by"]).toBeUndefined();
-    expect(JSON.stringify(named.export())).not.toContain("Planner");
-    const unnamed = sandboxDetailsEntry({
-      ...input,
-      summary: sandboxSummaryFixture({
-        createdBy: null,
-        burst: false,
-        createdByAgentId: "agent-planner",
-        createdByAgentName: null,
-      }),
-    });
-    expect(
-      unnamed.status.find((row) => row.label === "Started by")?.value,
-    ).toBe("an agent");
+    const startedBy = entry.status.find((row) => row.label === "Started by");
+    expect(startedBy?.value).toBe("you");
+    expect(JSON.stringify(entry.status)).not.toContain("Planner");
+    expect(entry.export().status["Started by"]).toBe("you");
+    expect(JSON.stringify(entry.export())).not.toContain("Planner");
   });
 
   it("gives an agent's sandbox no Resting row beside its self-destroying Idle row", () => {
@@ -253,6 +288,25 @@ describe("sandboxDetailsEntry", () => {
     });
     expect(entry.export().status.Idle).toMatch(/destroys itself/);
     expect(entry.export().status.Resting).toBeUndefined();
+  });
+
+  it("labels the retention clock by the suspended or stopped state it starts from", () => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        burst: false,
+        destroyAfterRestingMinutes: 7 * 24 * 60,
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: true,
+      now: NOW,
+    });
+
+    expect(
+      entry.status.find((row) => row.label === "Suspended or stopped for")
+        ?.value,
+    ).toBe("destroyed after 7 days");
   });
 
   // The announced day is read in UTC whatever zone the runtime is in, so the
@@ -450,12 +504,15 @@ describe("the Settings Details drawer's sandbox provider", () => {
 
     expect(entry.title).toBe("api-refactor");
     const status = entry.status();
-    expect(status.reason).toBe("Failed to start (SBX-0412)");
+    expect(status.reason).toBe(
+      "Failed to start · The sandbox service couldn't start it. · SBX-0412",
+    );
     expect(status.hosts).toEqual([
       expect.objectContaining({
         hostId: "host-sbx-1",
         name: "api-refactor",
-        reason: "Failed to start (SBX-0412)",
+        reason:
+          "Failed to start · The sandbox service couldn't start it. · SBX-0412",
       }),
     ]);
     const history = entry.history();
@@ -671,7 +728,9 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
 
     it("reads as Failed to start with its code and the first shell, never as Created", () => {
       const [event] = events([failedStart({})], { kind: "automation" });
-      expect(event.label).toBe("Failed to start (SBX-0412)");
+      expect(event.label).toBe(
+        "Failed to start · The sandbox service couldn't start it. · SBX-0412",
+      );
       expect(event.value).toBe("by the first shell");
     });
 
@@ -679,7 +738,9 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
       const [event] = events([failedStart({ actor: ME })], {
         kind: "automation",
       });
-      expect(event.label).toBe("Failed to start (SBX-0412)");
+      expect(event.label).toBe(
+        "Failed to start · The sandbox service couldn't start it. · SBX-0412",
+      );
       expect(event.value).toMatch(/^by you/);
     });
 
@@ -722,10 +783,10 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
     ]);
   });
 
-  it("ends the current entry with idle from then or awake from then", () => {
+  it("ends the current entry with resting from then or awake from then", () => {
     expect(
       events([entryOperation({ untilAt: null })], {}).map((e) => e.value),
-    ).toEqual(["by you · idle from then"]);
+    ).toEqual(["by you · resting from then"]);
     expect(
       events(
         [

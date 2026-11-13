@@ -157,7 +157,7 @@ export function useBotUpdateReplyModeMutation(
 }
 
 /**
- * The bot's icon, swatch or channel background, each key left out kept and
+ * The bot's icon, colour or channel background, each key left out kept and
  * each `null` cleared. No toast: the panel states a refusal under the control.
  */
 export function useBotUpdateAppearanceMutation(

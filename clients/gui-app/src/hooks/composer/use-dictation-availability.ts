@@ -28,6 +28,7 @@ interface EnsureModelMutationContext {
  * composer shows a "preparing" indicator instead of silently nothing.
  */
 export interface DictationPreparingStatus {
+  readonly errorMessage: string | null;
   readonly downloadState: "absent" | "downloading" | "ready" | "error";
   // 0..1 while downloading, else null.
   readonly progress: number | null;
@@ -193,6 +194,7 @@ function useHostDictationAvailability(
   return {
     ready: false,
     preparing: {
+      errorMessage: statusQuery.data?.errorMessage ?? null,
       downloadState: downloadState ?? "absent",
       progress: downloadProgress,
     },

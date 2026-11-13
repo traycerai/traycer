@@ -140,6 +140,9 @@ function personalPage(children: ReactNode): ReactNode {
 }
 
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   linkMock.link.mockReset();
   listMock.mockReset();
   listGate.current = null;
