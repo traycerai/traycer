@@ -391,6 +391,7 @@ describe("callHostRpc", () => {
   it.each([
     ["the refresh is rejected", "refresh-rejected-credential", true],
     ["the refresh rotates and the retry is refused again", "applied", false],
+    ["the refresh fails transiently", "refresh-network", false],
   ] as const)(
     "marks the host's refusal as a dead sign-in only when %s",
     async (_label, rotateOutcome, marked) => {
