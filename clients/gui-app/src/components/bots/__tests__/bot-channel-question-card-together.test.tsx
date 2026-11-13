@@ -1220,7 +1220,7 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answers are in the box, not sent.",
+      "Tess Teammate answered first. Your answers are in your message box, not sent.",
     );
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(useBotDraftsStore.getState().answers).toEqual({});
@@ -1288,7 +1288,7 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(
       screen.getByTestId("bot-channel-composer-send-failed").textContent,
@@ -1300,7 +1300,7 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
   });
 
@@ -1323,7 +1323,7 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Release Bot settled it first. Your answer is in the box, not sent.",
+      "Release Bot settled it first. Your answer is in your message box, not sent.",
     );
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(within(card).queryByTestId("question-card-sending")).toBeNull();
@@ -1385,7 +1385,7 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answers are in the box, not sent.",
+      "Tess Teammate answered first. Your answers are in your message box, not sent.",
     );
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(useBotDraftsStore.getState().answers).toEqual({});
@@ -1430,7 +1430,7 @@ describe("<BotChannelView tiles={null} /> a card's set the host refused as alrea
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Release Bot settled it first. Your answer is in the box, not sent.",
+      "Release Bot settled it first. Your answer is in your message box, not sent.",
     );
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
   });
@@ -1531,7 +1531,7 @@ describe("<BotChannelView tiles={null} /> a card's answers whose send ended with
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answers are in the box, not sent.",
+      "Tess Teammate answered first. Your answers are in your message box, not sent.",
     );
     expect(useBotDraftsStore.getState().answers).toEqual({});
     expect(sent).toHaveLength(1);
@@ -1703,7 +1703,7 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together, sett
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answers are in the box, not sent.",
+      "Tess Teammate answered first. Your answers are in your message box, not sent.",
     );
     expect(sent).toEqual([]);
   });
@@ -1754,7 +1754,7 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together, sett
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answers are in the box, not sent.",
+      "Tess Teammate answered first. Your answers are in your message box, not sent.",
     );
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
   });
@@ -1783,7 +1783,7 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together, sett
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(useBotDraftsStore.getState().answers).toEqual({});
   });
@@ -1811,7 +1811,7 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together, sett
       "bot-channel-composer-answers-moved",
     ).textContent;
     expect(line).toBe(
-      "Tess Teammate answered the card first. Your answer is in the box, not sent.",
+      "Tess Teammate answered the card first. Your answer is in your message box, not sent.",
     );
     expect(line).not.toContain("skipped");
   });
@@ -1840,7 +1840,7 @@ describe("<BotChannelView tiles={null} /> a card whose answers go together, sett
     expect(
       screen.getByTestId("bot-channel-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answers are in the box, not sent.",
+      "Tess Teammate answered first. Your answers are in your message box, not sent.",
     );
     expect(textOf(boxInput("Message Release Bot"))).toBe(
       `${DEPLOY} Now\n${HOLD} Hold the migration`,

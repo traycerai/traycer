@@ -988,7 +988,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     // The failed answer is the one that moved: nothing is left to retry.
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(within(channelCard()).queryAllByRole("button")).toEqual([]);
     expect(sent).toHaveLength(1);
@@ -1027,7 +1027,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
 
     expect(textOf(channelBox())).toBe("Hold the migration");
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(useBotDraftsStore.getState().answers).toEqual({});
@@ -1071,7 +1071,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
 
     expect(textOf(channelBox())).toBe("Hold the migration");
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(sendAttempts).toBe(2);
@@ -1161,7 +1161,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     expect(textOf(channelBox())).toBe("Hold the migration");
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(useBotDraftsStore.getState().answers).toEqual({});
   });
@@ -1188,7 +1188,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     expect(within(question).queryAllByRole("button")).toEqual([]);
     expect(textOf(channelBox())).toBe("Now");
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(sent).toEqual([]);
   });
@@ -1225,7 +1225,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
       drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
         block: taken.map(([, draft]) => draft.typed).join("\n"),
         notice:
-          "Tess Teammate answered first. Your answer is in the box, not sent.",
+          "Tess Teammate answered first. Your answer is in your message box, not sent.",
       }));
     });
     session(CHANNEL_ID, [questionRow([hold(null)])]);
@@ -1262,7 +1262,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
       "Settled by Release Bot: Nothing",
     );
     expect(channelMovedLine()).toBe(
-      "Release Bot settled it first. Your answer is in the box, not sent.",
+      "Release Bot settled it first. Your answer is in your message box, not sent.",
     );
   });
 
@@ -1276,7 +1276,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     write([questionRow([hold(byPerson(TEAMMATE_USER_ID, null))])]);
 
     expect(channelMovedLine()).toBe(
-      "Tess Teammate skipped it first. Your answer is in the box, not sent.",
+      "Tess Teammate skipped this question first. Your answer is in your message box, not sent.",
     );
   });
 
@@ -1326,7 +1326,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
 
     await screen.findByTestId("bot-channel-composer-send-failed");
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
   });
 
@@ -1377,7 +1377,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     await failureShowingThenAnAnswerMoves();
 
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(
       screen.getByTestId("bot-channel-composer-send-failed").textContent,
@@ -1397,7 +1397,7 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
 
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
   });
 
@@ -1590,7 +1590,7 @@ describe("<BotChannelView tiles={null} /> an answer someone else settled with fi
     );
     expect(textOf(channelBox())).toBe("After the train");
     expect(channelMovedLine()).toBe(
-      "You answered in another window first. This answer is in the box, not sent.",
+      "You answered in another window first. This answer is in your message box, not sent.",
     );
     expect(sent).toHaveLength(1);
   });
@@ -1878,7 +1878,7 @@ describe("<BotChannelView tiles={null} /> a moved answer and the signed-in accou
       drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
         block: taken.map(([, draft]) => draft.typed).join("\n"),
         notice:
-          "Tess Teammate answered first. Your answer is in the box, not sent.",
+          "Tess Teammate answered first. Your answer is in your message box, not sent.",
       }));
     });
     expect(
@@ -1923,7 +1923,7 @@ describe("<BotChannelView tiles={null} /> a moved answer and the signed-in accou
       drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
         block: taken.map(([, draft]) => draft.typed).join("\n"),
         notice:
-          "Tess Teammate answered first. Your answer is in the box, not sent.",
+          "Tess Teammate answered first. Your answer is in your message box, not sent.",
       }));
     });
 
@@ -2326,7 +2326,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     expect(
       screen.getByTestId("bot-thread-composer-answers-moved").textContent,
     ).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
     expect(textOf(channelBox())).toBe("");
     expect(sent).toHaveLength(1);
@@ -2346,7 +2346,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
       screen.queryByTestId("bot-thread-composer-answers-moved"),
     ).toBeNull();
     expect(channelMovedLine()).toBe(
-      "Tess Teammate answered first. Your answer is in the box, not sent.",
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
   });
 

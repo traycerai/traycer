@@ -286,16 +286,18 @@ export function questionCardMovedHow(
 }
 
 /** What the person who settled the questions first did, for the box's line. */
-function movedDid(how: QuestionCardMovedHow, them: string): string {
+function movedDid(how: QuestionCardMovedHow, moved: number): string {
   if (how === "card") return "answered the card";
-  if (how === "skipped") return `skipped ${them}`;
+  if (how === "skipped") {
+    return moved === 1 ? "skipped this question" : "skipped these questions";
+  }
   return "answered";
 }
 
 /**
  * What the box says under it once `moved` of the member's answers went
  * there: who settled the questions first, said once, and that the answers
- * are in the box, unsent.
+ * are in the person's message box, unsent.
  */
 export function questionCardMovedLine(
   by: QuestionCardSettlement["by"],
@@ -303,17 +305,18 @@ export function questionCardMovedLine(
   asker: string,
   moved: number,
 ): string {
-  const them = moved === 1 ? "it" : "them";
-  const did = movedDid(how, them);
+  const did = movedDid(how, moved);
   if (by.kind === "person" && by.viewer) {
     const what = moved === 1 ? "This answer is" : "These answers are";
-    return `You ${did} in another window first. ${what} in the box, not sent.`;
+    return `You ${did} in another window first. ${what} in your message box, not sent.`;
   }
   const yours =
     moved === 1
-      ? "Your answer is in the box, not sent."
-      : "Your answers are in the box, not sent.";
-  if (by.kind === "asker") return `${asker} settled ${them} first. ${yours}`;
+      ? "Your answer is in your message box, not sent."
+      : "Your answers are in your message box, not sent.";
+  if (by.kind === "asker") {
+    return `${asker} settled ${moved === 1 ? "it" : "them"} first. ${yours}`;
+  }
   return `${by.name} ${did} first. ${yours}`;
 }
 

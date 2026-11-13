@@ -65,10 +65,10 @@ describe("questionCardMovedBlock", () => {
 });
 
 describe("questionCardMovedLine", () => {
-  const YOURS_ONE = "Your answer is in the box, not sent.";
-  const YOURS_MANY = "Your answers are in the box, not sent.";
-  const THIS = "This answer is in the box, not sent.";
-  const THESE = "These answers are in the box, not sent.";
+  const YOURS_ONE = "Your answer is in your message box, not sent.";
+  const YOURS_MANY = "Your answers are in your message box, not sent.";
+  const THIS = "This answer is in your message box, not sent.";
+  const THESE = "These answers are in your message box, not sent.";
   it.each<{
     name: string;
     by: QuestionCardSettlement["by"];
@@ -95,14 +95,14 @@ describe("questionCardMovedLine", () => {
       by: TEAMMATE,
       how: "skipped",
       moved: 1,
-      line: `Asha skipped it first. ${YOURS_ONE}`,
+      line: `Asha skipped this question first. ${YOURS_ONE}`,
     },
     {
       name: "a teammate's Skip, several moved",
       by: TEAMMATE,
       how: "skipped",
       moved: 2,
-      line: `Asha skipped them first. ${YOURS_MANY}`,
+      line: `Asha skipped these questions first. ${YOURS_MANY}`,
     },
     {
       name: "a teammate's answer to the card that left the moved question out",
@@ -110,6 +110,13 @@ describe("questionCardMovedLine", () => {
       how: "card",
       moved: 1,
       line: `Asha answered the card first. ${YOURS_ONE}`,
+    },
+    {
+      name: "a teammate's answer to the card, several moved",
+      by: TEAMMATE,
+      how: "card",
+      moved: 2,
+      line: `Asha answered the card first. ${YOURS_MANY}`,
     },
     {
       name: "the asker settling one, whatever the way",
@@ -144,7 +151,21 @@ describe("questionCardMovedLine", () => {
       by: VIEWER,
       how: "skipped",
       moved: 1,
-      line: `You skipped it in another window first. ${THIS}`,
+      line: `You skipped this question in another window first. ${THIS}`,
+    },
+    {
+      name: "the viewer's other window skipping several",
+      by: VIEWER,
+      how: "skipped",
+      moved: 2,
+      line: `You skipped these questions in another window first. ${THESE}`,
+    },
+    {
+      name: "the asker settling several that were skipped, which keeps its wording",
+      by: ASKER,
+      how: "skipped",
+      moved: 2,
+      line: `Tracy settled them first. ${YOURS_MANY}`,
     },
     {
       name: "the viewer's other window answering the card",
