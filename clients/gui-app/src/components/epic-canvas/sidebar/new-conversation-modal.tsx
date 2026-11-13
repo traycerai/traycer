@@ -87,6 +87,7 @@ import {
   useComposerFileRoute,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
 import {
   containsPendingFileAttachment,
   settleFileNodeInContent,
@@ -1308,12 +1309,13 @@ export function NewConversationModalBody(props: {
     putFileBlob,
     settleDraft: settleDraftFile,
   });
-  const paste = useComposerHashPaste(
-    editorRef,
-    runnerHost.fileDrops,
+  const pathsReachTarget = useTypedPathsReach(resolvedHostId);
+  const paste = useComposerHashPaste(editorRef, {
+    fileDrops: runnerHost.fileDrops,
     mentionRoots,
     fileRoute,
-  );
+    pathsReachTarget,
+  });
   const {
     ingestPastedComposerImages,
     reingestPendingImages,
