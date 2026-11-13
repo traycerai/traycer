@@ -80,8 +80,11 @@ async function keepAnsweredLook(
   queryClient: QueryClient,
   botId: string,
   look: BotAppearance | null,
+  owned: () => boolean,
 ): Promise<void> {
   await queryClient.cancelQueries(BOT_LIST_READS);
+  // Retired while the reads ended: the lists are no longer this run's to write.
+  if (!owned()) return;
   queryClient.setQueriesData<BotListResponse>(BOT_LIST_READS, (cached) => {
     if (cached === undefined || look === null) return cached;
     return {
@@ -147,7 +150,7 @@ async function sendInOrder(
       if (flights.get(botId) === flight) flights.delete(botId);
       if (!owned()) return;
       if (answer.refusal === null) {
-        await keepAnsweredLook(sender.queryClient, botId, answer.look);
+        await keepAnsweredLook(sender.queryClient, botId, answer.look, owned);
         if (!owned()) return;
       }
       const held = botLookSaveOf(botId);
