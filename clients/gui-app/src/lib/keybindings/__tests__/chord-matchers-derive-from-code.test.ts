@@ -117,6 +117,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 3,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
+  // Left and right arrows step through the images attached together while
+  // their viewer is open; named non-printable keys, not registered chords.
+  "gui-app/src/components/chat/expanded-image-dialog.tsx": 2,
   // Enter and Space activate a folded agent row's `role="button"` text (#2441):
   // a button's own activation keys, named, not a registered chord.
   "gui-app/src/components/chat/queued-message-surface.tsx": 2,

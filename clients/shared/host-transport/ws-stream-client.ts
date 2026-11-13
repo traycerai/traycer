@@ -1101,10 +1101,19 @@ export class WsStreamClient<
       return;
     }
     if (outcome.kind !== "provisioned") {
+      // The attempt marker stays set, so this client asks again only when the
+      // host's reported state changes. A host left like that has no credential
+      // of its own, and this line is the only record of how it got there.
+      console.warn(
+        `[stream] host credential not provisioned; not asking again until the host reports a different state (client=${this.instanceId}, host=${hostId}, state=${state})`,
+      );
       return;
     }
     if (this.closed) {
       // Nothing can deliver it and nothing will collect it later.
+      console.warn(
+        `[stream] dropped a minted host credential, the client closed before delivery (client=${this.instanceId}, host=${hostId})`,
+      );
       return;
     }
     // The access JWS the host verifies on handoff is short-lived, so a
