@@ -10,7 +10,14 @@ import {
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
 import type { ReactElement, ReactNode } from "react";
-import { cleanup, act, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   notifyManager,
@@ -39,7 +46,11 @@ import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-exp
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
-import { hostFailure } from "@/lib/host/test-support/cloud-failure-reads";
+import { createAppQueryClient } from "@/lib/query-client";
+import {
+  heldFailure,
+  hostFailure,
+} from "@/lib/host/test-support/cloud-failure-reads";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { CloudRecoveryDoorbellMount } from "@/providers/cloud-recovery-doorbell-mount";
@@ -175,6 +186,25 @@ function mountRealChannel(args: {
 
 function mountWithDoorbell(): void {
   queryClient = appClientWithoutRetries();
+  mocks.client = hostClientAnswering(script, queryClient);
+  mountRealChannel({
+    queryClient,
+    openThread: null,
+    extra: <CloudRecoveryDoorbellMount />,
+  });
+}
+
+/**
+ * As `mountWithDoorbell`, over the app's own query client with its retry
+ * policy (one retry of a failed host read), the retry delay set to zero.
+ */
+function mountWithDoorbellAndAppRetries(): void {
+  queryClient = createAppQueryClient();
+  const defaults = queryClient.getDefaultOptions();
+  queryClient.setDefaultOptions({
+    ...defaults,
+    queries: { ...defaults.queries, retryDelay: 0 },
+  });
   mocks.client = hostClientAnswering(script, queryClient);
   mountRealChannel({
     queryClient,
@@ -335,5 +365,58 @@ describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
     await refetchRead("bot.thread.list");
 
     expect(await screen.findByTestId("bot-thread-error")).toBeDefined();
+  });
+});
+
+describe("<BotChannelView /> when Retry is pressed while the host still refuses the read", () => {
+  /** What the channel panel says, as one string: its message and its Retry. */
+  const PANEL_TEXT = `${CHANNEL_FAILURE_COPY}Retry`;
+
+  it("shows the loading state while the press is answered, then the same panel, and loads by itself when the host rings", async () => {
+    script.conversationList = () =>
+      Promise.reject(
+        hostFailure("E_CLOUD_UNREACHABLE", "bot.conversation.list"),
+      );
+    mountWithDoorbellAndAppRetries();
+    const panel = await screen.findByTestId("bot-channel-error");
+    expect(panel.textContent).toBe(PANEL_TEXT);
+    await waitFor(() => expect(liveDoorbell()).toBeDefined());
+    const asksBeforeRetry = script.conversationListCalls;
+
+    // The press's own ask is held, so the screen between press and answer can
+    // be looked at; its retry, and the refusal that follows, answer at once.
+    const pressAnswer = heldFailure(
+      hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.conversation.list"),
+    );
+    script.conversationList = () =>
+      script.conversationListCalls === asksBeforeRetry + 1
+        ? pressAnswer.answer().then(() => CHANNEL_LIST)
+        : Promise.reject(
+            hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.conversation.list"),
+          );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    // The press shows work in progress, not a dead button.
+    const loading = await screen.findByTestId("bot-channel-loading");
+    expect(loading.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByTestId("bot-channel-error")).toBeNull();
+
+    pressAnswer.release();
+
+    // The host refused the press and its retry: the same panel, nothing added.
+    const again = await screen.findByTestId("bot-channel-error");
+    expect(again.textContent).toBe(PANEL_TEXT);
+    expect(script.conversationListCalls).toBe(asksBeforeRetry + 2);
+    expect(screen.queryByTestId("bot-channel-loading")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+    ).toBe(false);
+
+    script.conversationList = () => Promise.resolve(CHANNEL_LIST);
+    ringTabHost();
+
+    expect(await screen.findByTestId("bot-channel")).toBeDefined();
+    expect(screen.queryByTestId("bot-channel-error")).toBeNull();
+    expect(screen.queryByTestId("bot-channel-loading")).toBeNull();
   });
 });
