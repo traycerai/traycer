@@ -119,6 +119,20 @@ export function artifactMountsShareSite(
 }
 
 /**
+ * The URL path that names the mount on a served page's site, ahead of the
+ * tree path: `/m/<mountId>` on a site the artifact's mounts share, empty
+ * where the host names the mount. Past it, a URL path on that site is a path
+ * from the tree's root.
+ */
+export function artifactMountPath(pageUrl: string): string {
+  const address = parseArtifactAddress(pageUrl);
+  const origin = /^[^:/?#]+:\/\/[^/?#]+/.exec(pageUrl)?.[0];
+  return address === null || origin === undefined || namesMount(origin)
+    ? ""
+    : `/m/${address.mountId}`;
+}
+
+/**
  * Keeping the folder in the URL lets the browser resolve parent references.
  * On a site the artifact's mounts share, the mount goes in the path.
  */

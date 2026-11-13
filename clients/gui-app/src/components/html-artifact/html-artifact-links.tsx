@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/common/artifact-path";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useArtifactTreeOnlyOpener } from "@/components/epic-canvas/renderers/use-artifact-link-opener";
+import { artifactMountPath } from "@/lib/sandbox/artifact-serving/artifact-address";
 import type { SandboxArtifactLink } from "@/lib/sandbox/bridge-host";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
@@ -54,13 +55,31 @@ const parseUrl = (href: string, base: string | URL | undefined): URL | null => {
 };
 
 /**
+ * A URL path on the page's site, read from the tree's root. The desktop's
+ * site is shared by the artifact's mounts and spells the page's mount ahead
+ * of the tree path (`/m/m1/research/index.html`); a path without it, as a
+ * rooted href resolves there, is from the root already, as it is on a site
+ * whose host names the mount.
+ */
+const fromTreeRoot = (urlPath: string, pageUrl: string): string => {
+  const mountPath = artifactMountPath(pageUrl);
+  return mountPath !== "" &&
+    urlPath.startsWith(mountPath) &&
+    /^(?:[/?#]|$)/u.test(urlPath.slice(mountPath.length))
+    ? urlPath.slice(mountPath.length)
+    : urlPath;
+};
+
+/**
  * The href a page's link is read by. One that names no origin is read as
  * written, `../` and all. One written out in full on the clicked page's own
  * origin is the rooted href it names: an artifact address carries the
- * artifact and mount in its host and the whole tree path in its URL path
- * (`traycer-artifact://artifact-a1--m1/research/index.html`, or on Android
- * `https://artifact-a1--m1.traycer-artifact.invalid/research/index.html`), so
- * cutting `protocol//host` off the href leaves the path from the tree root.
+ * artifact in its host and the tree path in its URL path
+ * (`traycer-artifact://artifact-a1--m1/research/index.html`, on Android
+ * `https://artifact-a1--m1.traycer-artifact.invalid/research/index.html`, on
+ * the desktop `traycer-sandbox://artifact-a1/m/m1/research/index.html`), so
+ * cutting `protocol//host` and the mount off the href leaves the path from
+ * the tree root.
  * The cut is made only where the text begins with exactly the page's own
  * `protocol//host` (or `//host`), then `/`, `?`, `#` or nothing, which ends
  * the authority on every scheme, so the URL parser reads that same origin;
@@ -72,9 +91,13 @@ function hrefFromTreeRoot(href: string, pageUrl: string): string | null {
   const page = parseUrl(pageUrl, undefined);
   if (page === null) return null;
   for (const origin of [`${page.protocol}//${page.host}`, `//${page.host}`]) {
-    const rest = href.slice(origin.length);
-    if (href.startsWith(origin) && /^(?:[/?#]|$)/u.test(rest))
-      return rest.startsWith("/") ? rest : `/${rest}`;
+    if (
+      !href.startsWith(origin) ||
+      !/^(?:[/?#]|$)/u.test(href.slice(origin.length))
+    )
+      continue;
+    const rest = fromTreeRoot(href.slice(origin.length), pageUrl);
+    return rest.startsWith("/") ? rest : `/${rest}`;
   }
   return null;
 }
@@ -106,7 +129,9 @@ function framePathFor(link: SandboxArtifactLink): string | null {
   )
     return null;
   const names: string[] = [];
-  for (const segment of target.pathname.split("/")) {
+  for (const segment of fromTreeRoot(target.pathname, link.pageUrl).split(
+    "/",
+  )) {
     const name = decodeName(segment);
     if (name === null || /[\\/]/u.test(name)) return null;
     names.push(name);

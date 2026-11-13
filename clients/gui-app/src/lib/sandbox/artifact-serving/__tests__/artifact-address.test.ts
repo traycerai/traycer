@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  artifactMountPath,
   buildArtifactAddress,
   newMountId,
   parseArtifactAddress,
@@ -470,6 +471,36 @@ describe("buildArtifactAddress", () => {
       mountId: MOUNT,
       path,
     });
+  });
+});
+
+describe("artifactMountPath", () => {
+  it("is the path that names the mount on a site the artifact's mounts share", () => {
+    expect(
+      artifactMountPath(
+        `traycer-sandbox://artifact-myart123/m/${MOUNT}/site/index.html?tab=2`,
+      ),
+    ).toBe(`/m/${MOUNT}`);
+  });
+
+  it.each<[string, string]>([
+    [
+      "the iOS host names the mount",
+      `${SCHEME}://artifact-myart123--${MOUNT}/site/index.html`,
+    ],
+    [
+      "the Android host names the mount",
+      `${androidOrigin("myart123", MOUNT)}/site/index.html`,
+    ],
+    [
+      // The tree may hold a folder called `m`; under a host that names the
+      // mount it is only that.
+      "a host that names the mount serves a tree path beginning /m/",
+      `traycer-sandbox://artifact-myart123--${MOUNT}/m/${MOUNT}/index.html`,
+    ],
+    ["the URL is no artifact address", "https://example.com/m/abc/x.html"],
+  ])("is empty where %s", (_label, url) => {
+    expect(artifactMountPath(url)).toBe("");
   });
 });
 
