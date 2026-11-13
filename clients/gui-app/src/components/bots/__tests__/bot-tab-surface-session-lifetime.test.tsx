@@ -411,6 +411,7 @@ import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result"
 import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 
 /** The trunk's turn behind a reply in the channel. */
 const REPLY_TURN: BotTurnRef = {
@@ -1571,5 +1572,70 @@ describe("<BotTabSurface /> header on a short viewport under the keyboard", () =
 
     expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(true);
     expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(true);
+  });
+});
+
+describe("<BotTabSurface /> the place store the route reads", () => {
+  function placeOfBot(): {
+    readonly view: string | undefined;
+    readonly threadsShown: boolean;
+    readonly session: unknown;
+    readonly automaticMoves: number;
+  } {
+    const place = useTracyPlaceStore.getState();
+    return {
+      view: place.viewByBotId[BOT_ID],
+      threadsShown: place.threadsShown,
+      session: place.sessionByBotId[BOT_ID],
+      automaticMoves: place.automaticMoves,
+    };
+  }
+
+  it("records a person's choice of Activity, of Threads and of a session, and counts none of them as an automatic move", async () => {
+    const user = userEvent.setup();
+    render(surface());
+
+    await user.click(screen.getByTestId("bot-tab-view-activity"));
+    expect(placeOfBot()).toEqual({
+      view: "activity",
+      threadsShown: false,
+      session: undefined,
+      automaticMoves: 0,
+    });
+
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
+    expect(placeOfBot()).toMatchObject({
+      threadsShown: true,
+      automaticMoves: 0,
+    });
+
+    await user.click(screen.getByTestId("stub-sidebar-own-channel"));
+    await user.click(screen.getByTestId("bot-tab-view-messages"));
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    expect(placeOfBot()).toEqual({
+      view: undefined,
+      threadsShown: false,
+      session: { chatId: "trunk-1", threadId: null },
+      automaticMoves: 0,
+    });
+  });
+
+  it("counts a landing asked of the tab from outside as an automatic move, and the tab moves", () => {
+    useBotTabLandingStore.setState({ byBotId: {} });
+    useBotTabLandingStore.getState().request(BOT_ID, {
+      kind: "chat",
+      chatId: BOT.trunkChatId,
+      messageId: "turn-1",
+      sendPostId: null,
+    });
+    render(surface());
+
+    expect(screen.getByTestId("stub-session")).toBeTruthy();
+    const place = useTracyPlaceStore.getState();
+    expect(place.sessionByBotId[BOT_ID]).toEqual({
+      chatId: BOT.trunkChatId,
+      threadId: null,
+    });
+    expect(place.automaticMoves).toBeGreaterThan(0);
   });
 });

@@ -394,6 +394,7 @@ import {
 } from "@/lib/tab-navigation";
 import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
@@ -680,6 +681,7 @@ function resetStores(): void {
     collapsed: [],
   });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   useBotSurfaceActionsStore.setState({ entries: {} });
   useBotTabLandingStore.setState({ byBotId: {} });

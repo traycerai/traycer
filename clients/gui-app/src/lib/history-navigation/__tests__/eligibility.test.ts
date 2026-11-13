@@ -4,6 +4,7 @@ import {
   isHistoryEntryEligible,
   type HistoryEligibilityState,
 } from "@/lib/history-navigation/eligibility";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 
 function tab(tabId: string, epicId: string): EpicViewTab {
@@ -153,5 +154,69 @@ describe("findEligibleOffset", () => {
         (href) => href.includes("open") || href.includes("current"),
       ),
     ).toBe(-2);
+  });
+});
+
+describe("isHistoryEntryEligible — a bot shown gone", () => {
+  beforeEach(() => {
+    useTracySurfaceStore.setState({ goneBotIds: [] });
+  });
+  afterEach(() => {
+    useTracySurfaceStore.setState({ goneBotIds: [] });
+  });
+
+  it("skips the channel of a bot shown gone, and takes it again once it is not", () => {
+    const canvas = state({}, []);
+    const href = "/bot/bot-gone?view=activity";
+    expect(isHistoryEntryEligible(href, canvas)).toBe(true);
+
+    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone"] });
+    expect(isHistoryEntryEligible(href, canvas)).toBe(false);
+    expect(isHistoryEntryEligible("/bot/bot-gone", canvas)).toBe(false);
+
+    useTracySurfaceStore.setState({ goneBotIds: [] });
+    expect(isHistoryEntryEligible(href, canvas)).toBe(true);
+  });
+
+  it("lands past a gone bot's entries on the nearest eligible one", () => {
+    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone"] });
+    const canvas = state({}, []);
+    const entries = [
+      "/bot/bot-live?view=messages",
+      "/bot/bot-gone?view=messages",
+      "/bot/bot-gone?view=activity",
+      "/bot/bot-live?view=activity",
+    ];
+    expect(
+      findEligibleOffset(entries, 3, -1, (href) =>
+        isHistoryEntryEligible(href, canvas),
+      ),
+    ).toBe(-3);
+  });
+
+  it("answers every other route kind as it did before, whoever is gone", () => {
+    const canvas = state({ t1: tab("t1", "e1"), closed: tab("closed", "e1") }, [
+      "t1",
+    ]);
+    const answers: ReadonlyArray<readonly [string, boolean]> = [
+      ["/", true],
+      ["/home", true],
+      ["/epics", true],
+      ["/epics/e1/t1", true],
+      ["/epics/e1/closed", false],
+      ["/draft/d1", true],
+      ["/draft/new", true],
+      ["/settings/general", true],
+      ["/bot", true],
+      ["/bot/bot-live", true],
+      ["not a route at all", true],
+    ];
+    const eligibleNow = () =>
+      answers.map(([href]) => isHistoryEntryEligible(href, canvas));
+    expect(eligibleNow()).toEqual(answers.map(([, eligible]) => eligible));
+
+    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone", "bot-other"] });
+
+    expect(eligibleNow()).toEqual(answers.map(([, eligible]) => eligible));
   });
 });

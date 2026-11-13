@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isHistoryEntryDead } from "@/lib/history-navigation/liveness";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -295,5 +296,69 @@ describe("isHistoryEntryDead — conservative liveness", () => {
 
   it("never prunes the /draft/new route even with an empty store", () => {
     expect(isHistoryEntryDead("/draft/new")).toBe(false);
+  });
+});
+
+describe("isHistoryEntryDead — a bot shown gone", () => {
+  beforeEach(() => {
+    useTracySurfaceStore.setState({ goneBotIds: [] });
+  });
+  afterEach(() => {
+    useTracySurfaceStore.setState({ goneBotIds: [] });
+  });
+
+  it("keeps a bot's channel until its bot is shown gone, then prunes every entry of it", () => {
+    for (const href of [
+      "/bot/bot-gone",
+      "/bot/bot-gone?view=activity&thread=m-1",
+      "/bot/bot%2Dgone",
+    ]) {
+      expect(isHistoryEntryDead(href)).toBe(false);
+    }
+
+    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone"] });
+
+    for (const href of [
+      "/bot/bot-gone",
+      "/bot/bot-gone?view=activity&thread=m-1",
+      "/bot/bot%2Dgone",
+    ]) {
+      expect(isHistoryEntryDead(href)).toBe(true);
+    }
+  });
+
+  it("keeps the channel of a bot that is not gone, and a deeper path of one that is", () => {
+    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone"] });
+    expect(isHistoryEntryDead("/bot/bot-live?view=activity")).toBe(false);
+    expect(isHistoryEntryDead("/bot/bot-gone/deeper")).toBe(false);
+  });
+
+  it("answers every other route kind as it did before, whoever is gone", () => {
+    useEpicCanvasStore.setState({
+      tabsById: { t1: tab("t1", "e1") },
+      openTabOrder: [],
+    });
+    const answers: ReadonlyArray<readonly [string, boolean]> = [
+      ["/", false],
+      ["/home", false],
+      ["/epics", false],
+      ["/epics/e1/t1", false],
+      ["/epics/e1/tGONE", true],
+      ["/draft/missing-draft-id", true],
+      ["/draft/new", false],
+      ["/settings/general", false],
+      ["/bot", false],
+      ["/bot/bot-live", false],
+      ["not a route at all", false],
+    ];
+    expect(answers.map(([href]) => isHistoryEntryDead(href))).toEqual(
+      answers.map(([, dead]) => dead),
+    );
+
+    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone", "bot-other"] });
+
+    expect(answers.map(([href]) => isHistoryEntryDead(href))).toEqual(
+      answers.map(([, dead]) => dead),
+    );
   });
 });

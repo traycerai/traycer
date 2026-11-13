@@ -25,6 +25,7 @@ import { __resetAgentActivityStoreForTests } from "@/stores/agent-activity-store
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
@@ -295,6 +296,7 @@ export function resetBotTabSurfaceMocks(): void {
   useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST });
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {}, unsentBoxes: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
   mocks.unreadTaskIds.clear();

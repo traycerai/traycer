@@ -75,6 +75,15 @@ import {
   handTracyLandingToChannel,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
+import {
+  tracySessionOf,
+  tracyViewOf,
+  useTracyPlaceStore,
+} from "@/stores/bots/tracy-place-store";
+import {
+  isTracyChannelView,
+  type TracyChannelView,
+} from "@/lib/bots/tracy-place";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
@@ -108,6 +117,7 @@ import {
   BotSessionView,
   type BotOpenSession,
 } from "@/components/bots/bot-session-view";
+import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import {
@@ -148,11 +158,7 @@ import {
 } from "@/components/bots/bot-tab-open-state";
 import { cn } from "@/lib/utils";
 
-type BotTabView = "messages" | "activity";
-
-function isBotTabView(value: string): value is BotTabView {
-  return value === "messages" || value === "activity";
-}
+type BotTabView = TracyChannelView;
 
 /**
  * The Tracy surface (decision 150): one per window, Slack's layout (decision
@@ -237,20 +243,23 @@ function TracySurfaceShell(props: {
 
   // Threads, from the column, in place of the channel; any move to one of
   // the channel's views ends it, and so does selecting a channel.
-  const [threadsShown, setThreadsShown] = useState(false);
-  const [threadsChannel, setThreadsChannel] = useState(botId);
-  if (threadsChannel !== botId) {
-    setThreadsChannel(botId);
-    setThreadsShown(false);
-  }
-  const leaveThreads = useCallback(() => setThreadsShown(false), []);
+  // Threads also takes the place of a session: leaving it shows the channel.
+  const threadsShown = useTracyPlaceStore((state) => state.threadsShown);
+  const leaveThreads = useCallback(
+    () => useTracyPlaceStore.getState().setThreadsShown(false),
+    [],
+  );
   const threadsView = useMemo(
     (): BotThreadsViewState => ({
       shown: threadsShown,
-      onShow: () => setThreadsShown(true),
+      onShow: () => {
+        const place = useTracyPlaceStore.getState();
+        if (botId !== null) place.setSession(botId, null);
+        place.setThreadsShown(true);
+      },
       onLeave: leaveThreads,
     }),
-    [leaveThreads, threadsShown],
+    [botId, leaveThreads, threadsShown],
   );
 
   const { level2, tiles, onRailDrawn } = useSurfaceTileForm();
@@ -466,6 +475,7 @@ function useTracyChannelUpkeep(input: {
   useEffect(() => {
     if (listed === null) return;
     const listedIds = new Set(listed.map((bot) => bot.botId));
+    useTracySurfaceStore.getState().settleListedBots(listedIds);
     const seen = seenListedRef.current;
     for (const kept of new Set([...visitedBotIds, ...draftBotIds])) {
       if (listedIds.has(kept)) {
@@ -720,13 +730,15 @@ function BotTabBody(props: {
     enabled: true,
   });
   const client = useTabHostClient();
-  const [view, setView] = useState<BotTabView>("messages");
+  const view = useTracyPlaceStore((state) =>
+    tracyViewOf(state.viewByBotId, botId),
+  );
   const changeView = useCallback(
     (next: BotTabView) => {
-      setView(next);
+      useTracyPlaceStore.getState().setView(botId, next);
       onLeaveThreads();
     },
-    [onLeaveThreads],
+    [botId, onLeaveThreads],
   );
 
   // Open once per channel - this body is keyed by its bot - and again on
@@ -979,9 +991,8 @@ function useChannelSearchEntry(args: {
  * way back says it goes.
  */
 function useBotTabSession(args: {
+  readonly botId: string;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
-  /** The shell's Threads shows in place of the channel's views. */
-  readonly threadsShown: boolean;
   readonly onViewChange: (view: BotTabView) => void;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
 }): {
@@ -995,45 +1006,65 @@ function useBotTabSession(args: {
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
 } {
-  const { threads, threadsShown, onViewChange, setOpenThread } = args;
+  const { botId, threads, onViewChange, setOpenThread } = args;
+  // Which session shows is the surface's place, kept in its store; where it
+  // lands is this visit's alone, and holds only for the session it was
+  // opened on: a session a step back or forward shows opens where it opens.
+  const shownSession = useTracyPlaceStore((state) =>
+    tracySessionOf(state.sessionByBotId, botId),
+  );
   const [shown, setShown] = useState<{
-    readonly session: BotOpenSession | null;
+    readonly sessionLanding: {
+      readonly chatId: string;
+      readonly landOn: BotTranscriptLanding;
+    } | null;
     readonly channelLanding: BotChannelLanding | null;
     readonly visits: number;
-  }>({ session: null, channelLanding: null, visits: 0 });
-  const [threadsSeen, setThreadsSeen] = useState(threadsShown);
-  if (threadsSeen !== threadsShown) {
-    setThreadsSeen(threadsShown);
-    if (threadsShown) setShown({ ...shown, session: null });
-  }
-  const openSession = useCallback<BotSessionOpen>((target) => {
-    setShown((previous) => {
-      const visit = previous.visits + 1;
-      return {
-        session: {
-          chatId: target.chatId,
-          threadId: target.threadId,
-          landOn:
-            target.messageId === null
+  }>({ sessionLanding: null, channelLanding: null, visits: 0 });
+  const session = useMemo(
+    (): BotOpenSession | null =>
+      shownSession === null
+        ? null
+        : {
+            chatId: shownSession.chatId,
+            threadId: shownSession.threadId,
+            landOn:
+              shown.sessionLanding?.chatId === shownSession.chatId
+                ? shown.sessionLanding.landOn
+                : null,
+          },
+    [shown.sessionLanding, shownSession],
+  );
+  const openSession = useCallback<BotSessionOpen>(
+    (target) => {
+      const { chatId, messageId } = target;
+      setShown((previous) => {
+        const visit = previous.visits + 1;
+        return {
+          sessionLanding:
+            messageId === null
               ? null
               : {
-                  messageId: target.messageId,
-                  sendPostId: target.sendPostId,
-                  visit,
+                  chatId,
+                  landOn: { messageId, sendPostId: target.sendPostId, visit },
                 },
-        },
-        channelLanding: null,
-        visits: visit,
-      };
-    });
-  }, []);
+          channelLanding: null,
+          visits: visit,
+        };
+      });
+      useTracyPlaceStore
+        .getState()
+        .setSession(botId, { chatId, threadId: target.threadId });
+    },
+    [botId],
+  );
   const openTurn = useCallback<BotTurnOpen>(
     (ref, sendPostId) => openSession(sessionTargetOfTurn(ref, sendPostId)),
     [openSession],
   );
   const closeSession = useCallback(
-    () => setShown((previous) => ({ ...previous, session: null })),
-    [],
+    () => useTracyPlaceStore.getState().setSession(botId, null),
+    [botId],
   );
   // The channel shows, landed on a message of it or of the thread beside it.
   const showLanded = useCallback(
@@ -1041,14 +1072,15 @@ function useBotTabSession(args: {
       setShown((previous) => {
         const visit = previous.visits + 1;
         return {
-          session: null,
+          sessionLanding: null,
           channelLanding: landOn === null ? null : { ...landOn, visit },
           visits: visit,
         };
       });
+      useTracyPlaceStore.getState().setSession(botId, null);
       onViewChange("messages");
     },
-    [onViewChange],
+    [botId, onViewChange],
   );
   // A row of the channel shows with nothing beside it: a thread left open
   // there is not what was asked for. Back to the channel (`null`) keeps it.
@@ -1118,7 +1150,7 @@ function useBotTabSession(args: {
     [setOpenThread, showLanded, threads],
   );
   return {
-    session: shown.session,
+    session,
     channelLanding: shown.channelLanding,
     openSession,
     openTurn,
@@ -1221,7 +1253,24 @@ function useSpendTabLanding(args: {
 }): void {
   const { botId, channelChatId, trunkChatId, threads } = args;
   const { threadsFetching, threadsFailed } = args;
-  const { landChannel, showThread, openSession, onViewChange, place } = args;
+  const { openSession, onViewChange, place } = args;
+  const { landChannel: landOnChannel, showThread: showLandedThread } = args;
+  // Where a landing puts the tab is nobody's own move: the route records it
+  // over the entry the opener made, so one step back leaves it.
+  const landChannel = useCallback(
+    (messageId: string | null) => {
+      useTracyPlaceStore.getState().markAutomaticMove();
+      landOnChannel(messageId);
+    },
+    [landOnChannel],
+  );
+  const showThread = useCallback(
+    (threadId: string, messageId: string | null) => {
+      useTracyPlaceStore.getState().markAutomaticMove();
+      showLandedThread(threadId, messageId);
+    },
+    [showLandedThread],
+  );
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
@@ -1265,6 +1314,7 @@ function useSpendTabLanding(args: {
       // Threads shows in place of a session, so leave it, onto the channel
       // the session's Back returns to; a channel or thread landing leaves it
       // the same way through `landChannel` and `showThread`.
+      useTracyPlaceStore.getState().markAutomaticMove();
       onViewChange("messages");
       openSession({
         chatId,
@@ -1473,7 +1523,7 @@ function BotTabContent(props: {
     showChannel,
     landChannel,
     showThread,
-  } = useBotTabSession({ threads, threadsShown, onViewChange, setOpenThread });
+  } = useBotTabSession({ botId, threads, onViewChange, setOpenThread });
   // Threads is the shell's, shown in place of the channel: a move too.
   const place = useMemo(
     (): BotTabPlace => ({
@@ -1578,7 +1628,7 @@ function BotTabContent(props: {
                 <Tabs
                   value={view}
                   onValueChange={(next) => {
-                    if (isBotTabView(next)) changeView(next);
+                    if (isTracyChannelView(next)) changeView(next);
                   }}
                   className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
                 >
