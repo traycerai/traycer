@@ -11,6 +11,7 @@ import type { FakeStreamClient } from "@traycer-clients/shared/host-transport/__
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   ScriptedRead,
+  heldAnswer,
   heldFailure,
   hostFailure,
   hostReadKey,
@@ -103,6 +104,33 @@ async function failedRead(
   const created = made.at(0);
   if (created === undefined) throw new Error("read was not created");
   await waitFor(() => expect(created.state.status).toBe("error"));
+  return created;
+}
+
+/** A read of `hostId` that holds data ("first") and whose refetch then failed with `code`. */
+async function dataHoldingFailedRead(
+  hostId: string,
+  code: Parameters<typeof hostFailure>[0],
+): Promise<ScriptedRead> {
+  const made: ScriptedRead[] = [];
+  act(() => {
+    made.push(
+      new ScriptedRead(
+        queryClient,
+        hostReadKey(hostId, "bot.thread.list", "held-data"),
+        resolves("first"),
+      ),
+    );
+  });
+  const created = made.at(0);
+  if (created === undefined) throw new Error("read was not created");
+  await waitFor(() => expect(created.state.data).toBe("first"));
+  created.answer = rejects(hostFailure(code, "bot.thread.list"));
+  await act(async () => {
+    await queryClient.refetchQueries({ queryKey: created.queryKey });
+  });
+  expect(created.state.status).toBe("error");
+  expect(created.state.data).toBe("first");
   return created;
 }
 
@@ -259,6 +287,27 @@ describe("<CloudRecoveryDoorbellMount />", () => {
     await waitFor(() => expect(read.state.status).toBe("success"));
     await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(0));
     expect(doorbellsOf(A)).toHaveLength(1);
+  });
+
+  it("re-asks a stranded read that holds data once for two recovered frames back to back", async () => {
+    mount();
+    const read = await dataHoldingFailedRead(A, "E_CLOUD_REQUEST_REFUSED");
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(1));
+    const reAsk = heldAnswer("recovered");
+    read.answer = reAsk.answer;
+    const session = liveDoorbellsOf(A).at(-1);
+    if (session === undefined) throw new Error("no doorbell open to host-A");
+
+    act(() => {
+      session.emit({ kind: "recovered", hasBinaryPayload: false }, null);
+      session.emit({ kind: "recovered", hasBinaryPayload: false }, null);
+    });
+    await waitFor(() => expect(read.calls).toBeGreaterThan(2));
+    reAsk.release();
+    await waitFor(() => expect(read.state.data).toBe("recovered"));
+    await flushCacheNotifications();
+
+    expect(read.calls).toBe(3);
   });
 
   it("keeps the subscription while a read is still failing after the ring", async () => {

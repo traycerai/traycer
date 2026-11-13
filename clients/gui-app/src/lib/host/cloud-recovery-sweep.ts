@@ -20,38 +20,53 @@ export function isTransientlyFailedRead(query: Query): boolean {
   );
 }
 
+/** Per client, the reads a sweep has chosen and not finished re-asking. */
+const reAsking = new WeakMap<QueryClient, Set<Query>>();
+
 /**
  * Asks `hostId` again for every read it answered with a transient cloud
  * failure, once. Run when that host's doorbell rings.
  *
  * Bounded by the cache, not by time: one ring re-asks each such read at most
- * once, and skips one whose re-ask is still in flight, so a second ring
- * during the first's re-asks adds none. Only reads with an observer refetch;
- * one with none is marked stale and asks on its next mount. Mutations live in
- * the mutation cache and are never re-sent. Another host's reads are outside
- * the key scope, so a ring never re-asks a read its host did not answer.
+ * once, and a later ring skips a read while a sweep's re-ask of it is pending
+ * or a refetch from elsewhere is in flight and has not failed. Only reads with
+ * an observer refetch; one with none is marked stale and asks on its next
+ * mount. Mutations live in the mutation cache and are never re-sent. Another
+ * host's reads are outside the key scope, so a ring never re-asks a read its
+ * host did not answer.
  *
- * The reads are chosen when it is called. It resolves once their re-asks
- * have answered, and never rejects.
+ * The reads are chosen, and claimed against later sweeps, synchronously when
+ * it is called: a ring that arrives before this sweep's cancel resumes cannot
+ * choose them again and restart their re-ask. It resolves once their re-asks
+ * have answered, releasing them, and never rejects.
  */
 export async function sweepTransientCloudFailures(
   client: QueryClient,
   hostId: string,
 ): Promise<void> {
   const queryKey = queryKeys.hostScope(hostId);
+  const busy = reAsking.get(client) ?? new Set<Query>();
+  reAsking.set(client, busy);
   const stranded = new Set(
     client
       .getQueryCache()
       .findAll({ queryKey })
       .filter(
         (query) =>
-          isTransientlyFailedRead(query) && !attemptInFlightHasNotFailed(query),
+          !busy.has(query) &&
+          isTransientlyFailedRead(query) &&
+          !attemptInFlightHasNotFailed(query),
       ),
   );
   if (stranded.size === 0) return;
+  for (const query of stranded) busy.add(query);
   const predicate = (query: Query): boolean => stranded.has(query);
-  // A read in TanStack's retry backoff is still `fetching`; invalidating it
-  // alone would only mark it stale. Cancel first, as the recovery sweep does.
-  await client.cancelQueries({ queryKey, predicate });
-  await client.invalidateQueries({ queryKey, predicate });
+  try {
+    // A read in TanStack's retry backoff is still `fetching`; invalidating it
+    // alone would only mark it stale. Cancel first, as the recovery sweep does.
+    await client.cancelQueries({ queryKey, predicate });
+    await client.invalidateQueries({ queryKey, predicate });
+  } finally {
+    for (const query of stranded) busy.delete(query);
+  }
 }
