@@ -678,9 +678,7 @@ describe("Reply on a row of a bot's channel", () => {
     addBotRow("bot-two-lines", "First line\nSecond line");
     render(<MountedChannel />);
 
-    await userEvent
-      .setup()
-      .click(within(rowOf("bot-two-lines")).getByTestId("bot-message-reply"));
+    await chooseReplyOn("bot-two-lines");
 
     expect(
       screen.getByTestId("bot-channel-composer-reply-line").textContent,
@@ -702,9 +700,7 @@ describe("Reply on a row of a bot's channel", () => {
     addBotRow("bot-long-line", line);
     render(<MountedChannel />);
 
-    await userEvent
-      .setup()
-      .click(within(rowOf("bot-long-line")).getByTestId("bot-message-reply"));
+    await chooseReplyOn("bot-long-line");
 
     expect(
       screen.getByTestId("bot-channel-composer-reply-line").textContent,
