@@ -31,7 +31,7 @@ import {
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
 import { readComposerHostIdSnapshot } from "@/lib/composer/composer-host-snapshot";
-import { newDraftRunSettings } from "@/lib/composer/empty-terminal-default";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -142,6 +142,14 @@ export interface LandingDraftTab {
    * pick of its own, so the draft's Send goes there even after a reload.
    */
   readonly returnedSandbox: StoredReturnedSandbox | null;
+  /**
+   * Nobody chose this draft's account: its settings came from the host's
+   * last-run settings, and its Terminal login starts on the default account
+   * (`useSignedOutTerminalDefaultAccount`) each time it is shown. Local to
+   * this device: a row that arrives without it, from the host or another
+   * window, counts as chosen and never moves.
+   */
+  readonly accountFollowsDefault: boolean;
 }
 
 export type LandingDraftAdoption =
@@ -297,6 +305,11 @@ interface LandingDraftStoreState {
   setDraftSelection: (id: string, selection: DraftSelection | null) => void;
   /** Update the run settings of a specific draft. No-op when id not found. */
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
+  /**
+   * Record whether nobody chose the draft's account
+   * (`LandingDraftTab.accountFollowsDefault`). Local: nothing is published.
+   */
+  setDraftAccountFollowsDefault: (id: string, follows: boolean) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
   /**
@@ -457,6 +470,7 @@ function readProjectedDrafts(
         ...mirrorFieldsFromExisting(draft.id),
         closed: draft.closed === true,
         returnedSandbox: parseReturnedSandbox(draft.returnedSandbox),
+        accountFollowsDefault: draft.accountFollowsDefault === true,
       },
     ];
   });
@@ -548,6 +562,7 @@ function parsePersistedLandingDrafts(
           ...parseLandingMirrorFields(raw),
           closed: raw.closed === true,
           returnedSandbox: parseReturnedSandbox(raw.returnedSandbox),
+          accountFollowsDefault: raw.accountFollowsDefault === true,
         },
       ];
     }),
@@ -718,12 +733,16 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           selection: null,
           lastTouchedAt: Date.now(),
           settings: copyChatRunSettings(
-            settings ?? newDraftRunSettings(hostId),
+            settings ??
+              useComposerRunSettingsStore
+                .getState()
+                .getGlobalRunSettings(hostId),
           ),
           // Seed from the global last-used mode; the draft owns it from here.
           composerMode: useSettingsStore.getState().composerMode,
           workspace: readLandingDraftWorkspaceSnapshotForHost(hostId),
           ...freshLandingMirrorState(),
+          accountFollowsDefault: settings === null,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -736,7 +755,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         if (hostId === null) return false;
         const draft = get().drafts.find((d) => d.id === id);
         if (draft === undefined || !isUnseededLandingDraft(draft)) return false;
-        const settings = copyChatRunSettings(newDraftRunSettings(hostId));
+        const settings = copyChatRunSettings(
+          useComposerRunSettingsStore.getState().getGlobalRunSettings(hostId),
+        );
         const workspace = readLandingDraftWorkspaceSnapshotForHost(hostId);
         if (settings === null && workspace.folders.length === 0) return false;
         // `generation` from the row as read above: the workspace update bumps
@@ -745,7 +766,12 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           drafts: updateDraftWorkspace(state, id, () => workspace).drafts.map(
             (d) =>
               d.id === id
-                ? { ...d, settings, generation: draft.generation + 1 }
+                ? {
+                    ...d,
+                    settings,
+                    accountFollowsDefault: true,
+                    generation: draft.generation + 1,
+                  }
                 : d,
           ),
         }));
@@ -778,6 +804,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // (or re-mints) its local row from there.
           supersedes: sourceId,
           returnedSandbox: source.returnedSandbox,
+          accountFollowsDefault: source.accountFollowsDefault,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -1043,6 +1070,18 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ),
         }));
         notifyDraftLocalEdit(id);
+      },
+
+      setDraftAccountFollowsDefault: (id, follows) => {
+        const draft = get().drafts.find((d) => d.id === id);
+        if (draft === undefined || draft.accountFollowsDefault === follows) {
+          return;
+        }
+        set((state) => ({
+          drafts: state.drafts.map((d) =>
+            d.id === id ? { ...d, accountFollowsDefault: follows } : d,
+          ),
+        }));
       },
 
       setDraftReturnedSandbox: (id, given) => {
@@ -1327,6 +1366,7 @@ function projectLandingDraftForDesktop(
     ...(draft.returnedSandbox === null
       ? {}
       : { returnedSandbox: returnedSandboxToJson(draft.returnedSandbox) }),
+    ...(draft.accountFollowsDefault ? { accountFollowsDefault: true } : {}),
   };
 }
 
@@ -1782,6 +1822,7 @@ export function freshLandingMirrorState(): Pick<
   | "confirmedHostBlobHashes"
   | "closed"
   | "returnedSandbox"
+  | "accountFollowsDefault"
 > {
   return {
     adoption: UNADOPTED_LANDING_DRAFT,
@@ -1795,6 +1836,7 @@ export function freshLandingMirrorState(): Pick<
     confirmedHostBlobHashes: [],
     closed: false,
     returnedSandbox: null,
+    accountFollowsDefault: false,
   };
 }
 
@@ -2071,6 +2113,24 @@ function keptReturnedSandbox(
 }
 
 /**
+ * The echo of this device's own write keeps the row's account provenance; an
+ * account another device set is somebody's choice.
+ */
+function keptAccountFollowsDefault(
+  existing: LandingDraftTab | undefined,
+  settings: ChatRunSettings | null,
+): boolean {
+  return (
+    existing !== undefined &&
+    existing.accountFollowsDefault &&
+    settings !== null &&
+    existing.settings !== null &&
+    settings.harnessId === existing.settings.harnessId &&
+    settings.profileId === existing.settings.profileId
+  );
+}
+
+/**
  * A host document's frozen settings carry no Ultracode request; the row's own
  * same-draft Claude request survives the echo.
  */
@@ -2122,12 +2182,13 @@ export function applyLandingHostDocument(
     );
     return true;
   }
+  const settings = echoedRunSettings(document.portable.runSettings, existing);
   const next: LandingDraftTab = {
     id: document.draftId,
     content,
     selection: document.portable.selection,
     lastTouchedAt: document.lastTouchedAt,
-    settings: echoedRunSettings(document.portable.runSettings, existing),
+    settings,
     composerMode: document.portable.composerMode,
     workspace:
       document.workspace === null
@@ -2151,6 +2212,7 @@ export function applyLandingHostDocument(
       existing,
     ),
     returnedSandbox: keptReturnedSandbox(existing),
+    accountFollowsDefault: keptAccountFollowsDefault(existing, settings),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);

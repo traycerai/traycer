@@ -826,7 +826,7 @@ describe("task create: input errors name the flag, never echo the value", () => 
   });
 });
 
-describe("task create: an empty Terminal login", () => {
+describe("task create: a signed-out Terminal login", () => {
   const signedIn = {
     providerId: "claude-code",
     auth: { status: "unauthenticated" },

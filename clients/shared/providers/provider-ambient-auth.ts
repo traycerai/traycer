@@ -2,7 +2,6 @@ import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import {
   isProfileEnabled,
   type ProviderAuthStatus,
-  type ProviderId,
   type ProviderMutationCliStateV21,
   type ProviderProfileKind,
 } from "@traycer/protocol/host/provider-schemas";
@@ -190,20 +189,7 @@ export function isProviderAmbientAuthenticated(
   );
 }
 
-/**
- * Providers whose Terminal-login `unauthenticated` is a definite "this login
- * holds no credential": claude-code (its own `claude auth status` says
- * `loggedIn: false`), codex (no account, and the credential file store holds
- * no usable credential) and antigravity (its settings name no usable sign-in).
- * Grok is left out: the host's reader of its credential sources is knowingly
- * incomplete, so its signed-out verdict proves nothing. Mirrors the host's own
- * list for `traycer_create_agent`.
- */
-const DEFINITE_TERMINAL_SIGN_OUT_PROVIDERS: ReadonlySet<ProviderId> =
-  new Set<ProviderId>(["claude-code", "codex", "antigravity"]);
-
 type DefaultAccountSources = {
-  readonly providerId: ProviderId;
   readonly auth: { readonly status: ProviderAuthStatus };
   readonly profiles: readonly {
     readonly profileId: string;
@@ -216,17 +202,15 @@ type DefaultAccountSources = {
 /**
  * The account a new chat or agent starts on when nobody chose one and the
  * default would be the Terminal login: the provider's one enabled, signed-in
- * profile when the Terminal login definitely holds no credential, else `null`
- * (the Terminal login, as before). Two signed-in profiles, none, a signed-in
- * Terminal login and an `unknown` or `unavailable` Terminal verdict all stay
- * `null`.
+ * profile when the Terminal login shows as signed out
+ * (`isProviderAmbientSignedOut`: its store is empty, its login expired or a
+ * provider refused it), else `null` (the Terminal login, as before). Two
+ * signed-in profiles, none, a signed-in Terminal login and an `unknown` or
+ * `unavailable` Terminal verdict all stay `null`.
  */
-export function soleSignedInProfileForEmptyTerminal(
+export function soleSignedInProfileForSignedOutTerminal(
   provider: DefaultAccountSources,
 ): string | null {
-  if (!DEFINITE_TERMINAL_SIGN_OUT_PROVIDERS.has(provider.providerId)) {
-    return null;
-  }
   if (!isProviderAmbientSignedOut(provider)) return null;
   const signedIn = provider.profiles.filter(
     (profile) =>

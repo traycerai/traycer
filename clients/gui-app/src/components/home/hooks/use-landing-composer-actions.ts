@@ -73,7 +73,6 @@ import {
 } from "@/stores/home/draft-runtime-registry";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
-import { newDraftRunSettings } from "@/lib/composer/empty-terminal-default";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   markEpicCreatedThisSession,
@@ -190,6 +189,14 @@ export interface LandingComposerSubmitArgs {
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
     readonly ultracode: boolean;
+    /** A person chose the account (`ComposerToolbarState.accountChosen`). */
+    readonly accountChosen: boolean;
+    /**
+     * `selection` shows a default account (`showsDefaultAccount`), which is
+     * nobody's choice: the last-run settings record the Terminal login it
+     * stands in for.
+     */
+    readonly showsDefaultAccount: boolean;
   };
   /**
    * The owner known to the caller at submit; `null` is Personal. A pending
@@ -809,12 +816,15 @@ export function useLandingComposerActions(
       // until this exact runtime's create reports success. Last-run memory is
       // keyed by the host the chat is created on (`activeHostId`, resolved
       // and null-guarded above).
+      const lastRunSettings = toolbar.showsDefaultAccount
+        ? { ...settings, profileId: null }
+        : settings;
       useComposerRunSettingsStore
         .getState()
-        .setGlobalRunSettings(activeHostId, settings, now);
+        .setGlobalRunSettings(activeHostId, lastRunSettings, now);
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(epicId, activeHostId, settings, now);
+        .setEpicRunSettings(epicId, activeHostId, lastRunSettings, now);
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
       useInitialChatHandoffStore.getState().register({
         hostId: activeHostId,
@@ -1311,6 +1321,7 @@ export function useLandingComposerActions(
         args.draftId,
         editorContent,
         hostId,
+        args.toolbar.accountChosen,
       );
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
       if (runtime === null) return false;
@@ -1972,14 +1983,20 @@ function ensureSubmissionDraft(
   draftId: string | null,
   content: JsonContent,
   hostId: string,
+  accountChosen: boolean,
 ): string {
   if (draftId !== null) return draftId;
   const createdDraftId = useLandingDraftStore.getState().createDraft(
-    // The placement host is the same one whose workspace is restored below;
-    // a pinned pristine composer must not seed either setting from the
-    // app-wide active host.
-    newDraftRunSettings(hostId),
+    useComposerRunSettingsStore
+      .getState()
+      // The placement host is the same one whose workspace is restored below;
+      // a pinned pristine composer must not seed either setting from the
+      // app-wide active host.
+      .getGlobalRunSettings(hostId),
   );
+  useLandingDraftStore
+    .getState()
+    .setDraftAccountFollowsDefault(createdDraftId, !accountChosen);
   useLandingDraftStore
     .getState()
     .restoreDraftWorkspaceForHost(createdDraftId, hostId);

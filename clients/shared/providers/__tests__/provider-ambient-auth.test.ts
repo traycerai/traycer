@@ -4,7 +4,7 @@ import type {
   ProviderId,
   ProviderProfileKind,
 } from "@traycer/protocol/host/provider-schemas";
-import { soleSignedInProfileForEmptyTerminal } from "../provider-ambient-auth";
+import { soleSignedInProfileForSignedOutTerminal } from "../provider-ambient-auth";
 
 function provider(input: {
   readonly providerId: ProviderId;
@@ -52,12 +52,12 @@ const ONE_SIGNED_IN = [
   },
 ];
 
-describe("soleSignedInProfileForEmptyTerminal", () => {
-  it.each(["claude-code", "codex", "antigravity"] as const)(
-    "names the one signed-in profile when %s's Terminal login is empty",
+describe("soleSignedInProfileForSignedOutTerminal", () => {
+  it.each(["claude-code", "codex", "antigravity", "grok"] as const)(
+    "names the one signed-in profile when %s's Terminal login is signed out",
     (providerId) => {
       expect(
-        soleSignedInProfileForEmptyTerminal(
+        soleSignedInProfileForSignedOutTerminal(
           provider({
             providerId,
             ambient: "unauthenticated",
@@ -70,7 +70,7 @@ describe("soleSignedInProfileForEmptyTerminal", () => {
 
   it("stays on the Terminal login when two profiles are signed in", () => {
     expect(
-      soleSignedInProfileForEmptyTerminal(
+      soleSignedInProfileForSignedOutTerminal(
         provider({
           providerId: "claude-code",
           ambient: "unauthenticated",
@@ -91,7 +91,7 @@ describe("soleSignedInProfileForEmptyTerminal", () => {
     "stays on the Terminal login when its verdict is %s",
     (ambient) => {
       expect(
-        soleSignedInProfileForEmptyTerminal(
+        soleSignedInProfileForSignedOutTerminal(
           provider({
             providerId: "claude-code",
             ambient,
@@ -102,21 +102,9 @@ describe("soleSignedInProfileForEmptyTerminal", () => {
     },
   );
 
-  it("stays on the Terminal login for grok", () => {
-    expect(
-      soleSignedInProfileForEmptyTerminal(
-        provider({
-          providerId: "grok",
-          ambient: "unauthenticated",
-          managed: ONE_SIGNED_IN,
-        }),
-      ),
-    ).toBeNull();
-  });
-
   it("does not count a disabled signed-in profile", () => {
     expect(
-      soleSignedInProfileForEmptyTerminal(
+      soleSignedInProfileForSignedOutTerminal(
         provider({
           providerId: "claude-code",
           ambient: "unauthenticated",
@@ -134,7 +122,7 @@ describe("soleSignedInProfileForEmptyTerminal", () => {
 
   it("names the one enabled signed-in profile when another signed-in profile is disabled", () => {
     expect(
-      soleSignedInProfileForEmptyTerminal(
+      soleSignedInProfileForSignedOutTerminal(
         provider({
           providerId: "codex",
           ambient: "unauthenticated",

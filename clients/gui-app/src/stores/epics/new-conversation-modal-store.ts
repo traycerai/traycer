@@ -94,6 +94,13 @@ export interface NewConversationModalDraftPatch {
    * this device, like the stage it restores; absent on any other draft.
    */
   readonly returnedSandbox?: StoredReturnedSandbox;
+  /**
+   * Nobody chose this draft's account: its settings are edits made while the
+   * composer showed a default account in place of an unchosen Terminal login
+   * (`useSignedOutTerminalDefaultAccount`). Local to this device; a draft
+   * without it whose settings are set counts as chosen and never moves.
+   */
+  readonly accountFollowsDefault?: true;
 }
 
 /**
@@ -156,6 +163,12 @@ interface NewConversationModalStore {
    * re-dirty the row the collector is about to mark clean and loop it forever.
    */
   readonly setNewChatOwnerHostId: (epicId: string, hostId: string) => void;
+  /**
+   * Record whether nobody chose the draft's account
+   * (`accountFollowsDefault`). Local and non-dirtying, like the title
+   * setter: nothing is published. No-op when the epic has no patch.
+   */
+  readonly setAccountFollowsDefault: (epicId: string, follows: boolean) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
   readonly addResolvedFolders: (
@@ -311,6 +324,26 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             draftPatchesByEpicId: {
               ...state.draftPatchesByEpicId,
               [epicId]: { ...current, epicTitle },
+            },
+          };
+        });
+      },
+      setAccountFollowsDefault: (epicId, follows) => {
+        set((state) => {
+          const current = state.draftPatchesByEpicId[epicId];
+          if (
+            current === undefined ||
+            (current.accountFollowsDefault === true) === follows
+          ) {
+            return state;
+          }
+          const { accountFollowsDefault: _previous, ...rest } = current;
+          return {
+            draftPatchesByEpicId: {
+              ...state.draftPatchesByEpicId,
+              [epicId]: follows
+                ? { ...rest, accountFollowsDefault: true }
+                : rest,
             },
           };
         });
@@ -503,8 +536,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             ownerHostId: parseNullableId(raw.ownerHostId),
           };
           const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
-          draftPatchesByEpicId[epicId] =
+          const withSandbox =
             returnedSandbox === null ? patch : { ...patch, returnedSandbox };
+          draftPatchesByEpicId[epicId] =
+            raw.accountFollowsDefault === true
+              ? { ...withSandbox, accountFollowsDefault: true }
+              : withSandbox;
         }
         return { ...currentState, draftPatchesByEpicId };
       },
@@ -674,17 +711,21 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
         },
       };
     }
+    const settings = runSettingsFromDraftEcho(
+      document.portable.runSettings,
+      current.draftId === document.draftId ? current.settings : null,
+    );
     return {
       draftPatchesByEpicId: {
         ...state.draftPatchesByEpicId,
         [epicId]: {
-          ...dropReturnedSandboxOnNewLine(current, document.draftId),
+          ...keptAccountProvenance(
+            dropReturnedSandboxOnNewLine(current, document.draftId),
+            current.draftId === document.draftId ? settings : null,
+          ),
           content: document.portable.content,
           selection: document.portable.selection,
-          settings: runSettingsFromDraftEcho(
-            document.portable.runSettings,
-            current.draftId === document.draftId ? current.settings : null,
-          ),
+          settings,
           composerMode: document.portable.composerMode,
           workspace: document.workspace,
           draftId: document.draftId,
@@ -699,6 +740,28 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
     };
   });
   return contentLands;
+}
+
+/**
+ * The echo of this device's own settings keeps the draft's account
+ * provenance; an account another device set, or another line, is somebody's
+ * choice.
+ */
+function keptAccountProvenance(
+  current: NewConversationModalDraftPatch,
+  settings: ChatRunSettings | null,
+): NewConversationModalDraftPatch {
+  if (current.accountFollowsDefault !== true) return current;
+  if (
+    settings !== null &&
+    current.settings !== null &&
+    settings.harnessId === current.settings.harnessId &&
+    settings.profileId === current.settings.profileId
+  ) {
+    return current;
+  }
+  const { accountFollowsDefault: _dropped, ...rest } = current;
+  return rest;
 }
 
 /** Another draft line's text does not inherit this line's destination. */

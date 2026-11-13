@@ -6,7 +6,7 @@ import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 import { plainTextPromptContent } from "@traycer-clients/shared/epic/plain-text-content";
-import { soleSignedInProfileForEmptyTerminal } from "../../../shared/providers/provider-ambient-auth";
+import { soleSignedInProfileForSignedOutTerminal } from "../../../shared/providers/provider-ambient-auth";
 import { providerIdFromHarnessOrProviderName } from "../../../shared/providers/provider-harness-ids";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -368,7 +368,7 @@ function fingerprintOf(input: TaskCreateInput): string {
 /**
  * With no `--profile`, nobody chose the account, so it is the host's default:
  * its Terminal login, or that provider's one signed-in profile when the
- * Terminal login definitely holds no credential. `--profile ambient` is the
+ * Terminal login shows as signed out. `--profile ambient` is the
  * Terminal login as chosen and is never moved. A list that cannot be read
  * leaves the Terminal login. Applied to what is sent, never to the
  * fingerprint, which records what the person asked for.
@@ -401,7 +401,7 @@ async function withDefaultAccount(
   const profileId =
     provider === undefined
       ? null
-      : soleSignedInProfileForEmptyTerminal(provider);
+      : soleSignedInProfileForSignedOutTerminal(provider);
   return profileId === null
     ? input
     : { ...input, settings: { ...input.settings, profileId } };

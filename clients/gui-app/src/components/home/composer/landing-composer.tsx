@@ -69,6 +69,7 @@ import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-to
 import {
   catalogSettledFor,
   chipModelName,
+  showsDefaultAccount,
 } from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
@@ -140,8 +141,7 @@ import {
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { useEmptyTerminalDefaultSettings } from "@/hooks/providers/use-empty-terminal-default-settings";
-import { newDraftRunSettings } from "@/lib/composer/empty-terminal-default";
+import { useSignedOutTerminalDefaultAccount } from "@/hooks/providers/use-signed-out-terminal-default-account";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
@@ -313,16 +313,6 @@ export function LandingComposer(props: LandingComposerProps) {
   const globalLastRunSettings = useComposerRunSettingsStore((state) =>
     selectGlobalLastRunSettings(state, activeHostId),
   );
-  // The last-run settings are nobody's choice for a NEW draft: on an empty
-  // Terminal login they start on the one signed-in profile. Kept loaded here
-  // so the drafts this composer mints (`newDraftRunSettings`) read the same
-  // list; a draft's own settings are never moved.
-  const lastRunDefault = useEmptyTerminalDefaultSettings(
-    globalLastRunSettings,
-    true,
-    activityEnabled,
-    hostClient,
-  );
   const setGlobalRunSettings = useComposerRunSettingsStore(
     (state) => state.setGlobalRunSettings,
   );
@@ -407,29 +397,37 @@ export function LandingComposer(props: LandingComposerProps) {
   const rememberedFolders = useWorkspaceFoldersStore(
     (state) => selectWorkspaceFoldersBucket(state, resolvedHostId).folders,
   );
-  // A draft seeded while that list loads would keep the Terminal login for good.
   useEffect(() => {
-    if (draftId !== null && !lastRunDefault.pending) {
-      seedUnseededDraft(draftId, resolvedHostId);
-    }
+    if (draftId !== null) seedUnseededDraft(draftId, resolvedHostId);
   }, [
     draftId,
-    lastRunDefault,
+    globalLastRunSettings,
     rememberedFolders,
     resolvedHostId,
     seedUnseededDraft,
   ]);
+  const setDraftAccountFollowsDefault = useLandingDraftStore(
+    (state) => state.setDraftAccountFollowsDefault,
+  );
   const handleToolbarSettingsChange = useCallback(
-    (settings: ChatRunSettings) => {
+    (settings: ChatRunSettings, accountChosen: boolean) => {
       setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
+        setDraftAccountFollowsDefault(draftId, !accountChosen);
       }
       // After the write: the fork copies the row as it is, so the setting
       // rides into the fork and the old row is retired locally unpublished.
       authority.noteEdit();
     },
-    [activeHostId, authority, draftId, setDraftSettings, setGlobalRunSettings],
+    [
+      activeHostId,
+      authority,
+      draftId,
+      setDraftAccountFollowsDefault,
+      setDraftSettings,
+      setGlobalRunSettings,
+    ],
   );
   // The window's pin key, which a staged sandbox is staged under.
   const composerSurfaceKey = useComposerSurfaceHostKey();
@@ -439,9 +437,9 @@ export function LandingComposer(props: LandingComposerProps) {
       landingComposerSettingsSeedForDraft(
         draftId,
         props.initialSettings,
-        lastRunDefault.settings,
+        globalLastRunSettings,
       ),
-    [lastRunDefault.settings, draftId, props.initialSettings],
+    [globalLastRunSettings, draftId, props.initialSettings],
   );
   // `settingsSeed` may carry a frozen `profileId` from an old landing draft
   // (`landing-draft-store` persists a draft's settings snapshot indefinitely,
@@ -489,6 +487,19 @@ export function LandingComposer(props: LandingComposerProps) {
             },
     });
   }, [authority, draftId, setDraftSettings, toolbarStore]);
+  // Nobody chose the account of an unbound page, or of a draft whose settings
+  // came from the host's last-run settings: its Terminal login starts on the
+  // default account. A draft whose account a person chose keeps it.
+  const draftAccountFollowsDefault = useLandingDraftStore(
+    (state) =>
+      draftId === null ||
+      state.drafts.find((entry) => entry.id === draftId)
+        ?.accountFollowsDefault === true,
+  );
+  useLayoutEffect(() => {
+    toolbarStore.getState().setAccountChosen(!draftAccountFollowsDefault);
+  }, [draftAccountFollowsDefault, toolbarStore]);
+  useSignedOutTerminalDefaultAccount(toolbarStore, activityEnabled, hostClient);
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
@@ -877,15 +888,22 @@ export function LandingComposer(props: LandingComposerProps) {
     // new draft's id so activeDraftId's null -> id flip lines up with the
     // key the parent already mounted under (no editor remount). Falls back
     // to a fresh id when the caller has not pre-minted one.
+    const toolbar = toolbarStore.getState();
     const createdDraftId = useLandingDraftStore.getState().createDraftWithId(
       props.pendingCreateId ?? uuidv4(),
       landingMintedDraftSettings(
-        toolbarStore.getState(),
-        // The composer's own resolved placement host - not the app binding:
-        // the seed should describe the machine this draft will create on.
-        newDraftRunSettings(activeHostId),
+        toolbar,
+        useComposerRunSettingsStore
+          .getState()
+          // The composer's own resolved placement host - not the app
+          // binding: the seed should describe the machine this draft
+          // will create on.
+          .getGlobalRunSettings(activeHostId),
       ),
     );
+    useLandingDraftStore
+      .getState()
+      .setDraftAccountFollowsDefault(createdDraftId, !toolbar.accountChosen);
     // Keep the workspace aligned with the caller's captured placement, which
     // supplied the settings above, before accepting a submit.
     useLandingDraftStore
@@ -1102,6 +1120,8 @@ export function LandingComposer(props: LandingComposerProps) {
         serviceTier: toolbar.serviceTier,
         permission: toolbar.permission,
         ultracode: toolbar.ultracode,
+        accountChosen: toolbar.accountChosen,
+        showsDefaultAccount: showsDefaultAccount(toolbar),
       },
       owner,
       teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
