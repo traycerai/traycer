@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import {
   Pause,
   Play,
@@ -39,6 +39,13 @@ export function EpicPlaybackControls(): ReactNode {
 }
 
 function EpicPlaybackControlsBody(): ReactNode {
+  const trackId = useId();
+  const track = useSoundtrackStore((state) => state.soundingTrack);
+  const trackTitle = track === null ? null : track.title.trim() || track.name;
+  const trackKind =
+    track?.kind === "composed" ? "Composed" : "Generative variant";
+  const trackDescription =
+    track === null ? null : `${trackTitle} · ${trackKind}`;
   const availability = useSettingsAvailabilityContext();
   const asked = useSettingsStore((state) => state.soundtrackPlaybackControls);
   const paused = useSettingsStore((state) => state.soundtrackPaused);
@@ -47,8 +54,25 @@ function EpicPlaybackControlsBody(): ReactNode {
     return null;
   }
   return (
-    <div className="flex items-center gap-1.5">
+    <div
+      role="group"
+      aria-label="Music playback"
+      className="flex min-w-0 max-w-1/2 items-center gap-1.5"
+    >
+      {trackDescription === null ? null : (
+        <span
+          id={trackId}
+          data-testid="epic-playback-track"
+          className="min-w-0 flex-1 text-xs leading-tight text-muted-foreground @max-[46rem]:sr-only"
+        >
+          <span className="block truncate">{trackTitle}</span>
+          <span className="sr-only"> · </span>
+          <span className="block">{trackKind}</span>
+        </span>
+      )}
       <PlaybackButton
+        trackDescription={trackDescription}
+        describedBy={trackDescription === null ? undefined : trackId}
         label="Previous track"
         testId="epic-playback-previous"
         icon={SkipBack}
@@ -56,6 +80,8 @@ function EpicPlaybackControlsBody(): ReactNode {
         leavesShortRow
       />
       <PlaybackButton
+        trackDescription={trackDescription}
+        describedBy={trackDescription === null ? undefined : trackId}
         label={paused ? "Play" : "Pause"}
         testId="epic-playback-toggle"
         icon={paused ? Play : Pause}
@@ -65,6 +91,8 @@ function EpicPlaybackControlsBody(): ReactNode {
         leavesShortRow={!paused}
       />
       <PlaybackButton
+        trackDescription={trackDescription}
+        describedBy={trackDescription === null ? undefined : trackId}
         label="Next track"
         testId="epic-playback-next"
         icon={SkipForward}
@@ -76,6 +104,8 @@ function EpicPlaybackControlsBody(): ReactNode {
 }
 
 function PlaybackButton(props: {
+  readonly trackDescription: string | null;
+  readonly describedBy: string | undefined;
   readonly label: string;
   readonly testId: string;
   readonly icon: LucideIcon;
@@ -85,7 +115,11 @@ function PlaybackButton(props: {
   const { label, testId, icon: Icon, onClick, leavesShortRow } = props;
   return (
     <TooltipWrapper
-      label={label}
+      label={
+        props.trackDescription === null
+          ? label
+          : `${label} · ${props.trackDescription}`
+      }
       side="bottom"
       sideOffset={undefined}
       align="end"
@@ -95,6 +129,7 @@ function PlaybackButton(props: {
         variant="muted"
         size="icon-xs"
         aria-label={label}
+        aria-describedby={props.describedBy}
         data-testid={testId}
         onClick={onClick}
         // 34rem of content is the row at its fullest: the pill's longest label
