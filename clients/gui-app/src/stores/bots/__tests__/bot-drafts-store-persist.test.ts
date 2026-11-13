@@ -17,7 +17,16 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import type { UseStore } from "idb-keyval";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  deleteAndAwaitInvalidation,
+  deleteDatabaseOutcome,
+  openHoldingConnection,
+  rawGet,
+  stubDigestsOf,
+} from "@/lib/composer/__tests__/fake-idb";
+import { botBoxDraftsKey } from "@/lib/persist";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import type * as ImageBase64 from "@/lib/composer/image-base64";
 import type * as ReportableErrorToast from "@/lib/reportable-error-toast";
@@ -42,6 +51,33 @@ import {
   waitForStore,
   type App,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
+
+const holds = vi.hoisted(() => ({
+  /** While set, a write of image bytes answers only once this settles. */
+  afterByteWrite: null as Promise<void> | null,
+  byteWritten: (): void => undefined,
+}));
+
+// A write of image bytes is held after the database took it: the draft writer is
+// then caught storing its images.
+vi.mock("idb-keyval", async (importOriginal) => {
+  const real = await importOriginal<typeof import("idb-keyval")>();
+  return {
+    ...real,
+    set: async (
+      key: IDBValidKey,
+      value: unknown,
+      store: UseStore | undefined,
+    ): Promise<void> => {
+      await real.set(key, value, store);
+      const gate = holds.afterByteWrite;
+      if (gate !== null && value instanceof Uint8Array) {
+        holds.byteWritten();
+        await gate;
+      }
+    },
+  };
+});
 
 let app: App;
 
@@ -71,9 +107,11 @@ async function startReadingStoredDraft(text: string): Promise<App> {
 describe("the boxes' drafts through the persisted store", () => {
   it("stores a typed draft with its image by hash once typing pauses, and reads it back whole after a restart", async () => {
     const content = boxDoc("Ship it ", [MENTION, INLINE_IMAGE]);
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", "Ship it @Ada", content);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "Ship it @Ada",
+      content: content,
+      held: [],
+    });
     expect(storedDrafts(app)).toBeNull();
 
     await waitForStore(
@@ -119,7 +157,11 @@ describe("the boxes' drafts through the persisted store", () => {
       "imageAttachment",
     );
     expect(kept?.imageOnly).toBeUndefined();
-    app.drafts.getState().typeThreadBox(BOT_ID, "other", "elsewhere", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "other", {
+      text: "elsewhere",
+      content: null,
+      held: [],
+    });
     await waitForStore(app, (stored) => stored?.[BOT_ID]?.other !== undefined);
     expect(localStorage.getItem(BOX_DRAFTS_KEY)).not.toContain(gone);
   });
@@ -153,7 +195,11 @@ describe("the boxes' drafts through the persisted store", () => {
     const kept = app.drafts.getState().threadBoxes[BOT_ID]?.channel;
     expect(kept?.text).toBe("still here");
     expect(JSON.stringify(kept?.content)).not.toContain("imageAttachment");
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "after", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "after",
+      content: null,
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel?.text === "after",
@@ -180,9 +226,11 @@ describe("two windows over one device's storage", () => {
     });
     inWindow("window-a");
     app = await restart();
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", text, boxDoc(text, [INLINE_IMAGE]));
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: text,
+      content: boxDoc(text, [INLINE_IMAGE]),
+      held: [],
+    });
     await waitForStore(app, (stored) =>
       JSON.stringify(stored?.[BOT_ID]?.channel).includes('"hash"'),
     );
@@ -198,15 +246,16 @@ describe("two windows over one device's storage", () => {
   it("keeps the image one window stored through another's edits, for the first window to read back", async () => {
     await storedByAThenStartB("pic");
 
-    app.drafts
-      .getState()
-      .typeThreadBox(
-        BOT_ID,
-        "channel",
-        "pic, edited",
-        boxDoc("pic, edited", []),
-      );
-    app.drafts.getState().typeThreadBox(BOT_ID, "other", "elsewhere", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic, edited",
+      content: boxDoc("pic, edited", []),
+      held: [],
+    });
+    app.drafts.getState().typeThreadBox(BOT_ID, "other", {
+      text: "elsewhere",
+      content: null,
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel?.text === "pic, edited",
@@ -222,16 +271,19 @@ describe("two windows over one device's storage", () => {
   it("drops that image once the other window's person clears the box", async () => {
     await storedByAThenStartB("pic");
 
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic, edited",
+      content: boxDoc("pic, edited", []),
+      held: [],
+    });
     app.drafts
       .getState()
-      .typeThreadBox(
-        BOT_ID,
-        "channel",
-        "pic, edited",
-        boxDoc("pic, edited", []),
-      );
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
-    app.drafts.getState().typeThreadBox(BOT_ID, "other", "elsewhere", null);
+      .typeThreadBox(BOT_ID, "channel", { text: "", content: null, held: [] });
+    app.drafts.getState().typeThreadBox(BOT_ID, "other", {
+      text: "elsewhere",
+      content: null,
+      held: [],
+    });
     await waitForStore(app, (stored) => stored?.[BOT_ID]?.other !== undefined);
 
     expect(storedDrafts(app)?.[BOT_ID]?.channel).toBeUndefined();
@@ -240,10 +292,14 @@ describe("two windows over one device's storage", () => {
   it("drops a box that held only the other window's image once this window's person types in it and clears it", async () => {
     await storedByAThenStartB("");
 
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "hi",
+      content: boxDoc("hi", []),
+      held: [],
+    });
     app.drafts
       .getState()
-      .typeThreadBox(BOT_ID, "channel", "hi", boxDoc("hi", []));
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
+      .typeThreadBox(BOT_ID, "channel", { text: "", content: null, held: [] });
     await waitForStore(
       app,
       (stored) => stored !== null && stored[BOT_ID] === undefined,
@@ -268,9 +324,11 @@ describe("two windows over one device's storage", () => {
     for (const edit of ["one", "two", "three"]) {
       const kept = app.drafts.getState().threadBoxes[BOT_ID]?.channel;
       const text = `${kept?.text ?? ""} ${edit}`;
-      app.drafts
-        .getState()
-        .typeThreadBox(BOT_ID, "channel", text, kept?.content ?? null);
+      app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+        text: text,
+        content: kept?.content ?? null,
+        held: [],
+      });
       await waitForStore(
         app,
         (stored) => stored?.[BOT_ID]?.channel?.text === text,
@@ -291,14 +349,11 @@ describe("two windows over one device's storage", () => {
     await storedByAThenStartB("pic");
     await fillImageBudget();
 
-    app.drafts
-      .getState()
-      .typeThreadBox(
-        BOT_ID,
-        "other",
-        "same pic",
-        boxDoc("same pic", [INLINE_IMAGE]),
-      );
+    app.drafts.getState().typeThreadBox(BOT_ID, "other", {
+      text: "same pic",
+      content: boxDoc("same pic", [INLINE_IMAGE]),
+      held: [],
+    });
     await waitForStore(app, (stored) => stored?.[BOT_ID]?.other !== undefined);
 
     expect(JSON.stringify(storedDrafts(app)?.[BOT_ID]?.other)).not.toContain(
@@ -320,13 +375,19 @@ describe("two windows open at once over one device's storage", () => {
     const a = app;
     const b = await windowBeside();
 
-    a.drafts.getState().typeThreadBox(BOT_ID, "x", "from A", null);
+    a.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "x", { text: "from A", content: null, held: [] });
     await waitForStore(a, (stored) => stored?.[BOT_ID]?.x !== undefined);
-    b.drafts.getState().typeThreadBox(BOT_ID, "y", "from B", null);
+    b.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "y", { text: "from B", content: null, held: [] });
     await waitForStore(b, (stored) => stored?.[BOT_ID]?.y !== undefined);
     expect(storedDrafts(b)?.[BOT_ID]?.x?.text).toBe("from A");
 
-    b.drafts.getState().typeThreadBox(BOT_ID, "y", "", null);
+    b.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "y", { text: "", content: null, held: [] });
     await waitForStore(
       b,
       (stored) => stored !== null && stored[BOT_ID]?.y === undefined,
@@ -336,18 +397,26 @@ describe("two windows open at once over one device's storage", () => {
   });
 
   it("does not bring back a box another window cleared when this one saves another", async () => {
-    app.drafts.getState().typeThreadBox(BOT_ID, "x", "from A", null);
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "x", { text: "from A", content: null, held: [] });
     await waitForStore(app, (stored) => stored?.[BOT_ID]?.x !== undefined);
     const a = app;
     const b = await windowBeside();
     expect(b.drafts.getState().threadBoxes[BOT_ID]?.x?.text).toBe("from A");
 
-    b.drafts.getState().typeThreadBox(BOT_ID, "x", "", null);
+    b.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "x", { text: "", content: null, held: [] });
     await waitForStore(
       b,
       (stored) => stored !== null && stored[BOT_ID] === undefined,
     );
-    a.drafts.getState().typeThreadBox(BOT_ID, "z", "from A again", null);
+    a.drafts.getState().typeThreadBox(BOT_ID, "z", {
+      text: "from A again",
+      content: null,
+      held: [],
+    });
     await waitForStore(a, (stored) => stored?.[BOT_ID]?.z !== undefined);
 
     expect(storedDrafts(a)?.[BOT_ID]?.x).toBeUndefined();
@@ -356,9 +425,11 @@ describe("two windows open at once over one device's storage", () => {
   it.each(["pic", ""])(
     "does not bring back a box another window cleared that this one wrote without its image (text %j)",
     async (text) => {
-      app.drafts
-        .getState()
-        .typeThreadBox(BOT_ID, "x", text, boxDoc(text, [INLINE_IMAGE]));
+      app.drafts.getState().typeThreadBox(BOT_ID, "x", {
+        text: text,
+        content: boxDoc(text, [INLINE_IMAGE]),
+        held: [],
+      });
       window.dispatchEvent(new Event("pagehide"));
       expect(
         JSON.stringify(storedDrafts(app)?.[BOT_ID]?.x ?? null),
@@ -367,13 +438,23 @@ describe("two windows open at once over one device's storage", () => {
       const b = await windowBeside();
 
       // An image-only draft reads back as nothing there: typing is what a clear needs first.
-      b.drafts.getState().typeThreadBox(BOT_ID, "x", "hi", boxDoc("hi", []));
-      b.drafts.getState().typeThreadBox(BOT_ID, "x", "", null);
+      b.drafts.getState().typeThreadBox(BOT_ID, "x", {
+        text: "hi",
+        content: boxDoc("hi", []),
+        held: [],
+      });
+      b.drafts
+        .getState()
+        .typeThreadBox(BOT_ID, "x", { text: "", content: null, held: [] });
       await waitForStore(
         b,
         (stored) => stored !== null && stored[BOT_ID] === undefined,
       );
-      a.drafts.getState().typeThreadBox(BOT_ID, "z", "from A", null);
+      a.drafts.getState().typeThreadBox(BOT_ID, "z", {
+        text: "from A",
+        content: null,
+        held: [],
+      });
       await waitForStore(a, (stored) => stored?.[BOT_ID]?.z !== undefined);
 
       expect(storedDrafts(a)?.[BOT_ID]?.x).toBeUndefined();
@@ -383,14 +464,11 @@ describe("two windows open at once over one device's storage", () => {
   it("drops a bot's boxes another window saved, and their images' roots, when this window forgets the bot holding none of them", async () => {
     const a = app;
     const b = await windowBeside();
-    b.drafts
-      .getState()
-      .typeThreadBox(
-        BOT_ID,
-        "channel",
-        "from B",
-        boxDoc("from B", [INLINE_IMAGE]),
-      );
+    b.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "from B",
+      content: boxDoc("from B", [INLINE_IMAGE]),
+      held: [],
+    });
     await waitForStore(b, (stored) =>
       JSON.stringify(stored?.[BOT_ID]?.channel ?? null).includes('"hash"'),
     );
@@ -423,14 +501,20 @@ describe("two windows open at once over one device's storage", () => {
     const a = app;
     const b = await windowBeside();
 
-    b.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "x", "", boxDoc("", [INLINE_IMAGE]));
+    b.drafts.getState().typeThreadBox(BOT_ID, "x", {
+      text: "",
+      content: boxDoc("", [INLINE_IMAGE]),
+      held: [],
+    });
     window.dispatchEvent(new Event("pagehide"));
     expect(storedDrafts(b)?.[BOT_ID]?.x?.text).toBe("");
-    a.drafts.getState().typeThreadBox(BOT_ID, "z", "from A", null);
+    a.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "z", { text: "from A", content: null, held: [] });
     await waitForStore(a, (stored) => stored?.[BOT_ID]?.z !== undefined);
-    b.drafts.getState().typeThreadBox(BOT_ID, "y", "from B", null);
+    b.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "y", { text: "from B", content: null, held: [] });
     await waitForStore(b, (stored) => stored?.[BOT_ID]?.y !== undefined);
 
     expect(JSON.stringify(storedDrafts(b)?.[BOT_ID]?.x ?? null)).toContain(
@@ -479,7 +563,11 @@ describe("the image budget a draft's images are stored under", () => {
     const elsewhere = await fillImageBudget();
 
     const content = boxDoc("pic", [INLINE_IMAGE]);
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "pic", content);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: content,
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel !== undefined,
@@ -487,7 +575,11 @@ describe("the image budget a draft's images are stored under", () => {
     expect(localStorage.getItem(BOX_DRAFTS_KEY)).not.toContain(
       "imageAttachment",
     );
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "pic more", content);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic more",
+      content: content,
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel?.text === "pic more",
@@ -500,9 +592,11 @@ describe("the image budget a draft's images are stored under", () => {
     );
 
     elsewhere.release();
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", "pic again", content);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic again",
+      content: content,
+      held: [],
+    });
     await waitForStore(app, (stored) =>
       JSON.stringify(stored?.[BOT_ID]?.channel).includes('"hash"'),
     );
@@ -514,23 +608,29 @@ describe("the image budget a draft's images are stored under", () => {
     app = await restart();
     await fillImageBudget();
 
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel !== undefined,
     );
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", "no pic", boxDoc("no pic", []));
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "no pic",
+      content: boxDoc("no pic", []),
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel?.text === "no pic",
     );
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel?.text === "pic",
@@ -544,7 +644,11 @@ describe("a box changed while the stored drafts are read", () => {
   it("writes what was typed over what was stored, once the read answers and typing pauses", async () => {
     const reading = await startReadingStoredDraft("old");
 
-    reading.drafts.getState().typeThreadBox(BOT_ID, "channel", "new", null);
+    reading.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "new",
+      content: null,
+      held: [],
+    });
     await pastTheDebounce(reading);
     expect(storedDrafts(reading)?.[BOT_ID]?.channel?.text).toBe("old");
 
@@ -562,8 +666,14 @@ describe("a box changed while the stored drafts are read", () => {
 
   it("keeps a box cleared during the read cleared, in memory and in storage", async () => {
     const reading = await startReadingStoredDraft("old");
-    reading.drafts.getState().typeThreadBox(BOT_ID, "channel", "mid", null);
-    reading.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
+    reading.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "mid",
+      content: null,
+      held: [],
+    });
+    reading.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", { text: "", content: null, held: [] });
 
     await hydrated(reading);
 
@@ -595,7 +705,11 @@ describe("a box changed while the stored drafts are read", () => {
     localStorage.removeItem(BOX_DRAFTS_KEY);
 
     await hydrated(reading);
-    reading.drafts.getState().typeThreadBox(BOT_ID, "channel", "after", null);
+    reading.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "after",
+      content: null,
+      held: [],
+    });
     window.dispatchEvent(new Event("pagehide"));
     await pastTheDebounce(reading);
 
@@ -621,7 +735,11 @@ describe("what a window leaves stored", () => {
     });
     app = await restart();
 
-    app.drafts.getState().typeThreadBox(BOT_ID, "other", "elsewhere", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "other", {
+      text: "elsewhere",
+      content: null,
+      held: [],
+    });
     window.dispatchEvent(new Event("pagehide"));
 
     expect(JSON.stringify(storedDrafts(app)?.[BOT_ID]?.channel)).toContain(
@@ -637,13 +755,15 @@ describe("what a window leaves stored", () => {
       },
     });
 
-    app.drafts.getState().typeThreadBox(BOT_ID, "empty", "", null);
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "empty", { text: "", content: null, held: [] });
     app.drafts.getState().setAnswer(BOT_ID, "question-1", {
       chosen: ["a"],
       typed: "",
-      skip: false,
       sent: null,
       unsureSince: null,
+      heldForSettlement: null,
     });
     app.drafts.getState().closeBot(BOT_ID);
     app.drafts.getState().forgetBot("a-bot-holding-nothing");
@@ -675,10 +795,48 @@ describe("the image hashes the stored drafts keep alive", () => {
     expect(app.imageRoots().has(HASH)).toBe(false);
   });
 
+  it("still name the images of the accounts whose drafts can be read, and throw nothing, when one account's stored drafts cannot be read", () => {
+    const hashOfA = "a".repeat(64);
+    const hashOfB = "b".repeat(64);
+    const keyOfA = botBoxDraftsKey("user-a");
+    const storedWith = (hash: string): string =>
+      JSON.stringify({
+        state: {
+          threadBoxes: {
+            [BOT_ID]: {
+              channel: {
+                text: "",
+                content: boxDoc("", [hashedImage(hash)]),
+                seedId: 1,
+              },
+            },
+          },
+        },
+        version: 1,
+      });
+    localStorage.setItem(keyOfA, storedWith(hashOfA));
+    localStorage.setItem(botBoxDraftsKey("user-b"), storedWith(hashOfB));
+    const read = Storage.prototype.getItem.bind(localStorage);
+    const reads = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation((asked: string) => {
+        if (asked === keyOfA) throw new Error("storage cannot be read");
+        return read(asked);
+      });
+    onTestFinished(() => reads.mockRestore());
+
+    const roots = app.imageRoots();
+
+    expect(roots.has(hashOfB)).toBe(true);
+    expect(roots.has(hashOfA)).toBe(false);
+  });
+
   it("include the ones this window's boxes hold, after storage drops them", async () => {
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel !== undefined,
@@ -695,15 +853,19 @@ describe("the image hashes the stored drafts keep alive", () => {
 
   it("leave out the image of a box cleared and written at once by a page hide", async () => {
     const hash = await storeImageBytes();
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", "pic", boxDoc("pic", [INLINE_IMAGE]));
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
     await waitForStore(app, (stored) =>
       JSON.stringify(stored?.[BOT_ID]?.channel).includes(hash),
     );
     expect(app.imageRoots().has(hash)).toBe(true);
 
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", { text: "", content: null, held: [] });
     window.dispatchEvent(new Event("pagehide"));
 
     expect(storedDrafts(app)?.[BOT_ID]).toBeUndefined();
@@ -781,9 +943,11 @@ describe("a write a newer one overtakes while it stores an image", () => {
     held: HeldPuts,
     text: string,
   ): Promise<void> {
-    held.app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", text, boxDoc(text, [INLINE_IMAGE]));
+    held.app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: text,
+      content: boxDoc(text, [INLINE_IMAGE]),
+      held: [],
+    });
     await vi.advanceTimersByTimeAsync(
       held.app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
     );
@@ -796,7 +960,9 @@ describe("a write a newer one overtakes while it stores an image", () => {
     app = held.app;
     await storingTypedImage(held, "pic");
 
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", { text: "", content: null, held: [] });
     await waitForStore(
       app,
       (stored) => stored !== null && stored[BOT_ID] === undefined,
@@ -830,7 +996,11 @@ describe("a write a newer one overtakes while it stores an image", () => {
     app = held.app;
     await storingTypedImage(held, "pic");
 
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "newer", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "newer",
+      content: null,
+      held: [],
+    });
     window.dispatchEvent(new Event("pagehide"));
     window.dispatchEvent(new Event("pagehide"));
 
@@ -844,7 +1014,11 @@ describe("a write a newer one overtakes while it stores an image", () => {
     const held = await restartWithImagePutsHeld(isGif);
     app = held.app;
     const content = boxDoc("two", [INLINE_IMAGE, GIF_IMAGE]);
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "two", content);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "two",
+      content: content,
+      held: [],
+    });
     await vi.advanceTimersByTimeAsync(
       app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
     );
@@ -853,11 +1027,17 @@ describe("a write a newer one overtakes while it stores an image", () => {
       expect(app.imageRoots().has(pngHash)).toBe(true);
     });
 
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "two more", content);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "two more",
+      content: content,
+      held: [],
+    });
     window.dispatchEvent(new Event("pagehide"));
-    app.drafts
-      .getState()
-      .typeThreadBox(BOT_ID, "channel", "two again", content);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "two again",
+      content: content,
+      held: [],
+    });
     window.dispatchEvent(new Event("pagehide"));
 
     const stored = storedDrafts(app)?.[BOT_ID]?.channel;
@@ -879,13 +1059,17 @@ describe("closing Tracy and forgetting a bot", () => {
       botId: BOT_ID,
       visitedBotIds: [BOT_ID],
     });
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "unsent", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
     app.drafts.getState().setAnswer(BOT_ID, "question-1", {
       chosen: ["a"],
       typed: "",
-      skip: false,
       sent: null,
       unsureSince: null,
+      heldForSettlement: null,
     });
     return useTracySurfaceStore;
   }
@@ -922,14 +1106,11 @@ describe("closing Tracy and forgetting a bot", () => {
 
 describe("a window that is going away or being wiped", () => {
   it("writes a draft still waiting out the pause at once when the page is hidden, without an image not yet stored", () => {
-    app.drafts
-      .getState()
-      .typeThreadBox(
-        BOT_ID,
-        "channel",
-        "unsent",
-        boxDoc("unsent", [INLINE_IMAGE]),
-      );
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "unsent",
+      content: boxDoc("unsent", [INLINE_IMAGE]),
+      held: [],
+    });
     expect(storedDrafts(app)).toBeNull();
 
     window.dispatchEvent(new Event("pagehide"));
@@ -951,7 +1132,11 @@ describe("a window that is going away or being wiped", () => {
     onTestFinished(() => {
       setItem.mockRestore();
     });
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "unsent", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
     await vi.advanceTimersByTimeAsync(
       app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
     );
@@ -966,12 +1151,199 @@ describe("a window that is going away or being wiped", () => {
   });
 
   it("keeps a write that has not landed from landing once the stored drafts are being wiped", async () => {
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "unsent", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
 
     app.storage.stopBotBoxDraftWrites();
     await pastTheDebounce(app);
     window.dispatchEvent(new Event("pagehide"));
 
     expect(storedDrafts(app)).toBeNull();
+  });
+});
+
+describe("a wipe of the image database under a running window", () => {
+  const IMAGES_DB = "traycer-gui-app:default:landing-images";
+
+  afterEach(() => {
+    holds.afterByteWrite = null;
+    holds.byteWritten = (): void => undefined;
+  });
+
+  function storedHash(): string {
+    return (
+      /"hash":"([0-9a-f]{64})"/.exec(
+        localStorage.getItem(BOX_DRAFTS_KEY) ?? "",
+      )?.[1] ?? ""
+    );
+  }
+
+  it("stores a draft's image again when the person types in the box after another window deleted the image database", async () => {
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel !== undefined,
+    );
+    const hash = storedHash();
+    expect(hash).not.toBe("");
+
+    // Before anything that could wait on the deletion.
+    expect(await deleteDatabaseOutcome(IMAGES_DB)).toBe("deleted");
+
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic more",
+      content: boxDoc("pic more", [INLINE_IMAGE]),
+      held: [],
+    });
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic more",
+    );
+    expect(localStorage.getItem(BOX_DRAFTS_KEY) ?? "").toContain(hash);
+    expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+  });
+
+  it("writes a draft again, and stores its image again, when the image database was deleted while the write was storing that image", async () => {
+    let release = (): void => undefined;
+    holds.afterByteWrite = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const byteWritten = new Promise<void>((resolve) => {
+      holds.byteWritten = resolve;
+    });
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
+    await vi.advanceTimersByTimeAsync(
+      app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await byteWritten;
+
+    expect(await deleteDatabaseOutcome(IMAGES_DB)).toBe("deleted");
+    holds.afterByteWrite = null;
+    release();
+
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic",
+    );
+    expect(await rawGet(IMAGES_DB, "bytes", storedHash())).toBeDefined();
+  });
+
+  it("stores a draft's image again, and keeps it on reload, when the image database was deleted while the stored draft's image was being read back", async () => {
+    const hash = await storeImageBytes();
+    storeDraftsAsLeft({
+      [BOT_ID]: {
+        channel: {
+          text: "pic",
+          content: boxDoc("pic", [hashedImage(hash)]),
+          seedId: 1,
+        },
+      },
+    });
+    const connection = await openHoldingConnection(IMAGES_DB, "bytes");
+    const held = connection.hold(hash);
+    onTestFinished(() => held.release());
+    await held.started;
+    // The start reads the image back from the disk-only bytes, queued behind the held transaction.
+    app = await startApp();
+    const images = await import("@/lib/composer/landing-image-store");
+
+    const deletion = deleteAndAwaitInvalidation(
+      IMAGES_DB,
+      images.onLandingImagesDeleted,
+    );
+    await deletion.invalidated;
+    expect(images.hasLandingImageBytes(hash)).toBe(false);
+    held.release();
+    await hydrated(app);
+    await deletion.removed;
+
+    expect(images.hasLandingImageBytes(hash)).toBe(false);
+    expect(
+      JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
+    ).toContain(IMAGE_B64);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic more",
+      content: boxDoc("pic more", [INLINE_IMAGE]),
+      held: [],
+    });
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic more",
+    );
+    expect(storedHash()).toBe(hash);
+    expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+
+    app = await restart();
+
+    expect(
+      JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
+    ).toContain(IMAGE_B64);
+  });
+
+  it("keeps a draft's image through a deletion that overtakes the put storing it, which the writer's retry joins", async () => {
+    const hash = await storeImageBytes();
+    // A start of its own, so the image is on disk alone and the put's read finds it there.
+    app = await restart();
+    const { base64ToBytes } = await import("@/lib/composer/image-base64");
+    const bytes = base64ToBytes(IMAGE_B64);
+    if (bytes === null) throw new Error("the fixture image decodes");
+    // The retry reaches the put in microtasks, so it joins the first put's
+    // flight, which the held transaction keeps running, whatever the machine.
+    await stubDigestsOf([bytes]);
+    const images = await import("@/lib/composer/landing-image-store");
+    const connection = await openHoldingConnection(IMAGES_DB, "bytes");
+    const held = connection.hold(hash);
+    onTestFinished(() => held.release());
+    await held.started;
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "pic",
+      content: boxDoc("pic", [INLINE_IMAGE]),
+      held: [],
+    });
+    await vi.advanceTimersByTimeAsync(
+      app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await vi.waitFor(() =>
+      expect(images.sessionImageBytes(hash)).not.toBeNull(),
+    );
+
+    const deletion = deleteAndAwaitInvalidation(
+      IMAGES_DB,
+      images.onLandingImagesDeleted,
+    );
+    await deletion.invalidated;
+    // The writer's own retry of the write the deletion overtook.
+    await vi.advanceTimersByTimeAsync(
+      app.storage.BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    held.release();
+    await deletion.removed;
+
+    await waitForStore(
+      app,
+      (stored) => stored?.[BOT_ID]?.channel?.text === "pic",
+    );
+    expect(storedHash()).toBe(hash);
+    // The session answers for the bytes until it lets go.
+    images.releaseSession(hash);
+    expect(await rawGet(IMAGES_DB, "bytes", hash)).toBeDefined();
+
+    app = await restart();
+
+    expect(
+      JSON.stringify(app.drafts.getState().threadBoxes[BOT_ID]?.channel),
+    ).toContain(IMAGE_B64);
   });
 });

@@ -69,7 +69,9 @@ import { ChatMessageTimestamp } from "./chat-message-timestamp";
 import { useTimestampDrawn } from "./use-timestamp-drawn";
 import {
   answerDraftKey,
+  useBotDraftActions,
   useBotDraftsStore,
+  withoutAnswerFailure,
 } from "@/stores/bots/bot-drafts-store";
 import { QuestionCard, type QuestionCardQuestion } from "./question-card";
 import { ChatReplyBadgeSlot } from "./chat-reply-badge";
@@ -77,9 +79,17 @@ import {
   EMPTY_QUESTION_CARD_DRAFT,
   botQuestionCardSettlement,
   draftText,
+  questionCardMovedBlock,
+  questionCardMovedHow,
+  questionCardMovedLine,
   questionCardView,
+  type QuestionCardSettlement,
 } from "./question-card-view";
-import { mayHaveReachedHost } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TextSegment } from "./segments/text-segment";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
@@ -710,14 +720,41 @@ function BotAskingBody(props: {
   );
 }
 
+/** One of a member's answers moving off a card, with the settlement that overtook it. */
+interface MovedAnswer {
+  readonly index: number;
+  readonly question: string;
+  readonly answer: string;
+  readonly settlement: QuestionCardSettlement;
+}
+
+/**
+ * Whether the bot's host refused a card's send because someone settled a
+ * question of it first (`E_BOT_QUESTION_ALREADY_SETTLED`). A host that
+ * predates the code refuses with `RPC_ERROR`, read as any other failure.
+ */
+function settledFirst(error: unknown): boolean {
+  const refusal = finalRefusalOf(error);
+  return (
+    refusal instanceof HostRpcError &&
+    refusal.code === "E_BOT_QUESTION_ALREADY_SETTLED"
+  );
+}
+
 /**
  * The card of the questions a bot's row asks, each settlement named as this
  * surface names its members, and the person's own answers kept under the bot
  * (`useBotDraftsStore`) so they outlive the view; without actions until the
  * row is written. A sent answer that the host does not take is given back to
- * edit; one whose question shows settled, or a draft with nothing of the
- * person's left in it, is spent. Discuss takes the draft off the card into
- * the discussion's box.
+ * edit, and the surface's box says it was not sent; one whose question shows
+ * settled by it, or a draft with nothing of the person's left in it, is
+ * spent. An answer whose question someone else settled first moves off the
+ * card into the surface's box, unsent, below what the box held, and the box
+ * says who settled it (T186); a card drawn where it has no box of its own
+ * leaves that to the copy that has. A send the host refused because a
+ * question of it was settled first stays held as sent, saying nothing, until
+ * that settlement shows here: the reply can beat the settlement to this
+ * window. A question of that send still open then goes back to edit.
  *
  * On a card of two or more questions whose answers go together (`answerAll`,
  * T167), one Submit sends them all. A send the host refused gives them all
@@ -734,17 +771,11 @@ function BotQuestionCard(props: {
   readonly questions: ChatBotQuestions;
 }): ReactElement {
   const { messageId, question, botTitle, questions } = props;
-  const {
-    botId,
-    viewerUserId,
-    memberName,
-    answer,
-    answerAll,
-    baseline,
-    discuss,
-  } = questions;
+  const { botId, viewerUserId, memberName, answer, answerAll, baseline, box } =
+    questions;
   const drafts = useBotDraftsStore((state) => state.answers[botId]);
-  const setAnswer = useBotDraftsStore((state) => state.setAnswer);
+  // A send or settlement that answers after the account retired changes nothing.
+  const { setAnswer, moveAnswers, noticeBox } = useBotDraftActions();
   const cardQuestions = question.questions.map(
     (item, index): QuestionCardQuestion => ({
       index,
@@ -781,6 +812,77 @@ function BotQuestionCard(props: {
     if (spent.length === 0) return;
     for (const key of spent.split("\n")) setAnswer(botId, key, null);
   }, [botId, setAnswer, spent]);
+  const overtaken =
+    messageId === null || box === null
+      ? ""
+      : cardQuestions
+          .filter(
+            (item) =>
+              drafts?.[answerDraftKey(messageId, item.index)] !== undefined &&
+              questionCardView(item.settlement, item.draft, item.several)
+                .kind === "overtaken",
+          )
+          .map((item) => answerDraftKey(messageId, item.index))
+          .join("\n");
+  useEffect(() => {
+    if (overtaken.length === 0 || messageId === null || box === null) return;
+    const byKey = new Map(
+      question.questions.map((item, index) => [
+        answerDraftKey(messageId, index),
+        { index, item },
+      ]),
+    );
+    moveAnswers(botId, box, overtaken.split("\n"), (taken) => {
+      const moved = taken
+        .flatMap(([key, draft]): ReadonlyArray<MovedAnswer> => {
+          const entry = byKey.get(key);
+          if (entry === undefined) return [];
+          const settlement = botQuestionCardSettlement(
+            entry.item.settlement,
+            memberName,
+            viewerUserId,
+          );
+          const own = draftText(draft, entry.item.multiSelect === true);
+          return settlement === null || own === null
+            ? []
+            : [
+                {
+                  index: entry.index,
+                  question: entry.item.text,
+                  answer: own,
+                  settlement,
+                },
+              ];
+        })
+        .sort((a, b) => a.index - b.index);
+      let latest: MovedAnswer | null = null;
+      for (const item of moved) {
+        if (latest === null || item.settlement.at > latest.settlement.at) {
+          latest = item;
+        }
+      }
+      if (latest === null) return null;
+      return {
+        block: questionCardMovedBlock(moved, question.questions.length > 1),
+        notice: questionCardMovedLine(
+          latest.settlement.by,
+          questionCardMovedHow(moved.map((item) => item.settlement)),
+          botTitle,
+          moved.length,
+        ),
+      };
+    });
+  }, [
+    botId,
+    botTitle,
+    box,
+    memberName,
+    messageId,
+    moveAnswers,
+    overtaken,
+    question,
+    viewerUserId,
+  ]);
   // A baseline from another session store is a later one too: the registry
   // replaced the store, whose epochs start again, and its snapshot is new.
   const resynced =
@@ -810,8 +912,73 @@ function BotQuestionCard(props: {
       }
     }
   }, [botId, resynced, setAnswer]);
+  // A send the bot's host refused as settled already holds its answers until
+  // one of its questions shows settled here; those move or are spent as
+  // above. Any of its questions still open go back to edit, and where one
+  // held an answer of the person's the box says the send failed: sent again,
+  // it is not refused. Said where the box already says who answered first,
+  // the failure goes under that line (`noticeBox`).
+  const released =
+    messageId === null
+      ? ""
+      : [
+          ...new Set(
+            cardQuestions.flatMap((item) => {
+              const held =
+                drafts?.[answerDraftKey(messageId, item.index)]
+                  ?.heldForSettlement ?? null;
+              return held === null ? [] : [held];
+            }),
+          ),
+        ]
+          .flatMap((held) => {
+            const keys = held.split("\n");
+            const items = cardQuestions.filter((item) =>
+              keys.includes(answerDraftKey(messageId, item.index)),
+            );
+            return items.every((item) => item.settlement === null)
+              ? []
+              : items
+                  .filter((item) => item.settlement === null)
+                  .map((item) => answerDraftKey(messageId, item.index));
+          })
+          .join("\n");
+  useEffect(() => {
+    if (released.length === 0 || messageId === null) return;
+    const severalOf = new Map(
+      question.questions.map((item, index) => [
+        answerDraftKey(messageId, index),
+        item.multiSelect === true,
+      ]),
+    );
+    const given: string[] = [];
+    for (const key of released.split("\n")) {
+      const latest = useBotDraftsStore.getState().answers[botId]?.[key];
+      if (latest === undefined || latest.heldForSettlement === null) continue;
+      setAnswer(botId, key, { ...latest, sent: null, heldForSettlement: null });
+      if (draftText(latest, severalOf.get(key) === true) !== null) {
+        given.push(key);
+      }
+    }
+    if (given.length > 0 && box !== null) {
+      noticeBox(botId, box, { kind: "answer-failed", keys: given });
+    }
+  }, [botId, box, messageId, noticeBox, question, released, setAnswer]);
   const keyOf = (index: number): string | null =>
     messageId === null ? null : answerDraftKey(messageId, index);
+  // A new send takes back what the box said of an earlier one that failed,
+  // and only that; one that fails while an answer of it is still on the card
+  // says so there.
+  const sending = (): void => {
+    if (box === null) return;
+    const said = useBotDraftsStore.getState().boxNotices[botId]?.[box];
+    if (said !== undefined && said.kind !== "moved") {
+      noticeBox(botId, box, withoutAnswerFailure(said));
+    }
+  };
+  const failed = (keys: ReadonlyArray<string>): void => {
+    if (box !== null) noticeBox(botId, box, { kind: "answer-failed", keys });
+  };
   return (
     <QuestionCard
       asker={botTitle}
@@ -822,18 +989,27 @@ function BotQuestionCard(props: {
           : (index, draft) => {
               const key = keyOf(index);
               if (key !== null) {
-                setAnswer(botId, key, { ...draft, unsureSince: null });
+                setAnswer(botId, key, {
+                  ...draft,
+                  unsureSince: null,
+                  heldForSettlement: null,
+                });
               }
             }
       }
       onAnswer={(given) => {
         const key = keyOf(given.questionIndex);
         if (messageId === null || key === null || answer === null) return;
-        answer(messageId, given).catch(() => {
+        sending();
+        answer(messageId, given).catch((error: unknown) => {
           const latest = useBotDraftsStore.getState().answers[botId]?.[key];
-          if (latest !== undefined) {
-            setAnswer(botId, key, { ...latest, sent: null });
+          if (latest === undefined) return;
+          if (settledFirst(error)) {
+            setAnswer(botId, key, { ...latest, heldForSettlement: key });
+            return;
           }
+          setAnswer(botId, key, { ...latest, sent: null });
+          failed([key]);
         });
       }}
       onAnswerAll={
@@ -861,15 +1037,37 @@ function BotQuestionCard(props: {
                   };
                 }),
               );
+              sending();
               answerAll(messageId, { entries, text }).catch(
                 (error: unknown) => {
-                  const unsure = mayHaveReachedHost(error);
+                  const keys = entries.map((entry) =>
+                    answerDraftKey(messageId, entry.questionIndex),
+                  );
                   const current =
                     useBotDraftsStore.getState().answers[botId] ?? {};
+                  if (settledFirst(error)) {
+                    const held = keys.join("\n");
+                    for (const key of keys) {
+                      const latest = current[key];
+                      if (latest !== undefined) {
+                        setAnswer(botId, key, {
+                          ...latest,
+                          heldForSettlement: held,
+                        });
+                      }
+                    }
+                    return;
+                  }
+                  const unsure = mayHaveReachedHost(error);
+                  // The person's own answers, which the failure names: an
+                  // untouched question went as skipped, and nothing of theirs
+                  // is on its card to send again.
+                  const kept: string[] = [];
                   for (const entry of entries) {
                     const key = answerDraftKey(messageId, entry.questionIndex);
                     const latest = current[key];
                     if (latest === undefined) continue;
+                    if (!entry.skipped) kept.push(key);
                     setAnswer(
                       botId,
                       key,
@@ -878,16 +1076,9 @@ function BotQuestionCard(props: {
                         : { ...latest, sent: null },
                     );
                   }
+                  if (kept.length > 0) failed(kept);
                 },
               );
-            }
-      }
-      onDiscuss={
-        messageId === null || discuss === null
-          ? null
-          : (index, draft) => {
-              discuss(messageId, draft);
-              setAnswer(botId, answerDraftKey(messageId, index), null);
             }
       }
     />

@@ -162,10 +162,15 @@ export interface ChatBotQuestions {
    */
   readonly baseline: BotTranscriptBaseline | null;
   /**
-   * Opens the question's discussion - its thread, or the thread it was asked
-   * in - with `draft` in the box, unsent; `null` where there is none.
+   * The box a member's answers move into, unsent, once someone else settles
+   * their questions first (T186), by its key in `useBotDraftsStore`: the
+   * channel's conversation for a card asked at the channel's top level, the
+   * thread's post for one asked in a thread. Where an answer of the card does
+   * not reach the bot's host, this box says so under it. `null` where this
+   * card moves nothing and sends nothing: a card drawn again elsewhere, whose
+   * own surface moves its answers.
    */
-  readonly discuss: ((questionMessageId: string, draft: string) => void) | null;
+  readonly box: string | null;
 }
 
 /**

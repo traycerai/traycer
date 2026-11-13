@@ -3,8 +3,8 @@
  * besides the mocked boundaries in `bot-tab-surface-mocks.tsx`: the fixtures,
  * the new-team setup and the per-case reset.
  */
-import { cleanup } from "@testing-library/react";
-import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
@@ -25,6 +25,7 @@ import { __resetAgentActivityStoreForTests } from "@/stores/agent-activity-store
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
@@ -163,7 +164,11 @@ function openSurfaceOn(botId: string): void {
     botId,
     visitedBotIds: [],
   });
-  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent", null);
+  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", {
+    text: "unsent",
+    content: null,
+    held: [],
+  });
 }
 
 /**
@@ -236,6 +241,23 @@ export function scriptTeamControlPlane(): void {
   });
 }
 
+/**
+ * The bot tab shows its tree only once the signed-in account's own drafts have been read. Mounts the real
+ * bridge long enough to do that read for the identity now in the auth store, so a case that signs in through
+ * the store finds the tab past its connecting state. Call it after the case's last auth change, before it renders the tab.
+ */
+export async function admitBotDrafts(): Promise<void> {
+  const view = render(
+    <QueryClientProvider client={new QueryClient()}>
+      <BotDraftsPersistLifecycleBridge>{null}</BotDraftsPersistLifecycleBridge>
+    </QueryClientProvider>,
+  );
+  await act(async () => {
+    await useBotDraftsStore.persist.rehydrate();
+  });
+  view.unmount();
+}
+
 /** Every mocked boundary and store back at its start, with the surface open on `BOT_ID`. */
 export function resetBotTabSurfaceMocks(): void {
   vi.clearAllMocks();
@@ -293,7 +315,13 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.subscribed.length = 0;
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
   useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST });
-  useBotDraftsStore.setState({ answers: {}, threadBoxes: {}, unsentBoxes: {} });
+  useBotDraftsStore.setState({
+    answers: {},
+    threadBoxes: {},
+    unsentBoxes: {},
+    owner: null,
+    ownDraftsRead: true,
+  });
   useBotOpenThreadStore.setState({ byBotId: {} });
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();

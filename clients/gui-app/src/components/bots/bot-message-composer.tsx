@@ -33,8 +33,14 @@ import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
-import type { BotUnsentMessage } from "@/stores/bots/bot-drafts-store";
+import type {
+  BotBoxNotice,
+  BotCarriedBlock,
+  BotCarrySend,
+  BotUnsentMessage,
+} from "@/stores/bots/bot-drafts-store";
 import {
+  BotAnswersMovedNotice,
   BotQueuedNotice,
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
@@ -58,6 +64,7 @@ import {
   buildQuoteBlockquote,
   type QuoteTextSnapshot,
 } from "@/components/chat/quote/append-quote-to-draft";
+import { appendBelow } from "@/components/chat/quote/append-comment-text-to-draft";
 import {
   botBoxAttachments,
   botBoxText,
@@ -71,6 +78,9 @@ import {
 import { cn } from "@/lib/utils";
 
 const MESSAGE_MAX = 100_000;
+
+/** A box document that holds no moved answers. */
+const NO_MOVES: ReadonlyArray<number> = [];
 
 function sameImageAtoms(
   left: ReadonlyArray<ComposerImageAtom>,
@@ -159,8 +169,10 @@ const BOX_ONE_ROW = {
  * Edit on a message the bot failed to answer (`edit`) puts its text in the
  * box; what the person sends then is a new message that replaces the failed
  * one (`supersedes`), which stays where it is. A `seed` puts its text in the
- * box as a draft of a new message, unsent: the answer a member had for a
- * question someone else settled first, taken to its discussion. A box whose
+ * box as a draft of a new message, unsent: the draft kept outside the box,
+ * loaded back into it, with the focus. The box's own draft coming back as it
+ * keeps it, a moved answer that started it included, loads nothing and
+ * leaves the focus where it is. A box whose
  * draft is kept outside it (`keptDraft`) reports what it holds, so the draft
  * outlives the box, and so holds nothing once the box sends it. A send that
  * fails after the box is gone keeps it there again; one that fails over a
@@ -174,6 +186,18 @@ const BOX_ONE_ROW = {
  * A quote of a selection in the conversation (`quote`) is added after what
  * the box shows, as markdown quote lines - an edit in progress included,
  * which stays an edit - and the box takes the focus with the caret after it.
+ * A member's answers moved off question cards someone else settled first
+ * (`moved`, T186) are added the same way, below what the box shows with a
+ * blank line between, and leave the focus where it is. They stay kept apart
+ * until the box keeps them in its draft or a send of them went, so an edit
+ * cancelled before either, a refused one included, gives them back to the
+ * emptied box. A send still out holds them, and one that failed gives them
+ * back with what it puts back or offers. What the box says
+ * about card answers (`notice`) shows under it until the box sends or
+ * another notice takes its place; a card answer that did not reach the host
+ * stops saying so once the person types, as a failed send does, or once that
+ * answer moves into the box; with answers moved in it says so under their
+ * line, which stays.
  *
  * `@` completes a member of the team's environment (decision 137), or a bot
  * or a task of the bot's environment (decision 177); the box shows the name
@@ -228,6 +252,10 @@ export function BotMessageComposer(props: {
   readonly keptDraft: BotKeptDraft | null;
   /** A quote to add to what the box shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
+  /** Answers moved off question cards, to add after what the box shows; `null` for none. */
+  readonly moved: BotComposerCarry | null;
+  /** What the box says under it about question cards' answers; `null` for nothing. */
+  readonly notice: BotComposerNotice | null;
   /**
    * The host accepted `text`, what the box sent; not called once the box
    * is gone. Answers whether the owner says the send's delivery itself, where the
@@ -257,6 +285,8 @@ export function BotMessageComposer(props: {
     seed,
     keptDraft,
     quote,
+    moved,
+    notice,
     onSent,
   } = props;
   const client = useTabHostClient();
@@ -270,13 +300,22 @@ export function BotMessageComposer(props: {
   const mentions = useBotMentionCompletion({
     replyRow: box === BOX_ONE_ROW ? frameRef : null,
   });
-  const { content, setContent, loadBox, onEditorReady, takenQuoteId } =
-    useBotBoxDocument(editorRef, {
-      edit,
-      seed,
-      quote,
-      contentOf: mentions.contentOf,
-    });
+  const {
+    content,
+    setContent,
+    loadBox,
+    onEditorReady,
+    takenQuoteId,
+    held,
+    seedsLoaded,
+    noteSelection,
+  } = useBotBoxDocument(editorRef, {
+    edit,
+    seed,
+    quote,
+    moved,
+    contentOf: mentions.contentOf,
+  });
   const text = useMemo(() => botBoxText(content), [content]);
   const wire = useMemo(() => botBoxWire(content), [content]);
   const imageAtoms = useMemo(() => collectImageAtoms(content), [content]);
@@ -286,10 +325,9 @@ export function BotMessageComposer(props: {
   useEffect(() => {
     if (edit !== null) editorRef.current?.focusAtEnd("reveal-caret");
   }, [edit]);
-  const seedId = seed?.id ?? null;
   useEffect(() => {
-    if (seedId !== null) editorRef.current?.focusAtEnd("reveal-caret");
-  }, [seedId]);
+    if (seedsLoaded > 0) editorRef.current?.focusAtEnd("reveal-caret");
+  }, [seedsLoaded]);
   useEffect(() => {
     if (quote === null || quote.id !== takenQuoteId) return;
     editorRef.current?.focusAtEnd("reveal-caret");
@@ -304,13 +342,16 @@ export function BotMessageComposer(props: {
       mountedRef.current = false;
     };
   }, []);
+  // An edit in progress is not kept, so the moves it holds stay the store's
+  // until a send of the edit went or its box keeps them.
   useEffect(() => {
     if (edit !== null) return;
     keptDraft?.keep(
       text,
       text.length === 0 && imageCount === 0 ? null : content,
+      held,
     );
-  }, [content, edit, imageCount, keptDraft, text]);
+  }, [content, edit, held, imageCount, keptDraft, text]);
   const [lastDelivery, setLastDelivery] =
     useState<BotConversationSendDelivery | null>(null);
   // What goes with the text: a bot's host that takes no image gets none.
@@ -326,39 +367,46 @@ export function BotMessageComposer(props: {
     sendPending: send.isPending,
   });
 
-  // What failed goes back in the box, as it was sent: an edit's send edits
-  // that message again, and a new message's text is the box's draft.
+  // What failed goes back in the box, as it was sent, with the moves it
+  // holds: an edit's send edits that message again, and a new message's text
+  // is the box's draft.
   const putBack = (unsent: BotUnsentMessage): void => {
     if (unsent.supersedes !== null) {
       // The owner may immediately retire this edit if its request resumed
       // while the failed send was offered back. Restore the draft either way.
-      loadBox(unsent.content);
+      loadBox(unsent.content, unsent.held);
       onEditResume({
         requestId: unsent.supersedes,
         text: unsent.wire,
         content: unsent.content,
+        held: unsent.held,
         sessionThreadId: unsent.sessionThreadId,
       });
       return;
     }
     if (edit !== null) onEditEnd();
-    loadBox(unsent.content);
+    loadBox(unsent.content, unsent.held);
   };
   const submit = (): void => {
     if (!canSend) return;
     failure.clear();
+    notice?.clear();
     keptDraft?.offer(null);
     const unsent: BotUnsentMessage = {
       text,
       wire,
       supersedes: edit?.requestId ?? null,
       content,
+      held,
       sessionThreadId: edit?.sessionThreadId,
     };
+    // The send carries the moves the box holds: the store keeps them, added
+    // to no box, until the send went or failed.
+    keptDraft?.carry(held, "out");
     // The box empties as the send starts, which drops the draft kept outside
     // it, and the edit it held ends: the row the host writes reaches the
     // list before the host answers.
-    loadBox(EMPTY_BOT_BOX);
+    loadBox(EMPTY_BOT_BOX, NO_MOVES);
     setLastDelivery(null);
     if (unsent.supersedes !== null) onEditEnd();
     // Settled through the promise, not `mutate`'s callbacks, which do not
@@ -377,6 +425,7 @@ export function BotMessageComposer(props: {
       })
       .then(
         (response) => {
+          keptDraft?.carry(unsent.held, "went");
           // The send went, so it is reported whatever the box did meanwhile,
           // unless the box is gone; the delivery is said under the box only
           // while it is still empty.
@@ -401,10 +450,13 @@ export function BotMessageComposer(props: {
             keptDraft.offer(unsent);
             failure.fail(null);
           } else if (unsent.supersedes === null && !keptDraft.hasDraft()) {
-            keptDraft.keep(unsent.text, unsent.content);
+            keptDraft.keep(unsent.text, unsent.content, unsent.held);
           } else {
             keptDraft.offer(unsent);
           }
+          // Its moves are the store's again: held by what holds the message
+          // now, else added back to the box.
+          keptDraft?.carry(unsent.held, "failed");
         },
       );
   };
@@ -510,7 +562,7 @@ export function BotMessageComposer(props: {
                 size="xs"
                 data-testid={`${testId}-edit-cancel`}
                 onClick={() => {
-                  loadBox(EMPTY_BOT_BOX);
+                  loadBox(EMPTY_BOT_BOX, NO_MOVES);
                   onEditEnd();
                 }}
               >
@@ -539,13 +591,17 @@ export function BotMessageComposer(props: {
               preserveMessagePaste
               hasPastedImageBytes={NO_PASTED_IMAGE_BYTES}
               ingestPastedComposerImages={ingestPasted}
-              onDocumentChange={(next) => {
+              onDocumentChange={(next, selection) => {
                 setContent(next);
+                noteSelection(selection);
                 if (lastDelivery !== null) setLastDelivery(null);
                 // A failed message offered back stays offered while they type.
                 if (failure.unsent === null) failure.clear();
+                if (notice !== null && notice.kind !== "moved") {
+                  notice.clearFailure();
+                }
               }}
-              onSelectionChange={noop}
+              onSelectionChange={noteSelection}
               onSubmit={submit}
               onPaste={takesImages ? paste.onPaste : noop}
               onDragOver={noop}
@@ -588,6 +644,7 @@ export function BotMessageComposer(props: {
       <ComposerStatus
         failure={failure}
         keptDraft={keptDraft}
+        notice={notice}
         queued={lastDelivery === "queued"}
         testId={testId}
         onRestore={(unsent) => {
@@ -700,8 +757,17 @@ function useBoxEmptyRef(
 /**
  * The editor's document as the box holds it. What the person does reaches it
  * through `setContent`; what the box puts there itself goes through `loadBox`,
- * which the editor then shows. A focused box keeps its caret at the end of it,
- * and only a gesture of the person's moves focus to it.
+ * which the editor then shows. A focused box keeps its caret at the end of a
+ * document it loads, and only a gesture of the person's moves focus to it.
+ * Answers someone else's settlement moved here are added below the draft
+ * without moving the person's selection, focus or scroll.
+ *
+ * Answers moved off question cards (`moved`, T186) are added once each, by
+ * move: `held` names the moves whose lines the document holds, for the box to
+ * report as it keeps or sends them. Whatever replaces the document holds the
+ * moves it says it holds (its `held`) - an edit, a seed, `loadBox` - so a
+ * move still waiting in the store is added to the document that replaced
+ * it, once, and a send of it carries the moves it holds.
  */
 function useBotBoxDocument(
   editorRef: RefObject<ComposerPromptEditorHandle | null>,
@@ -709,83 +775,106 @@ function useBotBoxDocument(
     readonly edit: BotComposerEdit | null;
     readonly seed: BotComposerSeed | null;
     readonly quote: BotComposerQuote | null;
+    readonly moved: BotComposerCarry | null;
     readonly contentOf: (text: string) => JsonContent;
   },
 ): {
   readonly content: JsonContent;
   readonly setContent: (content: JsonContent) => void;
-  readonly loadBox: (content: JsonContent) => void;
+  readonly loadBox: (
+    content: JsonContent,
+    contentHeld: ReadonlyArray<number>,
+  ) => void;
   readonly onEditorReady: () => void;
   readonly takenQuoteId: number | null;
+  readonly held: ReadonlyArray<number>;
+  /** How many seeds put a draft from outside the box in it. */
+  readonly seedsLoaded: number;
+  /** Where the person's selection is, as the editor reports it. */
+  readonly noteSelection: (selection: BoxSelection) => void;
 } {
-  const { edit, seed, quote, contentOf } = incoming;
+  const { edit, seed, quote, moved, contentOf } = incoming;
   const [content, setContent] = useState(EMPTY_BOT_BOX);
-  const [loaded, setLoaded] = useState<JsonContent | null>(null);
+  const [loaded, setLoaded] = useState<BoxLoad | null>(null);
   const [editContent, setEditContent] = useState<JsonContent | null>(null);
-  const loadBox = (next: JsonContent): void => {
+  const [held, setHeld] = useState<ReadonlyArray<number>>(NO_MOVES);
+  const selectionRef = useRef<BoxSelection>(START_OF_BOX);
+  const noteSelection = useCallback((selection: BoxSelection) => {
+    selectionRef.current = selection;
+  }, []);
+  const loadBox = (
+    next: JsonContent,
+    contentHeld: ReadonlyArray<number>,
+  ): void => {
     // An explicit load replaces the row copy, even when its document matches.
     setEditContent(null);
     setContent(next);
     // Each load must trigger the editor sync, including repeated clears with
     // EMPTY_BOT_BOX after consecutive sends on one mounted composer.
-    setLoaded({ ...next });
+    setLoaded({ content: next, belowDraft: false });
+    setHeld(contentHeld);
   };
-  // An edit or seed replaces the box's content once. A quote appends after
-  // whichever document it currently holds, including an edit.
+  // One document per render, from what this render brings: an edit or seed
+  // replaces the box's content once, then a quote and the moves still waiting
+  // are appended to whichever document that leaves, an edit included, which
+  // stays an edit.
+  let next = content;
+  let nextHeld = held;
   const [loadedEdit, setLoadedEdit] = useState<BotComposerEdit | null>(null);
   if (edit !== loadedEdit) {
     setLoadedEdit(edit);
-    if (edit !== null) {
-      const next = edit.content ?? contentOf(edit.text);
-      // A refused replacement is unsent work, even before another keystroke.
-      // Only a fresh row load can be an untouched duplicate of the request.
-      setEditContent(edit.content === null ? next : null);
-      setContent(next);
-      setLoaded(next);
-    } else {
-      // A retry outside this box ends replacement mode. Drop the duplicate
-      // only while it is still the document Edit loaded; a changed draft
-      // becomes an ordinary new message, including its images and quotes.
-      if (
-        editContent !== null &&
-        JSON.stringify(content) === JSON.stringify(editContent)
-      ) {
-        setContent(EMPTY_BOT_BOX);
-        setLoaded(EMPTY_BOT_BOX);
-      }
-      setEditContent(null);
+    const load = editLoadOf(edit, content, editContent, contentOf);
+    setEditContent(load.editContent);
+    if (load.content !== null) {
+      next = load.content;
+      nextHeld = edit?.held ?? NO_MOVES;
     }
   }
   const seedId = seed?.id ?? null;
   const [loadedSeedId, setLoadedSeedId] = useState<number | null>(null);
+  const [seedsLoaded, setSeedsLoaded] = useState(0);
   if (seedId !== loadedSeedId) {
     setLoadedSeedId(seedId);
-    let next: JsonContent | null = null;
-    if (seed !== null) next = seed.content ?? contentOf(seed.text);
-    else if (edit === null) next = EMPTY_BOT_BOX;
-    if (next !== null) {
-      setContent(next);
-      setLoaded(next);
+    const load = seedLoadOf(seed, edit, content, contentOf);
+    if (load.fromOutside) setSeedsLoaded(seedsLoaded + 1);
+    if (load.content !== null) {
+      next = load.content;
+      nextHeld = seed?.held ?? NO_MOVES;
     }
   }
   const [takenQuoteId, setTakenQuoteId] = useState<number | null>(null);
   if (quote !== null && quote.id !== takenQuoteId) {
     setTakenQuoteId(quote.id);
-    const next = appendBlocks(
-      content,
+    next = appendBlocks(
+      next,
       quote.snapshots.flatMap((snapshot) => [
         buildQuoteBlockquote(snapshot),
         { type: "paragraph" },
       ]),
     );
-    setContent(next);
-    setLoaded(next);
   }
+  const box = withWaitingMoves(
+    { content: next, held: nextHeld },
+    moved,
+    contentOf,
+  );
+  if (box.content !== content) {
+    setContent(box.content);
+    setLoaded({ content: box.content, belowDraft: next === content });
+  }
+  if (box.held !== held) setHeld(box.held);
   useEffect(() => {
     const editor = editorRef.current;
     if (loaded === null || editor === null) return;
+    if (loaded.belowDraft) {
+      // Answers someone else's settlement moved here go below the draft, so
+      // the person's selection still points where it did, and neither their
+      // focus nor any scroll moves.
+      editor.syncContent(loaded.content, selectionRef.current);
+      return;
+    }
     const hadFocus = editor.hasFocus();
-    editor.syncContent(loaded, { from: 1, to: 1 });
+    editor.syncContent(loaded.content, START_OF_BOX);
     if (hadFocus) editor.focusAtEnd("reveal-caret");
   }, [editorRef, loaded]);
   const contentRef = useRef(content);
@@ -795,39 +884,175 @@ function useBotBoxDocument(
   // Anything loaded before the editor could take it.
   const onEditorReady = useCallback(() => {
     if (contentRef.current === EMPTY_BOT_BOX) return;
-    editorRef.current?.syncContent(contentRef.current, { from: 1, to: 1 });
+    editorRef.current?.syncContent(contentRef.current, START_OF_BOX);
   }, [editorRef]);
-  return { content, setContent, loadBox, onEditorReady, takenQuoteId };
+  return {
+    content,
+    setContent,
+    loadBox,
+    onEditorReady,
+    takenQuoteId,
+    held,
+    seedsLoaded,
+    noteSelection,
+  };
+}
+
+/** A selection in the box's document, as the editor reports it. */
+interface BoxSelection {
+  readonly from: number;
+  readonly to: number;
+}
+
+const START_OF_BOX: BoxSelection = { from: 1, to: 1 };
+
+/**
+ * A document the box puts in its editor, and whether it is only moved answers
+ * added below what the editor holds (`belowDraft`), which leaves the person's
+ * selection, focus and scroll as they are.
+ */
+interface BoxLoad {
+  readonly content: JsonContent;
+  readonly belowDraft: boolean;
 }
 
 /**
- * What the box says under it: a failed send offered back (from the draft
- * kept outside the box, else from the failure), a failed send whose text is
- * in the box, or a queued send.
+ * What an edit that changed does to the box: the document it loads, `null`
+ * for none, and the row copy an untouched duplicate is told by.
+ */
+function editLoadOf(
+  edit: BotComposerEdit | null,
+  content: JsonContent,
+  editContent: JsonContent | null,
+  contentOf: (text: string) => JsonContent,
+): {
+  readonly content: JsonContent | null;
+  readonly editContent: JsonContent | null;
+} {
+  if (edit !== null) {
+    const loaded = edit.content ?? contentOf(edit.text);
+    // A refused replacement is unsent work, even before another keystroke.
+    // Only a fresh row load can be an untouched duplicate of the request.
+    return {
+      content: loaded,
+      editContent: edit.content === null ? loaded : null,
+    };
+  }
+  // A retry outside this box ends replacement mode. Drop the duplicate only
+  // while it is still the document Edit loaded; a changed draft becomes an
+  // ordinary new message, including its images and quotes.
+  const untouched =
+    editContent !== null &&
+    JSON.stringify(content) === JSON.stringify(editContent);
+  return { content: untouched ? EMPTY_BOT_BOX : null, editContent: null };
+}
+
+/**
+ * What a seed that changed puts in the box: its draft, an empty box once it
+ * goes, or nothing while the box edits a failed message.
+ */
+function seededContentOf(
+  seed: BotComposerSeed | null,
+  edit: BotComposerEdit | null,
+  contentOf: (text: string) => JsonContent,
+): JsonContent | null {
+  if (seed !== null) return seed.content ?? contentOf(seed.text);
+  return edit === null ? EMPTY_BOT_BOX : null;
+}
+
+/**
+ * What a seed that changed puts in the box, and whether that is a draft from
+ * outside it (`fromOutside`). The box's own first keep comes back as a seed
+ * of the very document it holds, a moved answer's included: it loads nothing
+ * new.
+ */
+function seedLoadOf(
+  seed: BotComposerSeed | null,
+  edit: BotComposerEdit | null,
+  content: JsonContent,
+  contentOf: (text: string) => JsonContent,
+): { readonly content: JsonContent | null; readonly fromOutside: boolean } {
+  const seeded = seededContentOf(seed, edit, contentOf);
+  return { content: seeded, fromOutside: seed !== null && seeded !== content };
+}
+
+/**
+ * `box` with each move `moved` carries that it does not hold yet appended
+ * below what it holds, a blank line between, and those moves held.
+ */
+function withWaitingMoves(
+  box: { readonly content: JsonContent; readonly held: ReadonlyArray<number> },
+  moved: BotComposerCarry | null,
+  contentOf: (text: string) => JsonContent,
+): { readonly content: JsonContent; readonly held: ReadonlyArray<number> } {
+  const waiting =
+    moved?.blocks.filter((item) => !box.held.includes(item.id)) ?? [];
+  if (waiting.length === 0) return box;
+  return {
+    content: waiting.reduce(
+      (doc, item) => appendBelow(doc, contentOf(item.block).content ?? []),
+      box.content,
+    ),
+    held: [...box.held, ...waiting.map((item) => item.id)],
+  };
+}
+
+/**
+ * What the box says under it: the line about answers moved into it, then one
+ * failure line, or else a queued send. The failure line is the box's own
+ * failed send, offered back from the draft kept outside the box, else from
+ * the failure, or else a card answer's failed send. While the box's own
+ * failure stands for both, the card failure stays on the notice and goes on
+ * being cut to its answers still on their cards, so its line is back when the
+ * box's goes only if one of them still is.
  */
 function ComposerStatus(props: {
   readonly failure: BotSendFailure;
   readonly keptDraft: BotKeptDraft | null;
+  readonly notice: BotComposerNotice | null;
   readonly queued: boolean;
   readonly testId: string;
   readonly onRestore: (unsent: BotUnsentMessage) => void;
 }): ReactNode {
-  const { failure, onRestore } = props;
+  const { failure, notice, onRestore } = props;
   const unsent = props.keptDraft?.unsent ?? failure.unsent;
-  if (unsent !== null || failure.failed) {
-    return (
-      <BotSendFailedNotice
-        testId={`${props.testId}-send-failed`}
-        restore={
-          unsent === null
-            ? null
-            : { text: unsent.text, onRestore: () => onRestore(unsent) }
-        }
-      />
-    );
+  const moved = movedLineOf(notice);
+  const failed = unsent !== null || failure.failed || cardAnswerFailed(notice);
+  if (moved === null && !failed) {
+    if (!props.queued) return null;
+    return <BotQueuedNotice testId={`${props.testId}-queued`} />;
   }
-  if (!props.queued) return null;
-  return <BotQueuedNotice testId={`${props.testId}-queued`} />;
+  return (
+    <>
+      {moved === null ? null : (
+        <BotAnswersMovedNotice
+          testId={`${props.testId}-answers-moved`}
+          text={moved}
+        />
+      )}
+      {failed ? (
+        <BotSendFailedNotice
+          testId={`${props.testId}-send-failed`}
+          restore={
+            unsent === null
+              ? null
+              : { text: unsent.text, onRestore: () => onRestore(unsent) }
+          }
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** The line about answers moved into the box; `null` where the notice has none. */
+function movedLineOf(notice: BotComposerNotice | null): string | null {
+  if (notice === null || notice.kind === "answer-failed") return null;
+  return notice.text;
+}
+
+/** Whether the notice says a card answer's send failed. */
+function cardAnswerFailed(notice: BotComposerNotice | null): boolean {
+  return notice !== null && notice.kind !== "moved";
 }
 
 /** A draft put in the box to be sent as a new message, once the person sends it. */
@@ -837,12 +1062,28 @@ export type BotComposerSeed = {
   readonly text: string;
   /** The box's own document; `null` for text put there from outside it. */
   readonly content: JsonContent | null;
+  /** The moves whose lines the draft holds, as far as this window knows. */
+  readonly held: ReadonlyArray<number>;
 };
 
 /** Where a box's unsent draft is kept, outside the box. */
 export type BotKeptDraft = {
-  /** What the box holds now, as the person types it; empty keeps nothing. */
-  readonly keep: (text: string, content: JsonContent | null) => void;
+  /**
+   * What the box holds now, as the person types it; empty keeps nothing.
+   * `held` names the moves (`BotComposerCarry`) whose lines it holds: kept
+   * with it, they are no longer kept apart.
+   */
+  readonly keep: (
+    text: string,
+    content: JsonContent | null,
+    held: ReadonlyArray<number>,
+  ) => void;
+  /**
+   * The box's send carries the moves `held`, `stage` saying where it is:
+   * kept apart, added to no box, while it is out; let go once it went; kept
+   * apart again once it failed.
+   */
+  readonly carry: (held: ReadonlyArray<number>, stage: BotCarrySend) => void;
   /** Whether a draft is kept now, read when a send settles. */
   readonly hasDraft: () => boolean;
   /** A failed send of the box offered back beside the draft; `null` for none. */
@@ -861,6 +1102,26 @@ export type BotComposerQuote = {
   readonly taken: () => void;
 };
 
+/**
+ * Answers moved off question cards (T186), for the box to add after what it
+ * shows: each move's lines, in order, kept apart until the box keeps them or
+ * a send of them went (`BotKeptDraft`), and added to whatever document
+ * replaces the one that held them until then. The box adds each move once,
+ * by its id.
+ */
+export type BotComposerCarry = {
+  readonly blocks: ReadonlyArray<BotCarriedBlock>;
+};
+
+/**
+ * What the box says under it about question cards' answers, and how it stops:
+ * all of it (`clear`), or only the failure it says (`clearFailure`).
+ */
+export type BotComposerNotice = BotBoxNotice & {
+  readonly clear: () => void;
+  readonly clearFailure: () => void;
+};
+
 /** A failed message loaded into the box to be edited and sent again. */
 export type BotComposerEdit = {
   /** Captured by the edit owner; null is trunk, absent means not observed. */
@@ -870,4 +1131,6 @@ export type BotComposerEdit = {
   readonly text: string;
   /** The box's document as a failed send of the edit left it; `null` for a row's text alone. */
   readonly content: JsonContent | null;
+  /** The moves whose lines `content` holds; none for a row's text. */
+  readonly held: ReadonlyArray<number>;
 };

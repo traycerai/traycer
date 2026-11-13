@@ -93,7 +93,7 @@ export function appendCommentTextToNewConversationDraft(
 }
 
 /** Below anything already typed, with a blank line between. */
-function appendBelow(
+export function appendBelow(
   content: JsonContent,
   paragraphs: ReadonlyArray<JsonContent>,
 ): JsonContent {

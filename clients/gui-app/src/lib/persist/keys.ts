@@ -86,6 +86,14 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const githubMentionFiltersKey = (identity: string | null): string =>
   scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(identity));
 
+// What each bot channel's and thread's box holds unsent, by account. A box can
+// hold a member's private answer to a team bot's question, moved there when a
+// teammate answered first, so another account signed in on this profile never
+// reads it. Unlike the stores above, signing out keeps the bucket: a draft is
+// its only copy, and it comes back when its account signs in again.
+export const botBoxDraftsKey = (identity: string | null): string =>
+  scopedPersistKey(STORE_KEYS.botBoxDrafts, scopeBucket(identity));
+
 // The hostId this machine's OWN local host last published. Unscoped and
 // identity-free like the picker memory: it is a fact about this machine, not
 // about who is signed in. The directory uses it to keep the machine's own
@@ -257,6 +265,11 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
+  // What each bot channel's and thread's message box holds unsent, by
+  // account (`botBoxDraftsKey`), kept on this device across closing Tracy and
+  // restarting (`bot-drafts-store.ts`). Image bytes live in the composer image
+  // store; the drafts name their hashes.
+  { camelName: "botBoxDrafts", leaf: "bot-box-drafts", kind: "scoped" },
 
   // ── Scoped non-zustand key families ──────────────────────────────────────
   {
@@ -517,15 +530,6 @@ export const PERSIST_STORES = [
   {
     camelName: "botPaneWidths",
     leaf: "bot-pane-widths",
-    kind: "static",
-  },
-  // What each bot channel's and thread's message box holds unsent, kept on
-  // this device across closing Tracy and restarting (`bot-drafts-store.ts`).
-  // Image bytes live in the composer image store; the drafts name their
-  // hashes.
-  {
-    camelName: "botBoxDrafts",
-    leaf: "bot-box-drafts",
     kind: "static",
   },
   // The channel column's arrangement, one per device: the sections' order,

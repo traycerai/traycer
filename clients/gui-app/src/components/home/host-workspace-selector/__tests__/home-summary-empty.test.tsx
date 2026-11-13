@@ -306,6 +306,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 }));
 
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  onLandingImagesDeleted: vi.fn(),
   sessionImageBytes: () => null,
   getImageBytes: () => Promise.resolve(undefined),
   imageHashKeys: () => Promise.resolve([]),

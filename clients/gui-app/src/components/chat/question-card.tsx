@@ -2,7 +2,6 @@ import { useId, type ReactElement, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useMessageTime } from "@/lib/relative-time";
 import {
   QUESTION_SKIPPED_TEXT,
@@ -11,6 +10,7 @@ import {
   draftText,
   questionCardAnsweredBy,
   questionCardEntry,
+  questionCardSkippedEntry,
   questionCardTallyLine,
   questionCardView,
   questionSettledLine,
@@ -48,24 +48,23 @@ export interface QuestionCardAnswer {
  * and Skip; a settled question says what it was settled with and by whom,
  * and offers nothing. Every member sees the same card, and the first answer
  * to land settles a question for all of them (decision 122). An answer sent
- * stays on the card, waiting, until the question shows settled: by this
- * person, and the card says so; or by someone else first, and this person
- * keeps their answer in place, is told who answered while they were
- * answering, loses Submit, and can copy what they had or take it to the
- * question's discussion.
+ * stays on the card, waiting, until the question shows settled, and the card
+ * says how and by whom. Where someone else settled it first while this
+ * person had an answer of their own, the question shows settled all the
+ * same: their answer is the caller's to move off the card (T186).
  *
  * The card keeps nothing itself: each question's draft is the caller's, so
- * it outlives the view (`onDraft`), as do where an answer goes (`onAnswer`)
- * and where the discussion is (`onDiscuss`). `onDraft: null` draws the card
- * without actions.
+ * it outlives the view (`onDraft`), as does where an answer goes
+ * (`onAnswer`). `onDraft: null` draws the card without actions.
  *
  * Where the answers go together (`onAnswerAll`, T167), the card has one
- * Submit at its foot in place of each question's own, sending an answer or a
- * Skip for every open question as one message; each question has its own
- * Skip, and the foot counts the open questions answered. A question settled
- * already, by the asker or anyone, shows how and is not counted. Once one set
- * settled them all, the card shows each answer and who sent them, once,
- * whichever way this viewer's own answers would go.
+ * Submit at its foot in place of each question's own, sending every open
+ * question as one message: once at least one is answered, the ones left
+ * untouched go skipped (T186), and the foot counts the open questions
+ * answered. A question settled already, by the asker or anyone, shows how
+ * and is not counted. Once one set settled them all, the card shows each
+ * answer and who sent them, once, whichever way this viewer's own answers
+ * would go.
  */
 export function QuestionCard(props: {
   /** Who asks, by the name the card shows. */
@@ -76,16 +75,14 @@ export function QuestionCard(props: {
     | null;
   readonly onAnswer: (answer: QuestionCardAnswer) => void;
   /**
-   * Sends the person's answer or Skip for every open question at once;
-   * `null` answers each question on its own.
+   * Sends the person's answers to every open question at once, the ones
+   * they left untouched skipped; `null` answers each question on its own.
    */
   readonly onAnswerAll:
     | ((entries: ReadonlyArray<QuestionCardEntry>) => void)
     | null;
-  /** Opens the question's discussion with `draft` in its box, unsent; `null` where there is none. */
-  readonly onDiscuss: ((questionIndex: number, draft: string) => void) | null;
 }): ReactElement {
-  const { asker, questions, onDraft, onAnswer, onAnswerAll, onDiscuss } = props;
+  const { asker, questions, onDraft, onAnswer, onAnswerAll } = props;
   const answeredBy = questionCardAnsweredBy(
     questions.map((item) => item.settlement),
   );
@@ -108,11 +105,6 @@ export function QuestionCard(props: {
             onDraft === null ? null : (draft) => onDraft(question.index, draft)
           }
           onAnswer={onAnswer}
-          onDiscuss={
-            onDiscuss === null
-              ? null
-              : (draft) => onDiscuss(question.index, draft)
-          }
         />
       ))}
       {answeredBy === null ? null : (
@@ -129,12 +121,13 @@ export function QuestionCard(props: {
               const { draft } = question;
               onDraft(question.index, {
                 ...draft,
-                sent: draft.skip
-                  ? { text: QUESTION_SKIPPED_TEXT, skipped: true }
-                  : {
-                      text: draftText(draft, question.several) ?? "",
-                      skipped: false,
-                    },
+                sent:
+                  questionCardEntry(question.index, draft) === null
+                    ? { text: QUESTION_SKIPPED_TEXT, skipped: true }
+                    : {
+                        text: draftText(draft, question.several) ?? "",
+                        skipped: false,
+                      },
               });
             }
             onAnswerAll(entries);
@@ -154,17 +147,8 @@ function QuestionCardItem(props: {
   readonly answerOnly: boolean;
   readonly onDraft: ((draft: QuestionCardDraft) => void) | null;
   readonly onAnswer: (answer: QuestionCardAnswer) => void;
-  readonly onDiscuss: ((draft: string) => void) | null;
 }): ReactElement {
-  const {
-    asker,
-    question,
-    together,
-    answerOnly,
-    onDraft,
-    onAnswer,
-    onDiscuss,
-  } = props;
+  const { asker, question, together, answerOnly, onDraft, onAnswer } = props;
   const { draft } = question;
   const view = questionCardView(question.settlement, draft, question.several);
   const submit = (text: string, skipped: boolean): void => {
@@ -172,59 +156,43 @@ function QuestionCardItem(props: {
     onDraft({ ...draft, sent: { text, skipped } });
     onAnswer({ questionIndex: question.index, text, skipped });
   };
+  // A sent answer waits as it was sent.
   const editable = view.kind !== "sent" && onDraft !== null;
-  // A sent answer waits as it was sent; an overtaken one stays the person's
-  // to change before they copy it or discuss it. A question skipped on a
-  // card sent together takes no answer.
-  const draftEditable = editable && !(together && draft.skip);
+  // An answer someone else's settlement overtook is the caller's to move
+  // off the card: the question shows settled, as it is.
+  const settlement =
+    view.kind === "settled" || view.kind === "overtaken"
+      ? view.settlement
+      : null;
 
   return (
     <section
       data-testid="question-card-item"
-      data-state={view.kind}
+      data-state={settlement === null ? view.kind : "settled"}
       aria-label={question.text}
       className="flex min-w-0 flex-col gap-1.5"
     >
       <p className="text-ui-sm break-words whitespace-pre-wrap text-foreground">
         {question.text}
       </p>
-      {question.several && view.kind !== "settled" ? (
+      {question.several && settlement === null ? (
         <p className="text-ui-xs text-muted-foreground">Choose any.</p>
       ) : null}
-      {view.kind === "settled" ? (
+      {settlement !== null ? (
         <p
           data-testid="question-card-settlement"
           className="text-ui-xs break-words whitespace-pre-wrap text-muted-foreground"
         >
-          {settledText(view.settlement, asker, answerOnly)}
+          {settledText(settlement, asker, answerOnly)}
         </p>
       ) : (
         <>
-          {view.kind === "overtaken" ? (
-            <p
-              data-testid="question-card-overtaken"
-              role="status"
-              className="text-ui-xs break-words whitespace-pre-wrap text-warning-foreground"
-            >
-              {overtakenLine(view.settlement, asker)}
-            </p>
-          ) : null}
           <QuestionDraft
             question={question}
-            editable={draftEditable}
+            editable={editable}
             onChange={(next) => onDraft?.(next)}
           />
-          {view.kind === "overtaken" ? (
-            <OvertakenActions draft={view.draft} onDiscuss={onDiscuss} />
-          ) : null}
-          {view.kind !== "overtaken" && together ? (
-            <SkipToggle
-              skip={draft.skip}
-              disabled={!editable}
-              onToggle={() => onDraft?.({ ...draft, skip: !draft.skip })}
-            />
-          ) : null}
-          {view.kind === "overtaken" || together ? null : (
+          {together ? null : (
             <OpenActions
               draft={draftText(draft, question.several)}
               disabled={onDraft === null || view.kind === "sent"}
@@ -247,31 +215,6 @@ function settledText(
 ): string {
   if (!answerOnly) return questionSettledLine(settlement, asker);
   return settlement.answer ?? QUESTION_SKIPPED_TEXT;
-}
-
-/**
- * A question's Skip on a card whose answers go together: pressed again, it is
- * answered after all. One name; `aria-pressed` says whether it is skipped.
- */
-function SkipToggle(props: {
-  readonly skip: boolean;
-  readonly disabled: boolean;
-  readonly onToggle: () => void;
-}): ReactElement {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="xs"
-      className="self-start"
-      aria-pressed={props.skip}
-      disabled={props.disabled}
-      data-testid="question-card-skip"
-      onClick={props.onToggle}
-    >
-      Skip this question
-    </Button>
-  );
 }
 
 /**
@@ -396,8 +339,8 @@ function OpenActions(props: {
 
 /**
  * The foot of a card whose answers go together: how many open questions the
- * person has answered or skipped, and Submit, which sends them all once
- * every one has an answer or a Skip; held, spinning, while they are sent.
+ * person has answered, and Submit, which sends them all once one is
+ * answered, the rest skipped; held, spinning, while they are sent.
  */
 function SubmitAll(props: {
   readonly questions: ReadonlyArray<QuestionCardQuestion>;
@@ -407,10 +350,11 @@ function SubmitAll(props: {
   const { questions, disabled, onSubmit } = props;
   const open = questions.filter((item) => item.settlement === null);
   if (open.length === 0) return null;
-  const entries = open.flatMap((item) => {
-    const entry = questionCardEntry(item.index, item.draft);
-    return entry === null ? [] : [entry];
-  });
+  const answers = open.map((item) => questionCardEntry(item.index, item.draft));
+  const answered = answers.filter((entry) => entry !== null).length;
+  const entries = answers.map(
+    (entry, at) => entry ?? questionCardSkippedEntry(open[at].index),
+  );
   const sending = open.some((item) => item.draft.sent !== null);
   return (
     <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
@@ -418,12 +362,12 @@ function SubmitAll(props: {
         data-testid="question-card-tally"
         className="text-ui-xs text-muted-foreground"
       >
-        {questionCardTallyLine(entries.length, open.length)}
+        {questionCardTallyLine(answered, open.length)}
       </p>
       <Button
         type="button"
         size="xs"
-        disabled={disabled || sending || entries.length < open.length}
+        disabled={disabled || sending || answered === 0}
         data-testid="question-card-submit"
         onClick={() => onSubmit(entries)}
       >
@@ -454,53 +398,4 @@ function AnsweredBy(props: {
       {`Answered by ${props.name} · ${time}`}
     </p>
   );
-}
-
-/** What a member whose answer was overtaken can do with it: copy it, or discuss it. */
-function OvertakenActions(props: {
-  readonly draft: string;
-  readonly onDiscuss: ((draft: string) => void) | null;
-}): ReactNode {
-  const { draft, onDiscuss } = props;
-  const { copied, copy } = useClipboardCopy({
-    resetMs: 1500,
-    onSuccess: null,
-    onError: null,
-  });
-  return (
-    <div className="flex items-center gap-1.5">
-      <Button
-        type="button"
-        variant="outline"
-        size="xs"
-        data-testid="question-card-copy"
-        onClick={() => copy(draft)}
-      >
-        {copied ? "Copied" : "Copy"}
-      </Button>
-      {onDiscuss === null ? null : (
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          data-testid="question-card-discuss"
-          onClick={() => onDiscuss(draft)}
-        >
-          Discuss
-        </Button>
-      )}
-    </div>
-  );
-}
-
-function overtakenLine(
-  settlement: QuestionCardSettlement,
-  asker: string,
-): string {
-  if (settlement.by.kind === "asker") {
-    return `Settled by ${asker} while you were answering: ${settlement.answer ?? QUESTION_SKIPPED_TEXT}`;
-  }
-  return settlement.skipped || settlement.answer === null
-    ? `Skipped by ${settlement.by.name} while you were answering`
-    : `Answered by ${settlement.by.name} while you were answering: ${settlement.answer}`;
 }

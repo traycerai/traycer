@@ -216,6 +216,8 @@ export function Pane(): ReactElement {
             seed={null}
             keptDraft={null}
             quote={null}
+            moved={null}
+            notice={null}
             onSent={() => false}
           />
         </TabHostContext.Provider>

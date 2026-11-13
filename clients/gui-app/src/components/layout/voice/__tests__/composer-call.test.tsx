@@ -189,6 +189,8 @@ function box(kind: BoxKind): ReactNode {
       seed={null}
       keptDraft={null}
       quote={null}
+      moved={null}
+      notice={null}
       onSent={() => false}
     />
   );

@@ -5,36 +5,39 @@
  * app afresh, so the box, the store and the testing library share one set of
  * modules, and a restart loads them again over what was stored. Each case
  * scripts the send mutation and settles the send through the callbacks
- * the box handed it.
+ * the box handed it. The suite is split by describe into four files for the
+ * test budget; what they share is `bot-message-composer-draft-test-support`.
  */
 import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  BotConversationSendRequest,
-  BotConversationSendResponse,
-} from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
   BOT_ID,
   CHANNEL,
   OWNER_LABEL,
   MENTION,
   boxDoc,
-  restart,
-  startFresh,
   storeDraftsAsLeft,
   waitForStore,
-  type App,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
-
-interface SendCallbacks {
-  readonly onSuccess:
-    | ((response: BotConversationSendResponse) => void)
-    | undefined;
-  readonly onError: ((error: Error) => void) | undefined;
-}
+import {
+  app,
+  boxText,
+  endCase,
+  lastSend,
+  mountBox,
+  RESPONSE,
+  restartApp,
+  scriptedSendMutation,
+  settleSend,
+  startCase,
+  typeBox,
+  ui,
+  type SendCallbacks,
+} from "@/components/bots/__tests__/bot-message-composer-draft-test-support";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn<
@@ -57,100 +60,12 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
-  useBotConversationSendMutation: () => ({
-    mutateAsync: (variables: BotConversationSendRequest) => {
-      const { promise, resolve, reject } =
-        Promise.withResolvers<BotConversationSendResponse>();
-      const callbacks: SendCallbacks = { onSuccess: resolve, onError: reject };
-      mocks.settled.set(
-        callbacks,
-        promise.then(
-          () => undefined,
-          () => undefined,
-        ),
-      );
-      mocks.send(variables, callbacks);
-      return promise;
-    },
-    isPending: false,
-  }),
+  useBotConversationSendMutation: () => scriptedSendMutation(mocks),
 }));
 
-const RESPONSE: BotConversationSendResponse = {
-  messageId: "post-1",
-  requestId: "request-1",
-  delivery: "written",
-  threadId: "thread-1",
-};
+beforeEach(() => startCase(mocks));
 
-/** What a started app loads for a case: the box's owner, the testing library over the same React. */
-interface Ui {
-  readonly owner: typeof import("@/components/bots/__tests__/bot-box-draft-owner");
-  readonly rtl: typeof import("@testing-library/react");
-  readonly box: typeof import("@/components/bots/__tests__/bot-box-test-support");
-}
-
-async function loadUi(): Promise<Ui> {
-  const owner = await import("@/components/bots/__tests__/bot-box-draft-owner");
-  const rtl = await import("@testing-library/react");
-  const box = await import("@/components/bots/__tests__/bot-box-test-support");
-  return { owner, rtl, box };
-}
-
-let app: App;
-let ui: Ui;
-
-beforeEach(async () => {
-  app = await startFresh();
-  ui = await loadUi();
-});
-
-afterEach(() => {
-  ui.rtl.cleanup();
-  mocks.send.mockReset();
-  app.close();
-  vi.useRealTimers();
-});
-
-/**
- * The box mounted and its editor found, which polls on the real clock; the
- * fake clock the drafts' write debounce runs on comes after.
- */
-async function mountBox(initial: string): Promise<{ unmount: () => void }> {
-  vi.useRealTimers();
-  const view = ui.rtl.render(<ui.owner.OwnerBox initial={initial} />);
-  await ui.box.findBoxInput(OWNER_LABEL);
-  startDebounceClock();
-  return view;
-}
-
-function startDebounceClock(): void {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-}
-
-function typeBox(sequence: string): void {
-  ui.box.typeKeys(OWNER_LABEL, sequence);
-}
-
-function boxText(): string {
-  return ui.box.boxText(OWNER_LABEL);
-}
-
-function lastSend(): SendCallbacks {
-  const call = mocks.send.mock.calls.at(-1);
-  if (call === undefined) throw new Error("the box sent nothing");
-  return call[1];
-}
-
-async function settleSend(
-  callbacks: SendCallbacks,
-  outcome: (callbacks: SendCallbacks) => void,
-): Promise<void> {
-  await ui.rtl.act(async () => {
-    outcome(callbacks);
-    await mocks.settled.get(callbacks);
-  });
-}
+afterEach(endCase);
 
 describe("<BotMessageComposer /> and its draft on the device", () => {
   it("restores what a conversation's box held when it is mounted again, and shows another conversation's box empty", async () => {
@@ -177,9 +92,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
         },
       },
     });
-    ui.rtl.cleanup();
-    app = await restart();
-    ui = await loadUi();
+    await restartApp();
 
     await mountBox(CHANNEL);
 
@@ -190,6 +103,157 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
         .getByTestId("bot-box-mention")
         .getAttribute("data-token"),
     ).toBe("<@user-1>");
+  });
+
+  it("keeps a mention the box holds when answers move into it off a question card, and adds them below, after a blank line", async () => {
+    storeDraftsAsLeft({
+      [BOT_ID]: {
+        [CHANNEL]: {
+          text: "Ask @Ada",
+          content: boxDoc("Ask ", [MENTION]),
+          seedId: 1,
+        },
+      },
+    });
+    await restartApp();
+    await mountBox(CHANNEL);
+
+    ui.rtl.act(() => {
+      const drafts = app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "answer-key", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-key"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+
+    expect(boxText()).toBe("Ask @Ada\n\nHold the migration");
+    expect(
+      ui.rtl
+        .within(ui.box.boxInput(OWNER_LABEL))
+        .getByTestId("bot-box-mention")
+        .getAttribute("data-token"),
+    ).toBe("<@user-1>");
+    expect(app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).toEqual(
+      [],
+    );
+  });
+
+  it("adds each of two answers that moved into the box once, when the second moves in before the box acknowledged the first", async () => {
+    vi.useRealTimers();
+    const answer = (typed: string) => ({
+      chosen: [],
+      typed,
+      sent: null,
+      unsureSince: null,
+      heldForSettlement: null,
+    });
+    const compose = (
+      taken: ReadonlyArray<readonly [string, { readonly typed: string }]>,
+    ) => ({
+      block: taken.map(([, draft]) => draft.typed).join("\n"),
+      notice: "Tess answered first.",
+    });
+    ui.rtl.render(
+      <ui.owner.OwnerBoxWithSecondMover
+        initial={CHANNEL}
+        first="First answer"
+        move={() =>
+          app.drafts
+            .getState()
+            .moveAnswers(BOT_ID, CHANNEL, ["second"], compose)
+        }
+      />,
+    );
+    await ui.box.findBoxInput(OWNER_LABEL);
+
+    ui.rtl.act(() => {
+      const drafts = app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "first", answer("First answer"));
+      drafts.setAnswer(BOT_ID, "second", answer("Second answer"));
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["first"], compose);
+    });
+
+    expect(boxText()).toBe("First answer\n\nSecond answer");
+    expect(app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).toEqual(
+      [],
+    );
+  });
+
+  it("keeps a moved answer in the store's draft, with nothing left waiting, when the box that reported it held is unmounted at once, and shows it once when the box is mounted again", async () => {
+    const view = await mountBox(CHANNEL);
+    ui.rtl.act(() => {
+      const drafts = app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "first", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["first"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+    view.unmount();
+
+    expect(app.drafts.getState().threadBoxes[BOT_ID]?.[CHANNEL]?.text).toBe(
+      "Hold the migration",
+    );
+    expect(app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).toEqual(
+      [],
+    );
+
+    await mountBox(CHANNEL);
+    expect(boxText()).toBe("Hold the migration");
+  });
+
+  it("composes the edit of a failed post and the answer waiting for the box in the box's first render, the edit's text first, still editing, with the answer left in the store", async () => {
+    vi.useRealTimers();
+    ui.rtl.act(() => {
+      const drafts = app.drafts.getState();
+      drafts.setAnswer(BOT_ID, "first", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["first"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+    });
+
+    ui.rtl.render(
+      <ui.owner.OwnerBoxEditing
+        initial={CHANNEL}
+        edit={{
+          requestId: "request-failed",
+          text: "Failed post",
+          content: null,
+          held: [],
+        }}
+      />,
+    );
+    await ui.box.findBoxInput(OWNER_LABEL);
+
+    expect(boxText()).toBe("Failed post\n\nHold the migration");
+    expect(
+      ui.rtl.screen.getByTestId("bot-channel-composer-editing"),
+    ).toBeTruthy();
+    expect(
+      (app.drafts.getState().boxCarries[BOT_ID]?.[CHANNEL] ?? []).map(
+        (item) => item.block,
+      ),
+    ).toEqual(["Hold the migration"]);
   });
 
   it("clears the stored draft when a send is accepted", async () => {

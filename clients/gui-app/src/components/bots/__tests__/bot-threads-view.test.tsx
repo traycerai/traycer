@@ -73,6 +73,10 @@ import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navi
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  answerDraftKey,
+  useBotDraftsStore,
+} from "@/stores/bots/bot-drafts-store";
+import {
   negotiateBotSend,
   signInViewer,
   resetBotFailedRequestSupport,
@@ -663,6 +667,13 @@ beforeEach(() => {
   vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
   signInViewer("user-1");
   useBotThreadFoldStore.setState({ unfolded: {} });
+  useBotDraftsStore.setState({
+    answers: {},
+    threadBoxes: {},
+    unsentBoxes: {},
+    boxCarries: {},
+    boxNotices: {},
+  });
   useBotTabLandingStore.setState({ byBotId: {} });
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useSelectionAuthorityStore.setState({ effectiveHostId: "host-1" });
@@ -1655,7 +1666,7 @@ describe("<BotThreadsView /> a card whose bot asks several questions at once", (
 
     expect(
       (await questionCard.findByTestId("question-card-tally")).textContent,
-    ).toBe("0 of 2 answered. Answer or skip each one to submit.");
+    ).toBe("0 of 2 answered. Answer at least one to submit.");
     expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(1);
     for (const item of questionCard.getAllByTestId("question-card-item")) {
       expect(within(item).queryByTestId("question-card-submit")).toBeNull();
@@ -1678,6 +1689,91 @@ describe("<BotThreadsView /> a card whose bot asks several questions at once", (
       );
     }
     expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(2);
+  });
+});
+
+describe("<BotThreadsView /> a thread opened on a channel question, drawn without the channel's transcript", () => {
+  const QUESTION_ID = "bot-question:req-q";
+  const HOLD_TEXT = "Anything to hold back from the train?";
+
+  function question(settled: boolean): Message {
+    const questions: BotQuestionItem[] = [
+      {
+        text: HOLD_TEXT,
+        options: [],
+        allowFreeText: true,
+        settlement: settled
+          ? {
+              answer: "Nothing",
+              skipped: false,
+              by: { kind: "person", userId: "user-teammate" },
+              at: 3_000,
+            }
+          : null,
+      },
+    ];
+    return {
+      ...botReply({
+        messageId: QUESTION_ID,
+        text: botQuestionsText(questions),
+        timestamp: 2_000,
+      }),
+      question: { requestId: "req-q", questions },
+    };
+  }
+
+  it("moves nothing off the origin's card when a teammate settles the question: the draft stays kept, and the thread's box holds nothing and says nothing", async () => {
+    const summary = thread(TEAM, "team-new", 3_000);
+    const { anchor } = summary;
+    if (anchor === null) throw new Error("the thread has no anchor");
+    mocks.hosted[TEAM] = script(
+      [
+        {
+          ...summary,
+          anchor: {
+            messageId: QUESTION_ID,
+            requestId: anchor.requestId,
+            senderUserId: anchor.senderUserId,
+            sentAt: anchor.sentAt,
+            resolvedAt: anchor.resolvedAt,
+            excerpt: anchor.excerpt,
+          },
+        },
+      ],
+      { "team-new": FOLLOWING },
+    );
+    mocks.hosted[TRACY] = script([], {});
+    mocks.posts[TEAM] = {};
+    mocks.channels[TEAM] = chatSessionWithThreadRows([question(false)]);
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    const key = answerDraftKey(QUESTION_ID, 0);
+    useBotDraftsStore.getState().setAnswer(TEAM, key, {
+      chosen: [],
+      typed: "Hold the migration",
+      sent: null,
+      unsureSince: null,
+      heldForSettlement: null,
+    });
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    const originCard = await full.findByTestId("question-card");
+    expect(
+      within(originCard).getByRole("textbox", { name: "Your answer" }),
+    ).toHaveProperty("value", "Hold the migration");
+
+    act(() =>
+      mocks.channels[TEAM].store.setState({ messages: [question(true)] }),
+    );
+
+    const item = await full.findByTestId("question-card-item");
+    expect(item.getAttribute("data-state")).toBe("settled");
+    expect(useBotDraftsStore.getState().answers[TEAM]?.[key]?.typed).toBe(
+      "Hold the migration",
+    );
+    expect(useBotDraftsStore.getState().boxCarries).toEqual({});
+    expect(useBotDraftsStore.getState().boxNotices).toEqual({});
+    expect(full.queryByTestId("bot-thread-composer-answers-moved")).toBeNull();
   });
 });
 

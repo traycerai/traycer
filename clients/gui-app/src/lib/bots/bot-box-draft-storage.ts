@@ -14,13 +14,15 @@ import {
 } from "@/lib/composer/landing-image-budget";
 import {
   getImageBytes,
+  landingImageDeletions,
   landingImagePartition,
+  onLandingImagesDeleted,
   putImage,
   sha256Hex,
 } from "@/lib/composer/landing-image-store";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { isJsonContent, isRecord } from "@/lib/editor/prosemirror-json";
-import { appLogger, describeLogError } from "@/lib/logger";
+import { appLogger } from "@/lib/logger";
 import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
 
 /** What a bot's message box holds unsent, as the drafts store keeps it. */
@@ -40,7 +42,15 @@ export interface PersistedBotBoxDrafts {
   readonly threadBoxes: StoredBoxDrafts;
 }
 
-export const BOT_BOX_DRAFTS_PERSIST_KEY = persistKey(STORE_KEYS.botBoxDrafts);
+/**
+ * Where every account's drafts were kept before each account's were kept
+ * apart (T186, `botBoxDraftsKey`). Nobody owns what is stored there, so it is
+ * never read: the drafts store removes it once an account signs in.
+ */
+export const LEGACY_BOT_BOX_DRAFTS_KEY = persistKey(STORE_KEYS.botBoxDrafts);
+
+/** Each account's stored drafts are kept under a key that starts with this. */
+const ACCOUNT_DRAFTS_PREFIX = `${LEGACY_BOT_BOX_DRAFTS_KEY}:`;
 
 /** How long typing must pause before the boxes are written. */
 export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
@@ -72,17 +82,21 @@ export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
  * next write. Only a change to the boxes' drafts is written. Nothing is
  * written until the drafts store says the stored drafts are read and merged
  * ({@link botBoxDraftsRead}), so a change made while they are still being
- * read cannot replace them.
+ * read cannot replace them. A read that storage refuses fails, never reads as
+ * nothing stored, so nothing is written for that account until a read does
+ * succeed; a write that cannot read what is stored waits.
  */
 export function createBotBoxDraftStorage(): PersistStorage<PersistedBotBoxDrafts> {
   return {
     getItem: async (name) => {
       if (writer.stopped) return null;
+      const read = writer.readGeneration;
       const stored = readStoredValue(name);
       if (stored === null) return null;
-      const state = await inlineStoredImages(stored.state);
-      // The stored drafts were wiped while their images were read.
-      if (wiped()) return null;
+      const state = await inlineStoredImages(stored.state, read);
+      // The stored drafts were wiped while their images were read, or the
+      // account whose drafts they are retired and another's are read now.
+      if (wiped() || read !== writer.readGeneration) return null;
       writer.baseline = state.threadBoxes;
       return { ...stored, state };
     },
@@ -102,14 +116,86 @@ export function createBotBoxDraftStorage(): PersistStorage<PersistedBotBoxDrafts
   };
 }
 
-/** The drafts store reads the stored drafts again: nothing is written until it has. */
-export function botBoxDraftsReading(): void {
+/**
+ * The drafts store reads the stored drafts again: nothing is written until it
+ * has. Returns the read's number, for {@link isCurrentBotBoxDraftsRead}.
+ */
+export function botBoxDraftsReading(): number {
   writer.read = false;
+  writer.readGeneration += 1;
   writer.baseline = {};
   writer.unresolved = new Map();
   writer.gone = new Map();
   writer.droppedDuringRead.keys.clear();
   writer.droppedDuringRead.bots.clear();
+  return writer.readGeneration;
+}
+
+/**
+ * Whether the read numbered `read` is still the store's: one that an
+ * account's retirement or a newer read overtook comes to nothing.
+ */
+export function isCurrentBotBoxDraftsRead(read: number): boolean {
+  return read === writer.readGeneration;
+}
+
+/**
+ * The account whose drafts the store holds is retiring (signed out, or
+ * another signed in): what is waiting to be written lands now, under that
+ * account's own key, as on a page hide. From then on nothing is written, and
+ * a read still in flight is not taken, until the next account's drafts are
+ * read.
+ *
+ * `midRead` is what the store holds when that account's own stored drafts
+ * were still being read: what this window changed meanwhile, which has not
+ * been written, and the boxes whose moves went below their stored draft
+ * ({@link storedBotBoxDrafts}), land on them as they are stored, every other
+ * box left as stored. `null` once they were read, or when their read failed:
+ * unreadable drafts are never written over, nor are drafts storage cannot
+ * read now (`land`).
+ */
+export function retireBotBoxDraftWrites(midRead: PendingWrite | null): void {
+  if (midRead !== null && !writer.stopped && !writer.read) {
+    takePending();
+    // What the read found, if it got that far, is not this window's yet.
+    writer.baseline = {};
+    const { hashByInline } = writer;
+    land(midRead, (b64content) => hashByInline.get(b64content));
+  } else {
+    flushPendingBotBoxDraftWrite();
+  }
+  dropWrites();
+  writer.read = false;
+  writer.readGeneration += 1;
+  writer.lastThreadBoxes = null;
+  writer.baseline = {};
+  writer.hashByInline = new Map();
+}
+
+/**
+ * The drafts stored under `name` as storage holds them now, each image named
+ * by its hash, which a write keeps as it is: what an account retiring while
+ * its drafts are still being read puts its moves below.
+ */
+export function storedBotBoxDrafts(name: string): StoredBoxDrafts {
+  try {
+    return readStoredValue(name)?.state.threadBoxes ?? {};
+  } catch {
+    // The write that follows cannot read them either, so it lands nothing.
+    return {};
+  }
+}
+
+/**
+ * Removes the drafts every account shared before each account's were kept
+ * apart, unread: whoever signs in first must not get another's.
+ */
+export function retireLegacyBotBoxDrafts(): void {
+  try {
+    localStorage.removeItem(LEGACY_BOT_BOX_DRAFTS_KEY);
+  } catch {
+    // Storage that cannot be reached holds nothing this window could read.
+  }
 }
 
 /**
@@ -199,7 +285,8 @@ function flushPendingBotBoxDraftWrite(): void {
   );
 }
 
-interface PendingWrite {
+/** A write of the boxes' drafts: under which key, and what. */
+export interface PendingWrite {
   readonly name: string;
   readonly value: StorageValue<PersistedBotBoxDrafts>;
 }
@@ -208,6 +295,8 @@ interface PendingWrite {
 const writer: {
   /** Whether the drafts store has read and merged the stored drafts. */
   read: boolean;
+  /** Bumped by each read and each account's retirement; a read that sees it move is stale. */
+  readGeneration: number;
   /** Set for good by a wipe. */
   stopped: boolean;
   /** The drafts last written or read, to tell a change to them from none. */
@@ -266,6 +355,7 @@ const writer: {
   refused: Set<string>;
 } = {
   read: false,
+  readGeneration: 0,
   stopped: false,
   lastThreadBoxes: null,
   pending: null,
@@ -409,9 +499,18 @@ function land(
   }
   writer.hashByInline = hashByInline;
   const partition = landingImagePartition();
-  const threadBoxes = editableDrafts(
-    readStoredValue(write.name)?.state.threadBoxes ?? {},
-  );
+  let threadBoxes: Partial<
+    Record<string, Partial<Record<string, StoredBoxDraft>>>
+  >;
+  try {
+    threadBoxes = editableDrafts(
+      readStoredValue(write.name)?.state.threadBoxes ?? {},
+    );
+  } catch (error) {
+    // The boxes it did not change are unknown, so it cannot keep them.
+    writeFailed(write, error);
+    return;
+  }
   for (const botId of writer.forgotten) delete threadBoxes[botId];
   // Before this write's own boxes, which replace a box it changed anyway.
   takeOutGoneImages(threadBoxes, partition);
@@ -422,12 +521,7 @@ function land(
       JSON.stringify({ ...write.value, state: { threadBoxes } }),
     );
   } catch (error) {
-    // Storage refused it (full, say): it waits again, for the next change to
-    // replace or the page hiding to try once more.
-    appLogger.warn("[bot-box-drafts] draft write failed", {
-      error: describeLogError(error),
-    });
-    writer.pending ??= write;
+    writeFailed(write, error);
     return;
   }
   writer.baseline = next;
@@ -435,6 +529,19 @@ function land(
   writer.cleared.clear();
   writer.gone = new Map();
   writer.incomplete = incomplete;
+}
+
+/**
+ * Storage could not be read for `write`, or refused it (full, say): it waits
+ * again, for the next change to replace or the page hiding to try once more.
+ * The error's name only: a quota error's message names the key, and the key
+ * holds the account's id.
+ */
+function writeFailed(write: PendingWrite, error: unknown): void {
+  appLogger.warn("[bot-box-drafts] draft write failed", {
+    errorName: error instanceof Error ? error.name : "unknown",
+  });
+  writer.pending ??= write;
 }
 
 /**
@@ -763,11 +870,14 @@ async function readBack(hash: string): Promise<ReadBack> {
  * no longer holds is dropped. Any other image it cannot read back is left
  * out of the box and kept for its writes (`writer.unresolved`). Each image
  * read back is remembered under its hash, so a write that cannot wait keeps
- * it.
+ * it, unless the image store was deleted while they were read: the box still
+ * gets them back, and its next write stores them again.
  */
 async function inlineStoredImages(
   state: PersistedBotBoxDrafts,
+  read: number,
 ): Promise<PersistedBotBoxDrafts> {
+  const deletions = landingImageDeletions();
   const hashes = new Set<string>();
   for (const draft of eachDraft(state.threadBoxes)) {
     if (draft.content === null) continue;
@@ -805,12 +915,15 @@ async function inlineStoredImages(
       content: (content.content?.length ?? 0) === 0 ? null : content,
     };
   });
-  if (!wiped()) {
-    const restored = new Map<string, string>();
-    for (const [hash, outcome] of found) {
-      if (outcome.kind === "bytes") restored.set(outcome.b64content, hash);
+  // A read overtaken meanwhile leaves the writer to the read that overtook it.
+  if (!wiped() && read === writer.readGeneration) {
+    if (deletions === landingImageDeletions()) {
+      const restored = new Map<string, string>();
+      for (const [hash, outcome] of found) {
+        if (outcome.kind === "bytes") restored.set(outcome.b64content, hash);
+      }
+      writer.hashByInline = new Map([...writer.hashByInline, ...restored]);
     }
-    writer.hashByInline = new Map([...writer.hashByInline, ...restored]);
     const { keys, bots } = writer.droppedDuringRead;
     writer.unresolved = new Map(
       [...unresolved].filter(
@@ -943,13 +1056,19 @@ function storedDraftOf(value: unknown): StoredBoxDraft | null {
   return { text, content, seedId };
 }
 
+/**
+ * The drafts stored under `name`; `null` when nothing is, or what is cannot be
+ * parsed as drafts by any build, so writing over it loses nothing readable.
+ * Throws when storage cannot be read: what it holds is unknown, so a read
+ * fails and a write waits rather than replacing it.
+ */
 function readStoredValue(
   name: string,
 ): StorageValue<PersistedBotBoxDrafts> | null {
+  const raw = localStorage.getItem(name);
+  if (raw === null) return null;
   let parsed: unknown;
   try {
-    const raw = localStorage.getItem(name);
-    if (raw === null) return null;
     parsed = JSON.parse(raw);
   } catch {
     return null;
@@ -963,8 +1082,9 @@ function readStoredValue(
 
 /**
  * The image hashes the image store's sweeps must keep for the bot boxes: the
- * ones the stored drafts name as storage holds them now, whichever window
- * wrote them; the ones this window's boxes held at the last write that
+ * ones every account's stored drafts on this device name as storage holds them
+ * now, whichever window wrote them, for an account signed out keeps its drafts
+ * and their images; the ones this window's boxes held at the last write that
  * landed, or read back; and the ones the newest write has stored so far.
  */
 function botBoxDraftImageRoots(): ReadonlyArray<string> {
@@ -972,8 +1092,15 @@ function botBoxDraftImageRoots(): ReadonlyArray<string> {
     ...writer.hashByInline.values(),
     ...writer.inFlightHashByInline.values(),
   ]);
-  const stored = readStoredValue(BOT_BOX_DRAFTS_PERSIST_KEY);
-  if (stored !== null) {
+  for (const name of accountDraftKeys()) {
+    let stored: StorageValue<PersistedBotBoxDrafts> | null;
+    try {
+      stored = readStoredValue(name);
+    } catch {
+      // As for the keys: storage that cannot be read names no image.
+      continue;
+    }
+    if (stored === null) continue;
     for (const draft of eachDraft(stored.state.threadBoxes)) {
       if (draft.content === null) continue;
       for (const hash of hashOnlyImageHashes(draft.content)) roots.add(hash);
@@ -982,7 +1109,36 @@ function botBoxDraftImageRoots(): ReadonlyArray<string> {
   return [...roots];
 }
 
+/** The keys every account's stored drafts on this device are kept under. */
+function accountDraftKeys(): ReadonlyArray<string> {
+  const keys: string[] = [];
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(ACCOUNT_DRAFTS_PREFIX) === true) keys.push(key);
+    }
+  } catch {
+    // Storage that cannot be reached names no image.
+    return [];
+  }
+  return keys;
+}
+
 registerExtraImageRootSource({ hashes: botBoxDraftImageRoots });
+
+// Another window's wipe deleted this window's image store: none of the images
+// it stored are there any more, so each write from now on stores its boxes'
+// images again, and a write storing its images there is written again, after
+// any newer one waiting.
+onLandingImagesDeleted(() => {
+  if (writer.stopped) return;
+  writer.hashByInline = new Map();
+  const inFlight = writer.inFlight;
+  writer.inFlight = null;
+  writer.inFlightHashByInline = new Map();
+  writer.generation += 1;
+  if (inFlight !== null && writer.pending === null) schedule(inFlight);
+});
 
 // A window that goes away mid-pause still keeps what its boxes held.
 if (typeof window !== "undefined") {
