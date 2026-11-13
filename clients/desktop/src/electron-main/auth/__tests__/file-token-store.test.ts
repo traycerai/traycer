@@ -1,7 +1,7 @@
 /**
  * End-to-end FileTokenStore tests against a real temp-dir credentials file
- * (lock + WAL via `createCredentialsMutationStore`). Fetch is the only faked
- * boundary — the locked rotate spend hits a stubbed authn refresh endpoint.
+ * (lock + WAL via `createCredentialsMutationStore`). Pressure projection also
+ * uses a recording mutation-store boundary to deliver background callbacks.
  *
  * Spec: credentials-file token-store tech plan §2 / §3 / §4.
  */
@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   watch,
   writeFileSync,
 } from "node:fs";
@@ -61,6 +62,42 @@ const WATCHER_DELIVERY_TIMEOUT_MS = 10_000;
  * minimum that passes.
  */
 const TEST_TIMEOUT_BUFFER_MS = 5_000;
+const RESERVE_PIECE_COUNT = 16;
+const RESERVE_PIECE_BYTES = 64 * 1024;
+
+const diskWriteFault = vi.hoisted(() => ({
+  metaTempPrefix: null as string | null,
+  armed: false,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: vi.fn((...args: Parameters<typeof actual.writeFile>) => {
+      const target = String(args[0]);
+      const prefix = diskWriteFault.metaTempPrefix;
+      const temporaryName =
+        prefix !== null && target.startsWith(prefix)
+          ? target.slice(prefix.length)
+          : "";
+      if (
+        diskWriteFault.armed &&
+        /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.tmp$/i.test(
+          temporaryName,
+        )
+      ) {
+        diskWriteFault.armed = false;
+        return Promise.reject(
+          Object.assign(new Error("controlled full disk"), {
+            code: "ENOSPC",
+          }),
+        );
+      }
+      return actual.writeFile(...args);
+    }),
+  };
+});
 
 vi.mock("electron", () => ({
   app: {
@@ -117,6 +154,22 @@ function status(code: number): Promise<Response> {
   return Promise.resolve(new Response(null, { status: code }));
 }
 
+function hasFullReserve(credentialsPath: string): boolean {
+  return Array.from({ length: RESERVE_PIECE_COUNT }, (_, index) => {
+    try {
+      const piece = statSync(`${credentialsPath}.reserve.${index}`);
+      return piece.isFile() && piece.size === RESERVE_PIECE_BYTES;
+    } catch {
+      return false;
+    }
+  }).every(Boolean);
+}
+
+function armMetadataWriteFault(credentialsPath: string): void {
+  diskWriteFault.metaTempPrefix = `${credentialsPath}.meta.json.`;
+  diskWriteFault.armed = true;
+}
+
 describe("FileTokenStore (real fs + lock/WAL)", () => {
   let homeDir: string;
   let previousHome: string | undefined;
@@ -144,6 +197,8 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     homeDir = mkdtempSync(join(tmpdir(), "traycer-file-token-store-"));
     previousHome = process.env.HOME;
     sandboxHome(homeDir);
+    diskWriteFault.metaTempPrefix = null;
+    diskWriteFault.armed = false;
     vi.resetModules();
     ({ FileTokenStore } = await import("../file-token-store"));
     // Default: any refresh mints a deterministic rotated pair.
@@ -157,6 +212,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
   });
 
   afterEach(() => {
+    vi.doUnmock("@traycer/protocol/config/credentials-mutation");
     for (const store of stores) {
       store.dispose();
     }
@@ -183,7 +239,14 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
 
   it("signIn stamps savedAt, get round-trips the full identity", async () => {
     const store = makeStore();
-    await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
+    const firstListener: TokenStoreChange[] = [];
+    const secondListener: TokenStoreChange[] = [];
+    store.subscribe((change) => firstListener.push(change));
+    store.subscribe((change) => secondListener.push(change));
+    expect(store.getSignInStorageLow()).toBe(false);
+    await expect(
+      store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY),
+    ).resolves.toBe("saved");
 
     const got = await store.get();
     expect(got).toEqual({
@@ -197,7 +260,238 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       readFileSync(credentialsPath(), "utf8"),
     ) as StoredCredentials;
     expect(onDisk.user).toEqual(IDENTITY);
+    await vi.waitFor(() => {
+      expect(firstListener).not.toHaveLength(0);
+      expect(secondListener).not.toHaveLength(0);
+    });
+    expect(firstListener.at(-1)).toEqual({
+      present: true,
+      userId: IDENTITY.id,
+      revision: expect.any(Number),
+    });
+    expect(secondListener.at(-1)).toEqual({
+      present: true,
+      userId: IDENTITY.id,
+      revision: expect.any(Number),
+    });
+    expect(store.getSignInStorageLow()).toBe(false);
   });
+
+  it("keeps the FileTokenStore pressure snapshot in sync with save results and continuation callbacks", async () => {
+    vi.resetModules();
+    const reporter: { current: ((pressure: "low" | "clear") => void) | null } =
+      { current: null };
+    const outcomes: Array<"disk-full" | "reserve-save" | "clean-save"> = [
+      "disk-full",
+      "reserve-save",
+      "clean-save",
+    ];
+    let failRead = false;
+    const mutationStore = {
+      read: async () => {
+        if (failRead) throw new Error("credential read unavailable");
+        return null;
+      },
+      signIn: async (credentials: StoredCredentials) => {
+        const next = outcomes.shift();
+        if (next === "disk-full") {
+          return {
+            outcome: "disk-full",
+            credentials: null,
+            rejection: null,
+            diskPressure: null,
+          };
+        }
+        if (next === "reserve-save") {
+          reporter.current?.("low");
+          return {
+            outcome: "applied",
+            credentials,
+            rejection: null,
+            diskPressure: "low",
+          };
+        }
+        return {
+          outcome: "applied",
+          credentials,
+          rejection: null,
+          diskPressure: "clear",
+        };
+      },
+      drainQuarantine: async () => true,
+      dispose: () => undefined,
+    };
+    vi.doMock("@traycer/protocol/config/credentials-mutation", () => ({
+      createCredentialsMutationStore: (options: {
+        readonly onDiskPressure: ((pressure: "low" | "clear") => void) | null;
+      }) => {
+        reporter.current = options.onDiskPressure;
+        return mutationStore;
+      },
+    }));
+    const { FileTokenStore: IsolatedFileTokenStore } =
+      await import("../file-token-store");
+    const store = new IsolatedFileTokenStore({
+      environment: ENVIRONMENT,
+      authnBaseUrl: AUTHN_BASE_URL,
+      watchImpl: undefined,
+    });
+    stores.push(store);
+    const firstStatusListener: boolean[] = [];
+    const secondStatusListener: boolean[] = [];
+    store.subscribeSignInStorageLow((low) => firstStatusListener.push(low));
+    store.subscribeSignInStorageLow((low) => secondStatusListener.push(low));
+
+    expect(
+      await store.signIn({ token: "blocked", refreshToken: "rt" }, IDENTITY),
+    ).toBe("disk-full");
+    expect(store.getSignInStorageLow()).toBe(true);
+    expect(firstStatusListener).toEqual([true]);
+    expect(secondStatusListener).toEqual([true]);
+
+    expect(
+      await store.signIn({ token: "reserve", refreshToken: "rt" }, IDENTITY),
+    ).toBe("saved");
+    expect(store.getSignInStorageLow()).toBe(true);
+    expect(
+      await store.signIn({ token: "clean", refreshToken: "rt" }, IDENTITY),
+    ).toBe("saved");
+    expect(store.getSignInStorageLow()).toBe(false);
+    expect(firstStatusListener).toEqual([true, false]);
+    expect(secondStatusListener).toEqual([true, false]);
+
+    failRead = true;
+    await expect(store.get()).rejects.toThrow("credential read unavailable");
+    reporter.current?.("low");
+    expect(store.getSignInStorageLow()).toBe(true);
+    reporter.current?.("clear");
+    expect(store.getSignInStorageLow()).toBe(false);
+    expect(firstStatusListener).toEqual([true, false, true, false]);
+    expect(secondStatusListener).toEqual([true, false, true, false]);
+  });
+
+  it(
+    "clears disk pressure when another store cleanly saves and refills the reserve",
+    async () => {
+      const desktopStore = makeStore();
+      const hostLikeStore = makeStore();
+      await desktopStore.signIn(
+        { token: "seed", refreshToken: "seed-rt" },
+        IDENTITY,
+      );
+      await vi.waitFor(
+        () => {
+          expect(hasFullReserve(credentialsPath())).toBe(true);
+          expect(existsSync(`${credentialsPath()}.lock`)).toBe(false);
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
+
+      armMetadataWriteFault(credentialsPath());
+
+      const firstStatusListener: boolean[] = [];
+      const secondStatusListener: boolean[] = [];
+      desktopStore.subscribeSignInStorageLow((low) =>
+        firstStatusListener.push(low),
+      );
+      desktopStore.subscribeSignInStorageLow((low) =>
+        secondStatusListener.push(low),
+      );
+      expect(
+        await desktopStore.signIn(
+          { token: "desktop-reserve", refreshToken: "desktop-rt" },
+          IDENTITY,
+        ),
+      ).toBe("saved");
+      expect(diskWriteFault.armed).toBe(false);
+      expect(desktopStore.getSignInStorageLow()).toBe(true);
+      expect(firstStatusListener).toEqual([true]);
+      expect(secondStatusListener).toEqual([true]);
+
+      expect(
+        await hostLikeStore.signIn(
+          { token: "host-clean", refreshToken: "host-rt" },
+          IDENTITY,
+        ),
+      ).toBe("saved");
+      await vi.waitFor(
+        () => {
+          expect(hasFullReserve(credentialsPath())).toBe(true);
+          expect(desktopStore.getSignInStorageLow()).toBe(false);
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
+      expect(firstStatusListener).toEqual([true, false]);
+      expect(secondStatusListener).toEqual([true, false]);
+    },
+    2 * WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
+  );
+
+  it(
+    "keeps disk pressure set when another store also needs reserve help",
+    async () => {
+      const hostLikeStore = makeStore();
+      await hostLikeStore.signIn(
+        { token: "seed", refreshToken: "seed-rt" },
+        IDENTITY,
+      );
+      await vi.waitFor(
+        () => {
+          expect(hasFullReserve(credentialsPath())).toBe(true);
+          expect(existsSync(`${credentialsPath()}.lock`)).toBe(false);
+        },
+        { timeout: WATCHER_DELIVERY_TIMEOUT_MS },
+      );
+
+      const desktopWatchEvents: Array<
+        (event: string, filename: string | Buffer | null) => void
+      > = [];
+      const desktopStore = new FileTokenStore({
+        environment: ENVIRONMENT,
+        authnBaseUrl: AUTHN_BASE_URL,
+        watchImpl: (dir, listener) => {
+          desktopWatchEvents.push(listener);
+          return watch(dir, () => undefined);
+        },
+      });
+      stores.push(desktopStore);
+      await desktopStore.get();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      armMetadataWriteFault(credentialsPath());
+      expect(
+        await desktopStore.signIn(
+          { token: "desktop-reserve", refreshToken: "desktop-rt" },
+          IDENTITY,
+        ),
+      ).toBe("saved");
+      expect(diskWriteFault.armed).toBe(false);
+      expect(desktopStore.getSignInStorageLow()).toBe(true);
+
+      const desktopChanges: TokenStoreChange[] = [];
+      desktopStore.subscribe((change) => desktopChanges.push(change));
+      armMetadataWriteFault(credentialsPath());
+      expect(
+        await hostLikeStore.signIn(
+          { token: "host-reserve", refreshToken: "host-rt" },
+          IDENTITY,
+        ),
+      ).toBe("saved");
+      expect(diskWriteFault.armed).toBe(false);
+      const deliverWatchEvent = desktopWatchEvents[0];
+      if (deliverWatchEvent === undefined) {
+        throw new Error("desktop watcher was not installed");
+      }
+      deliverWatchEvent("change", basename(credentialsPath()));
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.waitFor(() => {
+        expect(desktopChanges).toHaveLength(1);
+      });
+      expect(hasFullReserve(credentialsPath())).toBe(false);
+      expect(desktopStore.getSignInStorageLow()).toBe(true);
+    },
+    2 * WATCHER_DELIVERY_TIMEOUT_MS + TEST_TIMEOUT_BUFFER_MS,
+  );
 
   it("startup drains a quarantined credential before any read is served", async () => {
     // A previous launch requested this pair's conditional delete but died

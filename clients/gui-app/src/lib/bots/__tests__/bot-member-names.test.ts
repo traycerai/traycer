@@ -110,16 +110,24 @@ describe("botUserSenderAvatarUrl", () => {
       inReplyTo: null,
     };
 
-    expect(botUserSenderAvatarUrl(userSender(VIEWER_ID), resolve)).toBe(
-      "https://avatars/user-viewer.png",
-    );
-    expect(botUserSenderAvatarUrl(userSender("user-teammate"), resolve)).toBe(
-      "https://avatars/user-teammate.png",
-    );
-    expect(botUserSenderAvatarUrl(userSender("user-unknown"), resolve)).toBe(
-      null,
-    );
-    expect(botUserSenderAvatarUrl(agent, resolve)).toBe(null);
+    expect(
+      botUserSenderAvatarUrl(userSender(VIEWER_ID), context.profile, resolve),
+    ).toBe("https://avatars/user-viewer.png");
+    expect(
+      botUserSenderAvatarUrl(
+        userSender("user-teammate"),
+        context.profile,
+        resolve,
+      ),
+    ).toBe("https://avatars/user-teammate.png");
+    expect(
+      botUserSenderAvatarUrl(
+        userSender("user-unknown"),
+        context.profile,
+        resolve,
+      ),
+    ).toBe(null);
+    expect(botUserSenderAvatarUrl(agent, context.profile, resolve)).toBe(null);
   });
 });
 

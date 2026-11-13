@@ -729,10 +729,11 @@ describe("traycer CLI entrypoint registration", () => {
     expect(flags).toContain("--no-service-register");
   });
 
-  it("host use takes a team argument", () => {
+  it("host use takes a team slug argument", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "use"]);
-    expect(cmd.registeredArguments.map((arg) => arg.name())).toEqual(["team"]);
+    expect(cmd.registeredArguments.map((arg) => arg.name())).toEqual(["slug"]);
+    expect(cmd.helpInformation()).toContain("<slug>");
   });
 
   it("host install and ensure accept a team", () => {

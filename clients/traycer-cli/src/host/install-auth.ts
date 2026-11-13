@@ -1,10 +1,21 @@
+import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
-import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentDescriptor,
+  EnvironmentHostBinding,
+} from "@traycer/protocol/host/environment/contracts";
 import {
-  callHostRpc,
+  HostTransportFailureError,
+  type HostTransportEndpoint,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  callHostRpcAtResolvedEndpoint,
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
+  resolveEndpoint,
+  hostRpcToCliError,
   toAgentCliError,
+  type HostRpcDispatch,
 } from "../internal/host-rpc";
 import {
   readCredentialsFile,
@@ -24,8 +35,15 @@ import {
 } from "./pid-metadata";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
 import { errorFromUnknown } from "../logger";
-import { CLI_ERROR_CODES, cliError, toCliError } from "../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  CliError,
+  cliError,
+  toCliError,
+} from "../runner/errors";
 import type { CommandContext } from "../runner/runner";
+import { config } from "../config";
+import { probeHostHealth } from "../service/health-probe";
 
 // The sign-in pre-flight and post-start credential provisioning shared by
 // every command that STARTS a host (client/host token split): the started
@@ -220,8 +238,9 @@ export async function runSignInPreflight(
   try {
     const login = await runDeviceAuthFlow(ctx);
     if (typeof policy === "object") policy.onInlineSignIn?.(login.token);
+    const identity = login.user.email || login.user.name;
     ctx.output.humanRequired(
-      `Signed in as ${login.user.email || login.user.name || login.user.id}.`,
+      identity ? `Signed in as ${identity}.` : "Signed in.",
     );
     return { state: "signed-in-inline", reason: null };
   } catch (err) {
@@ -409,7 +428,7 @@ export function formatCredentialProvisionNote(
     case "unreachable":
       return `host authorization not confirmed (the host did not respond in time) - ${nextStep}`;
     case "unsupported":
-      return "host authorization not confirmed (this version of the CLI can't authorize this host)";
+      return "host authorization not confirmed - update the Traycer CLI using your install method, run `traycer host update`, then `traycer login`";
     case "mint-unavailable":
       return `host authorization not confirmed (the authorization did not complete) - ${nextStep}`;
     case "not-adopted":
@@ -419,7 +438,7 @@ export function formatCredentialProvisionNote(
     case "unauthorized":
       return `host authorization not confirmed - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
     case "error":
-      return `host authorization not confirmed (${outcome.message}) - ${nextStep}`;
+      return `host authorization not confirmed - ${nextStep}`;
   }
 }
 
@@ -477,41 +496,42 @@ export async function warnIfTeamInstallSignInRemains(
 /** The one team transfer used by host use, install --team and ensure --team. */
 export async function useInstalledHostTeam(
   team: string,
+  progress: CommandContext["progress"],
 ): Promise<EnvironmentHostBinding> {
+  const dispatch = {
+    ...PLAIN_DISPATCH,
+    requiredHostMethodVersion: {
+      method: "environment.host.bind",
+      version: { major: 1, minor: 1 },
+    },
+  };
   const selector = team.startsWith("team/") ? team.slice(5) : team;
   const { environments } = await toAgentCliError(
-    callHostRpc("environment.list", {}),
+    callHostRpcWithDispatch("environment.list", {}, dispatch),
   );
-  const matches = environments.filter(
+  const teams = environments.filter(
+    (environment) => environment.ownerKind === "organization",
+  );
+  const exactMatches = teams.filter(
     (environment) =>
-      environment.ownerKind === "organization" &&
-      (environment.environmentId === selector ||
-        environment.providerHandle === selector ||
-        environment.label === selector),
+      environment.environmentId === selector ||
+      environment.providerHandle === selector,
   );
+  const matches =
+    exactMatches.length > 0
+      ? exactMatches
+      : teams.filter((environment) => environment.label === selector);
   if (matches.length !== 1) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message:
-        "Choose a team you belong to. If names match, use its team handle or environment id.",
+        "Enter the slug of a team you belong to, as shown in its dashboard address.",
       details: null,
       exitCode: 1,
     });
   }
   const target = matches[0];
-  const current = await toAgentCliError(
-    callHostRpcWithDispatch(
-      "environment.host.read",
-      {},
-      {
-        ...PLAIN_DISPATCH,
-        requiredHostMethodVersion: {
-          method: "environment.host.bind",
-          version: { major: 1, minor: 1 },
-        },
-      },
-    ),
-  );
+  const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) {
     throw cliError({
@@ -524,7 +544,7 @@ export async function useInstalledHostTeam(
   const directory = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     auth.token,
-    current.hostId,
+    endpoint.hostId,
   );
   const host = directory.kind === "ok" ? directory.host : undefined;
   if (host === undefined) {
@@ -545,6 +565,15 @@ export async function useInstalledHostTeam(
     });
   }
   if (host.owner.kind === "team") {
+    const current = await toAgentCliError(
+      callHostRpcAtResolvedEndpoint(
+        "environment.host.read",
+        {},
+        endpoint,
+        auth,
+        dispatch,
+      ),
+    );
     if (
       host.owner.id === target.ownerId &&
       current.environment.environmentId === target.environmentId &&
@@ -560,23 +589,170 @@ export async function useInstalledHostTeam(
       exitCode: 1,
     });
   }
-  const binding = await toAgentCliError(
-    callHostRpcWithDispatch(
+  for (const message of TEAM_TRANSFER_DISCLOSURE) {
+    progress({
+      stage: "host-team",
+      message,
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits: null,
+    });
+  }
+  // A Local computer has no environment binding to read before its transfer.
+  progress({
+    stage: "host-team",
+    message: `Restarting Traycer on this computer to run as ${target.label}…`,
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+    workUnits: null,
+  });
+  return transferInstalledHostTeam(endpoint, auth, target, dispatch, true);
+}
+
+async function transferInstalledHostTeam(
+  endpoint: HostTransportEndpoint,
+  auth: HostAuth,
+  target: EnvironmentDescriptor,
+  dispatch: HostRpcDispatch,
+  mayRetry: boolean,
+): Promise<EnvironmentHostBinding> {
+  const previous = await readHostPidMetadata(config.environment);
+  let binding: EnvironmentHostBinding;
+  try {
+    binding = await callHostRpcAtResolvedEndpoint(
       "environment.host.bind",
       { environmentId: target.environmentId },
-      {
-        ...PLAIN_DISPATCH,
-        requiredHostMethodVersion: {
-          method: "environment.host.bind",
-          version: { major: 1, minor: 1 },
-        },
+      endpoint,
+      auth,
+      dispatch,
+    );
+  } catch (error) {
+    const mapped = hostRpcToCliError(error);
+    if (
+      !(error instanceof HostTransportFailureError) ||
+      !(mapped instanceof CliError) ||
+      mapped.code !== CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN
+    )
+      throw mapped;
+    if (
+      previous === null ||
+      previous.hostId !== endpoint.hostId ||
+      previous.websocketUrl !== endpoint.websocketUrl
+    )
+      throw mapped;
+
+    // The transfer can commit and restart this host before its reply is sent.
+    const ownership = await readHostOwnershipViaHttp(
+      auth.authnBaseUrl,
+      auth.token,
+      endpoint.hostId,
+    );
+    if (
+      ownership.kind !== "ok" ||
+      (ownership.host.owner.kind === "team" &&
+        ownership.host.owner.id !== target.ownerId)
+    )
+      throw mapped;
+
+    const recovery: {
+      ready: {
+        readonly endpoint: HostTransportEndpoint;
+        readonly binding: EnvironmentHostBinding | null;
+      } | null;
+    } = { ready: null };
+    const health = await probeHostHealth({
+      environment: config.environment,
+      checkProcessAlive: null,
+      checkTcpReachable: null,
+      checkReadiness: async (metadata, remainingMs) => {
+        if (
+          metadata.hostId !== endpoint.hostId ||
+          metadata.pid === previous.pid ||
+          remainingMs <= 0
+        )
+          return false;
+        const replacement = {
+          hostId: endpoint.hostId,
+          websocketUrl: metadata.websocketUrl,
+        };
+        try {
+          const bounded = {
+            ...dispatch,
+            signal: AbortSignal.timeout(remainingMs),
+            responseTimeoutMs: Math.min(2_000, remainingMs),
+          };
+          if (ownership.host.owner.kind === "user") {
+            const status = await callHostRpcAtResolvedEndpoint(
+              "host.status",
+              {},
+              replacement,
+              auth,
+              bounded,
+            );
+            if (!status.ready) return false;
+            recovery.ready = { endpoint: replacement, binding: null };
+            return true;
+          }
+          const current = await callHostRpcAtResolvedEndpoint(
+            "environment.host.read",
+            {},
+            replacement,
+            auth,
+            bounded,
+          );
+          if (
+            !current.explicit ||
+            current.environment.environmentId !== target.environmentId
+          )
+            return false;
+          recovery.ready = { endpoint: replacement, binding: current };
+          return true;
+        } catch {
+          return false;
+        }
       },
-    ),
-  );
+      totalBudgetMs: null,
+      retryDelayMs: null,
+    });
+    const ready = recovery.ready;
+    if (!health.healthy || ready === null) throw mapped;
+    const confirmed = await readHostOwnershipViaHttp(
+      auth.authnBaseUrl,
+      auth.token,
+      endpoint.hostId,
+    );
+    if (confirmed.kind !== "ok") throw mapped;
+    if (
+      ownership.host.owner.kind === "user" &&
+      confirmed.host.owner.kind === "user" &&
+      mayRetry
+    ) {
+      const refreshed = await resolveHostAuth();
+      if (refreshed === null) throw mapped;
+      return transferInstalledHostTeam(
+        ready.endpoint,
+        refreshed,
+        target,
+        dispatch,
+        false,
+      );
+    }
+    if (
+      confirmed.host.owner.kind !== "team" ||
+      confirmed.host.owner.id !== target.ownerId ||
+      ready.binding === null ||
+      !ready.binding.explicit ||
+      ready.binding.environment.environmentId !== target.environmentId
+    )
+      throw mapped;
+    return ready.binding;
+  }
   const confirmed = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     auth.token,
-    current.hostId,
+    endpoint.hostId,
   );
   const owner = confirmed.kind === "ok" ? confirmed.host.owner : undefined;
   if (
@@ -599,8 +775,9 @@ export async function useInstalledHostTeam(
 export async function completeTeamInstall(
   team: string,
   session: TeamInstallAuthSession,
+  progress: CommandContext["progress"],
 ): Promise<EnvironmentHostBinding> {
-  const binding = await useInstalledHostTeam(team);
+  const binding = await useInstalledHostTeam(team, progress);
   if (session.inlineSignInToken !== null) {
     const token = session.inlineSignInToken;
     const outcome = await runWithCliStore((store) =>

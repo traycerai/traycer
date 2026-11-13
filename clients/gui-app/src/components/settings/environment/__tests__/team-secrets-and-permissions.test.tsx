@@ -238,6 +238,7 @@ describe("SecretsPage on a team", () => {
   });
 
   it("names Personal's own environment on the Personal pick, behind the 1.1 floor, and reads nothing before it is known", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
     const harness = mountTeamPage({ kind: "host" }, teamHandlers());
     renderSecrets(harness);
 

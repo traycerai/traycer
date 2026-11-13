@@ -469,8 +469,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -486,8 +485,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     );
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -499,8 +497,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });

@@ -66,17 +66,13 @@ function UsageChatBreakdownRow(props: {
 }): ReactNode {
   const { row } = props;
   const node = useEpicTreeNode(row.chatId);
-  const title = node?.title ?? row.chatId;
+  const title = (node?.title ?? "").trim() || "Untitled chat";
   const tokens = sumTokenTotals(row.tokens);
   return (
     <tr
       className="border-b border-border/40 last:border-b-0"
       data-testid={`usage-chat-breakdown-row-${row.chatId}`}
     >
-      {/* `wrap-anywhere`, matching the other breakdown tables' identifier
-          cells: a fallback chatId (or a long unbroken title) must not set
-          the auto-layout table's minimum width and push Tokens/Cost out of
-          the dialog, and truncating would hide the identifier instead. */}
       <td className="py-1.5 pr-3 wrap-anywhere text-foreground">{title}</td>
       <td className="py-1.5 pr-3 text-right tabular-nums text-muted-foreground">
         {tokens.toLocaleString()}

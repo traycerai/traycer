@@ -1,5 +1,6 @@
 /**
- * A bot's icon, colour and channel background (Tracy Bots T147): the real
+ * A bot's icon, colour, eyewear, accessory and channel background (Tracy Bots
+ * T147): the real
  * section, hooks and HostClient over a mock messenger whose host records each
  * `bot.updateAppearance` it is sent and answers it with the row it would
  * store. Nothing is faked but the tab's host binding and its method support.
@@ -24,7 +25,8 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import {
-  BOT_MASCOT_SHAPES,
+  BOT_MASCOT_ACCESSORIES,
+  BOT_MASCOT_EYEWEAR,
   BOT_UNRECOGNISED_MARK,
   type BotAppearance,
   type BotDirectoryRecord,
@@ -33,6 +35,8 @@ import {
 } from "@traycer/protocol/host/bot/schemas";
 import {
   DEFAULT_MASCOT_SHAPE,
+  MASCOT_AT_REST,
+  MASCOT_SHAPES,
   botMascot,
   drawMascotMark,
   ownMascotShape,
@@ -107,6 +111,12 @@ function applied(
       request.background === undefined
         ? appearance.background
         : request.background,
+    eyewear:
+      request.eyewear === undefined ? appearance.eyewear : request.eyewear,
+    accessory:
+      request.accessory === undefined
+        ? appearance.accessory
+        : request.accessory,
   };
 }
 
@@ -173,14 +183,14 @@ function pathsIn(root: HTMLElement): string[] {
 
 /** The paths the avatar draws at 24 px for a bot showing `look`. */
 function avatarPathsFor(look: BotAppearance): string[] {
-  return drawMascotMark(botMascot(BOT_ID, look), 24).layers.map(
+  return drawMascotMark(botMascot(BOT_ID, look), 24, MASCOT_AT_REST).layers.map(
     (layer) => layer.path,
   );
 }
 
-/** A shape's button name: "Blob", "Capsule". */
-function shapeName(shape: BotMascotShape): string {
-  return shape.charAt(0).toUpperCase() + shape.slice(1);
+/** A choice's button name: "Blob", "Shades", "None". */
+function partName(part: string): string {
+  return part.charAt(0).toUpperCase() + part.slice(1);
 }
 
 /** The shape the icon section shows pressed. */
@@ -195,13 +205,13 @@ function pressedShape(): string {
 /** A shape other than the one the bot's id gives it. */
 function chosenShape(): BotMascotShape {
   const own = ownMascotShape(BOT_ID);
-  const other = BOT_MASCOT_SHAPES.find((shape) => shape !== own);
+  const other = MASCOT_SHAPES.find((shape) => shape !== own);
   if (other === undefined) throw new Error("only one shape");
   return other;
 }
 
 describe("<BotAppearanceSettings />", () => {
-  it("names the three sections Icon, Colour and Background", () => {
+  it("names the five sections Icon, Colour, Eyewear, Accessory and Background", () => {
     mount(BARE);
 
     expect(screen.getByTestId("bot-settings-icon").textContent).toContain(
@@ -210,10 +220,16 @@ describe("<BotAppearanceSettings />", () => {
     expect(screen.getByTestId("bot-settings-colour").textContent).toContain(
       "Colour",
     );
+    expect(screen.getByTestId("bot-settings-eyewear").textContent).toContain(
+      "Eyewear",
+    );
+    expect(screen.getByTestId("bot-settings-accessory").textContent).toContain(
+      "Accessory",
+    );
     expect(screen.getByTestId("bot-settings-background").textContent).toContain(
       "Background",
     );
-    expect(screen.getAllByText("Use the default")).toHaveLength(3);
+    expect(screen.getAllByText("Use the default")).toHaveLength(5);
   });
 
   it("is absent when the host does not support bot.updateAppearance", () => {
@@ -225,14 +241,14 @@ describe("<BotAppearanceSettings />", () => {
     expect(screen.queryByTestId("bot-settings-background")).toBeNull();
   });
 
-  it("offers every shape and writes the chosen one alone", async () => {
+  it("offers exactly the shapes it draws and writes the chosen one alone", async () => {
     const user = userEvent.setup();
     mount(BARE);
     expect(
       within(screen.getByTestId("bot-settings-icon"))
         .getAllByRole("button", { name: /^[A-Z][a-z]+$/ })
         .map((button) => button.getAttribute("aria-label")),
-    ).toEqual(BOT_MASCOT_SHAPES.map(shapeName));
+    ).toEqual(["Blob", "Flame", "Ghost", "Capsule", "Cat", "Sun"]);
 
     await user.click(
       screen.getByTestId(`bot-settings-icon-shape-${chosenShape()}`),
@@ -264,12 +280,43 @@ describe("<BotAppearanceSettings />", () => {
     ]);
   });
 
+  it("offers every eyewear and accessory and writes the chosen one alone", async () => {
+    const user = userEvent.setup();
+    mount(BARE);
+    for (const [section, options] of [
+      ["eyewear", BOT_MASCOT_EYEWEAR],
+      ["accessory", BOT_MASCOT_ACCESSORIES],
+    ] as const) {
+      expect(
+        within(screen.getByTestId(`bot-settings-${section}`))
+          .getAllByRole("button", { name: /^[A-Z][a-z]+$/ })
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual(options.map(partName));
+    }
+
+    await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(1);
+    });
+    await user.click(screen.getByTestId("bot-settings-accessory-halo"));
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(2);
+    });
+
+    expect(mocks.appearanceWrites).toEqual([
+      { botId: BOT_ID, eyewear: "shades" },
+      { botId: BOT_ID, accessory: "halo" },
+    ]);
+  });
+
   it("sends null for each Use the default, and only for its own field", async () => {
     const user = userEvent.setup();
     mount({
       mark: { kind: "mascot", shape: "cat" },
       color: 2,
       background: 9,
+      eyewear: "visor",
+      accessory: "bow",
     });
 
     await user.click(screen.getByTestId("bot-settings-icon-default"));
@@ -280,20 +327,30 @@ describe("<BotAppearanceSettings />", () => {
     await waitFor(() => {
       expect(mocks.appearanceWrites).toHaveLength(2);
     });
-    await user.click(screen.getByTestId("bot-settings-background-default"));
+    await user.click(screen.getByTestId("bot-settings-eyewear-default"));
     await waitFor(() => {
       expect(mocks.appearanceWrites).toHaveLength(3);
+    });
+    await user.click(screen.getByTestId("bot-settings-accessory-default"));
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(4);
+    });
+    await user.click(screen.getByTestId("bot-settings-background-default"));
+    await waitFor(() => {
+      expect(mocks.appearanceWrites).toHaveLength(5);
     });
 
     expect(mocks.appearanceWrites).toEqual([
       { botId: BOT_ID, mark: null },
       { botId: BOT_ID, color: null },
+      { botId: BOT_ID, eyewear: null },
+      { botId: BOT_ID, accessory: null },
       { botId: BOT_ID, background: null },
     ]);
   });
 
   it("offers Use the default only where a choice stands", () => {
-    mount({ mark: null, color: 2, background: null });
+    mount({ mark: null, color: 2, background: null, eyewear: "glasses" });
 
     expect(
       screen.getByTestId<HTMLButtonElement>("bot-settings-icon-default")
@@ -304,9 +361,15 @@ describe("<BotAppearanceSettings />", () => {
         .disabled,
     ).toBe(false);
     expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-background-default")
+      screen.getByTestId<HTMLButtonElement>("bot-settings-eyewear-default")
         .disabled,
-    ).toBe(true);
+    ).toBe(false);
+    for (const section of ["accessory", "background"]) {
+      expect(
+        screen.getByTestId<HTMLButtonElement>(`bot-settings-${section}-default`)
+          .disabled,
+      ).toBe(true);
+    }
   });
 
   it("offers no upload: neither a button nor a file input", () => {
@@ -319,15 +382,15 @@ describe("<BotAppearanceSettings />", () => {
 
   it("presses the shape the bot shows: its own, the chosen one, or the default for one it cannot read", () => {
     mount(BARE);
-    expect(pressedShape()).toBe(shapeName(ownMascotShape(BOT_ID)));
+    expect(pressedShape()).toBe(partName(ownMascotShape(BOT_ID)));
     cleanup();
 
     mount({ ...BARE, mark: { kind: "mascot", shape: chosenShape() } });
-    expect(pressedShape()).toBe(shapeName(chosenShape()));
+    expect(pressedShape()).toBe(partName(chosenShape()));
     cleanup();
 
     mount({ ...BARE, mark: BOT_UNRECOGNISED_MARK });
-    expect(pressedShape()).toBe(shapeName(DEFAULT_MASCOT_SHAPE));
+    expect(pressedShape()).toBe(partName(DEFAULT_MASCOT_SHAPE));
   });
 
   it("writes a chosen shape, and a reload shows that shape pressed and on the avatar", async () => {
@@ -345,7 +408,7 @@ describe("<BotAppearanceSettings />", () => {
     if (returned === null) throw new Error("the host stored nothing");
     rerenderWith(returned);
 
-    expect(pressedShape()).toBe(shapeName(chosenShape()));
+    expect(pressedShape()).toBe(partName(chosenShape()));
     expect(pathsIn(screen.getByTestId("bot-avatar"))).toEqual(
       avatarPathsFor(returned),
     );
@@ -357,7 +420,7 @@ describe("<BotAppearanceSettings />", () => {
   it("sends null for Use the default, and a reload shows the bot's own shape again", async () => {
     const user = userEvent.setup();
     mount({ ...BARE, mark: { kind: "mascot", shape: chosenShape() } });
-    expect(pressedShape()).toBe(shapeName(chosenShape()));
+    expect(pressedShape()).toBe(partName(chosenShape()));
 
     await user.click(screen.getByTestId("bot-settings-icon-default"));
 
@@ -368,7 +431,7 @@ describe("<BotAppearanceSettings />", () => {
     if (returned === null) throw new Error("the host stored nothing");
     rerenderWith(returned);
 
-    expect(pressedShape()).toBe(shapeName(ownMascotShape(BOT_ID)));
+    expect(pressedShape()).toBe(partName(ownMascotShape(BOT_ID)));
     expect(pathsIn(screen.getByTestId("bot-avatar"))).toEqual(
       avatarPathsFor(BARE),
     );

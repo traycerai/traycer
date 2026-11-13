@@ -200,6 +200,23 @@ describe("runSignInPreflight policy", () => {
       expect(result).toEqual({ state: "signed-in-inline", reason: null });
       expect(mocks.runDeviceAuthFlowMock).toHaveBeenCalledTimes(1);
     });
+
+    it("does not print an account id when inline sign-in has no email or name", async () => {
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      mocks.runDeviceAuthFlowMock.mockResolvedValue({
+        token: "inline-token",
+        user: { id: "opaque-user-id", email: "", name: "" },
+      });
+      const context = fakeCtx(INTERACTIVE);
+
+      const result = await runSignInPreflight(context, REQUIRE_SIGN_IN);
+
+      expect(result).toEqual({ state: "signed-in-inline", reason: null });
+      expect(context.output.humanRequired).toHaveBeenNthCalledWith(
+        2,
+        "Signed in.",
+      );
+    });
   });
 
   describe("existing warn-and-continue (false)", () => {

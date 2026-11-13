@@ -18,6 +18,12 @@ import {
 } from "@traycer/protocol/config/credentials";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type { HostPidMetadata } from "../pid-metadata";
+import type { HealthProbeOptions } from "../../service/health-probe";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 
 // `maybeProvisionCredential`'s own decision logic, which had no direct
 // coverage: every command suite that exercises it (`host-install`,
@@ -43,7 +49,12 @@ const mocks = vi.hoisted(() => ({
   resolveHostAuthMock: vi.fn(),
   provisionInstalledHostCredentialMock: vi.fn(),
   callHostRpcMock: vi.fn(),
+  callHostRpcAtResolvedEndpointMock: vi.fn(),
+  resolveEndpointMock: vi.fn(),
   readHostOwnershipMock: vi.fn(),
+  readHostPidMetadataMock: vi.fn(),
+  probeHostHealthMock: vi.fn(),
+  replacementMetadata: null as HostPidMetadata | null,
   credentialsPath: "",
   legacyHost: null as LegacyTeamHost | null,
 }));
@@ -51,6 +62,26 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../internal/host-auth", () => ({
   resolveHostAuth: mocks.resolveHostAuthMock,
 }));
+
+vi.mock("../pid-metadata", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pid-metadata")>();
+  return {
+    ...actual,
+    readHostPidMetadata: (
+      ...callArgs: Parameters<typeof actual.readHostPidMetadata>
+    ) => mocks.readHostPidMetadataMock(...callArgs),
+  };
+});
+
+vi.mock("../../service/health-probe", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/health-probe")>();
+  return {
+    ...actual,
+    probeHostHealth: (...callArgs: Parameters<typeof actual.probeHostHealth>) =>
+      mocks.probeHostHealthMock(...callArgs),
+  };
+});
 
 vi.mock("../credential-provisioning", () => ({
   provisionInstalledHostCredential: mocks.provisionInstalledHostCredentialMock,
@@ -63,6 +94,14 @@ vi.mock("../../internal/host-rpc", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/host-rpc")>();
   return {
     ...actual,
+    resolveEndpoint: (...callArgs: Parameters<typeof actual.resolveEndpoint>) =>
+      mocks.resolveEndpointMock(...callArgs),
+    callHostRpcAtResolvedEndpoint: (
+      ...callArgs: Parameters<typeof actual.callHostRpcAtResolvedEndpoint>
+    ) =>
+      mocks.legacyHost === null
+        ? mocks.callHostRpcAtResolvedEndpointMock(...callArgs)
+        : mocks.legacyHost.request(callArgs[0], callArgs[1], callArgs[4]),
     callHostRpcWithDispatch: (
       ...callArgs: Parameters<typeof actual.callHostRpcWithDispatch>
     ) =>
@@ -112,6 +151,7 @@ import type {
 } from "../install-auth";
 import type { HostCredentialProvisionOutcome } from "../credential-provisioning";
 import type { CommandContext } from "../../runner/runner";
+import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
 const credentialsRoot = mkdtempSync(join(tmpdir(), "team-install-auth-test-"));
@@ -126,6 +166,14 @@ const teamEnvironment = {
   kind: "team",
   hostCount: 0,
   providerHandle: "acme",
+} as const;
+const collidingLabelEnvironment = {
+  ...teamEnvironment,
+  environmentId: "environment-label-collision",
+  ownerId: "organization-label-collision",
+  roomId: "room-label-collision",
+  label: "acme",
+  providerHandle: "other-team",
 } as const;
 const personalEnvironment = {
   environmentId: "environment-personal",
@@ -235,10 +283,70 @@ function storedAuth(): {
   };
 }
 
+function hostPidMetadata(overrides: Partial<HostPidMetadata>): HostPidMetadata {
+  return {
+    pid: 4100,
+    hostId: "host-local",
+    version: "1.0.0",
+    websocketUrl: "ws://127.0.0.1:1/rpc",
+    startedAt: "2026-11-10T00:00:00.000Z",
+    processStartIdentity: null,
+    processStartIdentityRead: "absent",
+    layer0: null,
+    layer0Slot: null,
+    ...overrides,
+  };
+}
+
 describe("install auth helpers", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.legacyHost = null;
+    mocks.resolveEndpointMock.mockResolvedValue({
+      hostId: "host-local",
+      websocketUrl: "ws://127.0.0.1:1/rpc",
+    });
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      pid: 4100,
+      hostId: "host-local",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:1/rpc",
+      startedAt: "2026-11-10T00:00:00.000Z",
+      processStartIdentity: null,
+      processStartIdentityRead: "absent",
+      layer0: null,
+      layer0Slot: null,
+    });
+    mocks.replacementMetadata = {
+      pid: 4101,
+      hostId: "host-local",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:2/rpc",
+      startedAt: "2026-11-10T00:00:01.000Z",
+      processStartIdentity: null,
+      processStartIdentityRead: "absent",
+      layer0: null,
+      layer0Slot: null,
+    };
+    mocks.probeHostHealthMock.mockImplementation(
+      async (options: HealthProbeOptions) => {
+        if (
+          options.checkReadiness === null ||
+          mocks.replacementMetadata === null
+        )
+          return { healthy: false, detail: "replacement host not ready" };
+        const ready = await options.checkReadiness(
+          mocks.replacementMetadata,
+          10_000,
+        );
+        return {
+          healthy: ready,
+          detail: ready
+            ? "replacement host ready"
+            : "replacement host not ready",
+        };
+      },
+    );
     caseCredentialsRoot = mkdtempSync(join(credentialsRoot, "case-"));
     mocks.credentialsPath = join(caseCredentialsRoot, "cli", "credentials");
     mocks.callHostRpcMock.mockImplementation((method: string) => {
@@ -250,6 +358,16 @@ describe("install auth helpers", () => {
       }
       return Promise.resolve(teamBinding);
     });
+    mocks.callHostRpcAtResolvedEndpointMock.mockImplementation(
+      (method: string, params: unknown) => {
+        if (method === "environment.host.read")
+          return Promise.resolve(personalBinding);
+        if (method === "environment.host.bind")
+          return Promise.resolve(teamBinding);
+        if (method === "host.status") return Promise.resolve({ ready: true });
+        throw new Error(`unexpected host RPC ${method} ${String(params)}`);
+      },
+    );
     mocks.resolveHostAuthMock.mockResolvedValue({
       token: "stored-bearer",
       authnBaseUrl: "https://authn.test",
@@ -264,6 +382,89 @@ describe("install auth helpers", () => {
     });
   });
 
+  it("discloses transfer once before both binds and reports restart progress during recovery", async () => {
+    const order: string[] = [];
+    const progress = vi.fn(
+      (info: { readonly stage: string; readonly message: string | null }) => {
+        order.push(`progress:${info.message ?? ""}`);
+        expect(info.stage).toBe("host-team");
+      },
+    );
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+    mocks.callHostRpcAtResolvedEndpointMock
+      .mockImplementationOnce((method: string) => {
+        order.push(method);
+        return Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "WebSocket closed before the response arrived",
+            requestId: "team-bind-recovery",
+            method: "environment.host.bind",
+            fatalDetails: null,
+          }),
+        );
+      })
+      .mockImplementation((method: string) => {
+        order.push(method);
+        if (method === "environment.host.bind") {
+          return Promise.resolve(teamBinding);
+        }
+        if (method === "host.status") return Promise.resolve({ ready: true });
+        throw new Error(`unexpected host RPC ${method}`);
+      });
+
+    await expect(
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        progress,
+      ),
+    ).resolves.toEqual(teamBinding);
+
+    expect(progress).toHaveBeenCalledWith({
+      stage: "host-team",
+      message: "Restarting Traycer on this computer to run as Acme…",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits: null,
+    });
+    const disclosureMessages = progress.mock.calls
+      .map(([info]) => info.message)
+      .filter((message) =>
+        TEAM_TRANSFER_DISCLOSURE.some((disclosure) => disclosure === message),
+      );
+    expect(disclosureMessages).toEqual([...TEAM_TRANSFER_DISCLOSURE]);
+    const firstBind = order.indexOf("environment.host.bind");
+    const disclosureProgressIndexes = TEAM_TRANSFER_DISCLOSURE.map((line) =>
+      order.indexOf(`progress:${line}`),
+    );
+    expect(Math.max(...disclosureProgressIndexes)).toBeLessThan(firstBind);
+    expect(
+      order.filter((entry) => entry === "environment.host.bind"),
+    ).toHaveLength(2);
+    expect(progress).toHaveBeenCalledTimes(TEAM_TRANSFER_DISCLOSURE.length + 1);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+  });
+
   it("the CLI does not send a team target to a host that cannot transfer", async () => {
     const legacyHost = new LegacyTeamHost();
     mocks.legacyHost = legacyHost;
@@ -273,10 +474,146 @@ describe("install auth helpers", () => {
       message: expect.stringContaining("traycer host update"),
     });
     expect(legacyHost.requests).toEqual([]);
-    expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
-      "environment.list",
-    ]);
+    expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
     expect(mocks.readHostOwnershipMock).not.toHaveBeenCalled();
+  });
+
+  it("reports the team transfer through host use progress", async () => {
+    const progress = vi.fn<CommandContext["progress"]>();
+    const ctx: CommandContext = { ...fakeCtx(), progress };
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(buildHostUseCommand("acme")(ctx)).resolves.toMatchObject({
+      data: { binding: teamBinding },
+      human: "This computer belongs to Acme.",
+    });
+
+    expect(progress).toHaveBeenCalledWith({
+      stage: "host-team",
+      message: "Restarting Traycer on this computer to run as Acme…",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits: null,
+    });
+    expect(progress).toHaveBeenCalledTimes(TEAM_TRANSFER_DISCLOSURE.length + 1);
+    const disclosureMessages = progress.mock.calls
+      .map(([info]) => info.message)
+      .filter((message) =>
+        TEAM_TRANSFER_DISCLOSURE.some((disclosure) => disclosure === message),
+      );
+    expect(disclosureMessages).toEqual([...TEAM_TRANSFER_DISCLOSURE]);
+  });
+
+  it("prefers an exact team slug when another team's display label collides", async () => {
+    const token = "pre-existing-token";
+    await writeStoredCredentials(token);
+    mocks.callHostRpcMock.mockImplementation((method: string) => {
+      if (method === "environment.list") {
+        return Promise.resolve({
+          environments: [teamEnvironment, collidingLabelEnvironment],
+        });
+      }
+      if (method === "environment.host.read")
+        return Promise.resolve(personalBinding);
+      return Promise.resolve(teamBinding);
+    });
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
+    ).resolves.toEqual(teamBinding);
+
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock,
+    ).toHaveBeenCalledExactlyOnceWith(
+      "environment.host.bind",
+      { environmentId: teamEnvironment.environmentId },
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:1/rpc" },
+      {
+        token: "stored-bearer",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      },
+      expect.objectContaining({
+        requiredHostMethodVersion: {
+          method: "environment.host.bind",
+          version: { major: 1, minor: 1 },
+        },
+      }),
+    );
+    expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
+      token,
+    );
+  });
+
+  it("still accepts a team's canonical environment id as the selector", async () => {
+    await writeStoredCredentials("pre-existing-token");
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(
+      completeTeamInstall(
+        teamEnvironment.environmentId,
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
+    ).resolves.toEqual(teamBinding);
+
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock,
+    ).toHaveBeenCalledExactlyOnceWith(
+      "environment.host.bind",
+      { environmentId: teamEnvironment.environmentId },
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:1/rpc" },
+      {
+        token: "stored-bearer",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      },
+      expect.objectContaining({
+        requiredHostMethodVersion: {
+          method: "environment.host.bind",
+          version: { major: 1, minor: 1 },
+        },
+      }),
+    );
   });
 
   it("lists the signed-in teams and binds the selected team before clearing an inline-created sign-in", async () => {
@@ -300,19 +637,41 @@ describe("install auth helpers", () => {
         );
       });
 
-    await completeTeamInstall("team/acme", {
-      preflight: { state: "signed-in-inline", reason: null },
-      inlineSignInToken: token,
-    });
+    await completeTeamInstall(
+      "team/acme",
+      {
+        preflight: { state: "signed-in-inline", reason: null },
+        inlineSignInToken: token,
+      },
+      vi.fn(),
+    );
 
     expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
       "environment.list",
-      "environment.host.read",
-      "environment.host.bind",
     ]);
-    expect(mocks.callHostRpcMock.mock.calls[2]?.[1]).toEqual({
-      environmentId: "environment-acme",
-    });
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock.mock.calls.map(
+        ([method]) => method,
+      ),
+    ).toEqual(["environment.host.bind"]);
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock,
+    ).toHaveBeenCalledExactlyOnceWith(
+      "environment.host.bind",
+      { environmentId: "environment-acme" },
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:1/rpc" },
+      {
+        token: "stored-bearer",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      },
+      expect.objectContaining({
+        requiredHostMethodVersion: {
+          method: "environment.host.bind",
+          version: { major: 1, minor: 1 },
+        },
+      }),
+    );
     expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(2);
     expect(mocks.readHostOwnershipMock).toHaveBeenNthCalledWith(
       1,
@@ -327,9 +686,12 @@ describe("install auth helpers", () => {
       "host-local",
     );
     const ownershipReads = mocks.readHostOwnershipMock.mock.invocationCallOrder;
-    const bindCalls = mocks.callHostRpcMock.mock.invocationCallOrder;
-    expect(ownershipReads[0]).toBeLessThan(bindCalls[2] ?? Infinity);
-    expect(ownershipReads[1]).toBeGreaterThan(bindCalls[2] ?? -Infinity);
+    const listCalls = mocks.callHostRpcMock.mock.invocationCallOrder;
+    const bindCalls =
+      mocks.callHostRpcAtResolvedEndpointMock.mock.invocationCallOrder;
+    expect(listCalls[0]).toBeLessThan(ownershipReads[0] ?? Infinity);
+    expect(ownershipReads[0]).toBeLessThan(bindCalls[0] ?? Infinity);
+    expect(ownershipReads[1]).toBeGreaterThan(bindCalls[0] ?? -Infinity);
     expect(credentialsAtOwnerChecks).toEqual([token, token]);
     expect(await readCredentialsFile(mocks.credentialsPath)).toBeNull();
   });
@@ -337,21 +699,364 @@ describe("install auth helpers", () => {
   it("keeps the inline-created sign-in when the team bind fails", async () => {
     const token = "inline-team-token";
     await writeStoredCredentials(token);
-    mocks.callHostRpcMock
-      .mockResolvedValueOnce({ environments: [teamEnvironment] })
-      .mockResolvedValueOnce(personalBinding)
-      .mockRejectedValueOnce(new Error("bind failed"));
+    mocks.callHostRpcAtResolvedEndpointMock.mockRejectedValueOnce(
+      new Error("bind failed"),
+    );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in-inline", reason: null },
-        inlineSignInToken: token,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in-inline", reason: null },
+          inlineSignInToken: token,
+        },
+        vi.fn(),
+      ),
     ).rejects.toThrow();
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
       token,
     );
+  });
+
+  it("confirms a sent bind after the replacement host answers its pinned binding read", async () => {
+    let notifyReadStarted: () => void = () => undefined;
+    let resolveRead: (binding: typeof teamBinding) => void = () => {
+      throw new Error("replacement read was not held");
+    };
+    const readStarted = new Promise<void>((resolve) => {
+      notifyReadStarted = resolve;
+    });
+    const hostRead = new Promise<typeof teamBinding>((resolve) => {
+      resolveRead = resolve;
+    });
+    mocks.callHostRpcAtResolvedEndpointMock
+      .mockRejectedValueOnce(
+        new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: "WebSocket closed before the response arrived",
+          requestId: "team-bind-lost-response",
+          method: "environment.host.bind",
+          fatalDetails: null,
+        }),
+      )
+      .mockImplementationOnce(async (method: string) => {
+        if (method !== "environment.host.read")
+          throw new Error(`unexpected replacement RPC ${method}`);
+        notifyReadStarted();
+        return await hostRead;
+      });
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    const operation = completeTeamInstall(
+      "acme",
+      {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      },
+      vi.fn(),
+    );
+    await readStarted;
+    let settled = false;
+    void operation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    expect(settled).toBe(false);
+    resolveRead(teamBinding);
+    await expect(operation).resolves.toEqual(teamBinding);
+
+    expect(mocks.callHostRpcMock.mock.calls.map(([method]) => method)).toEqual([
+      "environment.list",
+    ]);
+    const bindCalls = mocks.callHostRpcAtResolvedEndpointMock.mock.calls.filter(
+      ([method]) => method === "environment.host.bind",
+    );
+    expect(bindCalls).toHaveLength(1);
+    expect(bindCalls[0]).toEqual([
+      "environment.host.bind",
+      { environmentId: "environment-acme" },
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:1/rpc" },
+      {
+        token: "stored-bearer",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      },
+      expect.objectContaining({
+        requiredHostMethodVersion: {
+          method: "environment.host.bind",
+          version: { major: 1, minor: 1 },
+        },
+      }),
+    ]);
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock.mock.calls.map(
+        ([method, _params, endpoint]) =>
+          method === "environment.host.read" ? endpoint : null,
+      ),
+    ).toEqual([
+      null,
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:2/rpc" },
+    ]);
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(3);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows one new bind only when both authoritative reads still say Personal", async () => {
+    mocks.callHostRpcAtResolvedEndpointMock.mockRejectedValueOnce(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before the response arrived",
+        requestId: "team-bind-lost-response",
+        method: "environment.host.bind",
+        fatalDetails: null,
+      }),
+    );
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
+    ).resolves.toEqual(teamBinding);
+
+    const bindCalls = mocks.callHostRpcAtResolvedEndpointMock.mock.calls.filter(
+      ([method]) => method === "environment.host.bind",
+    );
+    expect(bindCalls).toHaveLength(2);
+    expect(bindCalls.map(([, , endpoint]) => endpoint)).toEqual([
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:1/rpc" },
+      { hostId: "host-local", websocketUrl: "ws://127.0.0.1:2/rpc" },
+    ]);
+    expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledTimes(3);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("preserves a known team-transfer refusal instead of confirming around it", async () => {
+    mocks.callHostRpcAtResolvedEndpointMock.mockRejectedValueOnce(
+      new HostRpcError({
+        code: "E_ENVIRONMENT_NOT_A_MEMBER",
+        message: "internal refusal details are discarded by the CLI",
+        requestId: "team-bind-refused",
+        method: "environment.host.bind",
+        fatalDetails: null,
+      }),
+    );
+
+    await expect(
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      code: "E_ENVIRONMENT_NOT_A_MEMBER",
+      message: "Join the team before adding this computer.",
+      exitCode: 1,
+    });
+
+    expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledTimes(1);
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      outcome: "the owner now belongs to another team",
+      confirmation: hostOwnership(
+        { kind: "team", id: "organization-other", name: "Other" },
+        "personal",
+      ),
+    },
+    {
+      outcome: "the authoritative owner read does not return",
+      confirmation: { kind: "network-error" } satisfies HostOwnershipResult,
+    },
+  ])(
+    "keeps a sent bind outcome unknown when $outcome after the response is lost",
+    async ({ confirmation }) => {
+      mocks.callHostRpcAtResolvedEndpointMock
+        .mockRejectedValueOnce(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "WebSocket closed before the response arrived",
+            requestId: "team-bind-lost-response",
+            method: "environment.host.bind",
+            fatalDetails: null,
+          }),
+        )
+        .mockResolvedValueOnce(teamBinding);
+      mocks.readHostOwnershipMock
+        .mockResolvedValueOnce(
+          hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+        )
+        .mockResolvedValueOnce(confirmation);
+
+      await expect(
+        completeTeamInstall(
+          "acme",
+          {
+            preflight: { state: "signed-in", reason: null },
+            inlineSignInToken: null,
+          },
+          vi.fn(),
+        ),
+      ).rejects.toMatchObject({
+        code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+        exitCode: 1,
+      });
+
+      expect(
+        mocks.callHostRpcAtResolvedEndpointMock.mock.calls.filter(
+          ([method]) => method === "environment.host.bind",
+        ),
+      ).toHaveLength(1);
+      expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps a sent bind outcome unknown when only the old host answers after the drop", async () => {
+    const replacementMetadata = mocks.replacementMetadata;
+    if (replacementMetadata === null)
+      throw new Error("replacement metadata was not installed");
+    mocks.replacementMetadata = {
+      ...replacementMetadata,
+      pid: 4100,
+    };
+    mocks.callHostRpcAtResolvedEndpointMock.mockRejectedValueOnce(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before the response arrived",
+        requestId: "team-bind-lost-response",
+        method: "environment.host.bind",
+        fatalDetails: null,
+      }),
+    );
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+      exitCode: 1,
+    });
+
+    expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledTimes(1);
+    expect(mocks.probeHostHealthMock).toHaveBeenCalledTimes(1);
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { metadata: null, reason: "initial metadata is absent" },
+    {
+      metadata: hostPidMetadata({ hostId: "different-host" }),
+      reason: "initial metadata names a different host",
+    },
+    {
+      metadata: hostPidMetadata({ websocketUrl: "ws://127.0.0.1:3/rpc" }),
+      reason: "initial metadata names a different endpoint",
+    },
+  ])("keeps a sent bind outcome unknown when $reason", async ({ metadata }) => {
+    mocks.readHostPidMetadataMock.mockResolvedValueOnce(metadata);
+    mocks.callHostRpcAtResolvedEndpointMock.mockRejectedValueOnce(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before the response arrived",
+        requestId: "team-bind-lost-response",
+        method: "environment.host.bind",
+        fatalDetails: null,
+      }),
+    );
+    mocks.readHostOwnershipMock
+      .mockResolvedValueOnce(
+        hostOwnership({ kind: "user", id: "member-1" }, "personal"),
+      )
+      .mockResolvedValueOnce(
+        hostOwnership(
+          { kind: "team", id: "organization-acme", name: "Acme" },
+          "personal",
+        ),
+      );
+
+    await expect(
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({
+      code: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+      exitCode: 1,
+    });
+
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock.mock.calls.filter(
+        ([method]) => method === "environment.host.bind",
+      ),
+    ).toHaveLength(1);
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not clear a newer sign-in that replaced the inline token during owner confirmation", async () => {
@@ -374,7 +1079,7 @@ describe("install auth helpers", () => {
         );
       });
 
-    await completeTeamInstall("acme", session);
+    await completeTeamInstall("acme", session, vi.fn());
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
       replacement,
@@ -404,10 +1109,14 @@ describe("install auth helpers", () => {
     await writeStoredCredentials(token);
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in-inline", reason: null },
-        inlineSignInToken: token,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in-inline", reason: null },
+          inlineSignInToken: token,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({ code: "E_HOST_REQUEST_OUTCOME_UNKNOWN" });
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
@@ -418,12 +1127,7 @@ describe("install auth helpers", () => {
   it("accepts an existing same-team owner plus explicit binding without changing the stored sign-in", async () => {
     const token = "pre-existing-token";
     await writeStoredCredentials(token);
-    mocks.callHostRpcMock.mockImplementation((method: string) => {
-      if (method === "environment.list") {
-        return Promise.resolve({ environments: [teamEnvironment] });
-      }
-      return Promise.resolve(teamBinding);
-    });
+    mocks.callHostRpcAtResolvedEndpointMock.mockResolvedValue(teamBinding);
     mocks.readHostOwnershipMock.mockResolvedValue(
       hostOwnership(
         { kind: "team", id: "organization-acme", name: "Acme" },
@@ -431,16 +1135,21 @@ describe("install auth helpers", () => {
       ),
     );
 
-    const binding = await completeTeamInstall("acme", {
-      preflight: { state: "signed-in", reason: null },
-      inlineSignInToken: null,
-    });
+    const binding = await completeTeamInstall(
+      "acme",
+      {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      },
+      vi.fn(),
+    );
 
     expect(binding).toEqual(teamBinding);
-    expect(mocks.callHostRpcMock).not.toHaveBeenCalledWith(
-      "environment.host.bind",
-      expect.anything(),
-    );
+    expect(
+      mocks.callHostRpcAtResolvedEndpointMock.mock.calls.map(
+        ([method]) => method,
+      ),
+    ).toEqual(["environment.host.read"]);
     expect(mocks.readHostOwnershipMock).toHaveBeenCalledTimes(1);
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
       token,
@@ -453,10 +1162,14 @@ describe("install auth helpers", () => {
     );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_IS_SANDBOX });
   });
 
@@ -469,10 +1182,14 @@ describe("install auth helpers", () => {
     );
 
     await expect(
-      completeTeamInstall("acme", {
-        preflight: { state: "signed-in", reason: null },
-        inlineSignInToken: null,
-      }),
+      completeTeamInstall(
+        "acme",
+        {
+          preflight: { state: "signed-in", reason: null },
+          inlineSignInToken: null,
+        },
+        vi.fn(),
+      ),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
       message:
@@ -494,10 +1211,14 @@ describe("install auth helpers", () => {
         ),
       );
 
-    await completeTeamInstall("acme", {
-      preflight: { state: "signed-in", reason: null },
-      inlineSignInToken: null,
-    });
+    await completeTeamInstall(
+      "acme",
+      {
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      },
+      vi.fn(),
+    );
 
     expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
       token,

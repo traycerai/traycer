@@ -300,6 +300,9 @@ describe("<SandboxShapeSheet />", () => {
     expect(screen.getByText(idleAndRestingLine(30, 10_080))).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: CHANGE_LABEL }));
+    expect(
+      screen.getByText("Destroyed after suspended or stopped for"),
+    ).toBeDefined();
     fireEvent.change(screen.getByTestId("sandbox-shape-sheet-resting"), {
       target: { value: "" },
     });

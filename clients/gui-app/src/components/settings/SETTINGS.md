@@ -164,11 +164,23 @@ Application. It uses the first settings leader digit; General uses the second.
 The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
-While this computer's settings are not in Personal, the move's own invitation
-stands there instead, under an id of its own
-(`MOVE_INVITATION_TOAST_ID`): "This computer's settings aren't in Personal." ·
-Show me what moves · Not now. Only the person takes it down - a status that
-stops naming a move does not, and the reminder never stands in its place.
+While this computer runs its own settings, the move's own invitation stands
+there instead, once, under an id of its own (`MOVE_INVITATION_TOAST_ID`), in
+the move card's words: "Move this computer to Personal" · "So your settings
+follow you to every computer and sandbox." · Move to Personal · Later, through
+the import announcement's `ActionToastContent`. On a fresh install Home is
+hidden, so this is where a new person first meets the move. Only the person
+takes it down - a status that stops naming a move does not, and the reminder
+never stands in its place. The answer is kept on the
+desktop in its own flag (`moveInvitationAnswered`), not the reminder's, so
+someone who dismissed the reminder long ago is still asked once; it settles
+the reminder too. Afterwards the checklist's move card is the only place the
+move waits. A computer that runs a team's settings, or has moved, is never
+asked (`useThisComputersMove` answers `team` or `moved`). One ask at a time:
+while the invitation is owed, or the move sheet is open, the session-import
+and login-import announcements are held, unclaimed, and show once it is
+answered (`useMoveAskHoldsAnnouncements`); otherwise following the invitation
+would open the sheet under an announcement at the toaster's corner.
 
 The Home tab draws the checklist itself, above its task sections
 (`home-focus/home-getting-started-section.tsx`), from the same cards
@@ -828,6 +840,25 @@ name, endpoint route and active byte counters inline with wrapping rows.
 
 ## Team configuration sources
 
+The Environment default stays unresolved until the window's own computer is
+listed and its status has answered. The picker shows a spinner, and every
+Environment page waits without mounting its editors. Failed host lists reuse
+`HostScopeGate`; failed status reads show the existing settings read error and
+Retry. An answered host keeps its Local or Personal default, and a window with
+no host keeps Personal. A listed sandbox defaults to Personal without a Local
+status read. The stored default belongs to the window host it was derived for;
+a host change makes readers unresolved immediately, before upkeep runs.
+An explicit choice still takes precedence.
+A pending Settings host entry waits for a reachable computer's failed status
+read before asking for bindings. A completed handshake that explicitly lacks
+`environment.status` keeps the legacy entry path, without a status retry; an
+unnegotiated method still waits. It keeps “Finding your hosts…” with “Try again” after a
+failed attempt; that action retries the target status. An error holds the entry
+through a retry with cached data. An offline target keeps the existing
+binding path and offers no status retry; its observer reads again when the
+route returns. Unresolved picks ignore Personal membership results, including
+cached hosts.
+
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the
 cloud. A Local row reads that computer's own host pages. Personal reads the
@@ -1185,7 +1216,8 @@ with **Replace**, **Remove** and **Details**; Details holds **Verify**
 on a revoked secret sent with `regrant`, Destroy behind a confirmation, refusals
 read by `secretChangeRefusalLine`) and the recovery order for a leaked secret,
 open beside the versions: "If this secret leaked", four steps, and "If Traycer
-can't be reached, stopping the sandbox ends its sessions." Empty, it reads
+can't be reached, finish or stop running agent turns and shells before stopping
+the sandbox to end its sessions." Empty, it reads
 "Values and logins your agents use. On your computers they are set as values; on
 sandboxes agents use them without seeing them." with Add a secret, and the page
 has no subtitle, which would say it twice. A failed read shows only "Couldn't
@@ -1261,7 +1293,10 @@ records acknowledgement (`environment.review.record`) and Escape does not. A
 Local picker row's subtitle (`its own settings, not in Personal yet`,
 `partly in Personal`, `stopped using Personal`) and `Move to Personal` /
 `Finish moving` verb come from those planes (E4's slot); the row's `Local`
-badge reads "Settings on this computer only" on hover. The Secrets page's
+badge reads "Settings on this computer only" on hover. A computer that runs a
+team's settings (`principal.kind === "team"`) has no Local row whatever its
+planes read, and the retrospective sheet lists what is still on it without
+`Move to Personal`. The Secrets page's
 `N commands from {host} are on hold until you choose · Review them` line
 (`1 command … is on hold until you choose · Review it`) opens the same sheet
 for that host's held rows, where Approve and Discard answer one row through
@@ -5965,9 +6000,11 @@ wrap`). Each row names the account its first usable match runs on, the
     feature; per-chat intervention is the actions on the cards themselves.
 - `Storage` (Environment, section id `storage`, route `/settings/storage`,
   `environment/storage-settings-panel.tsx`): what the picked configuration's
-  hosts keep on disk. It is offered for Personal and teams, and not on a
-  Local row (`PAGES_HIDDEN_BY_PICK`), since its settings are an environment
-  item. Later storage rows go here too.
+  hosts keep on disk. Its policy is offered for Personal and teams. On a
+  Local row, as for MCP servers, Skills and Sandboxes, the page stays in the
+  rail and shows the move's offer instead (`environment/local-move-page.tsx`):
+  one line on what the page gives, one on what moving adds, and Move to
+  Personal, which opens the move sheet. Later storage rows go here too.
   - **The storage policy** (`panels/storage-policy-section.tsx`,
     `data-testid="storage-policy"`), two groups:
     - **Tasks you haven't used lately**, a card of two rows:
@@ -6577,9 +6614,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
   trailing "working" dropped, otherwise Idle or Busy); a health detail when
   the host is not live, or when it needs an update; this computer's lifecycle
   line; and the cost. A team sandbox's header cost is the rate only. A
-  personal sandbox adds "{amount} today", or **Free today** for an automation,
-  when a ledger row exists. The rate itself reads Free, Not billing, the
-  hourly rate, or Not priced here.
+  personal sandbox adds "{amount} today", or **Free today** for a personal
+  Automations host, when a ledger row exists. The rate itself reads Free for
+  personal Automations hosts, Not billing, or the hourly rate, and is left out
+  when no price is known. Team Automations hosts show the same rates as team
+  sandboxes. During a transition, the header omits the current rate until the
+  ledger supplies it; personal Automations remain Free and frozen sandboxes
+  show Not billing.
+  Installation omits the other rate during transitions.
 
   The header offers one primary action and one More menu. A sandbox's existing
   lifecycle verbs move here from the former sandbox card: Suspend while awake,
@@ -6686,7 +6728,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
        Applying your settings, each marked done, running or waiting, with
        "Step 2 of 3". Stalled or failed reads "Setup stopped while <step>."
        (a failed move: "Moving this host's settings to Personal failed.")
-       with Retry (`environment.setup.retry`). Gone once done.
+       with Retry (`environment.setup.retry`). Gone once done, and absent
+       while the state is `awaiting_consent`: the computer runs its own
+       settings until the person moves it, with no deadline, so nothing is
+       being set up.
     3. **Remote access** (`host-scope/remote-access-section.tsx`): On ("Other
        devices and agents signed in to your account can reach this
        computer."), Off ("Other devices and agents can't reach this computer.

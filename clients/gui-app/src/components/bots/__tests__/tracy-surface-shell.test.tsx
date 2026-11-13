@@ -301,6 +301,7 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
   useHostEnvironmentBindings: () => ({
     byHostId: {},
+    ownSettingsHostIds: [],
     failedHostIds: [],
     retryFailed: () => undefined,
   }),

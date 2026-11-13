@@ -126,6 +126,7 @@ vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -534,7 +535,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
     ).toEqual([
-      "Give the team a host",
+      "Give the team a computer",
       "Enable cloud for the team",
       "Add a computer",
     ]);
@@ -593,7 +594,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     ).toHaveProperty("disabled", true);
     expect(
       within(composer).getByTestId("team-setup-composer-reason").textContent,
-    ).toBe("Tracy can reply once the team has a host.");
+    ).toBe("Tracy can reply once the team has a computer.");
   });
 
   it("opens, subscribes to and closes nothing: the bot does not exist", () => {
@@ -750,7 +751,12 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
    */
   it("shows the channel could not be loaded, never opening or closing the tab, when the environment list's refresh failed over a list from before the team; Retry reads it again and the setup then shows", async () => {
     mocks.state.environments = [
-      { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+      {
+        environmentId: "env-team",
+        label: "Acme",
+        ownerKind: "organization",
+        providerHandle: null,
+      },
     ];
     mocks.state.environmentsStatus = "error";
     mocks.state.environmentsKept = true;
@@ -1253,14 +1259,14 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
     expect(within(post).getByText("Release Bot")).toBeTruthy();
     expect(post.textContent).toContain("I'm this team's main bot.");
     expect(post.textContent).toContain(
-      "Before I can run, the team needs a host",
+      "Before I can run, the team needs a computer for its bots.",
     );
     expect(
       within(within(post).getByTestId("team-host-options"))
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
     ).toEqual([
-      "Give the team a host",
+      "Give the team a computer",
       "Enable cloud for the team",
       "Add a computer",
     ]);
@@ -1279,7 +1285,7 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
 
     const channel = screen.getByTestId("stub-channel");
     expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
-      "Acme's machine joined · bots run on it",
+      "Acme's computer joined · bots run on it",
     );
     const option = within(channel).getByTestId("team-host-option-machine");
     expect(within(option).queryAllByRole("button")).toEqual([]);
@@ -1501,7 +1507,12 @@ describe("<BotTabSurface /> paused", () => {
     async (_name, ownerKind, expected) => {
       const user = userEvent.setup();
       mocks.state.environments = [
-        { environmentId: "env-team", label: "Acme", ownerKind },
+        {
+          environmentId: "env-team",
+          label: "Acme",
+          ownerKind,
+          providerHandle: null,
+        },
       ];
       render(surface());
 
@@ -1555,7 +1566,12 @@ describe("<BotTabSurface /> paused", () => {
         },
       });
       mocks.state.environments = [
-        { environmentId: "env-team", label: "Acme", ownerKind },
+        {
+          environmentId: "env-team",
+          label: "Acme",
+          ownerKind,
+          providerHandle: null,
+        },
       ];
       render(surface());
 
@@ -1571,7 +1587,12 @@ describe("<BotTabSurface /> paused", () => {
   it("treats the environment as not personal until the environment list names it", async () => {
     const user = userEvent.setup();
     mocks.state.environments = [
-      { environmentId: "env-other", label: "Mine", ownerKind: "user" },
+      {
+        environmentId: "env-other",
+        label: "Mine",
+        ownerKind: "user",
+        providerHandle: null,
+      },
     ];
     render(surface());
 

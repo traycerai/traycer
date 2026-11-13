@@ -389,7 +389,7 @@ describe("waitForTeamTokenInstall", () => {
 
     expect(error.code).toBe(CLI_ERROR_CODES.AUTH_REJECTED);
     expect(error.message).toBe(
-      "host install: couldn't confirm that this computer joined the team.",
+      "host install: couldn't confirm that this computer joined the team. Check the team's Computers list in Traycer before retrying. Install tokens work once and expire after one hour; create a new token if needed.",
     );
     expect(
       JSON.stringify({ message: error.message, details: error.details }),
@@ -443,7 +443,7 @@ describe("waitForTeamTokenInstall", () => {
     const error = cliErrorFromSettlement(await waiting);
     expect(error.code).toBe(CLI_ERROR_CODES.AUTH_REJECTED);
     expect(error.message).toBe(
-      "host install: couldn't confirm that this computer joined the team.",
+      "host install: couldn't confirm that this computer joined the team. Check the team's Computers list in Traycer before retrying. Install tokens work once and expire after one hour; create a new token if needed.",
     );
     expect(
       JSON.stringify({ message: error.message, details: error.details }),
@@ -454,6 +454,7 @@ describe("waitForTeamTokenInstall", () => {
 describe("team install operation serialization", () => {
   const environment: Environment = "production";
   const environmentId = "env_first-team";
+  const teamSlug = "first-team";
   const hostId = "0b6f6a3e-6f4c-4a0e-9d6e-0d7a4c1f2a11";
 
   function operationPath(): string {
@@ -660,7 +661,7 @@ describe("team install operation serialization", () => {
     await expect(
       withTeamTokenInstall(
         environment,
-        environmentId,
+        teamSlug,
         true,
         pipeReader(`${TOKEN}\n`).readToken,
         async (prepared) => {
@@ -695,7 +696,7 @@ describe("team install operation serialization", () => {
           return waitForTeamTokenInstall(environment, prepared, 1_000);
         },
       ),
-    ).resolves.toEqual({ hostId, environmentId });
+    ).resolves.toEqual({ hostId, environmentId: teamSlug });
   });
 
   it("reclaims an operation lock whose recorded process was killed", async () => {

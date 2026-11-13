@@ -54,8 +54,12 @@ export function useSkillEnvironmentRoute(): SkillEnvironmentRoute {
     bindingUsable,
   );
   // A disabled read still answers from the cache, which the host picker primes
-  // for a host this client has not negotiated with.
-  const environment = bindingUsable ? binding.data?.environment : undefined;
+  // for a host this client has not negotiated with. A host that runs its own
+  // settings is in no environment, so it offers none to add a skill to.
+  const environment =
+    bindingUsable && binding.kind === "binding"
+      ? binding.query.data?.environment
+      : undefined;
   const served: ServedSkillEnvironment | null =
     environment === undefined
       ? null

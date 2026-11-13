@@ -88,6 +88,7 @@ vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -194,6 +195,19 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       await admitBotDrafts();
     });
 
+    it("does not offer team commands when the environment has no provider handle", () => {
+      mocks.state.environments = mocks.state.environments.map((row) =>
+        row.environmentId === "env-new"
+          ? { ...row, providerHandle: null }
+          : row,
+      );
+      render(surfaceFor(SETUP_BOT_ID));
+
+      expect(
+        screen.queryByRole("button", { name: "Add a computer" }),
+      ).toBeNull();
+    });
+
     it("opens the install instructions for the selected team without minting a token", async () => {
       const user = userEvent.setup();
       render(surfaceFor(SETUP_BOT_ID));
@@ -210,9 +224,9 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       ).toBeTruthy();
       expect(
         screen.getByTestId("team-host-option-machine-command").textContent,
-      ).toBe("traycer host install --team env-new");
+      ).toBe("traycer host install --team newco");
       expect(screen.getByText(/Already installed\? Run/).textContent).toContain(
-        "traycer host use env-new",
+        "traycer host use newco",
       );
       expect(document.body.textContent).not.toContain("traycer host join");
     });
@@ -230,11 +244,25 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
       await user.click(screen.getByRole("button", { name: "Add a computer" }));
 
+      expect(screen.getByText(/^macOS and Linux(?: command)?$/)).not.toBeNull();
       expect(
-        screen.getByTestId("shell-safe-add-computer-command").textContent,
-      ).toBe("traycer host install --team 'team one'\\''s; echo unsafe'");
+        screen.getByText(/^Windows \(PowerShell\)(?: command)?$/),
+      ).not.toBeNull();
+      expect(
+        screen.getByText(
+          "traycer host install --team 'team one'\\''s; echo unsafe'",
+        ),
+      ).not.toBeNull();
+      expect(
+        screen.getByText(
+          "traycer host install --team 'team one''s; echo unsafe'",
+        ),
+      ).not.toBeNull();
       expect(screen.getByText(/Already installed\? Run/).textContent).toContain(
         "traycer host use 'team one'\\''s; echo unsafe'",
+      );
+      expect(screen.getByText(/Already installed\? Run/).textContent).toContain(
+        "traycer host use 'team one''s; echo unsafe'",
       );
     });
   });
@@ -245,7 +273,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       state: "host_joining",
       arrival: { kind: "machine" },
     };
-    const JOINING_NOTE = "A machine is joining the team.";
+    const JOINING_NOTE = "A computer is joining the team.";
 
     beforeEach(async () => {
       scriptTeamControlPlane();
@@ -288,7 +316,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       await user.click(addComputerButton);
       expect(
         screen.getByTestId("team-host-option-machine-command").textContent,
-      ).toBe("traycer host install --team env-new");
+      ).toBe("traycer host install --team newco");
       await user.keyboard("{Escape}");
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
       expect(hostButtons()[0]).toHaveProperty("disabled", true);

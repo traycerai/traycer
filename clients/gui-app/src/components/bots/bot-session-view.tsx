@@ -16,6 +16,7 @@ import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scop
 import { QuoteSinkContext } from "@/components/chat/quote/quote-sink-context";
 import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import {
+  botMemberAvatarUrl,
   botMemberName,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
@@ -158,7 +159,7 @@ export function BotSessionView(props: {
       botId,
       hostId,
       memberAvatarUrl: (userId: string) =>
-        resolveMember(userId)?.avatarUrl ?? null,
+        botMemberAvatarUrl(userId, profile, resolveMember),
       thread:
         session.threadId === null
           ? null

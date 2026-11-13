@@ -1768,6 +1768,7 @@ describe("the chat chip is the composer's picker", () => {
       sandbox: {
         state: "awake",
         frozen: false,
+        ownerKind: "unknown",
         teamOwned: false,
         summary: sandboxSummaryFixture({
           id: `sbx-${hostId}`,
@@ -1952,7 +1953,7 @@ describe("the chat chip is the composer's picker", () => {
     ).toContain(
       "New sandbox · a computer in the cloud, billed by the hour while awake",
     );
-    expect(screen.getByPlaceholderText("Search hosts")).toBeDefined();
+    expect(screen.getByPlaceholderText("Search computers")).toBeDefined();
     expect(
       screen.getByTestId("host-switcher-manage-sandboxes").textContent,
     ).toBe("Manage sandboxes in Settings");
@@ -2094,7 +2095,7 @@ describe("the chat chip is the composer's picker", () => {
   it("says no host of the person's matches, and where the others are", () => {
     openChip();
 
-    fireEvent.change(screen.getByPlaceholderText("Search hosts"), {
+    fireEvent.change(screen.getByPlaceholderText("Search computers"), {
       target: { value: "zzz" },
     });
 

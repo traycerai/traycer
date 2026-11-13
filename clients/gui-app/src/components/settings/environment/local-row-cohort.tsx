@@ -18,7 +18,10 @@ export type LocalRowVerb = "move_to_personal" | "finish_moving";
  *   is this window's own.
  *
  * `none` is the whole answer for a computer with no plane of its own left:
- * the planes decide, and there is no second rule behind this one.
+ * the planes decide, with one exception ahead of them. A computer that runs
+ * a team's settings is the team's: it has no Local row and nothing to move,
+ * whatever its planes read (a team-owned computer that never moved reports
+ * them local).
  */
 export type LocalRowCohort =
   | { readonly kind: "none" }
@@ -32,6 +35,7 @@ export type LocalRowCohort =
 export function localRowCohort(
   status: EnvironmentStatusResponseV11,
 ): LocalRowCohort {
+  if (status.principal?.kind === "team") return { kind: "none" };
   const cohort = cohortFromPlanes(
     status.planes,
     status.pendingUploads.length > 0,

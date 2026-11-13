@@ -156,6 +156,42 @@ Setting a mode does **not** start or stop the host. Startup changes apply to the
 
 In particular, `set none` leaves a running host alone and switches Desktop to remote hosts on its next launch. This differs from choosing **Don't run a host** in Settings, which can ask you to confirm stopping the local host. Manually started foreground hosts remain unaffected when Desktop quits.
 
+### Add a team computer
+
+Use the team's slug from its dashboard address:
+
+```sh
+traycer host install --team acme
+```
+
+Sign in as a member of `acme` when prompted. Already installed? Run
+`traycer host use acme`. To install or start the host when needed, use
+`traycer host ensure --team acme`.
+
+Traycer restarts once on this computer when it starts running for the team.
+
+For a computer nobody will sign in to, open **Settings → Environment → your
+team → Members → Computers → Add a computer** in the app. Under **Set up
+without signing in**, choose **Create install token**, then save the token in
+a private file on the target computer and run the command for its terminal:
+
+**macOS and Linux**
+
+```sh
+traycer host install --team acme < install-token.txt
+```
+
+**Windows (PowerShell)**
+
+```powershell
+Get-Content install-token.txt | traycer host install --team acme
+```
+
+The token works once and expires after one hour. The team can run agents and
+read or change files on the computer. Team installs register and start the
+host's service; they cannot use `--no-service-register`.
+
+
 ## CLI Commands
 
 | Command | Purpose |

@@ -22,6 +22,7 @@ import {
   sandboxCardShowsCostView,
   sandboxCreatorName,
   sandboxGuestConfigFailure,
+  sandboxGuestConfigFailureReason,
   sandboxHostVouches,
   sandboxIdleLine,
   sandboxOperationalLine,
@@ -122,6 +123,7 @@ export function SandboxInstallationGroup(props: {
       ) : (
         <>
           <SandboxFacts
+            ownerKind={props.sandbox.ownerKind}
             summary={summary}
             teamOwned={teamOwned}
             state={state}
@@ -162,14 +164,17 @@ export function SandboxSecretsPanel(props: {
 export function SandboxHeaderCost(props: {
   readonly sandbox: HostScopeSandbox;
 }): ReactNode {
-  const { summary, state, frozen, teamOwned } = props.sandbox;
+  const { summary, state, frozen, teamOwned, ownerKind } = props.sandbox;
   if (summary === null) return null;
-  return teamOwned ? (
+  return teamOwned ||
+    (summary.kind === "automation" && ownerKind !== "user") ? (
     <SandboxHeaderRate
       summary={summary}
       state={state}
       frozen={frozen}
       cost={null}
+      teamOwned={teamOwned}
+      ownerKind={ownerKind}
     />
   ) : (
     <SandboxPersonalHeaderCost
@@ -180,42 +185,59 @@ export function SandboxHeaderCost(props: {
   );
 }
 
-function SandboxHeaderRate(props: {
+interface SandboxHeaderRateProps {
   readonly summary: SandboxSummary;
   readonly state: HostSandboxState | null;
   readonly frozen: boolean;
   readonly cost: SandboxCost | null;
-}): ReactNode {
+  readonly ownerKind: HostScopeSandbox["ownerKind"];
+  readonly teamOwned: boolean;
+}
+
+function SandboxHeaderRate(props: SandboxHeaderRateProps): ReactNode {
+  const rate = formatHeaderRate(props);
+  if (rate === null) return null;
   return (
     <>
       <span aria-hidden>·</span>
-      <span>
-        {formatHeaderRate(props.summary, props.state, props.frozen, props.cost)}
-      </span>
+      <span>{rate}</span>
     </>
   );
 }
 
-function formatHeaderRate(
-  summary: SandboxSummary,
-  state: HostSandboxState | null,
-  frozen: boolean,
-  cost: SandboxCost | null,
-): string {
-  if (summary.kind === "automation") return "Free";
-  if (cost !== null)
-    return cost.currentRateMillicreditsPerHour === 0
-      ? "Not billing"
-      : hourlyRate(cost.currentRateMillicreditsPerHour);
-  // Without a ledger (a team's sandbox, or a personal ledger not read yet),
-  // the list price of the state's own tier is the rate. A frozen sandbox and
-  // a state that accrues nothing are not billing: the list price is not
-  // their rate.
+function sandboxRateNeedsLedger(state: HostSandboxState): boolean {
+  return (
+    state === "suspending" ||
+    state === "resuming" ||
+    state === "stopping" ||
+    state === "starting" ||
+    state === "destroying"
+  );
+}
+
+function formatHeaderRate(props: SandboxHeaderRateProps): string | null {
+  const { summary, state, frozen, cost, teamOwned } = props;
+  if (summary.kind === "automation" && !teamOwned && props.ownerKind === "user")
+    return "Free";
+  if (cost !== null) {
+    if (cost.currentRateMillicreditsPerHour !== 0)
+      return hourlyRate(cost.currentRateMillicreditsPerHour);
+    if (
+      !frozen &&
+      summary.priceMcPerHour === null &&
+      (state ?? summary.state) !== "creating"
+    )
+      return null;
+    return "Not billing";
+  }
   if (frozen) return "Not billing";
-  const field = sandboxBilledPriceField(state ?? summary.state);
+  const currentState = state ?? summary.state;
+  // Transitional billing depends on the entry state, absent from the summary.
+  if (sandboxRateNeedsLedger(currentState)) return null;
+  const field = sandboxBilledPriceField(currentState);
   if (field === null) return "Not billing";
   const price = summary.priceMcPerHour;
-  if (price === null) return "Not priced here";
+  if (price === null) return null;
   return hourlyRate(price[field]);
 }
 
@@ -237,6 +259,8 @@ function SandboxPersonalHeaderCost(props: {
         state={props.state}
         frozen={props.frozen}
         cost={cost}
+        teamOwned={false}
+        ownerKind="user"
       />
       {cost === null ? null : (
         <>
@@ -376,6 +400,7 @@ function SandboxDetailsMissing(props: {
 }
 
 function SandboxFacts(props: {
+  readonly ownerKind: HostScopeSandbox["ownerKind"];
   readonly summary: SandboxSummary;
   readonly teamOwned: boolean;
   readonly state: HostSandboxState | null;
@@ -406,7 +431,12 @@ function SandboxFacts(props: {
           <dd data-testid="sandbox-card-region">{regionLabel}</dd>
         </>
       )}
-      <SandboxOtherRate summary={summary} state={props.state} />
+      <SandboxOtherRate
+        ownerKind={props.ownerKind}
+        summary={summary}
+        state={props.state}
+        teamOwned={props.teamOwned}
+      />
       <dt className="text-muted-foreground">Idle policy</dt>
       <dd className="min-w-0 wrap-anywhere" data-testid="sandbox-card-idle">
         {sandboxIdleLine(summary, props.state)}
@@ -435,13 +465,22 @@ function SandboxFacts(props: {
 
 /** The header states the current rate; these facts retain the other rate. */
 function SandboxOtherRate(props: {
+  readonly ownerKind: HostScopeSandbox["ownerKind"];
   readonly summary: SandboxSummary;
+  readonly teamOwned: boolean;
   readonly state: HostSandboxState | null;
 }): ReactNode {
   const price = props.summary.priceMcPerHour;
-  if (price === null || props.summary.kind === "automation") return null;
+  if (
+    price === null ||
+    (props.summary.kind === "automation" &&
+      !props.teamOwned &&
+      props.ownerKind === "user")
+  ) {
+    return null;
+  }
   const state = props.state ?? props.summary.state;
-  if (state === "destroying" || state === "destroyed") return null;
+  if (sandboxRateNeedsLedger(state) || state === "destroyed") return null;
   const field = sandboxBilledPriceField(state);
   const resting = field === "suspendedMc" || field === "stoppedMc";
   const rate = resting
@@ -599,7 +638,11 @@ export function SandboxCostsPanel(props: {
       className="flex min-w-0 flex-col gap-3 text-ui-xs"
       data-testid="sandbox-card-cost"
     >
-      <SandboxCostRates summary={summary} />
+      <SandboxCostRates
+        summary={summary}
+        teamOwned={teamOwned}
+        ownerKind={props.sandbox.ownerKind}
+      />
       {sandboxCardShowsCostView(teamOwned) ? (
         <SandboxCostLedger sandboxId={summary.id} frozen={frozen} />
       ) : null}
@@ -608,9 +651,15 @@ export function SandboxCostsPanel(props: {
 }
 
 function SandboxCostRates(props: {
+  readonly ownerKind: HostScopeSandbox["ownerKind"];
   readonly summary: SandboxSummary;
+  readonly teamOwned: boolean;
 }): ReactNode {
-  if (props.summary.kind === "automation") {
+  if (
+    props.summary.kind === "automation" &&
+    !props.teamOwned &&
+    props.ownerKind === "user"
+  ) {
     return (
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
         <dt className="text-muted-foreground">Rate</dt>
@@ -1027,9 +1076,7 @@ function SandboxRepairAction(props: {
                   toast.success("Sandbox setup repaired");
                 } else {
                   toast.warning(
-                    result.guestConfigFailureReason === null
-                      ? "Sandbox setup is still failing"
-                      : `Sandbox setup is still failing: ${result.guestConfigFailureReason}`,
+                    `Sandbox setup is still failing. ${sandboxGuestConfigFailureReason(result.guestConfigFailureReason)}`,
                   );
                 }
                 void list.refetch();

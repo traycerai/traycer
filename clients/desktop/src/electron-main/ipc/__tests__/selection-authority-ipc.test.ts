@@ -681,18 +681,31 @@ class FakeAuthTokenStore implements IpcAuthTokenStore {
     return this.read();
   }
 
+  getSignInStorageLow(): boolean {
+    return false;
+  }
+
+  subscribeSignInStorageLow(): () => void {
+    return () => undefined;
+  }
+
   async signIn(
     _tokens: StoredAuthTokens,
     _identity: StoredCredentialsIdentity,
-  ): Promise<void> {
-    return Promise.resolve();
+  ): Promise<"saved" | "disk-full"> {
+    return Promise.resolve("saved");
   }
 
   async rotate(_expected: {
     readonly userId: string;
     readonly token: string;
   }): Promise<TokenRotateResult> {
-    return { outcome: "deleted", pair: null, rejection: null };
+    return {
+      outcome: "deleted",
+      pair: null,
+      rejection: null,
+      diskPressure: null,
+    };
   }
 
   delete(): Promise<void> {

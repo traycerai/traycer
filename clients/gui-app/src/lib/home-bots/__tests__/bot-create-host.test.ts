@@ -2,8 +2,8 @@
  * Where a new bot is created (Tracy Bots): the app walks a fixed order - this
  * machine, the active host, then the rest by host id - and takes the first
  * host that runs the bot's environment and advertises `bot.create`. A host
- * still being asked holds the walk; a host
- * whose read failed is passed over.
+ * still being asked holds the walk; a host whose read failed, or one that
+ * runs its own settings, is passed over.
  */
 import { describe, expect, it } from "vitest";
 import type {
@@ -49,6 +49,7 @@ interface Scenario {
   /** hostId -> environment id it is bound to; absent = not answered. */
   readonly bound: Readonly<Record<string, string>>;
   readonly failedHostIds: ReadonlyArray<string>;
+  readonly ownSettingsHostIds: ReadonlyArray<string>;
   readonly creatingHostIds: ReadonlyArray<string>;
 }
 
@@ -64,6 +65,7 @@ function choose(scenario: Scenario): BotCreateHostChoice {
     connectableHostIds: scenario.connectableHostIds,
     bindings,
     failedHostIds: scenario.failedHostIds,
+    ownSettingsHostIds: scenario.ownSettingsHostIds,
     creatingHostIds: new Set(scenario.creatingHostIds),
   });
 }
@@ -84,6 +86,7 @@ const ALL_QUALIFY: Scenario = {
     "host-alpha": TEAM_ENV,
   },
   failedHostIds: [],
+  ownSettingsHostIds: [],
   creatingHostIds: ["host-local", "host-effective", "host-zeta", "host-alpha"],
 };
 
@@ -250,6 +253,31 @@ describe("chooseBotCreateHost while hosts are still being asked", () => {
         failedHostIds: ["host-local"],
       }),
     ).toEqual({ kind: "chosen", hostId: "host-effective" });
+  });
+
+  it("passes over a computer that runs its own settings instead of waiting on it", () => {
+    expect(
+      choose({
+        ...ALL_QUALIFY,
+        bound: {
+          "host-effective": TEAM_ENV,
+          "host-zeta": TEAM_ENV,
+          "host-alpha": TEAM_ENV,
+        },
+        ownSettingsHostIds: ["host-local"],
+      }),
+    ).toEqual({ kind: "chosen", hostId: "host-effective" });
+  });
+
+  it("answers none when the only computer runs its own settings", () => {
+    expect(
+      choose({
+        ...ALL_QUALIFY,
+        connectableHostIds: ["host-local"],
+        bound: {},
+        ownSettingsHostIds: ["host-local"],
+      }),
+    ).toEqual({ kind: "none" });
   });
 
   it("answers none when every candidate failed or does not qualify", () => {

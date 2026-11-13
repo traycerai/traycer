@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname } from "node:path";
-import { errorCode } from "./credentials-fs";
+import { credentialsWrite, errorCode, isDiskFullError } from "./credentials-fs";
 import { probeProcessLivenessAsync } from "./process-liveness";
 
 /**
@@ -96,7 +96,9 @@ const ORPHAN_LOCK_GRACE_MS = 60_000;
 export async function acquireCredentialsLock(
   opts: AcquireCredentialsLockOptions,
 ): Promise<AcquireCredentialsLockResult> {
-  await mkdir(dirname(opts.lockPath), { recursive: true, mode: 0o700 });
+  await credentialsWrite(() =>
+    mkdir(dirname(opts.lockPath), { recursive: true, mode: 0o700 }),
+  );
   const content: LockContent = {
     pid: process.pid,
     pidStartTime: await ownPidStartFingerprintAsync(),
@@ -210,14 +212,16 @@ export async function holderProvablyDead(
 async function tryLink(lockPath: string, serialized: string): Promise<boolean> {
   const tmp = `${lockPath}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tmp, serialized, { encoding: "utf8", mode: 0o600 });
-    await link(tmp, lockPath);
+    await credentialsWrite(() =>
+      writeFile(tmp, serialized, { encoding: "utf8", mode: 0o600 }),
+    );
+    await credentialsWrite(() => link(tmp, lockPath));
     return true;
   } catch (err) {
     if (errorCode(err) === "EEXIST") return false;
     throw err;
   } finally {
-    await rm(tmp, { force: true });
+    await credentialsWrite(() => rm(tmp, { force: true }));
   }
 }
 
@@ -282,8 +286,9 @@ export async function breakStaleLock(
   if (current !== staleRaw) return "contended"; // changed under us - not ours
   const grave = `${lockPath}.dead-${randomUUID()}`;
   try {
-    await rename(lockPath, grave);
-  } catch {
+    await credentialsWrite(() => rename(lockPath, grave));
+  } catch (err) {
+    if (isDiskFullError(err)) throw err;
     // Another contender already moved it (ENOENT), or the removal was denied
     // (EPERM/EACCES/EBUSY - e.g. a Windows sharing violation). Neither throw nor
     // hot-loop: report contended so the caller falls through to the bounded wait
@@ -297,13 +302,15 @@ export async function breakStaleLock(
     moved = null;
   }
   if (moved === null || moved === staleRaw) {
-    await rm(grave, { force: true });
+    await credentialsWrite(() => rm(grave, { force: true }));
     return "removed";
   }
   // Layer 2 residual: the entry changed between the re-read and the rename, so we
   // moved a fresh lock aside. Put it back without clobbering a newer occupant.
-  await link(grave, lockPath).catch(() => {});
-  await rm(grave, { force: true });
+  await credentialsWrite(() => link(grave, lockPath)).catch((err: unknown) => {
+    if (isDiskFullError(err)) throw err;
+  });
+  await credentialsWrite(() => rm(grave, { force: true }));
   return "contended";
 }
 
@@ -330,7 +337,7 @@ function makeHandle(
             released = true;
             return;
           }
-          await unlink(lockPath);
+          await credentialsWrite(() => unlink(lockPath));
           released = true;
           return;
         } catch (err) {

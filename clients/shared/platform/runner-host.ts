@@ -1,4 +1,5 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
+import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type {
   TeamComputersResult,
   SetEnvironmentBotHostResult,
@@ -2041,6 +2042,7 @@ export type TokenRotateOutcome =
   | "user-mismatch"
   | "tombstoned"
   | "lock-busy"
+  | "disk-full"
   | "spend-pending"
   | "refresh-rejected-credential"
   | "refresh-rejected-account"
@@ -2048,10 +2050,11 @@ export type TokenRotateOutcome =
   | "commit-failed";
 
 export interface TokenRotateResult {
+  readonly diskPressure: DiskPressure | null;
   readonly outcome: TokenRotateOutcome;
   // The credentials the caller should act on: the committed/adopted/minted pair
   // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
-  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
+  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/`disk-full`/
   // `spend-pending`/`refresh-rejected-credential`/`refresh-rejected-account`/
   // `refresh-network`).
   readonly pair: StoredCredentials | null;
@@ -2134,6 +2137,8 @@ export function shouldWipeLegacyCredentials(
   return outcome !== "retryable" && outcome !== "commit-failed";
 }
 
+export type SignInSaveResult = "saved" | "disk-full";
+
 /**
  * Typed credential store owned by the shell, backed by the single machine-local
  * `~/.traycer/cli/<env>/credentials` file (tech plan §3). It carries the FULL
@@ -2158,10 +2163,12 @@ export function shouldWipeLegacyCredentials(
  */
 export interface ITokenStore {
   get(): Promise<StoredCredentials | null>;
+  getSignInStorageLow(): Promise<boolean>;
+  subscribeSignInStorageLow(listener: (low: boolean) => void): Disposable;
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void>;
+  ): Promise<SignInSaveResult>;
   rotate(expected: {
     readonly userId: string;
     readonly token: string;

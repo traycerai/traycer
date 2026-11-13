@@ -43,6 +43,26 @@ function stubTextMetrics(input: {
   readonly scrollWidth: number;
   readonly clientWidth: number;
 }): () => void {
+  return stubBoxMetrics({ ...input, scrollHeight: 0, clientHeight: 0 });
+}
+
+function stubBoxMetrics(input: {
+  readonly scrollWidth: number;
+  readonly clientWidth: number;
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
+}): () => void {
+  for (const key of ["scrollHeight", "clientHeight"] as const) {
+    Object.defineProperty(HTMLElement.prototype, key, {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.getAttribute("data-testid") === "probe-text") {
+          return input[key];
+        }
+        return 0;
+      },
+    });
+  }
   Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
     configurable: true,
     get(this: HTMLElement) {
@@ -62,6 +82,12 @@ function stubTextMetrics(input: {
     },
   });
   return () => {
+    for (const key of ["scrollHeight", "clientHeight"] as const) {
+      Object.defineProperty(HTMLElement.prototype, key, {
+        configurable: true,
+        get: () => 0,
+      });
+    }
     Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
       configurable: true,
       get: () => 0,
@@ -90,6 +116,18 @@ describe("useIsTextTruncated", () => {
     const restore = stubTextMetrics({ scrollWidth: 80, clientWidth: 100 });
     render(<TruncationProbe content="Short" />);
     expect(screen.getByTestId("probe-flag").textContent).toBe("no");
+    restore();
+  });
+
+  it("reports truncated when a line clamp hides lines the width check cannot see", () => {
+    const restore = stubBoxMetrics({
+      scrollWidth: 100,
+      clientWidth: 100,
+      scrollHeight: 48,
+      clientHeight: 32,
+    });
+    render(<TruncationProbe content="A body that wraps past its two lines" />);
+    expect(screen.getByTestId("probe-flag").textContent).toBe("yes");
     restore();
   });
 

@@ -231,6 +231,9 @@ function renderPage(host: SecretsHost): QueryClient {
 }
 
 beforeEach(() => {
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   useAuthStore.setState({ status: "signed-in" });
@@ -348,7 +351,7 @@ describe("the secrets list", () => {
     ]);
     expect(recovery.textContent).toContain("If this secret leaked");
     expect(recovery.textContent).toContain(
-      "If Traycer can't be reached, stopping the sandbox ends its sessions.",
+      "If Traycer can't be reached, finish or stop running agent turns and shells before stopping the sandbox to end its sessions.",
     );
   });
 

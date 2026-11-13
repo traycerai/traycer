@@ -1138,7 +1138,13 @@ describe("Terminals opener sub-page", () => {
         isActive: false,
         connectable: true,
         kind: "sandbox",
-        sandbox: { state: "awake", frozen: false, summary, teamOwned: false },
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary,
+          ownerKind: "unknown",
+          teamOwned: false,
+        },
       });
     extraHostsMock.directory = [
       dialable("burst-host", "Task box"),
@@ -1203,6 +1209,7 @@ describe("Terminals opener sub-page", () => {
             state: "suspended",
             burst: false,
           }),
+          ownerKind: "unknown",
           teamOwned: false,
         },
       }),
@@ -1236,6 +1243,7 @@ describe("Terminals opener sub-page", () => {
           state: "suspended",
           burst: false,
         }),
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });
@@ -1308,6 +1316,7 @@ describe("Terminals opener sub-page", () => {
             kind: "automation",
             environmentId,
           }),
+          ownerKind: "team",
           teamOwned: true,
         },
       });
@@ -1804,6 +1813,7 @@ describe("Browser opener sub-page", () => {
             state: "suspended",
             frozen: true,
           }),
+          ownerKind: "unknown",
           teamOwned: false,
         },
       }),

@@ -132,7 +132,8 @@ import {
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
-import { BotAvatar } from "@/components/bots/bot-avatars";
+import { ExpressiveBotAvatar } from "@/components/bots/bot-avatars";
+import { botExpressionOf, useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
@@ -1793,6 +1794,7 @@ function BotChannelHeader(props: {
 }): ReactNode {
   const { settingsOpen } = props;
   const background = useChannelBackground(props.botId);
+  const expression = botExpressionOf(useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header
@@ -1835,7 +1837,7 @@ function BotChannelHeader(props: {
             className="shrink-0 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
             data-testid="bot-tab-avatar"
           >
-            <BotAvatar size="sm" />
+            <ExpressiveBotAvatar size="sm" expression={expression} />
           </button>
         </BotIdentityTrigger>
         <BotChannelTitle

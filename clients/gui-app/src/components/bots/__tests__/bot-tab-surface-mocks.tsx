@@ -173,6 +173,7 @@ export const mocks = {
       environmentId: string;
       label: string;
       ownerKind: "organization" | "user";
+      providerHandle: string | null;
     }>,
   },
 };
@@ -305,6 +306,7 @@ export const hostQueriesMock = {
 export const hostEnvironmentBindingsMock = {
   useHostEnvironmentBindings: () => ({
     byHostId: {},
+    ownSettingsHostIds: [],
     failedHostIds: [],
     retryFailed: () => undefined,
   }),

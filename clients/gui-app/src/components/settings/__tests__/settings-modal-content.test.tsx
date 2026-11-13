@@ -1,6 +1,13 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Every section mounts the pick's upkeep, which reads the window's host scope
+// and the account's queries; it has its own cases (`local-move-page.test.tsx`)
+// and this file holds the pick fixed.
+vi.mock("@/components/settings/environment-picker", () => ({
+  EnvironmentPickUpkeep: () => null,
+}));
+
 vi.mock("@/components/settings/settings-sidebar", () => ({
   SettingsSidebar: () => <div data-testid="settings-sidebar-probe" />,
 }));
