@@ -27,6 +27,7 @@ import {
 } from "@/components/notifications/notification-bots";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import { notificationRowBotId } from "@/lib/notifications/notification-row-bot-id";
+import { FeedbackDraftSendControl } from "@/components/notifications/feedback-draft-send-control";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -256,7 +257,10 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
           fallback={<Icon className={cn("size-4", glyph.colorClassName)} />}
         />
       </span>
-      <NotificationRowWithSecrets row={row}>
+      <NotificationRowWithInlineControls
+        row={row}
+        originUnavailable={originUnavailable}
+      >
         <NotificationRowMain
           row={row}
           isRead={isRead}
@@ -264,7 +268,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
           originUnavailability={originUnavailability}
           onActivate={props.onActivate}
         />
-      </NotificationRowWithSecrets>
+      </NotificationRowWithInlineControls>
       <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
         <NotificationTimestamp createdAt={row.createdAt} />
         <NotificationRowTrailingControl
@@ -299,26 +303,59 @@ function NotificationRowPicture(props: {
 }
 
 /**
- * A grant request's card sits UNDER the row's main area and never inside it,
- * because that area is one button when the row is navigable and the card's
- * controls are buttons of their own.
+ * A row's own controls (a grant request's card, a feedback draft's Send) sit
+ * UNDER the row's main area and never inside it, because that area is one
+ * button when the row is navigable and the controls are buttons of their own.
  *
  * Every other row gets its main area back untouched, with no wrapper.
  */
-function NotificationRowWithSecrets(props: {
+function NotificationRowWithInlineControls(props: {
   readonly row: MergedNotificationRow;
+  readonly originUnavailable: boolean;
   readonly children: ReactNode;
 }): ReactNode {
-  const secrets = props.row.secrets ?? null;
-  if (secrets === null) return props.children;
+  const controls = notificationRowInlineControls(
+    props.row,
+    props.originUnavailable,
+  );
+  if (controls === null) return props.children;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       {props.children}
+      {controls}
+    </div>
+  );
+}
+
+function notificationRowInlineControls(
+  row: MergedNotificationRow,
+  originUnavailable: boolean,
+): ReactNode {
+  const secrets = row.secrets ?? null;
+  if (secrets !== null) {
+    return (
       <SecretGrantRequestCard
         detail={secrets}
-        resolved={props.row.resolvedAt !== null}
+        resolved={row.resolvedAt !== null}
       />
-    </div>
+    );
+  }
+  if (
+    row.payload === null ||
+    row.payload.kind !== "feedbackDraft" ||
+    row.originHostId === null ||
+    originUnavailable
+  ) {
+    return null;
+  }
+  return (
+    <FeedbackDraftSendControl
+      hostId={row.originHostId}
+      epicId={row.payload.epicId}
+      chatId={row.payload.chatId}
+      blockId={row.payload.blockId}
+      resolved={row.resolvedAt !== null}
+    />
   );
 }
 
