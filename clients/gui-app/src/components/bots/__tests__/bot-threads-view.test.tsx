@@ -530,6 +530,30 @@ function withReplies(
   );
 }
 
+/** A reply arrives: the host's list counts `count`, and the thread's session holds its row. */
+async function deliverReply(threadId: string, count: number): Promise<void> {
+  mocks.hosted[TEAM].threads = mocks.hosted[TEAM].threads.map((summary) =>
+    summary.threadId === threadId
+      ? { ...summary, replyCount: count, lastReplyAt: 4_000 }
+      : summary,
+  );
+  const session = mocks.threadSessions[threadId].store;
+  act(() => {
+    session.setState({
+      messages: [
+        ...session.getState().messages,
+        postRow(`${threadId}-reply-${String(count)}`, `reply ${String(count)}`),
+      ],
+    });
+  });
+  await act(() => queryClient.invalidateQueries());
+}
+
+/** The count a card gives assistive technology, where it draws no divider. */
+function screenReaderCount(threadId: string): HTMLElement | null {
+  return within(card(threadId)).queryByTestId("bot-thread-reply-count-sr");
+}
+
 function replyTexts(count: number): string[] {
   return Array.from(
     { length: count },
@@ -759,9 +783,6 @@ describe("<BotThreadsView />", () => {
     expect(full.getByTestId("bot-thread-anchor").textContent).toContain(
       "Nightly train: what failed?",
     );
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "2 replies",
-    );
     expect(await full.findByText("reply 1")).toBeTruthy();
     expect(full.getByText("reply 2")).toBeTruthy();
     expect(full.getByTestId("bot-chat-transcript-flow")).toBeTruthy();
@@ -863,6 +884,135 @@ describe("<BotThreadsView />", () => {
     expect(drawnReplies("team-new")).toEqual(replyTexts(5));
     expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
     expect(full.getByTestId("bot-thread-anchor")).toBeTruthy();
+  });
+
+  it("counts the replies of a card that draws every one for assistive technology only, with no divider or link", async () => {
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByText("reply 2");
+    const count = await full.findByTestId("bot-thread-reply-count-sr");
+    expect(count.textContent).toBe("2 replies");
+    expect(count.classList.contains("sr-only")).toBe(true);
+    expect(count.tagName).not.toBe("BUTTON");
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
+  });
+
+  it("counts a single reply as 1 reply for assistive technology, with no divider", async () => {
+    withReplies(TEAM, "team-new", replyTexts(1), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByText("reply 1");
+    expect(
+      (await full.findByTestId("bot-thread-reply-count-sr")).textContent,
+    ).toBe("1 reply");
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+  });
+
+  it("draws neither a divider nor a count for a card with no replies", async () => {
+    withReplies(TEAM, "team-new", [], 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+
+    const full = within(await revealFull("team-new"));
+
+    await full.findByTestId("bot-thread-anchor");
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-thread-reply-count-sr")).toBeNull();
+  });
+
+  it("keeps the divider and its link on a folded card, and swaps it for the assistive count once the card is unfolded", async () => {
+    const user = userEvent.setup();
+    withReplies(TEAM, "team-new", replyTexts(8), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+
+    const unfold = await full.findByTestId("bot-chat-transcript-unfold");
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "8 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+
+    await user.click(unfold);
+
+    await waitFor(() =>
+      expect(full.queryByTestId("bot-thread-reply-count")).toBeNull(),
+    );
+    expect(full.queryByTestId("bot-thread-reply-count-open")).toBeNull();
+    expect(screenReaderCount("team-new")?.textContent).toBe("8 replies");
+  });
+
+  it("updates the assistive count when a reply arrives and the card still draws every one", async () => {
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-thread-reply-count-sr");
+
+    await deliverReply("team-new", 3);
+
+    await waitFor(() =>
+      expect(screenReaderCount("team-new")?.textContent).toBe("3 replies"),
+    );
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+  });
+
+  it("keeps the divider hidden when a reply arrives in an unfolded card past the fold limit", async () => {
+    useBotThreadFoldStore.setState({ unfolded: { "team-new": true } });
+    withReplies(TEAM, "team-new", replyTexts(5), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-thread-reply-count-sr");
+
+    await deliverReply("team-new", 6);
+
+    await waitFor(() =>
+      expect(screenReaderCount("team-new")?.textContent).toBe("6 replies"),
+    );
+    expect(full.queryByTestId("bot-thread-reply-count")).toBeNull();
+    expect(full.queryByTestId("bot-chat-transcript-unfold")).toBeNull();
+  });
+
+  it("draws the divider with its link beside the unfold line when a reply pushes a card over the fold limit", async () => {
+    withReplies(TEAM, "team-new", replyTexts(5), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-thread-reply-count-sr");
+
+    await deliverReply("team-new", 6);
+
+    await full.findByTestId("bot-chat-transcript-unfold");
+    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+      "6 replies",
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
+  });
+
+  it("updates the divider's count when a reply arrives while some are hidden", async () => {
+    withReplies(TEAM, "team-new", replyTexts(8), 3_000);
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-chat-transcript-unfold");
+
+    await deliverReply("team-new", 9);
+
+    await waitFor(() =>
+      expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
+        "9 replies",
+      ),
+    );
+    expect(screenReaderCount("team-new")).toBeNull();
   });
 
   it("folds a longer thread to the origin, a line counting the hidden replies and the last two replies, and the line shows the rest in place and keeps them shown", async () => {

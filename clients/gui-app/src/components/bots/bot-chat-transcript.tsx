@@ -33,6 +33,7 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { BotChannelIntro } from "@/components/bots/bot-channel-intro";
+import { BotTranscriptFlowAllShownContext } from "@/components/bots/bot-transcript-flow-context";
 import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import {
   CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
@@ -949,7 +950,9 @@ function BotTranscriptFlowRows(props: {
         className="flex flex-col"
         data-testid="bot-chat-transcript-flow"
       >
-        {header}
+        <BotTranscriptFlowAllShownContext value={!folded && rows.length > 0}>
+          {header}
+        </BotTranscriptFlowAllShownContext>
         {folded ? (
           <div className="px-6 py-1">
             <Button
