@@ -1,6 +1,7 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "../host-stream-client";
+import type { StreamMethodSupport } from "../ws-stream-client";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -88,13 +89,18 @@ export class FakeStreamSession implements IStreamSession {
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
   emitFatal(reason: string): void {
+    this.emitFatalWithCode("UNAUTHORIZED", reason);
+  }
+
+  /** A terminal close carrying `code`, for a consumer that tells closes apart by it. */
+  emitFatalWithCode(code: string, reason: string): void {
     this.status = "closed";
     this.statusHandler?.(
       "closed",
       {
         kind: "fatalError",
         details: {
-          code: "UNAUTHORIZED",
+          code,
           reason,
           incompatibleMethods: null,
           upgradeGuidance: null,
@@ -260,8 +266,11 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     return this.silentFor;
   }
 
-  getMethodSupport(): "unknown" {
-    return "unknown";
+  /** What {@link getMethodSupport} answers; `"unknown"` until a suite says otherwise. */
+  methodSupport: StreamMethodSupport = "unknown";
+
+  getMethodSupport(): StreamMethodSupport {
+    return this.methodSupport;
   }
 
   subscribeMethodSupport(): () => void {
