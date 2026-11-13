@@ -2318,6 +2318,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A name answer writes the account's label everywhere; an identical repeat
+  // must not coalesce.
+  "providers.answerProfileName": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Profile eligibility is persisted provider configuration.
   "providers.setProfileEnabled": {
     mode: "fifo",

@@ -705,6 +705,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "pr.getLocalDiffSummary": "target-host",
   "pr.getLocalFileDiff": "target-host",
   "providers.addCustomPath": "target-host",
+  "providers.answerProfileName": "target-host",
   "providers.awaitLogin": "target-host",
   "providers.awaitMcpAuth": "target-host",
   "providers.awaitModelProviderAuth": "target-host",

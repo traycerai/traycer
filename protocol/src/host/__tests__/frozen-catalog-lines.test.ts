@@ -39,6 +39,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV108Preimage,
   providersListResponseSchemaV109Preimage,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
   providersListResponseSchemaV102Preimage,
@@ -312,9 +313,12 @@ const LIVE_FROZEN_EXPORTS = {
   // 10.9 froze when `hiddenModelProviders` opened 10.10. Its dump did not
   // change by the freeze.
   "providers.list@10.9": providersListResponseSchemaV109Preimage,
+  // 10.10 froze when the profile-sync keys opened 10.11. Its dump did not
+  // change by the freeze.
+  "providers.list@10.10": providersListResponseSchemaV1010Preimage,
   // The head line. It names the LIVE response, so the next attempt to grow the
   // provider state goes red on this line.
-  "providers.list@10.10": providersListResponseSchema,
+  "providers.list@10.11": providersListResponseSchema,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,
