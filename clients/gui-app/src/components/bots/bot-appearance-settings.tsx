@@ -1,10 +1,9 @@
 import { useId, type CSSProperties, type ReactNode } from "react";
 import {
-  BOT_MASCOT_SHAPES,
   BOT_COLOR_COUNT,
+  BOT_MASCOT_ACCESSORIES,
+  BOT_MASCOT_EYEWEAR,
   type BotAppearance,
-  type BotAppearanceMark,
-  type BotMascotShape,
   type BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -16,7 +15,11 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotLook } from "@/hooks/bots/use-bot-appearance";
 import { useBotUpdateAppearanceMutation } from "@/hooks/bots/use-bot-mutations";
-import { botMascot } from "@/lib/bots/mascot-mark";
+import {
+  MASCOT_SHAPES,
+  botMascot,
+  type MascotLook,
+} from "@/lib/bots/mascot-mark";
 import { botColorAt } from "@/lib/providers/profile-accent-color";
 
 /** The twelve hues' names, in the colours' order; the deep tones follow. */
@@ -45,23 +48,31 @@ const COLORS: readonly number[] = Array.from(
   (_, index) => index,
 );
 
-/** Which of the three a write changes, read off its request. */
-type AppearanceField = "mark" | "color" | "background";
+/** Which part of the look a write changes, read off its request. */
+type AppearanceField =
+  | "mark"
+  | "color"
+  | "eyewear"
+  | "accessory"
+  | "background";
 
 function fieldOf(request: BotUpdateAppearanceRequest): AppearanceField | null {
   if (request.mark !== undefined) return "mark";
   if (request.color !== undefined) return "color";
+  if (request.eyewear !== undefined) return "eyewear";
+  if (request.accessory !== undefined) return "accessory";
   if (request.background !== undefined) return "background";
   return null;
 }
 
-/** A shape's name as its button reads it: "Blob", "Capsule". */
-function shapeName(shape: BotMascotShape): string {
-  return shape.charAt(0).toUpperCase() + shape.slice(1);
+/** A part's name as its button reads it: "Blob", "Shades", "None". */
+function partName(part: string): string {
+  return part.charAt(0).toUpperCase() + part.slice(1);
 }
 
 /**
- * A bot's icon, icon colour and channel background, in its channel settings.
+ * A bot's icon, its colour, what it wears and its channel's background, in
+ * its channel settings. Each part starts as the one the bot's id gives it.
  * Drawn where the tab's host can change it; the rename authority decides who may.
  */
 export function BotAppearanceSettings(props: {
@@ -79,6 +90,8 @@ export function BotAppearanceSettings(props: {
     mark: null,
     color: null,
     background: null,
+    eyewear: null,
+    accessory: null,
   };
   const pending = update.isPending ? fieldOf(update.variables) : null;
   const failed = update.isError ? fieldOf(update.variables) : null;
@@ -86,15 +99,23 @@ export function BotAppearanceSettings(props: {
     failed === field && update.error !== null ? update.error.message : null;
   const change = (request: Omit<BotUpdateAppearanceRequest, "botId">): void =>
     update.mutate({ botId, ...request });
+  const current = botMascot(botId, appearance);
   return (
     <>
-      <BotIconSection
-        botId={botId}
-        look={appearance}
+      <MascotPartSection
+        label="Icon"
+        testId="bot-settings-icon"
+        choiceTestId="bot-settings-icon-shape"
+        options={MASCOT_SHAPES}
+        chosen={current.shape}
+        isDefault={appearance.mark === null}
+        preview={(shape) => ({ ...current, shape })}
         pending={pending === "mark"}
         disabled={update.isPending}
         refusal={refusal("mark")}
-        onChange={(mark) => change({ mark })}
+        onChange={(shape) =>
+          change({ mark: shape === null ? null : { kind: "mascot", shape } })
+        }
       />
       <ColorSection
         label="Colour"
@@ -104,6 +125,32 @@ export function BotAppearanceSettings(props: {
         disabled={update.isPending}
         refusal={refusal("color")}
         onChange={(color) => change({ color })}
+      />
+      <MascotPartSection
+        label="Eyewear"
+        testId="bot-settings-eyewear"
+        choiceTestId="bot-settings-eyewear"
+        options={BOT_MASCOT_EYEWEAR}
+        chosen={current.eyewear}
+        isDefault={(appearance.eyewear ?? null) === null}
+        preview={(eyewear) => ({ ...current, eyewear })}
+        pending={pending === "eyewear"}
+        disabled={update.isPending}
+        refusal={refusal("eyewear")}
+        onChange={(eyewear) => change({ eyewear })}
+      />
+      <MascotPartSection
+        label="Accessory"
+        testId="bot-settings-accessory"
+        choiceTestId="bot-settings-accessory"
+        options={BOT_MASCOT_ACCESSORIES}
+        chosen={current.accessory}
+        isDefault={(appearance.accessory ?? null) === null}
+        preview={(accessory) => ({ ...current, accessory })}
+        pending={pending === "accessory"}
+        disabled={update.isPending}
+        refusal={refusal("accessory")}
+        onChange={(accessory) => change({ accessory })}
       />
       <ColorSection
         label="Background"
@@ -165,54 +212,57 @@ const CHOICE_CLASS =
   "rounded-md p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 aria-pressed:ring-2 aria-pressed:ring-foreground";
 
 /**
- * The icon: every shape, in the colour the bot shows now, the one it shows
- * pressed, and "Use the default" for the shape its id gives it.
+ * One part of the mascot: every option drawn on the bot as it looks now, the
+ * one it shows pressed, and "Use the default" for the one its id gives it.
  */
-function BotIconSection(props: {
-  readonly botId: string;
-  readonly look: BotAppearance;
+function MascotPartSection<Part extends string>(props: {
+  readonly label: string;
+  readonly testId: string;
+  /** Each option's button is `<choiceTestId>-<option>`. */
+  readonly choiceTestId: string;
+  readonly options: readonly Part[];
+  readonly chosen: Part;
+  /** Whether nobody chose this part, so the bot's id decides it. */
+  readonly isDefault: boolean;
+  readonly preview: (option: Part) => MascotLook;
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly refusal: string | null;
-  readonly onChange: (mark: BotAppearanceMark | null) => void;
+  readonly onChange: (option: Part | null) => void;
 }): ReactNode {
-  const { botId, look, onChange } = props;
+  const { options, chosen, preview, onChange, testId, choiceTestId } = props;
   const labelId = useId();
-  const current = botMascot(botId, look);
   return (
     <section
       aria-labelledby={labelId}
-      data-testid="bot-settings-icon"
+      data-testid={testId}
       className="flex flex-col gap-2"
     >
-      <SectionLabel id={labelId} label="Icon" pending={props.pending} />
+      <SectionLabel id={labelId} label={props.label} pending={props.pending} />
       <div
         role="group"
         aria-labelledby={labelId}
         className="flex flex-wrap gap-1.5"
       >
-        {BOT_MASCOT_SHAPES.map((shape) => (
+        {options.map((option) => (
           <button
-            key={shape}
+            key={option}
             type="button"
-            aria-label={shapeName(shape)}
-            aria-pressed={shape === current.shape}
+            aria-label={partName(option)}
+            aria-pressed={option === chosen}
             className={CHOICE_CLASS}
-            data-testid={`bot-settings-icon-shape-${shape}`}
+            data-testid={`${choiceTestId}-${option}`}
             disabled={props.disabled}
-            onClick={() => onChange({ kind: "mascot", shape })}
+            onClick={() => onChange(option)}
           >
-            <BotMascotPreview
-              mascot={{ shape, ramp: current.ramp }}
-              size="default"
-            />
+            <BotMascotPreview mascot={preview(option)} size="default" />
           </button>
         ))}
       </div>
       <div>
         <UseDefaultButton
-          testId="bot-settings-icon-default"
-          disabled={props.disabled || look.mark === null}
+          testId={`${testId}-default`}
+          disabled={props.disabled || props.isDefault}
           onClick={() => onChange(null)}
         />
       </div>

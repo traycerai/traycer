@@ -1,6 +1,6 @@
 /**
- * A bell row about one of the person's bots shows the bot's picture, a
- * squircle, where other rows show their glyph. The real
+ * A bell row about one of the person's bots shows the bot's mascot, in a
+ * squircle box, where other rows show their glyph. The real
  * `NotificationRow` under the real `NotificationBotsProvider`; the row and
  * the host's `bot.list` answer are the boundaries.
  */
@@ -17,7 +17,11 @@ import {
   tracyRecord,
 } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
-import { botMascot, drawMascotMark } from "@/lib/bots/mascot-mark";
+import {
+  MASCOT_AT_REST,
+  botMascot,
+  drawMascotMark,
+} from "@/lib/bots/mascot-mark";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -243,7 +247,7 @@ describe("<NotificationRow /> title and the environment", () => {
 });
 
 describe("<NotificationRow /> about a bot", () => {
-  it("shows the bot's squircle picture in place of the glyph", () => {
+  it("shows the bot's mascot in place of the glyph", () => {
     const entry = renderRow(verdictRow(BOT_ID));
 
     const avatar = within(entry).getByTestId("bot-avatar");
@@ -253,7 +257,7 @@ describe("<NotificationRow /> about a bot", () => {
         (path) => path.getAttribute("d"),
       ),
     ).toEqual(
-      drawMascotMark(botMascot(BOT_ID, null), 24).layers.map(
+      drawMascotMark(botMascot(BOT_ID, null), 24, MASCOT_AT_REST).layers.map(
         (layer) => layer.path,
       ),
     );
