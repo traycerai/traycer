@@ -4,7 +4,10 @@ import {
   splitConnectionManifest,
   validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { upgradeResponseToVersion } from "@traycer/protocol/framework/versioned-rpc";
+import {
+  downgradeResponseAcrossMajors,
+  upgradeResponseToVersion,
+} from "@traycer/protocol/framework/versioned-rpc";
 import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build";
 import { checkSurfaceCompatibility } from "@traycer/protocol/framework/surface-compat";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -14,7 +17,8 @@ import { resolveUnavailableMethodDegrade } from "@traycer/protocol/host-transpor
 
 /**
  * `providers.list@10.11` publishes four profile keys and `removedProfiles`.
- * A 10.10 peer parses the frozen line, so none of them survive. A 10.11
+ * A 10.9 or 10.10 peer parses that minor's contract, and every older major
+ * takes the registry downgrade, so none of the five keys survive. A 10.11
  * client upgrades an older host's answer to the documented defaults.
  * `providers.answerProfileName@1.0` stays off the released floor.
  */
@@ -111,6 +115,39 @@ function keysAtAnyDepth(value: unknown): string[] {
   ]);
 }
 
+function stringValuesAtKey(value: unknown, keyName: string): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => stringValuesAtKey(entry, keyName));
+  }
+  if (typeof value !== "object" || value === null) return [];
+  return Object.entries(value).flatMap(([key, child]) => {
+    const found = key === keyName && typeof child === "string" ? [child] : [];
+    return [...found, ...stringValuesAtKey(child, keyName)];
+  });
+}
+
+type ProvidersListDowngradeMajor =
+  keyof (typeof listLine)["downgradePathsFromLatest"];
+
+function isProvidersListDowngradeMajor(
+  major: number,
+): major is ProvidersListDowngradeMajor {
+  return Object.prototype.hasOwnProperty.call(
+    listLine.downgradePathsFromLatest,
+    major,
+  );
+}
+
+function providersListDowngradeMajors(): ProvidersListDowngradeMajor[] {
+  const majors: ProvidersListDowngradeMajor[] = [];
+  for (const key of Object.keys(listLine.downgradePathsFromLatest)) {
+    const major = Number(key);
+    if (!isProvidersListDowngradeMajor(major)) continue;
+    majors.push(major);
+  }
+  return majors;
+}
+
 function expectUpgradeDefaults(upgraded: unknown): void {
   const parsed = headResponse.parse(upgraded);
   expect(parsed.removedProfiles).toEqual([]);
@@ -162,7 +199,7 @@ const host1011Answer = {
   ],
 };
 
-describe("providers.list@10.11 projected to a 10.10 peer", () => {
+describe("providers.list@10.11 projected to an older minor", () => {
   it("keeps the four row keys and removedProfiles on the 10.11 line", () => {
     const live = headResponse.parse(host1011Answer);
     expect(live.removedProfiles).toEqual(host1011Answer.removedProfiles);
@@ -178,23 +215,71 @@ describe("providers.list@10.11 projected to a 10.10 peer", () => {
     });
   });
 
-  it("gives a 10.10 peer neither the row keys nor removedProfiles", () => {
-    const received = peer1010.parse(host1011Answer);
-    for (const key of PROFILE_SYNC_KEYS) {
-      expect(keysAtAnyDepth(received), key).not.toContain(key);
+  it.each([9, 10] as const)(
+    "gives a 10.%s peer neither the row keys nor removedProfiles",
+    (minor) => {
+      const received =
+        listLine.versions[minor].contract.responseSchema.parse(host1011Answer);
+      for (const key of PROFILE_SYNC_KEYS) {
+        expect(keysAtAnyDepth(received), key).not.toContain(key);
+      }
+      expect(received.providers[0]?.profiles).toEqual([
+        expect.objectContaining({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Terminal account",
+        }),
+        expect.objectContaining({
+          profileId: "managed-1",
+          kind: "managed",
+          label: "Work",
+        }),
+      ]);
+    },
+  );
+});
+
+describe("providers.list downgrade from major 10", () => {
+  it("strips the four row keys and removedProfiles for every older major", () => {
+    const canonical = headResponse.parse(host1011Answer);
+    const toMajors = providersListDowngradeMajors();
+    expect(toMajors).toHaveLength(
+      Object.keys(listLine.downgradePathsFromLatest).length,
+    );
+    expect(toMajors.length).toBeGreaterThanOrEqual(9);
+
+    const majorsMissingProfiles: number[] = [];
+    const majorsMissingProvider: number[] = [];
+    for (const toMajor of toMajors) {
+      const result = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        10,
+        toMajor,
+        canonical,
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      for (const key of PROFILE_SYNC_KEYS) {
+        expect(keysAtAnyDepth(result.value), `${toMajor} ${key}`).not.toContain(
+          key,
+        );
+      }
+      const profileIds = stringValuesAtKey(result.value, "profileId");
+      if (
+        !profileIds.includes("ambient") ||
+        !profileIds.includes("managed-1")
+      ) {
+        majorsMissingProfiles.push(toMajor);
+      }
+      if (
+        !stringValuesAtKey(result.value, "providerId").includes("claude-code")
+      ) {
+        majorsMissingProvider.push(toMajor);
+      }
     }
-    expect(received.providers[0]?.profiles).toEqual([
-      expect.objectContaining({
-        profileId: "ambient",
-        kind: "ambient",
-        label: "Terminal account",
-      }),
-      expect.objectContaining({
-        profileId: "managed-1",
-        kind: "managed",
-        label: "Work",
-      }),
-    ]);
+    expect(majorsMissingProvider).toEqual([]);
+    // 1, 2 and 3 predate profile rows. Every later major keeps both.
+    expect(majorsMissingProfiles).toEqual([1, 2, 3]);
   });
 });
 
