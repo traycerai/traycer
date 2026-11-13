@@ -53,7 +53,11 @@ async function applyProfileAction(
   );
 }
 
-/** `traycer profile rename <provider> <profile> <label>`. */
+/**
+ * `traycer profile rename <provider> <profile> <label>`. On a row that has
+ * other names the name is set through `providers.answerProfileName`, which
+ * makes it the name on every computer and clears the other names there.
+ */
 export function buildProfileRenameCommand(opts: {
   readonly provider: string;
   readonly profile: string;
@@ -63,8 +67,24 @@ export function buildProfileRenameCommand(opts: {
     const providerId = parseProviderArgument(opts.provider);
     const typed = parseProfileArgument(opts.profile);
     const label = parseProfileLabel(opts.label);
-    const profileId =
-      (await readListedProfile(providerId, typed))?.profileId ?? typed;
+    const row = await readListedProfile(providerId, typed);
+    const profileId = row?.profileId ?? typed;
+    if ((row?.otherNames?.length ?? 0) > 0) {
+      const named = await toAgentCliError(
+        callHostRpcWithDispatch(
+          "providers.answerProfileName",
+          { providerId, profileId, label },
+          PLAIN_DISPATCH,
+        ),
+      );
+      // The name the account uses after the call: another person's choice
+      // can land just after this one.
+      return {
+        data: { providerId, profileId, label: named.label },
+        human: renamedLine(providerId, profileId, named.label),
+        exitCode: 0,
+      };
+    }
     await applyProfileAction(providerId, { type: "rename", profileId, label });
     return {
       data: { providerId, profileId, label },

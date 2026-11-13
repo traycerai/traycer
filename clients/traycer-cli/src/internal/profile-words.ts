@@ -1,8 +1,10 @@
 import type { ProviderProfilePersonNotice } from "@traycer/protocol/host/provider-schemas";
+import { printable } from "./profile-target";
 
 /**
- * The words `traycer profile list` prints for an account's person state and
- * its Terminal login: the app's words, so the CLI and the app tell one story.
+ * The words `traycer profile list` prints for an account's person state, its
+ * Terminal login and its other names: the app's words, so the CLI and the app
+ * tell one story.
  */
 
 /** Printed in place of the raw sign-in word when the computer sets a notice. */
@@ -17,3 +19,8 @@ export const PERSON_NOTICE_WORDS: Record<ProviderProfilePersonNotice, string> =
  * only ever reaches the host on its own computer.
  */
 export const TERMINAL_ACCOUNT_LINE = "Terminal account on this computer";
+
+/** Under a row whose account had other names before it became one row. */
+export function alsoNamedLine(otherNames: readonly string[]): string {
+  return `Also named: ${otherNames.map(printable).join(", ")}`;
+}

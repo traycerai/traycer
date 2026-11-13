@@ -13,13 +13,14 @@ import {
   type ProviderListState,
 } from "../internal/profile-target";
 import {
+  alsoNamedLine,
   PERSON_NOTICE_WORDS,
   TERMINAL_ACCOUNT_LINE,
 } from "../internal/profile-words";
 import type { CommandFn } from "../runner/runner";
 
 /**
- * The last two keys are present only when the computer says something
+ * The last three keys are present only when the computer says something
  * through them, so the row a computer that predates them answers with is
  * exactly the row it always was.
  */
@@ -38,6 +39,8 @@ export interface ProfileListRow {
    * Terminal login's own row, which is that login.
    */
   readonly terminalOnThisComputer?: true;
+  /** The names the account had before it became one row; never empty. */
+  readonly otherNames?: readonly string[];
 }
 
 export interface ProfileListProvider {
@@ -96,6 +99,7 @@ type ProfileSummarySource = Pick<
   readonly enabled?: boolean;
   readonly personNotice?: ProviderProfile["personNotice"];
   readonly terminalOnThisComputer?: boolean;
+  readonly otherNames?: readonly string[];
 };
 
 export function summarizeProfile(
@@ -115,6 +119,9 @@ export function summarizeProfile(
     ...(profile.terminalOnThisComputer === true && profile.kind !== "ambient"
       ? { terminalOnThisComputer: true }
       : {}),
+    ...(profile.otherNames === undefined || profile.otherNames.length === 0
+      ? {}
+      : { otherNames: profile.otherNames }),
   };
 }
 
@@ -156,7 +163,10 @@ function cellsOf(row: ProfileListRow): string[] {
  * the LABEL column, outside the columns' widths.
  */
 function detailLinesOf(row: ProfileListRow): string[] {
-  return row.terminalOnThisComputer === true ? [TERMINAL_ACCOUNT_LINE] : [];
+  return [
+    ...(row.terminalOnThisComputer === true ? [TERMINAL_ACCOUNT_LINE] : []),
+    ...(row.otherNames === undefined ? [] : [alsoNamedLine(row.otherNames)]),
+  ];
 }
 
 function formatRows(profiles: readonly ProfileListRow[]): string[] {
