@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from "uuid";
 import { useContext, useId, useState, type ReactNode } from "react";
 import { MessageSquareText } from "lucide-react";
 import { create, useStore } from "zustand";
@@ -25,6 +24,7 @@ import {
   useChatFeedbackDraftSupported,
 } from "@/hooks/chats/use-chat-feedback-draft";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { newFeedbackDraftClientActionId } from "@/lib/chats/feedback-draft-client-action-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
@@ -149,21 +149,12 @@ function LiveFeedbackDraftCard(
             ...blockRef,
             decision,
             includeDiagnostics,
-            clientActionId: newClientActionId(),
+            clientActionId: newFeedbackDraftClientActionId(),
           });
         },
       }}
     />
   );
-}
-
-/**
- * `crypto.randomUUID` throws outside a secure context (plain http), and
- * `uuid`'s bare `v4()` calls it too; random bytes from `getRandomValues`
- * work in either.
- */
-function newClientActionId(): string {
-  return uuidv4({ random: crypto.getRandomValues(new Uint8Array(16)) });
 }
 
 function liveReadOnlyReason(
