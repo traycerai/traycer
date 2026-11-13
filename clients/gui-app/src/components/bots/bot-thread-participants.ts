@@ -1,6 +1,7 @@
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
 import {
+  botMemberAvatarUrl,
   botMemberName,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
@@ -19,7 +20,11 @@ export function threadParticipants(
           kind: "person",
           userId: participant.userId,
           name: botMemberName(participant.userId, viewer, resolveMember),
-          avatarUrl: resolveMember(participant.userId)?.avatarUrl ?? null,
+          avatarUrl: botMemberAvatarUrl(
+            participant.userId,
+            viewer,
+            resolveMember,
+          ),
         },
   );
 }
