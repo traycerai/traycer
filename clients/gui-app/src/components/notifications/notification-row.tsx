@@ -137,9 +137,9 @@ function rowMotionProps(options: {
 }
 
 /**
- * One flat, balanced two-line row - a small semantic glyph, title/meta
- * content, trailing relative time, and exactly one primary interactive
- * control. A navigable row's primary control is the row itself (click to
+ * One flat row, a title line over a body of up to two lines - a small
+ * semantic glyph, title/meta content, trailing relative time, and exactly
+ * one primary interactive control. A navigable row's primary control is the row itself (click to
  * activate) with a sibling mark-as-read affordance while unread; a
  * payload-less row never pretends to navigate - its only control is an
  * explicit acknowledge button, so neither shape ever nests a button inside
@@ -438,6 +438,8 @@ function NotificationRowBody(props: NotificationRowBodyProps): ReactNode {
   const { title, body, isRead } = props;
   const { ref: titleRef, isTruncated } =
     useIsTextTruncated<HTMLSpanElement>(title);
+  const { ref: bodyRef, isTruncated: isBodyTruncated } =
+    useIsTextTruncated<HTMLSpanElement>(body);
   return (
     <>
       <TooltipWrapper
@@ -459,12 +461,22 @@ function NotificationRowBody(props: NotificationRowBodyProps): ReactNode {
           {title}
         </span>
       </TooltipWrapper>
-      <span
-        data-testid="notification-body"
-        className="block truncate text-ui-xs text-muted-foreground"
+      {/* Two lines, not one: a failure row's body ends in what went wrong,
+          after an agent name long enough to push it off a single line. */}
+      <TooltipWrapper
+        label={isBodyTruncated ? body : null}
+        side="bottom"
+        sideOffset={6}
+        align="start"
       >
-        {body}
-      </span>
+        <span
+          ref={bodyRef}
+          data-testid="notification-body"
+          className="line-clamp-2 text-ui-xs wrap-anywhere text-muted-foreground"
+        >
+          {body}
+        </span>
+      </TooltipWrapper>
     </>
   );
 }
