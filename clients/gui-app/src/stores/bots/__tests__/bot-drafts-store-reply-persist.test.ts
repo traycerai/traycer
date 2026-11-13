@@ -91,10 +91,14 @@ describe("the message a box replies to, through the persisted store", () => {
 
   it("keeps the reply when the text typed in the box is cleared", async () => {
     app.drafts.getState().setReplyTarget(BOT_ID, "channel", REPLY);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "hi",
+      content: boxDoc("hi", []),
+      held: [],
+    });
     app.drafts
       .getState()
-      .typeThreadBox(BOT_ID, "channel", "hi", boxDoc("hi", []));
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "", null);
+      .typeThreadBox(BOT_ID, "channel", { text: "", content: null, held: [] });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel !== undefined,
@@ -112,7 +116,9 @@ describe("the message a box replies to, through the persisted store", () => {
 
   it("leaves the text of a box alone when its reply is set and when it is cancelled", () => {
     const content = boxDoc("hi", []);
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "hi", content);
+    app.drafts
+      .getState()
+      .typeThreadBox(BOT_ID, "channel", { text: "hi", content, held: [] });
 
     app.drafts.getState().setReplyTarget(BOT_ID, "channel", REPLY);
     expect(app.drafts.getState().threadBoxes[BOT_ID]?.channel).toEqual({
@@ -150,21 +156,12 @@ describe("the message a box replies to, through the persisted store", () => {
     expect(app.drafts.getState().threadBoxes[BOT_ID]).toBeUndefined();
   });
 
-  it("keeps the reply when Discuss seeds the box", () => {
-    app.drafts.getState().setReplyTarget(BOT_ID, "channel", REPLY);
-
-    app.drafts.getState().seedThreadBox(BOT_ID, "channel", "Discuss this");
-
-    expect(app.drafts.getState().threadBoxes[BOT_ID]?.channel).toEqual({
-      text: "Discuss this",
-      content: null,
-      seedId: 1,
-      replyTo: REPLY,
-    });
-  });
-
   it("writes a change of only the reply, set and then replaced", async () => {
-    app.drafts.getState().typeThreadBox(BOT_ID, "channel", "hi", null);
+    app.drafts.getState().typeThreadBox(BOT_ID, "channel", {
+      text: "hi",
+      content: null,
+      held: [],
+    });
     await waitForStore(
       app,
       (stored) => stored?.[BOT_ID]?.channel?.text === "hi",

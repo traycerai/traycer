@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
-import { BotAvatar } from "@/components/bots/bot-avatars";
+import { ExpressiveBotAvatar } from "@/components/bots/bot-avatars";
 import { RunningFor } from "@/components/chat/chat-bot-message";
 import type { ChatBotTurnReceipt } from "@/components/chat/chat-bot-presentation-context";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
@@ -33,7 +33,7 @@ export function BotReplyingStrip(props: {
   const { botTitle, activity, turn, testId } = props;
   if (activity === null || activity.state !== "replying") return null;
   const replying = `${botTitle} is replying…`;
-  const picture = <BotAvatar size="sm" />;
+  const picture = <ExpressiveBotAvatar size="sm" expression="working" />;
   return (
     <div
       role="status"

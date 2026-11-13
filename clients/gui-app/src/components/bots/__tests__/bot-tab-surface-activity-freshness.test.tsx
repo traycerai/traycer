@@ -49,6 +49,7 @@ import {
 } from "@/hooks/bots/__tests__/bot-subscribe-stub-stream";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
+  admitBotDrafts,
   BOT,
   BOT_ID,
   BOUND_HOST,
@@ -231,7 +232,7 @@ const SUBSCRIPTION = {
   digests: null,
 } as const;
 
-beforeEach(() => {
+beforeEach(async () => {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -252,6 +253,7 @@ beforeEach(() => {
     hasSnapshot: true,
     connectionState: "connected",
   });
+  await admitBotDrafts();
 });
 
 afterEach(() => {

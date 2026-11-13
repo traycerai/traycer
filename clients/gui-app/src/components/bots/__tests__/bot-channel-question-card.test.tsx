@@ -9,10 +9,10 @@
  * the question it settles; the settlement the host writes on the row closes
  * the question for everyone, and until it lands the card holds what was sent;
  * a host too old to take an answer gets a card without actions;
- * a member whose answer is overtaken keeps it, loses Submit, and takes it to
- * the question's thread unsent. What a member has not sent outlives the views
- * that draw it: the channel unmounting, as a switch to another tab does,
- * and the thread closing.
+ * a member whose answer is overtaken sees the question settled, and the
+ * answer moves into the box of where it was asked, unsent (T186). What a
+ * member has not sent outlives the views that draw it: the channel
+ * unmounting, as a switch to another tab does, and the thread closing.
  */
 import {
   botMentionHostClientMock,
@@ -39,6 +39,16 @@ import {
 } from "@traycer-clients/shared/host-client/host-client";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  HostRpcError,
+  type IHostMessenger,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import {
+  createRetryingMessenger,
+  type TransportRetryPolicy,
+} from "@traycer-clients/shared/host-transport/retrying-messenger";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { botQuestionsText } from "@traycer/protocol/persistence/epic/messages";
@@ -215,10 +225,17 @@ const activityStore = create<{ activity: BotActivity | null }>()(() => ({
 }));
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
-import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
+import { botBoxDraftsKey } from "@/lib/persist/keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  answerDraftKey,
+  useBotDraftsStore,
+} from "@/stores/bots/bot-drafts-store";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import {
+  boxInput,
   boxWithin,
   textOf,
   typeInto,
@@ -410,14 +427,94 @@ interface HeldSend {
 let heldSends: HeldSend[] | null;
 const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
 
+/**
+ * How the host words a refusal of an answer to a settled question: as an
+ * older host does, `RPC_ERROR` with the reason in its message, or with the
+ * code a newer host adds.
+ */
+let refusalKind: "plain" | "coded";
+
 function settledRefusal(): Error {
-  return new Error("QUESTION_ALREADY_SETTLED: the question is settled");
+  if (refusalKind === "plain") {
+    return new Error("QUESTION_ALREADY_SETTLED: the question is settled");
+  }
+  return new HostRpcError({
+    code: "E_BOT_QUESTION_ALREADY_SETTLED",
+    message: "This question was already answered.",
+    requestId: "request-refused",
+    method: "bot.conversation.send",
+    fatalDetails: null,
+  });
+}
+
+/** While set, the host client's messenger is the retrying and auth-aware layers over the mock, whose first send dies in a session fatal. */
+let fatalFirstSend: boolean;
+/** While set, the channel is mounted under the bridge that scopes the drafts to the signed-in account. */
+let identityBridge: boolean;
+/** The sends that reached the transport double under those layers, the fatal one included. */
+let sendAttempts: number;
+
+/**
+ * What `RemoteSession` rejects a request already sent with when the session
+ * goes fatal: an UNAUTHORIZED, marked because the host may have run it.
+ */
+function sessionFatalError(): HostRpcError {
+  const error = new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: "credential revoked",
+    requestId: "session-fatal",
+    method: "",
+    fatalDetails: {
+      code: "UNAUTHORIZED",
+      reason: "credential revoked",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+  markMayHaveReachedHost(error);
+  return error;
+}
+
+const NO_DELAY_RETRY_POLICY: TransportRetryPolicy = {
+  maxRetries: 2,
+  initialDelayMs: 0,
+  maxDelayMs: 0,
+  sleep: () => Promise.resolve(),
+  random: () => 0,
+};
+
+/**
+ * The transport as the layers above it see it: its first `bot.conversation.send`
+ * rejects with the session fatal, every other call goes to `inner`. It sits
+ * below anything that restamps errors, which would drop the mark the auth
+ * layer reads.
+ */
+function sessionFatalOnFirstSend(
+  inner: IHostMessenger<HostRpcRegistry>,
+): IHostMessenger<HostRpcRegistry> {
+  return {
+    request(method, params, options) {
+      if (method === "bot.conversation.send") {
+        sendAttempts += 1;
+        if (sendAttempts === 1) return Promise.reject(sessionFatalError());
+      }
+      return inner.request(method, params, options);
+    },
+    requestWithResponseTimeout(method, params, responseTimeoutMs, options) {
+      return inner.requestWithResponseTimeout(
+        method,
+        params,
+        responseTimeoutMs,
+        options,
+      );
+    },
+  };
 }
 
 function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   const queryClient = new QueryClient();
   let seq = 0;
-  const messenger = new MockHostMessenger<HostRpcRegistry>({
+  const mock = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => `request-${String(++seq)}`,
     handlers: {
@@ -444,6 +541,30 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
       },
     },
   });
+  const context = createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: "tok-1",
+  });
+  // The recovery the auth layer waits on rotates this context's lease in
+  // place, as the request context provider does, so the call is sent again.
+  const messenger = fatalFirstSend
+    ? createRetryingMessenger(
+        createAuthAwareMessenger(
+          sessionFatalOnFirstSend(mock),
+          {
+            revalidateExpectedBearer: () => {
+              context.credentials.rotateBearerToken({
+                userId: context.identity.userId,
+                bearerToken: "tok-2",
+              });
+              return Promise.resolve("rotated");
+            },
+          },
+          "always",
+        ),
+        NO_DELAY_RETRY_POLICY,
+      )
+    : mock;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -451,9 +572,7 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
       hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
     messenger,
   });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
+  spine.setRequestContext(context);
   return spine.createRequester(mockRemoteHostEntry);
 }
 
@@ -492,8 +611,8 @@ function mountChannel(openThread: BotOpenThread | null): {
   readonly unmount: () => void;
 } {
   const queryClient = new QueryClient();
-  const tree = (open: BotOpenThread | null): ReactNode => (
-    <StrictMode>
+  const tree = (open: BotOpenThread | null): ReactNode => {
+    const view = (
       <QueryClientProvider client={queryClient}>
         <BotTestRunnerHost>
           <TooltipProvider>
@@ -529,8 +648,21 @@ function mountChannel(openThread: BotOpenThread | null): {
           </TooltipProvider>
         </BotTestRunnerHost>
       </QueryClientProvider>
-    </StrictMode>
-  );
+    );
+    return (
+      <StrictMode>
+        {identityBridge ? (
+          <QueryClientProvider client={queryClient}>
+            <BotDraftsPersistLifecycleBridge>
+              {view}
+            </BotDraftsPersistLifecycleBridge>
+          </QueryClientProvider>
+        ) : (
+          view
+        )}
+      </StrictMode>
+    );
+  };
   const result = render(tree(openThread));
   return {
     reopen: (next) => result.rerender(tree(next)),
@@ -560,6 +692,10 @@ beforeEach(() => {
   installLegendListTestClock();
   sent = [];
   refuseSends = false;
+  refusalKind = "plain";
+  fatalFirstSend = false;
+  identityBridge = false;
+  sendAttempts = 0;
   delivery = "written";
   heldSends = null;
   activityStore.setState({ activity: null });
@@ -567,7 +703,13 @@ beforeEach(() => {
   mocks.threads = [];
   mocks.handles.clear();
   rowBlocks.clear();
-  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
+  useBotDraftsStore.setState({
+    answers: {},
+    threadBoxes: {},
+    unsentBoxes: {},
+    boxCarries: {},
+    boxNotices: {},
+  });
   mocks.client = hostClientRecordingSends();
   negotiateBotSend(HOST_ID, { major: 1, minor: 2 });
   signInViewer(VIEWER_USER_ID);
@@ -580,6 +722,11 @@ afterEach(async () => {
     await vi.advanceTimersByTimeAsync(1);
   });
   resetBotFailedRequestSupport();
+  useAuthStore.setState({
+    status: "signed-out",
+    profile: null,
+    contextMetadata: null,
+  });
   mocks.handles.clear();
   mocks.client = null;
 });
@@ -792,18 +939,32 @@ describe("<BotChannelView tiles={null} /> a question on a tab whose host cannot 
   });
 });
 
-describe("<BotChannelView tiles={null} /> a question settled while a member was answering (decision 122)", () => {
-  it("refuses the member's answer at the host, keeps their draft, and once the settlement lands says who answered, drops Submit, and offers Copy and Discuss", async () => {
+/** The channel's box, where an answer overtaken on a card asked at the channel's top level moves. */
+function channelBox(): HTMLElement {
+  return boxInput("Message Release Bot");
+}
+
+/** What the channel's box says under it once answers moved there. */
+function channelMovedLine(): string | undefined {
+  return screen.queryByTestId("bot-channel-composer-answers-moved")
+    ?.textContent;
+}
+
+/** What a settled question's card line says, for the question named. */
+function settlementLine(card: HTMLElement, text: string): string | undefined {
+  return within(cardQuestion(card, text)).getByTestId(
+    "question-card-settlement",
+  ).textContent;
+}
+
+describe("<BotChannelView tiles={null} /> a question settled while a member was answering (decision 122, T186)", () => {
+  it("gives the answer back when the host refuses it while the question is open, says it was not sent, then moves it to the channel's box when the settlement lands, the moved line replacing the failure", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     mountChannel(null);
-    const field = within(cardQuestion(channelCard(), HOLD)).getByRole(
-      "textbox",
-      { name: "Your answer" },
-    );
-    await user.type(field, "Hold the migration");
+    await user.type(holdField(), "Hold the migration");
 
-    // A teammate's answer reached the host first.
+    // A teammate's answer reached the host first, but the row has not shown it yet.
     refuseSends = true;
     await user.click(
       within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
@@ -815,25 +976,197 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
     expect(
       await screen.findByTestId("bot-channel-composer-send-failed"),
     ).toBeTruthy();
-    expect(field).toHaveProperty("value", "Hold the migration");
+    expect(holdField().value).toBe("Hold the migration");
+    expect(textOf(channelBox())).toBe("");
+
     write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
 
-    const question = cardQuestion(channelCard(), HOLD);
-    expect(
-      within(question).getByTestId("question-card-overtaken").textContent,
-    ).toBe("Answered by Tess Teammate while you were answering: Nothing");
-    expect(holdField().value).toBe("Hold the migration");
-    expect(
-      within(question).queryByRole("button", { name: "Submit" }),
-    ).toBeNull();
-    expect(within(question).queryByRole("button", { name: "Skip" })).toBeNull();
-    expect(within(question).getByRole("button", { name: "Copy" })).toBeTruthy();
-    expect(
-      within(question).getByRole("button", { name: "Discuss" }),
-    ).toBeTruthy();
+    expect(settlementLine(channelCard(), HOLD)).toBe(
+      "Answered by Tess Teammate: Nothing",
+    );
+    expect(textOf(channelBox())).toBe("Hold the migration");
+    // The failed answer is the one that moved: nothing is left to retry.
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
+    expect(within(channelCard()).queryAllByRole("button")).toEqual([]);
+    expect(sent).toHaveLength(1);
   });
 
-  it("keeps a picked option in place when another member's settlement arrives, without sending anything", async () => {
+  it("holds the answer on the card, with no couldn't-send line, when the host refuses it with the already-settled code, and moves it to the channel's box once the teammate's settlement shows", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    refusalKind = "coded";
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    refuseSends = true;
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        useBotDraftsStore.getState().answers[BOT_ID]?.[
+          answerDraftKey(QUESTION_ID, 0)
+        ]?.heldForSettlement,
+      ).not.toBeNull(),
+    );
+    expect(sent).toHaveLength(1);
+    expect(
+      within(cardQuestion(channelCard(), HOLD)).getByTestId(
+        "question-card-sending",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    expect(textOf(channelBox())).toBe("Hold the migration");
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(useBotDraftsStore.getState().answers).toEqual({});
+  });
+
+  it("holds the answer, with no couldn't-send line, when the already-settled refusal comes back wrapped by the auth layer after a session fatal and a rotated bearer, and moves it to the channel's box once the teammate's settlement shows", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    refusalKind = "coded";
+    fatalFirstSend = true;
+    mocks.client = hostClientRecordingSends();
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    refuseSends = true;
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        useBotDraftsStore.getState().answers[BOT_ID]?.[
+          answerDraftKey(QUESTION_ID, 0)
+        ]?.heldForSettlement,
+      ).not.toBeNull(),
+    );
+    // The fatal send, then the one the auth layer made after the rotation.
+    expect(sendAttempts).toBe(2);
+    expect(sent).toHaveLength(1);
+    expect(
+      within(cardQuestion(channelCard(), HOLD)).getByTestId(
+        "question-card-sending",
+      ),
+    ).toBeTruthy();
+    expect(holdField().disabled).toBe(true);
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    expect(textOf(channelBox())).toBe("Hold the migration");
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(sendAttempts).toBe(2);
+  });
+
+  it("keeps the answer held on the card when the already-settled refusal is never followed by a settlement: no failure line, nothing in the box, nothing lost", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    refusalKind = "coded";
+    heldSends = [];
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    await refuse();
+
+    const key = answerDraftKey(QUESTION_ID, 0);
+    await vi.waitFor(() =>
+      expect(
+        useBotDraftsStore.getState().answers[BOT_ID]?.[key]?.heldForSettlement,
+      ).toBe(key),
+    );
+    expect(
+      within(cardQuestion(channelCard(), HOLD)).getByTestId(
+        "question-card-sending",
+      ),
+    ).toBeTruthy();
+    expect(holdField().value).toBe("Hold the migration");
+    expect(holdField().disabled).toBe(true);
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("spends the held answer, moving nothing and saying nothing, when the settlement that follows the already-settled refusal is the member's own matching answer", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    refusalKind = "coded";
+    const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
+    mountChannel(null);
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Now",
+      }),
+    );
+    refuseSends = true;
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    const key = answerDraftKey(QUESTION_ID, 0);
+    await vi.waitFor(() =>
+      expect(
+        useBotDraftsStore.getState().answers[BOT_ID]?.[key]?.heldForSettlement,
+      ).toBe(key),
+    );
+
+    write([questionRow([deploy(byPerson(VIEWER_USER_ID, "Now"))])]);
+
+    expect(settlementLine(channelCard(), DEPLOY)).toBe(
+      "Answered by Olive Owner: Now",
+    );
+    expect(useBotDraftsStore.getState().answers).toEqual({});
+    expect(textOf(channelBox())).toBe("");
+    expect(channelMovedLine()).toBeUndefined();
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+  });
+
+  it("moves the answer once when the settlement lands while the send is held, and a refusal after it changes nothing", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    heldSends = [];
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+    await refuse();
+
+    expect(textOf(channelBox())).toBe("Hold the migration");
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
+    expect(useBotDraftsStore.getState().answers).toEqual({});
+  });
+
+  it("moves a picked option, alone, into the channel's box when a teammate's settlement arrives, naming them, without sending anything", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
     mountChannel(null);
@@ -849,57 +1182,266 @@ describe("<BotChannelView tiles={null} /> a question settled while a member was 
 
     const question = cardQuestion(channelCard(), DEPLOY);
     expect(
-      within(question).getByTestId("question-card-overtaken").textContent,
-    ).toBe(
-      "Answered by Tess Teammate while you were answering: After the train",
+      within(question).getByTestId("question-card-settlement").textContent,
+    ).toBe("Answered by Tess Teammate: After the train");
+    expect(question.getAttribute("data-state")).toBe("settled");
+    expect(within(question).queryAllByRole("button")).toEqual([]);
+    expect(textOf(channelBox())).toBe("Now");
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
     );
-    expect(
-      within(question)
-        .getByRole("button", { name: "Now" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      within(question).queryByRole("button", { name: "Submit" }),
-    ).toBeNull();
     expect(sent).toEqual([]);
   });
 
-  it("opens the question's thread from Discuss with the member's draft in its box, unsent", async () => {
+  it("adds the answer below what the box already held, after a blank line, and replaces nothing", async () => {
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    typeInto(channelBox(), "Before I forget");
+    await userEvent
+      .setup({ advanceTimers: vi.advanceTimersByTime })
+      .type(holdField(), "Hold the migration");
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    expect(textOf(channelBox())).toBe("Before I forget\n\nHold the migration");
+  });
+
+  it("opens the channel's box with its kept draft, a blank line and the moved answer, existing text first, when the answer moved while the box was not mounted", async () => {
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, CHANNEL_ID, {
+      text: "Before I forget",
+      content: null,
+      held: [],
+    });
+    const key = answerDraftKey(QUESTION_ID, 0);
+    act(() => {
+      const drafts = useBotDraftsStore.getState();
+      drafts.setAnswer(BOT_ID, key, {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice:
+          "Tess Teammate answered first. Your answer is in your message box, not sent.",
+      }));
+    });
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+
+    mountChannel(null);
+
+    expect(textOf(channelBox())).toBe("Before I forget\n\nHold the migration");
+    await vi.waitFor(() =>
+      expect(
+        useBotDraftsStore.getState().boxCarries[BOT_ID]?.[CHANNEL_ID] ?? [],
+      ).toEqual([]),
+    );
+  });
+
+  it("moves a draft the person typed under a question the asker settled, naming the bot", async () => {
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await userEvent
+      .setup({ advanceTimers: vi.advanceTimersByTime })
+      .type(holdField(), "Hold the migration");
+
+    write([
+      questionRow([
+        hold({
+          answer: "Nothing",
+          skipped: false,
+          by: { kind: "bot" },
+          at: 4_000,
+        }),
+      ]),
+    ]);
+
+    expect(settlementLine(channelCard(), HOLD)).toBe(
+      "Settled by Release Bot: Nothing",
+    );
+    expect(channelMovedLine()).toBe(
+      "Release Bot settled it first. Your answer is in your message box, not sent.",
+    );
+  });
+
+  it("says a teammate skipped the question first when every answer that moved was skipped over", async () => {
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await userEvent
+      .setup({ advanceTimers: vi.advanceTimersByTime })
+      .type(holdField(), "Hold the migration");
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, null))])]);
+
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate skipped this question first. Your answer is in your message box, not sent.",
+    );
+  });
+
+  it("keeps the moved line while the person types in the box, and takes it back when the box sends", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
-    const { reopen } = mountChannel(null);
-    await user.type(
-      within(cardQuestion(channelCard(), HOLD)).getByRole("textbox", {
-        name: "Your answer",
-      }),
-      "Hold the migration",
-    );
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
     write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    typeInto(channelBox(), " today");
+    expect(channelMovedLine()).toBeDefined();
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+
+    expect(channelMovedLine()).toBeUndefined();
+    expect(sent.map((request) => request.text)).toEqual([
+      "Hold the migration today",
+    ]);
+  });
+
+  it("shows the moved line and the couldn't-send line together when a card's other question's send fails for another reason after one answer moved", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const write = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountChannel(null);
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Now",
+      }),
+    );
+    await user.type(holdField(), "Hold the migration");
+    write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train")),
+        hold(null),
+      ]),
+    ]);
+    await vi.waitFor(() => expect(channelMovedLine()).toBeDefined());
+    refuseSends = true;
 
     await user.click(
       within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
-        name: "Discuss",
+        name: "Submit",
       }),
     );
 
-    const opened: BotOpenThread = {
-      anchorMessageId: QUESTION_ID,
-      announcement: true,
-      anchorKind: null,
-      sent: null,
-    };
-    expect(onOpenThread).toHaveBeenLastCalledWith(opened);
-    reopen(opened);
-    const panel = screen.getByTestId("bot-thread-panel");
-    const box = boxWithin(panel, "Reply in a new thread");
-    expect(textOf(box)).toBe("Hold the migration");
-    // The thread opens on the question's card, which is answered in the channel.
+    await screen.findByTestId("bot-channel-composer-send-failed");
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
+  });
+
+  /** One card of two questions, each sent on its own: the second settled by a teammate, or open. */
+  function twoQuestions(settledSecond: boolean): ReadonlyArray<Message> {
+    return [
+      questionRow([
+        hold(null),
+        watch(
+          settledSecond
+            ? byPerson(TEAMMATE_USER_ID, "Agents waiting on me")
+            : null,
+        ),
+      ]),
+    ];
+  }
+
+  /**
+   * The first question's send refused for another reason, so its failure line
+   * shows, and the second question's answer then moves into the same box. The
+   * harness draws one card per row, so the second answer is another question of
+   * the card.
+   */
+  async function failureShowingThenAnAnswerMoves(): Promise<void> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const write = session(CHANNEL_ID, twoQuestions(false));
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), WATCH)).getByRole("button", {
+        name: "Nothing yet",
+      }),
+    );
+    refuseSends = true;
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    await screen.findByTestId("bot-channel-composer-send-failed");
+
+    write(twoQuestions(true));
+
+    await vi.waitFor(() => expect(channelMovedLine()).toBeDefined());
+  }
+
+  it("shows the moved line and keeps the couldn't-send line when another question's answer moves into the box after a question's send failed", async () => {
+    await failureShowingThenAnAnswerMoves();
+
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
     expect(
-      within(within(panel).getByTestId("question-card")).getByTestId(
-        "question-card-settlement",
-      ).textContent,
-    ).toBe("Answered by Tess Teammate: Nothing");
-    expect(sent).toEqual([]);
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
+    ).toContain("Couldn't send. Try again.");
+  });
+
+  it("takes back the couldn't-send line, and keeps the moved line, when the person sends a question's answer again", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await failureShowingThenAnAnswerMoves();
+    refuseSends = false;
+
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
+  });
+
+  it("takes back the box's couldn't-send line once the person types in the box", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    refuseSends = true;
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    await screen.findByTestId("bot-channel-composer-send-failed");
+
+    typeInto(channelBox(), "Wait");
+
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+  });
+
+  it("takes back the box's couldn't-send line when the card sends again", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    refuseSends = true;
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    await screen.findByTestId("bot-channel-composer-send-failed");
+    refuseSends = false;
+    heldSends = [];
+
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+
+    expect(sent).toHaveLength(2);
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
   });
 });
 
@@ -967,9 +1509,11 @@ describe("<BotChannelView tiles={null} /> an answer the host queued while the bo
     ).toBe("Answered by Olive Owner: After the train");
     expect(within(settled).queryAllByRole("button")).toEqual([]);
     expect(useBotDraftsStore.getState().answers).toEqual({});
+    expect(textOf(channelBox())).toBe("");
+    expect(channelMovedLine()).toBeUndefined();
   });
 
-  it("shows a queued answer overtaken once a teammate's settlement reaches the room first, the draft kept with Copy and Discuss, and sends nothing more", async () => {
+  it("moves a queued answer into the channel's box once a teammate's settlement reaches the room first, and sends nothing more", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
@@ -989,25 +1533,17 @@ describe("<BotChannelView tiles={null} /> an answer the host queued while the bo
     // The bot's host, back, refused it: a teammate's answer reached it first.
     write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
 
-    const question = cardQuestion(channelCard(), HOLD);
-    expect(
-      within(question).getByTestId("question-card-overtaken").textContent,
-    ).toBe("Answered by Tess Teammate while you were answering: Nothing");
-    expect(holdField().value).toBe("Hold the migration");
-    expect(
-      within(question).queryByRole("button", { name: "Submit" }),
-    ).toBeNull();
-    expect(within(question).getByRole("button", { name: "Copy" })).toBeTruthy();
-    expect(
-      within(question).getByRole("button", { name: "Discuss" }),
-    ).toBeTruthy();
+    expect(settlementLine(channelCard(), HOLD)).toBe(
+      "Answered by Tess Teammate: Nothing",
+    );
+    expect(textOf(channelBox())).toBe("Hold the migration");
     expect(sent).toHaveLength(1);
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
   });
 });
 
 describe("<BotChannelView tiles={null} /> an answer someone else settled with first, the same member from another window included", () => {
-  it("shows the card's sent answer overtaken when a teammate settled the question first with the same answer", async () => {
+  it("moves the card's sent answer when a teammate settled the question first with the same answer", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
@@ -1025,14 +1561,13 @@ describe("<BotChannelView tiles={null} /> an answer someone else settled with fi
 
     write([questionRow([deploy(byPerson(TEAMMATE_USER_ID, "Now"))])]);
 
-    expect(
-      within(cardQuestion(channelCard(), DEPLOY)).getByTestId(
-        "question-card-overtaken",
-      ).textContent,
-    ).toBe("Answered by Tess Teammate while you were answering: Now");
+    expect(settlementLine(channelCard(), DEPLOY)).toBe(
+      "Answered by Tess Teammate: Now",
+    );
+    expect(textOf(channelBox())).toBe("Now");
   });
 
-  it("shows the card's sent answer overtaken, kept with Copy and Discuss, when the member's settlement is a different answer", async () => {
+  it("moves the card's sent answer, with the another-window line, when the member's own settlement is a different answer", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     delivery = "queued";
     const write = session(CHANNEL_ID, [questionRow([deploy(null)])]);
@@ -1050,61 +1585,35 @@ describe("<BotChannelView tiles={null} /> an answer someone else settled with fi
 
     write([questionRow([deploy(byPerson(VIEWER_USER_ID, "Now"))])]);
 
-    const question = cardQuestion(channelCard(), DEPLOY);
-    expect(
-      within(question).getByTestId("question-card-overtaken").textContent,
-    ).toBe("Answered by Olive Owner while you were answering: Now");
-    expect(
-      within(question)
-        .getByRole("button", { name: "After the train" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(within(question).getByRole("button", { name: "Copy" })).toBeTruthy();
-    expect(
-      within(question).getByRole("button", { name: "Discuss" }),
-    ).toBeTruthy();
+    expect(settlementLine(channelCard(), DEPLOY)).toBe(
+      "Answered by Olive Owner: Now",
+    );
+    expect(textOf(channelBox())).toBe("After the train");
+    expect(channelMovedLine()).toBe(
+      "You answered in another window first. This answer is in your message box, not sent.",
+    );
     expect(sent).toHaveLength(1);
   });
 });
 
 describe("<BotChannelView tiles={null} /> what a member has not sent, across the views that draw it", () => {
   /**
-   * The card's two questions answered by a teammate first, the viewer's
-   * answers to both unsent: `typed` to the one that takes words, Now to the
-   * other.
+   * The card's one question settled by a teammate first, the viewer's answer
+   * unsent: `typed`, now moved into the channel's box.
    */
-  async function overtakenBoth(typed: string): Promise<{
+  async function movedToChannelBox(typed: string): Promise<{
     readonly reopen: (next: BotOpenThread | null) => void;
     readonly unmount: () => void;
   }> {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    const write = session(CHANNEL_ID, [
-      questionRow([deploy(null), hold(null)]),
-    ]);
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
     const view = mountChannel(null);
     // Seed the draft in one paste; these cases exercise its lifecycle after settlement.
     await user.click(holdField());
     await user.paste(typed);
-    await user.click(
-      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
-        name: "Now",
-      }),
-    );
-    write([
-      questionRow([
-        deploy(byPerson(TEAMMATE_USER_ID, "After the train")),
-        hold(byPerson(TEAMMATE_USER_ID, "Nothing")),
-      ]),
-    ]);
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+    expect(textOf(channelBox())).toBe(typed);
     return view;
-  }
-
-  async function discuss(text: string): Promise<void> {
-    await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(
-      within(cardQuestion(channelCard(), text)).getByRole("button", {
-        name: "Discuss",
-      }),
-    );
   }
 
   it("keeps a card's answers, typed, picked and sent, across the channel unmounting and mounting again, as a switch to another tab and back does", async () => {
@@ -1140,141 +1649,347 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
     expect(sent).toHaveLength(1);
   });
 
-  it("keeps the draft Discuss put in the question's thread, and what was typed after it, across the thread closing and the channel remounting", async () => {
-    const view = await overtakenBoth("Hold the migration");
-    await discuss(HOLD);
-    view.reopen(QUESTION_THREAD);
-    typeInto(questionThreadBox(), " today");
-
-    view.reopen(null);
-    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    view.reopen(QUESTION_THREAD);
-    expect(textOf(questionThreadBox())).toBe("Hold the migration today");
+  it("keeps the moved answer, and what was typed after it, in the channel's box across the channel unmounting and mounting again", async () => {
+    const view = await movedToChannelBox("Hold the migration");
+    typeInto(channelBox(), " today");
 
     view.unmount();
-    mountChannel(QUESTION_THREAD);
-    expect(textOf(questionThreadBox())).toBe("Hold the migration today");
+    mountChannel(null);
+
+    expect(textOf(channelBox())).toBe("Hold the migration today");
     expect(sent).toEqual([]);
   });
 
-  it("spends the draft with the send that carries it, even when the send lands after the thread closed", async () => {
+  it("spends the moved answer with the send that carries it, even when the send lands after the channel was unmounted", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
-    const view = await overtakenBoth("Hold the migration");
-    await discuss(HOLD);
-    view.reopen(QUESTION_THREAD);
-    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    const view = await movedToChannelBox("Hold the migration");
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
     expect(
-      sent.map((request) => [
-        request.text,
-        request.announcementId,
-        request.answer,
-      ]),
-    ).toEqual([["Hold the migration", QUESTION_ID, null]]);
+      sent.map((request) => [request.text, request.threadId, request.answer]),
+    ).toEqual([["Hold the migration", null, null]]);
 
-    view.reopen(null);
+    view.unmount();
     await land();
-    view.reopen(QUESTION_THREAD);
+    mountChannel(null);
 
-    expect(textOf(questionThreadBox())).toBe("");
+    expect(textOf(channelBox())).toBe("");
   });
 
-  it("offers the refused send's text back beside a newer draft, in the thread opened again after the send was refused with its thread closed", async () => {
+  it("offers the refused send's text back beside a newer draft, in the channel mounted again after the send was refused while it was unmounted", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
-    const view = await overtakenBoth("Hold the migration");
-    await discuss(HOLD);
-    view.reopen(QUESTION_THREAD);
-    await user.click(screen.getByTestId("bot-thread-composer-send"));
-    typeInto(questionThreadBox(), "Hold off today");
+    const view = await movedToChannelBox("Hold the migration");
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    typeInto(channelBox(), "Hold off today");
 
-    view.reopen(null);
+    view.unmount();
     await refuse();
-    view.reopen(QUESTION_THREAD);
+    mountChannel(null);
 
-    expect(textOf(questionThreadBox())).toBe("Hold off today");
+    expect(textOf(channelBox())).toBe("Hold off today");
     expect(
-      screen.getByTestId("bot-thread-composer-send-failed").textContent,
+      screen.getByTestId("bot-channel-composer-send-failed").textContent,
     ).toContain("Hold the migration");
     await user.click(
-      screen.getByTestId("bot-thread-composer-send-failed-restore"),
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
     );
-    expect(textOf(questionThreadBox())).toBe("Hold the migration");
-    expect(screen.queryByTestId("bot-thread-composer-send-failed")).toBeNull();
+    expect(textOf(channelBox())).toBe("Hold the migration");
+    expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
   });
 
   /**
-   * The Discuss draft sent from the question's thread, the thread closed and
-   * opened again while the send is held: the draft went with the send, so the
-   * box opens empty.
+   * The moved answer sent from the channel's box, the channel unmounted and
+   * mounted again while the send is held: the answer went with the send, so
+   * the box opens empty.
    */
-  async function sentThenReopened(): Promise<void> {
+  async function sentThenRemounted(): Promise<void> {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
-    const view = await overtakenBoth("Hold the migration");
-    await discuss(HOLD);
-    view.reopen(QUESTION_THREAD);
-    await user.click(screen.getByTestId("bot-thread-composer-send"));
-    view.reopen(null);
-    view.reopen(QUESTION_THREAD);
-    expect(textOf(questionThreadBox())).toBe("");
+    const view = await movedToChannelBox("Hold the migration");
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    view.unmount();
+    mountChannel(null);
+    expect(textOf(channelBox())).toBe("");
   }
 
-  it("does not offer the sent draft again in the box opened while the send was in flight, once it lands", async () => {
-    await sentThenReopened();
+  it("does not offer the sent answer again in the box mounted while the send was in flight, once it lands", async () => {
+    await sentThenRemounted();
 
     await land();
 
-    expect(textOf(questionThreadBox())).toBe("");
+    expect(textOf(channelBox())).toBe("");
     expect(
-      screen.getByTestId("bot-thread-composer-send").hasAttribute("disabled"),
+      screen.getByTestId("bot-channel-composer-send").hasAttribute("disabled"),
     ).toBe(true);
     expect(sent).toHaveLength(1);
   });
 
-  it("keeps what was typed in the box opened again after the send left, when the send lands", async () => {
-    await sentThenReopened();
-    typeInto(questionThreadBox(), "Hold off today");
+  it("keeps what was typed in the box mounted again after the send left, when the send lands", async () => {
+    await sentThenRemounted();
+    typeInto(channelBox(), "Hold off today");
 
     await land();
 
-    expect(textOf(questionThreadBox())).toBe("Hold off today");
+    expect(textOf(channelBox())).toBe("Hold off today");
   });
 
-  it("keeps a draft Discuss puts in the thread's open box while an earlier send from it is in flight", async () => {
+  it("keeps an answer that moves into the box while an earlier send from it is in flight, once that send lands", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     heldSends = [];
-    const view = await overtakenBoth("Hold the migration");
-    await discuss(HOLD);
-    view.reopen(QUESTION_THREAD);
-    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    const write = session(CHANNEL_ID, [
+      questionRow([deploy(null), hold(null)]),
+    ]);
+    mountChannel(null);
+    await user.click(holdField());
+    await user.paste("Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), DEPLOY)).getByRole("button", {
+        name: "Now",
+      }),
+    );
+    write([
+      questionRow([deploy(null), hold(byPerson(TEAMMATE_USER_ID, "Nothing"))]),
+    ]);
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
 
-    await discuss(DEPLOY);
-    expect(textOf(questionThreadBox())).toBe("Now");
+    write([
+      questionRow([
+        deploy(byPerson(TEAMMATE_USER_ID, "After the train")),
+        hold(byPerson(TEAMMATE_USER_ID, "Nothing")),
+      ]),
+    ]);
+    expect(textOf(channelBox())).toBe(`${DEPLOY} Now`);
     await land();
 
-    expect(textOf(questionThreadBox())).toBe("Now");
-    view.reopen(null);
-    view.reopen(QUESTION_THREAD);
-    expect(textOf(questionThreadBox())).toBe("Now");
+    expect(textOf(channelBox())).toBe(`${DEPLOY} Now`);
+  });
+});
+
+const ACCOUNT_A = "user-account-a";
+const ACCOUNT_B = "user-account-b";
+
+function signInAs(userId: string): void {
+  act(() => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId,
+        userName: userId,
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+      },
+      contextMetadata: { userId, username: userId },
+    });
+  });
+}
+
+function signOut(): void {
+  act(() => {
+    useAuthStore.setState({
+      status: "signed-out",
+      profile: null,
+      contextMetadata: null,
+    });
+  });
+}
+
+/** Nothing of anyone's kept in memory, in any slice of the drafts store. */
+function expectNoDraftsInMemory(): void {
+  const { answers, threadBoxes, unsentBoxes, boxCarries, boxNotices } =
+    useBotDraftsStore.getState();
+  expect({ answers, threadBoxes, unsentBoxes, boxCarries, boxNotices }).toEqual(
+    {
+      answers: {},
+      threadBoxes: {},
+      unsentBoxes: {},
+      boxCarries: {},
+      boxNotices: {},
+    },
+  );
+}
+
+describe("<BotChannelView tiles={null} /> a moved answer and the signed-in account (T186)", () => {
+  const MOVED = "Hold the migration";
+
+  beforeEach(() => {
+    localStorage.clear();
+    identityBridge = true;
+    signInAs(ACCOUNT_A);
   });
 
-  it("keeps a draft Discuss puts in the thread while it is closed, even with the text an earlier send from its box carried, when that send lands after", async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    heldSends = [];
-    const view = await overtakenBoth("Now");
-    await discuss(HOLD);
-    view.reopen(QUESTION_THREAD);
-    await user.click(screen.getByTestId("bot-thread-composer-send"));
-    expect(sent.map((request) => request.text)).toEqual(["Now"]);
-    view.reopen(null);
-
-    await discuss(DEPLOY);
-    await land();
-    view.reopen(QUESTION_THREAD);
-
-    expect(textOf(questionThreadBox())).toBe("Now");
+  afterEach(() => {
+    localStorage.clear();
   });
+
+  /** Signed in as A: the member types, a teammate settles, and the answer is in the channel's box. */
+  async function movedIntoTheBoxAsA(): Promise<void> {
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await userEvent
+      .setup({ advanceTimers: vi.advanceTimersByTime })
+      .type(holdField(), MOVED);
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+    expect(textOf(channelBox())).toBe(MOVED);
+  }
+
+  /** B's box, with nothing of A's anywhere B could read it. */
+  async function expectNothingOfAForB(): Promise<void> {
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(""));
+    expect(channelMovedLine()).toBeUndefined();
+    expectNoDraftsInMemory();
+    expect(
+      localStorage.getItem(botBoxDraftsKey(ACCOUNT_B)) ?? "",
+    ).not.toContain(MOVED);
+  }
+
+  it("shows account B nothing of account A's moved answer, in the box, the store or B's storage, and gives it back, unsent and with no line, when A signs in again after a switch", async () => {
+    await movedIntoTheBoxAsA();
+
+    signInAs(ACCOUNT_B);
+    await expectNothingOfAForB();
+
+    signInAs(ACCOUNT_A);
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(MOVED));
+    expect(channelMovedLine()).toBeUndefined();
+    expect(sent).toEqual([]);
+  });
+
+  it("keeps an answer that moved while the box was not mounted, and was still not mounted at the switch, for A alone, folded into A's kept draft", async () => {
+    identityBridge = false;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <BotDraftsPersistLifecycleBridge>
+          <div />
+        </BotDraftsPersistLifecycleBridge>
+      </QueryClientProvider>,
+    );
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+    const key = answerDraftKey(QUESTION_ID, 0);
+    act(() => {
+      const drafts = useBotDraftsStore.getState();
+      drafts.setAnswer(BOT_ID, key, {
+        chosen: [],
+        typed: MOVED,
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice:
+          "Tess Teammate answered first. Your answer is in your message box, not sent.",
+      }));
+    });
+    expect(
+      useBotDraftsStore.getState().boxCarries[BOT_ID]?.[CHANNEL_ID],
+    ).toBeDefined();
+
+    signInAs(ACCOUNT_B);
+    expectNoDraftsInMemory();
+    const asB = mountChannel(null);
+    await expectNothingOfAForB();
+    asB.unmount();
+
+    signInAs(ACCOUNT_A);
+    mountChannel(null);
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(MOVED));
+    expect(channelMovedLine()).toBeUndefined();
+  });
+
+  it("writes an answer that moved while the box was not mounted into A's own key at the switch, after A's read finished, and gives it back to A", async () => {
+    identityBridge = false;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <BotDraftsPersistLifecycleBridge>
+          <div />
+        </BotDraftsPersistLifecycleBridge>
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() =>
+      expect(useBotDraftsStore.persist.hasHydrated()).toBe(true),
+    );
+    session(CHANNEL_ID, [questionRow([hold(null)])]);
+    const key = answerDraftKey(QUESTION_ID, 0);
+    act(() => {
+      const drafts = useBotDraftsStore.getState();
+      drafts.setAnswer(BOT_ID, key, {
+        chosen: [],
+        typed: MOVED,
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL_ID, [key], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice:
+          "Tess Teammate answered first. Your answer is in your message box, not sent.",
+      }));
+    });
+
+    signInAs(ACCOUNT_B);
+
+    await vi.waitFor(() =>
+      expect(localStorage.getItem(botBoxDraftsKey(ACCOUNT_A)) ?? "").toContain(
+        MOVED,
+      ),
+    );
+    expectNoDraftsInMemory();
+    const asB = mountChannel(null);
+    await expectNothingOfAForB();
+    asB.unmount();
+
+    signInAs(ACCOUNT_A);
+    mountChannel(null);
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(MOVED));
+    expect(channelMovedLine()).toBeUndefined();
+  });
+
+  it("gives A the moved answer back, unsent and with no line, when A signs out and signs in again, with nothing of it in memory while signed out", async () => {
+    await movedIntoTheBoxAsA();
+
+    signOut();
+    expectNoDraftsInMemory();
+
+    signInAs(ACCOUNT_A);
+    await vi.waitFor(() => expect(textOf(channelBox())).toBe(MOVED));
+    expect(channelMovedLine()).toBeUndefined();
+  });
+
+  it.each([
+    { name: "refused", settle: refuse },
+    { name: "landed", settle: land },
+  ])(
+    "leaves B's draft and B's box alone when a send A started is $name after the switch",
+    async ({ settle }) => {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      heldSends = [];
+      session(CHANNEL_ID, [questionRow([hold(null)])]);
+      mountChannel(null);
+      await user.type(holdField(), MOVED);
+      await user.click(
+        within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+          name: "Submit",
+        }),
+      );
+      expect(heldSends).toHaveLength(1);
+
+      signInAs(ACCOUNT_B);
+      await vi.waitFor(() => expect(holdField().value).toBe(""));
+      await user.type(holdField(), "B's own answer");
+      const before = useBotDraftsStore.getState().answers;
+
+      await settle();
+
+      expect(useBotDraftsStore.getState().answers).toEqual(before);
+      expect(useBotDraftsStore.getState().boxNotices).toEqual({});
+      expect(holdField().value).toBe("B's own answer");
+      expect(holdField().disabled).toBe(false);
+      expect(
+        screen.queryByTestId("bot-channel-composer-send-failed"),
+      ).toBeNull();
+    },
+  );
 });
 
 describe("<BotChannelView tiles={null} /> a row's text above its question card", () => {
@@ -1581,7 +2296,7 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     sent: null,
   };
 
-  it("sends the answer into the thread, and Discuss on an overtaken answer puts it in the thread's own box, unsent", async () => {
+  it("sends the answer into the thread, and moves an overtaken answer into the thread's own box, unsent, with the line under it", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mocks.threads = [postThread()];
     session(CHANNEL_ID, [memberPost()]);
@@ -1601,7 +2316,6 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
 
     await user.click(within(panel).getByRole("button", { name: "Now" }));
     write([threadQuestion(byPerson(TEAMMATE_USER_ID, "After the train"))]);
-    await user.click(within(panel).getByRole("button", { name: "Discuss" }));
 
     expect(onOpenThread).not.toHaveBeenCalled();
     const box = boxWithin(
@@ -1609,7 +2323,31 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
       "Reply in the thread",
     );
     expect(textOf(box)).toBe("Now");
+    expect(
+      screen.getByTestId("bot-thread-composer-answers-moved").textContent,
+    ).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
+    expect(textOf(channelBox())).toBe("");
     expect(sent).toHaveLength(1);
+  });
+
+  it("moves a channel question's answer once, into the channel's box, when the question's own thread is open and draws its card too", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(QUESTION_THREAD);
+    await user.type(holdField(), "Hold the migration");
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    expect(textOf(channelBox())).toBe("Hold the migration");
+    expect(textOf(questionThreadBox())).toBe("");
+    expect(
+      screen.queryByTestId("bot-thread-composer-answers-moved"),
+    ).toBeNull();
+    expect(channelMovedLine()).toBe(
+      "Tess Teammate answered first. Your answer is in your message box, not sent.",
+    );
   });
 
   it("draws the thread's card with nothing to press on a host that negotiated bot.conversation.send 1.1", () => {
@@ -1695,7 +2433,13 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
   });
 
-  it("starts a new message when Discuss puts a draft in the box while it edits a failed reply: what is sent replaces nothing", async () => {
+  /**
+   * The thread's box editing a failed reply while another person's settlement
+   * moves the member's answer in under the edit.
+   */
+  async function movedUnderTheEditOfAFailedReply(): Promise<{
+    readonly reopen: (next: BotOpenThread | null) => void;
+  }> {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     activityStore.setState({
       activity: { trunk: null, threads: { [THREAD_ID]: FAILED_ON_REPLY } },
@@ -1703,24 +2447,33 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     mocks.threads = [postThread()];
     session(CHANNEL_ID, [memberPost()]);
     const write = session(THREAD_ID, [threadQuestion(null), failedReply()]);
-    mountChannel(POST_THREAD);
+    const view = mountChannel(POST_THREAD);
     const replies = screen.getByTestId("bot-thread-replies");
     await user.click(within(replies).getByRole("button", { name: "Now" }));
+    await user.click(within(replies).getByTestId("bot-message-edit"));
+
     write([
       threadQuestion(byPerson(TEAMMATE_USER_ID, "After the train")),
       failedReply(),
     ]);
-    await user.click(within(replies).getByTestId("bot-message-edit"));
-    expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
+    return view;
+  }
 
-    await user.click(within(replies).getByRole("button", { name: "Discuss" }));
-
-    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
-    const box = boxWithin(
+  function threadBox(): HTMLElement {
+    return boxWithin(
       screen.getByTestId("bot-thread-panel"),
       "Reply in the thread",
     );
-    expect(textOf(box)).toBe("Now");
+  }
+
+  it("keeps the thread's box editing the failed reply when an overtaken answer moves in under its text, and what is sent still replaces the failed reply", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await movedUnderTheEditOfAFailedReply();
+
+    expect(
+      screen.getByTestId("bot-thread-composer-editing").textContent,
+    ).toContain("Sending replaces your message that failed.");
+    expect(textOf(threadBox())).toBe("Hold for now\n\nNow");
     await user.click(screen.getByTestId("bot-thread-composer-send"));
     expect(
       sent.map((request) => [
@@ -1728,6 +2481,170 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
         request.threadId,
         request.supersedes,
       ]),
-    ).toEqual([["Now", THREAD_ID, null]]);
+    ).toEqual([["Hold for now\n\nNow", THREAD_ID, REPLY_REQUEST]]);
+  });
+
+  it("gives the moved answer back, once, in the thread's box opened again after the person left it while it edited the failed reply", async () => {
+    const view = await movedUnderTheEditOfAFailedReply();
+
+    view.reopen(null);
+    view.reopen(POST_THREAD);
+
+    expect(textOf(threadBox())).toBe("Now");
+    expect(sent).toEqual([]);
+  });
+
+  it("shows the moved answer, once, in the thread's box when the person cancels the edit of the failed reply", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await movedUnderTheEditOfAFailedReply();
+
+    await user.click(screen.getByTestId("bot-thread-composer-edit-cancel"));
+
+    expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
+    expect(textOf(threadBox())).toBe("Now");
+  });
+});
+
+describe("<BotChannelView tiles={null} /> under the box: a moved answer, a failed box send and a failed card answer", () => {
+  const BOX_MESSAGE = "Box message";
+  const NEWER = "Newer draft";
+
+  function failureLines(): HTMLElement[] {
+    return screen.queryAllByTestId("bot-channel-composer-send-failed");
+  }
+
+  function restoreButton(): HTMLElement | null {
+    return screen.queryByTestId("bot-channel-composer-send-failed-restore");
+  }
+
+  /** Whether `first` comes before `second` in the document. */
+  function inOrder(first: HTMLElement, second: HTMLElement): boolean {
+    return Boolean(
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  }
+
+  /** The box sends a message the host refuses, and a newer draft was typed meanwhile: the message is offered back. */
+  async function boxSendFailsWithAnOffer(): Promise<void> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    heldSends = [];
+    typeInto(channelBox(), BOX_MESSAGE);
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    typeInto(channelBox(), NEWER);
+    await refuse();
+    await screen.findByTestId("bot-channel-composer-send-failed-restore");
+  }
+
+  /** A card of two questions whose first one's answer is typed and second one's is picked. */
+  async function answeredBothQuestions(): Promise<
+    (settledSecond: boolean) => void
+  > {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const rows = (settledSecond: boolean): ReadonlyArray<Message> => [
+      questionRow([
+        hold(null),
+        watch(
+          settledSecond
+            ? byPerson(TEAMMATE_USER_ID, "Agents waiting on me")
+            : null,
+        ),
+      ]),
+    ];
+    const write = session(CHANNEL_ID, rows(false));
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await user.click(
+      within(cardQuestion(channelCard(), WATCH)).getByRole("button", {
+        name: "Nothing yet",
+      }),
+    );
+    return (settledSecond) => write(rows(settledSecond));
+  }
+
+  /**
+   * The box's send failed with an offer, the first question's send failed too,
+   * and then the second question's answer moved into the box.
+   */
+  async function threeThingsUnderTheBox(): Promise<void> {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const settleSecond = await answeredBothQuestions();
+    heldSends = [];
+    typeInto(channelBox(), BOX_MESSAGE);
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    typeInto(channelBox(), NEWER);
+    await user.click(
+      within(cardQuestion(channelCard(), HOLD)).getByRole("button", {
+        name: "Submit",
+      }),
+    );
+    await refuse();
+    await refuse();
+    settleSecond(true);
+    await vi.waitFor(() => expect(channelMovedLine()).toBeDefined());
+  }
+
+  it("shows the moved line, then the box's couldn't-send line with Restore, when an answer moves into the box after its send failed, and Restore puts the message back", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
+    mountChannel(null);
+    await user.type(holdField(), "Hold the migration");
+    await boxSendFailsWithAnOffer();
+
+    write([questionRow([hold(byPerson(TEAMMATE_USER_ID, "Nothing"))])]);
+
+    await vi.waitFor(() => expect(channelMovedLine()).toBeDefined());
+    expect(failureLines()).toHaveLength(1);
+    expect(restoreButton()).not.toBeNull();
+    expect(
+      inOrder(
+        screen.getByTestId("bot-channel-composer-answers-moved"),
+        failureLines()[0],
+      ),
+    ).toBe(true);
+
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+
+    expect(textOf(channelBox())).toContain(BOX_MESSAGE);
+  });
+
+  it("shows the moved line and exactly one couldn't-send line, the box's, with Restore, when a box send and a card answer both failed and an answer moved, and the card's line comes back without Restore after Restore", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await threeThingsUnderTheBox();
+
+    expect(failureLines()).toHaveLength(1);
+    expect(restoreButton()).not.toBeNull();
+    expect(
+      inOrder(
+        screen.getByTestId("bot-channel-composer-answers-moved"),
+        failureLines()[0],
+      ),
+    ).toBe(true);
+
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+
+    expect(channelMovedLine()).toBeDefined();
+    expect(failureLines()).toHaveLength(1);
+    expect(restoreButton()).toBeNull();
+  });
+
+  it("shows only the moved line after Restore when the transcript spent the card's answer while the box's couldn't-send line stood", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await threeThingsUnderTheBox();
+    act(() =>
+      useBotDraftsStore
+        .getState()
+        .setAnswer(BOT_ID, answerDraftKey(QUESTION_ID, 0), null),
+    );
+
+    await user.click(
+      screen.getByTestId("bot-channel-composer-send-failed-restore"),
+    );
+
+    expect(channelMovedLine()).toBeDefined();
+    expect(failureLines()).toEqual([]);
   });
 });

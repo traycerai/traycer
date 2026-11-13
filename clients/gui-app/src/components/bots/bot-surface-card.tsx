@@ -13,6 +13,7 @@ import { EMPTY_QUESTION_CARD_DRAFT } from "@/components/chat/question-card-view"
 import { useBotSurfaceOpen } from "@/hooks/bots/use-bot-surface-open";
 import {
   answerDraftKey,
+  useBotDraftActions,
   useBotDraftsStore,
 } from "@/stores/bots/bot-drafts-store";
 import {
@@ -257,7 +258,7 @@ function SurfaceQuestion(props: {
     onSend,
   } = props;
   const drafts = useBotDraftsStore((state) => state.answers[botId]);
-  const setAnswer = useBotDraftsStore((state) => state.setAnswer);
+  const { setAnswer } = useBotDraftActions();
   const keyOf = (index: number): string => answerDraftKey(messageId, index);
   // A send that did not land gives the person's answers back to change,
   // once: answering again after that is not undone.
@@ -288,7 +289,11 @@ function SurfaceQuestion(props: {
         busy
           ? null
           : (index, draft) =>
-              setAnswer(botId, keyOf(index), { ...draft, unsureSince: null })
+              setAnswer(botId, keyOf(index), {
+                ...draft,
+                unsureSince: null,
+                heldForSettlement: null,
+              })
       }
       onAnswer={() => {
         const current = useBotDraftsStore.getState().answers[botId] ?? {};
@@ -304,7 +309,6 @@ function SurfaceQuestion(props: {
         );
       }}
       onAnswerAll={null}
-      onDiscuss={null}
     />
   );
 }

@@ -191,6 +191,8 @@ function box(kind: BoxKind): ReactNode {
       keptDraft={null}
       quote={null}
       reply={NO_BOT_REPLY}
+      moved={null}
+      notice={null}
       onSent={() => false}
     />
   );

@@ -7,6 +7,7 @@ import {
   resetHostCredentialProvisioning,
   setHostCredentialMintRunner,
 } from "../host-credential-provisioning";
+import { appLogger } from "@/lib/logger";
 
 afterEach(() => {
   setHostCredentialMintRunner(null);
@@ -25,12 +26,18 @@ function provisionedOutcome(): HostCredentialMintOutcome {
 }
 
 describe("appHostCredentialMintFlow single-flight policy", () => {
-  it("resolves unavailable when no runner is installed", async () => {
+  it("resolves unavailable and logs when no runner is installed", async () => {
+    const info = vi.spyOn(appLogger, "info").mockImplementation(() => {});
     const outcome = await appHostCredentialMintFlow({
       hostId: "host-1",
       reason: "missing",
     });
     expect(outcome).toEqual({ kind: "unavailable" });
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("no mint runner installed"),
+      { hostId: "host-1" },
+    );
+    info.mockRestore();
   });
 
   it("collapses concurrent notices for the same host into ONE runner call", async () => {
@@ -274,7 +281,8 @@ describe("appHostCredentialMintFlow single-flight policy", () => {
     expect(runner).toHaveBeenCalledTimes(2);
   });
 
-  it("maps a thrown runner to unavailable and still frees the host for a later attempt", async () => {
+  it("maps a thrown runner to unavailable, warns with the host, and still frees the host for a later attempt", async () => {
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
     const runner = vi.fn((): Promise<HostCredentialMintOutcome> =>
       Promise.reject(new Error("mint crashed")),
     );
@@ -285,6 +293,11 @@ describe("appHostCredentialMintFlow single-flight policy", () => {
     ).resolves.toEqual({ kind: "unavailable" });
 
     expect(runner).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("mint runner threw"),
+      expect.objectContaining({ hostId: "host-1" }),
+    );
+    warn.mockRestore();
   });
 });
 

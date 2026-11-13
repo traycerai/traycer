@@ -39,6 +39,10 @@ const NEIGHBOURS = [
   "epic-durability-export",
   "epic-sweep-action",
 ];
+const TRACK = "epic-playback-track";
+const TITLE =
+  "A very long track title that cannot fit the label beside the buttons";
+const IDENTITY = `${TITLE} · Generative variant`;
 const LONGEST_LABEL = "Offline — new edits not backed up";
 
 async function open(page: Page): Promise<void> {
@@ -50,9 +54,17 @@ async function open(page: Page): Promise<void> {
   // widths are read only once all of them are there with the pill at its
   // longest.
   await expect(page.getByTestId(PILL)).toHaveText(LONGEST_LABEL);
-  for (const id of [...NEIGHBOURS, ...BUTTONS]) {
+  for (const id of [...NEIGHBOURS, ...BUTTONS, TRACK]) {
     await expect(page.getByTestId(id)).toBeVisible();
   }
+}
+
+/** Whether the label is out of the layout but still in the accessibility tree. */
+async function labelIsScreenReaderOnly(page: Page): Promise<boolean> {
+  return page.getByTestId(TRACK).evaluate((label) => {
+    const box = label.getBoundingClientRect();
+    return box.width <= 1 && box.height <= 1;
+  });
 }
 
 /** Sets the row's content box (the width its container query reads), in rem. */
@@ -232,4 +244,78 @@ test("paused in a 360px row Play and everything else are whole, and the pill's l
     .locator(":scope > :last-child")
     .evaluate((label) => label.scrollWidth > label.clientWidth);
   expect(cut).toBe(true);
+});
+
+test("a row just wide enough for the label cuts the title on one line with the kind under it, inside the row, and describes the buttons by the whole identity", async ({
+  page,
+}) => {
+  await open(page);
+  // The label is the widest it is given only in a wide row, where the title
+  // fits; narrowing to the threshold is what makes it cut.
+  await setContentRem(page, 46, 0);
+
+  const [title, kind] = await page
+    .getByTestId(TRACK)
+    .locator(":scope > span:not(.sr-only)")
+    .all();
+  const cut = await title.evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(cut).toBe(true);
+  await expect(kind).toHaveText("Generative variant");
+  expect((await boxOf(kind)).left).toBeCloseTo((await boxOf(title)).left, 0);
+  const labelBox = await boxOf(page.getByTestId(TRACK));
+  expect(
+    (await boxOf(page.getByTestId(BUTTONS[0]))).left,
+  ).toBeGreaterThanOrEqual(labelBox.right - 0.5);
+  await expectWhole(page, [TRACK, ...BUTTONS, ...NEIGHBOURS]);
+
+  for (const name of ["Previous track", "Pause", "Next track"]) {
+    await expect(
+      page.getByRole("button", { name }),
+    ).toHaveAccessibleDescription(IDENTITY);
+  }
+});
+
+test("below 46rem the label leaves the layout but stays the buttons' description, and at 46rem it is still there", async ({
+  page,
+}) => {
+  await open(page);
+
+  await setContentRem(page, 46, 0);
+  await expect(page.getByTestId(TRACK)).toBeVisible();
+  expect(await labelIsScreenReaderOnly(page)).toBe(false);
+  await expectWhole(page, [TRACK, ...BUTTONS, ...NEIGHBOURS]);
+
+  await setContentRem(page, 46, -1);
+  expect(await labelIsScreenReaderOnly(page)).toBe(true);
+  for (const id of BUTTONS) await expect(page.getByTestId(id)).toBeVisible();
+  await expectWhole(page, [...BUTTONS, ...NEIGHBOURS]);
+  await expect(
+    page.getByRole("button", { name: "Pause" }),
+  ).toHaveAccessibleDescription(IDENTITY);
+});
+
+test("below 34rem the buttons are gone, the identity stays out of the layout, and Play keeps the description", async ({
+  page,
+}) => {
+  await open(page);
+  await pause(page);
+
+  await setContentRem(page, 34, -1);
+
+  expect(await labelIsScreenReaderOnly(page)).toBe(true);
+  await expect(page.getByRole("button", { name: "Play" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Play" }),
+  ).toHaveAccessibleDescription(IDENTITY);
+  await expectWhole(page, ["epic-playback-toggle", ...NEIGHBOURS]);
+});
+
+test("focusing a button shows its tooltip with the whole identity", async ({
+  page,
+}) => {
+  await open(page);
+
+  await page.getByRole("button", { name: "Pause" }).focus();
+
+  await expect(page.getByRole("tooltip")).toHaveText(`Pause · ${IDENTITY}`);
 });

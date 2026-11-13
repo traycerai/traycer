@@ -46,6 +46,7 @@ import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import {
+  admitBotDrafts,
   endBotTabSurfaceCase,
   NEEDS_HOST_SETUP,
   resetBotTabSurfaceMocks,
@@ -189,7 +190,10 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   });
 
   describe("Add a computer", () => {
-    beforeEach(scriptTeamControlPlane);
+    beforeEach(async () => {
+      scriptTeamControlPlane();
+      await admitBotDrafts();
+    });
 
     it("does not offer team commands when the environment has no provider handle", () => {
       mocks.state.environments = mocks.state.environments.map((row) =>
@@ -271,8 +275,9 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     };
     const JOINING_NOTE = "A computer is joining the team.";
 
-    beforeEach(() => {
+    beforeEach(async () => {
       scriptTeamControlPlane();
+      await admitBotDrafts();
       // The setup channel's own read is not enabled by the surface: it reads
       // as what the host answered, which the fake host serves from its cache.
       mocks.state.readsCached = true;
@@ -341,7 +346,10 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   });
 
   describe("Enable cloud", () => {
-    beforeEach(scriptTeamControlPlane);
+    beforeEach(async () => {
+      scriptTeamControlPlane();
+      await admitBotDrafts();
+    });
 
     function auth(): TeamCloudBinding["auth"] {
       if (mocks.binding === null) throw new Error("no binding scripted");

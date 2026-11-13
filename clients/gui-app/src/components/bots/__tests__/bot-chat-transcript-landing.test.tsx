@@ -270,7 +270,7 @@ const THREAD_SURFACE: BotTranscriptSurface = {
   reply: null,
   answerQuestion: null,
   answerQuestions: null,
-  discussQuestion: null,
+  questionBox: "post-1",
   failedRequest: () => null,
   openTurn: null,
   sessionChatId: null,

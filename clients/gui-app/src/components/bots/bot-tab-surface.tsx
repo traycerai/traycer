@@ -76,6 +76,7 @@ import {
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useBotDraftsAdmitted } from "@/hooks/bots/use-bot-drafts-admitted";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
   useBotTabLandingStore,
@@ -131,7 +132,8 @@ import {
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
-import { BotAvatar } from "@/components/bots/bot-avatars";
+import { ExpressiveBotAvatar } from "@/components/bots/bot-avatars";
+import { botExpressionOf, useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
@@ -175,6 +177,7 @@ export function BotTabSurface(props: {
 }): ReactNode {
   const { botId, hostId } = props;
   useClaimBotSurfaceFocus();
+  const admitted = useBotDraftsAdmitted();
   // A RESTORED surface (the store persists) meets whatever its host
   // advertises now. `bot.open` is the newest method of the `bot.*` block, so
   // its presence stands for every write the surface offers; without it the
@@ -194,7 +197,16 @@ export function BotTabSurface(props: {
   }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
-      <TracySurfaceShell botId={botId} hostId={hostId} />
+      {/* What the person has not sent, wherever this tree holds it - a box's
+          edit, a send that failed, quotes waiting for their box, a card's
+          answer - is the signed-in account's. At a change of account the
+          tree goes while the drafts store still holds the outgoing one's,
+          and the next account's starts once the store is its own (T186). */}
+      {admitted ? (
+        <TracySurfaceShell botId={botId} hostId={hostId} />
+      ) : (
+        <BotTabConnecting />
+      )}
     </TabHostProvider>
   );
 }
@@ -230,7 +242,7 @@ function TracySurfaceShell(props: {
   const groups = useBotsGroups(botList.data, environments.data);
   // Every picture on the surface draws what its own host's list chose.
   const looks = useMemo(
-    () => (botList.data === undefined ? null : botLooksOf(botList.data.bots)),
+    () => (botList.data === undefined ? null : botLooksOf(botList.data)),
     [botList.data],
   );
 
@@ -1782,6 +1794,7 @@ function BotChannelHeader(props: {
 }): ReactNode {
   const { settingsOpen } = props;
   const background = useChannelBackground(props.botId);
+  const expression = botExpressionOf(useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header
@@ -1824,7 +1837,7 @@ function BotChannelHeader(props: {
             className="shrink-0 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
             data-testid="bot-tab-avatar"
           >
-            <BotAvatar size="sm" />
+            <ExpressiveBotAvatar size="sm" expression={expression} />
           </button>
         </BotIdentityTrigger>
         <BotChannelTitle

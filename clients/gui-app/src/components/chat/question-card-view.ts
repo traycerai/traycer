@@ -33,8 +33,6 @@ export interface QuestionCardSettlement {
 export interface QuestionCardDraft {
   readonly chosen: ReadonlyArray<string>;
   readonly typed: string;
-  /** Whether the person chose to skip it, on a card whose answers go together. */
-  readonly skip: boolean;
   readonly sent: {
     readonly text: string;
     readonly skipped: boolean;
@@ -68,14 +66,14 @@ export function botQuestionCardSettlement(
 export const EMPTY_QUESTION_CARD_DRAFT: QuestionCardDraft = {
   chosen: [],
   typed: "",
-  skip: false,
   sent: null,
 };
 
 /**
  * What one question shows: open; sent, the person's answer on its way to
  * the asker and the question not settled yet; settled; or settled by someone
- * else while this person had an answer of their own, which they keep.
+ * else while this person had an answer of their own (`draft`), which moves to
+ * their box and the question shows settled.
  */
 export type QuestionCardView =
   | { readonly kind: "open" }
@@ -151,7 +149,7 @@ export function draftAfterTyping(
 /**
  * One question's part of a card's answers sent together (T167), as
  * `bot.conversation.send@1.5` takes it: a Skip, or the options picked, in
- * the question's order, and the words typed. `null` while it has neither.
+ * the question's order, and the words typed.
  */
 export interface QuestionCardEntry {
   readonly questionIndex: number;
@@ -160,13 +158,15 @@ export interface QuestionCardEntry {
   readonly text: string | null;
 }
 
+/**
+ * A question's answer as the card's Submit sends it: the options picked and
+ * the words typed; `null` while it has neither, and Submit sends it skipped
+ * (`questionCardSkippedEntry`).
+ */
 export function questionCardEntry(
   questionIndex: number,
   draft: QuestionCardDraft,
 ): QuestionCardEntry | null {
-  if (draft.skip) {
-    return { questionIndex, skipped: true, selected: [], text: null };
-  }
   const typed = draft.typed.trim();
   if (draft.chosen.length === 0 && typed.length === 0) return null;
   return {
@@ -177,22 +177,27 @@ export function questionCardEntry(
   };
 }
 
+/** An open question the person left untouched, as Submit sends it: skipped (T186). */
+export function questionCardSkippedEntry(
+  questionIndex: number,
+): QuestionCardEntry {
+  return { questionIndex, skipped: true, selected: [], text: null };
+}
+
 /**
  * What the foot of a card whose answers go together says: how many of its
- * open questions the person has answered or skipped, and, until all of
- * them, what Submit waits for. A question settled already, by the asker or
- * anyone, is not counted.
+ * open questions the person has answered, and what Submit does with the
+ * rest - nothing until one is answered, then sends them skipped. A question
+ * settled already, by the asker or anyone, is not counted.
  */
 export function questionCardTallyLine(answered: number, open: number): string {
   const tally = `${String(answered)} of ${String(open)} answered.`;
   const left = open - answered;
   if (left === 0) return tally;
-  if (left === 1) {
-    return `${tally} Answer or skip the last one to submit.`;
-  }
-  return answered === 0
-    ? `${tally} Answer or skip each one to submit.`
-    : `${tally} Answer or skip the other ${String(left)} to submit.`;
+  if (answered === 0) return `${tally} Answer at least one to submit.`;
+  return left === 1
+    ? `${tally} The last one will be sent as skipped.`
+    : `${tally} The other ${String(left)} will be sent as skipped.`;
 }
 
 /**
@@ -233,6 +238,86 @@ export function questionCardView(
   const own = draftText(draft, several);
   if (theirs || own === null) return { kind: "settled", settlement };
   return { kind: "overtaken", settlement, draft: own };
+}
+
+/**
+ * The lines a member's answers take into their box once someone else
+ * settled the questions first (T186): on a card of one question, the answer
+ * alone, as Submit would have sent it; on a card of several, one line per
+ * question in the card's order, the question then the answer, with a colon
+ * between unless the question ends in a question mark.
+ */
+export function questionCardMovedBlock(
+  answers: ReadonlyArray<{
+    readonly question: string;
+    readonly answer: string;
+  }>,
+  severalQuestions: boolean,
+): string {
+  return answers
+    .map((item) => {
+      if (!severalQuestions) return item.answer;
+      const question = item.question.trimEnd();
+      return question.endsWith("?")
+        ? `${question} ${item.answer}`
+        : `${question}: ${item.answer}`;
+    })
+    .join("\n");
+}
+
+/**
+ * How the questions whose answers moved were settled: answered; skipped,
+ * each on its own; or left out of an answer to the card, which settles them
+ * skipped though nobody chose to skip them.
+ */
+export type QuestionCardMovedHow = "answered" | "skipped" | "card";
+
+/**
+ * How the questions whose answers moved were settled: answered where any of
+ * them was. A question a teammate's answer to the card left out is settled
+ * skipped though nobody chose to skip it, so all skipped with any by a set
+ * reads as the card answered.
+ */
+export function questionCardMovedHow(
+  settlements: ReadonlyArray<QuestionCardSettlement>,
+): QuestionCardMovedHow {
+  if (!settlements.every((item) => item.skipped)) return "answered";
+  return settlements.some((item) => item.setId !== null) ? "card" : "skipped";
+}
+
+/** What the person who settled the questions first did, for the box's line. */
+function movedDid(how: QuestionCardMovedHow, moved: number): string {
+  if (how === "card") return "answered the card";
+  if (how === "skipped") {
+    return moved === 1 ? "skipped this question" : "skipped these questions";
+  }
+  return "answered";
+}
+
+/**
+ * What the box says under it once `moved` of the member's answers went
+ * there: who settled the questions first, said once, and that the answers
+ * are in the person's message box, unsent.
+ */
+export function questionCardMovedLine(
+  by: QuestionCardSettlement["by"],
+  how: QuestionCardMovedHow,
+  asker: string,
+  moved: number,
+): string {
+  const did = movedDid(how, moved);
+  if (by.kind === "person" && by.viewer) {
+    const what = moved === 1 ? "This answer is" : "These answers are";
+    return `You ${did} in another window first. ${what} in your message box, not sent.`;
+  }
+  const yours =
+    moved === 1
+      ? "Your answer is in your message box, not sent."
+      : "Your answers are in your message box, not sent.";
+  if (by.kind === "asker") {
+    return `${asker} settled ${moved === 1 ? "it" : "them"} first. ${yours}`;
+  }
+  return `${by.name} ${did} first. ${yours}`;
 }
 
 /** The line a Skip sends as the person's message. */

@@ -1,4 +1,5 @@
 import {
+  use,
   useCallback,
   useEffect,
   useMemo,
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import { BotTranscriptFlowAllShownContext } from "@/components/bots/bot-transcript-flow-context";
 import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
@@ -75,8 +77,8 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
+import { useBotDraftActions } from "@/stores/bots/bot-drafts-store";
 import type {
   BotSessionOpen,
   BotTurnOpen,
@@ -133,8 +135,8 @@ export type BotThreadPanelThread =
  * Where a thread's post, replies and box are drawn: in the panel beside the
  * channel, which scrolls them in the pane, or as a card on the Threads page
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
- * card's reply count opens the thread in its channel's panel
- * (`onOpenThread`), its post's time shows the post in the channel
+ * card's reply count, drawn while it folds replies away, opens the thread in
+ * its channel's panel (`onOpenThread`), its post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
  * in full), and the reply its reading would acknowledge is marked
  * (`readMark`, `null` for none).
@@ -173,10 +175,11 @@ const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
  * session's routing card sits above the panel's box.
  *
  * A question card in the thread answers in the thread. A member whose answer
- * someone else's overtook takes it to the discussion: the thread's box, with
- * their draft in it unsent - a question's own thread for a question in the
- * channel, this thread for one asked here. What the box holds is kept under
- * the bot (`useBotDraftsStore`), so it outlives the panel, until it is sent.
+ * to a question asked here someone else's overtook finds it in the thread's
+ * box, unsent, below what the box held (T186); a question asked in the
+ * channel moves its answers to the channel's box. What the box holds is kept
+ * under the bot (`useBotDraftsStore`), so it outlives the panel, until it is
+ * sent.
  *
  * Reply on a row of the thread names it in the thread's box (T166), which
  * takes the focus; the thread's rows offer no thread of their own.
@@ -524,7 +527,7 @@ function ThreadOriginPost(
       answer: null,
       answerAll: null,
       baseline: null,
-      discuss: null,
+      box: null,
     }),
     [anchorSenderLabel, botId, viewerUserId],
   );
@@ -746,28 +749,19 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     props.originMessageId,
   );
   // What the box holds unsent, kept under the bot: what the person typed,
-  // or a draft Discuss put there, from the channel's card or this thread's.
+  // or answers moved off a card in this thread that someone else settled
+  // first, below it.
   const { botId, originMessageId } = props;
   // Stable across what the box does to this component's own state, so typing
   // does not hand the replies' list a new header on every key.
   const origin = useMemo(() => <ThreadOrigin {...props} />, [props]);
-  const { kept, seed, keptDraft } = useKeptBoxDraft(botId, originMessageId);
-  const seedThreadBox = useBotDraftsStore((state) => state.seedThreadBox);
-  // A draft Discuss puts in the box is a new message: an edit the box held
-  // ends, so the draft replaces nothing.
-  const [heldSeedId, setHeldSeedId] = useState(kept?.seedId ?? null);
-  if ((kept?.seedId ?? null) !== heldSeedId) {
-    setHeldSeedId(kept?.seedId ?? null);
-    if (kept !== null) setEdit(null);
-  }
-  const discuss = useCallback(
-    (_questionMessageId: string, draft: string) =>
-      seedThreadBox(botId, originMessageId, draft),
-    [botId, originMessageId, seedThreadBox],
+  const { seed, keptDraft, moved, notice } = useKeptBoxDraft(
+    botId,
+    originMessageId,
   );
   // Reply on a row of the thread names it in this box; none while the box
   // edits a failed message, whose send replaces it and replies to nothing.
-  const setReplyTarget = useBotDraftsStore((state) => state.setReplyTarget);
+  const { setReplyTarget } = useBotDraftActions();
   const [replyChosen, setReplyChosen] = useState(0);
   const { replyReach } = props;
   const chooseReply = useMemo(
@@ -808,7 +802,6 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           retry={thread.retry}
           sendable={thread.sendable}
           onEdit={setEdit}
-          onDiscuss={discuss}
           onReply={chooseReply}
         />
       )}
@@ -838,6 +831,8 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         keptDraft={keptDraft}
         quote={props.quote}
         reply={{ reach: replyReach, chosen: replyChosen }}
+        moved={moved}
+        notice={notice}
         onSent={keepOpenThread}
       />
     </>
@@ -921,8 +916,6 @@ function KnownThread(
     readonly sendable: boolean;
     /** Edit on a failed message: its text goes in the panel's box. */
     readonly onEdit: (edit: BotComposerEdit) => void;
-    /** Discuss on an overtaken answer to a question here: its draft goes in the panel's box. */
-    readonly onDiscuss: (questionMessageId: string, draft: string) => void;
     /** Reply on a row of the thread: it is named in the panel's box; `null` where none can. */
     readonly onReply: ((target: BotReplyTarget) => void) | null;
   },
@@ -943,7 +936,6 @@ function KnownThread(
     resolveMember,
     sendFailure,
     onEdit,
-    onDiscuss,
     onReply,
     onOpenTurn,
     landOn,
@@ -1002,52 +994,47 @@ function KnownThread(
     [failedRequest, sendable],
   );
   // A question card's answer or Skip, on a question asked in the thread, is
-  // the person's next message in it; a failed one says so where a failed
-  // message does, and the card keeps the draft. A host that cannot take the
-  // answer gets a card without actions; where both hosts take a card's
-  // answers together, one Submit sends them as one message.
+  // the person's next message in it; a failed one gives the card the draft
+  // back, and the thread's box says so under it, unless someone else settled
+  // the question meanwhile (T186). A host that cannot take the answer gets a
+  // card without actions; where both hosts take a card's answers together,
+  // one Submit sends them as one message.
   const answerQuestion = useCallback<QuestionAnswerSend>(
     async (questionMessageId, given) => {
       clearSendFailure();
-      await sendAsync(
-        {
-          botId,
-          conversationId,
-          text: given.text,
-          threadId,
-          announcementId: null,
-          redeliver: null,
-          supersedes: null,
-          answer: {
-            questionMessageId,
-            questionIndex: given.questionIndex,
-            skipped: given.skipped,
-          },
+      await sendAsync({
+        botId,
+        conversationId,
+        text: given.text,
+        threadId,
+        announcementId: null,
+        redeliver: null,
+        supersedes: null,
+        answer: {
+          questionMessageId,
+          questionIndex: given.questionIndex,
+          skipped: given.skipped,
         },
-        { onError: () => failSend(null) },
-      );
+      });
     },
-    [botId, clearSendFailure, conversationId, failSend, sendAsync, threadId],
+    [botId, clearSendFailure, conversationId, sendAsync, threadId],
   );
   const answerQuestions = useCallback<QuestionAnswersSend>(
     async (questionMessageId, given) => {
       clearSendFailure();
-      await sendAsync(
-        {
-          botId,
-          conversationId,
-          text: given.text,
-          threadId,
-          announcementId: null,
-          redeliver: null,
-          supersedes: null,
-          answer: null,
-          answers: { questionMessageId, entries: answerEntries(given) },
-        },
-        { onError: () => failSend(null) },
-      );
+      await sendAsync({
+        botId,
+        conversationId,
+        text: given.text,
+        threadId,
+        announcementId: null,
+        redeliver: null,
+        supersedes: null,
+        answer: null,
+        answers: { questionMessageId, entries: answerEntries(given) },
+      });
     },
-    [botId, clearSendFailure, conversationId, failSend, sendAsync, threadId],
+    [botId, clearSendFailure, conversationId, sendAsync, threadId],
   );
   // A reply's option, clicked, is the person's next message in the thread:
   // offered only while no earlier pick is still being sent and the thread
@@ -1079,7 +1066,7 @@ function KnownThread(
         sendable && answerReach !== "none" ? answerQuestion : null,
       answerQuestions:
         sendable && answerReach === "together" ? answerQuestions : null,
-      discussQuestion: onDiscuss,
+      questionBox: originMessageId,
       failedRequest: failedRequestShown,
       openTurn: onOpenTurn,
       sessionChatId: listed?.sessionChatId ?? null,
@@ -1095,9 +1082,9 @@ function KnownThread(
       failSend,
       failedRequestShown,
       listed?.sessionChatId,
-      onDiscuss,
       onOpenTurn,
       onReply,
+      originMessageId,
       opening,
       send,
       sendable,
@@ -1124,25 +1111,7 @@ function KnownThread(
           >
             {origin}
           </div>
-          <div
-            className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
-            data-testid="bot-thread-reply-count"
-          >
-            {openThread === null ? (
-              <span className="shrink-0">{replies}</span>
-            ) : (
-              <Button
-                type="button"
-                variant="link"
-                size="inline-xs"
-                data-testid="bot-thread-reply-count-open"
-                onClick={openThread}
-              >
-                {replies}
-              </Button>
-            )}
-            <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
-          </div>
+          <ThreadReplyCount replies={replies} onOpenThread={openThread} />
         </>
       ) : null,
     [hasReplies, openThread, openingHighlighted, openingRef, origin, replies],
@@ -1194,6 +1163,48 @@ function KnownThread(
         testId="bot-thread-replying-strip"
       />
     </>
+  );
+}
+
+/**
+ * The line between a thread's post and its replies: how many replies it has,
+ * which on a card opens the thread in its channel's panel (`onOpenThread`).
+ * Where the flow under it draws every reply, the line says nothing the
+ * replies do not, so only assistive technology is told the count.
+ */
+function ThreadReplyCount(props: {
+  readonly replies: string;
+  readonly onOpenThread: (() => void) | null;
+}): ReactNode {
+  const { replies, onOpenThread } = props;
+  const allShown = use(BotTranscriptFlowAllShownContext);
+  if (allShown) {
+    return (
+      <span className="sr-only" data-testid="bot-thread-reply-count-sr">
+        {replies}
+      </span>
+    );
+  }
+  return (
+    <div
+      className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
+      data-testid="bot-thread-reply-count"
+    >
+      {onOpenThread === null ? (
+        <span className="shrink-0">{replies}</span>
+      ) : (
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          data-testid="bot-thread-reply-count-open"
+          onClick={onOpenThread}
+        >
+          {replies}
+        </Button>
+      )}
+      <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
+    </div>
   );
 }
 

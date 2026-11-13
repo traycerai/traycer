@@ -5208,6 +5208,92 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
+  it("warns once naming the host and state when the mint is unavailable, and a second ack with the same state does not ask again", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+
+    const notProvisionedWarnings = (): string[] =>
+      warn.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) =>
+          message.includes("host credential not provisioned"),
+        );
+    expect(notProvisionedWarnings()).toHaveLength(1);
+    expect(notProvisionedWarnings()[0]).toContain(`host=${HOST_A.hostId}`);
+    expect(notProvisionedWarnings()[0]).toContain("state=needs-reauth");
+
+    sockets[0].socket.fireClose(1000, "drop", false);
+    const next = await nthSocket(sockets, 1);
+    next.fireOpen();
+    await pollUntil(
+      "redialed socket to send its open frame",
+      () => next.textSent.length > 0,
+    );
+    ackProvisionHandshake(next, "needs-reauth");
+    await flush();
+
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(notProvisionedWarnings()).toHaveLength(1);
+    session.close();
+    warn.mockRestore();
+  });
+
+  it("warns that a minted credential was dropped when the client closes before it is delivered", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deferredMint: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const mint = vi.fn<HostCredentialMintFlow>().mockImplementationOnce(
+      () =>
+        new Promise<Provisioned>((resolve) => {
+          deferredMint.resolve = resolve;
+        }),
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    client.close("test-close-before-delivery");
+    const resolveMint = deferredMint.resolve;
+    if (resolveMint === null) {
+      throw new Error("mint call was never started");
+    }
+    resolveMint(
+      provisioned({ token: "late-token", refreshToken: "late-refresh" }),
+    );
+    await flush();
+
+    const dropWarnings = warn.mock.calls
+      .map(([message]) => String(message))
+      .filter((message) =>
+        message.includes("dropped a minted host credential"),
+      );
+    expect(dropWarnings).toHaveLength(1);
+    expect(dropWarnings[0]).toContain(`host=${HOST_A.hostId}`);
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    warn.mockRestore();
+  });
+
   it("attempts the mint flow exactly once per hostId across many reconnects reporting missing", async () => {
     const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();

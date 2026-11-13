@@ -74,6 +74,7 @@ import {
   BOT,
   BOT_ID,
   endBotTabSurfaceCase,
+  admitBotDrafts,
   resetBotTabSurfaceMocks,
   snapshot,
   TAB_HOST,
@@ -666,7 +667,7 @@ describe("<BotTabSurface /> views", () => {
         };
       }
 
-      beforeEach(() => {
+      beforeEach(async () => {
         useAuthStore.setState({
           profile: {
             userId: VIEWER,
@@ -675,6 +676,7 @@ describe("<BotTabSurface /> views", () => {
             avatarUrl: null,
           },
         });
+        await admitBotDrafts();
         mocks.homeTasks = [ownedDirectly(TASK_HOME, "Roadmap")];
       });
 
@@ -718,7 +720,7 @@ describe("<BotTabSurface /> views", () => {
       const mentionMenu = (): Element | null =>
         document.querySelector('[data-slot="composer-menu"]');
 
-      beforeEach(() => {
+      beforeEach(async () => {
         useAuthStore.setState({
           status: "signed-in",
           profile: {
@@ -728,6 +730,7 @@ describe("<BotTabSurface /> views", () => {
             avatarUrl: null,
           },
         });
+        await admitBotDrafts();
         // A personal bot: the viewer is its one member, so there are no
         // members to wait for.
         mocks.state.environments = [
@@ -888,6 +891,7 @@ describe("<BotTabSurface /> views", () => {
       },
       contextMetadata: { userId: "user-ada", username: "ada" },
     });
+    await admitBotDrafts();
     mocks.unreadTaskIds.add("task-unseen");
     mocks.state.snapshot = {
       ...snapshot(),
@@ -955,7 +959,7 @@ describe("<BotTabSurface /> views", () => {
     expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
   });
 
-  it("rule 6: shows no count when no task is active", () => {
+  it("rule 6: shows no count when no task is active", async () => {
     // The indicator read is made for a signed-in member.
     useAuthStore.setState({
       status: "signed-in",
@@ -966,6 +970,7 @@ describe("<BotTabSurface /> views", () => {
       },
       contextMetadata: { userId: "user-ada", username: "ada" },
     });
+    await admitBotDrafts();
     mocks.state.snapshot = {
       ...snapshot(),
       tasks: [

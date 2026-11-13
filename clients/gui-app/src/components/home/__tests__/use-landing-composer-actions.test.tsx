@@ -248,6 +248,7 @@ const imageStoreMocks = vi.hoisted(() => ({
 // here too, and a from-scratch factory that omits one makes vitest warn and the
 // importer read `undefined` at call time.
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  onLandingImagesDeleted: vi.fn(),
   // The real digest: recovery verifies a fetched reply against the requested
   // hash before it consults the residency budget.
   sha256Hex: async (bytes: ImageBytes): Promise<string> => {

@@ -1,14 +1,24 @@
 import { createContext, use } from "react";
 import type {
   BotAppearance,
-  BotDirectoryRecord,
+  BotListResponse,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HomeBotsModel } from "@/lib/home-bots/bots-model";
 import { botColorAt } from "@/lib/providers/profile-accent-color";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
-/** Bots' looks by id, as a surface's own `bot.list` read names them. */
-export type BotLooks = ReadonlyMap<string, BotAppearance>;
+/**
+ * What a surface's own `bot.list` read says of its bots' pictures: each
+ * bot's look by id, and which bots are their environment's main bot.
+ */
+export interface BotLooks {
+  readonly appearances: ReadonlyMap<string, BotAppearance>;
+  /**
+   * Whether each listed bot is its environment's main bot; `null` from a host
+   * whose list names no main bots.
+   */
+  readonly main: ReadonlyMap<string, boolean> | null;
+}
 
 /**
  * The looks of the bots a surface lists through its own host. Outside one, a
@@ -16,21 +26,32 @@ export type BotLooks = ReadonlyMap<string, BotAppearance>;
  */
 export const BotLooksContext = createContext<BotLooks | null>(null);
 
-/** The looks a list's rows carry; a row without an appearance is left out. */
-export function botLooksOf(bots: ReadonlyArray<BotDirectoryRecord>): BotLooks {
-  const looks = new Map<string, BotAppearance>();
-  for (const bot of bots) {
+/**
+ * The looks a list's rows carry, a row without an appearance left out, and
+ * which of its bots are main.
+ */
+export function botLooksOf(
+  list: Pick<BotListResponse, "bots" | "mainBotIds">,
+): BotLooks {
+  const appearances = new Map<string, BotAppearance>();
+  for (const bot of list.bots) {
     const look = bot.appearance ?? null;
-    if (look !== null) looks.set(bot.botId, look);
+    if (look !== null) appearances.set(bot.botId, look);
   }
-  return looks;
+  const { mainBotIds } = list;
+  if (mainBotIds === null) return { appearances, main: null };
+  const mainIds = new Set(Object.values(mainBotIds));
+  return {
+    appearances,
+    main: new Map(list.bots.map((bot) => [bot.botId, mainIds.has(bot.botId)])),
+  };
 }
 
 /** The directory's own row, so an unchanged directory selects the same value. */
 function directoryRow(
   model: HomeBotsModel,
   botId: string,
-): BotDirectoryRecord | null {
+): BotListResponse["bots"][number] | null {
   for (const group of model.groups) {
     const bot = group.bots.find((row) => row.botId === botId);
     if (bot !== undefined) return bot;
@@ -44,12 +65,27 @@ function directoryRow(
  * choice at its default.
  */
 export function useBotLook(botId: string): BotAppearance | null {
-  const surface = use(BotLooksContext)?.get(botId) ?? null;
+  const surface = use(BotLooksContext)?.appearances.get(botId) ?? null;
   const row = useStandaloneBotsStore((state) =>
     directoryRow(state.directory.model, botId),
   );
   if (surface !== null) return surface;
   return row?.appearance ?? null;
+}
+
+/**
+ * Whether a bot is its environment's main bot: what the surface's own list
+ * says of a bot it lists, else what the app's directory says, and `false`
+ * while neither names it. The surface's answer wins because the two are read
+ * through different hosts and the surface's is the one its settings change.
+ * A main bot's picture starts plain.
+ */
+export function useBotIsMain(botId: string): boolean {
+  const surface = use(BotLooksContext)?.main?.get(botId);
+  const directory = useStandaloneBotsStore((state) =>
+    state.directory.model.groups.some((group) => group.mainBotId === botId),
+  );
+  return surface ?? directory;
 }
 
 /**

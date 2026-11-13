@@ -34,6 +34,7 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { BotChannelIntro } from "@/components/bots/bot-channel-intro";
+import { BotTranscriptFlowAllShownContext } from "@/components/bots/bot-transcript-flow-context";
 import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import {
   CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
@@ -108,10 +109,8 @@ export type BotTranscriptSurface =
       readonly answerQuestion: QuestionAnswerSend | null;
       /** Sends a card's answers together at the channel's top level; `null` where they go one at a time. */
       readonly answerQuestions: QuestionAnswersSend | null;
-      /** Opens a question's thread with the person's draft in its box; `null` where threads cannot be opened. */
-      readonly discussQuestion:
-        | ((questionMessageId: string, draft: string) => void)
-        | null;
+      /** The channel's box, by its conversation: where a card's overtaken answers move; `null` before the channel is known. */
+      readonly questionBox: string | null;
       /** A post the bot failed to answer, by its request id and writer, and what can be done about it. */
       readonly failedRequest: (
         requestId: string,
@@ -142,10 +141,8 @@ export type BotTranscriptSurface =
       readonly answerQuestion: QuestionAnswerSend | null;
       /** Sends a card's answers together in the thread; `null` where they go one at a time. */
       readonly answerQuestions: QuestionAnswersSend | null;
-      /** Puts the person's draft in the thread's box, unsent. */
-      readonly discussQuestion:
-        | ((questionMessageId: string, draft: string) => void)
-        | null;
+      /** The thread's box, by its post: where a card's overtaken answers move. */
+      readonly questionBox: string;
       /** A message the bot failed to answer, by its request id and writer, and what can be done about it. */
       readonly failedRequest: (
         requestId: string,
@@ -635,7 +632,7 @@ function BotChatTranscriptBody(props: {
       answer: surface.answerQuestion,
       answerAll: surface.answerQuestions,
       baseline: { store, epoch: baselineEpoch },
-      discuss: surface.discussQuestion,
+      box: surface.questionBox,
     };
     if (surface.kind === "thread") {
       return {
@@ -913,6 +910,11 @@ function BotTranscriptFlowRows(props: {
     [fold, folded, rows],
   );
   const hidden = rows.length - shown.length;
+  // A row still awaiting its body is not drawn yet.
+  const allShown =
+    !folded &&
+    rows.length > 0 &&
+    rows.every((row) => row.kind !== "placeholder");
   const {
     ref: landingRef,
     highlightedRowId,
@@ -956,7 +958,9 @@ function BotTranscriptFlowRows(props: {
         className="flex flex-col"
         data-testid="bot-chat-transcript-flow"
       >
-        {header}
+        <BotTranscriptFlowAllShownContext value={allShown}>
+          {header}
+        </BotTranscriptFlowAllShownContext>
         {folded ? (
           <div className="px-6 py-1">
             <Button

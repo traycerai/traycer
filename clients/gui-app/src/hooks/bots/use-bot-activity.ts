@@ -7,6 +7,7 @@ import {
   type BotSubscriptionResult,
 } from "@/hooks/bots/use-bot-subscription";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import type { MascotExpression } from "@/lib/bots/mascot-mark";
 
 export type { BotActivity, BotSessionActivity };
 
@@ -120,6 +121,18 @@ export function replyingSessionOf(
 export function botWorkingOf(activity: BotActivity | null): boolean | null {
   if (replyingSessionOf(activity) !== null) return true;
   return activity === null || activity.trunk === null ? null : false;
+}
+
+/**
+ * What the bot's mascot shows of it: `working` while it is answering
+ * anywhere, `away` while its trunk's queue is paused, and `idle` otherwise,
+ * with no reading included.
+ */
+export function botExpressionOf(
+  activity: BotActivity | null,
+): MascotExpression {
+  if (replyingSessionOf(activity) !== null) return "working";
+  return activity?.trunk?.state === "parked" ? "away" : "idle";
 }
 
 /** A session with no start time sorts after every one that has one. */

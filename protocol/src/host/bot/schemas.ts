@@ -149,7 +149,10 @@ const botColorIndexSchema = lazySchema(() =>
     .max(BOT_COLOR_COUNT - 1),
 );
 
-/** The pixel mascots a bot's icon is drawn as, by name. */
+/**
+ * The pixel mascots a bot's icon may name. A client draws the ones it has art
+ * for and takes any other as no choice of shape.
+ */
 export const BOT_MASCOT_SHAPES = [
   "blob",
   "block",
@@ -164,6 +167,35 @@ export const BOT_MASCOT_SHAPES = [
 ] as const;
 export const botMascotShapeSchema = lazySchema(() => z.enum(BOT_MASCOT_SHAPES));
 export type BotMascotShape = z.infer<typeof botMascotShapeSchema>;
+
+/** What a mascot wears over its eyes; `none` is a choice to wear nothing. */
+export const BOT_MASCOT_EYEWEAR = [
+  "none",
+  "glasses",
+  "shades",
+  "visor",
+] as const;
+export const botMascotEyewearSchema = lazySchema(() =>
+  z.enum(BOT_MASCOT_EYEWEAR),
+);
+export type BotMascotEyewear = z.infer<typeof botMascotEyewearSchema>;
+
+/** What a mascot carries on its head; `none` is a choice to carry nothing. */
+export const BOT_MASCOT_ACCESSORIES = [
+  "none",
+  "antenna",
+  "antennae",
+  "sprout",
+  "bow",
+  "sparkle",
+  "flag",
+  "horns",
+  "halo",
+] as const;
+export const botMascotAccessorySchema = lazySchema(() =>
+  z.enum(BOT_MASCOT_ACCESSORIES),
+);
+export type BotMascotAccessory = z.infer<typeof botMascotAccessorySchema>;
 
 /**
  * The bot's chosen icon: a mascot the GUI draws from its shape's name, never
@@ -180,8 +212,8 @@ export type BotAppearanceMark = z.infer<typeof botAppearanceMarkSchema>;
 /**
  * What a person chose for a bot's look, as it is written: every value one
  * this protocol knows. Each choice is `null` for the default the GUI derives
- * from the bot's id: its own mascot, its own colour, and no background of the
- * channel's own. Clearing a choice brings back exactly the derived look.
+ * from the bot's id: its own mascot, its own colour, what its id has it wear,
+ * and no background of the channel's own. Clearing a choice brings back exactly the derived look.
  */
 export const botAppearanceChoiceSchema = lazySchema(() =>
   z.object({
@@ -190,13 +222,16 @@ export const botAppearanceChoiceSchema = lazySchema(() =>
     color: botColorIndexSchema.nullable(),
     /** The colour the channel's background is tinted with, by index. */
     background: botColorIndexSchema.nullable(),
+    eyewear: botMascotEyewearSchema.nullable(),
+    accessory: botMascotAccessorySchema.nullable(),
   }),
 );
 export type BotAppearanceChoice = z.infer<typeof botAppearanceChoiceSchema>;
 
 /**
  * What a reader takes a choice it cannot read as: one a newer writer made,
- * a mark kind, mascot shape or colour past this protocol's own.
+ * a mark kind, mascot shape, colour, eyewear or accessory past this
+ * protocol's own.
  */
 export const BOT_APPEARANCE_UNRECOGNISED = "unrecognised";
 export const BOT_UNRECOGNISED_MARK = {
@@ -206,7 +241,9 @@ export const BOT_UNRECOGNISED_MARK = {
 /**
  * A bot's look as it is read. A choice this protocol cannot read becomes
  * {@link BOT_APPEARANCE_UNRECOGNISED} rather than failing the row, so a
- * value a newer writer adds never blanks a list it rides in.
+ * value a newer writer adds never blanks a list it rides in. `eyewear` and
+ * `accessory` are absent from a writer that predates them, which a reader
+ * takes as no choice.
  */
 export const botAppearanceSchema = lazySchema(() =>
   z.object({
@@ -224,6 +261,16 @@ export const botAppearanceSchema = lazySchema(() =>
     background: z
       .union([botColorIndexSchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
       .nullable()
+      .catch(BOT_APPEARANCE_UNRECOGNISED),
+    eyewear: z
+      .union([botMascotEyewearSchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
+      .nullable()
+      .optional()
+      .catch(BOT_APPEARANCE_UNRECOGNISED),
+    accessory: z
+      .union([botMascotAccessorySchema, z.literal(BOT_APPEARANCE_UNRECOGNISED)])
+      .nullable()
+      .optional()
       .catch(BOT_APPEARANCE_UNRECOGNISED),
   }),
 );
@@ -407,6 +454,8 @@ export const botUpdateAppearanceRequestSchema = lazySchema(() =>
     mark: botAppearanceMarkSchema.nullable().optional(),
     color: botColorIndexSchema.nullable().optional(),
     background: botColorIndexSchema.nullable().optional(),
+    eyewear: botMascotEyewearSchema.nullable().optional(),
+    accessory: botMascotAccessorySchema.nullable().optional(),
   }),
 );
 export type BotUpdateAppearanceRequest = z.infer<

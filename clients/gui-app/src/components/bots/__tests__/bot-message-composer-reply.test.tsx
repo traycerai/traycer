@@ -97,6 +97,7 @@ const FAILED_EDIT: BotComposerEdit = {
   requestId: "request-failed",
   text: "Is CI green?",
   content: null,
+  held: [],
 };
 
 /** The box with its owner's real failure line and kept draft. */
@@ -128,6 +129,8 @@ function Harness(props: {
           keptDraft={kept.keptDraft}
           quote={null}
           reply={props.reply}
+          moved={kept.moved}
+          notice={kept.notice}
           onSent={() => false}
         />
       </BotTestRunnerHost>

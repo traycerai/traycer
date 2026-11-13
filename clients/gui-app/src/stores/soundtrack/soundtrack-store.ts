@@ -10,6 +10,7 @@ import {
 import {
   readSoundtrackManifest,
   type SoundtrackManifest,
+  type SoundtrackTrack,
 } from "@/lib/soundtrack/manifest";
 import {
   openSoundtrackMediaSession,
@@ -115,6 +116,8 @@ interface SoundtrackState {
   readonly paused: boolean;
   /** The view whose track is in front; null while off, or it has no track. */
   readonly soundingView: SoundtrackView | null;
+  /** The actual track definition whose arrangement or recording is in front. */
+  readonly soundingTrack: SoundtrackTrack | null;
   /** The plan applied last; null while off. */
   readonly lastPlan: MixPlan | null;
   /** Filled in when a session ends, and read by the next one. */
@@ -239,8 +242,12 @@ export function createSoundtrackStore(
           mediaSession?.setTrack(sounding?.track.title ?? null);
           set(
             sounding === null
-              ? { soundingView: null }
-              : { soundingView: sounding.view, lastPlan: sounding.plan },
+              ? { soundingView: null, soundingTrack: null }
+              : {
+                  soundingView: sounding.view,
+                  soundingTrack: sounding.track,
+                  lastPlan: sounding.plan,
+                },
           );
         },
         // The wish to hear it stands, whether or not the buttons are there. With
@@ -289,6 +296,7 @@ export function createSoundtrackStore(
       paused: false,
       setPiecesEnabled: true,
       soundingView: null,
+      soundingTrack: null,
       lastPlan: null,
       resumePositions: {},
       enable: () => {
@@ -323,6 +331,7 @@ export function createSoundtrackStore(
         set({
           enabled: false,
           soundingView: null,
+          soundingTrack: null,
           lastPlan: null,
           resumePositions,
         });

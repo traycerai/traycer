@@ -159,7 +159,9 @@ export const botConversationSendRequestSchemaV13 = lazySchema(() =>
      * otherwise it settles the card and opens a thread under it, whose
      * session takes it up with the member. `text` is the answer, or
      * the Skip's line. The bound host refuses an answer to a question already
-     * settled with `QUESTION_ALREADY_SETTLED`, and writes nothing. `null` (or
+     * settled with `QUESTION_ALREADY_SETTLED`, and writes nothing; a sender
+     * on that host gets `E_BOT_QUESTION_ALREADY_SETTLED` (`RPC_ERROR` from a
+     * host that predates it). `null` (or
      * absent) otherwise; never set with `announcementId`, `redeliver` or
      * `supersedes`.
      */
@@ -237,7 +239,8 @@ export type BotConversationQuestionAnswerEntry = z.infer<
  * bot's card at once (T167), each answered or skipped. The bound host settles
  * them all and writes them as one message, or refuses the whole set and
  * writes nothing: with `QUESTION_ALREADY_SETTLED` when any of them is already
- * settled, and as an invalid argument when an open question is missing, an
+ * settled (`E_BOT_QUESTION_ALREADY_SETTLED` to a sender on that host, as for
+ * `answer`), and as an invalid argument when an open question is missing, an
  * index is repeated or out of range, or an answer is not one the question
  * takes. Refused with `E_BOT_ANSWER_SETS_UNSUPPORTED`, nothing written or
  * queued, when the bot's bound host is another one that has not said it takes

@@ -203,6 +203,8 @@ function Box(props: {
         keptDraft={props.keepDraft ? kept.keptDraft : null}
         quote={null}
         reply={NO_BOT_REPLY}
+        moved={null}
+        notice={null}
         onSent={onSent}
       />
     </RunnerHostContext>
@@ -776,6 +778,7 @@ describe("<BotMessageComposer /> a send that fails", () => {
         requestId: "request-failed",
         text: editText,
         content: botBoxContentOf(editText, () => "Ann"),
+        held: [],
       },
     });
     pasteFiles(imageFile("shot.png", "image/png"));

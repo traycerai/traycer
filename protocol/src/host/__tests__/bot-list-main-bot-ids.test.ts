@@ -146,6 +146,31 @@ describe("bot appearance on the wire", () => {
     ).toEqual(APPEARANCE);
   });
 
+  it("carries eyewear and accessory, a null one meaning no choice", () => {
+    for (const worn of [
+      { eyewear: "shades", accessory: "halo" },
+      { eyewear: null, accessory: null },
+    ] as const) {
+      expect(
+        botReadV11.responseSchema.parse({
+          bot: { ...BOT_ROW, appearance: { ...APPEARANCE, ...worn } },
+        }).bot.appearance,
+      ).toEqual({ ...APPEARANCE, ...worn });
+    }
+  });
+
+  it("leaves eyewear and accessory absent for a writer that predates them", () => {
+    const appearance = botReadV11.responseSchema.parse({
+      bot: { ...BOT_ROW, appearance: APPEARANCE },
+    }).bot.appearance;
+
+    expect(Object.keys(appearance ?? {}).sort()).toEqual([
+      "background",
+      "color",
+      "mark",
+    ]);
+  });
+
   it("reads a row without an appearance as naming none", () => {
     expect(
       botListV12.responseSchema.parse({ bots: [BOT_ROW], mainBotIds: null })
@@ -197,6 +222,14 @@ describe("bot appearance on the wire", () => {
         { ...APPEARANCE, background: 1.5 },
         { ...APPEARANCE, background: "unrecognised" },
       ],
+      [
+        { ...APPEARANCE, eyewear: "monocle", accessory: "halo" },
+        { ...APPEARANCE, eyewear: "unrecognised", accessory: "halo" },
+      ],
+      [
+        { ...APPEARANCE, eyewear: "visor", accessory: "crown" },
+        { ...APPEARANCE, eyewear: "visor", accessory: "unrecognised" },
+      ],
     ] as const) {
       const row = botReadV11.responseSchema.parse({
         bot: { ...BOT_ROW, appearance: newer },
@@ -221,6 +254,15 @@ describe("bot.updateAppearance request", () => {
     ).toEqual({ botId: BOT_A, mark: null, color: null, background: null });
   });
 
+  it("accepts an eyewear and an accessory, each nullable", () => {
+    expect(
+      request.parse({ botId: BOT_A, eyewear: "visor", accessory: "sprout" }),
+    ).toEqual({ botId: BOT_A, eyewear: "visor", accessory: "sprout" });
+    expect(
+      request.parse({ botId: BOT_A, eyewear: null, accessory: null }),
+    ).toEqual({ botId: BOT_A, eyewear: null, accessory: null });
+  });
+
   it("accepts a mascot and the color bounds", () => {
     expect(
       request.parse({
@@ -238,6 +280,9 @@ describe("bot.updateAppearance request", () => {
       { background: 24 },
       { color: -1 },
       { color: "unrecognised" },
+      { eyewear: "monocle" },
+      { accessory: "crown" },
+      { eyewear: "unrecognised" },
       { mark: { kind: "mascot", shape: "comet" } },
       { mark: { kind: "unrecognised" } },
       { mark: { kind: "picture", blobRef: "a".repeat(64) } },

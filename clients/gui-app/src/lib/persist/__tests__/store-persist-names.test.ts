@@ -47,9 +47,9 @@ import { useTerminalAccountMentionStore } from "@/stores/onboarding/terminal-acc
 // to catch a divergence. A wrong leaf, a typo'd STORE_KEYS access, or a store
 // that stops routing through the catalog must fail HERE.
 //
-// The six scoped singletons (composer-run-settings, composer-harness-memory,
+// The scoped singletons (composer-run-settings, composer-harness-memory,
 // worktree-intent-memory, worktree-intent-staging, epic-canvas,
-// app-local-notifications) are constructed
+// app-local-notifications, surface-host-selection, bot-box-drafts) are constructed
 // at module load in their initial `anon` bucket; the persist lifecycle bridges
 // retarget them at runtime. The construction-time name asserted here is
 // therefore the `anon` one.
@@ -215,11 +215,15 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:surface-host-selection:anon",
   ],
   [
+    "useBotDraftsStore",
+    useBotDraftsStore,
+    "traycer-gui-app:bot-box-drafts:anon",
+  ],
+  [
     "useBotPaneWidthsStore",
     useBotPaneWidthsStore,
     "traycer-gui-app:bot-pane-widths",
   ],
-  ["useBotDraftsStore", useBotDraftsStore, "traycer-gui-app:bot-box-drafts"],
   [
     "useBotColumnLayoutStore",
     useBotColumnLayoutStore,
