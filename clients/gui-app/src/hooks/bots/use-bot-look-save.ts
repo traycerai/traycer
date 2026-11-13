@@ -6,6 +6,8 @@ import type {
   BotUpdateAppearanceResponse,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mayHaveReachedHost } from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
@@ -40,11 +42,27 @@ interface LookSender {
 let runs = 0;
 
 /**
- * Each bot's save now with a host, settled when it is answered or refused. A
- * run that takes a bot over waits for it: the cloud keeps whichever write
- * arrives last, so two must never be on their way at once.
+ * How a save ended. `unknown` is a save that may have reached the host with
+ * no answer back: it may be kept later, so it is neither saved nor refused.
  */
-const flights = new Map<string, Promise<unknown>>();
+type FlightEnd =
+  | { readonly kind: "saved"; readonly look: BotAppearance | null }
+  | { readonly kind: "refused"; readonly message: string }
+  | { readonly kind: "unknown" };
+
+/** A save now with a host: the parts it carries, and how it ends. */
+interface Flight {
+  readonly parts: BotLookChange;
+  readonly end: Promise<FlightEnd>;
+}
+
+/**
+ * Each bot's save now with a host. A run that takes a bot over waits for it
+ * to end before sending, so an answered or refused save never lands after a
+ * later one. Nothing here orders a save whose end is unknown: only the cloud
+ * could, and it keeps whichever write arrives last.
+ */
+const flights = new Map<string, Flight>();
 
 const BOT_LIST_READS = {
   predicate: (query: { readonly queryKey: readonly unknown[] }) =>
@@ -96,10 +114,107 @@ async function keepAnsweredLook(
   });
 }
 
+const UNSURE = "This may not have been saved.";
+
+function flightEndOf(error: unknown): FlightEnd {
+  if (mayHaveReachedHost(finalRefusalOf(error)) || mayHaveReachedHost(error)) {
+    return { kind: "unknown" };
+  }
+  return {
+    kind: "refused",
+    message:
+      error instanceof Error ? error.message : "The change was not saved.",
+  };
+}
+
+/** Whether every cached list that names the bot holds `value` for `part`. */
+function listsHold(
+  queryClient: QueryClient,
+  botId: string,
+  part: BotLookPart,
+  value: BotLookChange[BotLookPart],
+): boolean {
+  const looks = queryClient
+    .getQueriesData<BotListResponse>(BOT_LIST_READS)
+    .flatMap(([, list]) => list?.bots ?? [])
+    .filter((bot) => bot.botId === botId)
+    .map((bot) => bot.appearance ?? null);
+  return (
+    looks.length > 0 &&
+    looks.every(
+      (look) =>
+        JSON.stringify(look?.[part] ?? null) === JSON.stringify(value ?? null),
+    )
+  );
+}
+
+/** A run of saves: who sends it, for which bot, and how it knows it is live. */
+interface LookRun {
+  readonly sender: LookSender;
+  readonly botId: string;
+  /** Whether the bot's entry is still this run's. */
+  readonly owned: () => boolean;
+}
+
+/**
+ * Takes in how a save ended and answers the parts the next save must carry
+ * again. A part chosen again since the save left keeps that later choice.
+ *
+ * - Saved: the lists take the answered look and the parts stop being drawn
+ *   over them.
+ * - Refused: a save this run sent returns its parts to the held look, with
+ *   the message. One inherited from another host's run is carried again:
+ *   that host could not save it, and this one may.
+ * - Unknown: the parts are not sent again, as the first write may still
+ *   land. The lists are read, and a part they do not hold says so.
+ */
+async function absorb(
+  run: LookRun,
+  flight: Flight,
+  end: FlightEnd,
+  inherited: boolean,
+): Promise<BotLookChange> {
+  const { queryClient } = run.sender;
+  const { botId, owned } = run;
+  if (end.kind === "saved") {
+    await keepAnsweredLook(queryClient, botId, end.look, owned);
+  }
+  if (end.kind === "unknown") {
+    await queryClient.invalidateQueries(BOT_LIST_READS);
+  }
+  if (!owned()) return {};
+  const held = botLookSaveOf(botId);
+  const later = { ...(inherited ? held.sending : null), ...held.waiting };
+  const ended = partsOf(flight.parts).filter(
+    (part) => later[part] === undefined,
+  );
+  if (end.kind === "refused" && inherited) {
+    return withoutParts(flight.parts, partsOf(later));
+  }
+  const refusals: Partial<Record<BotLookPart, string>> = { ...held.refusals };
+  if ((openPanels.get(botId) ?? 0) > 0) {
+    for (const part of ended) {
+      if (end.kind === "refused") refusals[part] = end.message;
+      if (
+        end.kind === "unknown" &&
+        !listsHold(queryClient, botId, part, flight.parts[part])
+      ) {
+        refusals[part] = UNSURE;
+      }
+    }
+  }
+  setBotLookSave(botId, {
+    ...held,
+    chosen: withoutParts(held.chosen, ended),
+    refusals,
+  });
+  return {};
+}
+
 /**
  * Sends `change` and, when it is answered, whatever was chosen meanwhile, one
- * save at a time. A part stays chosen until the last save naming it is
- * answered, so an earlier answer never draws over a later choice.
+ * save at a time. A part stays chosen until the last save naming it has
+ * ended, so an earlier answer never draws over a later choice.
  *
  * The run belongs to the person who started it. When the client signs in as
  * anyone else the run is retired at once: its choices stop being drawn, and
@@ -112,66 +227,47 @@ async function sendInOrder(
   change: BotLookChange,
 ): Promise<void> {
   const owned = (): boolean => botLookSaveOf(botId).run === run;
+  const live: LookRun = { sender, botId, owned };
   const stopWatching = sender.client?.onChange(() => {
     if (sender.client?.getRequestContextUserId() === sender.userId) return;
     if (owned()) dropBotLookSave(botId);
   });
   try {
-    let next: BotLookChange | null = change;
+    let next: BotLookChange = change;
     const earlier = flights.get(botId);
     if (earlier !== undefined) {
+      // Marked as sending so later choices wait behind this run.
       setBotLookSave(botId, { ...botLookSaveOf(botId), sending: change });
-      await earlier;
+      const again = await absorb(live, earlier, await earlier.end, true);
       if (!owned()) return;
-      next = { ...change, ...botLookSaveOf(botId).waiting };
+      next = { ...again, ...change, ...botLookSaveOf(botId).waiting };
     }
-    while (next !== null) {
-      const sending: BotLookChange = next;
+    while (partsOf(next).length > 0) {
+      const parts = next;
       setBotLookSave(botId, {
         ...botLookSaveOf(botId),
-        sending,
+        sending: parts,
         waiting: null,
       });
-      const flight = sender.send(botId, sending).then(
-        (response) => ({
-          look: response.bot.appearance ?? null,
-          refusal: null,
-        }),
-        (error: unknown) => ({
-          look: null,
-          refusal:
-            error instanceof Error
-              ? error.message
-              : "The change was not saved.",
-        }),
-      );
+      const flight: Flight = {
+        parts,
+        end: sender.send(botId, parts).then(
+          (response): FlightEnd => ({
+            kind: "saved",
+            look: response.bot.appearance ?? null,
+          }),
+          flightEndOf,
+        ),
+      };
       flights.set(botId, flight);
-      const answer = await flight;
+      const end = await flight.end;
       if (flights.get(botId) === flight) flights.delete(botId);
       if (!owned()) return;
-      if (answer.refusal === null) {
-        await keepAnsweredLook(sender.queryClient, botId, answer.look, owned);
-        if (!owned()) return;
-      }
+      await absorb(live, flight, end, false);
+      if (!owned()) return;
       const held = botLookSaveOf(botId);
-      // A part chosen again since this save left keeps that later choice.
-      const answered = partsOf(sending).filter(
-        (part) => held.waiting?.[part] === undefined,
-      );
-      const refusals: Partial<Record<BotLookPart, string>> = {
-        ...held.refusals,
-      };
-      if (answer.refusal !== null && (openPanels.get(botId) ?? 0) > 0) {
-        for (const part of answered) refusals[part] = answer.refusal;
-      }
-      next = held.waiting;
-      settle(botId, {
-        ...held,
-        chosen: withoutParts(held.chosen, answered),
-        sending: null,
-        waiting: null,
-        refusals,
-      });
+      next = held.waiting ?? {};
+      settle(botId, { ...held, sending: null, waiting: null });
     }
   } finally {
     stopWatching?.();
@@ -233,9 +329,7 @@ export function useBotLookSaver(
         return;
       }
       // Nothing is on its way, or a run through another host is: this host
-      // takes the bot over and, once that run's save has ended, sends its
-      // unanswered parts itself, so they are still saved, in order, by a
-      // host that can.
+      // takes the bot over and sends once that run's save has ended.
       runs += 1;
       setBotLookSave(botId, {
         chosen,
@@ -255,7 +349,13 @@ export function useBotLookSaver(
         },
         botId,
         runs,
-        { ...held.sending, ...held.waiting, ...change },
+        {
+          // What an earlier run chose and never sent; its save now with a
+          // host is taken in when it ends.
+          ...(held.sending === flights.get(botId)?.parts ? null : held.sending),
+          ...held.waiting,
+          ...change,
+        },
       );
     },
     saving: (part) =>

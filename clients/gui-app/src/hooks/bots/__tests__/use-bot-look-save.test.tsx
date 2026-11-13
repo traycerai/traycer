@@ -4,8 +4,12 @@
  * messenger whose host holds every `bot.updateAppearance` until the test
  * answers or refuses it by hand.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement } from "react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+} from "@tanstack/react-query";
+import type { ReactElement, ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -18,6 +22,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  HostTransportFailureError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -29,9 +37,12 @@ import {
 import type {
   BotAppearance,
   BotDirectoryRecord,
+  BotListResponse,
   BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
+import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useBotLookSaveStore } from "@/stores/bots/bot-look-save-store";
+import { hostQueryKeys } from "@/lib/query-keys";
 import {
   MASCOT_AT_REST,
   botMascot,
@@ -97,7 +108,10 @@ function botRow(appearance: BotAppearance): BotDirectoryRecord {
 interface HeldWrite {
   readonly request: BotUpdateAppearanceRequest;
   readonly answer: (look: BotAppearance) => void;
+  /** The host answers with its own error: a definite refusal. */
   readonly refuse: (message: string) => void;
+  /** The answer is lost after the write left: it may yet be kept. */
+  readonly lose: (message: string) => void;
 }
 
 interface FakeHost {
@@ -132,10 +146,25 @@ function fakeHost(userId: string): FakeHost {
           new Promise((resolve, reject) => {
             writes.push({
               request: params,
-              answer: (look) => resolve({ bot: botRow(look) }),
+              answer: (look) => {
+                listed = look;
+                resolve({ bot: botRow(look) });
+              },
               refuse: (message) => reject(new Error(message)),
+              lose: (message) => {
+                const lost = new HostTransportFailureError({
+                  code: "RPC_ERROR",
+                  message,
+                  requestId: "req-1",
+                  method: "bot.updateAppearance",
+                  fatalDetails: null,
+                });
+                expect(mayHaveReachedHost(lost)).toBe(true);
+                reject(lost);
+              },
             });
           }),
+        "bot.list": () => ({ bots: [botRow(listed)], mainBotIds: null }),
       },
     }),
   });
@@ -145,18 +174,68 @@ function fakeHost(userId: string): FakeHost {
 
 let queryClient = new QueryClient();
 let view: RenderResult | null = null;
+/** The look every fake host's `bot.list` answers with; an answered write becomes it. */
+let listed: BotAppearance = LISTED;
+/** Whether the bot's pictures draw over a real `bot.list` read, which a save can re-read. */
+let listing = false;
+
+function Pictures(): ReactNode {
+  return (
+    <>
+      <NamedBotAvatar botId={BOT_ID} size="sm" />
+      <BotAppearanceSettings botId={BOT_ID} />
+    </>
+  );
+}
+
+function ListedLooks(): ReactNode {
+  const list = useBotListQuery(mocks.client, true);
+  return (
+    <BotLooksContext
+      value={list.data === undefined ? null : botLooksOf(list.data)}
+    >
+      <Pictures />
+    </BotLooksContext>
+  );
+}
 
 function tree(): ReactElement {
   return (
     <QueryClientProvider client={queryClient}>
-      <BotLooksContext
-        value={botLooksOf({ bots: [botRow(LISTED)], mainBotIds: null })}
-      >
-        <NamedBotAvatar botId={BOT_ID} size="sm" />
-        <BotAppearanceSettings botId={BOT_ID} />
-      </BotLooksContext>
+      {listing ? (
+        <ListedLooks />
+      ) : (
+        <BotLooksContext
+          value={botLooksOf({ bots: [botRow(LISTED)], mainBotIds: null })}
+        >
+          <Pictures />
+        </BotLooksContext>
+      )}
     </QueryClientProvider>
   );
+}
+
+/** The look the cached `bot.list` holds for the bot. */
+function cachedLook(): BotAppearance | null {
+  const list = queryClient
+    .getQueriesData<BotListResponse>({
+      predicate: (query) =>
+        hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, "bot.list"),
+    })
+    .at(0)?.[1];
+  return list?.bots.find((bot) => bot.botId === BOT_ID)?.appearance ?? null;
+}
+
+/** Points the panel at `host` over a real `bot.list` read, once it has answered. */
+async function pointListedPanelAt(
+  host: FakeHost,
+  hostId: string,
+): Promise<void> {
+  listing = true;
+  pointPanelAt(host, hostId);
+  await waitFor(() => {
+    expect(cachedLook()).toEqual(listed);
+  });
 }
 
 /** Points the open panel at `host`, as moving the tab to another host does. */
@@ -218,6 +297,8 @@ beforeEach(() => {
   view = null;
   mocks.client = null;
   mocks.hostId = "host-1";
+  listed = LISTED;
+  listing = false;
   useBotLookSaveStore.setState({ saves: {} });
 });
 
@@ -253,6 +334,63 @@ describe("a run of look saves when the client's person changes", () => {
   });
 });
 
+describe("a run of look saves retired while the cached bot lists are being settled", () => {
+  it("never writes the answered look into the cached lists", async () => {
+    const user = userEvent.setup();
+    const host = fakeHost("user-A");
+    pointPanelAt(host, "host-1");
+    const listKey = [...hostQueryKeys.methodScope("host-1", "bot.list"), "all"];
+    queryClient.setQueryData(listKey, {
+      bots: [botRow(LISTED)],
+      mainBotIds: null,
+    });
+    const readReleased = Promise.withResolvers<void>();
+    // A read of the list left before the save is answered and is still out.
+    // Ending it is what the saver waits on, so the person changes as it ends.
+    const refetch = queryClient.fetchQuery(
+      queryOptions({
+        queryKey: listKey,
+        staleTime: 0,
+        queryFn: async ({ signal }) => {
+          signal.addEventListener("abort", () => {
+            host.spine.setRequestContext(userContext("user-B"));
+          });
+          await readReleased.promise;
+          return { bots: [botRow(LISTED)], mainBotIds: null };
+        },
+      }),
+    );
+    const refetchEnded = refetch.catch(() => {});
+
+    await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
+    const held = await writeAt(host, 0);
+    act(() => {
+      held.answer({ ...LISTED, eyewear: "shades" });
+    });
+    await settledMutations(1);
+    await refetchEnded;
+    readReleased.resolve();
+
+    const cached = queryClient
+      .getQueryCache()
+      .findAll({ queryKey: listKey })
+      .map((query) => query.state.data);
+    expect(cached).toEqual([{ bots: [botRow(LISTED)], mainBotIds: null }]);
+    expect(useBotLookSaveStore.getState().saves[BOT_ID]).toBeUndefined();
+    expect(screen.queryAllByRole("alert")).toEqual([]);
+  });
+});
+
+const UNSURE = "This may not have been saved.";
+
+function refusalUnder(section: "eyewear" | "accessory"): string | null {
+  return (
+    within(screen.getByTestId(`bot-settings-${section}`)).queryByTestId(
+      "bot-settings-refusal",
+    )?.textContent ?? null
+  );
+}
+
 describe("a run of look saves when a choice is made through another host", () => {
   const SHADES = { eyewear: "shades" } as const;
   const CHOSEN = {
@@ -268,18 +406,23 @@ describe("a run of look saves when a choice is made through another host", () =>
       .getAttribute("aria-pressed");
   }
 
-  /** H1 holds a save of eyewear with an accessory waiting; H2 is then asked for a colour, and its write is not yet sent. */
-  async function handOver(): Promise<{
+  /**
+   * H1 holds a save of eyewear, with an accessory waiting when `waiting`; H2 is
+   * then asked for a colour, and its write is not yet sent.
+   */
+  async function handOver(waiting: boolean): Promise<{
     readonly first: FakeHost;
     readonly second: FakeHost;
     readonly held: HeldWrite;
   }> {
     const user = userEvent.setup();
     const first = fakeHost("user-A");
-    pointPanelAt(first, "host-1");
+    await pointListedPanelAt(first, "host-1");
     await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
     const held = await writeAt(first, 0);
-    await user.click(screen.getByTestId("bot-settings-accessory-halo"));
+    if (waiting) {
+      await user.click(screen.getByTestId("bot-settings-accessory-halo"));
+    }
 
     const second = fakeHost("user-A");
     pointPanelAt(second, "host-2");
@@ -287,37 +430,53 @@ describe("a run of look saves when a choice is made through another host", () =>
     return { first, second, held };
   }
 
-  it("holds the new host's request until the old host's save has ended, then sends one carrying every part's latest value, and none more through the old", async () => {
-    const { first, second, held } = await handOver();
+  it("holds the new host's request until the old host's save is answered, then sends only what was waiting or chosen since, and writes the answered look to the lists", async () => {
+    const { first, second, held } = await handOver(true);
 
     expect(useBotLookSaveStore.getState().saves[BOT_ID]?.hostId).toBe("host-2");
     expect(colourPressed(7)).toBe("true");
     await userEvent.click(screen.getByTestId("bot-settings-background-2"));
     expect(second.writes).toHaveLength(0);
 
-    held.answer({ ...LISTED, ...SHADES });
+    act(() => {
+      held.answer({ ...LISTED, ...SHADES });
+    });
     const takenOver = await writeAt(second, 0);
 
     expect(takenOver.request).toEqual({
       botId: BOT_ID,
-      ...SHADES,
       accessory: "halo",
       color: 7,
       background: 2,
     });
     expect(second.writes).toHaveLength(1);
     expect(first.writes).toHaveLength(1);
+    expect(cachedLook()).toEqual({ ...LISTED, ...SHADES });
+    expect(pressedIn("eyewear")).toBe("Shades");
     takenOver.answer({ ...CHOSEN, background: 2 });
   });
 
-  it("shows no refusal when the old host's save is refused, keeps the parts drawn, and sends the new host's request", async () => {
-    const { second, held } = await handOver();
+  it("does not replay a part the old host saved when only a colour is chosen through the new host", async () => {
+    const { second, held } = await handOver(false);
+
+    act(() => {
+      held.answer({ ...LISTED, ...SHADES });
+    });
+    const takenOver = await writeAt(second, 0);
+
+    expect(Object.keys(takenOver.request).sort()).toEqual(["botId", "color"]);
+    takenOver.answer({ ...LISTED, ...SHADES, color: 7 });
+  });
+
+  it("sends the old host's parts again, with the waiting and later ones, when its save is definitely refused, and shows no refusal", async () => {
+    const { second, held } = await handOver(true);
     const run = useBotLookSaveStore.getState().saves[BOT_ID]?.run;
 
     held.refuse("Old host refused.");
     const takenOver = await writeAt(second, 0);
 
     expect(screen.queryAllByRole("alert")).toEqual([]);
+    expect(refusalUnder("eyewear")).toBeNull();
     const entry = useBotLookSaveStore.getState().saves[BOT_ID];
     expect(entry.hostId).toBe("host-2");
     expect(entry.run).toBe(run);
@@ -338,26 +497,91 @@ describe("a run of look saves when a choice is made through another host", () =>
     });
   });
 
-  it("keeps the chosen values drawn when the old host answers with the old look, and clears them only on the new host's answer", async () => {
-    const { second, held } = await handOver();
+  it("does not send the old host's parts again when its save ends unknown, and says so under a part the re-read lists do not hold", async () => {
+    const { second, held } = await handOver(true);
 
-    held.answer(LISTED);
+    act(() => {
+      held.lose("Connection dropped.");
+    });
     const takenOver = await writeAt(second, 0);
 
-    expect(useBotLookSaveStore.getState().saves[BOT_ID]?.hostId).toBe("host-2");
-    expect(pressedIn("eyewear")).toBe("Shades");
-    expect(pressedIn("accessory")).toBe("Halo");
-    expect(avatarPaths()).toEqual(avatarPathsFor(CHOSEN));
     expect(takenOver.request).toEqual({
       botId: BOT_ID,
-      ...SHADES,
       accessory: "halo",
       color: 7,
     });
+    expect(second.writes).toHaveLength(1);
+    expect(refusalUnder("eyewear")).toBe(UNSURE);
+    expect(refusalUnder("accessory")).toBeNull();
+    expect(pressedIn("eyewear")).toBe("None");
+    takenOver.answer({ ...LISTED, accessory: "halo", color: 7 });
+  });
 
-    takenOver.answer(CHOSEN);
-    await waitFor(() => {
-      expect(useBotLookSaveStore.getState().saves[BOT_ID]).toBeUndefined();
+  it("says nothing under a part the re-read lists hold when the old host's save ends unknown", async () => {
+    const { second, held } = await handOver(true);
+    listed = { ...LISTED, ...SHADES };
+
+    act(() => {
+      held.lose("Connection dropped.");
     });
+    const takenOver = await writeAt(second, 0);
+
+    expect(takenOver.request).toEqual({
+      botId: BOT_ID,
+      accessory: "halo",
+      color: 7,
+    });
+    expect(refusalUnder("eyewear")).toBeNull();
+    expect(pressedIn("eyewear")).toBe("Shades");
+    takenOver.answer({ ...CHOSEN });
+  });
+});
+
+describe("a run of look saves through one host whose save ends unknown", () => {
+  async function unknownWithAccessoryWaiting(): Promise<{
+    readonly host: FakeHost;
+    readonly lost: HeldWrite;
+  }> {
+    const user = userEvent.setup();
+    const host = fakeHost("user-A");
+    await pointListedPanelAt(host, "host-1");
+    await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
+    const lost = await writeAt(host, 0);
+    await user.click(screen.getByTestId("bot-settings-accessory-halo"));
+    return { host, lost };
+  }
+
+  it("still sends the part waiting behind it, never sends the unknown part again, and says so when the lists do not hold it", async () => {
+    const { host, lost } = await unknownWithAccessoryWaiting();
+
+    act(() => {
+      lost.lose("Connection dropped.");
+    });
+    const next = await writeAt(host, 1);
+
+    expect(next.request).toEqual({ botId: BOT_ID, accessory: "halo" });
+    expect(host.writes).toHaveLength(2);
+    expect(refusalUnder("eyewear")).toBe(UNSURE);
+    expect(pressedIn("eyewear")).toBe("None");
+    next.answer({ ...LISTED, accessory: "halo" });
+    await waitFor(() => {
+      expect(useBotLookSaveStore.getState().saves[BOT_ID]?.sending).toBeNull();
+    });
+    expect(host.writes).toHaveLength(2);
+  });
+
+  it("says nothing under the unknown part when the lists hold it", async () => {
+    const { host, lost } = await unknownWithAccessoryWaiting();
+    listed = { ...LISTED, eyewear: "shades" };
+
+    act(() => {
+      lost.lose("Connection dropped.");
+    });
+    const next = await writeAt(host, 1);
+
+    expect(next.request).toEqual({ botId: BOT_ID, accessory: "halo" });
+    expect(refusalUnder("eyewear")).toBeNull();
+    expect(pressedIn("eyewear")).toBe("Shades");
+    next.answer({ ...listed, accessory: "halo" });
   });
 });
