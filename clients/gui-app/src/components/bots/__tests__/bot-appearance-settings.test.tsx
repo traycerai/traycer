@@ -822,5 +822,23 @@ describe("<BotAppearanceSettings />", () => {
 
       expect(useBotLookSaveStore.getState().saves[BOT_ID]).toBeUndefined();
     });
+
+    it("keeps no refusal that arrives after the panel closed, so a reopened panel shows the list's look without one", async () => {
+      const user = userEvent.setup();
+      const { unmount } = await mountListed(BASE);
+      await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
+      const write = await writeAt(0);
+      expect(useBotLookSaveStore.getState().saves[BOT_ID]).toBeDefined();
+      unmount();
+
+      write.refuse("Not saved.");
+
+      await waitFor(() => {
+        expect(useBotLookSaveStore.getState().saves[BOT_ID]).toBeUndefined();
+      });
+      await mountListed(BASE);
+      expect(screen.queryByTestId("bot-settings-refusal")).toBeNull();
+      expect(pressedIn("eyewear")).toBe("None");
+    });
   });
 });

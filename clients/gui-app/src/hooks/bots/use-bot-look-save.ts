@@ -34,6 +34,12 @@ const BOT_LIST_READS = {
     hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, "bot.list"),
 };
 
+/**
+ * How many settings panels are open on each bot. A refusal is a panel's to
+ * show, so one that arrives with none open is not kept for a later one.
+ */
+const openPanels = new Map<string, number>();
+
 /** Drops a bot's entry once it holds nothing: no choice, save or refusal. */
 function settle(botId: string, save: BotLookSave): void {
   const idle =
@@ -116,7 +122,7 @@ async function sendInOrder(
     const refusals: Partial<Record<BotLookPart, string>> = {
       ...held.refusals,
     };
-    if (refusal !== null) {
+    if (refusal !== null && (openPanels.get(botId) ?? 0) > 0) {
       for (const part of answered) refusals[part] = refusal;
     }
     next = held.waiting;
@@ -154,15 +160,20 @@ export function useBotLookSaver(
   const save = useBotLookSaveStore(
     (state) => state.saves[botId] ?? NO_BOT_LOOK_SAVE,
   );
-  // A refusal is the panel's to show: one nobody is looking at is dropped.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    openPanels.set(botId, (openPanels.get(botId) ?? 0) + 1);
+    return () => {
+      const open = (openPanels.get(botId) ?? 1) - 1;
+      if (open > 0) {
+        openPanels.set(botId, open);
+        return;
+      }
+      openPanels.delete(botId);
       const held = botLookSaveOf(botId);
       if (Object.keys(held.refusals).length === 0) return;
       settle(botId, { ...held, refusals: {} });
-    },
-    [botId],
-  );
+    };
+  }, [botId]);
   return {
     choose: (change) => {
       const held = botLookSaveOf(botId);
