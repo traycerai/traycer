@@ -121,8 +121,8 @@ const NO_HOSTS: readonly string[] = [];
 
 /**
  * The hosts that answered at least one observed read with a transient cloud
- * failure, kept per cache event from the one query that changed, never by
- * rescanning the cache.
+ * failure, kept per cache event from the cache's current entry for the key
+ * that changed, never by rescanning the cache.
  */
 function useHostsWithStrandedReads(client: QueryClient): readonly string[] {
   const tracker = strandedReadTrackerFor(client.getQueryCache());
@@ -154,10 +154,13 @@ class StrandedReadTracker {
       for (const query of this.cache.getAll()) this.track(query);
       this.publish();
       this.unsubscribeCache = this.cache.subscribe((event) => {
-        // Looked up by hash for a typed query: the event's own is `any`.
+        // Decided from the cache's current entry for the hash, looked up
+        // typed (the event's own query is `any`). An event about another
+        // Query object, such as an old read's removal announced after a
+        // replacement took the key, says nothing about that entry; a read's
+        // own removal leaves none.
         const { queryHash } = event.query;
-        const query =
-          event.type === "removed" ? undefined : this.cache.get(queryHash);
+        const query = this.cache.get(queryHash);
         const changed =
           query === undefined
             ? this.hostByHash.delete(queryHash)

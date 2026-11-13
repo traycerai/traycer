@@ -24,6 +24,13 @@ export function isTransientlyFailedRead(query: Query): boolean {
   );
 }
 
+/** A ring remembered for one attempt of one read. */
+interface OwedRing {
+  readonly query: Query;
+  /** The attempt in flight when the ring came (`Query.promise`). */
+  readonly attempt: Promise<unknown> | undefined;
+}
+
 /** Per client: what the sweeps have claimed, and the rings they still owe. */
 interface SweepState {
   /**
@@ -33,10 +40,12 @@ interface SweepState {
   readonly claimed: Map<Query, boolean>;
   /**
    * The reads a ring reached while an attempt of theirs was in flight, by
-   * query hash: each is re-asked once if that attempt ends in a transient
-   * failure. Keyed by hash so a cache event resolves to the read held here.
+   * query hash: each is re-asked once if that same attempt ends in a
+   * transient failure. An attempt that replaced it (a reset, or a refetch
+   * that cancels a read holding data) began after the ring and owes nothing.
+   * Keyed by hash so a cache event resolves to the read held here.
    */
-  readonly owed: Map<string, Query>;
+  readonly owed: Map<string, OwedRing>;
   /**
    * The query-cache listener that learns when an owed read's attempt ends,
    * for an attempt no sweep started; held only while a ring is owed.
@@ -77,10 +86,11 @@ function sweepStateOf(client: QueryClient): SweepState {
  * started asking, or a refetch from elsewhere (Retry, a mount). The edge can
  * overtake that attempt's answer - the doorbell and the reads travel on
  * separate sockets - so the ring is remembered for the read instead, once
- * however many rings come, and spent as one re-ask when the attempt ends in a
- * transient failure. It is dropped when the attempt succeeds, fails for any
- * other reason, or a later ring chooses the read first. A read claimed whose
- * ask has not started yet owes nothing: that ask comes after the ring.
+ * however many rings come, and spent as one re-ask when that attempt ends in
+ * a transient failure. It is dropped when the attempt succeeds, fails for any
+ * other reason, or is replaced by a later attempt, or when a later ring
+ * chooses the read first. A read claimed whose ask has not started yet owes
+ * nothing: that ask comes after the ring.
  *
  * Claims and remembered rings belong to the Query object, not to its key. A
  * read removed from the cache while its re-ask is in flight retires that
@@ -118,8 +128,8 @@ export async function sweepTransientCloudFailures(
 }
 
 /**
- * Re-asks one claimed read, and again for each ring that reached it while an
- * ask was in flight and found it failed transiently; then releases it.
+ * Re-asks one claimed read, and once more if a ring reached that same ask in
+ * flight and it failed transiently; then releases it.
  *
  * It works by key, so before each step it checks that its read is still the
  * cache's entry for that key: once the read is removed, a cancel or an
@@ -162,15 +172,20 @@ function isCurrentEntry(client: QueryClient, query: Query): boolean {
   return client.getQueryCache().get(query.queryHash) === query;
 }
 
-/** Takes the ring owed to `query` itself, if any; never another read's. */
+/**
+ * Takes the ring owed to `query` itself, if any, never another read's. True
+ * when it was owed for the attempt `query` made last, the one whose end is
+ * being settled: a ring whose attempt was replaced is taken and not spent.
+ */
 function takeOwedRing(state: SweepState, query: Query): boolean {
-  if (state.owed.get(query.queryHash) !== query) return false;
+  const owed = state.owed.get(query.queryHash);
+  if (owed === undefined || owed.query !== query) return false;
   state.owed.delete(query.queryHash);
-  return true;
+  return owed.attempt === query.promise;
 }
 
 function oweRing(client: QueryClient, state: SweepState, query: Query): void {
-  state.owed.set(query.queryHash, query);
+  state.owed.set(query.queryHash, { query, attempt: query.promise });
   if (state.stopListening !== null) return;
   state.stopListening = client
     .getQueryCache()
@@ -187,24 +202,24 @@ function settleOwedRing(
   event: QueryCacheNotifyEvent,
 ): void {
   const hash: string = event.query.queryHash;
-  const query = state.owed.get(hash);
+  const owed = state.owed.get(hash);
   // The event's read itself: another object under the same key owns nothing
   // remembered here.
   if (
-    query === undefined ||
-    event.query !== query ||
-    state.claimed.has(query)
+    owed === undefined ||
+    event.query !== owed.query ||
+    state.claimed.has(owed.query)
   ) {
     return;
   }
+  const { query } = owed;
   if (event.type === "removed") {
-    state.owed.delete(hash);
+    takeOwedRing(state, query);
   } else if (
     event.type === "updated" &&
     query.state.fetchStatus !== "fetching"
   ) {
-    state.owed.delete(hash);
-    if (isTransientlyFailedRead(query)) {
+    if (takeOwedRing(state, query) && isTransientlyFailedRead(query)) {
       // Claimed now, so a ring meanwhile waits for this ask; started after
       // the cache has finished telling everyone about the attempt's end.
       state.claimed.set(query, false);

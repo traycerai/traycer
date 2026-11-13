@@ -985,4 +985,150 @@ describe("sweepTransientCloudFailures", () => {
       });
     },
   );
+
+  describe.each(STRANDED_READS)(
+    "a reset or clear of a read with a ring owed, read $label",
+    ({ method, base, strand }) => {
+      const refused = (): Error =>
+        hostFailure("E_CLOUD_REQUEST_REFUSED", method);
+
+      it("drops the ring remembered for a read that is reset, whose own refetch is its next attempt", async () => {
+        const client = freshClient();
+        const read = await strand(client);
+        const listening = client.getQueryCache().hasListeners();
+        const attempt = heldFailure(refused());
+        read.answer = attempt.answer;
+        const retry = client.refetchQueries({ queryKey: read.queryKey });
+        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        const ring = sweepTransientCloudFailures(client, HOST);
+
+        // The reset's refetch is refused too: a ring still remembered would
+        // be spent on it as one more ask.
+        read.answer = rejects(refused());
+        await client.resetQueries({ queryKey: read.queryKey, exact: true });
+        attempt.release();
+        await Promise.all([retry, ring]);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 2);
+        expect(client.getQueryCache().hasListeners()).toBe(listening);
+      });
+
+      it("does not loop on a ring owed to a read reset during the sweep's own re-ask, and frees it for a later ring", async () => {
+        const client = freshClient();
+        const read = await strand(client);
+        const attempt = heldFailure(refused());
+        read.answer = attempt.answer;
+        const first = sweepTransientCloudFailures(client, HOST);
+        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        const second = sweepTransientCloudFailures(client, HOST);
+
+        read.answer = rejects(refused());
+        await client.resetQueries({ queryKey: read.queryKey, exact: true });
+        attempt.release();
+        await Promise.all([first, second]);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 2);
+        expect(read.state.status).toBe("error");
+        read.answer = resolves("recovered");
+        await sweepTransientCloudFailures(client, HOST);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 3);
+        expect(read.state.data).toBe("recovered");
+      });
+
+      // A refetch with cancelRefetch replaces a data-holding read's attempt
+      // with a new one, and joins a no-data read's attempt in flight. A ring
+      // owed for the attempt it met is spent only when THAT attempt ends:
+      // replaced, it is not spent on the new attempt's end; joined, it is.
+      it("spends a ring owed during the sweep's own re-ask only on the attempt it met, when a refetch comes in", async () => {
+        const client = freshClient();
+        const read = await strand(client);
+        const listening = client.getQueryCache().hasListeners();
+        const attempt = heldFailure(refused());
+        read.answer = attempt.answer;
+        const first = sweepTransientCloudFailures(client, HOST);
+        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        const second = sweepTransientCloudFailures(client, HOST);
+
+        // Used by the refetch's attempt, or by the ask the ring spends.
+        read.answer = rejects(refused());
+        const refetch = client.refetchQueries({
+          queryKey: read.queryKey,
+          exact: true,
+        });
+        await turn();
+        attempt.release();
+        await Promise.all([first, second, refetch]);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 2);
+        expect(read.state.status).toBe("error");
+        read.answer = resolves("recovered");
+        await sweepTransientCloudFailures(client, HOST);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 3);
+        expect(read.state.data).toBe("recovered");
+        expect(client.getQueryCache().hasListeners()).toBe(listening);
+      });
+
+      it("spends a ring owed during a refetch from elsewhere only on the attempt it met, when a second refetch comes in", async () => {
+        const client = freshClient();
+        const read = await strand(client);
+        const listening = client.getQueryCache().hasListeners();
+        const attempt = heldFailure(refused());
+        read.answer = attempt.answer;
+        const firstRefetch = client.refetchQueries({
+          queryKey: read.queryKey,
+          exact: true,
+        });
+        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        const ring = sweepTransientCloudFailures(client, HOST);
+
+        read.answer = rejects(refused());
+        const secondRefetch = client.refetchQueries({
+          queryKey: read.queryKey,
+          exact: true,
+        });
+        await turn();
+        attempt.release();
+        await Promise.all([firstRefetch, secondRefetch, ring]);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 2);
+        expect(read.state.status).toBe("error");
+        read.answer = resolves("recovered");
+        await sweepTransientCloudFailures(client, HOST);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 3);
+        expect(read.state.data).toBe("recovered");
+        expect(client.getQueryCache().hasListeners()).toBe(listening);
+      });
+
+      it("re-asks nothing, and leaves no listener, when the cache is cleared with a ring owed", async () => {
+        const client = freshClient();
+        const read = await strand(client);
+        const listening = client.getQueryCache().hasListeners();
+        const attempt = heldFailure(refused());
+        read.answer = attempt.answer;
+        const first = sweepTransientCloudFailures(client, HOST);
+        await vi.waitFor(() => expect(read.calls).toBe(base + 1));
+        const second = sweepTransientCloudFailures(client, HOST);
+
+        client.clear();
+        read.release();
+        attempt.release();
+        await Promise.all([first, second]);
+        await quiet(client);
+
+        expect(read.calls).toBe(base + 1);
+        expect(client.getQueryCache().getAll()).toHaveLength(0);
+        expect(client.getQueryCache().hasListeners()).toBe(listening);
+      });
+    },
+  );
 });

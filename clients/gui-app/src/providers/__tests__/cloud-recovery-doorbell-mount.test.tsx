@@ -352,3 +352,102 @@ describe("<CloudRecoveryDoorbellMount />", () => {
     expect(doorbellsOf(A)).toHaveLength(1);
   });
 });
+
+describe("<CloudRecoveryDoorbellMount /> following the cache's current entry", () => {
+  const REFUSED = "E_CLOUD_REQUEST_REFUSED";
+
+  it("keeps the replacement's doorbell when the removed read is dropped by gc afterwards", async () => {
+    mount();
+    const key = hostReadKey(A, "bot.list", "same-key");
+    queryClient.setQueryDefaults(key, { gcTime: 0 });
+    const old = await failedRead(A, REFUSED, "same-key");
+    const oldQuery = queryClient.getQueryCache().find({
+      queryKey: key,
+      exact: true,
+    });
+    if (oldQuery === undefined) throw new Error("the old read is not cached");
+    // Removed while its reader still holds it, then replaced under the same key.
+    act(() => queryClient.removeQueries({ queryKey: key, exact: true }));
+    const current = await failedRead(A, REFUSED, "same-key");
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(1));
+
+    // The old reader lets go: gc announces the old read's removal, though the
+    // replacement holds the slot. Waited for on the old object itself.
+    const gone = Promise.withResolvers<void>();
+    const stopWatching = queryClient.getQueryCache().subscribe((event) => {
+      if (event.type === "removed" && event.query === oldQuery) gone.resolve();
+    });
+    await act(async () => {
+      old.release();
+      await gone.promise;
+    });
+    stopWatching();
+    await flushCacheNotifications();
+
+    expect(current.state.status).toBe("error");
+    expect(
+      queryClient.getQueryCache().find({ queryKey: key, exact: true })
+        ?.observers.length,
+    ).toBe(1);
+    expect(liveDoorbellsOf(A)).toHaveLength(1);
+    current.answer = resolves("recovered");
+    ring(A);
+    await waitFor(() => expect(current.state.data).toBe("recovered"));
+    expect(current.calls).toBe(2);
+  });
+
+  it("closes when the stranded read is removed, and reopens for a replacement that fails", async () => {
+    mount();
+    const old = await failedRead(A, REFUSED, "replaced");
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(1));
+
+    act(() => {
+      queryClient.removeQueries({ queryKey: old.queryKey, exact: true });
+    });
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(0));
+
+    const replacement = await failedRead(A, REFUSED, "replaced");
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(1));
+    expect(doorbellsOf(A)).toHaveLength(2);
+    replacement.answer = resolves("recovered");
+    ring(A);
+    await waitFor(() => expect(replacement.state.data).toBe("recovered"));
+  });
+
+  it("follows a stranded read through a reset and reopens when the reset's refetch fails", async () => {
+    mount();
+    const read = await failedRead(A, REFUSED, "reset-me");
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(1));
+    const resetAsk = heldFailure(hostFailure(REFUSED, "bot.list"));
+    read.answer = resetAsk.answer;
+
+    act(() => {
+      void queryClient.resetQueries({ queryKey: read.queryKey, exact: true });
+    });
+    await waitFor(() => expect(read.calls).toBe(2));
+    await flushCacheNotifications();
+    // The reset read is not failed while its refetch is held.
+    expect(liveDoorbellsOf(A)).toHaveLength(0);
+
+    resetAsk.release();
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(1));
+    read.answer = resolves("recovered");
+    ring(A);
+    await waitFor(() => expect(read.state.data).toBe("recovered"));
+  });
+
+  it("leaves no doorbell open for either host after the cache is cleared", async () => {
+    mount();
+    await failedRead(A, REFUSED, "on-a");
+    await failedRead(B, REFUSED, "on-b");
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(1));
+    await waitFor(() => expect(liveDoorbellsOf(B)).toHaveLength(1));
+
+    act(() => {
+      queryClient.clear();
+    });
+
+    await waitFor(() => expect(liveDoorbellsOf(A)).toHaveLength(0));
+    await waitFor(() => expect(liveDoorbellsOf(B)).toHaveLength(0));
+  });
+});
