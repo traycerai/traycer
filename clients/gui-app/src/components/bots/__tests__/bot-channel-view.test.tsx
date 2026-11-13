@@ -15,7 +15,10 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
-import { BotLooksContext } from "@/hooks/bots/use-bot-appearance";
+import {
+  BotLooksContext,
+  type BotLooks,
+} from "@/hooks/bots/use-bot-appearance";
 import { botColorAt } from "@/lib/providers/profile-accent-color";
 import {
   useVoiceSessionStore,
@@ -578,9 +581,12 @@ function mount(options: MountOptions): {
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const queryClient = new QueryClient();
-  const looks = new Map([
-    [BOT_ID, { mark: null, color: null, background: mountBackground }],
-  ]);
+  const looks: BotLooks = {
+    appearances: new Map([
+      [BOT_ID, { mark: null, color: null, background: mountBackground }],
+    ]),
+    main: null,
+  };
   const runnerHost = createFakeRunnerHost({});
   const tree = (openThread: BotOpenThread | null): ReactNode => (
     <BotLooksContext value={looks}>

@@ -1,7 +1,7 @@
 /**
- * A bot looks like a bot: on a bot's channel rows the
- * bot's picture is a squircle and a person's a circle, read from the
- * rendered element's clip; a row names no owner, which the bot's card
+ * A bot looks like a bot: on a bot's channel rows the bot's picture is its
+ * mascot in a squircle box with no picture layer, and a person's a clipped
+ * circle; a row names no owner, which the bot's card
  * carries; and the bot's card says what it is doing now from the real `useBotActivity` over the real shared
  * `bot.subscribe` subscription, whose stream the test scripts.
  */
@@ -17,7 +17,11 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentMember } from "@traycer/protocol/host/environment/contracts";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
-import { botMascot, drawMascotMark } from "@/lib/bots/mascot-mark";
+import {
+  MASCOT_AT_REST,
+  botMascot,
+  drawMascotMark,
+} from "@/lib/bots/mascot-mark";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -245,9 +249,11 @@ describe("a bot channel's rows", () => {
           .querySelectorAll('[data-slot="bot-mascot"] path'),
       ].map((path) => path.getAttribute("d")),
     ).toEqual(
-      drawMascotMark(botMascot(BOT_ID, null), 40).layers.map(
-        (layer) => layer.path,
-      ),
+      drawMascotMark(
+        botMascot(BOT_ID, null, false),
+        40,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
     );
   });
 });

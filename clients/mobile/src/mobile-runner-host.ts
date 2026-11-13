@@ -123,6 +123,7 @@ import type {
   SystemSuspendCause,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -1506,6 +1507,14 @@ class MobileTokenStore implements ITokenStore {
     private readonly authnBaseUrl: string,
   ) {}
 
+  subscribeSignInStorageLow(): Disposable {
+    return { dispose: () => undefined };
+  }
+
+  getSignInStorageLow(): Promise<boolean> {
+    return Promise.resolve(false);
+  }
+
   async get(): Promise<StoredCredentials | null> {
     return parseStoredCredentials(
       await this.secureStorage.get(MOBILE_TOKEN_STORE_KEY),
@@ -1515,13 +1524,14 @@ class MobileTokenStore implements ITokenStore {
   async signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void> {
+  ): Promise<SignInSaveResult> {
     await this.write({
       token: tokens.token,
       refreshToken: tokens.refreshToken,
       savedAt: new Date().toISOString(),
       user: identity,
     });
+    return "saved";
   }
 
   async rotate(expected: {
@@ -1530,23 +1540,44 @@ class MobileTokenStore implements ITokenStore {
   }): Promise<TokenRotateResult> {
     const stored = await this.get();
     if (stored === null) {
-      return { outcome: "deleted", pair: null, rejection: null };
+      return {
+        outcome: "deleted",
+        pair: null,
+        diskPressure: null,
+        rejection: null,
+      };
     }
     if (stored.user.id !== expected.userId) {
-      return { outcome: "user-mismatch", pair: stored, rejection: null };
+      return {
+        outcome: "user-mismatch",
+        pair: stored,
+        diskPressure: null,
+        rejection: null,
+      };
     }
     if (stored.token !== expected.token) {
-      return { outcome: "superseded", pair: stored, rejection: null };
+      return {
+        outcome: "superseded",
+        pair: stored,
+        diskPressure: null,
+        rejection: null,
+      };
     }
     const refreshed = await refreshOnceAbortable({
       authnBaseUrl: this.authnBaseUrl,
       token: stored.token,
       refreshToken: stored.refreshToken,
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
     if (refreshed.kind === "network-error") {
-      return { outcome: "refresh-network", pair: null, rejection: null };
+      return {
+        outcome: "refresh-network",
+        pair: null,
+        diskPressure: null,
+        rejection: null,
+      };
     }
     if (refreshed.kind === "rejected") {
       // Carried through rather than collapsed. `refreshOnceAbortable` already
@@ -1562,6 +1593,7 @@ class MobileTokenStore implements ITokenStore {
             ? "refresh-rejected-account"
             : "refresh-rejected-credential",
         pair: null,
+        diskPressure: null,
         rejection: refreshed.rejection,
       };
     }
@@ -1572,7 +1604,12 @@ class MobileTokenStore implements ITokenStore {
       savedAt: new Date().toISOString(),
     };
     await this.write(next);
-    return { outcome: "applied", pair: next, rejection: null };
+    return {
+      outcome: "applied",
+      pair: next,
+      diskPressure: null,
+      rejection: null,
+    };
   }
 
   async delete(): Promise<void> {
@@ -1621,6 +1658,7 @@ class MobileTokenStore implements ITokenStore {
       authnBaseUrl: this.authnBaseUrl,
       token: legacy.token,
       refreshToken: legacy.refreshToken,
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });

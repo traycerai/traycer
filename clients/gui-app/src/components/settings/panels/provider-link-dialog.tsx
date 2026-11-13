@@ -1,9 +1,6 @@
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   useCallback,
-  useId,
   useEffect,
   useRef,
   useState,
@@ -11,10 +8,7 @@ import {
 } from "react";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
-import {
-  AgentSpinningDots,
-  MutedAgentSpinner,
-} from "@/components/ui/agent-spinning-dots";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -26,15 +20,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useHostClient } from "@/lib/host/runtime";
-import { EnvironmentProfileSignIn } from "@/components/providers/environment-profile-sign-in";
-import { useEnvironmentProfileSignInSupported } from "@/hooks/providers/use-profile-sign-in-environment";
-import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
-import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
-import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import {
   useConfigurationEnvironmentId,
   useConfigurationIsPersonal,
-  useCanEditConfiguration,
 } from "@/components/settings/environment/configuration-source";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
@@ -52,12 +40,10 @@ import {
   LINK_LINKING,
   LINK_SIGN_IN_LINE,
   LINK_UNAVAILABLE,
-  LINK_OUTCOME_UNKNOWN,
-  isLinkCompletionOutcomeUnknown,
+  linkedLine,
   mismatchLine,
   onHostOnlyLine,
   stateOfLinkComplete,
-  stateOfLinkCompleteError,
   stateOfLinkError,
   stateOfLinkStart,
   type LinkDialogState,
@@ -66,15 +52,16 @@ import {
   useProviderLinkDialogStore,
   type ProviderLinkTarget,
 } from "@/stores/providers/provider-link-dialog-store";
-import { providersListQueryKey } from "@/lib/query-keys";
 
 /**
- * The environment sign-in dialog, opened from the Providers page through
+ * The Link dialog: links a profile that is on
+ * this host only, or a new one, to the person's plan. Opened from the
+ * Providers page's "On <host> only, link to use everywhere" line through
  * `provider-link-dialog-store`, and mounted once inside the page's host
  * scope, so its calls go to the host the page shows.
  *
  * Claude: sign in on claude.ai and paste the code. Codex: the provider's
- * device code, polled. The local handoff: "Signing in…", polled. Each answer
+ * device code, polled. The local handoff: "Linking…", polled. Each answer
  * moves the dialog to its state; the lines are `provider-link-copy.ts`'s.
  *
  * The Personal calls are direct requests, as the Secrets page's Add a secret
@@ -92,81 +79,12 @@ const STARTING: LinkDialogState = { kind: "starting" };
 
 type SignInState = Extract<LinkDialogState, { readonly kind: "sign_in" }>;
 
-function refreshProviderInventory(
-  queryClient: QueryClient,
-  hostId: string | null,
-): void {
-  if (hostId === null) return;
-  void queryClient.refetchQueries({
-    queryKey: providersListQueryKey(hostId),
-    exact: true,
-  });
-}
-
 export function ProviderLinkDialog(): ReactNode {
-  const canEdit = useCanEditConfiguration();
   const target = useProviderLinkDialogStore((state) => state.target);
   const close = useProviderLinkDialogStore((state) => state.close);
   const environmentId = useConfigurationEnvironmentId();
-  if (
-    !canEdit ||
-    target === null ||
-    (target.environmentId ?? null) !== environmentId
-  )
+  if (target === null || (target.environmentId ?? null) !== environmentId)
     return null;
-  return (
-    <RoutedProviderLinkDialog
-      target={target}
-      environmentId={environmentId}
-      onClose={close}
-    />
-  );
-}
-
-function RoutedProviderLinkDialog(props: {
-  readonly target: ProviderLinkTarget;
-  readonly environmentId: string | null;
-  readonly onClose: () => void;
-}): ReactNode {
-  const { target, environmentId, onClose: close } = props;
-  const client = useHostClient();
-  const hostId = useRequesterHostId(client);
-  const credentialRefusal = useHostCredentialRefusal(hostId);
-  const supported = useEnvironmentProfileSignInSupported(
-    hostId,
-    target.providerId,
-    true,
-  );
-  if (credentialRefusal !== null || supported === null)
-    return (
-      <Dialog
-        open
-        onOpenChange={(open) => {
-          if (!open) close();
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Sign in</DialogTitle>
-          </DialogHeader>
-          <CredentialRefusalNote refusal={credentialRefusal} />
-          {credentialRefusal === null ? <MutedAgentSpinner /> : null}
-          <Button type="button" variant="ghost" onClick={close}>
-            Back
-          </Button>
-        </DialogContent>
-      </Dialog>
-    );
-  if (environmentId !== null && supported) {
-    return (
-      <EnvironmentPlanSignInDialog
-        key={`${environmentId}:${target.providerId}:${target.profileId}`}
-        target={target}
-        environmentId={environmentId}
-        onClose={close}
-      />
-    );
-  }
   // Keyed by the target, so a new target starts from the intro.
   const key = `${environmentId}:${target.providerId}:${target.profileId ?? "new"}`;
   if (environmentId !== null)
@@ -179,99 +97,6 @@ function RoutedProviderLinkDialog(props: {
       />
     );
   return <ProviderLinkDialogFor key={key} target={target} onClose={close} />;
-}
-
-function EnvironmentPlanSignInDialog(props: {
-  readonly target: ProviderLinkTarget;
-  readonly environmentId: string;
-  readonly onClose: () => void;
-}): ReactNode {
-  const client = useHostClient();
-  const queryClient = useQueryClient();
-  const labelId = useId();
-  const [label, setLabel] = useState("New profile");
-  const [started, setStarted] = useState(false);
-  const [complete, setComplete] = useState(false);
-  const personal = useConfigurationIsPersonal();
-  const name = usePickedTeamLabel(props.environmentId) ?? "this team";
-  const providerId = providerIdSchema.parse(props.target.providerId);
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) props.onClose();
-      }}
-    >
-      <DialogContent
-        layout="banded"
-        className="flex max-h-[min(85dvh,calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)))] w-full flex-col overflow-y-auto sm:max-w-lg"
-      >
-        <DialogHeader>
-          <DialogTitle>
-            {personal ? "Sign in" : `Sign in to ${name}`}
-          </DialogTitle>
-          <DialogDescription>
-            {personal ? LINK_INTRO : teamLinkIntro()}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-3 px-5 pb-5">
-          {complete ? (
-            <>
-              <p role="status">Signed in.</p>
-              <Button onClick={props.onClose}>Done</Button>
-            </>
-          ) : (
-            <>
-              {props.target.profileId === null ? (
-                <label
-                  htmlFor={labelId}
-                  className="flex flex-col gap-1 text-ui-sm"
-                >
-                  Profile name
-                  <Input
-                    id={labelId}
-                    value={label}
-                    maxLength={64}
-                    disabled={started}
-                    onChange={(event) => setLabel(event.target.value)}
-                  />
-                </label>
-              ) : null}
-              <EnvironmentProfileSignIn
-                client={client}
-                request={{
-                  providerId,
-                  profileId: props.target.profileId,
-                  environmentId: props.environmentId,
-                  createProfile:
-                    props.target.profileId === null
-                      ? { label: label.trim(), shareSkillsAndPlugins: false }
-                      : null,
-                  replaceAccount: false,
-                }}
-                autoStart={false}
-                onActiveChange={setStarted}
-                waitForLocalProfile={false}
-                disabled={label.trim().length === 0}
-                onComplete={() => {
-                  invalidateConfigurationReads(
-                    queryClient,
-                    props.environmentId,
-                    [
-                      "environment.plans.list",
-                      "environment.configuration.items",
-                    ],
-                  );
-                  setComplete(true);
-                }}
-                onCancel={props.onClose}
-              />
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 /** The poll a state asks for: a device code and a local handoff settle late. */
@@ -291,9 +116,6 @@ function TeamProviderLinkDialogFor(props: {
   readonly environmentId: string;
   readonly onClose: () => void;
 }): ReactNode {
-  const queryClient = useQueryClient();
-  const client = useHostClient();
-  const hostId = useRequesterHostId(client);
   const [target, setTarget] = useState<ProviderLinkTarget>(props.target);
   const [state, setState] = useState<LinkDialogState>(INTRO);
   const [code, setCode] = useState("");
@@ -330,7 +152,7 @@ function TeamProviderLinkDialogFor(props: {
       { providerId: providerId.data, profileId: linkTarget.profileId },
       {
         onSuccess: (response) => setState(stateOfLinkStart(response)),
-        onError: (error) => setState(teamLinkError(error, false)),
+        onError: (error) => setState(teamLinkError(error)),
       },
     );
   };
@@ -341,35 +163,20 @@ function TeamProviderLinkDialogFor(props: {
         changeCode("");
         setState((latest) => stateOfLinkComplete(latest, response));
       },
-      onError: (error) => {
-        setState(teamLinkError(error, true));
-      },
+      onError: (error) => setState(teamLinkError(error)),
     });
   };
 
-  const setupLabel = "Sign in";
   let shown = state;
   if (startLink.isPending) shown = STARTING;
   else if (poll.linkId !== null && pollAnswer.error !== null)
-    shown = teamLinkError(pollAnswer.error, true);
+    shown = teamLinkError(pollAnswer.error);
   else if (poll.linkId !== null && pollAnswer.data !== undefined)
     shown = stateOfLinkComplete(state, pollAnswer.data);
 
-  const uncertainPoll =
-    poll.linkId !== null &&
-    (pollAnswer.data?.state === "unavailable" ||
-      isLinkCompletionOutcomeUnknown(pollAnswer.error));
-  if (uncertainPoll) setState({ kind: "failed", line: LINK_OUTCOME_UNKNOWN });
-  const outcomeUnknown =
-    state.kind === "failed" && state.line === LINK_OUTCOME_UNKNOWN;
-  useEffect(() => {
-    if (!outcomeUnknown) return;
-    refreshProviderInventory(queryClient, hostId);
-  }, [outcomeUnknown, queryClient, hostId]);
-
   return (
     <LinkDialogFrame
-      title={personal ? setupLabel : `${setupLabel} to ${teamName}`}
+      title={personal ? "Link a plan" : `Link a plan to ${teamName}`}
       intro={personal ? LINK_INTRO : teamLinkIntro()}
       state={shown}
       target={target}
@@ -389,8 +196,6 @@ function ProviderLinkDialogFor(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const client = useHostClient();
-  const hostId = useRequesterHostId(client);
-  const queryClient = useQueryClient();
   // Personal by its own id: a host that has not moved its settings has no
   // environment of its own to link into.
   const { environmentId, resolved } = useAddressedEnvironment();
@@ -425,8 +230,6 @@ function ProviderLinkDialogFor(props: {
         providerId: providerId.data,
         profileId: linkTarget.profileId,
         environmentId,
-        createProfile: null,
-        replaceAccount: false,
       });
       setState(stateOfLinkStart(response));
     } catch (error) {
@@ -439,13 +242,9 @@ function ProviderLinkDialogFor(props: {
     try {
       const response = await complete(current.linkId, code.trim());
       setCode("");
-      if (response.state === "unavailable")
-        refreshProviderInventory(queryClient, hostId);
       setState((latest) => stateOfLinkComplete(latest, response));
     } catch (error) {
-      if (isLinkCompletionOutcomeUnknown(error))
-        refreshProviderInventory(queryClient, hostId);
-      setState(stateOfLinkCompleteError(error));
+      setState(stateOfLinkError(error));
     } finally {
       setSubmitting(false);
     }
@@ -458,27 +257,23 @@ function ProviderLinkDialogFor(props: {
     const timer = setTimeout(() => {
       void complete(pollLinkId, null)
         .then((response) => {
-          if (response.state === "unavailable")
-            refreshProviderInventory(queryClient, hostId);
           if (cancelled) return;
           setState((latest) => stateOfLinkComplete(latest, response));
           setPollTick((tick) => tick + 1);
         })
         .catch((error: unknown) => {
-          if (isLinkCompletionOutcomeUnknown(error))
-            refreshProviderInventory(queryClient, hostId);
-          if (!cancelled) setState(stateOfLinkCompleteError(error));
+          if (!cancelled) setState(stateOfLinkError(error));
         });
     }, pollMs);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [complete, pollLinkId, pollMs, pollTick, queryClient, hostId]);
+  }, [complete, pollLinkId, pollMs, pollTick]);
 
   return (
     <LinkDialogFrame
-      title="Sign in"
+      title="Link to your plan"
       intro={LINK_INTRO}
       state={state}
       target={target}
@@ -661,7 +456,7 @@ function LinkBody(props: {
     case "linked":
       return (
         <Line testId="provider-link-linked" tone="plain">
-          Signed in.
+          {linkedLine(state.account)}
         </Line>
       );
     case "mismatch":
@@ -719,7 +514,7 @@ function LinkActions(props: {
     case "intro":
       return (
         <>
-          {closeButton("Close")}
+          {closeButton("Cancel")}
           <Button
             type="button"
             size="sm"
@@ -734,7 +529,7 @@ function LinkActions(props: {
     case "sign_in":
       return (
         <>
-          {closeButton("Close")}
+          {closeButton("Cancel")}
           <Button
             type="button"
             size="sm"
@@ -742,7 +537,7 @@ function LinkActions(props: {
             onClick={() => props.onSubmitCode(state)}
             data-testid="provider-link-submit-code"
           >
-            Sign in
+            Link
             {props.submitting ? <Spinner /> : null}
           </Button>
         </>
@@ -751,12 +546,38 @@ function LinkActions(props: {
       return closeButton("Done");
     case "mismatch":
       return (
-        <LinkMismatchActions target={props.target} onStart={props.onStart} />
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              props.onStart({
+                providerId: props.target.providerId,
+                profileId: null,
+                environmentId: props.target.environmentId,
+              })
+            }
+            data-testid="provider-link-add-new"
+          >
+            {(props.target.environmentId ?? null) === null
+              ? "Add as a new profile"
+              : "Link another plan"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => props.onStart(props.target)}
+            data-testid="provider-link-retry"
+          >
+            Retry
+          </Button>
+        </>
       );
     case "expired":
       return (
         <>
-          {closeButton("Close")}
+          {closeButton("Cancel")}
           <Button
             type="button"
             size="sm"
@@ -769,8 +590,6 @@ function LinkActions(props: {
       );
     case "failed":
     case "unavailable":
-      if (state.kind === "failed" && state.line === LINK_OUTCOME_UNKNOWN)
-        return closeButton("Close");
       return (
         <>
           {closeButton("Close")}
@@ -787,50 +606,15 @@ function LinkActions(props: {
     case "starting":
     case "device":
     case "linking":
-      return closeButton("Close");
+      return closeButton("Cancel");
     case "not_offered":
       return closeButton("Close");
   }
 }
 
 /** A team's link refused by a host older than `@1.1` says it needs an update. */
-function teamLinkError(error: unknown, completion: boolean): LinkDialogState {
+function teamLinkError(error: unknown): LinkDialogState {
   if (error instanceof HostMethodVersionUnsatisfiedError)
-    return { kind: "failed", line: "Signing in needs an updated host." };
-  return completion ? stateOfLinkCompleteError(error) : stateOfLinkError(error);
-}
-
-function LinkMismatchActions(props: {
-  readonly target: ProviderLinkTarget;
-  readonly onStart: (target: ProviderLinkTarget) => void;
-}): ReactNode {
-  return (
-    <>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        onClick={() =>
-          props.onStart({
-            providerId: props.target.providerId,
-            profileId: null,
-            environmentId: props.target.environmentId,
-          })
-        }
-        data-testid="provider-link-add-new"
-      >
-        {(props.target.environmentId ?? null) === null
-          ? "Add as a new profile"
-          : "Sign in to another plan"}
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        onClick={() => props.onStart(props.target)}
-        data-testid="provider-link-retry"
-      >
-        Retry
-      </Button>
-    </>
-  );
+    return { kind: "failed", line: "Linking a plan needs an updated host." };
+  return stateOfLinkError(error);
 }

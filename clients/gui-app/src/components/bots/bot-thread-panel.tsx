@@ -1,4 +1,5 @@
 import {
+  use,
   useCallback,
   useEffect,
   useMemo,
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import { BotTranscriptFlowAllShownContext } from "@/components/bots/bot-transcript-flow-context";
 import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
@@ -67,7 +69,10 @@ import {
   type ChatBotQuestions,
   type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
-import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  botMemberAvatarUrl,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
 import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
@@ -128,8 +133,8 @@ export type BotThreadPanelThread =
  * Where a thread's post, replies and box are drawn: in the panel beside the
  * channel, which scrolls them in the pane, or as a card on the Threads page
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
- * card's reply count opens the thread in its channel's panel
- * (`onOpenThread`), its post's time shows the post in the channel
+ * card's reply count, drawn while it folds replies away, opens the thread in
+ * its channel's panel (`onOpenThread`), its post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
  * in full), and the reply its reading would acknowledge is marked
  * (`readMark`, `null` for none).
@@ -363,9 +368,11 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
   const { originMessageId, sent, anchorSenderLabel, resolveMember } = props;
   const anchor =
     props.thread.kind === "listed" ? props.thread.thread.anchor : null;
+  const viewer = useAuthStore((s) => s.profile);
   const senderAvatarUrl = useCallback(
-    (senderUserId: string) => resolveMember(senderUserId)?.avatarUrl ?? null,
-    [resolveMember],
+    (senderUserId: string) =>
+      botMemberAvatarUrl(senderUserId, viewer, resolveMember),
+    [resolveMember, viewer],
   );
   return (
     <ChannelPost
@@ -1088,25 +1095,7 @@ function KnownThread(
           >
             {origin}
           </div>
-          <div
-            className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
-            data-testid="bot-thread-reply-count"
-          >
-            {openThread === null ? (
-              <span className="shrink-0">{replies}</span>
-            ) : (
-              <Button
-                type="button"
-                variant="link"
-                size="inline-xs"
-                data-testid="bot-thread-reply-count-open"
-                onClick={openThread}
-              >
-                {replies}
-              </Button>
-            )}
-            <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
-          </div>
+          <ThreadReplyCount replies={replies} onOpenThread={openThread} />
         </>
       ) : null,
     [hasReplies, openThread, openingHighlighted, openingRef, origin, replies],
@@ -1158,6 +1147,48 @@ function KnownThread(
         testId="bot-thread-replying-strip"
       />
     </>
+  );
+}
+
+/**
+ * The line between a thread's post and its replies: how many replies it has,
+ * which on a card opens the thread in its channel's panel (`onOpenThread`).
+ * Where the flow under it draws every reply, the line says nothing the
+ * replies do not, so only assistive technology is told the count.
+ */
+function ThreadReplyCount(props: {
+  readonly replies: string;
+  readonly onOpenThread: (() => void) | null;
+}): ReactNode {
+  const { replies, onOpenThread } = props;
+  const allShown = use(BotTranscriptFlowAllShownContext);
+  if (allShown) {
+    return (
+      <span className="sr-only" data-testid="bot-thread-reply-count-sr">
+        {replies}
+      </span>
+    );
+  }
+  return (
+    <div
+      className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
+      data-testid="bot-thread-reply-count"
+    >
+      {onOpenThread === null ? (
+        <span className="shrink-0">{replies}</span>
+      ) : (
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          data-testid="bot-thread-reply-count-open"
+          onClick={onOpenThread}
+        >
+          {replies}
+        </Button>
+      )}
+      <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
+    </div>
   );
 }
 

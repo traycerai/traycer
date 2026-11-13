@@ -403,7 +403,7 @@ function ProfileEditAccountSection(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly switchingAccount: boolean;
-  readonly reauthenticating: boolean;
+  readonly startInReauth: boolean;
   readonly isLocalHost: boolean;
   readonly canOauth: boolean;
   /** Why `canOauth` is false, from the same helper that decided it. */
@@ -414,34 +414,22 @@ function ProfileEditAccountSection(props: {
   readonly onCancelSwitchingAccount: () => void;
   readonly onCloseAfterSignIn: () => void;
   readonly onFinishSignIn: (profile: ProviderProfile) => void;
-  readonly onProfileSignedIn?: (profile: ProviderProfile) => void;
 }): ReactNode {
   if (props.switchingAccount) {
     return (
       <ProviderProfileReauthPanel
-        replaceAccount={!props.reauthenticating}
-        onDeliveryPending={
-          props.reauthenticating
-            ? props.onCloseAfterSignIn
-            : props.onCancelSwitchingAccount
-        }
         state={props.state}
         profile={props.profile}
         isLocalHost={props.isLocalHost}
         onSameAccountReconnected={
-          props.reauthenticating
-            ? (profile) => {
-                props.onProfileSignedIn?.(profile);
-                props.onFinishSignIn(profile);
-              }
-            : null
+          props.startInReauth ? props.onFinishSignIn : null
         }
         onCancel={props.onCancelSwitchingAccount}
-        onDone={(profile) => {
-          props.onProfileSignedIn?.(profile);
-          if (props.reauthenticating) props.onCloseAfterSignIn();
-          else props.onCancelSwitchingAccount();
-        }}
+        onDone={
+          props.startInReauth
+            ? props.onCloseAfterSignIn
+            : props.onCancelSwitchingAccount
+        }
       />
     );
   }
@@ -567,8 +555,6 @@ export function ProfileEditDialog(props: {
   readonly isLocalHost: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly onProfileSignedIn?: (profile: ProviderProfile) => void;
-  readonly onStartSignIn?: () => void;
   readonly remainingProfilesAfterRemoval: ReadonlyArray<ProviderProfile>;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
   readonly profileEnablementAvailable: boolean;
@@ -586,8 +572,6 @@ export function ProfileEditDialog(props: {
     boolean | null
   >(null);
   const switchingAccount = switchingAccountOverride ?? props.startInReauth;
-  const reauthenticating =
-    switchingAccountOverride === null && props.startInReauth;
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
   // Held here, not inside `ProfileApiKeyForm` - see that component's note.
   const [apiKeyDraft, setApiKeyDraft] = useState("");
@@ -618,7 +602,7 @@ export function ProfileEditDialog(props: {
   const invalid = trimmedLabel.length === 0;
   const removePresentation = PROFILE_REMOVE_PRESENTATION[props.profile.kind];
   const removeDisabledReason = removePresentation.disabledReason;
-  const dialogCopy = profileEditDialogCopy(props.profile, reauthenticating);
+  const dialogCopy = profileEditDialogCopy(props.profile, props.startInReauth);
   const eligibilityDisabledReason = profileEligibilityToggleDisabledReason(
     props.state.enabled,
     PROVIDER_DISPLAY_NAMES[providerId],
@@ -673,10 +657,7 @@ export function ProfileEditDialog(props: {
     recolorIfNeeded();
   };
 
-  const closeAfterSignIn = (): void => {
-    setSwitchingAccount(false);
-    props.onOpenChange(false);
-  };
+  const closeAfterSignIn = (): void => props.onOpenChange(false);
   const finishSignIn = (signedIn: ProviderProfile): void => {
     closeAfterSignIn();
     toast.success(signedInMessage(signedIn));
@@ -759,20 +740,16 @@ export function ProfileEditDialog(props: {
         state={props.state}
         profile={props.profile}
         switchingAccount={switchingAccount}
-        reauthenticating={reauthenticating}
+        startInReauth={props.startInReauth}
         isLocalHost={props.isLocalHost}
         canOauth={props.canOauth}
         oauthUnavailableHint={props.oauthUnavailableHint}
         savePending={savePending}
         invalid={invalid}
-        onStartSwitchingAccount={() => {
-          props.onStartSignIn?.();
-          setSwitchingAccount(true);
-        }}
+        onStartSwitchingAccount={() => setSwitchingAccount(true)}
         onCancelSwitchingAccount={() => setSwitchingAccount(false)}
         onCloseAfterSignIn={closeAfterSignIn}
         onFinishSignIn={finishSignIn}
-        onProfileSignedIn={props.onProfileSignedIn}
       />
 
       <ProfileEditErrors

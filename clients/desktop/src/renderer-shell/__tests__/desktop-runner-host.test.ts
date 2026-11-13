@@ -247,6 +247,8 @@ function buildFakeBridge(
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {
+        getSignInStorageLow: async () => false,
+        subscribeSignInStorageLow: () => ({ dispose: () => undefined }),
         get: async () => stored,
         signIn: async (tokens, identity) => {
           stored = {
@@ -255,10 +257,12 @@ function buildFakeBridge(
             savedAt: new Date().toISOString(),
             user: identity,
           };
+          return "saved";
         },
         rotate: async () => ({
           outcome: "deleted",
           pair: null,
+          diskPressure: null,
           rejection: null,
         }),
         delete: async () => {

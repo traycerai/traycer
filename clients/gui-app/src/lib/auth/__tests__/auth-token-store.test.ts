@@ -13,6 +13,7 @@ import type {
   StoredCredentialsIdentity,
 } from "@traycer-clients/shared/platform/runner-host";
 import { AuthTokenStore } from "../auth-token-store";
+import { AUTH_ERROR_DISK_FULL } from "@traycer-clients/shared/auth/sign-in-storage";
 
 const IDENTITY: StoredCredentialsIdentity = {
   id: "user-1",
@@ -31,8 +32,10 @@ function pair(token: string): StoredCredentials {
 
 interface BackingStore {
   readonly store: ITokenStore;
+  readonly publishStorageLow: (low: boolean) => void;
   readonly state: {
     current: StoredCredentials | null;
+    signInResult: "saved" | "disk-full";
     /** Consumed by the NEXT `signIn`: it awaits this gate before writing. */
     nextSignInGate: Promise<void> | null;
     /** When set, `deleteIfToken` rejects with this error. */
@@ -43,12 +46,19 @@ interface BackingStore {
 
 function makeBackingStore(initial: StoredCredentials | null): BackingStore {
   const calls: string[] = [];
+  const storageListeners = new Set<(low: boolean) => void>();
   const state: BackingStore["state"] = {
     current: initial,
+    signInResult: "saved",
     nextSignInGate: null,
     deleteIfTokenError: null,
   };
   const store: ITokenStore = {
+    getSignInStorageLow: () => Promise.resolve(false),
+    subscribeSignInStorageLow: (listener) => {
+      storageListeners.add(listener);
+      return { dispose: () => storageListeners.delete(listener) };
+    },
     get: () => {
       calls.push("get");
       return Promise.resolve(state.current);
@@ -56,19 +66,21 @@ function makeBackingStore(initial: StoredCredentials | null): BackingStore {
     signIn: async (
       tokens: StoredAuthTokens,
       identity: StoredCredentialsIdentity,
-    ): Promise<void> => {
+    ): Promise<"saved" | "disk-full"> => {
       const gate = state.nextSignInGate;
       state.nextSignInGate = null;
       if (gate !== null) {
         await gate;
       }
       calls.push("signIn");
+      if (state.signInResult === "disk-full") return state.signInResult;
       state.current = {
         token: tokens.token,
         refreshToken: tokens.refreshToken,
         savedAt: "2024-01-02T00:00:00.000Z",
         user: identity,
       };
+      return state.signInResult;
     },
     rotate: () => Promise.reject(new Error("rotate is not under test")),
     delete: () => {
@@ -93,7 +105,14 @@ function makeBackingStore(initial: StoredCredentials | null): BackingStore {
     migrateLegacyCredentials: () =>
       Promise.reject(new Error("migration is not under test")),
   };
-  return { store, state, calls };
+  return {
+    store,
+    state,
+    calls,
+    publishStorageLow: (low) => {
+      for (const listener of storageListeners) listener(low);
+    },
+  };
 }
 
 describe("AuthTokenStore.deleteIfToken", () => {
@@ -146,5 +165,38 @@ describe("AuthTokenStore.deleteIfToken", () => {
     // The pair the delete failed to remove is still there — the caller must
     // hear about it, which is exactly why the rejection is not swallowed.
     expect(backing.state.current?.token).toBe("a-token");
+  });
+});
+
+describe("AuthTokenStore.signIn", () => {
+  it("turns the typed disk-full answer into the renderer error sentinel", async () => {
+    const backing = makeBackingStore(pair("existing-token"));
+    backing.state.signInResult = "disk-full";
+    const store = new AuthTokenStore(backing.store);
+
+    await expect(
+      store.signIn(
+        { token: "new-token", refreshToken: "new-refresh" },
+        IDENTITY,
+      ),
+    ).rejects.toThrow(AUTH_ERROR_DISK_FULL);
+    expect(backing.state.current?.token).toBe("existing-token");
+  });
+});
+
+describe("AuthTokenStore.subscribeSignInStorageLow", () => {
+  it("forwards main-process storage status updates and disposes the listener", () => {
+    const backing = makeBackingStore(null);
+    const store = new AuthTokenStore(backing.store);
+    const changes: boolean[] = [];
+    const subscription = store.subscribeSignInStorageLow((low) => {
+      changes.push(low);
+    });
+
+    backing.publishStorageLow(true);
+    subscription.dispose();
+    backing.publishStorageLow(false);
+
+    expect(changes).toEqual([true]);
   });
 });

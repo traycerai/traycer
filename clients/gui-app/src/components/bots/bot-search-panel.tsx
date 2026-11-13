@@ -47,7 +47,7 @@ import {
 } from "@/hooks/bots/use-environment-members-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { botMemberName } from "@/lib/bots/bot-member-names";
+import { botMemberAvatarUrl, botMemberName } from "@/lib/bots/bot-member-names";
 import {
   botSearchHitKey,
   botSearchHitsOf,
@@ -835,7 +835,7 @@ function useHitSender(
   }
   return {
     name: botMemberName(hit.senderUserId, viewer, resolve),
-    avatarUrl: resolve(hit.senderUserId)?.avatarUrl ?? null,
+    avatarUrl: botMemberAvatarUrl(hit.senderUserId, viewer, resolve),
   };
 }
 

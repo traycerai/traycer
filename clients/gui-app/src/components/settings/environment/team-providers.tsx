@@ -45,6 +45,7 @@ import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { ConfigurationProfiles } from "./team-configuration-profiles";
 import { TeamPlans } from "./team-plans";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
+import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { EnvironmentProviderSkillsTab } from "./environment-skills";
 import {
   cloudProviderStanding,
@@ -66,6 +67,7 @@ interface ProviderRailRow {
 export function TeamProviders(): ReactNode {
   const query = useConfigurationProviderItemsQuery();
   const read = useBoundedRead(query);
+  const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
   const catalog = useProvidersListForClient(scope.client, {
     enabled: scope.client !== null,
@@ -144,6 +146,7 @@ export function TeamProviders(): ReactNode {
       rows={rows}
       onSelect={selectProvider}
       profiles={profiles}
+      adminNames={members.adminNames}
       packIds={packIds}
       packs={packs}
       items={items}
@@ -166,6 +169,7 @@ function TeamProvidersView(props: {
   readonly rows: readonly ProviderRailRow[];
   readonly onSelect: (providerId: ProviderId) => void;
   readonly profiles: readonly ConfigurationItem[];
+  readonly adminNames: readonly string[];
   readonly packIds: readonly string[];
   readonly packs: readonly ConfigurationItem[];
   readonly items: readonly ConfigurationItem[];
@@ -187,6 +191,7 @@ function TeamProvidersView(props: {
     rows,
     onSelect,
     profiles,
+    adminNames,
     packIds,
     packs,
     items,
@@ -252,7 +257,7 @@ function TeamProvidersView(props: {
                 ) : null}
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
-                <TeamPlans providerId={providerId} />
+                <TeamPlans providerId={providerId} adminNames={adminNames} />
                 <ConfigurationProfiles
                   providerLabel={providerDisplayName(providerId)}
                   profiles={profiles}

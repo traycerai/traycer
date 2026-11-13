@@ -71,12 +71,7 @@ export function useTeamPlanLinkStartMutation(
     method: "providers.link",
     mapVariables: (variables) => {
       cloudVerdictPreflight("providers.link")();
-      return {
-        ...variables,
-        environmentId,
-        createProfile: null,
-        replaceAccount: false,
-      };
+      return { ...variables, environmentId };
     },
     requiredHostMethodVersion: () => teamLinkFloor("providers.link"),
     options: { mutationKey: environmentMutationKeys.providersLink() },
@@ -110,7 +105,7 @@ export function useTeamPlanLinkCompleteMutation(
     options: {
       mutationKey: environmentMutationKeys.providersLinkComplete(),
       onSuccess: (response) => {
-        if (response.state === "linked" || response.state === "installing") {
+        if (response.state === "linked") {
           rereadLinkedPlan(queryClient, environmentId);
         }
       },
@@ -159,8 +154,7 @@ export function useTeamPlanLinkPollQuery(
       fireOnShow: true,
     });
   }, [pending, refetch, intervalMs]);
-  const linked =
-    poll.data?.state === "linked" || poll.data?.state === "installing";
+  const linked = poll.data?.state === "linked";
   useEffect(() => {
     if (linked) {
       rereadLinkedPlan(queryClient, environmentId);

@@ -28,6 +28,7 @@ import { SessionConnectivityStrip } from "@/components/layout/session-connectivi
 import { useHostSessionConnectivity } from "@/lib/host/session-connectivity";
 import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
+import { SignInStorageBanner } from "@/components/layout/sign-in-storage-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
 import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
@@ -152,6 +153,7 @@ function AppShellBody(props: AppShellProps) {
                     the interruption the strip reports, so if both are showing
                     the actionable one has to be read first. */}
                   <ClockSkewBanner />
+                  <SignInStorageBanner />
                   <SessionConnectivityStrip
                     connectivity={sessionConnectivity}
                   />

@@ -63,6 +63,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
 } from "../ipc-contracts/auth-types";
 import type {
   DesktopAuthSessionSetResult,
@@ -593,10 +594,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
  */
 export interface AuthTokenStoreBridgeSurface {
   get(): Promise<StoredCredentials | null>;
+  getSignInStorageLow(): Promise<boolean>;
+  subscribeSignInStorageLow(handler: Listener<boolean>): Disposable;
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void>;
+  ): Promise<SignInSaveResult>;
   rotate(expected: {
     readonly userId: string;
     readonly token: string;
@@ -611,6 +614,15 @@ export interface AuthTokenStoreBridgeSurface {
 
 export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
   return {
+    subscribeSignInStorageLow: (handler) =>
+      subscribe<{ readonly low: boolean }>(
+        RunnerHostEvent.authSignInStorageLowChanged,
+        (change) => handler(change.low),
+      ),
+    getSignInStorageLow: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreGetSignInStorageLow,
+      ) as Promise<boolean>,
     get: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.authTokenStoreGet,
@@ -620,7 +632,7 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
         RunnerHostInvoke.authTokenStoreSignIn,
         tokens,
         identity,
-      ) as Promise<void>,
+      ) as Promise<SignInSaveResult>,
     rotate: (expected) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.authTokenStoreRotate,

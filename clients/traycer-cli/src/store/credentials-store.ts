@@ -44,12 +44,13 @@ const COMMIT_RETRY_ATTEMPTS = 3;
 export function createCliCredentialsStore(): CredentialsMutationStore {
   const credentialsPath = cliCredentialsPath(config.environment);
   return createCredentialsMutationStore({
+    onDiskPressure: null,
     paths: {
       credentialsPath,
       metaPath: `${credentialsPath}.meta.json`,
       lockPath: `${credentialsPath}.lock`,
     },
-    // The store hands over only the pair; the refresh endpoint is THIS build's
+    // The store hands over the pair and rotation code; the endpoint is THIS build's
     // configured authn (baked, with the dev-slot env override applied at module
     // init). The file deliberately carries no URL - see `store/credentials.ts`.
     refresh: (args) =>
@@ -138,6 +139,7 @@ export function createStoreBackedRevalidator(args: {
         case "refresh-network":
         case "lock-busy":
         case "spend-pending":
+        case "disk-full":
           // Transient, bearer untouched: a refresh transport blip, a lock held
           // past the wait budget, or a sibling's still-landing spend of this
           // base. None is a dead credential — stay in reconnect backoff and
@@ -242,6 +244,14 @@ export async function withCommitRetry(
       break;
     }
     result = await op();
+  }
+  if (
+    result.outcome === "disk-full" ||
+    (result.outcome === "commit-failed" && result.diskPressure === "low")
+  ) {
+    process.stderr.write(
+      "Disk is full: could not save your sign-in. Free up some space and run the command again.\n",
+    );
   }
   return result;
 }

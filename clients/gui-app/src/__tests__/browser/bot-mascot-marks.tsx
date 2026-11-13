@@ -13,7 +13,7 @@ import "@/index.css";
  * The first three ids are real derived main-bot ids (`bot-avatars.test.tsx`
  * says how): the personal Tracy and two "Team Tracy" bots on one hue in its
  * two tones. "Twin" is on the personal Tracy's colour exactly, so the sheet
- * shows two bots told apart by the shape alone. The rest are random ids
+ * shows two bots told apart by what they are drawn as, not their colour. The rest are random ids
  * of the same shape.
  *
  * `browser-tests/bot-mascot-marks.spec.ts` reads the painted pixels here;
