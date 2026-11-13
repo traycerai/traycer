@@ -20,6 +20,7 @@ import {
   BOT_UNRECOGNISED_MARK,
   type BotAppearance,
   type BotDirectoryRecord,
+  type BotListResponse,
 } from "@traycer/protocol/host/bot/schemas";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 import {
@@ -41,6 +42,12 @@ import {
 } from "@/components/bots/bot-avatars";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+import {
+  EMPTY_DIRECTORY_STATE,
+  ONE_TEAM_MAIN_BOT_DIRECTORY,
+  TEAM_MAIN_BOT_ID as DIRECTORY_MAIN_BOT_ID,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 const PERSONAL_MAIN_BOT_ID = "bot_019YFRXBQ551DN29WCTHKM3CEP";
 const TEAM_A_MAIN_BOT_ID = "bot_0RVWRHPMH8WPT9KW1NGKJB319D";
@@ -84,7 +91,7 @@ function pathsOf(
   look: BotAppearance | null,
   pose: MascotPose,
 ): string[] {
-  return drawMascotMark(botMascot(botId, look), 24, pose).layers.map(
+  return drawMascotMark(botMascot(botId, look, false), 24, pose).layers.map(
     (layer) => layer.path,
   );
 }
@@ -113,8 +120,34 @@ function InBotContext(props: {
   );
 }
 
+function botRow(
+  botId: string,
+  appearance: BotAppearance | undefined,
+): BotDirectoryRecord {
+  return {
+    botId,
+    environmentId: "env-1",
+    createdByUserId: "user-1",
+    title: "Team Tracy",
+    harness: "claude",
+    model: "model-a",
+    effort: null,
+    profile: null,
+    directive: null,
+    replyMode: "thread",
+    appConversationChatId: null,
+    trunkChatId: "trunk-1",
+    boundHostId: "host-1",
+    hostEpoch: 0,
+    createdAt: 1_000,
+    archivedAt: null,
+    ...(appearance === undefined ? {} : { appearance }),
+  };
+}
+
 afterEach(() => {
   cleanup();
+  useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
 });
 
 describe("a bot's picture", () => {
@@ -274,31 +307,14 @@ describe("a bot's chosen look", () => {
   const BOT_ID = TEAM_S_MAIN_BOT_ID;
   const BARE: BotAppearance = { mark: null, color: null, background: null };
 
-  function row(appearance: BotAppearance | undefined): BotDirectoryRecord {
-    return {
-      botId: BOT_ID,
-      environmentId: "env-1",
-      createdByUserId: "user-1",
-      title: "Team Tracy",
-      harness: "claude",
-      model: "model-a",
-      effort: null,
-      profile: null,
-      directive: null,
-      replyMode: "thread",
-      appConversationChatId: null,
-      trunkChatId: "trunk-1",
-      boundHostId: "host-1",
-      hostEpoch: 0,
-      createdAt: 1_000,
-      archivedAt: null,
-      ...(appearance === undefined ? {} : { appearance }),
-    };
-  }
-
   function looking(appearance: BotAppearance | undefined): ReactElement {
     return (
-      <BotLooksContext value={botLooksOf([row(appearance)])}>
+      <BotLooksContext
+        value={botLooksOf({
+          bots: [botRow(BOT_ID, appearance)],
+          mainBotIds: null,
+        })}
+      >
         <NamedBotAvatar botId={BOT_ID} size="sm" />
       </BotLooksContext>
     );
@@ -351,7 +367,7 @@ describe("a bot's chosen look", () => {
 
     expect(chosen.fills).toEqual(
       drawMascotMark(
-        { ...botMascot(BOT_ID, null), ramp: mascotRampAt(3) },
+        { ...botMascot(BOT_ID, null, false), ramp: mascotRampAt(3) },
         24,
         MASCOT_AT_REST,
       ).layers.map((layer) => layer.fill),
@@ -368,7 +384,7 @@ describe("a bot's chosen look", () => {
     const [unreadable] = drawn();
 
     const expected = drawMascotMark(
-      { ...botMascot(BOT_ID, null), shape: DEFAULT_MASCOT_SHAPE },
+      { ...botMascot(BOT_ID, null, false), shape: DEFAULT_MASCOT_SHAPE },
       24,
       MASCOT_AT_REST,
     ).layers;
@@ -383,7 +399,7 @@ describe("a bot's chosen look", () => {
 
     expect(unreadable.fills).toEqual(
       drawMascotMark(
-        { ...botMascot(BOT_ID, null), ramp: DEFAULT_MASCOT_RAMP },
+        { ...botMascot(BOT_ID, null, false), ramp: DEFAULT_MASCOT_RAMP },
         24,
         MASCOT_AT_REST,
       ).layers.map((layer) => layer.fill),
@@ -416,6 +432,91 @@ describe("a bot's chosen look", () => {
       expect(markup()).toBe(derived);
     },
   );
+});
+
+describe("an environment's main bot's picture", () => {
+  const BOT_ID = TEAM_S_MAIN_BOT_ID;
+
+  function inSurface(mainBotIds: BotListResponse["mainBotIds"]): ReactElement {
+    return (
+      <BotLooksContext
+        value={botLooksOf({
+          bots: [botRow(BOT_ID, undefined)],
+          mainBotIds,
+        })}
+      >
+        <NamedBotAvatar botId={BOT_ID} size="sm" />
+      </BotLooksContext>
+    );
+  }
+
+  it("is the plain default mascot where the surface's list names the bot as main", () => {
+    render(inSurface({ "env-1": BOT_ID }));
+
+    expect(drawn()[0].paths).toEqual(
+      drawMascotMark(
+        botMascot(BOT_ID, null, true),
+        24,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
+    );
+  });
+
+  it("is the bot's own mascot where the surface's list names no main bot", () => {
+    render(inSurface(null));
+    const [own] = drawn();
+    cleanup();
+    render(inSurface({ "env-1": "bot_other" }));
+
+    expect(own.paths).toEqual(pathsOf(BOT_ID, null, MASCOT_AT_REST));
+    expect(drawn()[0]).toEqual(own);
+  });
+
+  it("is the plain default mascot where the app's directory names the bot as main, with no surface list", () => {
+    const ownPaths = (): string[] =>
+      pathsOf(DIRECTORY_MAIN_BOT_ID, null, MASCOT_AT_REST);
+    render(<NamedBotAvatar botId={DIRECTORY_MAIN_BOT_ID} size="sm" />);
+    expect(drawn()[0].paths).toEqual(ownPaths());
+    cleanup();
+
+    act(() => {
+      useStandaloneBotsStore.setState({
+        directory: ONE_TEAM_MAIN_BOT_DIRECTORY,
+      });
+    });
+    render(<NamedBotAvatar botId={DIRECTORY_MAIN_BOT_ID} size="sm" />);
+
+    expect(drawn()[0].paths).toEqual(
+      drawMascotMark(
+        botMascot(DIRECTORY_MAIN_BOT_ID, null, true),
+        24,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
+    );
+    expect(drawn()[0].paths).not.toEqual(ownPaths());
+  });
+
+  it("is the bot's own mascot where the surface's list names another main bot, whatever the app's directory says", () => {
+    act(() => {
+      useStandaloneBotsStore.setState({
+        directory: ONE_TEAM_MAIN_BOT_DIRECTORY,
+      });
+    });
+    render(
+      <BotLooksContext
+        value={botLooksOf({
+          bots: [botRow(DIRECTORY_MAIN_BOT_ID, undefined)],
+          mainBotIds: { "env-1": "bot_other" },
+        })}
+      >
+        <NamedBotAvatar botId={DIRECTORY_MAIN_BOT_ID} size="sm" />
+      </BotLooksContext>,
+    );
+
+    expect(drawn()[0].paths).toEqual(
+      pathsOf(DIRECTORY_MAIN_BOT_ID, null, MASCOT_AT_REST),
+    );
+  });
 });
 
 describe("a bot's picture while it works", () => {

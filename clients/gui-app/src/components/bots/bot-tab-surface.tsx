@@ -231,7 +231,7 @@ function TracySurfaceShell(props: {
   const groups = useBotsGroups(botList.data, environments.data);
   // Every picture on the surface draws what its own host's list chose.
   const looks = useMemo(
-    () => (botList.data === undefined ? null : botLooksOf(botList.data.bots)),
+    () => (botList.data === undefined ? null : botLooksOf(botList.data)),
     [botList.data],
   );
 

@@ -196,7 +196,7 @@ for (const theme of ["light", "dark"]) {
     const expected = avatars.map(
       (avatar) =>
         drawMascotMark(
-          botMascot(avatar.botId, null),
+          botMascot(avatar.botId, null, false),
           avatar.size,
           MASCOT_AT_REST,
         ).layers,
