@@ -420,3 +420,60 @@ describe("<BotChannelView /> when Retry is pressed while the host still refuses 
     expect(screen.queryByTestId("bot-channel-loading")).toBeNull();
   });
 });
+
+describe("<BotChannelView /> when the host rings while a read's attempt is still in flight", () => {
+  /** The channel read fails (twice, with the app's one retry) and the doorbell is open. */
+  async function strandedChannel(): Promise<number> {
+    script.conversationList = () =>
+      Promise.reject(
+        hostFailure("E_CLOUD_UNREACHABLE", "bot.conversation.list"),
+      );
+    mountWithDoorbellAndAppRetries();
+    await screen.findByTestId("bot-channel-error");
+    await waitFor(() => expect(liveDoorbell()).toBeDefined());
+    return script.conversationListCalls;
+  }
+
+  const refusal = (): Error =>
+    hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.conversation.list");
+
+  it("loads by itself when the ring arrives before the final refusal settles", async () => {
+    const before = await strandedChannel();
+    const finalRefusal = heldFailure(refusal());
+    // The first ring's ask is refused at once; its app retry is the held one.
+    script.conversationList = () =>
+      script.conversationListCalls === before + 2
+        ? finalRefusal.answer().then(() => CHANNEL_LIST)
+        : Promise.reject(refusal());
+    ringTabHost();
+    await waitFor(() => expect(script.conversationListCalls).toBe(before + 2));
+
+    // The floor passes while the final refusal is still in flight.
+    script.conversationList = () => Promise.resolve(CHANNEL_LIST);
+    ringTabHost();
+    act(() => {
+      finalRefusal.release();
+    });
+
+    expect(await screen.findByTestId("bot-channel")).toBeDefined();
+    expect(screen.queryByTestId("bot-channel-error")).toBeNull();
+    expect(script.conversationListCalls).toBe(before + 3);
+  });
+
+  it("loads when the ring arrives after the final refusal has settled", async () => {
+    const before = await strandedChannel();
+    script.conversationList = () => Promise.reject(refusal());
+    ringTabHost();
+    await waitFor(() => expect(script.conversationListCalls).toBe(before + 2));
+    await waitFor(() =>
+      expect(screen.queryByTestId("bot-channel-loading")).toBeNull(),
+    );
+    expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+
+    script.conversationList = () => Promise.resolve(CHANNEL_LIST);
+    ringTabHost();
+
+    expect(await screen.findByTestId("bot-channel")).toBeDefined();
+    expect(script.conversationListCalls).toBe(before + 3);
+  });
+});
