@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { providersListUpgradeV1010ToV1011 } from "@traycer/protocol/host/registry";
 import {
   providerCliStateSchema,
   providerProfileSchema,
+  providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   type ProviderCliState,
   type ProviderId,
   type ProviderProfile,
+  type ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   callHostRpcWithDispatch,
@@ -376,5 +380,409 @@ describe("traycer profile list", () => {
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
     expect(error.message).toContain("not-a-provider");
     expect(rpcMock).not.toHaveBeenCalled();
+  });
+});
+
+interface ListedProfileSpec {
+  readonly profileId: string;
+  readonly kind: "ambient" | "managed";
+  readonly label: string;
+  readonly email: string | null;
+  readonly authStatus: "authenticated" | "unauthenticated";
+  readonly enabled: boolean;
+  readonly aliases: readonly string[];
+  readonly personNotice: "needs-sign-in" | "waiting" | null;
+  readonly terminalOnThisComputer: boolean;
+  /** Null omits the key. An empty array is a 10.11 row with nothing to print. */
+  readonly otherNames: readonly string[] | null;
+}
+
+function listedProfile(spec: ListedProfileSpec): object {
+  return {
+    ...profileFixture({
+      profileId: spec.profileId,
+      kind: spec.kind,
+      label: spec.label,
+      email: spec.email,
+      authStatus: spec.authStatus,
+      enabled: spec.enabled,
+    }),
+    aliases: [...spec.aliases],
+    personNotice: spec.personNotice,
+    terminalOnThisComputer: spec.terminalOnThisComputer,
+    ...(spec.otherNames === null ? {} : { otherNames: [...spec.otherNames] }),
+  };
+}
+
+function listedResponse(
+  providers: readonly {
+    readonly providerId: ProviderId;
+    readonly profiles: readonly ListedProfileSpec[];
+  }[],
+): ProvidersListResponse {
+  return providersListResponseSchema.parse({
+    providers: providers.map((provider) => ({
+      providerId: provider.providerId,
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled" },
+      candidates: [],
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      profiles: provider.profiles.map(listedProfile),
+    })),
+    native: null,
+    removedProfiles: [],
+  });
+}
+
+/** The Terminal login as its own row. A folded record is never beside it. */
+const AMBIENT_TERMINAL: ListedProfileSpec = {
+  profileId: "ambient",
+  kind: "ambient",
+  label: "Terminal",
+  email: "term@example.test",
+  authStatus: "authenticated",
+  enabled: true,
+  aliases: [],
+  personNotice: null,
+  terminalOnThisComputer: true,
+  otherNames: null,
+};
+
+const TEN_ELEVEN_ROWS: readonly ListedProfileSpec[] = [
+  {
+    profileId: "row-plain",
+    kind: "managed",
+    label: "Plain",
+    email: null,
+    authStatus: "authenticated",
+    enabled: true,
+    aliases: [],
+    personNotice: null,
+    terminalOnThisComputer: false,
+    otherNames: null,
+  },
+  {
+    profileId: "row-sign-in",
+    kind: "managed",
+    label: "Signed out",
+    email: "work@example.test",
+    authStatus: "unauthenticated",
+    enabled: false,
+    aliases: [],
+    personNotice: "needs-sign-in",
+    terminalOnThisComputer: false,
+    otherNames: null,
+  },
+  {
+    profileId: "row-waiting",
+    kind: "managed",
+    label: "Held",
+    email: null,
+    authStatus: "unauthenticated",
+    enabled: true,
+    aliases: [],
+    personNotice: "waiting",
+    terminalOnThisComputer: false,
+    otherNames: null,
+  },
+  {
+    profileId: "row-term",
+    kind: "managed",
+    label: "Record",
+    email: "held@example.test",
+    authStatus: "authenticated",
+    enabled: true,
+    aliases: [],
+    personNotice: null,
+    terminalOnThisComputer: true,
+    otherNames: null,
+  },
+];
+
+describe("traycer profile list 10.11 keys", () => {
+  it("prints each person notice in place of the sign-in word, the terminal line, and only the sparse json keys", async () => {
+    const answer = listedResponse([
+      { providerId: "claude-code", profiles: TEN_ELEVEN_ROWS },
+      { providerId: "codex", profiles: [AMBIENT_TERMINAL] },
+    ]);
+    rpcMock.mockResolvedValue(answer);
+
+    const result = await buildProfileListCommand({ provider: null })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toBe(
+      [
+        "claude (Claude Code)",
+        "  PROFILE      LABEL       ACCOUNT            STATE     SIGN-IN              LIMIT",
+        "  row-plain    Plain       -                  enabled   authenticated        ok",
+        "  row-sign-in  Signed out  work@example.test  disabled  Needs a sign-in      ok",
+        "  row-waiting  Held        -                  enabled   Waiting for Traycer  ok",
+        "  row-term     Record      held@example.test  enabled   authenticated        ok",
+        "               Terminal account on this computer",
+        "",
+        "codex (Codex)",
+        "  PROFILE  LABEL     ACCOUNT            STATE    SIGN-IN        LIMIT",
+        "  ambient  Terminal  term@example.test  enabled  authenticated  ok",
+      ].join("\n"),
+    );
+    expect(result.data).toEqual({
+      providers: [
+        {
+          providerId: "claude-code",
+          harnessId: "claude",
+          profiles: [
+            {
+              profileId: "row-plain",
+              label: "Plain",
+              kind: "managed",
+              email: null,
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
+            },
+            {
+              profileId: "row-sign-in",
+              label: "Signed out",
+              kind: "managed",
+              email: "work@example.test",
+              enabled: false,
+              authStatus: "unauthenticated",
+              rateLimitStatus: "ok",
+              personNotice: "needs-sign-in",
+            },
+            {
+              profileId: "row-waiting",
+              label: "Held",
+              kind: "managed",
+              email: null,
+              enabled: true,
+              authStatus: "unauthenticated",
+              rateLimitStatus: "ok",
+              personNotice: "waiting",
+            },
+            {
+              profileId: "row-term",
+              label: "Record",
+              kind: "managed",
+              email: "held@example.test",
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
+              terminalOnThisComputer: true,
+            },
+          ],
+        },
+        {
+          providerId: "codex",
+          harnessId: "codex",
+          profiles: [
+            {
+              profileId: "ambient",
+              label: "Terminal",
+              kind: "ambient",
+              email: "term@example.test",
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("prints a 10.10 answer, after the upgrade, identically to today's list", async () => {
+    const today = [stateFixture("claude-code", CLAUDE_PROFILES)];
+    const upgraded = providersListUpgradeV1010ToV1011.upgradeResponse(
+      providersListResponseSchemaV1010Preimage.parse({
+        providers: today,
+        native: null,
+      }),
+    );
+    const ambient = upgraded.providers[0]?.profiles.find(
+      (profile) => profile.kind === "ambient",
+    );
+    const managed = upgraded.providers[0]?.profiles.find(
+      (profile) => profile.kind === "managed",
+    );
+    expect(ambient?.terminalOnThisComputer).toBe(true);
+    expect(ambient?.aliases).toEqual([]);
+    expect(ambient?.personNotice).toBeNull();
+    expect(ambient?.otherNames).toEqual([]);
+    expect(managed?.terminalOnThisComputer).toBe(false);
+    expect(managed?.personNotice).toBeNull();
+    expect(managed?.otherNames).toEqual([]);
+    expect(upgraded.removedProfiles).toEqual([]);
+
+    respondWith(today);
+    const current = await buildProfileListCommand({ provider: null })(
+      makeCtx(),
+    );
+    rpcMock.mockResolvedValue(upgraded);
+    const fromOlderHost = await buildProfileListCommand({ provider: null })(
+      makeCtx(),
+    );
+
+    expect(fromOlderHost.exitCode).toBe(current.exitCode);
+    expect(fromOlderHost.human).toBe(current.human);
+    expect(fromOlderHost.data).toEqual(current.data);
+  });
+
+  it("prints Also named under a row with other names, the terminal line first, and the list only on those json rows", async () => {
+    const rows: readonly ListedProfileSpec[] = [
+      {
+        profileId: "row-one",
+        kind: "managed",
+        label: "One",
+        email: null,
+        authStatus: "authenticated",
+        enabled: true,
+        aliases: [],
+        personNotice: null,
+        terminalOnThisComputer: false,
+        otherNames: ["A"],
+      },
+      {
+        profileId: "row-two",
+        kind: "managed",
+        label: "Two",
+        email: null,
+        authStatus: "authenticated",
+        enabled: true,
+        aliases: [],
+        personNotice: null,
+        terminalOnThisComputer: false,
+        otherNames: ["A", "B"],
+      },
+      {
+        profileId: "row-both",
+        kind: "managed",
+        label: "Both",
+        email: null,
+        authStatus: "authenticated",
+        enabled: true,
+        aliases: [],
+        personNotice: null,
+        terminalOnThisComputer: true,
+        otherNames: ["A", "B"],
+      },
+      {
+        profileId: "row-empty",
+        kind: "managed",
+        label: "Empty",
+        email: null,
+        authStatus: "authenticated",
+        enabled: true,
+        aliases: [],
+        personNotice: null,
+        terminalOnThisComputer: false,
+        otherNames: [],
+      },
+      {
+        profileId: "row-absent",
+        kind: "managed",
+        label: "Absent",
+        email: null,
+        authStatus: "authenticated",
+        enabled: true,
+        aliases: [],
+        personNotice: null,
+        terminalOnThisComputer: false,
+        otherNames: null,
+      },
+    ];
+    rpcMock.mockResolvedValue(
+      listedResponse([
+        { providerId: "claude-code", profiles: rows },
+        { providerId: "codex", profiles: [AMBIENT_TERMINAL] },
+      ]),
+    );
+
+    const result = await buildProfileListCommand({ provider: null })(makeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toBe(
+      [
+        "claude (Claude Code)",
+        "  PROFILE     LABEL   ACCOUNT  STATE    SIGN-IN        LIMIT",
+        "  row-one     One     -        enabled  authenticated  ok",
+        "              Also named: A",
+        "  row-two     Two     -        enabled  authenticated  ok",
+        "              Also named: A, B",
+        "  row-both    Both    -        enabled  authenticated  ok",
+        "              Terminal account on this computer",
+        "              Also named: A, B",
+        "  row-empty   Empty   -        enabled  authenticated  ok",
+        "  row-absent  Absent  -        enabled  authenticated  ok",
+        "",
+        "codex (Codex)",
+        "  PROFILE  LABEL     ACCOUNT            STATE    SIGN-IN        LIMIT",
+        "  ambient  Terminal  term@example.test  enabled  authenticated  ok",
+      ].join("\n"),
+    );
+    const listed = {
+      profileId: "",
+      label: "",
+      kind: "managed" as const,
+      email: null,
+      enabled: true,
+      authStatus: "authenticated" as const,
+      rateLimitStatus: "ok" as const,
+    };
+    expect(result.data).toEqual({
+      providers: [
+        {
+          providerId: "claude-code",
+          harnessId: "claude",
+          profiles: [
+            {
+              ...listed,
+              profileId: "row-one",
+              label: "One",
+              otherNames: ["A"],
+            },
+            {
+              ...listed,
+              profileId: "row-two",
+              label: "Two",
+              otherNames: ["A", "B"],
+            },
+            {
+              ...listed,
+              profileId: "row-both",
+              label: "Both",
+              terminalOnThisComputer: true,
+              otherNames: ["A", "B"],
+            },
+            { ...listed, profileId: "row-empty", label: "Empty" },
+            { ...listed, profileId: "row-absent", label: "Absent" },
+          ],
+        },
+        {
+          providerId: "codex",
+          harnessId: "codex",
+          profiles: [
+            {
+              profileId: "ambient",
+              label: "Terminal",
+              kind: "ambient",
+              email: "term@example.test",
+              enabled: true,
+              authStatus: "authenticated",
+              rateLimitStatus: "ok",
+            },
+          ],
+        },
+      ],
+    });
   });
 });

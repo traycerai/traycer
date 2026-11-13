@@ -20,11 +20,13 @@ import {
 } from "../internal/host-rpc";
 import {
   describeProvider,
+  findProfileByIdOrAlias,
   isAmbientProfileId,
   parseProfileArgument,
   parseProviderArgument,
   printable,
   readProviderStates,
+  type ProviderListState,
 } from "../internal/profile-target";
 import { providerPackReasonRetryable } from "../../../shared/providers/provider-pack-retry";
 import {
@@ -228,21 +230,31 @@ export function buildProfileLoginCommand(
 ): CommandFn {
   return async (ctx) => {
     const providerId = parseProviderArgument(opts.provider);
-    const target = resolveTarget(opts.target);
+    const typed = resolveTarget(opts.target);
     assertPersonPresent(ctx);
     const state = await readProviderState(providerId);
     assertCanTakeCode(io, state);
-    if (
-      target.profileId !== null &&
-      !state.profiles.some((p) => p.profileId === target.profileId)
-    ) {
+    const row =
+      typed.profileId === null
+        ? null
+        : findProfileByIdOrAlias(state.profiles, typed.profileId);
+    if (typed.profileId !== null && row === null) {
       throw cliError({
         code: CLI_ERROR_CODES.NOT_FOUND,
-        message: `traycer: ${describeProvider(providerId)} has no profile '${printable(target.profileId)}' - run 'traycer profile list ${printable(opts.provider)}' to see them.`,
+        message: `traycer: ${describeProvider(providerId)} has no profile '${printable(typed.profileId)}' - run 'traycer profile list ${printable(opts.provider)}' to see them.`,
         details: null,
         exitCode: 1,
       });
     }
+    // An id folded into another row signs that row in; ambient is addressed
+    // as no profile, as `resolveTarget` does for the typed sentinel.
+    const target: ResolvedTarget =
+      row === null
+        ? typed
+        : {
+            ...typed,
+            profileId: isAmbientProfileId(row.profileId) ? null : row.profileId,
+          };
     const outcome = await runLogin(ctx, io, providerId, target, state);
     return resultOf(providerId, outcome);
   };
@@ -310,7 +322,7 @@ function notInteractive(): CliError {
 
 async function readProviderState(
   providerId: ProviderId,
-): Promise<ProviderCliState> {
+): Promise<ProviderListState> {
   const state = (await readProviderStates()).find(
     (p) => p.providerId === providerId,
   );

@@ -7,15 +7,19 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { providersListUpgradeV1010ToV1011 } from "@traycer/protocol/host/registry";
 import {
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
   providerCliStateSchema,
   providerMutationCliStateSchemaV21,
   providersAwaitLoginResponseSchema,
+  providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersStartLoginResponseSchemaV13,
   type ProviderCliState,
   type ProviderMutationCliStateV21,
   type ProvidersAwaitLoginResponse,
+  type ProvidersListResponse,
   type ProvidersStartLoginResponseV13,
 } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -248,15 +252,25 @@ function rowOf(profile: ProfileSpec, label: string): object {
 // Scenario: what the fake host answers, routed by method name.
 // ---------------------------------------------------------------------------
 
+type ListedProvider =
+  | ProviderCliState
+  | ProvidersListResponse["providers"][number];
+
 interface Scenario {
   /** What the first `providers.list` read answers (the command's own pre-flight). */
-  listState: ProviderCliState;
+  listState: ListedProvider;
+  /**
+   * The whole `providers.list` envelope, when a test needs a key the provider
+   * row does not carry (`removedProfiles`). Null keeps the `{ providers:
+   * [listState], native: null }` answer.
+   */
+  listEnvelope: ProvidersListResponse | null;
   /**
    * What every later `providers.list` read answers: the command's re-read when
    * the sign-in's echo lacks the profile it needs. Null keeps `listState`; an
    * Error makes that read fail.
    */
-  laterListReads: ProviderCliState | Error | null;
+  laterListReads: ListedProvider | Error | null;
   /** When set, `providers.startLogin` rejects with it instead of answering. */
   startFailure: Error | null;
   startAnswers: readonly ProvidersStartLoginResponseV13[];
@@ -286,6 +300,7 @@ let listReads = 0;
 function defaultScenario(): Scenario {
   return {
     listState: listState(NO_PROFILES),
+    listEnvelope: null,
     laterListReads: null,
     startFailure: null,
     startAnswers: [startAnswer({ profileId: "prof_new" })],
@@ -305,13 +320,14 @@ function nextStartAnswer(): ProvidersStartLoginResponseV13 {
   return answer;
 }
 
-function nextListAnswer(): Promise<{
-  providers: ProviderCliState[];
-  native: null;
-}> {
+function nextListAnswer(): Promise<
+  ProvidersListResponse | { providers: ListedProvider[]; native: null }
+> {
   listReads += 1;
   const later = scenario.laterListReads;
   if (listReads === 1 || later === null) {
+    const envelope = scenario.listEnvelope;
+    if (envelope !== null) return Promise.resolve(envelope);
     return Promise.resolve({ providers: [scenario.listState], native: null });
   }
   if (later instanceof Error) return Promise.reject(later);
@@ -2356,5 +2372,373 @@ describe("PROCESS_PROFILE_LOGIN_IO.wait", () => {
     await PROCESS_PROFILE_LOGIN_IO.wait(60_000, abort.signal);
 
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+interface SyncProfileSpec {
+  readonly profileId: string;
+  readonly kind: "ambient" | "managed";
+  readonly label: string;
+  readonly email: string | null;
+  readonly authStatus: AuthStatus;
+  readonly aliases: readonly string[];
+  readonly personNotice: "needs-sign-in" | "waiting" | null;
+  readonly terminalOnThisComputer: boolean;
+  /** Null omits the key. Login does not read it. */
+  readonly otherNames: readonly string[] | null;
+}
+
+interface RemovedEntry {
+  readonly providerId: string;
+  readonly profileId: string;
+  readonly aliases: readonly string[];
+}
+
+function syncList(spec: {
+  readonly profiles: readonly SyncProfileSpec[];
+  readonly codePaste: boolean;
+  readonly selfOpensBrowser: boolean;
+  readonly removedProfiles: readonly RemovedEntry[];
+}): ListedProvider {
+  const parsed = providersListResponseSchema.parse({
+    providers: [
+      {
+        ...stateInput({
+          auth: "authenticated",
+          authPending: false,
+          profiles: [],
+        }),
+        loginCapability: {
+          oauthArgs: [],
+          token: null,
+          codePaste: spec.codePaste ? {} : null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: spec.selfOpensBrowser ? {} : null,
+        },
+        profiles: spec.profiles.map((profile) => ({
+          ...profileInput({
+            profileId: profile.profileId,
+            kind: profile.kind,
+            label: profile.label,
+            email: profile.email,
+            authStatus: profile.authStatus,
+          }),
+          aliases: [...profile.aliases],
+          personNotice: profile.personNotice,
+          terminalOnThisComputer: profile.terminalOnThisComputer,
+          ...(profile.otherNames === null
+            ? {}
+            : { otherNames: [...profile.otherNames] }),
+        })),
+      },
+    ],
+    native: null,
+    removedProfiles: spec.removedProfiles.map((entry) => ({
+      providerId: entry.providerId,
+      profileId: entry.profileId,
+      aliases: [...entry.aliases],
+    })),
+  });
+  const provider = parsed.providers[0];
+  if (provider === undefined) throw new Error("unreachable: no provider");
+  return provider;
+}
+
+function deviceList(
+  profiles: readonly SyncProfileSpec[],
+  removedProfiles: readonly RemovedEntry[],
+): ListedProvider {
+  return syncList({
+    profiles,
+    codePaste: false,
+    selfOpensBrowser: false,
+    removedProfiles,
+  });
+}
+
+function workRow(
+  profileId: string,
+  aliases: readonly string[],
+  label: string,
+  email: string,
+): SyncProfileSpec {
+  return {
+    profileId,
+    kind: "managed",
+    label,
+    email,
+    authStatus: "authenticated",
+    aliases,
+    personNotice: null,
+    terminalOnThisComputer: false,
+    otherNames: null,
+  };
+}
+
+const WORK_EMAIL = "work@example.test";
+
+describe("alias look-up on login", () => {
+  it("login addressed to an alias starts the row's own profile id", async () => {
+    const echo: ProfileSpec = {
+      profileId: "row-own",
+      kind: "managed",
+      label: "Work",
+      email: WORK_EMAIL,
+      authStatus: "authenticated",
+    };
+    scenario.listState = deviceList(
+      [workRow("row-own", ["old-id"], "Work", WORK_EMAIL)],
+      [],
+    );
+    scenario.startAnswers = [startAnswer({ profileId: "row-own" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(awaitResult({ state: signedInState([echo]) }));
+
+    const result = await runLogin(
+      existing("old-id"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(onlyCallTo("providers.startLogin")[1]).toEqual({
+      providerId: "claude-code",
+      holderId: HOLDER_ID,
+      profileId: "row-own",
+      createProfile: null,
+    });
+    expect(onlyCallTo("providers.awaitLogin")[1]).toEqual({
+      providerId: "claude-code",
+      profileId: "row-own",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.human).toBe(
+      'Signed in claude (Claude Code) profile row-own "Work" (work@example.test).',
+    );
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: rowOf(echo, "Work"),
+      created: false,
+    });
+  });
+
+  it("refuses an unknown id before asking the host to start", async () => {
+    scenario.listState = deviceList(
+      [workRow("row-own", ["old-id"], "Work", WORK_EMAIL)],
+      [],
+    );
+
+    const error = await failureOf(
+      runLogin(existing("missing-id"), makeIo(false), makeCtx(false, false)),
+    );
+
+    expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
+    expect(error.message).toContain("missing-id");
+    expect(callsTo("providers.startLogin")).toHaveLength(0);
+  });
+
+  it("refuses an id found only in removedProfiles before asking the host to start", async () => {
+    scenario.listEnvelope = providersListResponseSchema.parse({
+      providers: [deviceList([workRow("row-own", [], "Work", WORK_EMAIL)], [])],
+      native: null,
+      removedProfiles: [
+        {
+          providerId: "claude-code",
+          profileId: "gone-id",
+          aliases: ["gone-alias"],
+        },
+      ],
+    });
+
+    for (const id of ["gone-id", "gone-alias"]) {
+      const error = await failureOf(
+        runLogin(existing(id), makeIo(false), makeCtx(false, false)),
+      );
+      expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
+      expect(error.message).toContain(id);
+    }
+    expect(callsTo("providers.startLogin")).toHaveLength(0);
+  });
+
+  it("does not guess an id listed in two rows' aliases", async () => {
+    scenario.listState = deviceList(
+      [
+        workRow("row-a", ["shared-id"], "A", WORK_EMAIL),
+        workRow("row-b", ["shared-id"], "B", WORK_EMAIL),
+      ],
+      [],
+    );
+
+    const error = await failureOf(
+      runLogin(existing("shared-id"), makeIo(false), makeCtx(false, false)),
+    );
+
+    expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
+    expect(error.message).toContain("shared-id");
+    expect(callsTo("providers.startLogin")).toHaveLength(0);
+  });
+
+  it("refuses an id that one row owns and another row lists as an alias before asking the host to start", async () => {
+    scenario.listState = deviceList(
+      [
+        workRow("shared-id", [], "A", WORK_EMAIL),
+        workRow("row-b", ["shared-id"], "B", WORK_EMAIL),
+      ],
+      [],
+    );
+
+    const error = await failureOf(
+      runLogin(existing("shared-id"), makeIo(false), makeCtx(false, false)),
+    );
+
+    expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
+    expect(error.message).toContain("shared-id");
+    expect(callsTo("providers.startLogin")).toHaveLength(0);
+  });
+});
+
+describe("login against a 10.10 answer", () => {
+  it("against a 10.10 answer, login output, data and exit stay today's", async () => {
+    const today = listState({
+      ...NO_PROFILES,
+      profiles: [AMBIENT_PROFILE, WORK_PROFILE],
+    });
+    const upgraded = providersListUpgradeV1010ToV1011.upgradeResponse(
+      providersListResponseSchemaV1010Preimage.parse({
+        providers: [today],
+        native: null,
+      }),
+    );
+    const upgradedProvider = upgraded.providers[0];
+    if (upgradedProvider === undefined) throw new Error("unreachable");
+    const ambient = upgradedProvider.profiles.find(
+      (profile) => profile.kind === "ambient",
+    );
+    const managed = upgradedProvider.profiles.find(
+      (profile) => profile.profileId === "prof_work",
+    );
+    expect(ambient?.terminalOnThisComputer).toBe(true);
+    expect(ambient?.personNotice).toBeNull();
+    expect(ambient?.aliases).toEqual([]);
+    expect(managed?.terminalOnThisComputer).toBe(false);
+    expect(managed?.personNotice).toBeNull();
+    expect(managed?.aliases).toEqual([]);
+    expect(upgraded.removedProfiles).toEqual([]);
+
+    scenario.listState = today;
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(awaitResult({ state: signedInState([WORK_PROFILE]) }));
+    const current = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    startIndex = 0;
+    listReads = 0;
+    scenario.listState = upgradedProvider;
+    const fromOlderHost = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(fromOlderHost.exitCode).toBe(current.exitCode);
+    expect(fromOlderHost.human).toBe(current.human);
+    expect(fromOlderHost.data).toEqual(current.data);
+  });
+});
+
+/**
+ * The record is this computer's Terminal login, or it is not. When it is, that
+ * row is the only one under the provider. When it is not, the Terminal login
+ * is its own ambient row and the only row with the flag.
+ */
+function accountRows(
+  otherNames: readonly string[] | null,
+  terminalOnThisComputer: boolean,
+): readonly SyncProfileSpec[] {
+  const work: SyncProfileSpec = {
+    profileId: "prof_work",
+    kind: "managed",
+    label: "Work",
+    email: "work@example.test",
+    authStatus: "authenticated",
+    aliases: [],
+    personNotice: null,
+    terminalOnThisComputer,
+    otherNames,
+  };
+  if (terminalOnThisComputer) return [work];
+  return [
+    {
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal login",
+      email: "term@example.test",
+      authStatus: "authenticated",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: true,
+      otherNames: null,
+    },
+    work,
+  ];
+}
+
+describe("login on an account that has other names", () => {
+  it("prompts for nothing and exits as the same rows without other names, with or without a terminal", async () => {
+    const signIn = async (
+      otherNames: readonly string[] | null,
+      terminalOnThisComputer: boolean,
+      hasTerminal: boolean,
+    ): Promise<CommandResult> => {
+      const fake = makeIo(hasTerminal);
+      if (!hasTerminal) fake.stdinIsTerminal.mockReturnValue(false);
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+      scenario.listState = deviceList(
+        accountRows(otherNames, terminalOnThisComputer),
+        [],
+      );
+      scenario.laterListReads = null;
+      scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+      scenario.awaitLogin = () =>
+        Promise.resolve(awaitResult({ state: signedInState([WORK_PROFILE]) }));
+      const result = await runLogin(
+        existing("prof_work"),
+        fake,
+        makeCtx(false, false),
+      );
+      expect(fake.readLines).not.toHaveBeenCalled();
+      expect(
+        dispatchMock.mock.calls
+          .map((call) => call[0])
+          .slice()
+          .sort(),
+      ).toEqual([
+        "providers.awaitLogin",
+        "providers.list",
+        "providers.startLogin",
+      ]);
+      return result;
+    };
+
+    for (const terminalOnThisComputer of [false, true]) {
+      for (const hasTerminal of [true, false]) {
+        const plain = await signIn(null, terminalOnThisComputer, hasTerminal);
+        const named = await signIn(
+          ["A", "B"],
+          terminalOnThisComputer,
+          hasTerminal,
+        );
+        expect(named.exitCode).toBe(plain.exitCode);
+        expect(named.human).toBe(plain.human);
+        expect(named.data).toEqual(plain.data);
+      }
+    }
   });
 });
