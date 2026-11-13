@@ -18,12 +18,17 @@ import {
 } from "vitest";
 import type * as LandingImageStore from "@/lib/composer/landing-image-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { StoredBoxDrafts } from "@/lib/bots/bot-box-draft-storage";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import { isRecord } from "@/lib/editor/prosemirror-json";
+import type { BotUnsentMessage } from "@/stores/bots/bot-drafts-store";
 import {
   BOT_ID,
   CHANNEL,
   IMAGE_B64,
   LEGACY_BOX_DRAFTS_KEY,
+  THREAD,
   boxDoc,
   hashedImage,
   startSignedOutApp,
@@ -544,6 +549,108 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
     const stored = localStorage.getItem(keyOfA) ?? "";
     expect(stored).toContain("Hold the migration");
     expect(stored).not.toContain("A's own draft");
+  });
+});
+
+describe("<BotDraftsPersistLifecycleBridge /> a box replying to a message when its account retires", () => {
+  const REPLY: BotReplyTarget = {
+    messageId: "message-1",
+    author: "Sam",
+    line: "Ship it on Friday",
+  };
+  const SENT_REPLY: BotReplyTarget = {
+    messageId: "message-2",
+    author: "Tess",
+    line: "Hold the migration",
+  };
+
+  /** A send that failed after replying to `replyTo`, offered back in its box. */
+  function failedSend(
+    text: string,
+    replyTo: BotReplyTarget | null,
+  ): BotUnsentMessage {
+    return {
+      text,
+      wire: text,
+      supersedes: null,
+      content: boxDoc(text, []),
+      held: [],
+      replyTo,
+    };
+  }
+
+  /** The drafts stored under `key`, as the account's own read parses them. */
+  function storedUnder(run: Run, key: string): StoredBoxDrafts {
+    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "null");
+    if (!isRecord(parsed) || !isRecord(parsed.state)) return {};
+    return run.app.storage.storedBoxDraftsOf(parsed.state.threadBoxes);
+  }
+
+  /** A is signed in with its own drafts read; nothing is stored for it. */
+  async function signedInAsA(run: Run): Promise<void> {
+    mountBridge(run);
+    signInAs(run, ACCOUNT_A);
+    await vi.waitFor(() =>
+      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
+    );
+  }
+
+  it("keeps the message each box's kept draft replies to under A's key when a moved answer, or a failed send that replied to another message, is folded below it", async () => {
+    const run = await startOver();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    await signedInAsA(run);
+    run.rtl.act(() => {
+      const drafts = run.app.drafts.getState();
+      drafts.typeThreadBox(BOT_ID, CHANNEL, {
+        text: "Kept draft",
+        content: null,
+        held: [],
+      });
+      drafts.setReplyTarget(BOT_ID, CHANNEL, REPLY);
+      drafts.setAnswer(BOT_ID, "answer-1", {
+        chosen: [],
+        typed: "Hold the migration",
+        sent: null,
+        unsureSince: null,
+        heldForSettlement: null,
+      });
+      drafts.moveAnswers(BOT_ID, CHANNEL, ["answer-1"], (taken) => ({
+        block: taken.map(([, draft]) => draft.typed).join("\n"),
+        notice: "Tess answered first.",
+      }));
+      drafts.typeThreadBox(BOT_ID, THREAD, {
+        text: "Kept in thread",
+        content: null,
+        held: [],
+      });
+      drafts.setReplyTarget(BOT_ID, THREAD, REPLY);
+      drafts.offerUnsent(BOT_ID, THREAD, failedSend("Failed send", SENT_REPLY));
+    });
+
+    signInAs(run, ACCOUNT_B);
+
+    const stored = storedUnder(run, keyOfA)[BOT_ID];
+    expect(stored?.[CHANNEL]?.text).toContain("Hold the migration");
+    expect(stored?.[CHANNEL]?.replyTo).toEqual(REPLY);
+    expect(stored?.[THREAD]?.text).toContain("Failed send");
+    expect(stored?.[THREAD]?.replyTo).toEqual(REPLY);
+  });
+
+  it("replies to the message a failed send offered back replied to when A retires holding no kept draft of the box", async () => {
+    const run = await startOver();
+    const keyOfA = run.keys.botBoxDraftsKey(ACCOUNT_A);
+    await signedInAsA(run);
+    run.rtl.act(() => {
+      run.app.drafts
+        .getState()
+        .offerUnsent(BOT_ID, CHANNEL, failedSend("Failed send", REPLY));
+    });
+
+    signInAs(run, ACCOUNT_B);
+
+    const stored = storedUnder(run, keyOfA)[BOT_ID]?.[CHANNEL];
+    expect(stored?.text).toContain("Failed send");
+    expect(stored?.replyTo).toEqual(REPLY);
   });
 });
 

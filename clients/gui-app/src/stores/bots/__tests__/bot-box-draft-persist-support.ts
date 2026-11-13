@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import type * as DraftStorage from "@/lib/bots/bot-box-draft-storage";
@@ -209,6 +209,48 @@ export function storedDrafts(app: App): StoredBoxDrafts | null {
   const parsed: unknown = JSON.parse(raw);
   if (!isRecord(parsed) || !isRecord(parsed.state)) return null;
   return app.storage.storedBoxDraftsOf(parsed.state.threadBoxes);
+}
+
+/** The app starts over what is stored; the read of it has not answered yet. */
+async function startWhileStoredDraftsAreRead(): Promise<App> {
+  const reading = await startApp();
+  expect(reading.drafts.persist.hasHydrated()).toBe(false);
+  return reading;
+}
+
+/** The app starts over a stored draft whose image the read has to fetch, and has not answered yet. */
+export async function startReadingStoredDraft(text: string): Promise<App> {
+  const hash = await storeImageBytes();
+  storeDraftsAsLeft({
+    [BOT_ID]: {
+      channel: { text, content: boxDoc(text, [hashedImage(hash)]), seedId: 1 },
+    },
+  });
+  return startWhileStoredDraftsAreRead();
+}
+
+/**
+ * The app starts over a stored draft of `text` holding an image another
+ * window stored, which this window's image store cannot read back; the read
+ * leaves the image out of the box and keeps it in storage, and has not
+ * answered yet.
+ */
+export async function startReadingAnotherWindowsDraft(
+  text: string,
+): Promise<App> {
+  const image = hashedImage("a".repeat(64));
+  storeDraftsAsLeft({
+    [BOT_ID]: {
+      channel: {
+        text,
+        content: boxDoc(text, [
+          { ...image, attrs: { ...image.attrs, partition: "window-a" } },
+        ]),
+        seedId: 1,
+      },
+    },
+  });
+  return startWhileStoredDraftsAreRead();
 }
 
 /**

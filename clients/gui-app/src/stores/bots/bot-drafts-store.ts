@@ -13,6 +13,7 @@ import {
   storedBotBoxDrafts,
   storedBoxDraftsOf,
   type PersistedBotBoxDrafts,
+  type StoredBoxDrafts,
 } from "@/lib/bots/bot-box-draft-storage";
 import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { isRecord } from "@/lib/editor/prosemirror-json";
@@ -109,10 +110,17 @@ export interface BotDraftsOwner {
   readonly userId: string | null;
 }
 
-/** What an account's retirement adds below a box's kept draft. */
+/**
+ * What an account's retirement adds below a box's kept draft: a move's
+ * lines, or a failed send offered back, with the message it replied to.
+ */
 export type BotRetiredPart =
   | { readonly kind: "move"; readonly block: string }
-  | { readonly kind: "unsent"; readonly content: JsonContent };
+  | {
+      readonly kind: "unsent";
+      readonly content: JsonContent;
+      readonly replyTo: BotReplyTarget | null;
+    };
 
 /** A box's kept draft, `null` for none, with `parts` added below it. */
 export type BotRetireFold = (
@@ -350,9 +358,21 @@ function withEntry<T>(
  * by bot and box (`boxKey`), and the bots it forgot then: the merge keeps
  * none of the stored drafts they name, a cleared or forgotten one included,
  * and the merged drafts are written once read, since nothing was written
- * while they were read.
+ * while they were read. A box whose reply alone changed then (`targets`)
+ * keeps its stored draft under the reply chosen (`withTargetsOnStored`).
  */
-const changedDuringRead = { keys: new Set<string>(), bots: new Set<string>() };
+const changedDuringRead = {
+  keys: new Set<string>(),
+  bots: new Set<string>(),
+  targets: new Map<string, TargetChange>(),
+};
+
+/** A reply chosen or cancelled for a box while the stored drafts were read. */
+interface TargetChange {
+  readonly botId: string;
+  readonly key: string;
+  readonly target: BotReplyTarget | null;
+}
 let readingStoredDrafts = false;
 /** The newest read's number: a read an account's retirement overtook merges nothing. */
 let storedRead = 0;
@@ -365,6 +385,52 @@ function noteBoxChange(botId: string, key: string | null): void {
   if (!readingStoredDrafts) return;
   if (key === null) changedDuringRead.bots.add(botId);
   else changedDuringRead.keys.add(boxKey(botId, key));
+}
+
+/**
+ * Notes a reply chosen or cancelled for a box while the stored drafts are
+ * being read (T166): choosing whom to reply to is no edit of the box's
+ * draft, so the stored one stays, under that reply. `false` once they were
+ * read.
+ */
+function noteTargetChange(
+  botId: string,
+  key: string,
+  target: BotReplyTarget | null,
+): boolean {
+  if (!readingStoredDrafts) return false;
+  changedDuringRead.targets.set(boxKey(botId, key), { botId, key, target });
+  return true;
+}
+
+/**
+ * `threadBoxes` with each box whose reply alone changed during the read
+ * holding its stored draft under the reply chosen then; a box with nothing
+ * stored keeps what it holds, as does a box typed in, cleared or forgotten
+ * then, whose own draft wins over the stored one. The same object where
+ * none changes.
+ */
+function withTargetsOnStored(
+  threadBoxes: ByBot<BotThreadBoxDraft>,
+  stored: StoredBoxDrafts,
+): ByBot<BotThreadBoxDraft> {
+  let next = threadBoxes;
+  for (const [at, { botId, key, target }] of changedDuringRead.targets) {
+    if (changedDuringRead.bots.has(botId) || changedDuringRead.keys.has(at)) {
+      continue;
+    }
+    const draft = stored[botId]?.[key];
+    if (draft !== undefined) {
+      next = withEntry(next, botId, key, { ...draft, replyTo: target });
+    }
+  }
+  return next;
+}
+
+function clearChangedDuringRead(): void {
+  changedDuringRead.keys.clear();
+  changedDuringRead.bots.clear();
+  changedDuringRead.targets.clear();
 }
 
 // No account's drafts until one signs in: the bridge points the store at that
@@ -607,7 +673,9 @@ function retiredParts(
   blocks: ReadonlyArray<BotCarriedBlock> | undefined,
 ): ReadonlyArray<BotRetiredPart> {
   const parts: Array<BotRetiredPart> =
-    offer === undefined ? [] : [{ kind: "unsent", content: offer.content }];
+    offer === undefined
+      ? []
+      : [{ kind: "unsent", content: offer.content, replyTo: offer.replyTo }];
   for (const item of blocks ?? []) {
     if (offer?.held.includes(item.id) !== true) {
       parts.push({ kind: "move", block: item.block });
@@ -761,9 +829,12 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         const content = current?.content ?? null;
         const cleared =
           target === null && text.length === 0 && content === null;
-        noteBoxChange(botId, anchorMessageId);
-        // A reply cancelled in an empty box empties it, as clearing it does.
-        if (cleared) botBoxDraftCleared(botId, anchorMessageId);
+        // A reply cancelled in an empty box empties it, as clearing it does,
+        // unless the box's stored draft is still being read: that draft keeps
+        // its text and images then, under no reply.
+        if (!noteTargetChange(botId, anchorMessageId, target) && cleared) {
+          botBoxDraftCleared(botId, anchorMessageId);
+        }
         set({
           threadBoxes: withEntry(
             state.threadBoxes,
@@ -821,11 +892,17 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         // Still being read: a box this window did not change holds what is
         // stored for it, images by their hash, which the write keeps.
         const stored = readingStoredDrafts ? storedBotBoxDrafts(name) : {};
-        const threadBoxes = retiredThreadBoxes(state, fold, (botId, key) =>
-          changedDuringRead.bots.has(botId) ||
-          changedDuringRead.keys.has(boxKey(botId, key))
-            ? null
-            : (stored[botId]?.[key] ?? null),
+        const threadBoxes = retiredThreadBoxes(
+          {
+            ...state,
+            threadBoxes: withTargetsOnStored(state.threadBoxes, stored),
+          },
+          fold,
+          (botId, key) =>
+            changedDuringRead.bots.has(botId) ||
+            changedDuringRead.keys.has(boxKey(botId, key))
+              ? null
+              : (stored[botId]?.[key] ?? null),
         );
         // Written under the retiring account's key, then nothing more is.
         if (threadBoxes !== state.threadBoxes) set({ threadBoxes });
@@ -841,8 +918,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
             : null,
         );
         readingStoredDrafts = false;
-        changedDuringRead.keys.clear();
-        changedDuringRead.bots.clear();
+        clearChangedDuringRead();
         set({
           answers: {},
           threadBoxes: {},
@@ -869,13 +945,14 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         const stored = storedBoxDraftsOf(
           isRecord(persisted) ? persisted.threadBoxes : null,
         );
+        const boxes = withTargetsOnStored(current.threadBoxes, stored);
         const threadBoxes: Record<
           string,
           Readonly<Partial<Record<string, BotThreadBoxDraft>>>
         > = {};
         for (const botId of new Set([
           ...Object.keys(stored),
-          ...Object.keys(current.threadBoxes),
+          ...Object.keys(boxes),
         ])) {
           const kept: Partial<Record<string, BotThreadBoxDraft>> = {};
           if (!changedDuringRead.bots.has(botId)) {
@@ -885,7 +962,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
               }
             }
           }
-          const merged = { ...kept, ...current.threadBoxes[botId] };
+          const merged = { ...kept, ...boxes[botId] };
           if (Object.keys(merged).length > 0) threadBoxes[botId] = merged;
         }
         return { ...current, threadBoxes };
@@ -899,9 +976,10 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           if (!isCurrentBotBoxDraftsRead(read)) return;
           readingStoredDrafts = false;
           const changed =
-            changedDuringRead.keys.size > 0 || changedDuringRead.bots.size > 0;
-          changedDuringRead.keys.clear();
-          changedDuringRead.bots.clear();
+            changedDuringRead.keys.size > 0 ||
+            changedDuringRead.bots.size > 0 ||
+            changedDuringRead.targets.size > 0;
+          clearChangedDuringRead();
           // Read or failed, the bot tab shows the store now: after a failed
           // read its boxes are empty, and nothing is written over the stored.
           useBotDraftsStore.setState({ ownDraftsRead: true });

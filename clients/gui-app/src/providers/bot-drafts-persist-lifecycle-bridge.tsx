@@ -8,6 +8,7 @@ import {
 } from "@/hooks/auth/use-auth-identity-transition";
 import { botBoxContentOf, botBoxText } from "@/lib/bots/bot-box-content";
 import { retireLegacyBotBoxDrafts } from "@/lib/bots/bot-box-draft-storage";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { botBoxDraftsKey } from "@/lib/persist";
 import { botMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -95,15 +96,16 @@ function forgetSettledSends(queryClient: QueryClient): void {
 
 /**
  * A box's kept draft with `parts` below what it holds, a blank line between
- * each, as the box itself adds them, and replying to what the kept draft
- * replies to.
+ * each, as the box itself adds them. It replies to what the kept draft
+ * replies to, else to what the failed send offered back replied to, as that
+ * send put back in its box would (T166).
  */
 function withRetiredParts(
   kept: BotThreadBoxDraft | null,
   parts: ReadonlyArray<BotRetiredPart>,
 ): BotThreadBoxDraft {
   const seedId = kept?.seedId ?? 0;
-  const replyTo = kept?.replyTo ?? null;
+  const replyTo = kept?.replyTo ?? unsentReplyOf(parts);
   // Text put there from outside the box stays text: the box makes its
   // document, chips included, when it loads it.
   const blocks = movedBlocksOnly(parts);
@@ -127,6 +129,16 @@ function withRetiredParts(
     seedId,
     replyTo,
   };
+}
+
+/** What the failed send `parts` holds replied to; `null` for none. */
+function unsentReplyOf(
+  parts: ReadonlyArray<BotRetiredPart>,
+): BotReplyTarget | null {
+  for (const part of parts) {
+    if (part.kind === "unsent") return part.replyTo;
+  }
+  return null;
 }
 
 /** The moved blocks `parts` holds, `null` once it holds a failed send. */

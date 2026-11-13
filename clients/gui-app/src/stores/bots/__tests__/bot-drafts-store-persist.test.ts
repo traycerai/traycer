@@ -44,6 +44,7 @@ import {
   restart,
   startApp,
   startFresh,
+  startReadingStoredDraft,
   startWindowBeside,
   storeDraftsAsLeft,
   storeImageBytes,
@@ -90,19 +91,6 @@ afterEach(() => {
   app.close();
   vi.useRealTimers();
 });
-
-/** The app starts over a stored draft whose image the read has to fetch, and has not answered yet. */
-async function startReadingStoredDraft(text: string): Promise<App> {
-  const hash = await storeImageBytes();
-  storeDraftsAsLeft({
-    [BOT_ID]: {
-      channel: { text, content: boxDoc(text, [hashedImage(hash)]), seedId: 1 },
-    },
-  });
-  const reading = await startApp();
-  expect(reading.drafts.persist.hasHydrated()).toBe(false);
-  return reading;
-}
 
 describe("the boxes' drafts through the persisted store", () => {
   it("stores a typed draft with its image by hash once typing pauses, and reads it back whole after a restart", async () => {
