@@ -490,6 +490,47 @@ describe("a bot's picture while it works", () => {
     expect(drawn()[0].paths).toEqual(before);
   });
 
+  it("stops its eyes on the first beat when reduced motion is turned on while it works", () => {
+    vi.useFakeTimers();
+    const preference = {
+      matches: false,
+      listeners: new Set<() => void>(),
+    };
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() {
+        return preference.matches;
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_type: string, listener: () => void) => {
+        preference.listeners.add(listener);
+      },
+      removeEventListener: (_type: string, listener: () => void) => {
+        preference.listeners.delete(listener);
+      },
+      dispatchEvent: () => false,
+    }));
+    render(working());
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(drawn()[0].paths).toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, { ...WORKING, beat: 1 }),
+    );
+
+    act(() => {
+      preference.matches = true;
+      for (const listener of preference.listeners) listener();
+    });
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(drawn()[0].paths).toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, WORKING),
+    );
+  });
+
   it("starts no timer for a bot that is idle or away", () => {
     vi.useFakeTimers();
     stubReducedMotion(false);

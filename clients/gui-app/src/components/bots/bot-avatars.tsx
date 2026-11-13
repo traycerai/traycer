@@ -120,19 +120,32 @@ function BotIdentityAvatar(props: {
 const WORKING_BEAT_MS = 500;
 
 /**
- * The beat a working mascot's eyes are on, moving while `working`; it stays
- * on the first for a person who asked for reduced motion.
+ * The beat a working mascot's eyes are on, moving while `working`. It stays
+ * on the first for a person who asks for reduced motion, from the moment
+ * they ask.
  */
 function useWorkingBeat(working: boolean): number {
   const [beat, setBeat] = useState(0);
   useEffect(() => {
     if (!working) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const timer = window.setInterval(() => {
-      setBeat((current) => (current + 1) % MASCOT_WORKING_BEATS);
-    }, WORKING_BEAT_MS);
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let timer: number | null = null;
+    const follow = (): void => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = null;
+      if (reduced.matches) {
+        setBeat(0);
+        return;
+      }
+      timer = window.setInterval(() => {
+        setBeat((current) => (current + 1) % MASCOT_WORKING_BEATS);
+      }, WORKING_BEAT_MS);
+    };
+    follow();
+    reduced.addEventListener("change", follow);
     return () => {
-      window.clearInterval(timer);
+      reduced.removeEventListener("change", follow);
+      if (timer !== null) window.clearInterval(timer);
     };
   }, [working]);
   return working ? beat : 0;
