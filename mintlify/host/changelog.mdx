@@ -5,6 +5,34 @@ description: "Track the latest updates and improvements to the Traycer Host."
 rss: true
 ---
 
+<Update label="v1.5.4">
+Steadier Codex turns, more reliable file and artifact sync, lower resource use, and tighter privacy in logs.
+
+* **Codex** - a turn ends properly when steered messages are waiting, and cleanup from an earlier turn can no longer disrupt the next one.
+* **File and artifact sync** - files rewritten in place are picked up, canvas saves made during a background update are kept, a failed sync can be retried so the Task reopens, and existing files are no longer reported as new edits when watching starts.
+* **CPU and memory** - new files no longer trigger full artifact-folder scans, usage tracking no longer loads whole Claude Code or Codex transcripts into memory, and a loop that kept rechecking credentials and could spike CPU is fixed.
+* **Resource monitor** - the Host reports its processor count, so Desktop 1.5.4 can show CPU as a share of the whole machine. See [Resource monitor](/concepts/hosts/resource-monitor).
+* **Windows** - Traycer's child processes are tracked and cleaned up more reliably when the Host stops, and a refused shell or registry lookup no longer interrupts finding installed coding agents.
+* **Privacy** - support logs and error reports leave out profile folder names, profile identities and credentials found in error text.
+* **Fixes** - a failed Copilot start is handled cleanly, and a Claude Code chat that never asked for Ultracode no longer says Ultracode may still be on.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/host-v1.5.4).
+</Update>
+
+<Update label="v1.5.3">
+More control over Devin, a notice after out-of-memory restarts, and lower Host CPU use.
+
+* **Devin** - choose a thinking effort and Fast mode on Devin models that offer them, and [steer](/panels/agents/message-queue#steering-devin) a message into a running Devin turn on versions that support it. An outdated Devin model name falls back to the session's default instead of ending the turn.
+* **Switching folders** - a message that moves a chat to another folder during a running turn restarts the turn in the new folder instead of waiting behind it.
+* **Out-of-memory restarts** - if the Host restarted after running out of memory, Traycer says so once. This uses the exit record written by [CLI 1.5.3](/cli/changelog).
+* **Ultracode** - no false "request not sent" notice when Claude Code starts slowly or is an older 2.1.x version.
+* **OpenCode subagents** - an error in one subagent no longer ends the whole turn.
+* **Performance** - opening a Task, refreshing the file tree after bursts of file changes such as a package install, and waiting for file sync use much less CPU. Artifacts sync while a Task is open or its agent is working, and catch up the next time you open it.
+* **Fixes** - notifications call an agent without a title yet **New agent**, the last copy of an artifact is kept during cleanup, and Tasks deleted elsewhere no longer cause repeated reconnect attempts.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/host-v1.5.3).
+</Update>
+
 <Update label="v1.5.2">
 Richer artifacts, mobile simulators, and more reliable long-running agents and Host restarts.
 
