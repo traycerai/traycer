@@ -1,8 +1,8 @@
 /**
- * A bot's picture: a mascot on a tile of its colour, both from the bot's id
- * alone. Every surface draws one bot the same way, and a rename changes
- * nothing. A person is
- * still initials or a photo in a circle.
+ * A bot's picture: its mascot drawn straight in a squircle box, with no tile
+ * behind it and no clip over it, from the bot's id alone. Every surface draws
+ * one bot the same way, and a rename changes nothing. A person is still
+ * initials or a photo in a circle.
  *
  * The ids are real derived main-bot ids, `personalAssistantBotId(envId)` in
  * the internal repository's `bot-schemas.ts`: the personal assistant of
@@ -13,8 +13,8 @@
  * "Team Tracy" bots shared one colour then and differ now.
  */
 import type { ReactElement } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BOT_APPEARANCE_UNRECOGNISED,
   BOT_UNRECOGNISED_MARK,
@@ -25,13 +25,17 @@ import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 import {
   DEFAULT_MASCOT_RAMP,
   DEFAULT_MASCOT_SHAPE,
+  MASCOT_AT_REST,
+  MASCOT_WORKING_BEATS,
   botMascot,
   drawMascotMark,
   mascotRampAt,
+  type MascotPose,
 } from "@/lib/bots/mascot-mark";
 import {
   AvatarStack,
   BotAvatar,
+  ExpressiveBotAvatar,
   PersonAvatar,
   NamedBotAvatar,
 } from "@/components/bots/bot-avatars";
@@ -46,8 +50,6 @@ interface DrawnAvatar {
   /** One path per colour layer, darkest first. */
   readonly paths: string[];
   readonly fills: string[];
-  readonly tile: string;
-  readonly tileDark: string;
 }
 
 function fallbackOf(avatar: HTMLElement): HTMLElement {
@@ -68,20 +70,21 @@ function mascotOf(avatar: HTMLElement): SVGSVGElement {
 
 function drawn(): DrawnAvatar[] {
   return screen.getAllByTestId("bot-avatar").map((avatar) => {
-    const fallback = fallbackOf(avatar);
     const paths = [...mascotOf(avatar).querySelectorAll("path")];
     return {
       paths: paths.map((path) => path.getAttribute("d") ?? ""),
       fills: paths.map((path) => path.getAttribute("fill") ?? ""),
-      tile: fallback.style.getPropertyValue("--avatar-fill"),
-      tileDark: fallback.style.getPropertyValue("--avatar-fill-dark"),
     };
   });
 }
 
-/** The paths the mascot of `look` is drawn as at the `sm` size. */
-function pathsOf(botId: string, look: BotAppearance | null): string[] {
-  return drawMascotMark(botMascot(botId, look), 24).layers.map(
+/** The paths the mascot of `look` is drawn as at the `sm` size, in `pose`. */
+function pathsOf(
+  botId: string,
+  look: BotAppearance | null,
+  pose: MascotPose,
+): string[] {
+  return drawMascotMark(botMascot(botId, look), 24, pose).layers.map(
     (layer) => layer.path,
   );
 }
@@ -146,9 +149,38 @@ describe("a bot's picture", () => {
       const avatar = screen.getByTestId("bot-avatar");
       expect(avatarShape(avatar)).toBe("squircle");
       expect(mascotOf(avatar).getAttribute("aria-hidden")).toBe("true");
-      expect(fallbackOf(avatar).textContent).toBe("");
+      expect(avatar.textContent).toBe("");
     },
   );
+
+  it("draws a bot's mascot with nothing behind or over it, which a person's picture has", () => {
+    render(
+      <>
+        <NamedBotAvatar botId={TEAM_S_MAIN_BOT_ID} size="sm" />
+        <PersonAvatar
+          userId="user_1"
+          name="Ada Lovelace"
+          avatarUrl={null}
+          size="sm"
+        />
+      </>,
+    );
+
+    const bot = screen.getByTestId("bot-avatar");
+    expect(bot.querySelector('[data-slot="avatar-fallback"]')).toBeNull();
+    expect(bot.querySelector('[data-slot="avatar-edge"]')).toBeNull();
+    expect(mascotOf(bot).parentElement).toBe(bot);
+    for (const node of [bot, ...bot.querySelectorAll<HTMLElement>("*")]) {
+      expect(node.getAttribute("style") ?? "", node.tagName).not.toMatch(
+        /background|--avatar-fill/,
+      );
+    }
+    expect(
+      fallbackOf(screen.getByTestId("person-avatar")).style.getPropertyValue(
+        "--avatar-fill",
+      ),
+    ).not.toBe("");
+  });
 
   it("is a person's initials in a circle, with no mascot", () => {
     render(
@@ -193,7 +225,6 @@ describe("a bot's picture", () => {
       TEAM_A_MAIN_BOT_ID,
     ]);
 
-    expect(personal.tile).not.toBe(team.tile);
     expect(personal.fills).not.toEqual(team.fills);
   });
 
@@ -201,7 +232,6 @@ describe("a bot's picture", () => {
     const [teamA, teamS] = sideBySide([TEAM_A_MAIN_BOT_ID, TEAM_S_MAIN_BOT_ID]);
 
     expect(teamA.paths).not.toEqual(teamS.paths);
-    expect(teamA.tile).not.toBe(teamS.tile);
     expect(teamA.fills).not.toEqual(teamS.fills);
   });
 
@@ -293,7 +323,7 @@ describe("a bot's chosen look", () => {
   it("draws the bot's own mascot from its id when no mark is chosen", () => {
     render(looking(BARE));
 
-    expect(drawn()[0].paths).toEqual(pathsOf(BOT_ID, null));
+    expect(drawn()[0].paths).toEqual(pathsOf(BOT_ID, null, MASCOT_AT_REST));
   });
 
   it("draws the mascot the person chose and keeps the bot's own colours", () => {
@@ -307,9 +337,9 @@ describe("a bot's chosen look", () => {
     render(looking(chosenLook));
     const [chosen] = drawn();
 
-    expect(chosen.paths).toEqual(pathsOf(BOT_ID, chosenLook));
+    expect(chosen.paths).toEqual(pathsOf(BOT_ID, chosenLook, MASCOT_AT_REST));
     expect(chosen.paths).not.toEqual(derived.paths);
-    expect(chosen.tile).toBe(derived.tile);
+    expect(chosen.fills).toEqual(derived.fills);
   });
 
   it("draws the colour the person chose and keeps the bot's own mascot", () => {
@@ -319,15 +349,14 @@ describe("a bot's chosen look", () => {
     render(looking({ ...BARE, color: 3 }));
     const [chosen] = drawn();
 
-    expect(chosen.tile).toBe(mascotRampAt(3).tile.light);
-    expect(chosen.tileDark).toBe(mascotRampAt(3).tile.dark);
     expect(chosen.fills).toEqual(
       drawMascotMark(
-        { shape: botMascot(BOT_ID, null).shape, ramp: mascotRampAt(3) },
+        { ...botMascot(BOT_ID, null), ramp: mascotRampAt(3) },
         24,
+        MASCOT_AT_REST,
       ).layers.map((layer) => layer.fill),
     );
-    expect(chosen.tile).not.toBe(derived.tile);
+    expect(chosen.fills).not.toEqual(derived.fills);
     expect(chosen.paths).toEqual(derived.paths);
   });
 
@@ -338,22 +367,28 @@ describe("a bot's chosen look", () => {
     render(looking({ ...BARE, mark: BOT_UNRECOGNISED_MARK }));
     const [unreadable] = drawn();
 
-    expect(unreadable.paths).toEqual(
-      drawMascotMark(
-        { shape: DEFAULT_MASCOT_SHAPE, ramp: botMascot(BOT_ID, null).ramp },
-        24,
-      ).layers.map((layer) => layer.path),
-    );
+    const expected = drawMascotMark(
+      { ...botMascot(BOT_ID, null), shape: DEFAULT_MASCOT_SHAPE },
+      24,
+      MASCOT_AT_REST,
+    ).layers;
+    expect(unreadable.paths).toEqual(expected.map((layer) => layer.path));
+    expect(unreadable.fills).toEqual(expected.map((layer) => layer.fill));
     expect(unreadable.paths).not.toEqual(derived.paths);
-    expect(unreadable.tile).toBe(derived.tile);
   });
 
   it("draws the default colours for a colour it cannot read, in the bot's own mascot", () => {
     render(looking({ ...BARE, color: BOT_APPEARANCE_UNRECOGNISED }));
     const [unreadable] = drawn();
 
-    expect(unreadable.tile).toBe(DEFAULT_MASCOT_RAMP.tile.light);
-    expect(unreadable.paths).toEqual(pathsOf(BOT_ID, null));
+    expect(unreadable.fills).toEqual(
+      drawMascotMark(
+        { ...botMascot(BOT_ID, null), ramp: DEFAULT_MASCOT_RAMP },
+        24,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.fill),
+    );
+    expect(unreadable.paths).toEqual(pathsOf(BOT_ID, null, MASCOT_AT_REST));
   });
 
   it.each([
@@ -381,4 +416,119 @@ describe("a bot's chosen look", () => {
       expect(markup()).toBe(derived);
     },
   );
+});
+
+describe("a bot's picture while it works", () => {
+  const WORKING: MascotPose = { expression: "working", beat: 0 };
+
+  function working(): ReactElement {
+    return (
+      <InBotContext title="Team Tracy">
+        <ExpressiveBotAvatar size="sm" expression="working" />
+      </InBotContext>
+    );
+  }
+
+  /** The narrow stub of the reduced-motion preference the clock reads. */
+  function stubReducedMotion(reduced: boolean): void {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: reduced && query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("moves its eyes a beat every 500 ms and comes back round", () => {
+    vi.useFakeTimers();
+    stubReducedMotion(false);
+    render(working());
+    expect(drawn()[0].paths).toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, WORKING),
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(499);
+    });
+    expect(drawn()[0].paths).toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, WORKING),
+    );
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(drawn()[0].paths).toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, { ...WORKING, beat: 1 }),
+    );
+    expect(drawn()[0].paths).not.toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, WORKING),
+    );
+    act(() => {
+      vi.advanceTimersByTime(500 * (MASCOT_WORKING_BEATS - 1));
+    });
+    expect(drawn()[0].paths).toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, WORKING),
+    );
+  });
+
+  it("keeps its eyes still for a person who asked for reduced motion", () => {
+    vi.useFakeTimers();
+    stubReducedMotion(true);
+    render(working());
+    const before = drawn()[0].paths;
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(drawn()[0].paths).toEqual(before);
+  });
+
+  it("starts no timer for a bot that is idle or away", () => {
+    vi.useFakeTimers();
+    stubReducedMotion(false);
+    const setInterval = vi.spyOn(window, "setInterval");
+    render(
+      <InBotContext title="Team Tracy">
+        <>
+          <ExpressiveBotAvatar size="sm" expression="idle" />
+          <ExpressiveBotAvatar size="sm" expression="away" />
+        </>
+      </InBotContext>,
+    );
+    const before = drawn().map((avatar) => avatar.paths);
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(setInterval).not.toHaveBeenCalled();
+    expect(drawn().map((avatar) => avatar.paths)).toEqual(before);
+  });
+
+  it("draws its eyes shut when away, unlike when idle", () => {
+    render(
+      <InBotContext title="Team Tracy">
+        <>
+          <ExpressiveBotAvatar size="sm" expression="idle" />
+          <ExpressiveBotAvatar size="sm" expression="away" />
+        </>
+      </InBotContext>,
+    );
+
+    const [idle, away] = drawn();
+    expect(idle.paths).toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, MASCOT_AT_REST),
+    );
+    expect(away.paths).toEqual(
+      pathsOf(TEAM_S_MAIN_BOT_ID, null, { expression: "away", beat: 0 }),
+    );
+    expect(away.paths).not.toEqual(idle.paths);
+  });
 });
