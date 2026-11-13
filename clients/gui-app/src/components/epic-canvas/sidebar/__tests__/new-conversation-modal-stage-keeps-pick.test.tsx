@@ -39,6 +39,16 @@ const host = vi.hoisted(() => ({
   /** The host's Traycer list, by slug and chip label. */
   traycerHostModels: [{ slug: "traycer-default", label: "traycer-default" }],
   createChat: vi.fn(),
+  providers: [] as {
+    readonly providerId: string;
+    readonly auth: { readonly status: string };
+    readonly profiles: readonly {
+      readonly profileId: string;
+      readonly kind: string;
+      readonly enabled: boolean;
+      readonly auth: { readonly status: string };
+    }[];
+  }[],
 }));
 
 function modelOption(harnessId: GuiHarnessId, slug: string): ModelOption {
@@ -142,6 +152,18 @@ vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
 vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
   useResolvedSeededProfileId: (_harnessId: string, profileId: string | null) =>
     profileId,
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => ({
+    data: { providers: host.providers },
+    isError: false,
+    isPending: false,
+  }),
+  useProvidersListForClient: () => ({
+    data: { providers: host.providers },
+    isError: false,
+    isPending: false,
+  }),
 }));
 
 // The editor and toolbar chrome are held by their own suites; the body hands
@@ -370,6 +392,7 @@ import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-s
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   useStagedSandboxStore,
   type StagedSandboxTarget,
@@ -500,6 +523,7 @@ beforeEach(() => {
     { slug: "traycer-default", label: "traycer-default" },
   ];
   host.createChat.mockReset();
+  host.providers = [];
   useStagedSandboxStore.setState({ bySurface: {} });
   useComposerHarnessMemoryStore.getState().resetForTests();
   useNewConversationModalStore.getState().resetForTests();
@@ -604,5 +628,82 @@ describe("a new-conversation modal with a sandbox staged", () => {
     expect(draftSettings()).toBe(draft);
     expect(chipModelName(toolbar().getState())).toBe("Traycer A");
     expect(pickedRunSettings(toolbar().getState()).model).toBe("trc-a");
+  });
+});
+
+const EMPTY_TERMINAL_SEED: ChatRunSettings = {
+  ultracode: false,
+  harnessId: "claude",
+  model: "sonnet-5.5",
+  permissionMode: "supervised",
+  reasoningEffort: "low",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+};
+
+function claudeListing(profileIds: readonly string[]) {
+  return [
+    {
+      providerId: "claude-code",
+      auth: { status: "unauthenticated" },
+      profiles: [
+        {
+          profileId: "ambient",
+          kind: "ambient",
+          enabled: true,
+          auth: { status: "unauthenticated" },
+        },
+        ...profileIds.map((profileId) => ({
+          profileId,
+          kind: "managed",
+          enabled: true,
+          auth: { status: "authenticated" },
+        })),
+      ],
+    },
+  ];
+}
+
+describe("a new conversation seeded on an empty Terminal login", () => {
+  beforeEach(() => {
+    useNewConversationModalStore.getState().resetForTests();
+    useComposerRunSettingsStore.getState().resetForTests();
+    useComposerRunSettingsStore
+      .getState()
+      .setEpicRunSettings(EPIC_ID, "host-a", EMPTY_TERMINAL_SEED, 1);
+    host.providers = claudeListing(["profile-work"]);
+  });
+
+  afterEach(() => {
+    useComposerRunSettingsStore.getState().resetForTests();
+    host.providers = [];
+  });
+
+  it("selects the one signed-in profile", async () => {
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe("profile-work"),
+    );
+  });
+
+  it("keeps the Terminal login when two profiles are signed in", async () => {
+    host.providers = claudeListing(["profile-work", "profile-home"]);
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("keeps a Terminal login the person already chose", async () => {
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, EMPTY_TERMINAL_SEED);
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
   });
 });
