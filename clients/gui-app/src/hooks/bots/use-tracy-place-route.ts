@@ -61,6 +61,40 @@ function readTracyPlace(botId: string | null): TracyPlace {
   };
 }
 
+/** Whether `state` is the entry of a write still in `awaited`, taken once. */
+function takeOwnWrite(state: unknown, awaited: Set<number>): boolean {
+  const mark = isRecord(state) ? state[TRACY_PLACE_WRITE_KEY] : undefined;
+  return typeof mark === "number" && awaited.delete(mark);
+}
+
+/**
+ * One string per place of `botId`'s channel, read as the stores change: it
+ * differs between two renders exactly when the surface moved between them.
+ */
+export function useTracyPlaceKey(botId: string): string {
+  const threadsShown = useTracyPlaceStore((state) => state.threadsShown);
+  const view = useTracyPlaceStore((state) =>
+    tracyViewOf(state.viewByBotId, botId),
+  );
+  const session = useTracyPlaceStore((state) =>
+    tracySessionOf(state.sessionByBotId, botId),
+  );
+  const railKey = useBotOpenThreadStore((state) =>
+    tracyPlaceRailKey(
+      tracyPlaceRailOf(
+        Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
+      ),
+    ),
+  );
+  return JSON.stringify([
+    threadsShown,
+    view,
+    session?.chatId ?? null,
+    session?.threadId ?? null,
+    railKey,
+  ]);
+}
+
 /**
  * Puts the surface where `place` says. Threads takes the place of a session,
  * so a place naming both shows Threads; with no channel only Threads can
@@ -135,6 +169,15 @@ export function useTracyPlaceRoute(botId: string | null): void {
 
   useEffect(() => {
     if (!surfaceOpen || surfaceBotId !== botId || navigating) return;
+    // The history can be an entry ahead of the router: the desktop replaces
+    // the entry a window starts on before the router has read it. That entry
+    // is read when the router commits it, never under the one it replaced.
+    if (
+      historyEntryIdentity(router.history.location) !==
+      historyEntryIdentity(location)
+    ) {
+      return;
+    }
     const write = (place: TracyPlace, mode: "push" | "replace"): void => {
       placeWrites += 1;
       const seq = placeWrites;
@@ -185,9 +228,7 @@ export function useTracyPlaceRoute(botId: string | null): void {
       return;
     }
     const stepped = takeTracyPlaceStep(identity);
-    const state: unknown = location.state;
-    const mark = isRecord(state) ? state[TRACY_PLACE_WRITE_KEY] : undefined;
-    const own = typeof mark === "number" && awaited.current.delete(mark);
+    const own = takeOwnWrite(location.state, awaited.current);
     if (routed === null) {
       write(here, "replace");
       return;

@@ -163,6 +163,7 @@ function openSurfaceOn(botId: string): void {
     hostId: TAB_HOST,
     botId,
     visitedBotIds: [],
+    goneReports: {},
   });
   useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent", null);
 }

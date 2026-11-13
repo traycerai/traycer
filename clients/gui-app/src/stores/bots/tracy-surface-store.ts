@@ -27,14 +27,16 @@ import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
  * - `visitedBotIds` are the channels shown since the surface opened, whose
  *   rail, drafts, surface actions and landing are kept across switches and
  *   forgotten when the bot goes away or the surface closes. Session-only.
- * - `goneBotIds` are the bots this surface's host has shown to be gone: a
- *   deleted bot, or one missing from a list that answered after carrying it.
- *   Back and forward skip a gone bot's history entries and the history
- *   prunes them (`isHistoryEntryDead`). A list that carries the bot again
- *   takes it back out; closing the surface forgets them all, since nothing
- *   then stands behind the claim. Session-only.
+ * - `goneReports` are the bots this surface's host has shown to be gone (a
+ *   deleted bot, or one missing from a list that answered after carrying
+ *   it), each with when the list it was reported against answered. Back and
+ *   forward skip a gone bot's history entries and the history prunes them
+ *   (`isHistoryEntryDead`). Only a list that answered after the report and
+ *   carries the bot takes it back out: the list a bot was reported against
+ *   still carries it and proves nothing. Closing the surface forgets them
+ *   all, since nothing then stands behind the claim. Session-only.
  *
- * Persisted in localStorage (except `visitedBotIds` and `goneBotIds`), so a restart restores
+ * Persisted in localStorage (except `visitedBotIds` and `goneReports`), so a restart restores
  * the surface on its host and its last channel: one record in the browser,
  * one per window on the desktop (`bindTracySurfaceToWindow`).
  */
@@ -43,7 +45,7 @@ interface TracySurfaceState {
   readonly hostId: string | null;
   readonly botId: string | null;
   readonly visitedBotIds: ReadonlyArray<string>;
-  readonly goneBotIds: ReadonlyArray<string>;
+  readonly goneReports: Readonly<Record<string, number>>;
   /** Opens the surface bound to `hostId`; an open surface keeps its host. */
   readonly openSurface: (hostId: string) => void;
   /** Commits the selected channel. */
@@ -51,10 +53,19 @@ interface TracySurfaceState {
   /** Moves an open surface to `hostId`. */
   readonly rebind: (hostId: string) => void;
   readonly markVisited: (botId: string) => void;
-  /** A bot shown to be gone: its per-channel state is forgotten with it. */
-  readonly forgetBot: (botId: string) => void;
-  /** A list answered with `botIds`: none of them is gone. */
-  readonly settleListedBots: (botIds: ReadonlySet<string>) => void;
+  /**
+   * A bot shown to be gone against the list that answered at `listedAt`: its
+   * per-channel state is forgotten with it.
+   */
+  readonly forgetBot: (botId: string, listedAt: number) => void;
+  /**
+   * The list that answered at `listedAt` carries `botIds`: none of them
+   * reported gone against an earlier list is gone.
+   */
+  readonly settleListedBots: (
+    botIds: ReadonlySet<string>,
+    listedAt: number,
+  ) => void;
   /** Closes the surface, forgetting every visited bot's state. */
   readonly closeSurface: () => void;
 }
@@ -97,7 +108,7 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
       hostId: null,
       botId: null,
       visitedBotIds: [],
-      goneBotIds: [],
+      goneReports: {},
       openSurface: (hostId) => {
         if (get().open) return;
         actedOnSinceBind = true;
@@ -124,21 +135,33 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
         if (visited.includes(botId)) return;
         set({ visitedBotIds: [...visited, botId] });
       },
-      forgetBot: (botId) => {
+      forgetBot: (botId, listedAt) => {
         stagedLandings.delete(botId);
         forgetBotState(botId);
         useMobileTabOriginStore.getState().forgetBot(botId);
-        const { visitedBotIds: visited, goneBotIds: gone } = get();
-        if (!visited.includes(botId) && gone.includes(botId)) return;
+        const { visitedBotIds: visited, goneReports: gone } = get();
+        if (
+          !visited.includes(botId) &&
+          Object.hasOwn(gone, botId) &&
+          gone[botId] === listedAt
+        ) {
+          return;
+        }
         set({
           visitedBotIds: visited.filter((id) => id !== botId),
-          goneBotIds: gone.includes(botId) ? gone : [...gone, botId],
+          goneReports: { ...gone, [botId]: listedAt },
         });
       },
-      settleListedBots: (botIds) => {
-        const gone = get().goneBotIds;
-        if (!gone.some((id) => botIds.has(id))) return;
-        set({ goneBotIds: gone.filter((id) => !botIds.has(id)) });
+      settleListedBots: (botIds, listedAt) => {
+        const gone = get().goneReports;
+        const kept = Object.fromEntries(
+          Object.entries(gone).filter(
+            ([botId, reportedAt]) =>
+              !(botIds.has(botId) && listedAt > reportedAt),
+          ),
+        );
+        if (Object.keys(kept).length === Object.keys(gone).length) return;
+        set({ goneReports: kept });
       },
       closeSurface: () => {
         const state = get();
@@ -151,12 +174,12 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
         if (
           !state.open &&
           state.visitedBotIds.length === 0 &&
-          state.goneBotIds.length === 0
+          Object.keys(state.goneReports).length === 0
         ) {
           return;
         }
         actedOnSinceBind = true;
-        set({ open: false, hostId: null, visitedBotIds: [], goneBotIds: [] });
+        set({ open: false, hostId: null, visitedBotIds: [], goneReports: {} });
       },
     }),
     {

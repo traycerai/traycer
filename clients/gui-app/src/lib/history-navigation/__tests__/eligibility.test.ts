@@ -159,10 +159,10 @@ describe("findEligibleOffset", () => {
 
 describe("isHistoryEntryEligible — a bot shown gone", () => {
   beforeEach(() => {
-    useTracySurfaceStore.setState({ goneBotIds: [] });
+    useTracySurfaceStore.setState({ goneReports: {} });
   });
   afterEach(() => {
-    useTracySurfaceStore.setState({ goneBotIds: [] });
+    useTracySurfaceStore.setState({ goneReports: {} });
   });
 
   it("skips the channel of a bot shown gone, and takes it again once it is not", () => {
@@ -170,16 +170,16 @@ describe("isHistoryEntryEligible — a bot shown gone", () => {
     const href = "/bot/bot-gone?view=activity";
     expect(isHistoryEntryEligible(href, canvas)).toBe(true);
 
-    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone"] });
+    useTracySurfaceStore.setState({ goneReports: { "bot-gone": 1 } });
     expect(isHistoryEntryEligible(href, canvas)).toBe(false);
     expect(isHistoryEntryEligible("/bot/bot-gone", canvas)).toBe(false);
 
-    useTracySurfaceStore.setState({ goneBotIds: [] });
+    useTracySurfaceStore.setState({ goneReports: {} });
     expect(isHistoryEntryEligible(href, canvas)).toBe(true);
   });
 
   it("lands past a gone bot's entries on the nearest eligible one", () => {
-    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone"] });
+    useTracySurfaceStore.setState({ goneReports: { "bot-gone": 1 } });
     const canvas = state({}, []);
     const entries = [
       "/bot/bot-live?view=messages",
@@ -215,7 +215,9 @@ describe("isHistoryEntryEligible — a bot shown gone", () => {
       answers.map(([href]) => isHistoryEntryEligible(href, canvas));
     expect(eligibleNow()).toEqual(answers.map(([, eligible]) => eligible));
 
-    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone", "bot-other"] });
+    useTracySurfaceStore.setState({
+      goneReports: { "bot-gone": 1, "bot-other": 1 },
+    });
 
     expect(eligibleNow()).toEqual(answers.map(([, eligible]) => eligible));
   });

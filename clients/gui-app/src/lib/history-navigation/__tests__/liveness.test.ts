@@ -301,10 +301,10 @@ describe("isHistoryEntryDead — conservative liveness", () => {
 
 describe("isHistoryEntryDead — a bot shown gone", () => {
   beforeEach(() => {
-    useTracySurfaceStore.setState({ goneBotIds: [] });
+    useTracySurfaceStore.setState({ goneReports: {} });
   });
   afterEach(() => {
-    useTracySurfaceStore.setState({ goneBotIds: [] });
+    useTracySurfaceStore.setState({ goneReports: {} });
   });
 
   it("keeps a bot's channel until its bot is shown gone, then prunes every entry of it", () => {
@@ -316,7 +316,7 @@ describe("isHistoryEntryDead — a bot shown gone", () => {
       expect(isHistoryEntryDead(href)).toBe(false);
     }
 
-    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone"] });
+    useTracySurfaceStore.setState({ goneReports: { "bot-gone": 1 } });
 
     for (const href of [
       "/bot/bot-gone",
@@ -328,7 +328,7 @@ describe("isHistoryEntryDead — a bot shown gone", () => {
   });
 
   it("keeps the channel of a bot that is not gone, and a deeper path of one that is", () => {
-    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone"] });
+    useTracySurfaceStore.setState({ goneReports: { "bot-gone": 1 } });
     expect(isHistoryEntryDead("/bot/bot-live?view=activity")).toBe(false);
     expect(isHistoryEntryDead("/bot/bot-gone/deeper")).toBe(false);
   });
@@ -355,7 +355,9 @@ describe("isHistoryEntryDead — a bot shown gone", () => {
       answers.map(([, dead]) => dead),
     );
 
-    useTracySurfaceStore.setState({ goneBotIds: ["bot-gone", "bot-other"] });
+    useTracySurfaceStore.setState({
+      goneReports: { "bot-gone": 1, "bot-other": 1 },
+    });
 
     expect(answers.map(([href]) => isHistoryEntryDead(href))).toEqual(
       answers.map(([, dead]) => dead),

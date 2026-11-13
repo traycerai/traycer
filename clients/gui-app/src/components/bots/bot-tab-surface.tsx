@@ -80,6 +80,7 @@ import {
   tracyViewOf,
   useTracyPlaceStore,
 } from "@/stores/bots/tracy-place-store";
+import { useTracyPlaceKey } from "@/hooks/bots/use-tracy-place-route";
 import {
   isTracyChannelView,
   type TracyChannelView,
@@ -434,14 +435,13 @@ function useTracyChannelUpkeep(input: {
   readonly unavailable: ReadonlySet<string>;
 } {
   const { botId, groups, listed, listedAt, select } = input;
-  // Each bot reported gone, with the list read it was reported against.
-  const [goneReports, setGoneReports] = useState<ReadonlyMap<string, number>>(
-    () => new Map(),
-  );
+  // Each bot reported gone, with the list read it was reported against: the
+  // one record the default below and the history's prune and skip both read.
+  const goneReports = useTracySurfaceStore((state) => state.goneReports);
   const unavailable = useMemo(
     () =>
       new Set(
-        [...goneReports]
+        Object.entries(goneReports)
           .filter(([, reportedAt]) => reportedAt === listedAt)
           .map(([goneBotId]) => goneBotId),
       ),
@@ -449,9 +449,8 @@ function useTracyChannelUpkeep(input: {
   );
   const forget = useCallback(
     (goneBotId: string): void => {
-      setGoneReports((reports) => new Map(reports).set(goneBotId, listedAt));
       const surface = useTracySurfaceStore.getState();
-      surface.forgetBot(goneBotId);
+      surface.forgetBot(goneBotId, listedAt);
       if (goneBotId !== surface.botId) return;
       if (tracyNavigationPending()) {
         surface.selectChannel(null);
@@ -475,7 +474,7 @@ function useTracyChannelUpkeep(input: {
   useEffect(() => {
     if (listed === null) return;
     const listedIds = new Set(listed.map((bot) => bot.botId));
-    useTracySurfaceStore.getState().settleListedBots(listedIds);
+    useTracySurfaceStore.getState().settleListedBots(listedIds, listedAt);
     const seen = seenListedRef.current;
     for (const kept of new Set([...visitedBotIds, ...draftBotIds])) {
       if (listedIds.has(kept)) {
@@ -485,7 +484,7 @@ function useTracyChannelUpkeep(input: {
         forget(kept);
       }
     }
-  }, [draftBotIds, forget, listed, visitedBotIds]);
+  }, [draftBotIds, forget, listed, listedAt, visitedBotIds]);
   const defaultBotId =
     groups === null ? null : defaultTracyChannelOf(groups, unavailable);
   const navigationPending = useSyncExternalStore(
@@ -985,7 +984,8 @@ function useChannelSearchEntry(args: {
  * so the same turn opened again lands again. The session's links show the
  * channel - on a post, or with a thread beside it - in Messages; its back
  * button returns to the view it was opened from, the channel where it was.
- * The channel lands on a post once: leaving Messages drops the landing.
+ * Either lands on its message once: leaving the place it was asked on, by
+ * a button or a step back or forward, drops the landing.
  * Threads takes the place of a session as well: leaving it shows the
  * channel, since a session open when Threads was chosen is not where either
  * way back says it goes.
@@ -1001,7 +1001,6 @@ function useBotTabSession(args: {
   readonly openSession: BotSessionOpen;
   readonly openTurn: BotTurnOpen;
   readonly closeSession: () => void;
-  readonly changeView: (view: BotTabView) => void;
   readonly showChannel: (messageId: string | null) => void;
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
@@ -1021,6 +1020,22 @@ function useBotTabSession(args: {
     readonly channelLanding: BotChannelLanding | null;
     readonly visits: number;
   }>({ sessionLanding: null, channelLanding: null, visits: 0 });
+  // A landing belongs to the visit that asked for it. The view it landed in
+  // is gone once the surface is anywhere else, and the place shown again
+  // mounts a new one, which must not jump to that message a second time.
+  const placeKey = useTracyPlaceKey(botId);
+  const [landedAt, setLandedAt] = useState<{
+    readonly visit: number;
+    readonly placeKey: string;
+  } | null>(null);
+  const landing = shown.sessionLanding?.landOn ?? shown.channelLanding;
+  if (landing === null) {
+    if (landedAt !== null) setLandedAt(null);
+  } else if (landedAt?.visit !== landing.visit) {
+    setLandedAt({ visit: landing.visit, placeKey });
+  } else if (landedAt.placeKey !== placeKey) {
+    setShown({ ...shown, sessionLanding: null, channelLanding: null });
+  }
   const session = useMemo(
     (): BotOpenSession | null =>
       shownSession === null
@@ -1109,21 +1124,6 @@ function useBotTabSession(args: {
     },
     [setOpenThread, showLanded],
   );
-  // Leaving Messages spends the channel's landing: the channel mounts again
-  // when Messages shows, and must not land on that post a second time.
-  const changeView = useCallback(
-    (view: BotTabView) => {
-      if (view !== "messages") {
-        setShown((previous) =>
-          previous.channelLanding === null
-            ? previous
-            : { ...previous, channelLanding: null },
-        );
-      }
-      onViewChange(view);
-    },
-    [onViewChange],
-  );
   // A thread the list does not name has no post to open it by: the channel
   // shows instead, with no other thread beside it. One it names opens on
   // `messageId` where one is named.
@@ -1155,7 +1155,6 @@ function useBotTabSession(args: {
     openSession,
     openTurn,
     closeSession,
-    changeView,
     showChannel,
     landChannel,
     showThread,
@@ -1519,7 +1518,6 @@ function BotTabContent(props: {
     openSession,
     openTurn,
     closeSession,
-    changeView,
     showChannel,
     landChannel,
     showThread,
@@ -1562,8 +1560,8 @@ function BotTabContent(props: {
   const activeTasks = useBotActiveTasks(snapshot.tasks, hostId, snapshotFresh);
   const showMessages = useCallback(() => {
     closeSession();
-    changeView("messages");
-  }, [changeView, closeSession]);
+    onViewChange("messages");
+  }, [closeSession, onViewChange]);
   const openSearch = useChannelSearchEntry({
     botId,
     hostId,
@@ -1628,7 +1626,7 @@ function BotTabContent(props: {
                 <Tabs
                   value={view}
                   onValueChange={(next) => {
-                    if (isTracyChannelView(next)) changeView(next);
+                    if (isTracyChannelView(next)) onViewChange(next);
                   }}
                   className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
                 >

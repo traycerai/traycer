@@ -60,7 +60,7 @@ function resetStores(): void {
     hostId: null,
     botId: null,
     visitedBotIds: [],
-    goneBotIds: [],
+    goneReports: {},
   });
   useBotTabLandingStore.setState(useBotTabLandingStore.getInitialState(), true);
   useSelectionAuthorityStore.setState({

@@ -42,6 +42,11 @@ export function takeTracyPlaceStep(identity: string): boolean {
  * write (`PUSH`, `REPLACE`) never is. The entry the history starts on counts
  * as one: a restart, or a pasted link, lands the surface where the entry says.
  *
+ * A landing nobody has taken yet outlives a replace of its entry by another
+ * Tracy entry: the desktop re-establishes the route a window showed at
+ * shutdown by replacing the entry it started on, and the entry the person
+ * landed on is still the one that says where the surface goes.
+ *
  * Returns the unsubscribe, for a router that is torn down.
  */
 export function observeTracyPlaceTraversals(
@@ -53,14 +58,18 @@ export function observeTracyPlaceTraversals(
     : null;
   return history.subscribe(({ location, action }) => {
     const identity = historyEntryIdentity(location);
-    const moved = identity !== lastIdentity;
+    const previous = lastIdentity;
     lastIdentity = identity;
-    if (!moved) return;
+    if (identity === previous) return;
+    const tracy = isTracyPath(hrefPathname(location.href));
+    if (action.type === "REPLACE" && steppedOnto === previous) {
+      steppedOnto = tracy ? identity : null;
+      return;
+    }
     const traversed =
       action.type === "BACK" ||
       action.type === "FORWARD" ||
       action.type === "GO";
-    steppedOnto =
-      traversed && isTracyPath(hrefPathname(location.href)) ? identity : null;
+    steppedOnto = traversed && tracy ? identity : null;
   });
 }

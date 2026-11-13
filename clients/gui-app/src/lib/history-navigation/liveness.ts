@@ -92,7 +92,8 @@ export function isHistoryEntryDead(href: string): boolean {
 export function isGoneBotHref(href: string): boolean {
   const botId = readBotIdFromPath(hrefPathname(href));
   return (
-    botId !== null && useTracySurfaceStore.getState().goneBotIds.includes(botId)
+    botId !== null &&
+    Object.hasOwn(useTracySurfaceStore.getState().goneReports, botId)
   );
 }
 

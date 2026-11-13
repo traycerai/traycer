@@ -135,7 +135,7 @@ function resetStores(): void {
     hostId: null,
     botId: null,
     visitedBotIds: [],
-    goneBotIds: [],
+    goneReports: {},
   });
   useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
   useBotOpenThreadStore.setState(useBotOpenThreadStore.getInitialState(), true);
@@ -850,7 +850,7 @@ describe("the Tracy surface's place on the route", () => {
 
     it("is skipped by Back, and taken back by a list that carries it", () => {
       const history = branded();
-      act(() => useTracySurfaceStore.getState().forgetBot(BOT_B));
+      act(() => useTracySurfaceStore.getState().forgetBot(BOT_B, 1));
 
       act(() => goBack({ history }));
       expect(history.location.pathname).toBe(`/bot/${BOT_A}`);
@@ -859,7 +859,7 @@ describe("the Tracy surface's place on the route", () => {
       expect(history.location.pathname).toBe("/bot/bot-c");
 
       act(() =>
-        useTracySurfaceStore.getState().settleListedBots(new Set([BOT_B])),
+        useTracySurfaceStore.getState().settleListedBots(new Set([BOT_B]), 2),
       );
       act(() => goBack({ history }));
       expect(history.location.pathname).toBe(`/bot/${BOT_B}`);
@@ -867,7 +867,7 @@ describe("the Tracy surface's place on the route", () => {
 
     it("is forgotten when the surface closes", () => {
       const canvas = useEpicCanvasStore.getState();
-      act(() => useTracySurfaceStore.getState().forgetBot(BOT_B));
+      act(() => useTracySurfaceStore.getState().forgetBot(BOT_B, 1));
       expect(isHistoryEntryDead(ENTRIES[1])).toBe(true);
       expect(isHistoryEntryEligible(ENTRIES[1], canvas)).toBe(false);
 

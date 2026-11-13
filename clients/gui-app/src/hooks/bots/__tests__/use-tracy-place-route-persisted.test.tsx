@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import {
   createRootRoute,
@@ -46,6 +46,8 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 import { emptyTabStripLayout } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import * as DesktopTabsPersistence from "@/stores/tabs/desktop-tabs-persistence";
 
 /**
  * The Tracy surface's place on the route over the PERSISTED history stack the
@@ -127,13 +129,44 @@ async function mount(initialRoute: string | null): Promise<Harness> {
   return harness;
 }
 
+/**
+ * `mount`, with the window's bridge hydrating only when `hydrate` is called,
+ * as the desktop's does once the per-window snapshot is applied: the route
+ * mounts and puts its place back first, the bridge's restore comes after.
+ */
+async function mountHydratingLater(): Promise<{
+  readonly harness: Harness;
+  readonly hydrate: () => void;
+}> {
+  const router = buildRouter(createPersistentMemoryHistory(null, WINDOW_KEY));
+  const stopObserving = observeTracyPlaceTraversals(router.history);
+  const tree = (hasHydrated: boolean) => (
+    <WindowsBridgeContext.Provider value={{ bridge: null, hasHydrated }}>
+      <RouterProvider router={router} />
+    </WindowsBridgeContext.Provider>
+  );
+  const view = render(tree(false));
+  const harness: Harness = {
+    router,
+    stop: () => {
+      stopObserving();
+      view.unmount();
+    },
+  };
+  current = harness;
+  await waitFor(() => {
+    expect(router.state.status).toBe("idle");
+  });
+  return { harness, hydrate: () => view.rerender(tree(true)) };
+}
+
 function resetStores(): void {
   useTracySurfaceStore.setState({
     open: false,
     hostId: null,
     botId: null,
     visitedBotIds: [],
-    goneBotIds: [],
+    goneReports: {},
   });
   useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
   useBotOpenThreadStore.setState(useBotOpenThreadStore.getInitialState(), true);
@@ -245,6 +278,7 @@ const THREAD_A: BotRail = {
   anchorKind: null,
   sent: null,
 };
+const MEMORY: BotRail = { kind: "memory", back: null };
 const THREAD_B: BotRail = {
   kind: "thread",
   anchorMessageId: "msg-2",
@@ -263,6 +297,7 @@ describe("the Tracy surface's place over the persisted history", () => {
     current?.stop();
     current = null;
     cleanup();
+    vi.restoreAllMocks();
     resetStores();
     window.localStorage.clear();
     window.sessionStorage.clear();
@@ -406,6 +441,133 @@ describe("the Tracy surface's place over the persisted history", () => {
         persisted.entries[persisted.index - 1],
       );
     });
+  });
+
+  describe("a desktop restart, through the bridge's restore of the route", () => {
+    /**
+     * The window starts on the persisted entry and the bridge, once hydrated,
+     * replaces it with the route the window showed at shutdown - the same
+     * href under a new entry key. The restored route is spent once, as the
+     * real `consumeDesktopRestoredRoute` does.
+     */
+    function seedRestoredRoute(route: string): void {
+      let pending: string | null = route;
+      vi.spyOn(
+        DesktopTabsPersistence,
+        "consumeDesktopRestoredRoute",
+      ).mockImplementation(() => {
+        const value = pending;
+        pending = null;
+        return value;
+      });
+    }
+
+    const PLACES: ReadonlyArray<
+      readonly [string, () => void, (search: Record<string, unknown>) => void]
+    > = [
+      [
+        "Activity with the bot's memory open",
+        () => {
+          place().setView(BOT_A, "activity");
+          rails().setRail(BOT_A, MEMORY);
+        },
+        (search) => {
+          expect(search).toMatchObject({ view: "activity", memory: true });
+          expect(storePlace(BOT_A).view).toBe("activity");
+          expect(railOf(BOT_A)).toMatchObject({ kind: "memory" });
+        },
+      ],
+      [
+        "a thread open beside Messages",
+        () => {
+          rails().setRail(BOT_A, THREAD_A);
+        },
+        (search) => {
+          expect(search).toMatchObject({ view: "messages", thread: "msg-1" });
+          expect(storePlace(BOT_A).view).toBe("messages");
+          expect(railOf(BOT_A)).toMatchObject({
+            kind: "thread",
+            anchorMessageId: "msg-1",
+          });
+        },
+      ],
+    ];
+
+    /**
+     * Restarts with the stores empty and the surface open on the bot, the
+     * bridge restoring `shown`, and checks the entry kept its place.
+     * `bridgeFirst`: the bridge is hydrated when the router mounts, so its
+     * replace of the entry comes before the route has read it.
+     */
+    async function restartAndRestore(
+      arrange: () => void,
+      expectPlace: (search: Record<string, unknown>) => void,
+      bridgeFirst: boolean,
+    ): Promise<void> {
+      const first = await mountOnChannel(BOT_A);
+      act(arrange);
+      await settle(first, BOT_A);
+      const persisted = storedStack();
+      const shown = first.router.state.location.href;
+      expect(persisted.entries[persisted.index]).toBe(shown);
+      expect(persisted.index).toBeGreaterThan(0);
+
+      first.stop();
+      current = null;
+      resetStores();
+      useTracySurfaceStore.setState({
+        open: true,
+        hostId: WINDOW_HOST,
+        botId: BOT_A,
+      });
+      seedRestoredRoute(shown);
+      const consumed = vi.mocked(
+        DesktopTabsPersistence.consumeDesktopRestoredRoute,
+      );
+
+      let second: Harness;
+      if (bridgeFirst) {
+        second = await mount(null);
+      } else {
+        const later = await mountHydratingLater();
+        second = later.harness;
+        await waitFor(() => {
+          expect(storePlace(BOT_A)).toEqual(urlPlace(second));
+        });
+        expect(consumed).not.toHaveBeenCalled();
+        act(later.hydrate);
+      }
+      await waitFor(() => {
+        expect(consumed).toHaveBeenCalled();
+        expect(storePlace(BOT_A)).toEqual(urlPlace(second));
+      });
+      await settle(second, BOT_A);
+
+      expect(second.router.state.location.href).toBe(shown);
+      expectPlace(second.router.state.location.search);
+      expect(storedStack()).toEqual(persisted);
+      expect(storedStack().entries[persisted.index]).toBe(shown);
+      expect(liveStack(second)).toEqual(persisted);
+
+      act(() => goBack(second.router));
+      await settle(second, BOT_A);
+      expect(liveStack(second).index).toBe(persisted.index - 1);
+      expect(second.router.state.location.href).toBe(
+        persisted.entries[persisted.index - 1],
+      );
+    }
+
+    it.each(PLACES)(
+      "keeps %s when the bridge restores the route before the route has read the entry",
+      (_name, arrange, expectPlace) =>
+        restartAndRestore(arrange, expectPlace, true),
+    );
+
+    it.each(PLACES)(
+      "keeps %s when the bridge restores the route after the route has read the entry",
+      (_name, arrange, expectPlace) =>
+        restartAndRestore(arrange, expectPlace, false),
+    );
   });
 
   describe("two moves in quick succession", () => {

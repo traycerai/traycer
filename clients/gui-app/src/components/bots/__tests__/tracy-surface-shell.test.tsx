@@ -674,6 +674,7 @@ function resetStores(): void {
     hostId: null,
     botId: null,
     visitedBotIds: [],
+    goneReports: {},
   });
   useBotColumnLayoutStore.setState({
     sectionOrder: [],
