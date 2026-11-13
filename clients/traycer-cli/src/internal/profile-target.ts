@@ -1,8 +1,9 @@
 import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
 import {
   PROVIDER_DISPLAY_NAMES,
-  type ProviderCliState,
   type ProviderId,
+  type ProviderProfile,
+  type ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   GUI_HARNESS_BY_PROVIDER_ID,
@@ -28,12 +29,51 @@ import {
  * The commands that change anything name their own floors.
  */
 export async function readProviderStates(): Promise<
-  readonly ProviderCliState[]
+  readonly ProviderListState[]
 > {
   const response = await toAgentCliError(
     callHostRpcWithDispatch("providers.list", { native: null }, PLAIN_DISPATCH),
   );
   return response.providers;
+}
+
+/** One provider as `providers.list` answers it, its rows with every list key. */
+export type ProviderListState = ProvidersListResponse["providers"][number];
+
+/**
+ * The row of one provider that `id` names: the row whose own `profileId` it
+ * is, else the one row whose `aliases` holds it (the ids of rows folded into
+ * it). An id that more than one row lists is not guessed. Null when no row
+ * names it, so the caller keeps what it does today for an id it cannot find.
+ */
+export function findProfileByIdOrAlias(
+  profiles: readonly ProviderProfile[],
+  id: string,
+): ProviderProfile | null {
+  const own = profiles.find((profile) => profile.profileId === id);
+  if (own !== undefined) return own;
+  const aliased = profiles.filter(
+    (profile) => profile.aliases?.includes(id) === true,
+  );
+  return aliased.length === 1 ? (aliased[0] ?? null) : null;
+}
+
+/**
+ * The listed row `id` names under `providerId`, read from `providers.list`
+ * the moment before a change is sent. Null when the provider or the row is
+ * not listed; the caller then sends `id` as typed, as it always has, and the
+ * host's answer for a missing profile is what the person sees.
+ */
+export async function readListedProfile(
+  providerId: ProviderId,
+  id: string,
+): Promise<ProviderProfile | null> {
+  const state = (await readProviderStates()).find(
+    (provider) => provider.providerId === providerId,
+  );
+  return state === undefined
+    ? null
+    : findProfileByIdOrAlias(state.profiles, id);
 }
 
 /**

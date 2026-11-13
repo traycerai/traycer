@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises";
 import type {
   ProviderId,
   ProviderProfileAction,
+  ProvidersAnswerProfileNameResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   callHostRpcWithDispatch,
@@ -15,8 +16,10 @@ import {
   parseProfileArgument,
   parseProviderArgument,
   printable,
+  readListedProfile,
 } from "../internal/profile-target";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { renameConflictLine } from "../internal/profile-words";
+import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 
 /**
@@ -52,7 +55,32 @@ async function applyProfileAction(
   );
 }
 
-/** `traycer profile rename <provider> <profile> <label>`. */
+/**
+ * Answers a row's open "Which name should this account use?" question with
+ * `label`, sending the question's `revision` back unchanged. The account's
+ * name everywhere when it is `applied`; a `conflict` wrote nothing, and its
+ * `label` is the name the account uses now.
+ */
+export async function answerProfileName(
+  providerId: ProviderId,
+  profileId: string,
+  revision: string,
+  label: string,
+): Promise<ProvidersAnswerProfileNameResponse> {
+  return await toAgentCliError(
+    callHostRpcWithDispatch(
+      "providers.answerProfileName",
+      { providerId, profileId, revision, label },
+      PLAIN_DISPATCH,
+    ),
+  );
+}
+
+/**
+ * `traycer profile rename <provider> <profile> <label>`. A row whose name is
+ * an open question is renamed by answering it, so the answer is the name on
+ * every computer and the question closes.
+ */
 export function buildProfileRenameCommand(opts: {
   readonly provider: string;
   readonly profile: string;
@@ -60,19 +88,53 @@ export function buildProfileRenameCommand(opts: {
 }): CommandFn {
   return async () => {
     const providerId = parseProviderArgument(opts.provider);
-    const profileId = parseProfileArgument(opts.profile);
+    const typed = parseProfileArgument(opts.profile);
     const label = parseProfileLabel(opts.label);
+    const row = await readListedProfile(providerId, typed);
+    const profileId = row?.profileId ?? typed;
+    const question = row?.nameQuestion ?? null;
+    if (question !== null) {
+      const answer = await answerProfileName(
+        providerId,
+        profileId,
+        question.revision,
+        label,
+      );
+      return {
+        data: {
+          providerId,
+          profileId,
+          label: answer.label,
+          nameQuestion: answer,
+        },
+        human:
+          answer.outcome === "applied"
+            ? renamedLine(providerId, profileId, answer.label)
+            : renameConflictLine(answer.label),
+        // A conflict leaves the account on a name other than the one asked
+        // for, so a script must not read it as renamed.
+        exitCode: answer.outcome === "applied" ? 0 : 1,
+      };
+    }
     await applyProfileAction(providerId, { type: "rename", profileId, label });
     return {
       data: { providerId, profileId, label },
-      human: `Renamed ${describeProvider(providerId)} profile ${printable(profileId)} to "${printable(label)}".`,
+      human: renamedLine(providerId, profileId, label),
       exitCode: 0,
     };
   };
 }
 
+function renamedLine(
+  providerId: ProviderId,
+  profileId: string,
+  label: string,
+): string {
+  return `Renamed ${describeProvider(providerId)} profile ${printable(profileId)} to "${printable(label)}".`;
+}
+
 /** The label cap both profile label fields carry on the wire. */
-const PROFILE_LABEL_MAX_LENGTH = 64;
+export const PROFILE_LABEL_MAX_LENGTH = 64;
 
 export function parseProfileLabel(value: string): string {
   const label = value.trim();
@@ -95,7 +157,9 @@ export function buildProfileSetEnabledCommand(opts: {
 }): CommandFn {
   return async () => {
     const providerId = parseProviderArgument(opts.provider);
-    const profileId = parseProfileArgument(opts.profile);
+    const typed = parseProfileArgument(opts.profile);
+    const profileId =
+      (await readListedProfile(providerId, typed))?.profileId ?? typed;
     const response = await toAgentCliError(
       callHostRpcWithDispatch(
         "providers.setProfileEnabled",
@@ -123,18 +187,15 @@ export function buildProfileRemoveCommand(opts: {
 }): CommandFn {
   return async (ctx) => {
     const providerId = parseProviderArgument(opts.provider);
-    const profileId = parseProfileArgument(opts.profile);
-    if (isAmbientProfileId(profileId)) {
-      throw cliError({
-        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-        message:
-          "traycer: the ambient profile is the provider's own CLI login and cannot be removed - use 'traycer profile disable' to stop Traycer using it.",
-        details: null,
-        exitCode: 1,
-      });
-    }
+    const typed = parseProfileArgument(opts.profile);
+    // Both refused before the host is asked anything, as they always were.
+    if (isAmbientProfileId(typed)) throw ambientNotRemovable();
+    if (!opts.yes) assertCanConfirm(ctx);
+    const profileId =
+      (await readListedProfile(providerId, typed))?.profileId ?? typed;
+    if (isAmbientProfileId(profileId)) throw ambientNotRemovable();
     if (!opts.yes) {
-      await confirmRemoval(ctx, providerId, profileId);
+      await confirmRemoval(providerId, profileId);
     }
     await applyProfileAction(providerId, { type: "remove", profileId });
     return {
@@ -145,11 +206,17 @@ export function buildProfileRemoveCommand(opts: {
   };
 }
 
-async function confirmRemoval(
-  ctx: CommandContext,
-  providerId: ProviderId,
-  profileId: string,
-): Promise<void> {
+function ambientNotRemovable(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    message:
+      "traycer: the ambient profile is the provider's own CLI login and cannot be removed - use 'traycer profile disable' to stop Traycer using it.",
+    details: null,
+    exitCode: 1,
+  });
+}
+
+function assertCanConfirm(ctx: CommandContext): void {
   const canPrompt =
     !ctx.runtime.json &&
     !ctx.runtime.nonInteractive &&
@@ -163,6 +230,12 @@ async function confirmRemoval(
       exitCode: 1,
     });
   }
+}
+
+async function confirmRemoval(
+  providerId: ProviderId,
+  profileId: string,
+): Promise<void> {
   const prompt = createInterface({
     input: process.stdin,
     output: process.stderr,

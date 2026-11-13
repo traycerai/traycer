@@ -5,6 +5,7 @@ import {
   type ProviderCliState,
   type ProviderId,
   type ProviderLoginRefusal,
+  type ProviderProfileNameQuestion,
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -20,12 +21,23 @@ import {
 } from "../internal/host-rpc";
 import {
   describeProvider,
+  findProfileByIdOrAlias,
   isAmbientProfileId,
   parseProfileArgument,
   parseProviderArgument,
   printable,
   readProviderStates,
+  type ProviderListState,
 } from "../internal/profile-target";
+import {
+  NAME_ANSWER_PROMPT,
+  NAME_TOO_LONG,
+  nameAppliedLine,
+  nameConflictLine,
+  nameNeedsChoiceLine,
+  nameQuestionPrompt,
+  nameSkippedLine,
+} from "../internal/profile-words";
 import { providerPackReasonRetryable } from "../../../shared/providers/provider-pack-retry";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
@@ -41,7 +53,11 @@ import type {
   CommandResult,
 } from "../runner/runner";
 import { summarizeProfile, type ProfileListRow } from "./profile-list";
-import { parseProfileLabel } from "./profile-mutations";
+import {
+  answerProfileName,
+  PROFILE_LABEL_MAX_LENGTH,
+  parseProfileLabel,
+} from "./profile-mutations";
 
 type StartLoginRequest = RequestOfMethod<
   HostRpcRegistry,
@@ -197,13 +213,34 @@ const KEEPALIVE_INTERVAL_MS = 60_000;
 
 const INTERRUPTED_EXIT_CODE = 130;
 
-type LoginOutcome =
+/**
+ * How an open "Which name should this account use?" question on the signed-in
+ * row ended in this command. `applied` and `conflict` are the host's answer
+ * and carry the name the account uses now; `skipped` is the person pressing
+ * Enter; `needs-choice` is a sign-in with no terminal to ask on.
+ */
+type NameQuestionOutcome =
+  | { readonly outcome: "applied" | "conflict"; readonly label: string }
   | {
+      readonly outcome: "skipped" | "needs-choice";
+      readonly choices: readonly string[];
+    };
+
+/** Present only when the signed-in row had an open name question. */
+interface NameQuestionPart {
+  readonly nameQuestion?: NameQuestionOutcome;
+}
+
+type LoginOutcome =
+  | ({
       readonly status: "signed-in";
       readonly profile: ProfileListRow | null;
       readonly created: boolean;
-    }
-  | { readonly status: "already-exists"; readonly profile: ProfileListRow }
+    } & NameQuestionPart)
+  | ({
+      readonly status: "already-exists";
+      readonly profile: ProfileListRow;
+    } & NameQuestionPart)
   | { readonly status: "refused"; readonly refusal: ProviderLoginRefusal }
   | { readonly status: "code-rejected" }
   | { readonly status: "not-completed" }
@@ -228,21 +265,31 @@ export function buildProfileLoginCommand(
 ): CommandFn {
   return async (ctx) => {
     const providerId = parseProviderArgument(opts.provider);
-    const target = resolveTarget(opts.target);
+    const typed = resolveTarget(opts.target);
     assertPersonPresent(ctx);
     const state = await readProviderState(providerId);
     assertCanTakeCode(io, state);
-    if (
-      target.profileId !== null &&
-      !state.profiles.some((p) => p.profileId === target.profileId)
-    ) {
+    const row =
+      typed.profileId === null
+        ? null
+        : findProfileByIdOrAlias(state.profiles, typed.profileId);
+    if (typed.profileId !== null && row === null) {
       throw cliError({
         code: CLI_ERROR_CODES.NOT_FOUND,
-        message: `traycer: ${describeProvider(providerId)} has no profile '${printable(target.profileId)}' - run 'traycer profile list ${printable(opts.provider)}' to see them.`,
+        message: `traycer: ${describeProvider(providerId)} has no profile '${printable(typed.profileId)}' - run 'traycer profile list ${printable(opts.provider)}' to see them.`,
         details: null,
         exitCode: 1,
       });
     }
+    // An id folded into another row signs that row in; ambient is addressed
+    // as no profile, as `resolveTarget` does for the typed sentinel.
+    const target: ResolvedTarget =
+      row === null
+        ? typed
+        : {
+            ...typed,
+            profileId: isAmbientProfileId(row.profileId) ? null : row.profileId,
+          };
     const outcome = await runLogin(ctx, io, providerId, target, state);
     return resultOf(providerId, outcome);
   };
@@ -310,7 +357,7 @@ function notInteractive(): CliError {
 
 async function readProviderState(
   providerId: ProviderId,
-): Promise<ProviderCliState> {
+): Promise<ProviderListState> {
   const state = (await readProviderStates()).find(
     (p) => p.providerId === providerId,
   );
@@ -436,7 +483,14 @@ async function runLogin(
       // naming a new profile. A Ctrl+C from here ends the process at once
       // rather than being taken as cancelling a sign-in that already happened.
       stopListening();
-      return await outcomeOf(providerId, target, heldProfileId, result);
+      return await outcomeOf(
+        ctx,
+        io,
+        providerId,
+        target,
+        heldProfileId,
+        result,
+      );
     } finally {
       stopKeepalive();
     }
@@ -705,6 +759,8 @@ async function awaitUntilSettled(
 }
 
 async function outcomeOf(
+  ctx: CommandContext,
+  io: ProfileLoginIo,
   providerId: ProviderId,
   target: ResolvedTarget,
   heldProfileId: string | null,
@@ -714,14 +770,23 @@ async function outcomeOf(
     return { status: "refused", refusal: result.refusal };
   }
   const echoed = (result.state?.profiles ?? []).map(summarizeProfile);
+  const readList = listReadOnce(providerId);
   if (result.existingProfileId !== null) {
     const existing = await findProfileRow(
-      providerId,
       echoed,
       result.existingProfileId,
+      readList,
     );
-    if (existing !== null)
-      return { status: "already-exists", profile: existing };
+    if (existing !== null) {
+      const named = await settleNameQuestion(
+        ctx,
+        io,
+        providerId,
+        existing,
+        readList,
+      );
+      return { status: "already-exists", ...named };
+    }
   }
   // Presence is not success: a row stays listed while signed out, so the row
   // (or, for ambient, the provider's own verdict) must say authenticated.
@@ -738,17 +803,39 @@ async function outcomeOf(
   // not looked up elsewhere then: a profile that was already signed in would
   // still list as authenticated and read as this sign-in's success.
   if (result.state === null) return failedOutcome(result);
-  const row = await findProfileRow(providerId, echoed, heldProfileId);
+  const row = await findProfileRow(echoed, heldProfileId, readList);
   if (row === null || row.authStatus !== "authenticated") {
     return failedOutcome(result);
   }
+  const named = await settleNameQuestion(ctx, io, providerId, row, readList);
   if (target.create === null) {
-    return { status: "signed-in", profile: row, created: false };
+    return { status: "signed-in", ...named, created: false };
   }
+  // An open question is how this account gets its name, so the email prefix
+  // is not put over it.
   return {
     status: "signed-in",
-    profile: await nameNewProfile(providerId, row, target.create.label),
+    ...named,
+    profile:
+      named.nameQuestion === undefined
+        ? await nameNewProfile(providerId, row, target.create.label)
+        : named.profile,
     created: true,
+  };
+}
+
+/**
+ * One `providers.list` read for this provider, shared by everything the
+ * outcome looks up after the sign-in, and null when it fails: what it adds
+ * is best effort, and the sign-in has already happened.
+ */
+function listReadOnce(
+  providerId: ProviderId,
+): () => Promise<ProviderListState | null> {
+  let read: Promise<ProviderListState | null> | null = null;
+  return () => {
+    read ??= readProviderState(providerId).catch(() => null);
+    return read;
   };
 }
 
@@ -759,19 +846,123 @@ async function outcomeOf(
  * which lists every row. Null when neither has it.
  */
 async function findProfileRow(
-  providerId: ProviderId,
   echoed: readonly ProfileListRow[],
   profileId: string,
+  readList: () => Promise<ProviderListState | null>,
 ): Promise<ProfileListRow | null> {
   const fromEcho = echoed.find((row) => row.profileId === profileId);
   if (fromEcho !== undefined) return fromEcho;
-  try {
-    const state = await readProviderState(providerId);
-    const listed = state.profiles.find((p) => p.profileId === profileId);
-    return listed === undefined ? null : summarizeProfile(listed);
-  } catch {
-    return null;
+  const listed = (await readList())?.profiles.find(
+    (p) => p.profileId === profileId,
+  );
+  return listed === undefined ? null : summarizeProfile(listed);
+}
+
+/**
+ * Asks the row's open name question, the sign-in's last step. Only
+ * `providers.list` carries the question (the sign-in's echo never does), so
+ * it is read once more here. With no terminal to ask on, nothing is renamed
+ * and the command says it still needs a choice. Without a question the row
+ * is returned as it is.
+ */
+async function settleNameQuestion(
+  ctx: CommandContext,
+  io: ProfileLoginIo,
+  providerId: ProviderId,
+  row: ProfileListRow,
+  readList: () => Promise<ProviderListState | null>,
+): Promise<{ readonly profile: ProfileListRow } & NameQuestionPart> {
+  const listed = (await readList())?.profiles.find(
+    (p) => p.profileId === row.profileId,
+  );
+  const question = listed?.nameQuestion ?? null;
+  if (listed === undefined || question === null) return { profile: row };
+  const nameQuestion = await answerNameQuestion(
+    ctx,
+    io,
+    providerId,
+    row.profileId,
+    question,
+  );
+  // The question is settled here, so the row no longer carries it.
+  const profile = summarizeProfile({
+    ...listed,
+    label: "label" in nameQuestion ? nameQuestion.label : listed.label,
+    nameQuestion: null,
+  });
+  return { profile, nameQuestion };
+}
+
+async function answerNameQuestion(
+  ctx: CommandContext,
+  io: ProfileLoginIo,
+  providerId: ProviderId,
+  profileId: string,
+  question: ProviderProfileNameQuestion,
+): Promise<NameQuestionOutcome> {
+  if (!io.stdinIsTerminal()) {
+    return { outcome: "needs-choice", choices: question.choices };
   }
+  const label = await askName(ctx, io, question.choices);
+  if (label === null) return { outcome: "skipped", choices: question.choices };
+  return await answerProfileName(
+    providerId,
+    profileId,
+    question.revision,
+    label,
+  );
+}
+
+/**
+ * Reads the person's answer: a choice's number, another name, or an empty
+ * line (or closed input) to skip. Asked once; a name that is too long is
+ * typed again.
+ */
+function askName(
+  ctx: CommandContext,
+  io: ProfileLoginIo,
+  choices: readonly string[],
+): Promise<string | null> {
+  ctx.output.humanRequired(
+    `${nameQuestionPrompt(choices)}\n${NAME_ANSWER_PROMPT}`,
+  );
+  return new Promise((resolve) => {
+    const reader: {
+      settled: boolean;
+      stop: (() => void) | null;
+    } = { settled: false, stop: null };
+    const finish = (label: string | null): void => {
+      if (reader.settled) return;
+      reader.settled = true;
+      reader.stop?.();
+      resolve(label);
+    };
+    reader.stop = io.readLines(
+      (line) => {
+        const answer = line.trim();
+        if (answer.length === 0) {
+          finish(null);
+          return;
+        }
+        const label = labelOfAnswer(answer, choices);
+        if (label.length > PROFILE_LABEL_MAX_LENGTH) {
+          ctx.output.humanRequired(`${NAME_TOO_LONG}\n${NAME_ANSWER_PROMPT}`);
+          return;
+        }
+        finish(label);
+      },
+      () => finish(null),
+    );
+    // A reader that answered while it was being set up, or none at all.
+    if (reader.settled) reader.stop?.();
+    else if (reader.stop === null) finish(null);
+  });
+}
+
+/** A choice's number picks that choice; anything else is the name itself. */
+function labelOfAnswer(answer: string, choices: readonly string[]): string {
+  if (!/^[0-9]+$/.test(answer)) return answer;
+  return choices[Number(answer) - 1] ?? answer;
 }
 
 function failedOutcome(result: AwaitLoginResult): LoginOutcome {
@@ -827,20 +1018,23 @@ function resultOf(
   const data = { providerId, ...outcome };
   switch (outcome.status) {
     case "signed-in":
-      return {
+      return withNameQuestion(
+        providerId,
+        outcome.profile,
+        outcome.nameQuestion,
         data,
-        human:
-          outcome.profile === null
-            ? `Signed in to ${provider}.`
-            : `${outcome.created ? "Added" : "Signed in"} ${provider} profile ${describeRow(outcome.profile)}${outcome.profile.email === null ? "" : ` (${printable(outcome.profile.email)})`}.`,
-        exitCode: 0,
-      };
+        outcome.profile === null
+          ? `Signed in to ${provider}.`
+          : `${outcome.created ? "Added" : "Signed in"} ${provider} profile ${describeRow(outcome.profile)}${outcome.profile.email === null ? "" : ` (${printable(outcome.profile.email)})`}.`,
+      );
     case "already-exists":
-      return {
+      return withNameQuestion(
+        providerId,
+        outcome.profile,
+        outcome.nameQuestion,
         data,
-        human: `That account is already ${provider} profile ${describeRow(outcome.profile)}. No profile was added.`,
-        exitCode: 0,
-      };
+        `That account is already ${provider} profile ${describeRow(outcome.profile)}. No profile was added.`,
+      );
     case "refused":
       return {
         data,
@@ -863,5 +1057,44 @@ function resultOf(
         human: "Sign-in cancelled.",
         exitCode: INTERRUPTED_EXIT_CODE,
       };
+  }
+}
+
+/**
+ * A sign-in's result line, followed by how its name question ended when the
+ * row had one. The sign-in succeeded either way, so the command does too; a
+ * script tells a question still open from `nameQuestion.outcome` in `data`.
+ */
+function withNameQuestion(
+  providerId: ProviderId,
+  profile: ProfileListRow | null,
+  nameQuestion: NameQuestionOutcome | undefined,
+  data: object,
+  line: string,
+): CommandResult {
+  return {
+    data,
+    human:
+      nameQuestion === undefined || profile === null
+        ? line
+        : `${line}\n${nameQuestionLineOf(providerId, profile.profileId, nameQuestion)}`,
+    exitCode: 0,
+  };
+}
+
+function nameQuestionLineOf(
+  providerId: ProviderId,
+  profileId: string,
+  nameQuestion: NameQuestionOutcome,
+): string {
+  switch (nameQuestion.outcome) {
+    case "applied":
+      return nameAppliedLine(nameQuestion.label);
+    case "conflict":
+      return nameConflictLine(nameQuestion.label);
+    case "skipped":
+      return nameSkippedLine(providerId, profileId);
+    case "needs-choice":
+      return nameNeedsChoiceLine(nameQuestion.choices, providerId, profileId);
   }
 }
