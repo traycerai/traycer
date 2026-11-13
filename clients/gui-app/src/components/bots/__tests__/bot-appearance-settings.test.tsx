@@ -30,6 +30,7 @@ import {
   BOT_UNRECOGNISED_MARK,
   type BotAppearance,
   type BotDirectoryRecord,
+  type BotListResponse,
   type BotMascotShape,
   type BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
@@ -124,6 +125,18 @@ let rerenderWith: (appearance: BotAppearance) => void = () => {};
 
 /** The section and the bot's own avatar, over what the surface's list names. */
 function mount(appearance: BotAppearance): void {
+  mountListing(appearance, null);
+}
+
+/** The same, the surface's list naming the bot as its environment's main bot. */
+function mountMain(appearance: BotAppearance): void {
+  mountListing(appearance, { "env-1": BOT_ID });
+}
+
+function mountListing(
+  appearance: BotAppearance,
+  mainBotIds: BotListResponse["mainBotIds"],
+): void {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
@@ -153,7 +166,9 @@ function mount(appearance: BotAppearance): void {
   mocks.client = spine.createRequester(mockLocalHostEntry);
   const tree = (looks: BotAppearance): ReactElement => (
     <QueryClientProvider client={queryClient}>
-      <BotLooksContext value={botLooksOf([botRow(looks)])}>
+      <BotLooksContext
+        value={botLooksOf({ bots: [botRow(looks)], mainBotIds })}
+      >
         <NamedBotAvatar botId={BOT_ID} size="sm" />
         <BotAppearanceSettings botId={BOT_ID} />
       </BotLooksContext>
@@ -183,9 +198,11 @@ function pathsIn(root: HTMLElement): string[] {
 
 /** The paths the avatar draws at 24 px for a bot showing `look`. */
 function avatarPathsFor(look: BotAppearance): string[] {
-  return drawMascotMark(botMascot(BOT_ID, look), 24, MASCOT_AT_REST).layers.map(
-    (layer) => layer.path,
-  );
+  return drawMascotMark(
+    botMascot(BOT_ID, look, false),
+    24,
+    MASCOT_AT_REST,
+  ).layers.map((layer) => layer.path);
 }
 
 /** A choice's button name: "Blob", "Shades", "None". */
@@ -193,13 +210,18 @@ function partName(part: string): string {
   return part.charAt(0).toUpperCase() + part.slice(1);
 }
 
-/** The shape the icon section shows pressed. */
-function pressedShape(): string {
+/** The choice a section shows pressed. */
+function pressedIn(section: "icon" | "eyewear" | "accessory"): string {
   const [pressed, ...rest] = within(
-    screen.getByTestId("bot-settings-icon"),
+    screen.getByTestId(`bot-settings-${section}`),
   ).getAllByRole("button", { pressed: true });
   expect(rest).toEqual([]);
   return pressed.getAttribute("aria-label") ?? "";
+}
+
+/** The shape the icon section shows pressed. */
+function pressedShape(): string {
+  return pressedIn("icon");
 }
 
 /** A shape other than the one the bot's id gives it. */
@@ -391,6 +413,19 @@ describe("<BotAppearanceSettings />", () => {
 
     mount({ ...BARE, mark: BOT_UNRECOGNISED_MARK });
     expect(pressedShape()).toBe(partName(DEFAULT_MASCOT_SHAPE));
+  });
+
+  it("presses Blob, None and None for a main bot nothing was chosen for, where another bot shows its own", () => {
+    expect(ownMascotShape(BOT_ID)).not.toBe(DEFAULT_MASCOT_SHAPE);
+    mount(BARE);
+    expect(pressedShape()).not.toBe(partName(DEFAULT_MASCOT_SHAPE));
+    cleanup();
+
+    mountMain(BARE);
+
+    expect(pressedShape()).toBe(partName(DEFAULT_MASCOT_SHAPE));
+    expect(pressedIn("eyewear")).toBe("None");
+    expect(pressedIn("accessory")).toBe("None");
   });
 
   it("writes a chosen shape, and a reload shows that shape pressed and on the avatar", async () => {

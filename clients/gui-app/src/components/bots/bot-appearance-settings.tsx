@@ -13,7 +13,7 @@ import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useBotLook } from "@/hooks/bots/use-bot-appearance";
+import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
 import { useBotUpdateAppearanceMutation } from "@/hooks/bots/use-bot-mutations";
 import {
   MASCOT_SHAPES,
@@ -85,6 +85,7 @@ export function BotAppearanceSettings(props: {
     useHostMethodSupport(hostId, "bot.updateAppearance") === true;
   const update = useBotUpdateAppearanceMutation(client);
   const look = useBotLook(botId);
+  const main = useBotIsMain(botId);
   if (!supported) return null;
   const appearance: BotAppearance = look ?? {
     mark: null,
@@ -99,7 +100,7 @@ export function BotAppearanceSettings(props: {
     failed === field && update.error !== null ? update.error.message : null;
   const change = (request: Omit<BotUpdateAppearanceRequest, "botId">): void =>
     update.mutate({ botId, ...request });
-  const current = botMascot(botId, appearance);
+  const current = botMascot(botId, appearance, main);
   return (
     <>
       <MascotPartSection

@@ -249,9 +249,11 @@ describe("a bot channel's rows", () => {
           .querySelectorAll('[data-slot="bot-mascot"] path'),
       ].map((path) => path.getAttribute("d")),
     ).toEqual(
-      drawMascotMark(botMascot(BOT_ID, null), 40, MASCOT_AT_REST).layers.map(
-        (layer) => layer.path,
-      ),
+      drawMascotMark(
+        botMascot(BOT_ID, null, false),
+        40,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
     );
   });
 });
