@@ -1,8 +1,9 @@
 /**
- * A bot's mascot: a pure function of the bot's id unless a person chose a
- * part of it, mirrored, with both eyes, and drawn in whole pixels inside its
- * box at every avatar size, the smallest from a drawing of its own. What its
- * eyes are doing follows the bot and changes none of what it is.
+ * A bot's mascot: a pure function of the bot's id, and of whether it is its
+ * environment's main bot, unless a person chose a part of it, mirrored, with
+ * both eyes, and drawn in whole pixels inside its box at every avatar size,
+ * the smallest from a drawing of its own. What its eyes are doing follows the
+ * bot and changes none of what it is.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -410,32 +411,36 @@ describe("a bot's mascot from its look", () => {
 
   it("is the id's own body, colour, eyewear and accessory when nothing was chosen", () => {
     for (const pinned of PINNED) {
-      expect(botMascot(pinned.botId, null), pinned.botId).toEqual({
+      expect(botMascot(pinned.botId, null, false), pinned.botId).toEqual({
         shape: pinned.shape,
         ramp: mascotRampAt(derivedBotColorIndex(pinned.botId)),
         eyewear: pinned.eyewear,
         accessory: pinned.accessory,
       });
-      expect(botMascot(pinned.botId, NO_CHOICE), pinned.botId).toEqual(
-        botMascot(pinned.botId, null),
+      expect(botMascot(pinned.botId, NO_CHOICE, false), pinned.botId).toEqual(
+        botMascot(pinned.botId, null, false),
       );
     }
   });
 
   it("takes the id's own eyewear and accessory from a null choice, as from an absent one", () => {
     expect(
-      botMascot(botId, { ...NO_CHOICE, eyewear: null, accessory: null }),
-    ).toEqual(botMascot(botId, NO_CHOICE));
+      botMascot(botId, { ...NO_CHOICE, eyewear: null, accessory: null }, false),
+    ).toEqual(botMascot(botId, NO_CHOICE, false));
   });
 
   it("honours a chosen body, colour, eyewear and accessory, none included", () => {
-    const chosen = botMascot(botId, {
-      mark: { kind: "mascot", shape: "ghost" },
-      color: 5,
-      background: null,
-      eyewear: "none",
-      accessory: "halo",
-    });
+    const chosen = botMascot(
+      botId,
+      {
+        mark: { kind: "mascot", shape: "ghost" },
+        color: 5,
+        background: null,
+        eyewear: "none",
+        accessory: "halo",
+      },
+      false,
+    );
 
     expect(chosen).toEqual({
       shape: "ghost",
@@ -443,14 +448,17 @@ describe("a bot's mascot from its look", () => {
       eyewear: "none",
       accessory: "halo",
     });
-    expect(chosen).not.toEqual(botMascot(botId, null));
+    expect(chosen).not.toEqual(botMascot(botId, null, false));
   });
 
   it("draws the bot's own body for a stored shape this client has no art for", () => {
     for (const shape of ["block", "shield", "diamond", "doc"] as const) {
       expect(
-        botMascot(botId, { ...NO_CHOICE, mark: { kind: "mascot", shape } })
-          .shape,
+        botMascot(
+          botId,
+          { ...NO_CHOICE, mark: { kind: "mascot", shape } },
+          false,
+        ).shape,
         shape,
       ).toBe(ownMascotShape(botId));
     }
@@ -458,26 +466,76 @@ describe("a bot's mascot from its look", () => {
 
   it("draws the default mascot for a mark it cannot read", () => {
     expect(
-      botMascot(botId, { ...NO_CHOICE, mark: BOT_UNRECOGNISED_MARK }).shape,
+      botMascot(botId, { ...NO_CHOICE, mark: BOT_UNRECOGNISED_MARK }, false)
+        .shape,
     ).toBe(DEFAULT_MASCOT_SHAPE);
   });
 
   it("draws the default colours for a colour it cannot read", () => {
     expect(
-      botMascot(botId, { ...NO_CHOICE, color: BOT_APPEARANCE_UNRECOGNISED })
-        .ramp,
+      botMascot(
+        botId,
+        { ...NO_CHOICE, color: BOT_APPEARANCE_UNRECOGNISED },
+        false,
+      ).ramp,
     ).toBe(DEFAULT_MASCOT_RAMP);
   });
 
   it("draws nothing worn for an eyewear or an accessory it cannot read", () => {
-    const unreadable = botMascot(botId, {
-      ...NO_CHOICE,
-      eyewear: BOT_APPEARANCE_UNRECOGNISED,
-      accessory: BOT_APPEARANCE_UNRECOGNISED,
-    });
+    const unreadable = botMascot(
+      botId,
+      {
+        ...NO_CHOICE,
+        eyewear: BOT_APPEARANCE_UNRECOGNISED,
+        accessory: BOT_APPEARANCE_UNRECOGNISED,
+      },
+      false,
+    );
 
     expect(unreadable.eyewear).toBe("none");
     expect(unreadable.accessory).toBe("none");
+  });
+});
+
+describe("an environment's main bot's mascot", () => {
+  const botId = STYLISH_BOT_ID;
+
+  it("is the plain default mascot in the id's own colours when nothing was chosen", () => {
+    expect(ownMascotShape(botId)).not.toBe(DEFAULT_MASCOT_SHAPE);
+
+    expect(botMascot(botId, null, true)).toEqual({
+      shape: DEFAULT_MASCOT_SHAPE,
+      ramp: botMascot(botId, null, false).ramp,
+      eyewear: "none",
+      accessory: "none",
+    });
+  });
+
+  it("still wears a chosen eyewear, accessory or shape", () => {
+    expect(botMascot(botId, { ...NO_CHOICE, eyewear: "visor" }, true)).toEqual({
+      ...botMascot(botId, null, true),
+      eyewear: "visor",
+    });
+    expect(botMascot(botId, { ...NO_CHOICE, accessory: "halo" }, true)).toEqual(
+      { ...botMascot(botId, null, true), accessory: "halo" },
+    );
+    expect(
+      botMascot(
+        botId,
+        { ...NO_CHOICE, mark: { kind: "mascot", shape: "cat" } },
+        true,
+      ),
+    ).toEqual({ ...botMascot(botId, null, true), shape: "cat" });
+  });
+
+  it("draws the default mascot for a stored shape this client has no art for, where another bot draws its own", () => {
+    const retired: BotAppearance = {
+      ...NO_CHOICE,
+      mark: { kind: "mascot", shape: "doc" },
+    };
+
+    expect(botMascot(botId, retired, true).shape).toBe(DEFAULT_MASCOT_SHAPE);
+    expect(botMascot(botId, retired, false).shape).toBe(ownMascotShape(botId));
   });
 });
 

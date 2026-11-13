@@ -819,21 +819,31 @@ export function ownMascotAccessory(botId: string): BotMascotAccessory {
 }
 
 /**
- * A bot's mascot: each choice its look names, else the one its id gives, and
- * the default mascot's for a choice this client cannot read.
+ * A bot's mascot: each choice its look names, else its default, and the
+ * default mascot's for a choice this client cannot read. A part's default is
+ * the one the bot's id gives it. An environment's main bot is the exception:
+ * it is the bot every member meets first, so its body and what it wears
+ * default to the default mascot's, and only its colour comes from its id.
  */
 export function botMascot(
   botId: string,
   look: BotAppearance | null,
+  main: boolean,
 ): MascotLook {
   const eyewear = look?.eyewear ?? null;
   const accessory = look?.accessory ?? null;
+  const own: Omit<MascotLook, "ramp"> = main
+    ? { shape: DEFAULT_MASCOT_SHAPE, eyewear: "none", accessory: "none" }
+    : {
+        shape: ownMascotShape(botId),
+        eyewear: ownMascotEyewear(botId),
+        accessory: ownMascotAccessory(botId),
+      };
   return {
-    shape: chosenShape(botId, look?.mark ?? null),
+    shape: chosenShape(own.shape, look?.mark ?? null),
     ramp: chosenRamp(botId, look?.color ?? null),
-    eyewear: eyewear === null ? ownMascotEyewear(botId) : readablePart(eyewear),
-    accessory:
-      accessory === null ? ownMascotAccessory(botId) : readablePart(accessory),
+    eyewear: eyewear === null ? own.eyewear : readablePart(eyewear),
+    accessory: accessory === null ? own.accessory : readablePart(accessory),
   };
 }
 
@@ -848,10 +858,13 @@ function isDrawn(shape: BotMascotShape): shape is MascotShape {
   return MASCOT_SHAPES.some((drawn) => drawn === shape);
 }
 
-function chosenShape(botId: string, mark: BotAppearance["mark"]): MascotShape {
-  if (mark === null) return ownMascotShape(botId);
+function chosenShape(
+  own: MascotShape,
+  mark: BotAppearance["mark"],
+): MascotShape {
+  if (mark === null) return own;
   if (mark.kind !== "mascot") return DEFAULT_MASCOT_SHAPE;
-  return isDrawn(mark.shape) ? mark.shape : ownMascotShape(botId);
+  return isDrawn(mark.shape) ? mark.shape : own;
 }
 
 function chosenRamp(botId: string, color: BotAppearance["color"]): MascotRamp {
