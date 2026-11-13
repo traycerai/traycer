@@ -65674,33 +65674,12 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                     "terminalOnThisComputer": {
                       "type": "boolean"
                     },
-                    "nameQuestion": {
-                      "anyOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "revision": {
-                              "type": "string",
-                              "minLength": 1
-                            },
-                            "choices": {
-                              "type": "array",
-                              "items": {
-                                "type": "string",
-                                "minLength": 1
-                              }
-                            }
-                          },
-                          "required": [
-                            "revision",
-                            "choices"
-                          ],
-                          "additionalProperties": false
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                    "otherNames": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
                     }
                   },
                   "required": [

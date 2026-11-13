@@ -3261,7 +3261,7 @@ export const providersListUpgradeV109ToV1010 = defineUpgradePath<
 
 /**
  * `providers.list@10.11` - on the profile row, `aliases`, `personNotice`,
- * `terminalOnThisComputer` and `nameQuestion`; on the envelope,
+ * `terminalOnThisComputer` and `otherNames`; on the envelope,
  * `removedProfiles`.
  *
  * A MINOR with no `responseGrowthProjectionGated`: new KEYS only, stripped for
@@ -3282,8 +3282,8 @@ export const providersListUpgradeV1010ToV1011 = defineUpgradePath<
   to: { major: 10, minor: 11 },
   upgradeRequest: (request) => request,
   // A host below 10.11 folds nothing and removes nothing from the list: every
-  // row is its own account with no other id, no notice and no open question,
-  // and its Terminal login is the ambient row.
+  // row is its own account with no other id, no notice and no other name, and
+  // its Terminal login is the ambient row.
   upgradeResponse: (response) => ({
     ...response,
     providers: response.providers.map((provider) => ({
@@ -3293,7 +3293,7 @@ export const providersListUpgradeV1010ToV1011 = defineUpgradePath<
         aliases: [],
         personNotice: null,
         terminalOnThisComputer: profile.kind === "ambient",
-        nameQuestion: null,
+        otherNames: [],
       })),
     })),
     removedProfiles: [],
@@ -5667,10 +5667,11 @@ export const providersSignOutProfileV10 = defineRpcContract({
 });
 
 /**
- * Answer a row's pending name question (`providers.list@10.11`). A new name at
- * `@1.0`, registered `degrade: unsupported` and off the released floor, so a
- * host that predates it refuses this call alone and the handshake with a
- * released peer is unchanged.
+ * Set an account's name everywhere and clear its other names (the row's
+ * `otherNames`, `providers.list@10.11`). A new name at `@1.0`, registered
+ * `degrade: unsupported` and off the released floor, so a host that predates
+ * it refuses this call alone and the handshake with a released peer is
+ * unchanged.
  */
 export const providersAnswerProfileNameV10 = defineRpcContract({
   method: "providers.answerProfileName",
