@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { useCallback, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentReviewHeldApplyResponse } from "@traycer/protocol/host/environment-schemas";
@@ -16,7 +17,6 @@ import {
   sharedInUseFromItems,
 } from "@/components/settings/move/review-inventory";
 import type { HeldApplyChoice } from "@/components/settings/move/retrospective-copy";
-import { reviewEvidence } from "@/components/settings/move/review-v11";
 import {
   RetrospectiveSheet,
   type HeldRow,
@@ -38,7 +38,6 @@ import {
 } from "@/hooks/environment/use-environment-reads";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
 export function RetrospectiveSession(props: {
@@ -67,14 +66,15 @@ export function RetrospectiveSession(props: {
     props.open,
   );
   const record = useEnvironmentReviewRecordMutation(props.client);
-  const heldApply = useEnvironmentReviewHeldApplyMutation(props.client);
+  const entries = review.data?.entries ?? [];
+  const heldApply = useEnvironmentReviewHeldApplyMutation(
+    props.client,
+    entries,
+  );
   const recordMutate = record.mutate;
   const queryClient = useQueryClient();
-  const reviewHostId = props.reviewHostId;
   const retryReview = (): void => {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(reviewHostId, "environment.review"),
-    });
+    void invalidateEnvironmentReads(queryClient, ["environment.review"]);
   };
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
@@ -83,7 +83,6 @@ export function RetrospectiveSession(props: {
     recordMutate({ event: "shown" });
   }, [recordMutate]);
 
-  const entries = review.data?.entries ?? [];
   const held = props.held ?? heldRowsFromReview(entries);
   const planes = status.data === null ? null : planesFromStatus(status.data);
   const { stillLocal, offerStop } = planeFacts(planes);
@@ -94,9 +93,7 @@ export function RetrospectiveSession(props: {
   const sharedInUse = sharedInUseFromItems(statusItems);
   const roomShared = roomSharedLine(planes, statusItems);
   const evidence =
-    review.data === null
-      ? { version: null, at: null }
-      : reviewEvidence(review.data);
+    review.data === null ? { version: null, at: null } : review.data.evidence;
   const heldPendingId = heldApply.isPending ? heldApply.variables.heldId : null;
 
   const onHeldApply = (heldId: string, choice: HeldApplyChoice): void => {

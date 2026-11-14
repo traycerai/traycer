@@ -8,9 +8,18 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type {
   EnvironmentLocalOverridesResponse,
   EnvironmentNoticesResponse,
-  EnvironmentReviewResponse,
+  EnvironmentReviewResponseV11,
   EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
+import {
+  readNotices,
+  readReviewHolds,
+  type ReviewHeldEntry,
+} from "@traycer-clients/shared/environment/environment-review";
+import {
+  ENVIRONMENT_CLOUD_QUERY_SCOPE,
+  useEnvironmentCloudOwnRead,
+} from "@/hooks/environment/use-environment-cloud";
 import {
   CONFIGURATION_READS,
   configurationReadMatches,
@@ -64,13 +73,33 @@ export function useEnvironmentStatusRead(
   return { supported, data: query.data ?? null, isError: query.isError };
 }
 
+/** An app-made read of a {@link DELTA_FED_READS} method whose params name `hostId`. */
+function aboutThisHost(
+  queryKey: readonly unknown[],
+  hostId: string | null,
+): boolean {
+  if (hostId === null) return false;
+  if (queryKey[0] !== "host" || queryKey[1] !== ENVIRONMENT_CLOUD_QUERY_SCOPE)
+    return false;
+  const params = queryKey[3];
+  return (
+    DELTA_FED_READS.some((method) => queryKey[2] === method) &&
+    typeof params === "object" &&
+    params !== null &&
+    "hostId" in params &&
+    params.hostId === hostId
+  );
+}
+
 /**
  * Re-reads the host's {@link DELTA_FED_READS} when its polled status reports
  * a new revision of the person's settings: a change made in the dashboard
  * reaches the host as a revision, and those reads are not re-read otherwise.
  * On a host that runs Personal, Personal's configuration reads move with it,
  * on every host that read them (`personalEnvironmentId`, `null` elsewhere).
- * The first status a reader sees for a host only records the revision.
+ * A read the app makes itself about this host (the review sheet, keyed by its
+ * `hostId`) moves with it too, whatever environment the host runs. The first
+ * status a reader sees for a host only records the revision.
  */
 function useRereadOnRevision(
   hostId: string | null,
@@ -113,7 +142,8 @@ function useRereadOnRevision(
             query.queryKey,
             personalEnvironmentId,
             CONFIGURATION_READS,
-          )),
+          )) ||
+        aboutThisHost(query.queryKey, hostId),
     };
     // Retire an initial GET before refreshing; overlapping read sets must refresh once.
     void queryClient
@@ -123,36 +153,80 @@ function useRereadOnRevision(
   }, [hostId, revision, personalEnvironmentId, queryClient]);
 }
 
+/**
+ * Personal's notices with their Undo, read by the app itself from authn on
+ * the person's sign-in; `enabled` false on a host that does not run Personal.
+ */
 export function useEnvironmentNoticesRead(
   client: HostClient<HostRpcRegistry> | null,
-  hostId: string | null,
   enabled: boolean,
 ): EnvironmentRead<EnvironmentNoticesResponse> {
-  const supported = useHostMethodSupport(hostId, "environment.notices");
-  const query = useHostQuery<HostRpcRegistry, "environment.notices">({
-    cacheKeyIdentity: undefined,
-    client,
+  const personal = usePersonalEnvironment(client, enabled);
+  const environmentId = personal.environmentId;
+  const query = useEnvironmentCloudOwnRead({
     method: "environment.notices",
-    params: {},
-    options: { enabled: enabled && supported === true },
+    params: { environmentId: environmentId ?? "" },
+    read: async (cloud) => ({
+      notices: await readNotices(cloud, environmentId ?? ""),
+    }),
+    enabled: enabled && environmentId !== null,
   });
-  return { supported, data: query.data ?? null, isError: query.isError };
+  return { supported: true, data: query.data ?? null, isError: query.isError };
 }
 
+/** The review sheet's answer: authn's holds and its host's own three facts. */
+export type EnvironmentReviewSheet = Omit<
+  EnvironmentReviewResponseV11,
+  "entries"
+> & {
+  readonly entries: readonly ReviewHeldEntry[];
+  /** Whether the host answered its own record; until then its three facts read null. */
+  readonly recorded: boolean;
+};
+
+/**
+ * The review sheet for the host `hostId`: Personal's holds, read by the app
+ * itself from authn's operation view, with that host's own record of the sheet
+ * (`shownAt`, `acknowledgedAt`, `evidence`) from the top of its
+ * `environment.review` answer. With that host unreachable the three read null,
+ * as a host with no record answers them; its `entries` are not read.
+ */
 export function useEnvironmentReviewRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): EnvironmentRead<EnvironmentReviewResponse> {
+): EnvironmentRead<EnvironmentReviewSheet> {
+  const personal = usePersonalEnvironment(client, enabled);
+  const environmentId = personal.environmentId;
+  const holds = useEnvironmentCloudOwnRead({
+    method: "environment.review",
+    // The sheet's host is in the key: its revision report re-reads this one.
+    params: { environmentId: environmentId ?? "", hostId },
+    read: (cloud) => readReviewHolds(cloud, environmentId ?? ""),
+    enabled: enabled && environmentId !== null,
+  });
   const supported = useHostMethodSupport(hostId, "environment.review");
-  const query = useHostQuery<HostRpcRegistry, "environment.review">({
+  const record = useHostQuery<HostRpcRegistry, "environment.review">({
     cacheKeyIdentity: undefined,
     client,
     method: "environment.review",
     params: {},
     options: { enabled: enabled && supported === true },
   });
-  return { supported, data: query.data ?? null, isError: query.isError };
+  // Waits only for a record read under way; one that cannot be sent reads null.
+  const recordPending =
+    record.data === undefined && record.fetchStatus === "fetching";
+  const data: EnvironmentReviewSheet | null =
+    holds.data === undefined || recordPending
+      ? null
+      : {
+          shownAt: record.data?.shownAt ?? null,
+          acknowledgedAt: record.data?.acknowledgedAt ?? null,
+          evidence: record.data?.evidence ?? { version: null, at: null },
+          entries: holds.data,
+          recorded: record.data !== undefined,
+        };
+  return { supported: true, data, isError: holds.isError };
 }
 
 export function useEnvironmentLocalOverridesRead(

@@ -15,14 +15,12 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import {
   useConfigurationMcpServerMutations,
   useConfigurationMcpServersQuery,
   type EnvironmentMcpServer,
 } from "@/hooks/environment/team/use-mcp-servers";
-import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -69,7 +67,6 @@ import {
   serverSwitchRefusal,
   toolCountPhrase,
 } from "./mcp-skills-copy";
-import { TeamMcpItems } from "./team-mcp-servers";
 import { TeamReadFailed } from "./team-read-failed";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 
@@ -91,26 +88,6 @@ function McpPage(props: { readonly children: ReactNode }): ReactNode {
 }
 
 function EnvironmentMcpServers(): ReactNode {
-  const version = useHostNegotiatedMethodVersion(
-    useHostClient(),
-    "environment.configuration.mcpServers.list",
-  );
-  if (version === null)
-    return (
-      <McpPage>
-        <MutedAgentSpinner />
-      </McpPage>
-    );
-  if (version === false)
-    return (
-      <McpPage>
-        <TeamMcpItems providerId={null} />
-      </McpPage>
-    );
-  return <McpServerList />;
-}
-
-function McpServerList(): ReactNode {
   const query = useConfigurationMcpServersQuery();
   const providers = useMcpProviders();
   const canEdit = useCanEditConfiguration();
@@ -216,17 +193,6 @@ function McpServerRow(props: {
   const source = useConfigurationSource();
   const name = useConfigurationName();
   const { remove, setEnabled } = useConfigurationMcpServerMutations();
-  const client = useHostClient();
-  const removable =
-    useHostNegotiatedMethodVersion(
-      client,
-      "environment.configuration.mcpServers.delete",
-    ) !== false;
-  const switchable =
-    useHostNegotiatedMethodVersion(
-      client,
-      "environment.configuration.mcpServers.setEnabled",
-    ) !== false;
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -258,7 +224,7 @@ function McpServerRow(props: {
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-2">
-          {props.canEdit && switchable ? (
+          {props.canEdit ? (
             <Switch
               aria-label={server.name}
               checked={enabled}
@@ -288,7 +254,7 @@ function McpServerRow(props: {
               }}
             />
           ) : null}
-          {props.canEdit && removable ? (
+          {props.canEdit ? (
             <Button
               type="button"
               size="icon-sm"

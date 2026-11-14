@@ -132,7 +132,12 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
 
     const loaded = await loadSecretDetails(
       { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
-      { hostId, client, queryClient: harness.queryClient },
+      {
+        hostId,
+        client,
+        environmentCloud: null,
+        queryClient: harness.queryClient,
+      },
       STATUS,
     );
 
@@ -170,7 +175,12 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
 
     const loaded = await loadSecretDetails(
       { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
-      { hostId, client, queryClient: harness.queryClient },
+      {
+        hostId,
+        client,
+        environmentCloud: null,
+        queryClient: harness.queryClient,
+      },
       STATUS,
     );
 

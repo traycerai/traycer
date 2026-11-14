@@ -1,8 +1,8 @@
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import { useContext, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -57,7 +57,7 @@ interface WindowHostEnvironment {
   readonly hostName: string;
   readonly localOverrides: readonly LocalOverride[];
   readonly notices: readonly EnvironmentNotice[];
-  readonly review: readonly EnvironmentReviewEntry[];
+  readonly review: readonly ReviewHeldEntry[];
 }
 
 /** Read through the window's own host, like every Personal page. */
@@ -83,11 +83,7 @@ function useWindowHostEnvironmentState(
   // on a host without them, or on a team's host.
   const personal =
     state.kind === "ready" && state.status.principal?.kind === "personal";
-  const notices = useEnvironmentNoticesRead(
-    scope.client,
-    scope.hostId,
-    personal,
-  );
+  const notices = useEnvironmentNoticesRead(scope.client, personal);
   const review = useEnvironmentReviewRead(scope.client, scope.hostId, personal);
   return {
     state,

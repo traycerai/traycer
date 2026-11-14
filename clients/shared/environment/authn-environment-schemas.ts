@@ -91,11 +91,6 @@ export const authnMcpServerItemValueSchema = lazySchema(() =>
   }),
 );
 
-/** The `managed_profile` item's value, as far as a plan's name is read from it. */
-export const authnManagedProfileItemValueSchema = lazySchema(() =>
-  z.object({ name: z.string().min(1).max(64) }),
-);
-
 // ── MCP servers ─────────────────────────────────────────────────────────────
 
 const authnMcpCredentialSchema = lazySchema(() =>

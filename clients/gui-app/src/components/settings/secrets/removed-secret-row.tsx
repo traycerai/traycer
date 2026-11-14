@@ -31,13 +31,12 @@ export function RemovedSecretRow(props: {
   const { removed } = props;
   const actions = useSecretRowActions({
     client: props.client,
-    hostId: props.hostId,
     secret: { secretId: removed.id, currentVersionId: null },
     removing: true,
     onChanged: props.onChanged,
   });
   const environmentId = useDetailsEnvironmentId(props.client);
-  const retry = useSecretRemovalRetry(props.client, props.hostId);
+  const retry = useSecretRemovalRetry();
   // The versions read is the newer fact: it follows a Retry the list has not.
   // Only the list carries a host's failure.
   const removal = removalWithFailures(

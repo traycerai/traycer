@@ -26,15 +26,8 @@ import {
   type EnvironmentHistoryRequest,
   type EnvironmentHistoryResponse,
   type EnvironmentPlansListResponse,
-  type EnvironmentPlansUnlinkPreviewResponse,
   type EnvironmentPlansUnlinkResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
-import { PROVIDER_ID_VALUES } from "@traycer/protocol/host/provider-ids";
-import {
-  PROVIDER_DISPLAY_NAMES,
-  TUI_HARNESS_ID_TO_PROVIDER_ID,
-  type ProviderId,
-} from "@traycer/protocol/host/provider-schemas";
 import {
   ITEM_ROUTE_KINDS,
   authnHarnessConnectionsResponseSchema,
@@ -42,7 +35,6 @@ import {
   authnItemConflictSchema,
   authnItemWriteResponseSchema,
   authnItemsResponseSchema,
-  authnManagedProfileItemValueSchema,
   authnMcpServerDeleteResponseSchema,
   authnMcpServerItemValueSchema,
   authnMcpServerResponseSchema,
@@ -639,17 +631,6 @@ function planStatus(
   }
 }
 
-function providerIdOfHarness(harnessId: string): ProviderId | null {
-  for (const [tuiHarnessId, providerId] of Object.entries(
-    TUI_HARNESS_ID_TO_PROVIDER_ID,
-  )) {
-    if (tuiHarnessId === harnessId) return providerId;
-  }
-  return (
-    PROVIDER_ID_VALUES.find((providerId) => providerId === harnessId) ?? null
-  );
-}
-
 async function planConnections(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -686,61 +667,6 @@ export async function listConfigurationPlans(
                 you: connection.linkedBy.you,
               },
       })),
-  };
-}
-
-/**
- * What unlinking a plan leaves working. The app holds no turns, so it answers
- * the running-turn facts as the server pool does: unknown.
- */
-export async function previewConfigurationPlanUnlink(
-  cloud: EnvironmentCloud,
-  environmentId: string,
-  profileId: string,
-): Promise<EnvironmentPlansUnlinkPreviewResponse> {
-  const connections = await planConnections(cloud, environmentId);
-  const target = connections.find(
-    (connection) =>
-      connection.profileId === profileId && connection.kind !== "api_key",
-  );
-  if (target === undefined) {
-    throw new EnvironmentCloudError("invalid", "This plan is unavailable.");
-  }
-  const path = environmentPath(environmentId);
-  const [secrets, profiles] = await Promise.all([
-    sendSettings(cloud, "GET", `${path}/secrets`, null).then((answer) =>
-      parseSettings(answer, authnSecretsListSchema),
-    ),
-    sendSettings(cloud, "GET", `${path}/items?kind=managed_profile`, null).then(
-      (answer) => parseSettings(answer, authnItemsResponseSchema),
-    ),
-  ]);
-  const names = connections
-    .filter(
-      (connection) =>
-        connection.profileId !== target.profileId &&
-        planStatus(connection) === "linked",
-    )
-    .map((connection) => {
-      const item = profiles.items.find(
-        (row) => row.key === `${connection.harnessId}:${connection.profileId}`,
-      );
-      const profile = authnManagedProfileItemValueSchema.safeParse(item?.value);
-      if (profile.success) return profile.data.name;
-      const provider = providerIdOfHarness(connection.harnessId);
-      return provider === null
-        ? connection.harnessId
-        : PROVIDER_DISPLAY_NAMES[provider];
-    });
-  names.push(
-    ...secrets.secrets
-      .filter((secret) => secret.kind === "provider")
-      .map((secret) => secret.name),
-  );
-  return {
-    activeTurns: null,
-    localHostId: null,
-    keepsWorking: [...new Set(names)],
   };
 }
 

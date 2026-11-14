@@ -472,6 +472,7 @@ function loadSandboxDetails(queryClient: QueryClient, sandboxId: string) {
       hostId: null,
       // Unused: a sandbox's evidence is the control plane's, not a host's.
       client: {} as HostClient<HostRpcRegistry>,
+      environmentCloud: null,
       queryClient,
     },
   );

@@ -181,7 +181,7 @@ export function ConfigurationSourceBoundary(props: {
       transportReadOnly,
     };
   }, [descriptor, transportReadOnly]);
-  useConfigurationRevision(client, descriptor?.environmentId ?? null);
+  useConfigurationRevision(descriptor?.environmentId ?? null);
   const gone = useGoneConfiguration({
     target,
     listed:

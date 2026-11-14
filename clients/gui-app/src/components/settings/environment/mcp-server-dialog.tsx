@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
-import { negotiatedVersionMeetsRequirement } from "@traycer-clients/shared/host-transport/host-messenger";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,7 +23,6 @@ import {
   AgentSpinningDots,
   MutedAgentSpinner,
 } from "@/components/ui/agent-spinning-dots";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import {
   useConfigurationMcpServerMutations,
@@ -51,16 +49,10 @@ import {
   addServerTitle,
   custodySentence,
   editServerTitle,
-  secretOptionLine,
   serverRefusal,
   stdioSecretRefusal,
+  SECRET_OPTION_LINE,
 } from "./mcp-skills-copy";
-
-/** `put@1.1` binds an existing secret; a 1.0 host takes a typed value only. */
-const PICK_SECRET_REQUIRED_HOST_VERSION = {
-  method: "environment.configuration.mcpServers.put",
-  version: { major: 1, minor: 1 },
-} as const;
 
 type FormUpdate = (patch: Partial<McpServerForm>) => void;
 
@@ -78,17 +70,6 @@ export function McpServerDialog(props: {
   const personal = useConfigurationIsPersonal();
   const name = useConfigurationName();
   const client = useHostClient();
-  const putVersion = useHostNegotiatedMethodVersion(
-    client,
-    "environment.configuration.mcpServers.put",
-  );
-  const canPick =
-    putVersion !== null &&
-    putVersion !== false &&
-    negotiatedVersionMeetsRequirement(
-      putVersion,
-      PICK_SECRET_REQUIRED_HOST_VERSION,
-    );
   const secrets = useEnvironmentSecretsQuery(client);
   const secretList = secrets.data?.secrets ?? [];
   // The pick is read apart from the server: while it is read, or once it
@@ -109,7 +90,7 @@ export function McpServerDialog(props: {
   const [problem, setProblem] = useState<string | null>(null);
   const update: FormUpdate = (patch) =>
     setForm((current) => ({ ...current, ...patch }));
-  const credential = mcpServerCredential(form, server !== null, canPick);
+  const credential = mcpServerCredential(form, server !== null, true);
   const submit = (): void => {
     if (source.kind !== "pool" || credential === null) return;
     setProblem(null);
@@ -177,7 +158,6 @@ export function McpServerDialog(props: {
             <McpServerSecretFields
               form={form}
               update={update}
-              canPick={canPick}
               secrets={secretList}
               secretsRead={secretsRead}
               custody={custodySentence(personal, "This environment")}
@@ -268,14 +248,12 @@ function McpServerTransportFields(props: {
 }
 
 /**
- * A remote server's Secret: the line, the pick (or Add only on a 1.0 host),
- * the value when added here, then the custody sentence. A command server's
+ * A remote server's Secret: the line, the pick, the value when added here, then the custody sentence. A command server's
  * Secret is refused by the field it names.
  */
 function McpServerSecretFields(props: {
   readonly form: McpServerForm;
   readonly update: FormUpdate;
-  readonly canPick: boolean;
   readonly secrets: readonly EnvironmentSecret[];
   /** Where the secrets read is, while it is read or once it fails. */
   readonly secretsRead: ReactNode;
@@ -298,33 +276,29 @@ function McpServerSecretFields(props: {
       </>
     );
   }
-  const adding = !props.canPick || form.secretChoice === "new";
+  const adding = form.secretChoice === "new";
   return (
     <>
-      <p className="text-ui-xs text-muted-foreground">
-        {secretOptionLine(props.canPick)}
-      </p>
-      {props.canPick ? (
-        <Select
-          value={form.secretChoice}
-          onValueChange={(value) =>
-            update({ secretChoice: value, authTouched: true })
-          }
-        >
-          <SelectTrigger aria-label="Secret">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {pickableSecrets(props.secrets, form.url).map((secret) => (
-              <SelectItem key={secret.secretId} value={secret.secretId}>
-                {secret.name}
-              </SelectItem>
-            ))}
-            <SelectItem value="new">Add a secret</SelectItem>
-          </SelectContent>
-        </Select>
-      ) : null}
-      {props.canPick ? props.secretsRead : null}
+      <p className="text-ui-xs text-muted-foreground">{SECRET_OPTION_LINE}</p>
+      <Select
+        value={form.secretChoice}
+        onValueChange={(value) =>
+          update({ secretChoice: value, authTouched: true })
+        }
+      >
+        <SelectTrigger aria-label="Secret">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {pickableSecrets(props.secrets, form.url).map((secret) => (
+            <SelectItem key={secret.secretId} value={secret.secretId}>
+              {secret.name}
+            </SelectItem>
+          ))}
+          <SelectItem value="new">Add a secret</SelectItem>
+        </SelectContent>
+      </Select>
+      {props.secretsRead}
       {adding ? (
         <Input
           aria-label="Secret value"

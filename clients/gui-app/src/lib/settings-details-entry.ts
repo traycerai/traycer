@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -120,6 +121,8 @@ export interface DetailsEntry {
 export interface DetailsProviderContext {
   readonly hostId: string | null;
   readonly client: HostClient<HostRpcRegistry>;
+  /** The app's own calls to authn's environment routes; null with no session service. */
+  readonly environmentCloud: EnvironmentCloud | null;
   readonly queryClient: QueryClient;
 }
 

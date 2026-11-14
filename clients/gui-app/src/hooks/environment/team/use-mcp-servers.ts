@@ -1,6 +1,3 @@
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
@@ -8,18 +5,14 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
-import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
-import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { environmentMutationKeys } from "@/lib/query-keys";
 import {
-  authorizesCloudCapability,
-  useAuthStore,
-} from "@/stores/auth/auth-store";
+  useEnvironmentCloudMutation,
+  useEnvironmentCloudQuery,
+} from "@/hooks/environment/use-environment-cloud";
+import type { HostRpcRegistry } from "@/lib/host";
+import { environmentMutationKeys } from "@/lib/query-keys";
 
 export type EnvironmentMcpServer = ResponseOfMethod<
   HostRpcRegistry,
@@ -27,43 +20,24 @@ export type EnvironmentMcpServer = ResponseOfMethod<
 >["servers"][number];
 
 /**
- * The configuration's MCP servers, each with its `mcp_server` item, read
- * through the configuration's serving tier on the viewer's session.
+ * The configuration's MCP servers, each with its `mcp_server` item, read by
+ * the app itself from authn on the viewer's sign-in.
  */
 export function useConfigurationMcpServersQuery(): UseQueryResult<
   readonly EnvironmentMcpServer[],
   HostRpcError
 > {
   const source = useConfigurationSource();
-  const client = usePoolTierHostClient(useHostClient());
-  const { hostId } = useReactiveHostReadiness(client);
-  const revisionSupported = useHostMethodSupport(
-    hostId,
-    "environment.configuration.revision",
-  );
-  const viewerId = useCloudChatViewerId();
-  const authorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  return useHostQueryWithResponseMap<
-    HostRpcRegistry,
-    "environment.configuration.mcpServers.list",
-    readonly EnvironmentMcpServer[]
-  >({
-    cacheKeyIdentity: [viewerId],
-    client,
+  return useEnvironmentCloudQuery({
     method: "environment.configuration.mcpServers.list",
     params: {
       environmentId: source.kind === "pool" ? source.environmentId : "",
     },
-    preflight: cloudVerdictPreflight(
-      "environment.configuration.mcpServers.list",
-    ),
-    mapResponse: ({ response }) => response.servers,
-    options: {
-      poll: revisionSupported !== true,
-      enabled: source.kind === "pool" && viewerId.length > 0 && authorized,
-    },
+    cacheKeyIdentity: [],
+    mapResponse: (response): readonly EnvironmentMcpServer[] =>
+      response.servers,
+    enabled: source.kind === "pool",
+    poll: false,
   });
 }
 
@@ -78,38 +52,14 @@ export function useSecretMcpServerNames(
   enabled: boolean,
 ): readonly string[] {
   const { environmentId, resolved } = useAddressedEnvironment();
-  const client = usePoolTierHostClient(useHostClient());
-  const { hostId } = useReactiveHostReadiness(client);
-  const revisionSupported = useHostMethodSupport(
-    hostId,
-    "environment.configuration.revision",
-  );
-  const viewerId = useCloudChatViewerId();
-  const authorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  const servers = useHostQueryWithResponseMap<
-    HostRpcRegistry,
-    "environment.configuration.mcpServers.list",
-    readonly EnvironmentMcpServer[]
-  >({
-    cacheKeyIdentity: [viewerId],
-    client,
+  const servers = useEnvironmentCloudQuery({
     method: "environment.configuration.mcpServers.list",
     params: { environmentId: environmentId ?? "" },
-    preflight: cloudVerdictPreflight(
-      "environment.configuration.mcpServers.list",
-    ),
-    mapResponse: ({ response }) => response.servers,
-    options: {
-      poll: revisionSupported !== true,
-      enabled:
-        enabled &&
-        resolved &&
-        environmentId !== null &&
-        viewerId.length > 0 &&
-        authorized,
-    },
+    cacheKeyIdentity: [],
+    mapResponse: (response): readonly EnvironmentMcpServer[] =>
+      response.servers,
+    enabled: enabled && resolved && environmentId !== null,
+    poll: false,
   });
   if (!enabled || environmentId === null) return NO_SERVER_NAMES;
   return (servers.data ?? [])
@@ -135,57 +85,38 @@ const MCP_SERVER_READS = [
  * switches).
  */
 export function useConfigurationMcpServerMutations() {
-  const client = usePoolTierHostClient(useHostClient());
   const queries = useQueryClient();
   // A configuration write refreshes every cached projection of its server
   // list, including readers mounted under another host scope.
   const reread = (environmentId: string): void =>
     invalidateConfigurationReads(queries, environmentId, MCP_SERVER_READS);
-  const put = useHostScopedMutationForClient(client, {
+  const put = useEnvironmentCloudMutation({
     method: "environment.configuration.mcpServers.put",
     mutationKey: environmentMutationKeys.configurationMcpServersPut(),
     errorMessage: "Couldn't save this server.",
     invalidateMethods: [],
-    prepareRequest: (request) => {
-      cloudVerdictPreflight("environment.configuration.mcpServers.put")();
-      return Promise.resolve(request);
-    },
     onSuccess: (_result, request) => reread(request.environmentId),
   });
-  const remove = useHostScopedMutationForClient(client, {
+  const remove = useEnvironmentCloudMutation({
     method: "environment.configuration.mcpServers.delete",
     mutationKey: environmentMutationKeys.configurationMcpServersDelete(),
     errorMessage: "Couldn't remove this server.",
     invalidateMethods: [],
-    prepareRequest: (request) => {
-      cloudVerdictPreflight("environment.configuration.mcpServers.delete")();
-      return Promise.resolve(request);
-    },
     onSuccess: (_result, request) => reread(request.environmentId),
   });
-  const putItem = useHostScopedMutationForClient(client, {
+  const putItem = useEnvironmentCloudMutation({
     method: "environment.configuration.items.put",
     mutationKey: environmentMutationKeys.configurationItemsPut(),
     errorMessage: "Couldn't save these settings.",
     invalidateMethods: [],
-    prepareRequest: (request) => {
-      cloudVerdictPreflight("environment.configuration.items.put")();
-      return Promise.resolve(request);
-    },
     onSuccess: (_result, request) => reread(request.environmentId),
   });
-  const setEnabled = useHostScopedMutationForClient(client, {
+  const setEnabled = useEnvironmentCloudMutation({
     method: "environment.configuration.mcpServers.setEnabled",
     mutationKey: environmentMutationKeys.configurationMcpServersSetEnabled(),
     // The toast names the server and the way it was switched.
     errorMessage: null,
     invalidateMethods: [],
-    prepareRequest: (request) => {
-      cloudVerdictPreflight(
-        "environment.configuration.mcpServers.setEnabled",
-      )();
-      return Promise.resolve(request);
-    },
     onSuccess: (_result, request) => reread(request.environmentId),
   });
   return { put, remove, putItem, setEnabled };

@@ -1,44 +1,23 @@
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import {
-  authorizesCloudCapability,
-  useAuthStore,
-} from "@/stores/auth/auth-store";
+import { useSecretsRead } from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 
+/**
+ * The secrets of the environment a page names, read by the app itself from
+ * authn; the host's own secrets (a Local pick, no environment named) are still
+ * the host's read.
+ */
 export function useEnvironmentSecretsQuery(
   client: HostClient<HostRpcRegistry>,
 ) {
   const { environmentId, resolved } = useAddressedEnvironment();
-  const viewerId = useCloudChatViewerId();
-  const authorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  return useHostQuery({
-    cacheKeyIdentity: environmentId === null ? undefined : [viewerId],
+  return useSecretsRead({
     client: usePoolTierHostClient(client),
     method: "environment.secrets.list",
     params: { environmentId },
-    preflight:
-      environmentId === null
-        ? undefined
-        : cloudVerdictPreflight("environment.secrets.list"),
-    requiredHostMethodVersion: () =>
-      environmentId === null
-        ? null
-        : {
-            method: "environment.secrets.list",
-            version: { major: 1, minor: 1 },
-          },
-    options: {
-      poll: true,
-      enabled:
-        resolved &&
-        (environmentId === null || (viewerId.length > 0 && authorized)),
-    },
+    enabled: resolved,
+    poll: true,
   });
 }

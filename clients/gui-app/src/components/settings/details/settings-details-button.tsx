@@ -1,4 +1,5 @@
 import "@/components/settings/details/environment-details-providers";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useState, type ReactNode } from "react";
 import {
   queryOptions,
@@ -43,10 +44,11 @@ function DetailsSession(props: {
 }): ReactNode {
   const client = useHostClient();
   const hostId = useReactiveHostReadiness(client).hostId;
+  const environmentCloud = useEnvironmentCloud();
   const queryClient = useQueryClient();
   const runner = useRunnerHostOrNull();
   const recovery = useDetailsRecovery();
-  const itemRetry = useSecretRemovalRetry(client, hostId);
+  const itemRetry = useSecretRemovalRetry();
   const viewerUserId = useCloudChatViewerId();
   const [selected, setSelected] = useState<{
     readonly subject: DetailsSubject;
@@ -58,7 +60,7 @@ function DetailsSession(props: {
     const provider = getDetailsProvider(subject.kind);
     if (provider === null)
       throw new Error("Details are unavailable. Update Traycer and try again.");
-    return provider(subject, { client, hostId, queryClient });
+    return provider(subject, { client, hostId, environmentCloud, queryClient });
   };
   const entry = useQuery(
     queryOptions({

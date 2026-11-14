@@ -13,7 +13,18 @@
  * Each answer authn gives that a person acts on is an outcome here, not an
  * error: a hold that moved, a live item that moved, a hold already gone.
  */
+import { z } from "zod";
 import {
+  environmentItemKindSchema,
+  type EnvironmentChangedBy,
+  type EnvironmentNotice,
+  type EnvironmentReviewEntryV12,
+  type EnvironmentReviewHeldApplyResponse,
+  type EnvironmentWriteOutcome,
+} from "@traycer/protocol/host/environment-schemas";
+import { heldFactsOf } from "@traycer/protocol/host/environment/held-facts";
+import {
+  ITEM_OS_VALUES,
   REVIEW_INCLUDE_OPERATION,
   authnHeldApplyConflictSchema,
   authnHeldDiscardResponseSchema,
@@ -27,6 +38,7 @@ import {
   type AuthnOperationReview,
 } from "./authn-environment-schemas";
 import {
+  EnvironmentCloudError,
   environmentPath,
   errorBodyCode,
   parseSettings,
@@ -186,4 +198,182 @@ export async function undoChange(
     outcome: "undone",
     item: parseSettings(answer, authnUndoResponseSchema).item,
   };
+}
+
+// ── the review sheet, the notices and Undo, as the screens read them ───────
+
+/**
+ * One held change as the review sheet lists it: the protocol's row, with its
+ * line masked by the protocol's own rule, and what Apply names. A held value
+ * is read for that line alone; it is never kept, logged or shown unmasked.
+ */
+export type ReviewHeldEntry = EnvironmentReviewEntryV12 & {
+  readonly op: "put" | "delete";
+  /** The hold's version: Apply and Discard name exactly this one. */
+  readonly heldRevision: number;
+  /** The live item's revision the list read; null when there is none. */
+  readonly liveRevision: number | null;
+};
+
+const NO_HELD_FACTS = {
+  command: null,
+  event: null,
+  description: null,
+  harness: null,
+  value: null,
+} as const;
+
+/** The holds of an environment's review, each as the sheet lists it. */
+export async function readReviewHolds(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+): Promise<readonly ReviewHeldEntry[]> {
+  const review = await readOperationReview(cloud, environmentId);
+  const holds: ReviewHeldEntry[] = [];
+  for (const entry of review?.needsYou ?? []) {
+    // A sign-in that did not move is the dashboard's to show.
+    if (entry.type !== "held") continue;
+    const kind = environmentItemKindSchema.safeParse(entry.kind);
+    if (!kind.success) continue;
+    holds.push({
+      entryId: entry.heldId,
+      reason: "executable_entry",
+      kind: kind.data,
+      key: entry.key,
+      os: entry.os ?? "any",
+      hostId: entry.hostId,
+      heldAt: entry.heldAt,
+      ...(entry.op === "put"
+        ? heldFactsOf({ kind: entry.kind, key: entry.key, value: entry.value })
+        : NO_HELD_FACTS),
+      op: entry.op,
+      heldRevision: entry.revision,
+      liveRevision: entry.live?.revision ?? null,
+    });
+  }
+  return holds;
+}
+
+/**
+ * The review sheet's choice on one hold, as the host answered it: written,
+ * gone, or not the person's to make. A hold or live item that moved since the
+ * list read it is `gone` too: the row stays in the review, and the reread
+ * draws it as it is now.
+ */
+export async function applyReviewChoice(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  entry: ReviewHeldEntry,
+  choice: "approve" | "discard",
+): Promise<EnvironmentReviewHeldApplyResponse> {
+  try {
+    const answer =
+      choice === "approve"
+        ? await applyHeldChange(cloud, environmentId, {
+            heldId: entry.entryId,
+            revision: entry.heldRevision,
+            expectedLiveRevision: entry.liveRevision,
+          })
+        : await discardHeldChange(
+            cloud,
+            environmentId,
+            entry.entryId,
+            entry.heldRevision,
+          );
+    return answer.outcome === "applied" || answer.outcome === "discarded"
+      ? { outcome: "applied" }
+      : { outcome: "gone" };
+  } catch (error) {
+    if (error instanceof EnvironmentCloudError && error.kind === "forbidden") {
+      return { outcome: "forbidden" };
+    }
+    throw error;
+  }
+}
+
+const noticeAddressSchema = z.tuple([
+  z.number().int().nonnegative(),
+  z.string().min(1),
+  z.string().min(1),
+  z.enum(ITEM_OS_VALUES).nullable(),
+]);
+
+/** A notice's id: the change it names, opaque to the screen; made and read here only. */
+function noticeIdOf(row: AuthnNoticeRow): string {
+  return JSON.stringify([row.revision, row.kind, row.key, row.os]);
+}
+
+function changedByOf(
+  hostId: string | null,
+  hostName: string | null,
+): EnvironmentChangedBy {
+  return hostId === null
+    ? { kind: "dashboard" }
+    : { kind: "host", hostId, hostLabel: hostName };
+}
+
+/** The environment's notices as the page lists them, each with Undo. */
+export async function readNotices(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+): Promise<EnvironmentNotice[]> {
+  const notices: EnvironmentNotice[] = [];
+  for (const row of await readChangeNotices(cloud, environmentId)) {
+    const kind = environmentItemKindSchema.safeParse(row.kind);
+    if (!kind.success) continue;
+    notices.push({
+      noticeId: noticeIdOf(row),
+      kind: kind.data,
+      key: row.key,
+      os: row.os ?? "any",
+      source: row.source,
+      from: changedByOf(row.hostId, row.hostName),
+      writtenAt: row.writtenAt,
+      // Listed only while no later change on its key superseded it.
+      undoAvailable: true,
+    });
+  }
+  return notices;
+}
+
+/** The words a notice that no longer names an undoable change is refused with. */
+const NOTICE_GONE_MESSAGE = "This notice is no longer available.";
+
+/** Undo of one notice, answered as the host's `environment.undo` was. */
+export async function undoNotice(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  noticeId: string,
+): Promise<EnvironmentWriteOutcome> {
+  let address: z.infer<typeof noticeAddressSchema> | null = null;
+  try {
+    const parsed = noticeAddressSchema.safeParse(JSON.parse(noticeId));
+    if (parsed.success) address = parsed.data;
+  } catch {
+    address = null;
+  }
+  if (address === null) {
+    throw new EnvironmentCloudError("invalid", NOTICE_GONE_MESSAGE);
+  }
+  const [revision, kind, key, os] = address;
+  const undone = await undoChange(cloud, environmentId, {
+    revision,
+    kind,
+    key,
+    os,
+  });
+  if (undone.outcome === "undone") {
+    return { outcome: "saved", revision: undone.item.revision };
+  }
+  if (undone.outcome === "superseded") {
+    return {
+      outcome: "stale",
+      currentRevision: undone.current?.revision ?? null,
+      changedBy: changedByOf(
+        undone.current?.writtenBy.hostId ?? null,
+        undone.current?.writtenBy.hostName ?? null,
+      ),
+    };
+  }
+  throw new EnvironmentCloudError("invalid", NOTICE_GONE_MESSAGE);
 }
