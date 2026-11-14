@@ -1,9 +1,10 @@
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   useMutation,
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type {
   HostRpcError,
@@ -56,7 +57,7 @@ export function useTerminalKillFor(
     withHostMutationLifecycleBoundary("terminal.kill", {
       mutationKey: terminalMutationKeys.kill(),
       mutationFn: (variables) =>
-        withHostQueryErrorBoundary("terminal.kill", () => {
+        withHostMutationErrorBoundary("terminal.kill", () => {
           if (client === null) {
             return Promise.reject<
               ResponseOfMethod<HostRpcRegistry, "terminal.kill">
@@ -81,7 +82,10 @@ export function useTerminalKillFor(
           queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
         });
       },
-      onError: (error) => toastFromHostError(error, errorMessage),
+      onError: (error) => {
+        if (!trackUserIntent && error instanceof HostBelowMinimumError) return;
+        toastFromHostError(error, errorMessage);
+      },
     }),
   );
 }
