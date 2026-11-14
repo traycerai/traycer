@@ -37,6 +37,7 @@ import {
   type BotMascotShape,
   type BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useBotLookSaveStore } from "@/stores/bots/bot-look-save-store";
 import {
@@ -67,13 +68,18 @@ const mocks = vi.hoisted(() => ({
   /** The next `bot.list` read answers with the look it started with only once this resolves. */
   listGate: null as Promise<void> | null,
   listReads: 0,
+  /** Releases every gate a test opened, so none outlives it. */
+  releases: [] as Array<() => void>,
 }));
 
 interface HeldWrite {
   readonly request: BotUpdateAppearanceRequest;
   /** Answers the write with `look`, which the cloud now holds. */
   readonly answer: (look: BotAppearance) => void;
+  /** The cloud refuses the person or the host (`FORBIDDEN`): certainly not kept. */
   readonly refuse: (message: string) => void;
+  /** Whether the host still holds the write, neither answered nor refused. */
+  readonly open: () => boolean;
 }
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -172,17 +178,29 @@ function buildClient(appearance: BotAppearance): void {
             mocks.inFlight += 1;
             mocks.maxInFlight = Math.max(mocks.maxInFlight, mocks.inFlight);
             return new Promise((resolve, reject) => {
+              let open = true;
               mocks.heldWrites.push({
                 request: params,
+                open: () => open,
                 answer: (look) => {
+                  open = false;
                   mocks.inFlight -= 1;
                   mocks.answered += 1;
                   mocks.listed = look;
                   resolve({ bot: botRow(look) });
                 },
                 refuse: (message) => {
+                  open = false;
                   mocks.inFlight -= 1;
-                  reject(new Error(message));
+                  reject(
+                    new HostRpcError({
+                      code: "FORBIDDEN",
+                      message,
+                      requestId: "req-1",
+                      method: "bot.updateAppearance",
+                      fatalDetails: null,
+                    }),
+                  );
                 },
               });
             });
@@ -298,11 +316,21 @@ beforeEach(() => {
   mocks.answered = 0;
   mocks.listGate = null;
   mocks.listReads = 0;
-  useBotLookSaveStore.setState({ saves: {} });
+  mocks.releases = [];
+  useBotLookSaveStore.setState(useBotLookSaveStore.getInitialState(), true);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const release of mocks.releases) release();
   cleanup();
+  // A write still held would answer into the next test's store.
+  await waitFor(() => {
+    for (const write of mocks.heldWrites) {
+      if (write.open()) write.refuse("The test is over.");
+    }
+    expect(useBotLookSaveStore.getState().flights).toEqual({});
+  });
+  useBotLookSaveStore.setState(useBotLookSaveStore.getInitialState(), true);
 });
 
 /** The paths a mascot in `root` draws, which say which shape it is. */
@@ -749,10 +777,9 @@ describe("<BotAppearanceSettings />", () => {
       const first = await writeAt(0);
       await user.click(screen.getByTestId("bot-settings-accessory-sparkle"));
 
-      let release: () => void = () => {};
-      mocks.listGate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      const gate = Promise.withResolvers<void>();
+      mocks.releases.push(gate.resolve);
+      mocks.listGate = gate.promise;
       const readsBefore = mocks.listReads;
       await act(() => {
         void queryClient.invalidateQueries(IS_BOT_LIST);
@@ -764,7 +791,7 @@ describe("<BotAppearanceSettings />", () => {
       first.answer({ ...BASE, eyewear: "shades" });
       const second = await writeAt(1);
       await act(() => {
-        release();
+        gate.resolve();
         return Promise.resolve();
       });
       await waitFor(() => {

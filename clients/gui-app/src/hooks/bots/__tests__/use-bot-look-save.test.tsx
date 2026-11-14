@@ -13,6 +13,7 @@ import type { ReactElement, ReactNode } from "react";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -23,6 +24,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
+  HostRpcError,
   HostTransportFailureError,
   mayHaveReachedHost,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -108,10 +110,14 @@ function botRow(appearance: BotAppearance): BotDirectoryRecord {
 interface HeldWrite {
   readonly request: BotUpdateAppearanceRequest;
   readonly answer: (look: BotAppearance) => void;
-  /** The host answers with its own error: a definite refusal. */
+  /** The cloud refuses the person or the host (`FORBIDDEN`): certainly not kept. */
   readonly refuse: (message: string) => void;
+  /** The host fails in a way of its own (`RPC_ERROR`): the write may have been kept. */
+  readonly fail: (message: string) => void;
   /** The answer is lost after the write left: it may yet be kept. */
   readonly lose: (message: string) => void;
+  /** Whether the host still holds the write, neither answered nor ended. */
+  readonly open: () => boolean;
 }
 
 interface FakeHost {
@@ -119,6 +125,19 @@ interface FakeHost {
   readonly client: HostClient<HostRpcRegistry>;
   /** Every `bot.updateAppearance` the host was sent, each held until answered. */
   readonly writes: HeldWrite[];
+  /** Holds this host's `bot.list` reads until the returned release is called. */
+  readonly holdLists: () => () => void;
+}
+
+/** Every host a test made, so its held writes can be ended when it is over. */
+let hosts: FakeHost[] = [];
+/** Every gate a test opened, so none outlives it. */
+let releases: Array<() => void> = [];
+
+function heldOpen(): PromiseWithResolvers<void> {
+  const gate = Promise.withResolvers<void>();
+  releases.push(gate.resolve);
+  return gate;
 }
 
 function userContext(userId: string) {
@@ -133,6 +152,7 @@ function userContext(userId: string) {
 /** A real HostClient, signed in as `userId`, whose host holds every write. */
 function fakeHost(userId: string): FakeHost {
   const writes: HeldWrite[] = [];
+  let listGate: Promise<void> | null = null;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
@@ -144,14 +164,33 @@ function fakeHost(userId: string): FakeHost {
       handlers: {
         "bot.updateAppearance": (params) =>
           new Promise((resolve, reject) => {
+            let open = true;
             writes.push({
               request: params,
+              open: () => open,
               answer: (look) => {
+                open = false;
                 listed = look;
                 resolve({ bot: botRow(look) });
               },
-              refuse: (message) => reject(new Error(message)),
+              refuse: (message) => {
+                open = false;
+                reject(
+                  new HostRpcError({
+                    code: "FORBIDDEN",
+                    message,
+                    requestId: "req-1",
+                    method: "bot.updateAppearance",
+                    fatalDetails: null,
+                  }),
+                );
+              },
+              fail: (message) => {
+                open = false;
+                reject(new Error(message));
+              },
               lose: (message) => {
+                open = false;
                 const lost = new HostTransportFailureError({
                   code: "RPC_ERROR",
                   message,
@@ -164,12 +203,26 @@ function fakeHost(userId: string): FakeHost {
               },
             });
           }),
-        "bot.list": () => ({ bots: [botRow(listed)], mainBotIds: null }),
+        "bot.list": async () => {
+          await listGate;
+          return { bots: [botRow(listed)], mainBotIds: null };
+        },
       },
     }),
   });
   spine.setRequestContext(userContext(userId));
-  return { spine, client: spine.createRequester(mockLocalHostEntry), writes };
+  const host: FakeHost = {
+    spine,
+    client: spine.createRequester(mockLocalHostEntry),
+    writes,
+    holdLists: () => {
+      const gate = heldOpen();
+      listGate = gate.promise;
+      return gate.resolve;
+    },
+  };
+  hosts.push(host);
+  return host;
 }
 
 let queryClient = new QueryClient();
@@ -299,11 +352,25 @@ beforeEach(() => {
   mocks.hostId = "host-1";
   listed = LISTED;
   listing = false;
-  useBotLookSaveStore.setState({ saves: {} });
+  hosts = [];
+  releases = [];
+  useBotLookSaveStore.setState(useBotLookSaveStore.getInitialState(), true);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const release of releases) release();
   cleanup();
+  // A write still held would answer into the next test's store.
+  await waitFor(() => {
+    for (const host of hosts) {
+      for (const write of host.writes) {
+        if (write.open()) write.refuse("The test is over.");
+      }
+    }
+    expect(useBotLookSaveStore.getState().flights).toEqual({});
+  });
+  useBotLookSaveStore.setState(useBotLookSaveStore.getInitialState(), true);
+  queryClient.clear();
 });
 
 describe("a run of look saves when the client's person changes", () => {
@@ -344,7 +411,7 @@ describe("a run of look saves retired while the cached bot lists are being settl
       bots: [botRow(LISTED)],
       mainBotIds: null,
     });
-    const readReleased = Promise.withResolvers<void>();
+    const readReleased = heldOpen();
     // A read of the list left before the save is answered and is still out.
     // Ending it is what the saver waits on, so the person changes as it ends.
     const refetch = queryClient.fetchQuery(
@@ -430,7 +497,7 @@ describe("a run of look saves when a choice is made through another host", () =>
     return { first, second, held };
   }
 
-  it("holds the new host's request until the old host's save is answered, then sends only what was waiting or chosen since, and writes the answered look to the lists", async () => {
+  it("holds the new host's request until the old host's save is done, then sends only what was waiting or chosen since, and writes the answered look to the lists", async () => {
     const { first, second, held } = await handOver(true);
 
     expect(useBotLookSaveStore.getState().saves[BOT_ID]?.hostId).toBe("host-2");
@@ -468,41 +535,32 @@ describe("a run of look saves when a choice is made through another host", () =>
     takenOver.answer({ ...LISTED, ...SHADES, color: 7 });
   });
 
-  it("sends the old host's parts again, with the waiting and later ones, when its save is definitely refused, and shows no refusal", async () => {
-    const { second, held } = await handOver(true);
+  it("never sends the old host's parts when its save is certainly refused, and returns them to the held look with the refusal", async () => {
+    const { second, held } = await handOver(false);
     const run = useBotLookSaveStore.getState().saves[BOT_ID]?.run;
 
     held.refuse("Old host refused.");
     const takenOver = await writeAt(second, 0);
 
-    expect(screen.queryAllByRole("alert")).toEqual([]);
-    expect(refusalUnder("eyewear")).toBeNull();
+    expect(takenOver.request).toEqual({ botId: BOT_ID, color: 7 });
+    expect(second.writes).toHaveLength(1);
+    expect(refusalUnder("eyewear")).toBe("Old host refused.");
+    expect(pressedIn("eyewear")).toBe("None");
+    expect(colourPressed(7)).toBe("true");
     const entry = useBotLookSaveStore.getState().saves[BOT_ID];
     expect(entry.hostId).toBe("host-2");
     expect(entry.run).toBe(run);
-    expect(pressedIn("eyewear")).toBe("Shades");
-    expect(pressedIn("accessory")).toBe("Halo");
-    expect(colourPressed(7)).toBe("true");
-    expect(takenOver.request).toEqual({
-      botId: BOT_ID,
-      ...SHADES,
-      accessory: "halo",
-      color: 7,
-    });
-    expect(second.writes).toHaveLength(1);
 
-    takenOver.answer(CHOSEN);
+    takenOver.answer({ ...LISTED, color: 7 });
     await waitFor(() => {
-      expect(useBotLookSaveStore.getState().saves[BOT_ID]).toBeUndefined();
+      expect(useBotLookSaveStore.getState().saves[BOT_ID]?.sending).toBeNull();
     });
   });
 
-  it("does not send the old host's parts again when its save ends unknown, and says so under a part the re-read lists do not hold", async () => {
+  it("treats the old host's plain failure as unknown: sends none of its parts, and says so under a part the re-read lists do not hold", async () => {
     const { second, held } = await handOver(true);
 
-    act(() => {
-      held.lose("Connection dropped.");
-    });
+    held.fail("Host failed.");
     const takenOver = await writeAt(second, 0);
 
     expect(takenOver.request).toEqual({
@@ -517,13 +575,11 @@ describe("a run of look saves when a choice is made through another host", () =>
     takenOver.answer({ ...LISTED, accessory: "halo", color: 7 });
   });
 
-  it("says nothing under a part the re-read lists hold when the old host's save ends unknown", async () => {
+  it("says nothing under a part the re-read lists hold when the old host's plain failure ends its save", async () => {
     const { second, held } = await handOver(true);
     listed = { ...LISTED, ...SHADES };
 
-    act(() => {
-      held.lose("Connection dropped.");
-    });
+    held.fail("Host failed.");
     const takenOver = await writeAt(second, 0);
 
     expect(takenOver.request).toEqual({
@@ -534,6 +590,94 @@ describe("a run of look saves when a choice is made through another host", () =>
     expect(refusalUnder("eyewear")).toBeNull();
     expect(pressedIn("eyewear")).toBe("Shades");
     takenOver.answer({ ...CHOSEN });
+  });
+
+  it("treats the old host's lost answer the same way: sends none of its parts, and says so under a part the re-read lists do not hold", async () => {
+    const { second, held } = await handOver(true);
+
+    held.lose("Connection dropped.");
+    const takenOver = await writeAt(second, 0);
+
+    expect(takenOver.request).toEqual({
+      botId: BOT_ID,
+      accessory: "halo",
+      color: 7,
+    });
+    expect(second.writes).toHaveLength(1);
+    expect(refusalUnder("eyewear")).toBe(UNSURE);
+    expect(pressedIn("eyewear")).toBe("None");
+    takenOver.answer({ ...LISTED, accessory: "halo", color: 7 });
+  });
+
+  it("sends none of the old host's parts when a colour is chosen through the new host while the lists are re-read after its save ended unknown", async () => {
+    const user = userEvent.setup();
+    const first = fakeHost("user-A");
+    await pointListedPanelAt(first, "host-1");
+    await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
+    const lost = await writeAt(first, 0);
+    const releaseLists = first.holdLists();
+
+    act(() => {
+      lost.lose("Connection dropped.");
+    });
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBeGreaterThan(0);
+    });
+    const second = fakeHost("user-A");
+    pointPanelAt(second, "host-2");
+    await user.click(screen.getByTestId("bot-settings-colour-7"));
+
+    expect(second.writes).toHaveLength(0);
+    releaseLists();
+    const takenOver = await writeAt(second, 0);
+
+    expect(takenOver.request).toEqual({ botId: BOT_ID, color: 7 });
+    expect(second.writes).toHaveLength(1);
+    takenOver.answer({ ...LISTED, color: 7 });
+  });
+
+  it("sends none of the answered save's parts when a colour is chosen through the new host while the lists in flight are being ended", async () => {
+    const first = fakeHost("user-A");
+    pointPanelAt(first, "host-1");
+    const second = fakeHost("user-A");
+    const listKey = [...hostQueryKeys.methodScope("host-1", "bot.list"), "all"];
+    queryClient.setQueryData(listKey, {
+      bots: [botRow(LISTED)],
+      mainBotIds: null,
+    });
+    const readReleased = heldOpen();
+    let writesInWindow = -1;
+    // A read of the list is out when the save is answered. Ending it is what
+    // the saver waits on, and the colour is chosen through H2 as it ends.
+    const refetch = queryClient.fetchQuery(
+      queryOptions({
+        queryKey: listKey,
+        staleTime: 0,
+        queryFn: async ({ signal }) => {
+          signal.addEventListener("abort", () => {
+            fireEvent.click(screen.getByTestId("bot-settings-colour-7"));
+            writesInWindow = second.writes.length;
+          });
+          await readReleased.promise;
+          return { bots: [botRow(LISTED)], mainBotIds: null };
+        },
+      }),
+    );
+    const refetchEnded = refetch.catch(() => {});
+    await userEvent.click(screen.getByTestId("bot-settings-eyewear-shades"));
+    const held = await writeAt(first, 0);
+    pointPanelAt(second, "host-2");
+
+    act(() => {
+      held.answer({ ...LISTED, ...SHADES });
+    });
+    await refetchEnded;
+    const takenOver = await writeAt(second, 0);
+
+    expect(writesInWindow).toBe(0);
+    expect(takenOver.request).toEqual({ botId: BOT_ID, color: 7 });
+    expect(second.writes).toHaveLength(1);
+    takenOver.answer({ ...LISTED, ...SHADES, color: 7 });
   });
 });
 
@@ -554,9 +698,7 @@ describe("a run of look saves through one host whose save ends unknown", () => {
   it("still sends the part waiting behind it, never sends the unknown part again, and says so when the lists do not hold it", async () => {
     const { host, lost } = await unknownWithAccessoryWaiting();
 
-    act(() => {
-      lost.lose("Connection dropped.");
-    });
+    lost.fail("Host failed.");
     const next = await writeAt(host, 1);
 
     expect(next.request).toEqual({ botId: BOT_ID, accessory: "halo" });
@@ -574,9 +716,7 @@ describe("a run of look saves through one host whose save ends unknown", () => {
     const { host, lost } = await unknownWithAccessoryWaiting();
     listed = { ...LISTED, eyewear: "shades" };
 
-    act(() => {
-      lost.lose("Connection dropped.");
-    });
+    lost.fail("Host failed.");
     const next = await writeAt(host, 1);
 
     expect(next.request).toEqual({ botId: BOT_ID, accessory: "halo" });

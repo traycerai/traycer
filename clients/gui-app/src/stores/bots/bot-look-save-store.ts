@@ -48,13 +48,31 @@ export const NO_BOT_LOOK_SAVE: BotLookSave = {
   hostId: null,
 };
 
+/**
+ * A save now with a host. It owns its parts until it has ended and what it
+ * left is taken in (`done`): until then nothing sends those parts again.
+ */
+export interface BotLookFlight {
+  readonly parts: BotLookChange;
+  readonly done: Promise<void>;
+}
+
 interface BotLookSaveState {
   readonly saves: Readonly<Record<string, BotLookSave>>;
+  /** Each bot's save now with a host, by bot id. */
+  readonly flights: Readonly<Record<string, BotLookFlight>>;
+  /**
+   * How many settings panels are open on each bot. A refusal is a panel's to
+   * show, so one that arrives with none open is not kept for a later one.
+   */
+  readonly panels: Readonly<Record<string, number>>;
 }
 
 /** Each bot's unanswered choices, by bot id; a bot with none has no entry. */
 export const useBotLookSaveStore = create<BotLookSaveState>(() => ({
   saves: {},
+  flights: {},
+  panels: {},
 }));
 
 export function botLookSaveOf(botId: string): BotLookSave {
@@ -85,8 +103,15 @@ export function partsOf(change: BotLookChange | null): BotLookPart[] {
 /** Forgets a bot's choices and saves. */
 export function dropBotLookSave(botId: string): void {
   useBotLookSaveStore.setState((state) => ({
-    saves: Object.fromEntries(
-      Object.entries(state.saves).filter(([id]) => id !== botId),
-    ),
+    saves: withoutBot(state.saves, botId),
   }));
+}
+
+export function withoutBot<Value>(
+  byBot: Readonly<Record<string, Value>>,
+  botId: string,
+): Record<string, Value> {
+  return Object.fromEntries(
+    Object.entries(byBot).filter(([id]) => id !== botId),
+  );
 }
