@@ -1091,7 +1091,8 @@ export function SandboxHeaderActions(props: {
   readonly sandbox: HostScopeSandbox;
   readonly onDestroyed: (() => void) | null;
   readonly renderActions:
-    ((primary: ReactNode, menuItems: ReactNode) => ReactNode) | null;
+    | ((primary: ReactNode, menuItems: ReactNode) => ReactNode)
+    | null;
 }): ReactNode {
   const summary = props.sandbox.summary;
   if (summary === null) return props.renderActions?.(null, null) ?? null;
@@ -1112,7 +1113,8 @@ function SandboxHeaderActionSet(props: {
   readonly hostName: string;
   readonly onDestroyed: (() => void) | null;
   readonly renderActions:
-    ((primary: ReactNode, menuItems: ReactNode) => ReactNode) | null;
+    | ((primary: ReactNode, menuItems: ReactNode) => ReactNode)
+    | null;
 }): ReactNode {
   const { summary, sandbox } = props;
   const actions = sandboxCardActions(
