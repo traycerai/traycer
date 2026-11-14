@@ -21,7 +21,6 @@ import {
   SET_ROLE_FORBIDDEN_REFUSAL,
   LEGACY_NOTICE_READ_FAILED,
   MANAGE_SEATS_LABEL,
-  MEMBERS_NEED_UPDATED_HOST,
   RETRY_LABEL,
   acceptedPeopleCount,
   addPlanOnDashboardLabel,
@@ -52,7 +51,7 @@ import type {
 import { DashboardLinkButton } from "@/components/settings/host-scope/dashboard-link-button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useEnvironmentMemberWorkNowQuery } from "@/hooks/environment/use-environment-member-work-now-query";
+import { useEnvironmentMemberWorkNow } from "@/hooks/environment/use-environment-member-work-now";
 import { useEnvironmentMembersRemovalPreviewQuery } from "@/hooks/environment/use-environment-members-removal-preview-query";
 
 type PendingRemove =
@@ -115,16 +114,15 @@ function previewState(
 }
 
 /**
- * The member's running work where a team computer counted it. A count not
- * read, refused, or that computer's "cannot count" is no count.
+ * The member's running work where the window's own host, a team computer,
+ * counted it. No answer, or that host's "cannot count", is no count.
  */
 function memberWorkNow(
-  query: UseQueryResult<EnvironmentMembersRemovePreviewResponse, HostRpcError>,
+  counts: EnvironmentMembersRemovePreviewResponse | null,
   hostLabel: (hostId: string) => string | null,
 ): MemberWorkNow | null {
-  const counts = query.isError ? undefined : query.data;
   if (
-    counts === undefined ||
+    counts === null ||
     counts.activeTurns === null ||
     counts.terminals === null
   ) {
@@ -183,17 +181,6 @@ function MembersReadFallback(props: {
         variant={undefined}
         tone="muted"
       />
-    );
-  }
-  if (props.membersRead === "unsupported") {
-    return (
-      <p
-        role="status"
-        className="text-ui-sm text-muted-foreground"
-        data-testid="members-needs-update"
-      >
-        {MEMBERS_NEED_UPDATED_HOST}
-      </p>
     );
   }
   if (props.membersRead === "failed") {
@@ -342,13 +329,13 @@ export function MembersView(props: {
     environmentId,
     targetUserId(removing),
   );
-  const workNowQuery = useEnvironmentMemberWorkNowQuery(
+  const workNowCounts = useEnvironmentMemberWorkNow(
     environmentId,
     targetUserId(removing),
   );
   const removePreview = previewState(
     removeQuery,
-    memberWorkNow(workNowQuery, hostLabel),
+    memberWorkNow(workNowCounts, hostLabel),
   );
 
   const membersReady = membersRead === "ready";

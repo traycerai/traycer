@@ -84,7 +84,7 @@ const seatSaveSchema = z.object({ receiptId: z.string().nullable() });
 const noticeSeenSchema = z.object({ legacyRoleNoticeSeenAt: z.string() });
 
 /** The person reading, as a Personal environment lists its one member. */
-export interface ConfigurationReader {
+interface ConfigurationReader {
   readonly userId: string;
   readonly displayName: string;
 }

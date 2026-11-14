@@ -38,8 +38,9 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   `autoPolicy.*`, a configuration's own cloud state (its records, secrets,
  *   members, host list, history and plans, and the skills and guide its room
  *   holds: what its Settings pages read and edit, so they work with no host
- *   running it), the environment arm
- *   (`environment.chats.subscribe`,
+ *   running it; a member's running work, which only the computer running it
+ *   can count, is the one members read that stays `target-host`), the
+ *   environment arm (`environment.chats.subscribe`,
  *   `.plainTerminals.subscribe`, `.communicationGraph.subscribe`), which no
  *   host serves, and the chat serving witness (`chat.serving.subscribe`),
  *   the server's published fact. A pool-only call never has a host fallback
@@ -499,7 +500,9 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.members.invite": "pool-only",
   "environment.members.noticeSeen": "pool-only",
   "environment.members.remove": "pool-only",
-  "environment.members.removePreview": "pool-only",
+  // A member's running turns and terminals: counted by the computer that runs
+  // them, so the one caller names that computer and the pool is never asked.
+  "environment.members.removePreview": "target-host",
   "environment.members.seats": "pool-only",
   "environment.members.setRole": "pool-only",
   "environment.move.accept": "target-host",
