@@ -4030,3 +4030,104 @@ export const hostNotificationHooksSaveDowngradeV30ToV10 = defineDowngradePath<
     value: downgradeHooksStatus(response),
   }),
 });
+
+/**
+ * `host.notificationHooks.save@4.0`'s answer: the status `@3.0` answers, and
+ * the account's part of the saved list.
+ *
+ * `accountHooks` holds the saved hooks this host classifies as not staying on
+ * this computer, at most 64. `[]` means the account's hooks column becomes
+ * empty; `null` means the app writes nothing to it.
+ *
+ * The host writes the saved hooks to this computer's file and answers; it
+ * makes no write of the account's hooks. The app writes the account's hooks
+ * column from this field, as a whole replace, against the row's revision it
+ * read itself, and adds `held: false` to each entry. A hook in `accountHooks`
+ * that the account's row does not hold is removed from this computer's file
+ * when the host next reads that row, so a save is complete only when the
+ * app's write of `accountHooks` to the account succeeds.
+ */
+export const notificationHooksSaveResponseSchemaV40 = lazySchema(() =>
+  notificationHooksStatusResponseSchema
+    .extend({
+      accountHooks: z.array(notificationHookConfigSchema).max(64).nullable(),
+    })
+    .strict(),
+);
+export type NotificationHooksSaveResponseV40 = z.infer<
+  typeof notificationHooksSaveResponseSchemaV40
+>;
+
+/**
+ * A major, not a minor: `@3.0`'s answer is `.strict()`, so a `@3.0` caller
+ * refuses an answer carrying `accountHooks`; the downgrades below drop it.
+ * The request is `@3.0`'s. Defined and not registered: it registers with its
+ * first caller.
+ */
+export const hostNotificationHooksSaveV40 = defineRpcContract({
+  method: "host.notificationHooks.save",
+  schemaVersion: { major: 4, minor: 0 } as const,
+  requestSchema: notificationHooksSaveRequestSchema,
+  responseSchema: notificationHooksSaveResponseSchemaV40,
+});
+/** A host before `@4.0` answers no account part: the app writes nothing. */
+export const hostNotificationHooksSaveUpgradeV3ToV4 = defineUpgradePath<
+  typeof hostNotificationHooksSaveV30,
+  typeof hostNotificationHooksSaveV40
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 4, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, accountHooks: null }),
+});
+function withoutAccountHooks(
+  response: NotificationHooksSaveResponseV40,
+): NotificationHooksStatusResponse {
+  const { accountHooks: _accountHooks, ...status } = response;
+  return status;
+}
+export const hostNotificationHooksSaveDowngradeV40ToV30 = defineDowngradePath<
+  typeof hostNotificationHooksSaveV40,
+  typeof hostNotificationHooksSaveV30
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: withoutAccountHooks(response),
+  }),
+});
+export const hostNotificationHooksSaveDowngradeV40ToV20 = defineDowngradePath<
+  typeof hostNotificationHooksSaveV40,
+  typeof hostNotificationHooksSaveV20
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: {
+      hooks: request.hooks,
+      executableWriteGrant: request.executableWriteGrant,
+    },
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: downgradeHooksStatus(withoutAccountHooks(response)),
+  }),
+});
+export const hostNotificationHooksSaveDowngradeV40ToV10 = defineDowngradePath<
+  typeof hostNotificationHooksSaveV40,
+  typeof hostNotificationHooksSave
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: { hooks: request.hooks },
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: downgradeHooksStatus(withoutAccountHooks(response)),
+  }),
+});
