@@ -4,9 +4,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   listTeamComputersViaHttp,
-  setEnvironmentBotHostViaHttp,
   type TeamComputersResult,
-  type SetEnvironmentBotHostResult,
 } from "@traycer-clients/shared/host-client/team-computers";
 import {
   mintTeamComputerInstallTokenViaHttp,
@@ -786,20 +784,6 @@ export class MobileRunnerHost implements IRunnerHost {
     environmentId: string,
   ): Promise<TeamComputersResult> {
     return listTeamComputersViaHttp(this.authnBaseUrl, bearer, environmentId);
-  }
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult> {
-    return setEnvironmentBotHostViaHttp(
-      this.authnBaseUrl,
-      bearer,
-      environmentId,
-      hostId,
-      sharingGeneration,
-    );
   }
   mintTeamComputerInstallToken(
     bearerToken: string,
