@@ -36,6 +36,7 @@ import {
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { modalLayerCoversApp } from "@/components/layout/shell/shell-gestures";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
@@ -245,6 +246,7 @@ function swipeFromLeadingEdge(): void {
 
 beforeEach(() => {
   setMobileApp(true);
+  useSettingsStore.setState({ mobileSwipeHistory: true });
   useAuthStore.setState({ status: "signed-in" });
 });
 
@@ -254,6 +256,7 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out" });
   useMobileNavStore.setState({ open: false });
   setMobileApp(false);
+  useSettingsStore.setState({ mobileSwipeHistory: false });
   document.body.style.pointerEvents = "";
 });
 

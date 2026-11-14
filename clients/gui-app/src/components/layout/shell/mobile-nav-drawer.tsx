@@ -90,8 +90,7 @@ const LIST_FADE_CLASS =
  * landing page renders). Sign out rides the identity row as an icon, joined by
  * Manage subscription on every shell EXCEPT the installed mobile app (see the
  * identity row below). Every action reuses the same helper the desktop surfaces
- * call. Mounted only on mobile while the form is the drawer (see AppShell), so
- * desktop is untouched.
+ * call. Mounted in the installed mobile app at every width and in the narrow browser shell, so desktop is untouched.
  */
 export function MobileNavDrawer(): ReactNode {
   const open = useMobileNavStore((state) => state.open);

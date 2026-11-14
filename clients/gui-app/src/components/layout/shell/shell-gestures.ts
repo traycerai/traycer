@@ -152,6 +152,10 @@ export function ownsHorizontalGesture(target: EventTarget | null): boolean {
   if (declaresOwnTouchHandling(target)) return true;
   let node = asElement(target);
   while (node !== null) {
+    if (
+      node.matches("[data-history-gesture-owner], .react-flow, iframe, webview")
+    )
+      return true;
     const style = window.getComputedStyle(node);
     if (style.touchAction.includes("pan-x")) return true;
     if (
