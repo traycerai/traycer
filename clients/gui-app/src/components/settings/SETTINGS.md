@@ -4402,7 +4402,13 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   The computer's Overview has a **Notifications** tab for the long-turn alert
   and the hooks that live only on that computer, including Test, its result,
   file path and Refresh. A whole-file save retains the unshown account hooks
-  from the same snapshot. Cloud hook editing is tracked as the next slice.
+  from the same snapshot.
+  Account hooks use an HTTP-only editor and replace only the hooks column.
+  Legacy commands and interpolating headers are parsed but not drawn or sent
+  back; their execution remains in the computers' files. Literal HTTP hooks
+  remain editable even with a legacy held flag, which a save clears. The cloud
+  list has no Test, result, file path or Refresh. Its Delete confirm has only
+  the title, and an empty list has no sentence pending the owner's C30 choice.
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents

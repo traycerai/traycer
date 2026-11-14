@@ -98,7 +98,7 @@ function useAccountNotificationWrite<Request>(
       return answer;
     },
     onSettled: () => {
-      void queries.invalidateQueries({ queryKey });
+      return queries.invalidateQueries({ queryKey });
     },
   });
 }

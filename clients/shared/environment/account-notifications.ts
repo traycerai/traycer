@@ -44,20 +44,26 @@ export function saveAccountNotificationMatrix(
   cloud: EnvironmentCloud,
   request: AccountNotificationMatrixPutRequest,
 ): Promise<AccountNotificationSettingsResponse> {
-  return writeAccountNotificationSettings(
-    cloud,
-    accountNotificationMatrixPutRequestSchema.parse(request),
-  );
+  const parsed = accountNotificationMatrixPutRequestSchema.safeParse(request);
+  if (!parsed.success)
+    throw new EnvironmentCloudError(
+      "invalid",
+      "The settings request was refused.",
+    );
+  return writeAccountNotificationSettings(cloud, parsed.data);
 }
 
 export function saveAccountNotificationHooks(
   cloud: EnvironmentCloud,
   request: AccountNotificationHooksPutRequest,
 ): Promise<AccountNotificationSettingsResponse> {
-  return writeAccountNotificationSettings(
-    cloud,
-    accountNotificationHooksPutRequestSchema.parse(request),
-  );
+  const parsed = accountNotificationHooksPutRequestSchema.safeParse(request);
+  if (!parsed.success)
+    throw new EnvironmentCloudError(
+      "invalid",
+      "The settings request was refused.",
+    );
+  return writeAccountNotificationSettings(cloud, parsed.data);
 }
 
 /** Each arm replaces only its own column. A stale row gets one fresh read and one retry. */

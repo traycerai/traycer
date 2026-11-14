@@ -7,8 +7,6 @@ export const TEAM_NOTIFICATION_HOOKS_COPY = {
     `Everyone in ${team} can see each hook's address and headers.`,
   localOnly: (variable: string) =>
     `A team's hook can't read ${variable} from a computer. Type the value itself.`,
-  emptyDescription:
-    "Hooks send an HTTP request for enabled notification severities.",
   headersExample: "authorization: Bearer your-token",
 } as const;
 
@@ -20,4 +18,11 @@ export const ACCOUNT_NOTIFICATIONS_COPY = {
   localOnly: (variable: string) =>
     `This hook reads ${variable} from a computer. Set it on that computer.`,
   computerTab: "Notifications",
+} as const;
+
+/** C30's interim state: no claim about a cloud hook's computer file. */
+export const CLOUD_NOTIFICATION_LIST_COPY = {
+  deleteTitle: "Delete hook?",
+  deleteDescription: null,
+  emptyState: null,
 } as const;

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { notificationHookVariable } from "@traycer-clients/shared/environment/notification-hook-values";
 import type { NotificationHookConfig } from "@traycer/protocol/host/notifications/host-notifications";
 import {
   draftProblem,
@@ -6,6 +7,10 @@ import {
   HOOK_SEVERITIES,
   type HookDraft,
 } from "@/components/settings/panels/notification-hook-draft";
+import {
+  ACCOUNT_NOTIFICATIONS_COPY,
+  TEAM_NOTIFICATION_HOOKS_COPY,
+} from "@/components/settings/panels/cloud-notification-copy";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -29,18 +34,66 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
-export function NotificationHookEditorDialog(props: {
+interface HookEditorProps {
   readonly initialDraft: HookDraft;
   readonly title: string;
   readonly saving: boolean;
   readonly onCancel: () => void;
   readonly onSave: (hook: NotificationHookConfig) => void;
-}) {
-  const [draft, setDraft] = useState(props.initialDraft);
-  // The Settings scope's host: a sandbox is sent no header value and no URL
-  // sign-in.
+}
+
+export function NotificationHookEditorDialog(props: HookEditorProps) {
   const credentialRefusal = useHostCredentialRefusal(null);
-  const problem = draftProblem(draft, credentialRefusal);
+  return (
+    <HookEditor
+      {...props}
+      scope="computer"
+      credentialRefusal={credentialRefusal}
+      serverProblem={null}
+      onChange={() => undefined}
+    />
+  );
+}
+
+export function CloudNotificationHookEditorDialog(
+  props: HookEditorProps & {
+    readonly scope: "account" | "team";
+    readonly serverProblem: string | null;
+    readonly onChange: () => void;
+  },
+) {
+  return <HookEditor {...props} credentialRefusal={null} />;
+}
+
+function HookEditor(
+  props: HookEditorProps & {
+    readonly scope: "computer" | "account" | "team";
+    readonly credentialRefusal: string | null;
+    readonly serverProblem: string | null;
+    readonly onChange: () => void;
+  },
+) {
+  const [draft, setDraft] = useState(props.initialDraft);
+  let headersExample: string | undefined;
+  if (props.scope === "computer")
+    headersExample = "authorization: Bearer $MY_TOKEN";
+  else if (props.scope === "team")
+    headersExample = TEAM_NOTIFICATION_HOOKS_COPY.headersExample;
+  const variable =
+    props.scope === "computer"
+      ? null
+      : notificationHookVariable(draftToHook(draft));
+  let localProblem: string | null = null;
+  if (variable !== null) {
+    localProblem =
+      props.scope === "team"
+        ? TEAM_NOTIFICATION_HOOKS_COPY.localOnly(variable)
+        : ACCOUNT_NOTIFICATIONS_COPY.localOnly(variable);
+  }
+  const problem =
+    localProblem ??
+    draftProblem(draft, props.credentialRefusal) ??
+    props.serverProblem;
   return (
     <Dialog
       open
@@ -57,7 +110,10 @@ export function NotificationHookEditorDialog(props: {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 space-y-5 overflow-y-auto">
+        <div
+          className="min-h-0 space-y-5 overflow-y-auto"
+          onChange={props.onChange}
+        >
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="hook-name">Name</Label>
@@ -71,26 +127,28 @@ export function NotificationHookEditorDialog(props: {
                 }}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="hook-type">Action</Label>
-              <Select
-                value={draft.actionType}
-                onValueChange={(value) => {
-                  setDraft((previous) => ({
-                    ...previous,
-                    actionType: value === "http" ? "http" : "command",
-                  }));
-                }}
-              >
-                <SelectTrigger id="hook-type" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="command">Run a script</SelectItem>
-                  <SelectItem value="http">POST to a URL</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {props.scope === "computer" ? (
+              <div className="space-y-2">
+                <Label htmlFor="hook-type">Action</Label>
+                <Select
+                  value={draft.actionType}
+                  onValueChange={(value) => {
+                    setDraft((previous) => ({
+                      ...previous,
+                      actionType: value === "http" ? "http" : "command",
+                    }));
+                  }}
+                >
+                  <SelectTrigger id="hook-type" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="command">Run a script</SelectItem>
+                    <SelectItem value="http">POST to a URL</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
           </div>
 
           {draft.actionType === "http" ? (
@@ -113,7 +171,7 @@ export function NotificationHookEditorDialog(props: {
                   id="hook-headers"
                   value={draft.headersText}
                   rows={3}
-                  placeholder={"authorization: Bearer $MY_TOKEN"}
+                  placeholder={headersExample}
                   onChange={(event) => {
                     const headersText = event.target.value;
                     setDraft((previous) => ({ ...previous, headersText }));
@@ -121,11 +179,13 @@ export function NotificationHookEditorDialog(props: {
                   font="mono"
                   size="xs"
                 />
-                <p className="text-ui-xs text-muted-foreground">
-                  One <code>name: value</code> per line. <code>$VAR</code> and{" "}
-                  <code>{"${VAR}"}</code> read the host&apos;s shell variables
-                  at send time — the value is never stored or shown here.
-                </p>
+                {props.scope === "computer" ? (
+                  <p className="text-ui-xs text-muted-foreground">
+                    One <code>name: value</code> per line. <code>$VAR</code> and{" "}
+                    <code>{"${VAR}"}</code> read the host&apos;s shell variables
+                    at send time — the value is never stored or shown here.
+                  </p>
+                ) : null}
               </div>
             </div>
           ) : (

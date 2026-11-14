@@ -1,3 +1,5 @@
+import { AccountNotificationHooksSection } from "./account-notification-hooks-section";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import type { HostNotificationSeverity } from "@traycer/protocol/host/notifications/host-notifications";
 import { DEFAULT_ACCOUNT_NOTIFICATION_MATRIX } from "@traycer-clients/shared/environment/account-notification-schemas";
 import { NEEDS_CONNECTION_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
@@ -29,6 +31,7 @@ const SEVERITY_ROWS: ReadonlyArray<{
 
 /** Account settings are read and saved on the sign-in, with no computer in the path. */
 export function NotificationsSettingsPanel() {
+  const viewerId = useCloudChatViewerId();
   const query = useAccountNotificationSettings();
   const save = useAccountNotificationMatrixSave();
   const account = query.data;
@@ -62,7 +65,7 @@ export function NotificationsSettingsPanel() {
             {query.error.message}
           </p>
         )}
-        {account === undefined
+        {account === undefined || query.error !== null
           ? null
           : SEVERITY_ROWS.map((severity) => (
               <SettingsRow
@@ -101,6 +104,9 @@ export function NotificationsSettingsPanel() {
           </p>
         )}
       </SettingsGroup>
+      {account === undefined || query.error !== null ? null : (
+        <AccountNotificationHooksSection key={viewerId} account={account} />
+      )}
       <p className="text-ui-sm text-muted-foreground">
         {ACCOUNT_NOTIFICATIONS_COPY.computerHooks}
       </p>
