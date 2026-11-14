@@ -19,13 +19,15 @@ import {
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  NotificationsSettingsPanel,
-  NotificationsSettingsPanelForClient,
-} from "@/components/settings/panels/notifications-settings-panel";
+import { NotificationsSettingsPanelForClient } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
+import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 const hostScopeMocks: {
   client: HostClient<HostRpcRegistry> | null;
@@ -454,10 +456,8 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     expect(screen.getByDisplayValue("Pager")).toBeTruthy();
   });
 
-  // The flip tests render the SCOPE-BOUND panel, not the ForClient variant
-  // the shared harness uses: `NotificationsSettingsPanelForClient` passes
-  // `scope={null}` (its caller owns the gating), so it never mounts the
-  // `HostScopeGate` whose hidden-`<Activity>` preservation is under test.
+  // The tab's caller owns host scoping; render the real gate around the
+  // computer panel so these cases exercise its hidden Activity lifecycle.
   function renderScopedPanel(): {
     readonly client: HostClient<HostRpcRegistry>;
     readonly rerender: () => void;
@@ -490,11 +490,26 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     // A FRESH element per (re)render: with a referentially identical element
     // React bails out of the whole subtree and never re-reads the mutated
     // scope mock, so the flip under test silently would not happen.
-    const makeUi = () => (
-      <Providers queryClient={queryClient}>
-        <NotificationsSettingsPanel />
-      </Providers>
-    );
+    const makeUi = () => {
+      const host =
+        hostScopeMocks.hostId === null
+          ? null
+          : hostScopeOptionFixture({ hostId: hostScopeMocks.hostId });
+      const scope = hostScopeFixture({
+        host,
+        client: hostScopeMocks.client,
+        ...(hostScopeMocks.status === null
+          ? {}
+          : { status: hostScopeMocks.status }),
+      });
+      return (
+        <Providers queryClient={queryClient}>
+          <HostScopeGate scope={scope} skeleton={<div />}>
+            <NotificationsSettingsPanelForClient client={scope.client} />
+          </HostScopeGate>
+        </Providers>
+      );
+    };
     const view = render(makeUi());
     return {
       client,
@@ -818,7 +833,20 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
 
     hostScopeMocks.client = client;
     hostScopeMocks.hostId = "host-a";
-    const { rerender } = render(<NotificationsSettingsPanel />, { wrapper });
+    const makeUi = () => {
+      const scope = hostScopeFixture({
+        host: hostScopeOptionFixture({
+          hostId: hostScopeMocks.hostId ?? "host-a",
+        }),
+        client: hostScopeMocks.client,
+      });
+      return (
+        <HostScopeGate scope={scope} skeleton={<div />}>
+          <NotificationsSettingsPanelForClient client={scope.client} />
+        </HostScopeGate>
+      );
+    };
+    const { rerender } = render(makeUi(), { wrapper });
 
     // Arm a delete against host-a's hook.
     await waitFor(() => {
@@ -835,7 +863,7 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
     // host, so confirming rewrote host-b's whole hooks file to delete a hook
     // chosen on host-a.
     hostScopeMocks.hostId = "host-b";
-    rerender(<NotificationsSettingsPanel />);
+    rerender(makeUi());
 
     await waitFor(() => {
       expect(screen.queryByText("Delete hook?")).toBeNull();
@@ -1277,9 +1305,18 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
       failsSave: false,
       readError: null,
     });
-    hostScopeMocks.client = rig.client;
-    hostScopeMocks.hostId = "host-a";
-    const { rerender } = render(<NotificationsSettingsPanel />, {
+    const makeUi = (hostId: string, client: HostClient<HostRpcRegistry>) => {
+      const scope = hostScopeFixture({
+        host: hostScopeOptionFixture({ hostId }),
+        client,
+      });
+      return (
+        <HostScopeGate scope={scope} skeleton={<div />}>
+          <NotificationsSettingsPanelForClient client={client} />
+        </HostScopeGate>
+      );
+    };
+    const { rerender } = render(makeUi("host-a", rig.client), {
       wrapper: rig.wrapper,
     });
     await amountShows("4");
@@ -1301,9 +1338,7 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
       >("host-b", "host.notifications.getLongTurnAlert", {}),
       { thresholdMs: 4 * HOUR_MS },
     );
-    hostScopeMocks.hostId = "host-b";
-    hostScopeMocks.client = secondClient;
-    rerender(<NotificationsSettingsPanel />);
+    rerender(makeUi("host-b", secondClient));
 
     await amountShows("4");
     fireEvent.blur(amountField(), { relatedTarget: null });
@@ -1335,9 +1370,10 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
     expect(
       screen.queryByText(LONG_TURN_ALERT_LABEL, { exact: true }),
     ).toBeNull();
-    await screen.findByRole("switch", {
-      name: "Needs action In-app notifications",
-    });
+    expect(
+      await screen.findByTestId("notification-hooks-manager"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
   });
 
   it("shows a retryable error for an ordinary get failure and loads the row on retry", async () => {

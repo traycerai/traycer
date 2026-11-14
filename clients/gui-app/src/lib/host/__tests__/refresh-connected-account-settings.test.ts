@@ -171,4 +171,70 @@ describe("refreshConnectedAccountSettings", () => {
     expect(requestedHosts).not.toContain("remote-in-fleet");
     streamLease?.release();
   });
+
+  it("does not resolve a remote requester after its held session closes", async () => {
+    const requestIds: string[] = [];
+    const requestedHosts: string[] = [];
+    const dialAttempts: string[] = [];
+    const identity: HostStreamClientIdentity = {
+      kind: "local",
+      hostId: "stream-host",
+      userId: "viewer-1",
+      websocketUrl: firstHost.websocketUrl ?? "",
+      publicKey: "",
+      authnBaseUrl: "",
+      authRecovery: "revalidate",
+      openAuth: null,
+    };
+    const streamLease = acquireHostStreamClient(identity, readyStreamClient);
+    readiness.remoteSessionReady = true;
+    const hostClient = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        [firstHost, remoteHost].find((entry) => entry.hostId === hostId) ??
+        null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `refresh-race-${requestIds.length}`,
+        handlers: {
+          "host.accountSettings.refresh": () => {
+            requestIds.push("refresh");
+            return {};
+          },
+        },
+      }),
+    });
+    hostClient.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "test-bearer",
+      }),
+    );
+    const resolveRequester =
+      hostClient.createRequesterForHostId.bind(hostClient);
+    const createRequester = vi.spyOn(hostClient, "createRequesterForHostId");
+    createRequester.mockImplementation((hostId) => {
+      if (hostId !== null) {
+        requestedHosts.push(hostId);
+        if (hostId === remoteHost.hostId && !readiness.remoteSessionReady)
+          dialAttempts.push(hostId);
+      }
+      return resolveRequester(hostId);
+    });
+    const binding = Object.assign(Object.create(null), {
+      hostClient,
+      directory: { list: async () => [firstHost, remoteHost] },
+    }) as HostRuntimeBinding<HostRpcRegistry>;
+
+    await refreshConnectedAccountSettings(binding, null, "viewer-1", () => {
+      readiness.remoteSessionReady = false;
+      return true;
+    });
+
+    expect(dialAttempts).toEqual([]);
+    expect(requestedHosts).toEqual(["stream-host"]);
+    expect(requestIds).toHaveLength(1);
+    streamLease?.release();
+  });
 });
