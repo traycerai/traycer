@@ -161,6 +161,7 @@ describe("AuthService cloud calls", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     while (trackedServices.length > 0) {
       trackedServices.pop()?.dispose();
     }
@@ -233,7 +234,12 @@ describe("AuthService cloud calls", () => {
       await expect(service.getTeamEnvironment("team-1")).resolves.toBe(result);
 
       expect(getTeamEnvironment).toHaveBeenCalledTimes(1);
-      expect(getTeamEnvironment).toHaveBeenCalledWith(BEARER, "team-1");
+      const teamCall = getTeamEnvironment.mock.calls.at(0);
+      expect(
+        teamCall !== undefined &&
+          teamCall[0] === BEARER &&
+          teamCall[1] === "team-1",
+      ).toBe(true);
     });
 
     it("getEnvironmentProviders hands the runner host the bearer and the environment and returns its result", async () => {
@@ -251,7 +257,12 @@ describe("AuthService cloud calls", () => {
       );
 
       expect(getEnvironmentProviders).toHaveBeenCalledTimes(1);
-      expect(getEnvironmentProviders).toHaveBeenCalledWith(BEARER, "env-1");
+      const providersCall = getEnvironmentProviders.mock.calls.at(0);
+      expect(
+        providersCall !== undefined &&
+          providersCall[0] === BEARER &&
+          providersCall[1] === "env-1",
+      ).toBe(true);
     });
   });
 
@@ -365,7 +376,13 @@ describe("AuthService cloud calls", () => {
       );
 
       expect(getSandboxGrants).toHaveBeenCalledTimes(1);
-      expect(getSandboxGrants).toHaveBeenCalledWith(BEARER, "env-1", "host-1");
+      const grantCall = getSandboxGrants.mock.calls.at(0);
+      expect(
+        grantCall !== undefined &&
+          grantCall[0] === BEARER &&
+          grantCall[1] === "env-1" &&
+          grantCall[2] === "host-1",
+      ).toBe(true);
     });
 
     it("getSandboxGrants returns a failure the runner host reports unchanged", async () => {
@@ -394,12 +411,14 @@ describe("AuthService cloud calls", () => {
       ).resolves.toBe(result);
 
       expect(decideSecretRequest).toHaveBeenCalledTimes(1);
-      expect(decideSecretRequest).toHaveBeenCalledWith(
-        BEARER,
-        "env-1",
-        "req-1",
-        "approve",
-      );
+      const decisionCall = decideSecretRequest.mock.calls.at(0);
+      expect(
+        decisionCall !== undefined &&
+          decisionCall[0] === BEARER &&
+          decisionCall[1] === "env-1" &&
+          decisionCall[2] === "req-1" &&
+          decisionCall[3] === "approve",
+      ).toBe(true);
     });
 
     it("hands the runner host a null environment as null", async () => {
@@ -414,13 +433,19 @@ describe("AuthService cloud calls", () => {
       await service.getSandboxGrants(null, "host-1");
       await service.decideSecretRequest(null, "req-1", "decline");
 
-      expect(getSandboxGrants).toHaveBeenCalledWith(BEARER, null, "host-1");
-      expect(decideSecretRequest).toHaveBeenCalledWith(
-        BEARER,
-        null,
-        "req-1",
-        "decline",
-      );
+      const grantCall = getSandboxGrants.mock.calls.at(0);
+      const decisionCall = decideSecretRequest.mock.calls.at(0);
+      expect(
+        grantCall !== undefined &&
+          grantCall[0] === BEARER &&
+          grantCall[1] === null &&
+          grantCall[2] === "host-1" &&
+          decisionCall !== undefined &&
+          decisionCall[0] === BEARER &&
+          decisionCall[1] === null &&
+          decisionCall[2] === "req-1" &&
+          decisionCall[3] === "decline",
+      ).toBe(true);
     });
 
     it("decideSecretRequest returns a conflict the runner host reports unchanged", async () => {

@@ -27,6 +27,7 @@ import { HostRpcError } from "../../host-transport/host-messenger";
 import {
   changeProviderApiKey,
   changeProviderKeyRecordViaHttp,
+  ProviderApiKeyEnvironmentChangedError,
   type ProviderApiKeyChange,
   type ProviderKeyProviderId,
   type ProviderKeyRecordClient,
@@ -38,6 +39,7 @@ const AUTHN_BASE = "https://auth.example.test";
 const BEARER = "synthetic-session-token";
 const API_KEY = "synthetic-provider-key";
 const ENVIRONMENT_FROM_HOST = "env_host-captured";
+const EXPECTED_ENVIRONMENT_ID = "env_expected";
 const RECORD_PROFILE_ID = "profile-synthetic";
 const setRequestBodySchema = z.strictObject({
   key: z.string(),
@@ -179,15 +181,19 @@ function callParams(rig: Rig, method: string): unknown {
   return call === undefined ? null : call.params;
 }
 
-async function failureInfo(
-  operation: Promise<unknown>,
-): Promise<{ readonly code: string | null; readonly message: string }> {
+async function failureInfo(operation: Promise<unknown>): Promise<{
+  readonly code: string | null;
+  readonly environmentChanged: boolean;
+  readonly message: string;
+}> {
   try {
     await operation;
-    return { code: null, message: "" };
+    return { code: null, environmentChanged: false, message: "" };
   } catch (error) {
     return {
       code: error instanceof HostRpcError ? error.code : null,
+      environmentChanged:
+        error instanceof ProviderApiKeyEnvironmentChangedError,
       message: error instanceof Error ? error.message : "",
     };
   }
@@ -231,13 +237,25 @@ describe("changeProviderApiKey shared flow", () => {
       });
       const records = recordClient(recordCalls);
 
-      const set = await changeProviderApiKey(rig.host, records, providerId, {
-        action: "set",
-        apiKey: API_KEY,
-      });
-      const clear = await changeProviderApiKey(rig.host, records, providerId, {
-        action: "clear",
-      });
+      const set = await changeProviderApiKey(
+        rig.host,
+        records,
+        providerId,
+        {
+          action: "set",
+          apiKey: API_KEY,
+        },
+        null,
+      );
+      const clear = await changeProviderApiKey(
+        rig.host,
+        records,
+        providerId,
+        {
+          action: "clear",
+        },
+        null,
+      );
 
       const requests = fetchMock.mock.calls;
       const firstInit = requests[0]?.[1];
@@ -335,10 +353,16 @@ describe("changeProviderApiKey shared flow", () => {
       async () => new Response(null, { status: 500 }),
     );
 
-    await changeProviderApiKey(rig.host, recordClient(recordCalls), "cursor", {
-      action: "set",
-      apiKey: API_KEY,
-    });
+    await changeProviderApiKey(
+      rig.host,
+      recordClient(recordCalls),
+      "cursor",
+      {
+        action: "set",
+        apiKey: API_KEY,
+      },
+      null,
+    );
 
     const legacy = callParams(rig, "providers.setApiKey");
     const parsedLegacy = providersSetApiKeyRequestSchema.safeParse(legacy);
@@ -372,13 +396,25 @@ describe("changeProviderApiKey shared flow", () => {
       async () => new Response(null, { status: 500 }),
     );
 
-    await changeProviderApiKey(rig.host, recordClient(recordCalls), "cursor", {
-      action: "set",
-      apiKey: API_KEY,
-    });
-    await changeProviderApiKey(rig.host, recordClient(recordCalls), "cursor", {
-      action: "clear",
-    });
+    await changeProviderApiKey(
+      rig.host,
+      recordClient(recordCalls),
+      "cursor",
+      {
+        action: "set",
+        apiKey: API_KEY,
+      },
+      null,
+    );
+    await changeProviderApiKey(
+      rig.host,
+      recordClient(recordCalls),
+      "cursor",
+      {
+        action: "clear",
+      },
+      null,
+    );
 
     const set = callParams(rig, "providers.setApiKey");
     const clear = callParams(rig, "providers.clearApiKey");
@@ -412,9 +448,15 @@ describe("changeProviderApiKey shared flow", () => {
       async () => new Response(null, { status: 500 }),
     );
 
-    await changeProviderApiKey(rig.host, recordClient(recordCalls), "codex", {
-      action: "clear",
-    });
+    await changeProviderApiKey(
+      rig.host,
+      recordClient(recordCalls),
+      "codex",
+      {
+        action: "clear",
+      },
+      null,
+    );
 
     expect(
       rig.messenger.calls.map((call) => call.method).join(",") ===
@@ -442,9 +484,15 @@ describe("changeProviderApiKey shared flow", () => {
       async () => new Response(null, { status: 500 }),
     );
 
-    await changeProviderApiKey(rig.host, recordClient(recordCalls), "cursor", {
-      action: "clear",
-    });
+    await changeProviderApiKey(
+      rig.host,
+      recordClient(recordCalls),
+      "cursor",
+      {
+        action: "clear",
+      },
+      null,
+    );
 
     expect(
       rig.messenger.calls.some(
@@ -469,6 +517,7 @@ describe("changeProviderApiKey shared flow", () => {
         recordClient(recordCalls),
         "cursor",
         { action: "clear" },
+        null,
       ),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(
@@ -476,6 +525,151 @@ describe("changeProviderApiKey shared flow", () => {
         (call) => call.method === "providers.clearApiKey",
       ),
     ).toBe(false);
+  });
+
+  it("refuses set and clear when the captured environment differs from the page environment", async () => {
+    const begin = providersBeginApiKeyChangeResponseSchema.parse({
+      mode: "record",
+      changeToken: "opaque-change-token",
+      environmentId: ENVIRONMENT_FROM_HOST,
+    });
+    const rig = makeRig(begin, settleResponse);
+    const recordCalls: Array<{
+      readonly environmentId: string;
+      readonly action: string;
+    }> = [];
+    const fetchMock = installFetch(
+      async () => new Response(null, { status: 500 }),
+    );
+
+    const setFailure = await failureInfo(
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        { action: "set", apiKey: API_KEY },
+        EXPECTED_ENVIRONMENT_ID,
+      ),
+    );
+    const clearFailure = await failureInfo(
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        { action: "clear" },
+        EXPECTED_ENVIRONMENT_ID,
+      ),
+    );
+
+    expect(
+      setFailure.environmentChanged &&
+        clearFailure.environmentChanged &&
+        setFailure.code === "RPC_ERROR" &&
+        clearFailure.code === "RPC_ERROR",
+    ).toBe(true);
+    expect(fetchMock.mock.calls.length === 0 && recordCalls.length === 0).toBe(
+      true,
+    );
+    expect(
+      rig.messenger.calls.map((call) => call.method).join(",") ===
+        "providers.beginApiKeyChange,providers.beginApiKeyChange",
+    ).toBe(true);
+  });
+
+  it("refuses the legacy begin response for both verbs when an environment is expected", async () => {
+    const legacy = providersBeginApiKeyChangeResponseSchema.parse({
+      mode: "legacy",
+      changeToken: null,
+      environmentId: null,
+    });
+    const rig = makeRig(legacy, settleResponse);
+    const recordCalls: Array<{
+      readonly environmentId: string;
+      readonly action: string;
+    }> = [];
+    const fetchMock = installFetch(
+      async () => new Response(null, { status: 500 }),
+    );
+
+    const setFailure = await failureInfo(
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        { action: "set", apiKey: API_KEY },
+        EXPECTED_ENVIRONMENT_ID,
+      ),
+    );
+    const clearFailure = await failureInfo(
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        { action: "clear" },
+        EXPECTED_ENVIRONMENT_ID,
+      ),
+    );
+
+    expect(
+      setFailure.environmentChanged && clearFailure.environmentChanged,
+    ).toBe(true);
+    expect(fetchMock.mock.calls.length === 0 && recordCalls.length === 0).toBe(
+      true,
+    );
+    expect(
+      rig.messenger.calls.map((call) => call.method).join(",") ===
+        "providers.beginApiKeyChange,providers.beginApiKeyChange",
+    ).toBe(true);
+  });
+
+  it("refuses unsupported begin on both verbs when an environment is expected", async () => {
+    const unsupported = new HostRpcError({
+      code: "E_HOST_UNSUPPORTED",
+      message: "Host does not support this method",
+      requestId: "request-synthetic",
+      method: "providers.beginApiKeyChange",
+      fatalDetails: null,
+    });
+    const rig = makeRig(unsupported, settleResponse);
+    const recordCalls: Array<{
+      readonly environmentId: string;
+      readonly action: string;
+    }> = [];
+    const fetchMock = installFetch(
+      async () => new Response(null, { status: 500 }),
+    );
+
+    const setFailure = await failureInfo(
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        { action: "set", apiKey: API_KEY },
+        EXPECTED_ENVIRONMENT_ID,
+      ),
+    );
+    const clearFailure = await failureInfo(
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        { action: "clear" },
+        EXPECTED_ENVIRONMENT_ID,
+      ),
+    );
+
+    expect(
+      setFailure.environmentChanged && clearFailure.environmentChanged,
+    ).toBe(true);
+    expect(fetchMock.mock.calls.length === 0 && recordCalls.length === 0).toBe(
+      true,
+    );
+    expect(rig.messenger.calls.length === 2).toBe(true);
+    expect(
+      rig.messenger.calls.every(
+        (call) => call.method === "providers.beginApiKeyChange",
+      ),
+    ).toBe(true);
   });
 
   it("uses a keyless null-clear settle for the exact typed record-not-found response", async () => {
@@ -503,6 +697,7 @@ describe("changeProviderApiKey shared flow", () => {
       recordClient(recordCalls),
       "cursor",
       { action: "clear" },
+      null,
     );
 
     const settle = providersSettleApiKeyChangeRequestSchema.safeParse(
@@ -538,9 +733,15 @@ describe("changeProviderApiKey shared flow", () => {
     );
 
     await expect(
-      changeProviderApiKey(rig.host, recordClient(recordCalls), "cursor", {
-        action: "clear",
-      }),
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        {
+          action: "clear",
+        },
+        null,
+      ),
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     expect(fetchMock.mock.calls.length === 0 && recordCalls.length === 0).toBe(
       true,
@@ -572,6 +773,7 @@ describe("changeProviderApiKey shared flow", () => {
       recordClient(recordCalls),
       "cursor",
       { action: "set", apiKey: API_KEY },
+      null,
     );
     expect(
       bareRig.messenger.calls.some(
@@ -591,9 +793,15 @@ describe("changeProviderApiKey shared flow", () => {
         new Response(JSON.stringify({ code: "not_found" }), { status: 404 }),
     );
     await expect(
-      changeProviderApiKey(codedRig.host, recordClient(recordCalls), "cursor", {
-        action: "clear",
-      }),
+      changeProviderApiKey(
+        codedRig.host,
+        recordClient(recordCalls),
+        "cursor",
+        {
+          action: "clear",
+        },
+        null,
+      ),
     ).rejects.toMatchObject({ code: "RPC_ERROR" });
     expect(
       codedFetch.mock.calls.length === 1 &&
@@ -624,10 +832,16 @@ describe("changeProviderApiKey shared flow", () => {
       );
 
       const failure = await failureInfo(
-        changeProviderApiKey(rig.host, recordClient(recordCalls), "cursor", {
-          action: "set",
-          apiKey: API_KEY,
-        }),
+        changeProviderApiKey(
+          rig.host,
+          recordClient(recordCalls),
+          "cursor",
+          {
+            action: "set",
+            apiKey: API_KEY,
+          },
+          null,
+        ),
       );
       const expectedCode =
         status === 401
@@ -674,10 +888,16 @@ describe("changeProviderApiKey shared flow", () => {
     );
 
     const failure = await failureInfo(
-      changeProviderApiKey(rig.host, recordClient(recordCalls), "cursor", {
-        action: "set",
-        apiKey: API_KEY,
-      }),
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        {
+          action: "set",
+          apiKey: API_KEY,
+        },
+        null,
+      ),
     );
 
     expect(
@@ -717,10 +937,16 @@ describe("changeProviderApiKey shared flow", () => {
     );
 
     const failure = await failureInfo(
-      changeProviderApiKey(rig.host, recordClient(recordCalls), "cursor", {
-        action: "set",
-        apiKey: API_KEY,
-      }),
+      changeProviderApiKey(
+        rig.host,
+        recordClient(recordCalls),
+        "cursor",
+        {
+          action: "set",
+          apiKey: API_KEY,
+        },
+        null,
+      ),
     );
 
     expect(
@@ -771,6 +997,7 @@ describe("changeProviderApiKey shared flow", () => {
       recordClient(recordCalls),
       "cursor",
       { action: "set", apiKey: API_KEY },
+      null,
     );
     await started;
     const replacement = requestContext(true);
@@ -825,6 +1052,7 @@ describe("changeProviderApiKey shared flow", () => {
       recordClient([]),
       "cursor",
       { action: "set", apiKey: API_KEY },
+      null,
     ).then((result) => {
       completed = true;
       return result;
@@ -877,6 +1105,7 @@ describe("changeProviderApiKey shared flow", () => {
         recordClient([]),
         "cursor",
         { action: "set", apiKey: API_KEY },
+        null,
       );
       expect(outcome.result === result).toBe(true);
     },

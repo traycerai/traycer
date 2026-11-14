@@ -30,12 +30,17 @@ import {
 } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostV115MutationV20Fixtures } from "@traycer/protocol/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20";
 import { AuthService } from "@/lib/auth/auth-service";
 import { isRecord } from "@/lib/editor/prosemirror-json";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notifications/app-local-notifications-store";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { ProviderApiKeySection } from "@/components/settings/panels/provider-api-key-section";
 import {
   apiKeyState,
@@ -55,8 +60,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostClient: () => mocks.hostClient(),
-    useAuthService: () => mocks.authService(),
+    useHostClient: (): HostClient<typeof hostRpcRegistry> => mocks.hostClient(),
+    useAuthService: (): AuthService => mocks.authService(),
   };
 });
 
@@ -91,6 +96,7 @@ vi.mock("@/lib/analytics", async (importOriginal) => {
 
 const API_KEY = "synthetic-provider-key";
 const ENVIRONMENT_ID = "env-synthetic";
+const EXPECTED_ENVIRONMENT_ID = "env-expected";
 const PROFILE_ID = "profile-synthetic";
 const STATE = providerMutationCliStateSchemaV21.parse({
   ...hostV115MutationV20Fixtures.minimalStatesByProviderId.codex,
@@ -106,9 +112,12 @@ interface Rig {
   readonly client: HostClient<typeof hostRpcRegistry>;
   readonly context: RequestContext;
   readonly authService: AuthService;
+  readonly messenger: MockHostMessenger<typeof hostRpcRegistry>;
+  readonly recordActions: string[];
 }
 
 const rigs: Rig[] = [];
+const queryClients: QueryClient[] = [];
 
 function makeRig(
   result:
@@ -174,9 +183,11 @@ function makeRig(
       traycerCli: undefined,
     }),
   });
+  const recordActions: string[] = [];
   vi.spyOn(authService, "changeProviderKeyRecord").mockImplementation(
-    (_environmentId, providerId, change) =>
-      Promise.resolve({
+    (_environmentId, providerId, change) => {
+      recordActions.push(change.action);
+      return Promise.resolve({
         kind: "record",
         record: {
           profileId: PROFILE_ID,
@@ -186,34 +197,56 @@ function makeRig(
           recordRevision: "5",
           personIntentNumber: "2",
         },
-      }),
+      });
+    },
   );
   mocks.authService.mockReturnValue(authService);
-  const rig = { client, context, authService };
+  const rig = { client, context, authService, messenger, recordActions };
   rigs.push(rig);
   return rig;
 }
 
-function SettingsHarness(props: { readonly stored: boolean }): ReactNode {
+function SettingsHarness(props: {
+  readonly stored: boolean;
+  readonly expectedEnvironmentId: string | null;
+  readonly environmentName: string | null;
+}): ReactNode {
   const [draft, setDraft] = useState(props.stored ? "" : API_KEY);
   return (
     <ProviderApiKeySection
       state={props.stored ? storedApiKeyState("cursor") : apiKeyState("cursor")}
       draft={draft}
       onDraftChange={setDraft}
+      expectedEnvironmentId={props.expectedEnvironmentId}
+      environmentName={props.environmentName}
     />
   );
 }
 
-function renderSettings(stored: boolean): void {
+function renderSettings(
+  stored: boolean,
+  expectedEnvironmentId: string | null,
+  environmentName: string | null,
+): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
-  render(<SettingsHarness stored={stored} />, {
-    wrapper: ({ children }: { readonly children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    ),
-  });
+  queryClients.push(queryClient);
+  render(
+    <SettingsHarness
+      stored={stored}
+      expectedEnvironmentId={expectedEnvironmentId}
+      environmentName={environmentName}
+    />,
+    {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    },
+  );
+  return queryClient;
 }
 
 function apiKeyDraft(): string {
@@ -238,6 +271,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.useRealTimers();
+  __resetAppLocalNotificationsStoreForTests();
   mocks.mobileApp = false;
   mocks.mobilePlatform = "ios";
   for (const rig of rigs.splice(0)) {
@@ -245,6 +279,7 @@ afterEach(() => {
     rig.context.release();
     rig.client.dispose();
   }
+  for (const queryClient of queryClients.splice(0)) queryClient.clear();
 });
 
 describe("provider API-key change Settings flow", () => {
@@ -253,7 +288,7 @@ describe("provider API-key change Settings flow", () => {
     async (result) => {
       makeRig(result, null);
       mocks.mobileApp = false;
-      renderSettings(false);
+      renderSettings(false, ENVIRONMENT_ID, "Personal");
 
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -275,7 +310,7 @@ describe("provider API-key change Settings flow", () => {
     async (result, message) => {
       makeRig(result, null);
       mocks.mobileApp = false;
-      renderSettings(false);
+      renderSettings(false, ENVIRONMENT_ID, "Personal");
 
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -300,7 +335,7 @@ describe("provider API-key change Settings flow", () => {
   ] as const)("shows the clear notice for %s", async (result, message) => {
     makeRig(result, null);
     mocks.mobileApp = false;
-    renderSettings(true);
+    renderSettings(true, ENVIRONMENT_ID, "Personal");
 
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
 
@@ -321,7 +356,7 @@ describe("provider API-key change Settings flow", () => {
     });
     makeRig("installed", forbidden);
     mocks.mobileApp = false;
-    renderSettings(false);
+    renderSettings(false, ENVIRONMENT_ID, "Personal");
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -336,10 +371,46 @@ describe("provider API-key change Settings flow", () => {
     ).toBe(true);
   });
 
+  it("keeps the draft on environment drift and invalidates the host list and status", async () => {
+    const rig = makeRig("installed", null);
+    const queryClient = renderSettings(false, EXPECTED_ENVIRONMENT_ID, "Team");
+    const hostId = mockLocalHostEntry.hostId;
+    const plan = readProcessHostRpcTierPlan();
+    const providersListKey = hostQueryKeys.methodScope(
+      hostRpcServingTierHostId("providers.list", hostId, plan, null),
+      "providers.list",
+    );
+    const environmentStatusKey = hostQueryKeys.methodScope(
+      hostRpcServingTierHostId("environment.status", hostId, plan, null),
+      "environment.status",
+    );
+    queryClient.setQueryData(providersListKey, { seeded: true });
+    queryClient.setQueryData(environmentStatusKey, { seeded: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const providersList = queryClient.getQueryState(providersListKey);
+      const environmentStatus = queryClient.getQueryState(environmentStatusKey);
+      expect(
+        providersList !== undefined &&
+          providersList.isInvalidated &&
+          environmentStatus !== undefined &&
+          environmentStatus.isInvalidated,
+      ).toBe(true);
+    });
+    expect(apiKeyDraft() === API_KEY).toBe(true);
+    expect(rig.recordActions.length === 0).toBe(true);
+    expect(
+      rig.messenger.calls.map((call) => call.method).join(",") ===
+        "providers.beginApiKeyChange",
+    ).toBe(true);
+  });
+
   it("offers the desktop app release action for update-required", async () => {
     makeRig("installed", updateRequiredError());
     mocks.mobileApp = false;
-    renderSettings(false);
+    renderSettings(false, ENVIRONMENT_ID, "Personal");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
@@ -349,9 +420,9 @@ describe("provider API-key change Settings flow", () => {
     if (toastCall === undefined)
       throw new Error("Expected desktop update notice");
     const options = isRecord(toastCall[1]) ? toastCall[1] : null;
-    const actionValue = options?.action;
+    const actionValue = options === null ? undefined : options.action;
     const action = isRecord(actionValue) ? actionValue : null;
-    const onClick = action?.onClick;
+    const onClick = action === null ? undefined : action.onClick;
     expect(
       toastCall[0] === "Your app is too old" &&
         action !== null &&
@@ -374,7 +445,7 @@ describe("provider API-key change Settings flow", () => {
       makeRig("installed", updateRequiredError());
       mocks.mobileApp = true;
       mocks.mobilePlatform = platform;
-      renderSettings(false);
+      renderSettings(false, ENVIRONMENT_ID, "Personal");
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() =>
