@@ -22,6 +22,10 @@ import type {
 } from "@/components/settings/panels/shell/shell-config-controller";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import { waitForShellEnvRead } from "@/components/settings/panels/shell/wait-for-shell-env-read";
+import {
+  sendFollowedSave,
+  useSettingsSave,
+} from "@/hooks/environment/use-settings-save";
 
 /**
  * Detected shells barely change; the picker always accepts a typed path. The
@@ -32,6 +36,9 @@ import { waitForShellEnvRead } from "@/components/settings/panels/shell/wait-for
  * already open.
  */
 const SHELL_LIST_STALE_MS = Number.POSITIVE_INFINITY;
+
+/** The items this panel's saves write. */
+const SAVED_KINDS = ["shell", "variable"] as const;
 
 /**
  * The Shell panel over the selected host's own config RPC.
@@ -89,6 +96,7 @@ export function useRpcShellConfigController(props: {
     options: { enabled: props.enabled },
   });
 
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
   const setMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.set",
     mutationKey: configMutationKeys.shellSet(),
@@ -97,6 +105,11 @@ export function useRpcShellConfigController(props: {
   });
   const resetMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.reset",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "config.shell.reset", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: configMutationKeys.shellReset(),
     errorMessage: "Couldn't use the system default shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
@@ -122,12 +135,22 @@ export function useRpcShellConfigController(props: {
   const queryClient = useQueryClient();
   const envSetMutation = useHostScopedMutationForClient(client, {
     method: "config.env.set",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "config.env.set", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: configMutationKeys.envSet(),
     errorMessage: "Couldn't save the variable",
     invalidateMethods: ["config.env.list"],
   });
   const envDeleteMutation = useHostScopedMutationForClient(client, {
     method: "config.env.delete",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "config.env.delete", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: configMutationKeys.envDelete(),
     errorMessage: "Couldn't remove the variable",
     invalidateMethods: ["config.env.list"],
@@ -156,13 +179,25 @@ export function useRpcShellConfigController(props: {
           "config.env.set",
         );
       }
-      await client.request("config.env.set", {
+      const sentOn = client.getActiveHostId();
+      const set = {
         key: rename.newKey,
         value: rename.value,
         executableWriteGrant: null,
-      });
+      };
+      await sendFollowedSave(
+        await prepareSave({ method: "config.env.set", request: set }, sentOn),
+        () => client.request("config.env.set", set),
+      );
       if (rename.oldKey.length === 0) return;
-      await client.request("config.env.delete", { key: rename.oldKey });
+      const remove = { key: rename.oldKey };
+      await sendFollowedSave(
+        await prepareSave(
+          { method: "config.env.delete", request: remove },
+          sentOn,
+        ),
+        () => client.request("config.env.delete", remove),
+      );
     },
     onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
     // SETTLED, not success - the same two-write staleness the bridge twin has:

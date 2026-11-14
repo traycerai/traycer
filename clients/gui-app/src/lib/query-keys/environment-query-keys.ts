@@ -10,4 +10,24 @@ export const environmentQueryKeys = {
       userId,
       viewerId,
     ] as const,
+  /** authn's listing of `hostId` in `environmentId`, as a save on that host reads it. */
+  settingsSaveHost: (environmentId: string, hostId: string, viewerId: string) =>
+    [
+      "environment",
+      "settings-save",
+      "host",
+      environmentId,
+      hostId,
+      viewerId,
+    ] as const,
+  /** authn's rows of `kind` in `environmentId`, as the person's edit was made over them. */
+  settingsSaveItems: (environmentId: string, kind: string, viewerId: string) =>
+    [
+      "environment",
+      "settings-save",
+      "items",
+      environmentId,
+      kind,
+      viewerId,
+    ] as const,
 };
