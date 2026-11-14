@@ -27,7 +27,11 @@ import {
   type ComposerPasteEditorHandle,
 } from "@/hooks/composer/use-composer-paste";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
-import type { PutFileBlob } from "@/lib/composer/file-attachment-upload";
+import {
+  readFileAttachmentUploadStatus,
+  type FileAttachmentUploadTarget,
+  type PutFileBlob,
+} from "@/lib/composer/file-attachment-upload";
 import {
   freshHostId,
   okPut,
@@ -35,6 +39,7 @@ import {
 } from "@/lib/composer/__tests__/file-attachment-fixtures";
 import {
   REMOTE_REFUSAL_DESCRIPTION,
+  attachedFileIds,
   attachedFileNames,
   folderFile,
   pdfFile,
@@ -546,6 +551,41 @@ describe("composer path paste/drop integration (real editor)", () => {
       expect(route.put).not.toHaveBeenCalled();
     });
 
+    it("uploads a re-routed file through the route the composer has when the path resolves", async () => {
+      const resolution = Promise.withResolvers<readonly string[]>();
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () => resolution.promise,
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const routeA = observableFileRoute();
+      const routeB = observableFileRoute();
+      routeA.put.mockName("the first route's put");
+      routeB.put.mockName("the second route's put");
+      const composer = await mountedComposer(fileDrops, { fileRoute: routeA });
+
+      fireEvent.drop(screen.getByTestId("composer-editor"), {
+        dataTransfer: makeFileTransfer([pdfFile("report.pdf")]),
+      });
+      expect(pasteBusy()).toBe("true");
+      composer.moveTarget({ fileRoute: routeB, pathsReachTarget: false });
+      resolution.resolve(["/repo/report.pdf"]);
+      await uploadsSettled(composer);
+
+      expect(routeA.put).not.toHaveBeenCalled();
+      expect(routeB.put).toHaveBeenCalledTimes(1);
+      expect(routeB.put.mock.calls[0][0].target.hostId).toBe(
+        routeB.target.hostId,
+      );
+      expect(routeB.put.mock.calls[0][0].request).toMatchObject({
+        kind: "file",
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+      });
+      expect(attachedFileNames(composer.document())).toEqual(["report.pdf"]);
+      expect(pathSpanTexts(composer.handleRef.current)).toEqual([]);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
     it("still types the path when the target is back on this machine by the time it resolves", async () => {
       const resolution = Promise.withResolvers<readonly string[]>();
       const fileDrops = makeFileDrops({
@@ -611,10 +651,17 @@ async function mountedHandleWithUnmount(
   return { handleRef, unmount };
 }
 
+/** What a composer's placement decides: where a file goes, and whether a path reaches it. */
+interface ComposerTarget {
+  readonly fileRoute: ComposerFileRoute | null;
+  readonly pathsReachTarget: boolean;
+}
+
 /**
  * The editor mounted with paths typed (`pathsReachTarget`), as on this
- * machine. `setPathsReachTarget` re-renders the SAME mounted editor with
- * another answer, which is what a placement change does to a composer.
+ * machine. `moveTarget` re-renders the SAME mounted editor with another
+ * route and another answer in one render, which is what a placement change
+ * does to a composer; `setPathsReachTarget` moves the answer alone.
  */
 async function mountedComposer(
   fileDrops: IFileDropHost,
@@ -622,6 +669,7 @@ async function mountedComposer(
 ): Promise<{
   readonly handleRef: { current: ComposerPromptEditorHandle | null };
   readonly unmount: () => void;
+  readonly moveTarget: (target: ComposerTarget) => void;
   readonly setPathsReachTarget: (pathsReachTarget: boolean) => void;
   readonly document: () => JsonContent;
 }> {
@@ -629,28 +677,37 @@ async function mountedComposer(
   const handleRef: { current: ComposerPromptEditorHandle | null } = {
     current: null,
   };
-  const harness = (pathsReachTarget: boolean): ReactElement => (
+  let target: ComposerTarget = {
+    fileRoute: opts.fileRoute,
+    pathsReachTarget: true,
+  };
+  const harness = (): ReactElement => (
     <Harness
       handleRef={handleRef}
       fileDrops={fileDrops}
       mentionRoots={opts.mentionRoots}
       initialContent={opts.initialContent}
       initialSelection={opts.initialSelection}
-      fileRoute={opts.fileRoute}
-      pathsReachTarget={pathsReachTarget}
+      fileRoute={target.fileRoute}
+      pathsReachTarget={target.pathsReachTarget}
     />
   );
-  const view = render(harness(true));
+  const view = render(harness());
   await act(async () => {
     await flushMicrotasksRaw();
   });
   expect(handleRef.current).not.toBeNull();
   expect(handleRef.current?.isReady()).toBe(true);
+  const moveTarget = (next: ComposerTarget): void => {
+    target = next;
+    view.rerender(harness());
+  };
   return {
     handleRef,
     unmount: view.unmount,
+    moveTarget,
     setPathsReachTarget: (pathsReachTarget) => {
-      view.rerender(harness(pathsReachTarget));
+      moveTarget({ ...target, pathsReachTarget });
     },
     document: () => {
       const handle = handleRef.current;
@@ -661,6 +718,7 @@ async function mountedComposer(
 }
 
 interface ObservableFileRoute extends ComposerFileRoute {
+  readonly target: FileAttachmentUploadTarget;
   readonly put: Mock<PutFileBlob>;
 }
 
@@ -869,6 +927,22 @@ function pathSpanTexts(handle: ComposerPromptEditorHandle | null): string[] {
 /** Whether a path resolution or a file upload hand-off is still running. */
 function pasteBusy(): string | null {
   return screen.getByTestId("paste-busy").getAttribute("data-busy");
+}
+
+/**
+ * The paste hand-off has finished and no attached file is still uploading: a
+ * node's outcome (its settlement and any failure toast) is written in the same
+ * step that reports it, so what is asserted after this is final.
+ */
+async function uploadsSettled(composer: {
+  readonly document: () => JsonContent;
+}): Promise<void> {
+  await waitFor(() => expect(pasteBusy()).toBe("false"));
+  await waitFor(() => {
+    for (const id of attachedFileIds(composer.document())) {
+      expect(readFileAttachmentUploadStatus(id)).not.toBe("uploading");
+    }
+  });
 }
 
 function plainTextOutsideCode(

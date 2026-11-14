@@ -143,6 +143,13 @@ export function typedPathSpans(content: JsonContent): ReadonlyArray<string> {
   );
 }
 
+/** The id of every attachment node: the key of its upload's status. */
+export function attachedFileIds(content: JsonContent): ReadonlyArray<string> {
+  return nodesOfType(content, "fileAttachment").flatMap((node) =>
+    typeof node.attrs?.id === "string" ? [node.attrs.id] : [],
+  );
+}
+
 /** The file name of every attachment node: how an uploaded file sits in a document. */
 export function attachedFileNames(content: JsonContent): ReadonlyArray<string> {
   return nodesOfType(content, "fileAttachment").flatMap((node) =>

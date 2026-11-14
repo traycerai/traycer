@@ -826,12 +826,15 @@ export function useComposerPasteEvents<Attrs>(args: {
   const activeRef = useRef(true);
   const controllersRef = useRef(new Set<AbortController>());
   // Read when a path resolution answers: the placement or a staged sandbox may
-  // have moved the target to another machine meanwhile. Written in the commit,
-  // so no answer lands between a render and the write.
+  // have moved the target to another machine meanwhile, and a drop re-routed
+  // then uploads to the host the composer has at that point. Written in the
+  // commit, so no answer lands between a render and the write.
   const pathsReachRef = useRef(filePaths.pathsReachTarget);
+  const fileAttachRef = useRef(fileAttach);
   useLayoutEffect(() => {
     pathsReachRef.current = filePaths.pathsReachTarget;
-  }, [filePaths.pathsReachTarget]);
+    fileAttachRef.current = fileAttach;
+  }, [fileAttach, filePaths.pathsReachTarget]);
 
   useEffect(() => {
     activeRef.current = true;
@@ -874,14 +877,18 @@ export function useComposerPasteEvents<Attrs>(args: {
   );
 
   // Admits `files` and attaches them through `insert`, the fence the gesture
-  // captured.
+  // captured, uploading through `route`.
   const attachFencedFiles = useCallback(
-    (files: ReadonlyArray<File>, insert: FileInsertion) => {
-      if (files.length === 0 || fileAttach === null) return;
+    (
+      files: ReadonlyArray<File>,
+      insert: FileInsertion,
+      route: ComposerFileAttachArgs,
+    ) => {
+      if (files.length === 0) return;
       const admitted: File[] = [];
       let hostRefusal: "no-host" | "host-outdated" | null = null;
       for (const file of files) {
-        const refusal = refuseFileAttachment(file, fileAttach.target);
+        const refusal = refuseFileAttachment(file, route.target);
         if (refusal === "too-large") showFileTooLargeToast(file);
         else if (refusal !== null) hostRefusal = refusal;
         else admitted.push(file);
@@ -889,7 +896,7 @@ export function useComposerPasteEvents<Attrs>(args: {
       // Once per pick: every file in it was refused for the same reason.
       if (hostRefusal === "no-host") showNoHostForFilesToast();
       if (hostRefusal === "host-outdated") showHostOutdatedForFilesToast();
-      const target = fileAttach.target;
+      const target = route.target;
       if (admitted.length === 0 || target === null) return;
       setPendingFileCount((count) => count + 1);
       void (async () => {
@@ -901,9 +908,9 @@ export function useComposerPasteEvents<Attrs>(args: {
             const placed = await attachFileAttachment({
               file,
               target,
-              put: fileAttach.put,
+              put: route.put,
               insert,
-              settle: fileAttach.settle,
+              settle: route.settle,
             });
             if (placed === "over-cap") overCap.push(file.name);
           } catch {
@@ -925,17 +932,18 @@ export function useComposerPasteEvents<Attrs>(args: {
         setPendingFileCount((count) => Math.max(0, count - 1));
       });
     },
-    [fileAttach],
+    [],
   );
 
   const attachFiles = useCallback(
     (files: ReadonlyArray<File>) => {
+      if (fileAttach === null) return;
       // Fenced NOW, before any byte is read: the pick belongs to the draft the
       // editor holds at this moment, and a file hashed after a send or a
       // switch must not land in whatever draft holds the editor then.
-      const insert = fileAttach?.beginInsertion() ?? null;
+      const insert = fileAttach.beginInsertion();
       if (insert === null) return;
-      attachFencedFiles(files, insert);
+      attachFencedFiles(files, insert, fileAttach);
     },
     [attachFencedFiles, fileAttach],
   );
@@ -950,22 +958,27 @@ export function useComposerPasteEvents<Attrs>(args: {
     [fileAttach],
   );
 
-  // A surface whose typed paths would name nothing: its files go through its
-  // file route, as a pick does, into the draft `fence` names; a folder and a
-  // URI-only entry have no bytes to send and are refused. Nothing is typed.
+  // A surface whose typed paths would name nothing: its files go through
+  // `upload.route`, as a pick does, into the draft `upload.fence` names; a
+  // folder and a URI-only entry have no bytes to send and are refused. Nothing
+  // is typed.
   const attachWithoutPaths = useCallback(
     (
       files: ReadonlyArray<File>,
       fileUrlPaths: ReadonlyArray<string>,
       folders: ReadonlySet<File>,
-      fence: () => FileInsertion | null,
+      upload: {
+        readonly route: ComposerFileAttachArgs | null;
+        readonly fence: () => FileInsertion | null;
+      },
     ) => {
       if (files.length === 0 && fileUrlPaths.length === 0) return;
+      const { route } = upload;
       const sendable =
-        fileAttach === null ? [] : files.filter((file) => !folders.has(file));
-      if (sendable.length > 0) {
-        const insert = fence();
-        if (insert !== null) attachFencedFiles(sendable, insert);
+        route === null ? [] : files.filter((file) => !folders.has(file));
+      if (route !== null && sendable.length > 0) {
+        const insert = upload.fence();
+        if (insert !== null) attachFencedFiles(sendable, insert, route);
       }
       refuseUntypedEntries([
         ...files
@@ -974,7 +987,7 @@ export function useComposerPasteEvents<Attrs>(args: {
         ...fileUrlPaths.map(pathDisplayName),
       ]);
     },
-    [attachFencedFiles, fileAttach, refuseUntypedEntries],
+    [attachFencedFiles, refuseUntypedEntries],
   );
 
   const attachFilePaths = useCallback(
@@ -989,7 +1002,8 @@ export function useComposerPasteEvents<Attrs>(args: {
       // Both fences at the gesture, before the paths resolve: a file that
       // resolves to no path is attached to the draft it was pasted into, not
       // to whatever draft the editor holds once resolution answers.
-      const fileInsert = fileAttach?.beginInsertion() ?? null;
+      const route = fileAttach;
+      const fileInsert = route?.beginInsertion() ?? null;
       setPendingPathCount((count) => count + 1);
       void resolveAndInsertFilePaths({
         files,
@@ -997,16 +1011,20 @@ export function useComposerPasteEvents<Attrs>(args: {
         filePaths,
         commit,
         attachUnresolved:
-          fileInsert === null
+          route === null || fileInsert === null
             ? null
             : (unresolved) => {
-                attachFencedFiles(unresolved, fileInsert);
+                attachFencedFiles(unresolved, fileInsert, route);
               },
         stillReaches: () => pathsReachRef.current,
         // The target moved to another machine while the paths resolved: the
-        // drop is taken as that target takes it, into the draft it was made in.
+        // drop is taken as the composer takes it now, uploading to the host
+        // it has now, into the draft the drop was made in.
         reroute: () => {
-          attachWithoutPaths(files, fileUrlPaths, folders, () => fileInsert);
+          attachWithoutPaths(files, fileUrlPaths, folders, {
+            route: fileAttachRef.current,
+            fence: () => fileInsert,
+          });
         },
       }).finally(() => {
         if (!activeRef.current) return;
@@ -1043,12 +1061,10 @@ export function useComposerPasteEvents<Attrs>(args: {
       if (filePaths.pathsReachTarget) {
         attachFilePaths(nonImageFiles, fileUrlPaths, folders);
       } else {
-        attachWithoutPaths(
-          nonImageFiles,
-          fileUrlPaths,
-          folders,
-          () => fileAttach?.beginInsertion() ?? null,
-        );
+        attachWithoutPaths(nonImageFiles, fileUrlPaths, folders, {
+          route: fileAttach,
+          fence: () => fileAttach?.beginInsertion() ?? null,
+        });
       }
     },
     [
