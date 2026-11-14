@@ -9,10 +9,10 @@ import { readEnvironmentList } from "../environment-list";
 
 const TEAM_ENVIRONMENT: EnvironmentDescriptor = {
   environmentId: "env-acme",
-  ownerKind: "team",
+  ownerKind: "organization",
   ownerId: "team-acme",
   roomId: "room-acme",
-  label: "Acme",
+  label: "acme",
 };
 
 /** authn at the transport: each path answers the body given for it. */
