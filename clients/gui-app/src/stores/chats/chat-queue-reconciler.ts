@@ -26,6 +26,7 @@ import type {
   StagedWorktreeIntentSource,
 } from "@/stores/chats/chat-session-store";
 import { queueItemCanPauseFromQueueHeader } from "@/lib/chat/queue-item-predicates";
+import { withAppWordsAfterReason } from "@/lib/chats/rejected-frame-reason";
 
 import type {
   OpenChatEvent,
@@ -540,7 +541,10 @@ export function displacedRestorationNotice(
       // second time. The shared builder deliberately stops at the losses.
       contentLossStatement(
         content,
-        `${reason} It was not put back in the composer, because you have started another message there.`,
+        withAppWordsAfterReason(
+          reason,
+          " It was not put back in the composer, because you have started another message there.",
+        ),
       ),
       quotedDraftOf(content),
     ),

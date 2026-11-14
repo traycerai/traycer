@@ -283,6 +283,32 @@ function ack(
     readonly status: "accepted" | "rejected";
   },
 ): void {
+  const rejected = input.status === "rejected";
+  ackWithCode(harness, {
+    clientActionId: input.clientActionId,
+    action: input.action,
+    status: input.status,
+    reason: rejected ? "The queued prompt is no longer pending." : null,
+    code: rejected ? "QUEUE_ITEM_NOT_FOUND" : null,
+  });
+}
+
+function ackWithCode(
+  harness: Harness,
+  input: {
+    readonly clientActionId: string;
+    readonly action:
+      | "queueEdit"
+      | "queueSettingsUpdate"
+      | "queueSteerNow"
+      | "queueAbortSteer"
+      | "queueCancel"
+      | "queueReorder";
+    readonly status: "accepted" | "rejected";
+    readonly reason: string | null;
+    readonly code: string | null;
+  },
+): void {
   harness.callbacks().onActionAck({
     kind: "actionAck",
     hasBinaryPayload: false,
@@ -291,11 +317,8 @@ function ack(
     clientActionId: input.clientActionId,
     action: input.action,
     status: input.status,
-    reason:
-      input.status === "rejected"
-        ? "The queued prompt is no longer pending."
-        : null,
-    code: input.status === "rejected" ? "QUEUE_ITEM_NOT_FOUND" : null,
+    reason: input.reason,
+    code: input.code,
     backgroundStopTaskIds: [],
     token: null,
   });
@@ -325,6 +348,158 @@ afterEach(() => {
 });
 
 describe("a queued-prompt edit stays in custody until the host answers", () => {
+  it.each([
+    { reason: "That profile no longer exists. Choose a profile." },
+    { reason: "" },
+    { reason: null },
+  ])(
+    "puts Was removed above the returned-text sentence for reason $reason",
+    ({ reason }) => {
+      harness = openWithQueuedRow();
+      const { editActionId } = submitEdit(harness, "save", SETTINGS, []);
+
+      ackWithCode(harness, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+        reason,
+        code: "removed-by-person",
+      });
+
+      expect(
+        harness.handle.store.getState().failedSendRestoration?.reason,
+      ).toBe(
+        "Was removed\nYour edit to a queued message was not saved. The edited text is back in the composer as an unsent draft. Nothing was sent again.",
+      );
+    },
+  );
+
+  it("keeps the computer's parenthetical sentence for the displaced last-copy under another code", () => {
+    harness = openWithQueuedRow();
+    harness.handle.store.getState().sendMessage({
+      content: textDoc("an earlier draft"),
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      attachments: [],
+      deliveryPolicy: "auto",
+      restore: {
+        content: textDoc("an earlier draft"),
+        browserAnnotations: [],
+      },
+    });
+    const sendFrame = harness.sent.at(-1);
+    if (sendFrame?.kind !== "send") throw new Error("expected a send frame");
+    harness.callbacks().onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: sendFrame.clientActionId,
+      action: "send",
+      status: "rejected",
+      reason: "The host refused the message.",
+      code: "SEND_REFUSED",
+      backgroundStopTaskIds: [],
+      token: null,
+    });
+    const { editActionId } = submitEdit(harness, "save", SETTINGS, []);
+
+    ackWithCode(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+      reason: "That profile no longer exists. Choose a profile.",
+      code: "RPC_ERROR",
+    });
+
+    const state = harness.handle.store.getState();
+    expect(state.lastCopyPrompts[editActionId]?.reason).toBe(
+      "An edit to a queued message was not saved (That profile no longer exists. Choose a profile).",
+    );
+    expect(
+      state.errorNotices.find(
+        (notice) => notice.clientActionId === editActionId,
+      )?.message,
+    ).toBe(
+      "An edit to a queued message was not saved (That profile no longer exists. Choose a profile), and another unsent message is already waiting in the composer.\n\nCopy the message below to resend it:\nthe corrected text",
+    );
+  });
+
+  it("keeps the reason in parentheses for another code with the same message", () => {
+    harness = openWithQueuedRow();
+    const { editActionId } = submitEdit(harness, "save", SETTINGS, []);
+
+    ackWithCode(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "rejected",
+      reason: "That profile no longer exists. Choose a profile.",
+      code: "RPC_ERROR",
+    });
+
+    expect(harness.handle.store.getState().failedSendRestoration?.reason).toBe(
+      "Your edit to a queued message was not saved (That profile no longer exists. Choose a profile). The edited text is back in the composer as an unsent draft. Nothing was sent again.",
+    );
+  });
+
+  it.each([
+    { reason: "That profile no longer exists. Choose a profile." },
+    { reason: "" },
+    { reason: null },
+  ])(
+    "puts Was removed above the displaced last-copy sentence for reason $reason",
+    ({ reason }) => {
+      harness = openWithQueuedRow();
+      harness.handle.store.getState().sendMessage({
+        content: textDoc("an earlier draft"),
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: {
+          content: textDoc("an earlier draft"),
+          browserAnnotations: [],
+        },
+      });
+      const sendFrame = harness.sent.at(-1);
+      if (sendFrame?.kind !== "send") throw new Error("expected a send frame");
+      harness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId: sendFrame.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "The host refused the message.",
+        code: "SEND_REFUSED",
+        backgroundStopTaskIds: [],
+        token: null,
+      });
+      const { editActionId } = submitEdit(harness, "save", SETTINGS, []);
+
+      ackWithCode(harness, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+        reason,
+        code: "removed-by-person",
+      });
+
+      const state = harness.handle.store.getState();
+      expect(state.lastCopyPrompts[editActionId]?.reason).toBe(
+        "Was removed\nAn edit to a queued message was not saved.",
+      );
+      expect(
+        state.errorNotices.find(
+          (notice) => notice.clientActionId === editActionId,
+        )?.message,
+      ).toBe(
+        "Was removed\nAn edit to a queued message was not saved, and another unsent message is already waiting in the composer.\n\nCopy the message below to resend it:\nthe corrected text",
+      );
+    },
+  );
+
   it("hands the EDITED text back, with no generic notice and no send, when the host refuses both frames (the #2418 sequence)", () => {
     harness = openWithQueuedRow();
     const { editActionId, followUpActionId } = submitEdit(
@@ -373,6 +548,38 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
       "queueSettingsUpdate",
     ]);
     expect(sendFrameCount(harness)).toBe(0);
+  });
+
+  it("keeps the computer's parenthetical sentence in the partial notice under another code", () => {
+    harness = openWithQueuedRow();
+    const { editActionId, followUpActionId } = submitEdit(
+      harness,
+      "steer",
+      SETTINGS,
+      [ANNOTATION],
+    );
+    ack(harness, {
+      clientActionId: editActionId,
+      action: "queueEdit",
+      status: "accepted",
+    });
+    ackWithCode(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSteerNow",
+      status: "rejected",
+      reason: "That profile no longer exists. Choose a profile.",
+      code: "RPC_ERROR",
+    });
+
+    const stated = harness.handle.store
+      .getState()
+      .errorNotices.filter(
+        (notice) => notice.clientActionId === followUpActionId,
+      );
+    expect(stated).toHaveLength(1);
+    expect(stated[0].message).toBe(
+      "Text saved; settings/steering were not applied (That profile no longer exists. Choose a profile).\n\nWhat you submitted is kept below to copy. It is already saved on the queued message, so do not send it again:\nthe corrected text",
+    );
   });
 
   it("keeps the edited text as a last-copy prompt, and the slot's occupant, when the restoration slot is taken", () => {
@@ -431,45 +638,52 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
     expect(stated[0].code).toBe(SEND_NOT_RECORDED_NOTICE_CODE);
   });
 
-  it("keeps the whole submission as a last-copy record, quoting the text, and restores nothing, when the edit is accepted and the follow-up refused (finding 6)", () => {
-    harness = openWithQueuedRow();
-    const { editActionId, followUpActionId } = submitEdit(
-      harness,
-      "steer",
-      SETTINGS,
-      [ANNOTATION],
-    );
+  it.each([
+    { reason: "That profile no longer exists. Choose a profile." },
+    { reason: "" },
+    { reason: null },
+  ])(
+    "puts Was removed above the partial sentence for reason $reason",
+    ({ reason }) => {
+      harness = openWithQueuedRow();
+      const { editActionId, followUpActionId } = submitEdit(
+        harness,
+        "steer",
+        SETTINGS,
+        [ANNOTATION],
+      );
 
-    ack(harness, {
-      clientActionId: editActionId,
-      action: "queueEdit",
-      status: "accepted",
-    });
-    ack(harness, {
-      clientActionId: followUpActionId,
-      action: "queueSteerNow",
-      status: "rejected",
-    });
+      ack(harness, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "accepted",
+      });
+      ackWithCode(harness, {
+        clientActionId: followUpActionId,
+        action: "queueSteerNow",
+        status: "rejected",
+        reason,
+        code: "removed-by-person",
+      });
 
-    const state = harness.handle.store.getState();
-    const kept = state.lastCopyPrompts[followUpActionId];
-    expect(kept).toBeDefined();
-    expect(kept.content).toEqual(EDITED);
-    expect(kept.browserAnnotations).toEqual([ANNOTATION]);
-    const stated = state.errorNotices.filter(
-      (notice) => notice.clientActionId === followUpActionId,
-    );
-    expect(stated).toHaveLength(1);
-    expect(stated[0].code).toBe(SEND_NOT_RECORDED_NOTICE_CODE);
-    expect(stated[0].message).toContain(
-      "Text saved; settings/steering were not applied",
-    );
-    expect(stated[0].message).toContain("the corrected text");
-    expect(stated[0].message).toContain("do not send it again");
-    expect(state.failedSendRestoration).toBeNull();
-    expect(state.queueEditRecords).toEqual({});
-    expect(sendFrameCount(harness)).toBe(0);
-  });
+      const state = harness.handle.store.getState();
+      const kept = state.lastCopyPrompts[followUpActionId];
+      expect(kept).toBeDefined();
+      expect(kept.content).toEqual(EDITED);
+      expect(kept.browserAnnotations).toEqual([ANNOTATION]);
+      const stated = state.errorNotices.filter(
+        (notice) => notice.clientActionId === followUpActionId,
+      );
+      expect(stated).toHaveLength(1);
+      expect(stated[0].code).toBe(SEND_NOT_RECORDED_NOTICE_CODE);
+      expect(stated[0].message).toBe(
+        "Was removed\nText saved; settings/steering were not applied.\n\nWhat you submitted is kept below to copy. It is already saved on the queued message, so do not send it again:\nthe corrected text",
+      );
+      expect(state.failedSendRestoration).toBeNull();
+      expect(state.queueEditRecords).toEqual({});
+      expect(sendFrameCount(harness)).toBe(0);
+    },
+  );
 
   it("names what the submission asked for in the partial notice when the settings differed from the row's (finding 6, addendum)", () => {
     harness = openWithQueuedRow();
@@ -1496,45 +1710,45 @@ describe("a row that drains after the settings frame was seen applied", () => {
 });
 
 describe("a saved-after-return notice for a follow-up the host refused", () => {
-  it("says the settings were not applied and why, and never 'not confirmed'", () => {
-    harness = openWithQueuedRow();
-    const { editActionId, followUpActionId } = submitEdit(
-      harness,
-      "save",
-      OTHER_SETTINGS,
-      [],
-    );
-    harness.callbacks().onActionAck({
-      kind: "actionAck",
-      hasBinaryPayload: false,
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      clientActionId: followUpActionId,
-      action: "queueSettingsUpdate",
-      status: "rejected",
-      reason: "The queued prompt is already being submitted.",
-      code: "QUEUE_ITEM_NOT_FOUND",
-      backgroundStopTaskIds: [],
-      token: null,
-    });
-    hostNotice(harness, followUpActionId);
+  it.each([
+    { reason: "That profile no longer exists. Choose a profile." },
+    { reason: "" },
+    { reason: null },
+  ])(
+    "puts Was removed above the saved-after-return sentence for reason $reason",
+    ({ reason }) => {
+      harness = openWithQueuedRow();
+      const { editActionId, followUpActionId } = submitEdit(
+        harness,
+        "save",
+        OTHER_SETTINGS,
+        [],
+      );
+      ackWithCode(harness, {
+        clientActionId: followUpActionId,
+        action: "queueSettingsUpdate",
+        status: "rejected",
+        reason,
+        code: "removed-by-person",
+      });
+      hostNotice(harness, followUpActionId);
 
-    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
-    const kept = harness.handle.store.getState().queueEditRecords[editActionId];
-    expect(kept?.followUp).toBe("rejected");
-    expect(kept?.contentReturned).toBe(true);
+      reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+      const kept =
+        harness.handle.store.getState().queueEditRecords[editActionId];
+      expect(kept?.followUp).toBe("rejected");
+      expect(kept?.contentReturned).toBe(true);
 
-    emitQueue(harness, [queuedRow(EDITED)]);
+      emitQueue(harness, [queuedRow(EDITED)]);
 
-    const told = savedAfterReturnNotices(harness);
-    expect(told).toHaveLength(1);
-    expect(told[0].message).toContain("were not applied");
-    expect(told[0].message).toContain(
-      "The queued prompt is already being submitted",
-    );
-    expect(told[0].message).not.toContain("not confirmed");
-    expect(harness.handle.store.getState().queueEditRecords).toEqual({});
-  });
+      const told = savedAfterReturnNotices(harness);
+      expect(told).toHaveLength(1);
+      expect(told[0].message).toBe(
+        "Was removed\nYour edit to a queued message was saved after all. Its settings/steering were not applied. The copy handed back to you is a duplicate - do not send it again.",
+      );
+      expect(harness.handle.store.getState().queueEditRecords).toEqual({});
+    },
+  );
 });
 
 describe("the saved-after-return notice survives the ordinary ring until delivered", () => {
@@ -1587,6 +1801,33 @@ describe("the saved-after-return notice survives the ordinary ring until deliver
     ).toBeLessThanOrEqual(MAX_ERROR_NOTICE_RECORDS);
     // ...and left the undelivered saved-after-return notice alone.
     expect(savedAfterReturnNotices(harness)).toHaveLength(1);
+  });
+});
+
+describe("the saved-after-return notice keeps the computer's reason under another code", () => {
+  it("keeps the parenthetical reason in the saved-after-return notice", () => {
+    harness = openWithQueuedRow();
+    const { followUpActionId } = submitEdit(
+      harness,
+      "save",
+      OTHER_SETTINGS,
+      [],
+    );
+    ackWithCode(harness, {
+      clientActionId: followUpActionId,
+      action: "queueSettingsUpdate",
+      status: "rejected",
+      reason: "That profile no longer exists. Choose a profile.",
+      code: "RPC_ERROR",
+    });
+    hostNotice(harness, followUpActionId);
+    reconnectWithItems(harness, [queuedRow(ORIGINAL)]);
+    emitQueue(harness, [queuedRow(EDITED)]);
+
+    expect(savedAfterReturnNotices(harness)).toHaveLength(1);
+    expect(savedAfterReturnNotices(harness)[0].message).toBe(
+      "Your edit to a queued message was saved after all. Its settings/steering were not applied (That profile no longer exists. Choose a profile). The copy handed back to you is a duplicate - do not send it again.",
+    );
   });
 });
 

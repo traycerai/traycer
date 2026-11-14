@@ -628,6 +628,14 @@ function noticeFor(harness: Harness, clientActionId: string): ChatErrorNotice {
 }
 
 function rejectLastAction(harness: Harness, reason: string): string {
+  return rejectLastActionWithCode(harness, reason, null);
+}
+
+function rejectLastActionWithCode(
+  harness: Harness,
+  reason: string | null,
+  code: string | null,
+): string {
   const frame = harness.sent.at(-1);
   if (frame === undefined || frame.kind === "ping") {
     throw new Error("Expected owner action frame");
@@ -641,11 +649,41 @@ function rejectLastAction(harness: Harness, reason: string): string {
     action: frame.kind,
     status: "rejected",
     reason,
-    code: null,
+    code,
     backgroundStopTaskIds: [],
     token: null,
   });
   return frame.clientActionId;
+}
+
+function sendWithSweptStagedWorktree(
+  harness: Harness,
+  reason: string | null,
+  code: string | null,
+): string {
+  const key: WorktreeStagingKey = {
+    surface: "owner",
+    hostId: "host-a",
+    epicId: EPIC_ID,
+    ownerKind: "chat",
+    ownerId: CHAT_ID,
+  };
+  useWorktreeIntentStagingStore
+    .getState()
+    .setIntent(key, worktreeIntentFor("feat/doomed"));
+  sendTestMessage(
+    harness.handle.store,
+    CONTENT,
+    { type: "user", userId: OWNER_ID },
+    { settings: SETTINGS, deliveryPolicy: "auto" },
+  );
+  useWorktreeIntentStagingStore
+    .getState()
+    .purgeRemovedWorktreeIntents("host-a", {
+      worktreePaths: new Set<string>(),
+      branches: [{ repoIdentifier: null, branch: "main" }],
+    });
+  return rejectLastActionWithCode(harness, reason, code);
 }
 
 function emitSnapshot(
@@ -5943,40 +5981,279 @@ describe("createChatSessionStore", () => {
   // paths do, but states things through its own errorNotice rather than
   // `failedSendRestoration.reason` - so the refusal was silent here while
   // being spoken everywhere else.
-  it("says the worktree is gone on the rejection path too", () => {
+  it.each([
+    { reason: "That profile no longer exists. Choose a profile." },
+    { reason: "" },
+    { reason: null },
+  ])(
+    "says Was removed and keeps the swept worktree clause when the reason is $reason",
+    ({ reason }) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      emitSnapshot(callbacks, "owner");
+      const rejected = sendWithSweptStagedWorktree(
+        harness,
+        reason,
+        "removed-by-person",
+      );
+
+      const notice = noticeFor(harness, rejected);
+      expect(notice.message).toBe(
+        "Was removed\nIts staged worktree a new branch feat/doomed from main no longer exists, so it was not restored.",
+      );
+    },
+  );
+
+  it("keeps the computer's reason and the clause on one line for another code", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
-    const key: WorktreeStagingKey = {
-      surface: "owner",
-      hostId: "host-a",
-      epicId: EPIC_ID,
-      ownerKind: "chat",
-      ownerId: CHAT_ID,
-    };
-    useWorktreeIntentStagingStore
-      .getState()
-      .setIntent(key, worktreeIntentFor("feat/doomed"));
+    const rejected = sendWithSweptStagedWorktree(
+      harness,
+      "That profile no longer exists. Choose a profile.",
+      "RPC_ERROR",
+    );
+
+    expect(noticeFor(harness, rejected).message).toBe(
+      "That profile no longer exists. Choose a profile. Its staged worktree a new branch feat/doomed from main no longer exists, so it was not restored.",
+    );
+  });
+
+  it("shows Was removed for the rejected send and its separate error notice once per action id", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
     sendTestMessage(
       harness.handle.store,
       CONTENT,
       { type: "user", userId: OWNER_ID },
       { settings: SETTINGS, deliveryPolicy: "auto" },
     );
-    // The worktree the send is staged for is swept while it is in flight.
-    useWorktreeIntentStagingStore
+    const clientActionId = rejectLastActionWithCode(
+      harness,
+      "That profile no longer exists. Choose a profile.",
+      "removed-by-person",
+    );
+
+    expect(noticeFor(harness, clientActionId).message).toBe("Was removed");
+    callbacks.onErrorNotice({
+      kind: "errorNotice",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      notice: {
+        code: "removed-by-person",
+        message: "That profile no longer exists. Choose a profile.",
+        severity: "warning",
+        clientActionId,
+      },
+    });
+
+    const sameAction = harness.handle.store
       .getState()
-      .purgeRemovedWorktreeIntents("host-a", {
-        worktreePaths: new Set<string>(),
-        branches: [{ repoIdentifier: null, branch: "main" }],
-      });
+      .errorNotices.filter(
+        (notice) => notice.clientActionId === clientActionId,
+      );
+    expect(sameAction.map((notice) => notice.message)).toEqual([
+      "Was removed",
+      "Was removed",
+    ]);
+    expect(
+      new Set(
+        sameAction.map((notice) => `${notice.code}:${notice.clientActionId}`),
+      ).size,
+    ).toBe(1);
+    sameAction.forEach((notice) =>
+      harness.handle.store.getState().markNoticeDelivered(notice),
+    );
+    expect(harness.handle.store.getState().deliveredNoticeActionIds.size).toBe(
+      1,
+    );
+  });
 
-    const rejected = rejectLastAction(harness, "Host refused the send.");
+  it("uses Was removed for an empty message on the separate errorNotice frame", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
 
-    const notice = noticeFor(harness, rejected);
-    expect(notice.message).toContain("Host refused the send.");
-    expect(notice.message).toContain(
-      "staged worktree a new branch feat/doomed from main no longer exists",
+    callbacks.onErrorNotice({
+      kind: "errorNotice",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      notice: {
+        code: "removed-by-person",
+        message: "",
+        severity: "warning",
+        clientActionId: "removed-profile-notice",
+      },
+    });
+
+    expect(harness.handle.store.getState().errorNotices.at(-1)?.message).toBe(
+      "Was removed",
+    );
+  });
+
+  it.each([
+    { label: "an empty reason", reason: "" },
+    { label: "a null reason", reason: null },
+  ])("uses Was removed with $label", ({ reason }) => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+
+    const rejected = rejectLastActionWithCode(
+      harness,
+      reason,
+      "removed-by-person",
+    );
+
+    expect(noticeFor(harness, rejected).message).toBe("Was removed");
+    expect(harness.handle.store.getState().failedSendRestoration?.reason).toBe(
+      "Was removed",
+    );
+  });
+
+  it.each([
+    { reason: "That profile no longer exists. Choose a profile." },
+    { reason: "" },
+    { reason: null },
+  ])(
+    "states a displaced removed-profile send for reason $reason",
+    ({ reason }) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      emitSnapshot(callbacks, "owner");
+      sendTestMessage(
+        harness.handle.store,
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      );
+      rejectLastAction(harness, "The first send was refused.");
+      sendTestMessage(
+        harness.handle.store,
+        SECOND_CONTENT,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      );
+      const displaced = rejectLastActionWithCode(
+        harness,
+        reason,
+        "removed-by-person",
+      );
+
+      const notice = noticeFor(harness, displaced);
+      expect(notice.message).toBe(
+        "A message was not accepted (Was removed), and another unsent message is already waiting in the composer.\n\nCopy the message below to resend it:\nWorld",
+      );
+      expect(
+        harness.handle.store.getState().lastCopyPrompts[displaced]?.reason,
+      ).toBe("A message was not accepted (Was removed).");
+    },
+  );
+
+  it("keeps the computer's displaced-send text under RPC_ERROR", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    rejectLastAction(harness, "The first send was refused.");
+    sendTestMessage(
+      harness.handle.store,
+      SECOND_CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    const displaced = rejectLastActionWithCode(
+      harness,
+      "That profile no longer exists. Choose a profile.",
+      "RPC_ERROR",
+    );
+
+    expect(noticeFor(harness, displaced).message).toBe(
+      "A message was not accepted (That profile no longer exists. Choose a profile), and another unsent message is already waiting in the composer.\n\nCopy the message below to resend it:\nWorld",
+    );
+    expect(
+      harness.handle.store.getState().lastCopyPrompts[displaced]?.reason,
+    ).toBe(
+      "A message was not accepted (That profile no longer exists. Choose a profile).",
+    );
+  });
+
+  it.each([
+    { reason: "That profile no longer exists. Choose a profile." },
+    { reason: "" },
+    { reason: null },
+  ])(
+    "puts the displaced restoration notice below Was removed for reason $reason",
+    ({ reason }) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      emitSnapshot(callbacks, "owner");
+      sendTestMessage(
+        harness.handle.store,
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        { settings: SETTINGS, deliveryPolicy: "auto" },
+      );
+      const restored = rejectLastActionWithCode(
+        harness,
+        reason,
+        "removed-by-person",
+      );
+
+      harness.handle.store.getState().stateFailedSendRestoration(restored);
+
+      const notice = harness.handle.store
+        .getState()
+        .errorNotices.find(
+          (entry) =>
+            entry.clientActionId === restored &&
+            entry.code === "SEND_NOT_RECORDED",
+        );
+      expect(notice?.message).toBe(
+        "Was removed\nIt was not put back in the composer, because you have started another message there.\n\nCopy the message below to resend it:\nHello",
+      );
+    },
+  );
+
+  it("keeps the computer's reason and the displaced restoration text under RPC_ERROR", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    sendTestMessage(
+      harness.handle.store,
+      CONTENT,
+      { type: "user", userId: OWNER_ID },
+      { settings: SETTINGS, deliveryPolicy: "auto" },
+    );
+    const restored = rejectLastActionWithCode(
+      harness,
+      "That profile no longer exists. Choose a profile.",
+      "RPC_ERROR",
+    );
+
+    harness.handle.store.getState().stateFailedSendRestoration(restored);
+
+    const notice = harness.handle.store
+      .getState()
+      .errorNotices.find(
+        (entry) =>
+          entry.clientActionId === restored &&
+          entry.code === "SEND_NOT_RECORDED",
+      );
+    expect(notice?.message).toBe(
+      "That profile no longer exists. Choose a profile. It was not put back in the composer, because you have started another message there.\n\nCopy the message below to resend it:\nHello",
     );
   });
 

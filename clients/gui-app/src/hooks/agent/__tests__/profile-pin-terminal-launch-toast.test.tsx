@@ -68,7 +68,9 @@ function toastTitles(): unknown[] {
   return vi.mocked(toast.error).mock.calls.map((call) => call[0]);
 }
 
-function start(error: HostRpcError): void {
+function start(error: HostRpcError): {
+  readonly currentError: () => HostRpcError | null;
+} {
   const queryClient = createAppQueryClient();
   const client = launchClient(error);
   const view = renderHook(() => useAgentStartTerminalSession(client), {
@@ -79,6 +81,7 @@ function start(error: HostRpcError): void {
     ),
   });
   view.result.current.mutate(LAUNCH);
+  return { currentError: () => view.result.current.error };
 }
 
 describe("useAgentStartTerminalSession removed-by-person", () => {
@@ -98,6 +101,23 @@ describe("useAgentStartTerminalSession removed-by-person", () => {
       }),
     );
     await waitFor(() => {
+      expect(toastTitles()).toContain("Was removed");
+    });
+  });
+
+  it("exposes the removed-by-person hook error before showing the toast", async () => {
+    const result = start(
+      new HostRpcError({
+        code: "removed-by-person",
+        message: 'No profile "work" is registered for provider "claude-code".',
+        requestId: "req-1",
+        method: "agent.tui.prepareLaunch",
+        fatalDetails: null,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.currentError()?.code).toBe("removed-by-person");
       expect(toastTitles()).toContain("Was removed");
     });
   });

@@ -290,6 +290,13 @@ import {
   buildTextOnlyPromptHandoff,
   buildUnrecordedPromptHandoff,
 } from "@/lib/drafts/unrecorded-prompt-handoff";
+import {
+  isRemovedProfileRefusalCode,
+  messageNotAcceptedCircumstance,
+  rejectionReasonText,
+  withAppWordsAfterReason,
+} from "@/lib/chats/rejected-frame-reason";
+import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-copy";
 import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
@@ -2850,12 +2857,14 @@ function rejectionLastCopySend(input: {
   ) {
     return null;
   }
-  const reason = input.frame.reason ?? "Action rejected.";
   return {
     clientActionId: input.frame.clientActionId,
     content: pending.restore.content,
     browserAnnotations: pending.restore.browserAnnotations,
-    circumstance: `A message was not accepted (${reason.replace(/\.$/, "")})`,
+    circumstance: messageNotAcceptedCircumstance(
+      input.frame.code,
+      input.frame.reason,
+    ),
     account: input.account ?? EMPTY_DEAD_SEND_ACCOUNT,
   };
 }
@@ -2891,17 +2900,22 @@ function rejectionNotice(input: {
 }): ChatErrorNotice {
   const lastCopy = rejectionLastCopySend(input);
   if (lastCopy !== null) return unrecoverableSendNotice(lastCopy);
-  const reason = input.frame.reason ?? "Action rejected.";
+  const reason = rejectionReasonText(
+    input.frame.code,
+    input.frame.reason,
+    "Action rejected.",
+  );
   // A rejected send that WINS the slot is restored, so it never reaches
   // `unrecoverableSendNotice` - this is the surface that speaks for it, and
   // `handedBack` is true because its surviving binding went back with it.
   return {
     code: input.frame.code ?? "ACTION_REJECTED",
-    message: `${reason}${
+    message: withAppWordsAfterReason(
+      reason,
       input.account === null || input.displaced
         ? ""
-        : deadSendAccountClauses(input.account, true)
-    }`,
+        : deadSendAccountClauses(input.account, true),
+    ),
     severity: "warning",
     clientActionId: input.frame.clientActionId,
   };
@@ -2947,6 +2961,7 @@ function rejectionRestoration(input: {
   readonly frame: {
     readonly clientActionId: string;
     readonly reason: string | null;
+    readonly code: string | null;
   };
   readonly account: DeadSendAccount | null;
 }): FailedSendRestorationState | null {
@@ -2955,17 +2970,26 @@ function rejectionRestoration(input: {
   if (pending?.action !== "send" || pending.restore === null) {
     return null;
   }
+  const reason = rejectionReasonText(
+    frame.code,
+    frame.reason,
+    "Message was not accepted.",
+  );
   return {
     clientActionId: frame.clientActionId,
     messageId: pending.messageId,
     content: pending.restore.content,
     browserAnnotations: pending.restore.browserAnnotations,
-    reason: `${frame.reason ?? "Message was not accepted."}${
-      input.account === null ? "" : deadSendAccountClauses(input.account, true)
-    }`,
-    displacedReason: `${frame.reason ?? "Message was not accepted."}${
-      input.account === null ? "" : deadSendAccountClauses(input.account, false)
-    }`,
+    reason: withAppWordsAfterReason(
+      reason,
+      input.account === null ? "" : deadSendAccountClauses(input.account, true),
+    ),
+    displacedReason: withAppWordsAfterReason(
+      reason,
+      input.account === null
+        ? ""
+        : deadSendAccountClauses(input.account, false),
+    ),
     // This path owns a notice and says it there, so the ack stays quiet.
     stated: true,
   };
@@ -10178,10 +10202,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return;
         }
+        // The computer's notice for a removed-account refusal carries the
+        // same sentence as its acknowledgement, which the app never shows.
+        const notice = isRemovedProfileRefusalCode(frame.notice.code)
+          ? { ...frame.notice, message: REMOVED_PROFILE_PIN_TEXT }
+          : frame.notice;
         set((state) => ({
           errorNotices: appendErrorNotice(
             state.errorNotices,
-            frame.notice,
+            notice,
             state.deliveredNoticeActionIds,
           ),
           // A notice naming an accepted restore is the host saying that
@@ -11697,6 +11726,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             edit: "pending",
             followUp: "pending",
             followUpReason: null,
+            followUpCode: null,
             contentReturned: false,
             dispatchedAt: Date.now(),
           }),
@@ -12887,20 +12917,35 @@ function cancelRestorationSettlementForAck(
   };
 }
 
-/** The host's refusal as a parenthesis, or nothing when it gave no reason. */
-function hostReasonClause(hostReason: string | null): string {
-  if (hostReason === null) return "";
+/**
+ * The host's refusal as a parenthesis, or nothing when it gave no reason. The
+ * removed-account code is never said in the parenthesis: its sentence is the
+ * one the app shows without a reason, under {@link hostRefusalLead}.
+ */
+function hostReasonClause(
+  hostReason: string | null,
+  hostCode: string | null,
+): string {
+  if (hostReason === null || isRemovedProfileRefusalCode(hostCode)) return "";
   return ` (${hostReason.replace(/\.$/, "")})`;
+}
+
+/** The pin's words on a line above a queue-edit sentence, for that code only. */
+function hostRefusalLead(hostCode: string | null): string {
+  return isRemovedProfileRefusalCode(hostCode)
+    ? `${REMOVED_PROFILE_PIN_TEXT}\n`
+    : "";
 }
 
 /** What became of the edit, in the words each cause can honestly use. */
 function queueEditReturnedBecause(
   cause: QueueEditReturnCause,
   hostReason: string | null,
+  hostCode: string | null,
 ): string {
   switch (cause) {
     case "refused":
-      return `was not saved${hostReasonClause(hostReason)}`;
+      return `was not saved${hostReasonClause(hostReason, hostCode)}`;
     case "not_applied":
       return "was not saved: the queued message had already started with its earlier text";
     case "unconfirmed":
@@ -12919,12 +12964,14 @@ function queueEditReturnedBecause(
 function queueEditHandBackCopy(
   cause: QueueEditReturnCause,
   hostReason: string | null,
+  hostCode: string | null,
 ): HandBackCopy {
-  const what = queueEditReturnedBecause(cause, hostReason);
+  const what = queueEditReturnedBecause(cause, hostReason, hostCode);
+  const lead = hostRefusalLead(hostCode);
   return {
-    reason: `Your edit to a queued message ${what}. The edited text is back in the composer as an unsent draft. Nothing was sent again.`,
-    displacedReason: `Your edit to a queued message ${what}.`,
-    circumstance: `An edit to a queued message ${what}`,
+    reason: `${lead}Your edit to a queued message ${what}. The edited text is back in the composer as an unsent draft. Nothing was sent again.`,
+    displacedReason: `${lead}Your edit to a queued message ${what}.`,
+    circumstance: `${lead}An edit to a queued message ${what}`,
   };
 }
 
@@ -12965,7 +13012,7 @@ function partialQueueEditLastCopy(
   settlement: Extract<QueueEditSettlement, { readonly kind: "partial" }>,
 ): UnrecoverableSend {
   const outcome = settlement.refused
-    ? `Text saved; settings/steering were not applied${hostReasonClause(settlement.hostReason)}`
+    ? `${hostRefusalLead(settlement.hostCode)}Text saved; settings/steering were not applied${hostReasonClause(settlement.hostReason, settlement.hostCode)}`
     : "Text saved; settings/steering were not confirmed after reconnecting";
   // What was asked for, said here because nothing else still holds it: the
   // composer's picker has moved on, and the row may have left the queue.
@@ -12994,7 +13041,7 @@ function savedAfterReturnSecondFrameClause(
 ): string {
   if (settlement.followUpApplied) return "";
   if (settlement.followUpRefused) {
-    return ` Its settings/steering were not applied${hostReasonClause(settlement.hostReason)}.`;
+    return ` Its settings/steering were not applied${hostReasonClause(settlement.hostReason, settlement.hostCode)}.`;
   }
   return " Its settings/steering were not confirmed.";
 }
@@ -13009,7 +13056,7 @@ function queueEditSavedAfterReturnNotice(
   const secondFrame = savedAfterReturnSecondFrameClause(settlement);
   return {
     code: QUEUE_EDIT_SAVED_AFTER_RETURN_NOTICE_CODE,
-    message: `Your edit to a queued message was saved after all.${secondFrame} The copy handed back to you is a duplicate - do not send it again.`,
+    message: `${hostRefusalLead(settlement.hostCode)}Your edit to a queued message was saved after all.${secondFrame} The copy handed back to you is a duplicate - do not send it again.`,
     severity: "warning",
     clientActionId: settlement.clientActionId,
   };
@@ -13090,7 +13137,11 @@ function foldQueueEditSettlementsForSnapshot(
       next.slot,
       settlement.clientActionId,
       settlement.restore,
-      queueEditHandBackCopy(settlement.cause, settlement.hostReason),
+      queueEditHandBackCopy(
+        settlement.cause,
+        settlement.hostReason,
+        settlement.hostCode,
+      ),
     );
     return {
       slot: awarded.failedSendRestoration,
@@ -13163,7 +13214,11 @@ function withQueueEditSettlements(
       carried.failedSendRestoration,
       settlement.clientActionId,
       settlement.restore,
-      queueEditHandBackCopy(settlement.cause, settlement.hostReason),
+      queueEditHandBackCopy(
+        settlement.cause,
+        settlement.hostReason,
+        settlement.hostCode,
+      ),
     );
     return {
       failedSendRestoration: awarded.failedSendRestoration,
@@ -13202,6 +13257,7 @@ function queueEditSurfacesForAck(
           clientActionId: frame.clientActionId,
           status: frame.status,
           reason: frame.reason ?? null,
+          code: frame.code ?? null,
         });
   return {
     queueEditRecords: fold.records,

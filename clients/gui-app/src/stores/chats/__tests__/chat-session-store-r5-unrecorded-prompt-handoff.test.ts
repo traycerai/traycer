@@ -292,6 +292,15 @@ function rejectPlain(
   clientActionId: string,
   reason: string,
 ): void {
+  rejectPlainWithCode(harness, clientActionId, reason, null);
+}
+
+function rejectPlainWithCode(
+  harness: Harness,
+  clientActionId: string,
+  reason: string | null,
+  code: string | null,
+): void {
   harness.callbacks().onActionAck({
     kind: "actionAck",
     hasBinaryPayload: false,
@@ -301,10 +310,14 @@ function rejectPlain(
     action: "send",
     status: "rejected",
     reason,
-    code: null,
+    code,
     backgroundStopTaskIds: [],
     token: null,
   });
+}
+
+function lastParagraphText(content: JsonContent): string | undefined {
+  return content.content?.at(-1)?.content?.[0]?.text;
 }
 
 function rejectMissingAttachmentBytes(
@@ -388,6 +401,109 @@ afterEach(() => {
 });
 
 describe("R5F2: lastCopyPrompts covers a notice created well before disposal", () => {
+  it("teardown keeps Was removed on its own line before the app clause", async () => {
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+    const text = "the removed-account prompt held for teardown";
+    const { clientActionId } = sendMessageWithContent(
+      harness,
+      plainContent(text),
+    );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5-mini" });
+    rejectPlainWithCode(
+      harness,
+      clientActionId,
+      "That profile no longer exists. Choose a profile.",
+      "removed-by-person",
+    );
+    expect(harness.handle.store.getState().failedSendRestoration?.reason).toBe(
+      "Was removed\nIt was going to run with model gpt-5-codex; the chat uses different settings now, so a resend will not match unless you set them back.",
+    );
+
+    harness.handle.dispose();
+    await waitForHandedOffDraft(
+      text,
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
+    );
+    const draft = handedOffDrafts().find((entry) =>
+      JSON.stringify(entry.content).includes(text),
+    );
+    expect(draft).toBeDefined();
+    if (draft === undefined) throw new Error("expected the handed-off draft");
+    expect(lastParagraphText(draft.content)).toBe(
+      "Unsent — Was removed\nIt was going to run with model gpt-5-codex; the chat uses different settings now, so a resend will not match unless you set them back.",
+    );
+  });
+
+  it("teardown keeps the computer's reason and app clause on one line for another code", async () => {
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+    const text = "the ordinary refusal held for teardown";
+    const { clientActionId } = sendMessageWithContent(
+      harness,
+      plainContent(text),
+    );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5-mini" });
+    rejectPlainWithCode(
+      harness,
+      clientActionId,
+      "That profile no longer exists. Choose a profile.",
+      "RPC_ERROR",
+    );
+    expect(harness.handle.store.getState().failedSendRestoration?.reason).toBe(
+      "That profile no longer exists. Choose a profile. It was going to run with model gpt-5-codex; the chat uses different settings now, so a resend will not match unless you set them back.",
+    );
+
+    harness.handle.dispose();
+    await waitForHandedOffDraft(
+      text,
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
+    );
+    const draft = handedOffDrafts().find((entry) =>
+      JSON.stringify(entry.content).includes(text),
+    );
+    expect(draft).toBeDefined();
+    if (draft === undefined) throw new Error("expected the handed-off draft");
+    expect(lastParagraphText(draft.content)).toBe(
+      "Unsent — That profile no longer exists. Choose a profile. It was going to run with model gpt-5-codex; the chat uses different settings now, so a resend will not match unless you set them back.",
+    );
+  });
+
+  it("a reason literally Was removed under another code still starts the app clause on a new line", async () => {
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+    const text = "the ordinary-code prompt held for teardown";
+    const { clientActionId } = sendMessageWithContent(
+      harness,
+      plainContent(text),
+    );
+    harness.handle.store
+      .getState()
+      .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5-mini" });
+    rejectPlainWithCode(harness, clientActionId, "Was removed", "RPC_ERROR");
+    expect(harness.handle.store.getState().failedSendRestoration?.reason).toBe(
+      "Was removed\nIt was going to run with model gpt-5-codex; the chat uses different settings now, so a resend will not match unless you set them back.",
+    );
+
+    harness.handle.dispose();
+    await waitForHandedOffDraft(
+      text,
+      HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000,
+    );
+    const draft = handedOffDrafts().find((entry) =>
+      JSON.stringify(entry.content).includes(text),
+    );
+    expect(draft).toBeDefined();
+    if (draft === undefined) throw new Error("expected the handed-off draft");
+    expect(lastParagraphText(draft.content)).toBe(
+      "Unsent — Was removed\nIt was going to run with model gpt-5-codex; the chat uses different settings now, so a resend will not match unless you set them back.",
+    );
+  });
+
   it("a last-copy notice created via the rejection path, long before disposal, reaches the prompt stash at dispose (DRIVE RED)", async () => {
     // A occupies the restoration slot; B's rejection is then displaced onto
     // the notice-only path (`lastCopyPrompts`), well before this test ever

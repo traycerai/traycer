@@ -91,6 +91,7 @@ import { sha256Hex } from "@/lib/composer/landing-image-store";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
+import { withAppWordsAfterReason } from "@/lib/chats/rejected-frame-reason";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -606,7 +607,10 @@ function teardownQualification(args: {
     // than none: it points the reader at a remedy that does not apply.
     clauses.push(`${subject} not saved with it.`);
   }
-  return [`Unsent — ${args.reason}`, ...clauses].join(" ");
+  return `Unsent — ${withAppWordsAfterReason(
+    args.reason,
+    clauses.map((clause) => ` ${clause}`).join(""),
+  )}`;
 }
 
 /**

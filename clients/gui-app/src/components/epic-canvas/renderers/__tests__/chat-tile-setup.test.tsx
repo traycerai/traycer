@@ -959,6 +959,58 @@ describe("useChatSetupFailureRestoreDriver", () => {
 });
 
 describe("<ChatTileErrorNoticeToasts />", () => {
+  it("shows one removed-profile warning for the rejected action and its error notice", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "prompt" }],
+        },
+      ],
+    };
+    act(() => {
+      sendTestMessage(harness, content);
+    });
+    const pending = harness.handle.store.getState().pendingUserMessages.at(0);
+    if (pending === undefined) throw new Error("expected pending user message");
+
+    act(() => {
+      harness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId: pending.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "That profile no longer exists. Choose a profile.",
+        code: "removed-by-person",
+        backgroundStopTaskIds: [],
+        token: null,
+      });
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "removed-by-person",
+          message: "That profile no longer exists. Choose a profile.",
+          severity: "warning",
+          clientActionId: pending.clientActionId,
+        },
+      });
+    });
+
+    expect(sonnerToastWarning).toHaveBeenCalledTimes(1);
+    expect(sonnerToastWarning.mock.calls[0][0]).toBe("Was removed");
+  });
+
   it("keeps warning severity and reports with fixed chat context", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
