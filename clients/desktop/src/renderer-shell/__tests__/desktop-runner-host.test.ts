@@ -279,6 +279,13 @@ function buildFakeBridge(
         migrateLegacyCredentials: async () => "identity-unknown" as const,
       };
     })(),
+    hostTokens: {
+      obtain: () => Promise.resolve({ kind: "no-sign-in" as const }),
+      renew: () => Promise.resolve({ kind: "already-current" as const }),
+      adopt: () => Promise.resolve(),
+      forgetUser: () => Promise.resolve(),
+      subscribe: () => ({ dispose: () => undefined }),
+    },
     listUserSessions: async () => ({ kind: "network-error" as const }),
     revokeUserSession: async () => ({ kind: "network-error" as const }),
     revokeAllSessions: async () => ({ kind: "network-error" as const }),

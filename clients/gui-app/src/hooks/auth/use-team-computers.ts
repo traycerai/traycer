@@ -18,7 +18,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
-import { invalidateLocalTeamAdmissionAfterClaim } from "@/lib/host/app-local-open-auth";
+import { noteHostMembershipChanged } from "@/lib/host/local-admission-invalidation";
 import { hostEnvironmentBindingQueryKey } from "@/hooks/bots/use-host-environment-bindings-query";
 
 function computerFailure(result: TeamComputerFailure): never {
@@ -117,7 +117,7 @@ export function useTeamComputerClaim(
         throw new Error("Sign in to claim this computer.");
       const result = await auth.releaseTeamComputer(hostId, environmentId);
       if (result.kind === "ok") {
-        await invalidateLocalTeamAdmissionAfterClaim(hostId, runnerHost);
+        noteHostMembershipChanged(hostId);
         return;
       }
       if (result.kind === "not-computer")

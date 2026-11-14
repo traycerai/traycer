@@ -347,6 +347,54 @@ export type EnvironmentStatusResponseV12 = z.infer<
   typeof environmentStatusResponseSchemaV12
 >;
 
+/**
+ * Where a started move attempt stands (`environment.move.start` /
+ * `.outcome`, `move-contracts.ts`), by one discriminant, `state`. `cause` and
+ * `reason` are open strings: a value outside the known lists is valid.
+ *
+ * - `retry` causes known: `unavailable` (the host's), `move_upload_incomplete`
+ *   (authn's full code).
+ * - `needs_person` reasons known: authn's eight `operation_acceptance_invalid`
+ *   reasons (`missing`, `ended`, `plan_hash_mismatch`,
+ *   `manifest_hash_mismatch`, `ownership_generation_mismatch`,
+ *   `target_mismatch`, `disclosure_mismatch`, `consumed`); and authn's
+ *   conflict codes `move_acceptance_conflict` and `move_upload_limit_exceeded`,
+ *   as full codes.
+ */
+export const environmentMoveAttemptOutcomeSchema = lazySchema(() => {
+  const ids = {
+    attemptId: z.string().min(1),
+    acceptanceId: z.string().min(1),
+  };
+  return z.discriminatedUnion("state", [
+    z.object({ ...ids, state: z.literal("running") }),
+    z.object({ ...ids, state: z.literal("retry"), cause: z.string().min(1) }),
+    z.object({
+      ...ids,
+      state: z.literal("needs_person"),
+      reason: z.string().min(1),
+    }),
+    z.object({ ...ids, state: z.literal("done") }),
+  ]);
+});
+export type EnvironmentMoveAttemptOutcome = z.infer<
+  typeof environmentMoveAttemptOutcomeSchema
+>;
+
+/**
+ * `environment.status@1.3` adds `move`: the started attempt's outcome, null
+ * until a start and never `not_found`. A staged attempt that is never started
+ * leaves it null. A `@1.2` answer upgrades with null.
+ */
+export const environmentStatusResponseSchemaV13 = lazySchema(() =>
+  environmentStatusResponseSchemaV12.extend({
+    move: environmentMoveAttemptOutcomeSchema.nullable().default(null),
+  }),
+);
+export type EnvironmentStatusResponseV13 = z.infer<
+  typeof environmentStatusResponseSchemaV13
+>;
+
 // ── environment.notices / .undo / .review ───────────────────────────────────
 
 export const environmentNoticesRequestSchema = emptyRequestSchema;
@@ -663,6 +711,48 @@ export const hostRemoteAccessSetResponseSchema = lazySchema(() =>
 );
 export type HostRemoteAccessSetResponse = z.infer<
   typeof hostRemoteAccessSetResponseSchema
+>;
+
+/**
+ * `host.remoteAccess.set@2.0` turns remote access off only; turning it on is
+ * the app's call to authn. The request is strict, so an `enabled` key is
+ * refused rather than stripped and read as Off.
+ */
+export const hostRemoteAccessSetRequestSchemaV20 = lazySchema(() =>
+  z.object({}).strict(),
+);
+export type HostRemoteAccessSetRequestV20 = z.infer<
+  typeof hostRemoteAccessSetRequestSchemaV20
+>;
+
+/** `environment.status`'s `remoteAccess` keeps its three states. */
+export const hostRemoteAccessSetResponseSchemaV20 = lazySchema(() =>
+  z.object({ state: z.literal("off") }),
+);
+export type HostRemoteAccessSetResponseV20 = z.infer<
+  typeof hostRemoteAccessSetResponseSchemaV20
+>;
+
+// ── host.status.refresh ─────────────────────────────────────────────────────
+
+/** `host.status.refresh@1.0` takes nothing; an unknown key is refused. */
+export const hostStatusRefreshRequestSchema = lazySchema(() =>
+  z.object({}).strict(),
+);
+export type HostStatusRefreshRequest = z.infer<
+  typeof hostStatusRefreshRequestSchema
+>;
+
+/**
+ * Empty on purpose, and no result field is ever added: the answer means only
+ * that this computer has tried to read its own row. The app reads
+ * `environment.status` afterwards, the one place that state is read.
+ */
+export const hostStatusRefreshResponseSchema = lazySchema(() =>
+  z.object({}).strict(),
+);
+export type HostStatusRefreshResponse = z.infer<
+  typeof hostStatusRefreshResponseSchema
 >;
 
 // ── providers.link / linkComplete ───────────────────────────────────────────

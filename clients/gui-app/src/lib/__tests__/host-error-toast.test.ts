@@ -19,12 +19,16 @@ import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
+  batchRefusalAdvice,
+  isSilentHostError,
   toastFromHostError,
   classifySendRefusal,
   toastFromHostErrorOnFork,
   toastFromBackgroundHostError,
   toastSendRefusal,
   toastFromHostErrorWithDetail,
+  toastUnknownOutcomeAfterRefusedRetry,
+  HOST_UNSUPPORTED_MESSAGE,
 } from "@/lib/host-error-toast";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import {
@@ -70,6 +74,47 @@ function unauthorizedFatal(
   });
 }
 
+function doorReasonUnauthorized(
+  doorReason: NonNullable<HostRpcError["doorRefusal"]>["doorReason"],
+): HostRpcError {
+  return new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: "host refusal",
+    requestId: `req-${doorReason}`,
+    method: "epic.revokeCollaborator",
+    fatalDetails: null,
+    doorRefusal: {
+      code: "UNAUTHORIZED",
+      reason: "host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: false,
+      doorReason,
+    },
+  });
+}
+
+function doorReasonError(
+  code: HostRpcError["code"],
+  doorReason: NonNullable<HostRpcError["doorRefusal"]>["doorReason"],
+): HostRpcError {
+  return new HostRpcError({
+    code,
+    message: "host refusal",
+    requestId: `req-${code}-${doorReason}`,
+    method: "epic.revokeCollaborator",
+    fatalDetails: null,
+    doorRefusal: {
+      code: "UNAUTHORIZED",
+      reason: "host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: false,
+      doorReason,
+    },
+  });
+}
+
 describe("toastFromHostError", () => {
   afterEach(() => {
     vi.mocked(toast.error).mockClear();
@@ -80,6 +125,29 @@ describe("toastFromHostError", () => {
     toastFromHostError(makeError("FORBIDDEN", "test error"), "fallback");
     expect(toast.error).toHaveBeenCalledWith(
       "You don't have permission to do that.",
+    );
+  });
+
+  it("uses transient verification copy for a retryable persistent door refusal", () => {
+    const error = new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "the host did not admit this token",
+      requestId: "req-persistent-door",
+      method: "host.echo",
+      fatalDetails: null,
+      doorRefusal: {
+        code: "UNAUTHORIZED",
+        reason: "the host did not admit this token",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+        doorReason: "not_admitted",
+      },
+    });
+
+    toastFromHostError(error, "fallback");
+    expect(toast.error).toHaveBeenCalledWith(
+      "The host couldn't verify your session. Try again in a moment.",
     );
   });
 
@@ -324,6 +392,39 @@ describe("toastFromHostError", () => {
       },
     );
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
+  });
+
+  it("uses fallback and records an E_HOST_UNSUPPORTED refusal carrying host_claimed", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+    const error = new HostRpcError({
+      code: "E_HOST_UNSUPPORTED",
+      message: "host claimed by another account",
+      requestId: "req-claimed-unsupported",
+      method: "host.notifications.resolve",
+      fatalDetails: {
+        code: "E_HOST_UNSUPPORTED",
+        reason: "host claimed by another account",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        doorReason: "host_claimed",
+      },
+    });
+
+    toastFromHostError(error, "Couldn't resolve the notification.");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't resolve the notification.",
+      {
+        id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
+        cancel: null,
+      },
+    );
+    const state = useAppLocalNotificationsStore.getState();
+    expect(state.orderedIds).toHaveLength(1);
+    expect(state.byId[state.orderedIds[0]]).toMatchObject({
+      message: "Couldn't resolve the notification.",
+      detail: "host claimed by another account",
+    });
   });
 
   it("names the host's full disk for E_HOST_STORAGE_FULL instead of the bare fallback", () => {
@@ -756,6 +857,87 @@ describe("transport-class causes never reach a reportable toast", () => {
   });
 });
 
+describe("recognized non-credential door reasons in batch advice", () => {
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+    vi.mocked(toast.error).mockClear();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  function signIn(): void {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+  }
+
+  it.each(["clock_skew", "enrolment_broken"] as const)(
+    "uses the caller fallback and no advice for %s",
+    (doorReason) => {
+      signIn();
+      const refusal = doorReasonUnauthorized(doorReason);
+      const fallback = "Couldn't revoke collaborator.";
+
+      expect(isSilentHostError(refusal)).toBe(false);
+      expect(batchRefusalAdvice([refusal], fallback)).toEqual([]);
+      toastFromHostError(refusal, fallback);
+      expect(toast.error).toHaveBeenCalledWith(fallback);
+      expect(toast.error).not.toHaveBeenCalledWith("Please sign in again.");
+    },
+  );
+
+  it("keeps sign-in advice for token_expired", () => {
+    signIn();
+    const refusal = doorReasonUnauthorized("token_expired");
+
+    expect(batchRefusalAdvice([refusal], "fallback")).toEqual([
+      "Please sign in again.",
+    ]);
+  });
+
+  it.each([
+    ["FORBIDDEN", "clock_skew"],
+    ["FORBIDDEN", "enrolment_broken"],
+    ["FORBIDDEN", "host_claimed"],
+    ["E_HOST_UNSUPPORTED", "clock_skew"],
+    ["E_HOST_UNSUPPORTED", "enrolment_broken"],
+  ] as const)("uses the fallback for %s carrying %s", (code, doorReason) => {
+    signIn();
+    const refusal = doorReasonError(code, doorReason);
+    const fallback = "Couldn't update this task.";
+
+    expect(batchRefusalAdvice([refusal], fallback)).toEqual([]);
+    toastFromHostError(refusal, fallback);
+    expect(toast.error).toHaveBeenCalledWith(fallback);
+  });
+
+  it("treats token_expired under FORBIDDEN as credential advice", () => {
+    signIn();
+    const refusal = doorReasonError("FORBIDDEN", "token_expired");
+
+    expect(isSilentHostError(refusal)).toBe(true);
+    useAuthStore.getState().setSignedOut();
+    expect(batchRefusalAdvice([refusal], "fallback")).toEqual([
+      "Please sign in again.",
+    ]);
+  });
+
+  it("keeps the code-specific advice for reasonless FORBIDDEN and unsupported errors", () => {
+    expect(
+      batchRefusalAdvice([makeError("FORBIDDEN", "denied")], "fallback"),
+    ).toEqual(["You don't have permission to do that."]);
+    expect(
+      batchRefusalAdvice(
+        [makeError("E_HOST_UNSUPPORTED", "method unavailable")],
+        "fallback",
+      ),
+    ).toEqual([HOST_UNSUPPORTED_MESSAGE]);
+  });
+});
+
 describe("toastFromHostErrorOnFork", () => {
   afterEach(() => {
     vi.mocked(toast.error).mockClear();
@@ -804,6 +986,20 @@ describe("toastFromHostErrorOnFork", () => {
 
     expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
       "This epic is busy right now, so it hasn't finished reaching the cloud. Let the current work settle, then invite again.",
+    );
+  });
+
+  it("uses fallback for a share code carrying clock_skew", () => {
+    toastFromHostErrorOnFork(
+      doorReasonError("E_SHARE_PENDING_BUSY", "clock_skew"),
+      "Couldn't continue on the team host.",
+    );
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't continue on the team host.",
+    );
+    expect(toast.error).not.toHaveBeenCalledWith(
+      "This task is still being set up. Fork again in a moment.",
     );
   });
 });
@@ -881,6 +1077,18 @@ describe("classifySendRefusal", () => {
         ),
       ),
     ).toEqual({ kind: "actionable", message: "Please sign in again." });
+  });
+
+  it("sorts a reasoned refusal before the FORBIDDEN arm", () => {
+    expect(
+      classifySendRefusal(doorReasonError("FORBIDDEN", "clock_skew")),
+    ).toEqual({ kind: "failed" });
+    expect(
+      classifySendRefusal(doorReasonError("FORBIDDEN", "token_expired")),
+    ).toEqual({
+      kind: "actionable",
+      message: "Please sign in again.",
+    });
   });
 
   it("names a full host disk", () => {
@@ -1089,6 +1297,43 @@ describe("below-minimum host errors", () => {
 
     expect(toast.error).toHaveBeenCalledExactlyOnceWith(
       "Couldn't restore the terminal.",
+    );
+  });
+});
+
+describe("reasoned door refusal dispatch", () => {
+  afterEach(() => {
+    vi.mocked(toast).mockClear();
+    vi.mocked(toast.error).mockClear();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it("toasts a background reasoned capability refusal but silences a reasonless one", () => {
+    toastFromBackgroundHostError(
+      doorReasonError("E_HOST_UNSUPPORTED", "host_claimed"),
+      "Couldn't refresh notifications.",
+    );
+    expect(toast.error).toHaveBeenCalledWith("Couldn't refresh notifications.");
+
+    vi.mocked(toast.error).mockClear();
+    toastFromBackgroundHostError(
+      makeError("E_HOST_UNSUPPORTED", "method unavailable"),
+      "Couldn't refresh notifications.",
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("uses credential guidance after an unknown-outcome retry", () => {
+    toastUnknownOutcomeAfterRefusedRetry(
+      doorReasonError("E_IDEMPOTENCY_OUTCOME_UNKNOWN", "token_expired"),
+      "Couldn't save the task.",
+    );
+
+    expect(toast).toHaveBeenCalledWith(
+      "No reply came back from the Traycer host, so this may or may not have gone through, and it may still appear.",
+      expect.objectContaining({
+        description: "The retry was refused: Please sign in again.",
+      }),
     );
   });
 });

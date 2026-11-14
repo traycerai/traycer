@@ -237,6 +237,60 @@ export const environmentStatusUpgradeV11ToV12 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, acceptedUploads: [] }),
 });
 
+/**
+ * Defined and not registered: registering a new latest minor changes the
+ * answer every caller reads, so `@1.3` registers with the host slice that
+ * fills `move` and the app change that reads it.
+ */
+export const environmentStatusV13 = defineRpcContract({
+  method: "environment.status",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: schemas.environmentStatusRequestSchema,
+  responseSchema: schemas.environmentStatusResponseSchemaV13,
+});
+
+export const environmentStatusUpgradeV12ToV13 = defineUpgradePath<
+  typeof environmentStatusV12,
+  typeof environmentStatusV13
+>({
+  from: environmentStatusV12.schemaVersion,
+  to: environmentStatusV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, move: null }),
+});
+
+/**
+ * `host.remoteAccess.set@2.0`, Off only; `@1.0` stays as registered below.
+ * Defined and not registered: it registers with the host slice that serves
+ * it and its first caller. Not an agent capability.
+ */
+export const hostRemoteAccessSetV20 = defineRpcContract({
+  method: "host.remoteAccess.set",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: schemas.hostRemoteAccessSetRequestSchemaV20,
+  responseSchema: schemas.hostRemoteAccessSetResponseSchemaV20,
+});
+
+/**
+ * `host.status.refresh@1.0`: this computer reads its own row now, through
+ * the status read it already runs, and answers once that read has ended,
+ * whether the row was read, unreachable or refused. It has no refusals of its
+ * own. A host with no environment domain running answers at once and does
+ * nothing. The answer carries no result on purpose (see
+ * `hostStatusRefreshResponseSchema`). Any person the door admits may call
+ * it, with no role: it reads only this computer's own row. Defined and not
+ * registered: it registers with the app's Remote access caller, off
+ * `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`, so
+ * a host without the method keeps today's two-minute interval. Not an agent
+ * capability, and not on the host-to-host allowlist.
+ */
+export const hostStatusRefreshV10 = defineRpcContract({
+  method: "host.status.refresh",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.hostStatusRefreshRequestSchema,
+  responseSchema: schemas.hostStatusRefreshResponseSchema,
+});
+
 export const environmentReviewV10 = defineRpcContract({
   method: "environment.review",
   schemaVersion: { major: 1, minor: 0 } as const,

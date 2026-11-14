@@ -6,6 +6,7 @@ import type {
   ServerFrameHandler,
   StatusChangeHandler,
   StreamContinuity,
+  StreamCloseReason,
   StreamFrameEnvelope,
 } from "../i-stream-session";
 
@@ -88,21 +89,20 @@ export class FakeStreamSession implements IStreamSession {
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
   emitFatal(reason: string): void {
-    this.status = "closed";
-    this.statusHandler?.(
-      "closed",
-      {
-        kind: "fatalError",
-        details: {
-          code: "UNAUTHORIZED",
-          reason,
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        },
+    this.emitClosed({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
       },
-      null,
-      null,
-    );
+    });
+  }
+
+  emitClosed(reason: StreamCloseReason): void {
+    this.status = "closed";
+    this.statusHandler?.("closed", reason, null, null);
   }
 
   /**

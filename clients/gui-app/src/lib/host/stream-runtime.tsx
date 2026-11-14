@@ -74,7 +74,7 @@ export interface HostStreamProviderProps {
 export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   const binding = useHostBinding();
   const auth = useStreamAuthRevalidator();
-  const authnBaseUrl = useRunnerHost().authnBaseUrl;
+  const { authnBaseUrl, hostTokens } = useRunnerHost();
   // The app-wide client, APP-WIDE BY CONSTRUCTION: this is a top-level
   // provider, so no re-provided `HostRuntimeContext` is above it. Stated
   // explicitly all the same, because the failure if one ever were is that the
@@ -180,6 +180,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         authorizesCloudCapability(useAuthStore.getState().status),
       authnBaseUrl,
       auth,
+      hostTokens,
       userId: requestContextUserId,
       // The app-wide epic stream: snapshot-shaped, replay-safe.
       proactiveWakeEligible: true,
@@ -266,6 +267,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     appHostClient,
     auth,
     authnBaseUrl,
+    hostTokens,
     identityKey,
     requestContextUserId,
     readiness.hostId,

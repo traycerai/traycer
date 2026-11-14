@@ -1,9 +1,13 @@
-import type {
-  AuthorityBoundAuthRevalidator,
-  RevalidateOutcome,
+import {
+  readsHostRefusal,
+  type AuthorityBoundAuthRevalidator,
+  type RevalidateOutcome,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import { hostRefusalOf } from "./host-door-state";
 import {
   HostRpcError,
   HostAuthoritySupersededError,
@@ -31,6 +35,40 @@ function readBearer(source: OpenFrameBearerSource): string | null {
     return source.getBearerToken();
   } catch {
     return null;
+  }
+}
+
+/**
+ * The retry, sent with the fresh host-only token, was refused again for a
+ * reason a fresh token answers: that refusal goes to the revalidator once
+ * more, as a stream's would, so the lease can raise the state that covers
+ * the host. Its answer is not acted on, and the call is not sent a third
+ * time. A refusal with no recognised reason, the server pool's among them, is
+ * never asked twice: there a second ask would renew the sign-in again.
+ */
+async function reportRefusedAgain(
+  auth: AuthorityBoundAuthRevalidator,
+  authority: HostRequestAuthority,
+  retryCause: unknown,
+): Promise<void> {
+  if (!readsHostRefusal(auth) || !(retryCause instanceof HostRpcError)) return;
+  const refusal = hostRefusalOf(retryCause);
+  if (
+    refusal === null ||
+    refusal.retryable === true ||
+    !isCredentialRefusal(refusal)
+  )
+    return;
+  const reason = readDoorReason(refusal.doorReason);
+  if (reason === "absent" || reason === "unrecognised") return;
+  try {
+    await auth.revalidateRefusedBearer(
+      authority.bearer,
+      authority.endpoint.hostId,
+      refusal,
+    );
+  } catch {
+    // The retry's own refusal is what the caller is told.
   }
 }
 
@@ -74,7 +112,9 @@ export function hostRejectedBeforeRequest(error: unknown): boolean {
  * whose bearer is no longer current comes back `"superseded"`.
  *
  * A revalidation that rotated the bearer is followed by one more `request`
- * attempt, whose failure propagates. One that did not rotate rethrows the
+ * attempt, whose failure propagates. If that attempt is refused again for a
+ * recognised credential reason, the refusal is first handed to the
+ * revalidator once more (see `reportRefusedAgain`). One that did not rotate rethrows the
  * original error; an abort during recovery rejects with
  * `HostRequestAbortedError`, and a superseded recovery with
  * `HostAuthoritySupersededError`.
@@ -100,14 +140,23 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
     try {
       return await call();
     } catch (cause) {
-      if (!(cause instanceof HostRpcError) || cause.code !== "UNAUTHORIZED") {
-        throw cause;
-      }
+      if (!(cause instanceof HostRpcError)) throw cause;
+      // The host's refusal, at the door or of this one request on a
+      // persistent session.
+      const refusal = hostRefusalOf(cause);
+      // A host-only token's recovery decides by the refusal's `doorReason`
+      // whatever its code; the sign-in's takes `UNAUTHORIZED` alone, as it
+      // always has.
+      const refused =
+        readsHostRefusal(auth) && refusal !== null
+          ? isCredentialRefusal(refusal)
+          : cause.code === "UNAUTHORIZED";
+      if (!refused) throw cause;
       // A transient, host-side rejection (e.g. a JWKS fetch timeout) rides in
-      // as `code: "UNAUTHORIZED"` with `fatalDetails.retryable === true`. Our
-      // bearer is fine, so revalidating it can't help - rethrow the transient
-      // failure and let the caller retry the request instead of churning authn.
-      if (cause.fatalDetails?.retryable === true) {
+      // as `code: "UNAUTHORIZED"` with `retryable === true`. Our bearer is
+      // fine, so revalidating it can't help - rethrow the transient failure
+      // and let the caller retry the request instead of churning authn.
+      if (refusal?.retryable === true) {
         throw cause;
       }
       if (scope === "before-request" && !hostRejectedBeforeRequest(cause)) {
@@ -129,7 +178,13 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       const before = readBearer(authority.bearer);
       let outcome: RevalidateOutcome | "superseded";
       try {
-        outcome = await auth.revalidateExpectedBearer(authority.bearer);
+        outcome = readsHostRefusal(auth)
+          ? await auth.revalidateRefusedBearer(
+              authority.bearer,
+              authority.endpoint.hostId,
+              refusal,
+            )
+          : await auth.revalidateExpectedBearer(authority.bearer);
       } catch {
         throw cause;
       }
@@ -157,12 +212,15 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
         throw cause;
       }
       const after = readBearer(authority.bearer);
-      if (after === null || after === before) {
+      // A host-only token is renewed under an unchanged sign-in lease, so its
+      // revalidator's "rotated" is itself the evidence of a new credential.
+      if (after === null || (after === before && !readsHostRefusal(auth))) {
         throw cause;
       }
       try {
         return await call();
       } catch (retryCause) {
+        await reportRefusedAgain(auth, authority, retryCause);
         throw withEarlierAttemptDispatch(retryCause, method, sentEarlier);
       }
     }

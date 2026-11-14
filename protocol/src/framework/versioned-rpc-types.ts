@@ -101,6 +101,13 @@ export const RPC_ERROR_CODES = [
   "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
   "E_HOST_IS_SANDBOX",
   "E_HOST_IN_ANOTHER_TEAM",
+  // `environment.move.plan@2.0`, `.stage@1.0` and `.start@1.0` refused: this
+  // computer has no move waiting for the person's word, or the request names
+  // a target that is not the move's own. The app draws its own line from the
+  // code, so no message text is part of the contract. `move.accept@1.0` keeps
+  // its `{ outcome: "not_awaiting" }` arm instead. Same additive degrade story
+  // as E_INVALID_ARGUMENT.
+  "E_MOVE_NOT_AWAITING",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may
   // retry with the SAME key once capacity returns. This meaning is part of the

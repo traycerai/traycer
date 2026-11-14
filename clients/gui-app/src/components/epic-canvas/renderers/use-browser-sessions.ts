@@ -9,7 +9,7 @@ import {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { remoteOpenAuthFor } from "@traycer-clients/shared/host-transport/remote/open-auth";
+import { isPersonalRemoteHost } from "@traycer-clients/shared/host-client/personal-remote-host";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
@@ -195,8 +195,7 @@ export function useBrowserSessions(
  * The bridge routes the stream through main, which carries the desktop's whole
  * cookie jar on it (snapshots, deltas, host-requested captures). Sandboxes and
  * team-owned computers take the jar-free path; main independently refuses
- * their jar transport. A local team door also refuses the initial bearer,
- * and this lane never upgrades that refusal to a member grant.
+ * their jar transport.
  */
 export function jarBridgeForHost(
   browserView: BrowserViewBridge | null,
@@ -205,7 +204,7 @@ export function jarBridgeForHost(
   if (
     hostEntry !== null &&
     isRemoteHostDirectoryEntry(hostEntry) &&
-    remoteOpenAuthFor(hostEntry) === "session-grant"
+    !isPersonalRemoteHost(hostEntry)
   ) {
     return null;
   }

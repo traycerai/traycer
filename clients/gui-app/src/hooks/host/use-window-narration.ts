@@ -1,5 +1,4 @@
-import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { useHostDoorState } from "@/stores/host/host-door-state-store";
 import { useMemo, useState } from "react";
 import {
   deriveWindowNarration,
@@ -63,12 +62,7 @@ export function useWindowNarration(): WindowNarrationState {
   // local host looks like, so the entry answers null for exactly the interval
   // this arm is about and the grace would collapse in the state it exists for.
   const localHostId = useReactiveLocalHostId();
-  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
-  const localTeamAdmission = useLocalTeamAdmissionStore((state) => {
-    if (localHostId === null) return null;
-    const observation = state.byHost.get(localHostId);
-    return observation?.userId === userId ? observation.state : null;
-  });
+  const doorState = useHostDoorState(effectiveHostId ?? targetHostId);
   // WHETHER DISCOVERY HAS ANSWERED, which the authority's own projection
   // cannot say: its leases are a map over the fleet it has been given, so an
   // unanswered fleet and an empty account produce the identical empty list.
@@ -119,7 +113,7 @@ export function useWindowNarration(): WindowNarrationState {
       localHostExpected,
       discoveryConcluded,
       localHostId,
-      localTeamAdmission,
+      doorState,
     });
   }, [
     attached,
@@ -129,7 +123,7 @@ export function useWindowNarration(): WindowNarrationState {
     leases,
     localHostExpected,
     localHostId,
-    localTeamAdmission,
+    doorState,
     targetHostId,
     updateCandidate,
   ]);

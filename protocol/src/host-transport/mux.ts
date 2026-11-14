@@ -22,6 +22,7 @@ import {
   clientHandshakeIdentitySchema,
   type ClientHandshakeIdentity,
 } from "../framework/client-identity";
+import { doorReasonWireFieldSchema } from "../framework/door-reason";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
 
@@ -124,8 +125,8 @@ export const MuxFrameType = {
   /** Session resume: `{received, attempt}` (streamId 0), exempt from resume counts. */
   RESUME: 11,
   /**
-   * In-place credential update on streamId 0: the rotated user bearer, or a
-   * team host's member credential (`memberCredential`, `bearer: null`).
+   * In-place credential update on streamId 0: the renewed host-only token, or
+   * a team host's member credential (`memberCredential`, `bearer: null`).
    */
   CREDENTIAL_UPDATE: 12,
   /** In-place cloud-verdict change: `{cloudAuthorized}` on streamId 0. */
@@ -231,6 +232,14 @@ export const OPEN_AUTHZ_SESSION_GRANT_VERSION = 2;
 export type ReservedAuthzSlot = {
   readonly v: number;
   readonly grant: string;
+  /**
+   * On a host-agent grant (`v: 1`), the person the session is for, named in
+   * plain by the dialing host inside the session the receiving host
+   * terminates. The receiving host admits the name only when it matches the
+   * reference authn signed into the grant. Absent when the session names
+   * nobody and from a dialer that predates the key. Not read on `v: 2`.
+   */
+  readonly namedUserId?: string;
 } | null;
 
 /** The session `open` frame (R4-A2 bridging-never-identity). */
@@ -382,6 +391,13 @@ export interface WireRpcErrorDetails {
   readonly holders?: readonly WorktreeBusyHolder[];
   readonly holdersRevision?: string;
   readonly staleWrite?: EnvironmentStaleWrite;
+  /** A transient refusal: the call may be sent again unchanged. */
+  readonly retryable?: boolean;
+  /**
+   * Why the host refused this one call at its door, as on a local `/rpc`
+   * reply (`HostResponseError.doorReason`). Absent from an older host.
+   */
+  readonly doorReason?: string;
 }
 
 export interface UnaryResponsePayload {
@@ -411,9 +427,9 @@ export interface CreditPayload {
 
 export interface CredentialUpdatePayload {
   /**
-   * The client's rotated user bearer, or `null` on a frame that rotates
-   * none: a member-credential frame to a team host's session-grant session,
-   * which holds no user bearer. `null` only beside a `memberCredential`.
+   * The host-only token the client holds for this host, renewed, or `null`
+   * on a frame that rotates none: a member-credential frame. `null` only
+   * beside a `memberCredential`.
    */
   readonly bearer: string | null;
   /**
@@ -462,7 +478,15 @@ const sessionManifestsSchema: z.ZodType<SessionManifests> = lazySchema(() =>
 );
 
 const reservedAuthzSlotSchema: z.ZodType<ReservedAuthzSlot> = lazySchema(() =>
-  z.object({ v: z.number(), grant: z.string() }).nullable(),
+  // Non-strict, so a released receiving host strips `namedUserId` and keeps
+  // parsing the OPEN.
+  z
+    .object({
+      v: z.number(),
+      grant: z.string(),
+      namedUserId: z.string().min(1).optional(),
+    })
+    .nullable(),
 );
 
 export const sessionOpenPayloadSchema: z.ZodType<SessionOpenPayload> =
@@ -517,6 +541,8 @@ export const unaryResponsePayloadSchema: z.ZodType<UnaryResponsePayload> =
           holders: worktreeBusyHoldersWireFieldSchema,
           holdersRevision: holdersRevisionWireFieldSchema,
           staleWrite: staleWriteWireFieldSchema,
+          retryable: z.boolean().optional(),
+          doorReason: doorReasonWireFieldSchema,
         })
         .nullable(),
     }),
@@ -598,7 +624,11 @@ export const credentialUpdatePayloadSchema: z.ZodType<CredentialUpdatePayload> =
 export const cloudVerdictUpdatePayloadSchema: z.ZodType<CloudVerdictUpdatePayload> =
   lazySchema(() => z.object({ cloudAuthorized: z.boolean() }));
 
-/** Capability tag advertised in `openAck.capabilities` for bearer rotation. */
+/**
+ * Capability tag advertised in `openAck.capabilities` for in-place renewal of
+ * the host-only token ({@link MuxFrameType.CREDENTIAL_UPDATE}). A host at this
+ * protocol advertises it on every session a person opens.
+ */
 export const SESSION_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
 
 /**
@@ -609,10 +639,7 @@ export const SESSION_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
  * personal host never offers it and ignores the field, and a released host
  * never offers it, so a released client never sends it.
  *
- * Never offered beside {@link SESSION_CAPABILITY_CREDENTIAL_UPDATE}, which
- * invites the client's USER bearer and stays unoffered to a sandbox. No
- * `/stream` twin: a team host admits no `/stream` connection, so a member
- * reaches it only through the relay.
+ * No `/stream` twin.
  */
 export const SESSION_CAPABILITY_MEMBER_CREDENTIAL = "memberCredential";
 

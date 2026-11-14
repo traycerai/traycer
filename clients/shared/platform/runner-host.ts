@@ -1,4 +1,5 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
+import type { HostTokenSource } from "../auth/host-token-source";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type {
   TeamComputersResult,
@@ -756,6 +757,14 @@ export interface IRunnerHost {
    * implementations (dev runner, tests) keep a single round-trippable entry.
    */
   readonly tokenStore: ITokenStore;
+
+  /**
+   * The person's host-only tokens, one per host, kept beside the sign-in
+   * token: the only credential this app ever puts in a frame to a host.
+   * Desktop backs it with the main process's file, mobile with the native
+   * secure store; in-memory implementations keep the table in process.
+   */
+  readonly hostTokens: HostTokenSource;
 
   /**
    * Declares whether this shell actually exposes a local-host stream.
@@ -3110,8 +3119,6 @@ export type MaintenanceDoctorProjection =
  * for every NDJSON `progress` event the CLI emits along the way.
  */
 export interface IHostManagement {
-  /** Clear cached local admission after the same host is claimed. */
-  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   // Two-lane canonical status (Host Update Layer Redesign Tech Plan). Read
   // once on mount to prime the shared query cache; live updates arrive via
   // the desktop-only `hostControllerStatus` push bridge (see

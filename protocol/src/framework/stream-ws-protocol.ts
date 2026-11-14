@@ -40,8 +40,9 @@ import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas"
 
 /**
  * Capability tag a host advertises in `openAck.capabilities` when it accepts
- * the `credentialUpdate` control frame (in-place bearer rotation on a live
- * stream connection, no reconnect). A client MUST only send `credentialUpdate`
+ * the `credentialUpdate` control frame (in-place renewal of the host-only token
+ * on a live stream connection, no reconnect). A host at this protocol
+ * advertises it on every connection a person opens. A client MUST only send `credentialUpdate`
  * after seeing this tag in the host's `openAck`; against an older host that
  * omits it the client stays silent and relies on reconnect-time re-auth. This
  * keeps a newer-client / older-host pairing from tripping the host's
@@ -57,7 +58,7 @@ export const STREAM_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
  * instead of tripping the unknown-frame guard.
  *
  * The two capabilities are deliberately independent. `credentialUpdate` pushes
- * the USER's rotated bearer onto a live connection; this one hands the host its
+ * the connection's renewed token onto a live connection; this one hands the host its
  * OWN long-lived credential, which it then refreshes autonomously.
  */
 export const STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION =
@@ -90,7 +91,11 @@ export const STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION =
  */
 export const STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE = "cloudVerdictUpdate";
 
-/** Client declaration that `openAck` can carry the team credential state. */
+/**
+ * Client declaration that `openAck` can carry the team credential state. A host
+ * at this protocol does not read it: it fills `openAck.hostCredentialState` for
+ * every `/stream` client.
+ */
 export const STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE = "teamCredentialState";
 
 /**
@@ -186,14 +191,15 @@ export type ClientStreamOpenFrame = {
 };
 
 /**
- * Pushes a freshly-rotated bearer onto an already-open stream connection so the
- * host updates the connection's credential lease in place - without a reconnect.
+ * Pushes a renewed token onto an already-open stream connection so the host
+ * updates the connection's credential lease in place - without a reconnect.
  * Sent only after a proactive/reactive token refresh and only when the host
- * advertised `credentialUpdate` support in its `openAck`. The host re-verifies
- * the token (signature + owner binding) and rotates only on a same-user match.
+ * advertised `credentialUpdate` support in its `openAck`. The host verifies the
+ * token as it verifies the open frame's and rotates only on a same-person match.
  */
 export type ClientStreamCredentialUpdateFrame = {
   readonly kind: "credentialUpdate";
+  /** The host-only token the client holds for this host. */
   readonly token: string;
 };
 
@@ -291,6 +297,8 @@ export type HostStreamOpenAckFrame = {
   /**
    * What the host reports about its own device credential, or `null` when it
    * did not report at all (every host predating the delegated-credential work).
+   * A host at this protocol fills it for every `/stream` client, whatever the
+   * client declares in `capabilities`.
    *
    * `null` is NOT "missing". A client provisions only on an explicit
    * `missing` / `needs-reauth`, so an unreported state can never trigger the

@@ -20,6 +20,7 @@ import { create } from "zustand";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -325,6 +326,7 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     mintHostCredential: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    hostTokens: inertHostTokenSource(),
     requestStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>

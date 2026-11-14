@@ -1,3 +1,4 @@
+import type { FatalErrorDetails } from "../../framework/ws-protocol";
 import type { ReservedAuthzSlot, SessionOpenPayload } from "../mux";
 import type { AttachGrant } from "./grant";
 
@@ -26,9 +27,23 @@ interface SessionCredentialPlane {
   readonly missingOpenAuthCause: string;
   readonly readCredentialUpdateBearer: () => string | null;
   readonly currentFingerprint: () => string | null;
+  /** Called with the host's own `UNAUTHORIZED` refusal that this recovers from. */
   readonly revalidateForReconnect:
-    | (() => Promise<RemoteSessionAuthRecoveryOutcome>)
+    | ((
+        refusal: FatalErrorDetails,
+      ) => Promise<RemoteSessionAuthRecoveryOutcome>)
     | null;
+  /**
+   * Told of every refusal the host itself sent and of every open it admitted.
+   * A relay's session kill is not the host's refusal and is never reported.
+   * A host-to-host dialer has no use for it and leaves it out.
+   */
+  readonly door?: SessionDoorObserver;
+}
+
+export interface SessionDoorObserver {
+  readonly refused: (details: FatalErrorDetails) => void;
+  readonly admitted: () => void;
 }
 
 /**

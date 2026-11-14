@@ -566,27 +566,6 @@ function modalCopy(
       reportCode: "TEAM_MEMBERSHIP_REQUIRED",
     };
   }
-  if (variant.kind === "team-membership-unavailable") {
-    return {
-      title: "Team membership could not be checked",
-      description:
-        "Traycer cannot reach the cloud to check team membership. It will try again.",
-      reportTitle: "Team membership check unavailable",
-      reportMessage:
-        "Traycer could not reach the cloud to check team membership.",
-      reportCode: "TEAM_MEMBERSHIP_UNAVAILABLE",
-    };
-  }
-  if (variant.kind === "team-membership-checking") {
-    return {
-      title: "Checking team membership",
-      description: "Traycer will open when this account's access is confirmed.",
-      reportTitle: "Team membership check pending",
-      reportMessage:
-        "Traycer is checking this account's access to the computer.",
-      reportCode: "TEAM_MEMBERSHIP_CHECKING",
-    };
-  }
   if (variant.kind === "update-client") {
     const { requirement } = variant;
     return {
