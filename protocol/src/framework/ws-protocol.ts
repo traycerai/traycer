@@ -15,6 +15,7 @@ import {
   staleWriteWireFieldSchema,
   type EnvironmentStaleWrite,
 } from "./environment-stale-write";
+import { doorReasonWireFieldSchema } from "./door-reason";
 
 /**
  * Wire-level frame types for the local WebSocket RPC protocol.
@@ -254,6 +255,14 @@ export type FatalErrorDetails = {
    * cannot see this field at all.
    */
   readonly clientCompatibilityRequirement?: ClientCompatibilityRequirement;
+  /**
+   * Why the host refused or closed this connection at or after the token
+   * step: one of `HOST_DOOR_REASONS` from a host at this protocol. Read it through
+   * `readDoorReason`, which keeps "absent" (an older host) apart from
+   * "unrecognised" (a newer one). Additive and optional under the same rule
+   * as the fields above.
+   */
+  readonly doorReason?: string;
 };
 
 /**
@@ -389,6 +398,15 @@ export type HostResponseFrame = {
      * a permanent `UNAUTHORIZED` and any host that predates the field.
      */
     readonly retryable?: boolean;
+    /**
+     * Why a persistent-session request was refused at or after its token
+     * step - the same field, and the same reading through `readDoorReason`,
+     * as {@link FatalErrorDetails.doorReason}. Absent on every other
+     * envelope and from any host that predates the field. A malformed value
+     * fails the whole frame, which ends the session, so a host never sends
+     * an empty one.
+     */
+    readonly doorReason?: string;
   } | null;
 };
 
@@ -500,6 +518,9 @@ export const fatalErrorDetailsSchema = z.object({
   // envelope's `reason` carries the whole remedy on its own.
   clientCompatibilityRequirement:
     clientCompatibilityRequirementSchema.optional(),
+  // Additive/optional, same rule again: absent from every host that predates
+  // the typed door reasons, and stripped by every client that does.
+  doorReason: doorReasonWireFieldSchema,
 });
 
 /** Canonical schema for the client `open` frame. */
@@ -588,6 +609,9 @@ export const hostResponseErrorSchema = z.object({
   // carries on the open frame). Absent on every other envelope, including
   // a permanent `UNAUTHORIZED` and any host that predates the field.
   retryable: z.boolean().optional(),
+  // A persistent-session request refused at or after its token step; same
+  // field and rule as `fatalErrorDetailsSchema.doorReason`.
+  doorReason: doorReasonWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */
