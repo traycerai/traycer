@@ -213,16 +213,23 @@ const NOOP_PROFILE_CHANGE = (): void => undefined;
 // (`usePickerProviderLeaderForIndex` / `usePickerReasoningLeaderForIndex` /
 // `usePickerProfileLeaderForIndex`) so a test can assert exactly which surface
 // lights up, not just the raw leader state.
-function PickerBadgeProbe(props: {
+interface PickerBadgeProbeProps {
   readonly reasoningActionable: boolean;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly onProfileChange: (
     providerId: ProviderId,
     profileId: string | null,
   ) => void;
-  /** Harness id the dropdown is scoped to. Omitted cases are the Codex picker. */
-  readonly activeProviderId?: ProviderId;
-}) {
+}
+
+/** The Codex picker's probe. */
+function PickerBadgeProbe(props: PickerBadgeProbeProps) {
+  return <ProviderPickerBadgeProbe {...props} activeProviderId="codex" />;
+}
+
+function ProviderPickerBadgeProbe(
+  props: PickerBadgeProbeProps & { readonly activeProviderId: ProviderId },
+) {
   const reasoning: ReasoningFooterConfig = {
     value: "low",
     options: [{ id: "low", label: "Low", description: null }],
@@ -238,7 +245,7 @@ function PickerBadgeProbe(props: {
     // No Fast footer wired here - this probe is scoped to the rail/reasoning/
     // profile dimensions, and `stepServiceTier(null)` is already a no-op.
     serviceTier: null,
-    activeProviderId: props.activeProviderId ?? "codex",
+    activeProviderId: props.activeProviderId,
     activeProviderProfiles: props.profiles,
     activeProviderProfileAdmission: null,
     profileEnablementPending: () => false,
@@ -1480,7 +1487,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
-        <PickerBadgeProbe
+        <ProviderPickerBadgeProbe
           reasoningActionable
           profiles={[testProfile("a-uuid", "A")]}
           onProfileChange={NOOP_PROFILE_CHANGE}
