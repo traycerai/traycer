@@ -30,8 +30,12 @@ import {
 } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostV115MutationV20Fixtures } from "@traycer/protocol/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20";
+import { AuthService } from "@/lib/auth/auth-service";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 import { ProviderApiKeySection } from "@/components/settings/panels/provider-api-key-section";
 import {
   apiKeyState,
@@ -39,8 +43,8 @@ import {
 } from "./provider-api-key-section-fixture";
 
 const mocks = vi.hoisted(() => ({
-  hostClient: vi.fn(),
-  authService: vi.fn(),
+  hostClient: vi.fn<() => HostClient<typeof hostRpcRegistry>>(),
+  authService: vi.fn<() => AuthService>(),
   openLink: vi.fn(),
   toastError: vi.fn(),
   mobileApp: false,
@@ -101,17 +105,10 @@ const BEGIN_RESPONSE = providersBeginApiKeyChangeResponseSchema.parse({
 interface Rig {
   readonly client: HostClient<typeof hostRpcRegistry>;
   readonly context: RequestContext;
+  readonly authService: AuthService;
 }
 
 const rigs: Rig[] = [];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return isRecord(value) ? value : null;
-}
 
 function makeRig(
   result:
@@ -165,24 +162,34 @@ function makeRig(
   client.setRequestContext(context);
   const requester = client.createRequesterForHostId(mockLocalHostEntry.hostId);
   mocks.hostClient.mockReturnValue(requester);
-  mocks.authService.mockReturnValue({
-    changeProviderKeyRecord: async (
-      _environmentId: string,
-      providerId: string,
-      change: { readonly action: "set" | "clear" },
-    ) => ({
-      kind: "record",
-      record: {
-        profileId: PROFILE_ID,
-        providerId,
-        state: change.action === "set" ? "live" : "removed",
-        signInNumber: "3",
-        recordRevision: "5",
-        personIntentNumber: "2",
-      },
+  const authService = new AuthService({
+    runnerHost: new MockRunnerHost({
+      signInUrl:
+        "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
     }),
   });
-  const rig = { client, context };
+  vi.spyOn(authService, "changeProviderKeyRecord").mockImplementation(
+    (_environmentId, providerId, change) =>
+      Promise.resolve({
+        kind: "record",
+        record: {
+          profileId: PROFILE_ID,
+          providerId,
+          state: change.action === "set" ? "live" : "removed",
+          signInNumber: "3",
+          recordRevision: "5",
+          personIntentNumber: "2",
+        },
+      }),
+  );
+  mocks.authService.mockReturnValue(authService);
+  const rig = { client, context, authService };
   rigs.push(rig);
   return rig;
 }
@@ -234,6 +241,7 @@ afterEach(() => {
   mocks.mobileApp = false;
   mocks.mobilePlatform = "ios";
   for (const rig of rigs.splice(0)) {
+    rig.authService.dispose();
     rig.context.release();
     rig.client.dispose();
   }
@@ -338,12 +346,16 @@ describe("provider API-key change Settings flow", () => {
       expect(mocks.toastError.mock.calls.length > 0).toBe(true),
     );
     const toastCall = mocks.toastError.mock.calls[0];
-    const options = recordOf(toastCall?.[1]);
-    const action = recordOf(options?.action);
+    if (toastCall === undefined)
+      throw new Error("Expected desktop update notice");
+    const options = isRecord(toastCall[1]) ? toastCall[1] : null;
+    const actionValue = options?.action;
+    const action = isRecord(actionValue) ? actionValue : null;
     const onClick = action?.onClick;
     expect(
-      toastCall?.[0] === "Your app is too old" &&
-        action?.label === "Update the app" &&
+      toastCall[0] === "Your app is too old" &&
+        action !== null &&
+        action.label === "Update the app" &&
         typeof onClick === "function",
     ).toBe(true);
     if (typeof onClick === "function") Reflect.apply(onClick, undefined, []);
@@ -369,10 +381,13 @@ describe("provider API-key change Settings flow", () => {
         expect(mocks.toastError.mock.calls.length > 0).toBe(true),
       );
       const toastCall = mocks.toastError.mock.calls[0];
-      const options = recordOf(toastCall?.[1]);
+      if (toastCall === undefined)
+        throw new Error("Expected mobile update notice");
+      const options = isRecord(toastCall[1]) ? toastCall[1] : null;
       expect(
-        toastCall?.[0] === "Your app is too old" &&
-          options?.description === note &&
+        toastCall[0] === "Your app is too old" &&
+          options !== null &&
+          options.description === note &&
           !Object.hasOwn(options, "action"),
       ).toBe(true);
     },

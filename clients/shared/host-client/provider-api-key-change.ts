@@ -20,6 +20,13 @@ export interface ProviderApiKeyChangeOutcome {
   readonly result: ProvidersSettleApiKeyChangeResponse["result"] | null;
 }
 
+/** Client-only completion data; the released host mutation responses stay unchanged. */
+export interface ProviderApiKeyChangeResponse extends ProvidersSetApiKeyResponse {
+  readonly keyChangeResult:
+    | ProvidersSettleApiKeyChangeResponse["result"]
+    | null;
+}
+
 /** The key travels to the computer only on the released legacy path. */
 export async function changeProviderApiKey(
   host: ProviderApiKeyChangeHost,

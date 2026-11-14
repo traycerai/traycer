@@ -584,9 +584,8 @@ function ReauthBannerInner({
     canTerminalLogin,
     terminalRow.kind,
   );
-  // Providers with a host-side encrypted API-key store (Cursor / Droid) save the
-  // pasted key as that secret (`providers.setApiKey`) rather than a plaintext env
-  // override, matching how Settings > Providers stores it.
+  // Provider keys use the same change flow as Settings; other credentials use
+  // the selected environment-variable override.
   const apiKeySupported = state?.apiKey.supported ?? false;
 
   // No reconnect method available from here: a provider with no web login, or an
@@ -1028,26 +1027,13 @@ function OAuthWaitingRow({
   );
 }
 
-// Paste a fresh credential into the provider's reconnect path, then immediately
-// force-probe auth. Providers with a host-side encrypted API-key store (Cursor /
-// Droid) save it as that secret via `providers.setApiKey` — the same path as
-// Settings > Providers; OAuth-token providers (Claude Code / Grok) write the
-// chosen credential var via `providers.setEnvOverride`. If the probe returns
-// authenticated the gate unmounts this banner; if still unauthenticated (bad
-// token) we stay mounted and show an inline error so the user can retry without a
-// page reload.
 /** Where a key pasted here is stored: read from the tab host's status. */
 interface KeyCustody {
   readonly principal: ProviderKeyPrincipal;
   readonly hostName: string | null;
 }
 
-/**
- * Under the key field, what saving it does: Personal's custody sentence for a
- * key the host forwards to Personal, else the line naming the one host that
- * keeps it. Only for the provider-level key (`providers.setApiKey`); an env
- * override says nothing here.
- */
+/** Where a provider-level key is kept; an environment-variable override has no custody line. */
 function PastedKeyCustody(props: {
   readonly providerId: ProviderId;
   readonly keyCustody: KeyCustody;
@@ -1162,11 +1148,21 @@ function TokenReauthForm({
     }
     setTokenError(null);
     if (apiKeySupported) {
-      // Cursor / Droid: store as the encrypted host-side secret, exactly like
-      // Settings > Providers.
       setApiKey.mutate(
         { providerId, apiKey: trimmed },
-        { onSuccess: afterWrite },
+        {
+          onSuccess: ({ keyChangeResult }) => {
+            if (
+              keyChangeResult !== null &&
+              keyChangeResult !== "installed" &&
+              keyChangeResult !== "unchanged"
+            ) {
+              setDraft("");
+              return;
+            }
+            afterWrite();
+          },
+        },
       );
     } else {
       setEnvOverride.mutate(

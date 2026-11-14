@@ -3,6 +3,7 @@
  * request boundary.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   AUTH_FETCH_MAX_ATTEMPTS,
@@ -20,6 +21,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // The identity route the sign-in validation hits; every fixture answers it.
 const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
 const BEARER = "user-token";
+const providerKeySetBodySchema = z.strictObject({
+  key: z.string(),
+  onlyIfAbsent: z.literal(false),
+});
 
 const SUMMARY_RESULT: SandboxGrantsFetchResult = {
   kind: "ok",
@@ -111,10 +116,6 @@ function okWithProfile(): Promise<Response> {
       },
     ),
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
 }
 
 const trackedServices: AuthService[] = [];
@@ -266,20 +267,16 @@ describe("AuthService cloud calls", () => {
       restoreFetch = installFetch((input, init) => {
         const url = String(input);
         if (url.includes("/provider-keys/")) {
-          const body =
-            init?.body === null || init?.body === undefined
-              ? null
-              : JSON.parse(String(init.body));
-          const bodyRecord = isRecord(body) ? body : null;
+          const bodyText = init?.body;
+          const parsedBody: unknown =
+            typeof bodyText === "string" ? JSON.parse(bodyText) : null;
+          const body = providerKeySetBodySchema.safeParse(parsedBody);
           directRequests.push({
             url,
             authorized:
               new Headers(init?.headers).get("Authorization") ===
               `Bearer ${BEARER}`,
-            setBody:
-              bodyRecord !== null &&
-              typeof bodyRecord.key === "string" &&
-              bodyRecord.onlyIfAbsent === false,
+            setBody: body.success,
           });
           return Promise.resolve(
             new Response(
@@ -309,15 +306,13 @@ describe("AuthService cloud calls", () => {
       const [directRequest] = directRequests;
       expect(
         directRequests.length === 1 &&
-          directRequest !== undefined &&
           directRequest.authorized &&
           directRequest.setBody,
       ).toBe(true);
       expect(
-        directRequest !== undefined &&
-          directRequest.url.includes(
-            "/environments/env-synthetic/provider-keys/cursor",
-          ),
+        directRequest.url.includes(
+          "/environments/env-synthetic/provider-keys/cursor",
+        ),
       ).toBe(true);
     });
 

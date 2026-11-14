@@ -8,11 +8,9 @@ import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import {
   changeProviderApiKey,
   type ProviderApiKeyChange,
+  type ProviderApiKeyChangeResponse,
 } from "@traycer-clients/shared/host-client/provider-api-key-change";
-import type {
-  ProviderId,
-  ProvidersSetApiKeyResponse,
-} from "@traycer/protocol/host/provider-schemas";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   hostRpcServingTierHostId,
@@ -54,7 +52,7 @@ interface ProviderApiKeyChangeMutationArgs<Variables> {
 export function useProviderApiKeyChangeMutation<Variables>(
   args: ProviderApiKeyChangeMutationArgs<Variables>,
 ): UseMutationResult<
-  ProvidersSetApiKeyResponse,
+  ProviderApiKeyChangeResponse,
   HostRpcError,
   Variables,
   { readonly hostId: string | null }
@@ -64,7 +62,7 @@ export function useProviderApiKeyChangeMutation<Variables>(
   const auth = useAuthService();
   const openLink = useOpenLink();
   return useMutation<
-    ProvidersSetApiKeyResponse,
+    ProviderApiKeyChangeResponse,
     HostRpcError,
     Variables,
     { readonly hostId: string | null }
@@ -100,7 +98,7 @@ export function useProviderApiKeyChangeMutation<Variables>(
                 : PARTIAL_CHANGE_MESSAGES)[change.action],
             );
           }
-          return outcome.response;
+          return { ...outcome.response, keyChangeResult: outcome.result };
         }),
       onSuccess: () => {
         Analytics.getInstance().track(

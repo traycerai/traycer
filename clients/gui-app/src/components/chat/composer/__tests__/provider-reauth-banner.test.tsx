@@ -11,15 +11,29 @@ import type { ReactElement, ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { providersAwaitLoginResponseSchema } from "@traycer/protocol/host/provider-schemas";
-import type {
-  ProviderCliState,
+import {
+  providerMutationCliStateSchemaV21,
+  providersBeginApiKeyChangeResponseSchema,
+  providersSettleApiKeyChangeResponseSchema,
+  providersAwaitLoginResponseSchema,
+  type ProviderCliState,
+  type ProviderId,
   ProviderLoginCapability,
   ProviderLoginRefusal,
 } from "@traycer/protocol/host/provider-schemas";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { hostV115MutationV20Fixtures } from "@traycer/protocol/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20";
+import { AuthService } from "@/lib/auth/auth-service";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 
 // The banner shows only for web-login providers; it receives live provider
 // `state` as a prop (from the composer's re-auth gate). Reconnect methods are
@@ -99,6 +113,14 @@ const mocks = vi.hoisted(() => ({
   touchLoginReset: vi.fn(),
   setEnvOverrideMutate: vi.fn(),
   setApiKeyMutate: vi.fn(),
+  useRealKeyChange: false,
+  hostClient: null as HostClient<HostRpcRegistry> | null,
+  authService: null as AuthService | null,
+  tabClient: { id: "tab-client" } as
+    | { id: string }
+    | HostClient<HostRpcRegistry>
+    | null,
+  toastError: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
   openLink: vi.fn(),
   reportableErrorToast: vi.fn(),
@@ -124,6 +146,30 @@ afterEach(() => {
   mocks.realAwaitClient = null;
   mocks.useRealAwaitLogin = false;
   mocks.realAwaitLoginSuccess = false;
+  mocks.useRealKeyChange = false;
+  mocks.hostClient = null;
+  mocks.authService = null;
+});
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => {
+      if (!mocks.useRealKeyChange) return actual.useHostClient();
+      if (mocks.hostClient === null) {
+        throw new Error("The provider-key test client is unavailable.");
+      }
+      return mocks.hostClient;
+    },
+    useAuthService: () => {
+      if (!mocks.useRealKeyChange) return actual.useAuthService();
+      if (mocks.authService === null) {
+        throw new Error("The provider-key test service is unavailable.");
+      }
+      return mocks.authService;
+    },
+  };
 });
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -222,12 +268,25 @@ vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
     isPending: false,
   }),
 }));
-vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
-  useProvidersSetApiKey: () => ({
-    mutate: mocks.setApiKeyMutate,
-    isPending: false,
-  }),
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-set-api-key-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-set-api-key-mutation")
+      >();
+    return {
+      ...actual,
+      useProvidersSetApiKey: () => {
+        if (mocks.useRealKeyChange) return actual.useProvidersSetApiKey();
+        return {
+          mutate: mocks.setApiKeyMutate,
+          isPending: false,
+        };
+      },
+    };
+  },
+);
 vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
   useTabRefreshProviders: () => mocks.refreshProviders,
 }));
@@ -240,6 +299,13 @@ vi.mock("@/components/report-issue/report-issue-action", () => ({
     return null;
   },
 }));
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: mocks.toastError },
+  };
+});
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: mocks.reportableErrorToast,
 }));

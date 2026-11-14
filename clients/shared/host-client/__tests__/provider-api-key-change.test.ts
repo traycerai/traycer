@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { z } from "zod";
 import {
   identityFromAuthenticatedUser,
   createRequestContext,
@@ -7,9 +8,12 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   providerMutationCliStateSchemaV21,
+  providersBeginApiKeyChangeRequestSchema,
   providersBeginApiKeyChangeResponseSchema,
   providersSetApiKeyResponseSchema,
+  providersSetApiKeyRequestSchema,
   providersSettleApiKeyChangeResponseSchema,
+  providersSettleApiKeyChangeRequestSchema,
   type ProvidersBeginApiKeyChangeResponse,
   type ProvidersSettleApiKeyChangeResponse,
 } from "@traycer/protocol/host/provider-schemas";
@@ -35,6 +39,13 @@ const BEARER = "synthetic-session-token";
 const API_KEY = "synthetic-provider-key";
 const ENVIRONMENT_FROM_HOST = "env_host-captured";
 const RECORD_PROFILE_ID = "profile-synthetic";
+const setRequestBodySchema = z.strictObject({
+  key: z.string(),
+  onlyIfAbsent: z.literal(false),
+});
+const legacyClearRequestBodySchema = z.strictObject({
+  providerId: z.literal("cursor"),
+});
 const PROVIDERS = [
   "cursor",
   "openrouter",
@@ -163,17 +174,9 @@ function recordBody(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-  return isRecord(value) ? value : null;
-}
-
-function callParams(rig: Rig, method: string): Record<string, unknown> | null {
+function callParams(rig: Rig, method: string): unknown {
   const call = rig.messenger.calls.find((entry) => entry.method === method);
-  return call === undefined ? null : recordOf(call.params);
+  return call === undefined ? null : call.params;
 }
 
 async function failureInfo(
@@ -183,12 +186,8 @@ async function failureInfo(
     await operation;
     return { code: null, message: "" };
   } catch (error) {
-    const details = recordOf(error);
     return {
-      code:
-        details !== null && typeof details.code === "string"
-          ? details.code
-          : null,
+      code: error instanceof HostRpcError ? error.code : null,
       message: error instanceof Error ? error.message : "",
     };
   }
@@ -243,10 +242,10 @@ describe("changeProviderApiKey shared flow", () => {
       const requests = fetchMock.mock.calls;
       const firstInit = requests[0]?.[1];
       const secondInit = requests[1]?.[1];
-      const firstBody =
-        firstInit?.body === null || firstInit?.body === undefined
-          ? null
-          : recordOf(JSON.parse(String(firstInit.body)));
+      const firstBodyText = firstInit?.body;
+      const parsedFirstBody: unknown =
+        typeof firstBodyText === "string" ? JSON.parse(firstBodyText) : null;
+      const firstBody = setRequestBodySchema.safeParse(parsedFirstBody);
       const firstUrl = requests[0]?.[0];
       const secondUrl = requests[1]?.[0];
       expect(set.result === "installed" && clear.result === "installed").toBe(
@@ -260,9 +259,9 @@ describe("changeProviderApiKey shared flow", () => {
         firstInit?.redirect === "error" && secondInit?.redirect === "error",
       ).toBe(true);
       expect(
-        firstBody !== null &&
-          firstBody.key === API_KEY &&
-          firstBody.onlyIfAbsent === false,
+        firstBody.success &&
+          firstBody.data.key === API_KEY &&
+          firstBody.data.onlyIfAbsent === false,
       ).toBe(true);
       expect(
         firstUrl !== undefined &&
@@ -293,17 +292,30 @@ describe("changeProviderApiKey shared flow", () => {
           "providers.beginApiKeyChange,providers.settleApiKeyChange,providers.beginApiKeyChange,providers.settleApiKeyChange",
       ).toBe(true);
       expect(
-        rig.messenger.calls.some((call) => {
-          const params = recordOf(call.params);
-          return params !== null && Object.hasOwn(params, "apiKey");
-        }),
-      ).toBe(false);
+        rig.messenger.calls
+          .filter(
+            (call) =>
+              call.method === "providers.beginApiKeyChange" ||
+              call.method === "providers.settleApiKeyChange",
+          )
+          .every((call) => {
+            const params =
+              call.method === "providers.beginApiKeyChange"
+                ? providersBeginApiKeyChangeRequestSchema.safeParse(call.params)
+                : providersSettleApiKeyChangeRequestSchema.safeParse(
+                    call.params,
+                  );
+            return params.success;
+          }),
+      ).toBe(true);
       const settle = callParams(rig, "providers.settleApiKeyChange");
+      const parsedSettle =
+        providersSettleApiKeyChangeRequestSchema.safeParse(settle);
       expect(
-        settle !== null &&
-          settle.recordId === RECORD_PROFILE_ID &&
-          settle.signInNumber === "17" &&
-          settle.recordRevision === "4",
+        parsedSettle.success &&
+          parsedSettle.data.recordId === RECORD_PROFILE_ID &&
+          parsedSettle.data.signInNumber === "17" &&
+          parsedSettle.data.recordRevision === "4",
       ).toBe(true);
     },
   );
@@ -329,10 +341,11 @@ describe("changeProviderApiKey shared flow", () => {
     });
 
     const legacy = callParams(rig, "providers.setApiKey");
+    const parsedLegacy = providersSetApiKeyRequestSchema.safeParse(legacy);
     expect(
-      legacy !== null &&
-        legacy.providerId === "cursor" &&
-        legacy.apiKey === API_KEY,
+      parsedLegacy.success &&
+        parsedLegacy.data.providerId === "cursor" &&
+        parsedLegacy.data.apiKey === API_KEY,
     ).toBe(true);
     expect(fetchMock.mock.calls.length === 0 && recordCalls.length === 0).toBe(
       true,
@@ -369,14 +382,14 @@ describe("changeProviderApiKey shared flow", () => {
 
     const set = callParams(rig, "providers.setApiKey");
     const clear = callParams(rig, "providers.clearApiKey");
+    const parsedSet = providersSetApiKeyRequestSchema.safeParse(set);
+    const parsedClear = legacyClearRequestBodySchema.safeParse(clear);
     expect(
-      set !== null && set.providerId === "cursor" && set.apiKey === API_KEY,
+      parsedSet.success &&
+        parsedSet.data.providerId === "cursor" &&
+        parsedSet.data.apiKey === API_KEY,
     ).toBe(true);
-    expect(
-      clear !== null &&
-        clear.providerId === "cursor" &&
-        !Object.hasOwn(clear, "apiKey"),
-    ).toBe(true);
+    expect(parsedClear.success).toBe(true);
     expect(fetchMock.mock.calls.length === 0 && recordCalls.length === 0).toBe(
       true,
     );
@@ -492,14 +505,16 @@ describe("changeProviderApiKey shared flow", () => {
       { action: "clear" },
     );
 
-    const settle = callParams(rig, "providers.settleApiKeyChange");
+    const settle = providersSettleApiKeyChangeRequestSchema.safeParse(
+      callParams(rig, "providers.settleApiKeyChange"),
+    );
     expect(outcome.result === "installed").toBe(true);
     expect(
-      settle !== null &&
-        settle.action === "clear" &&
-        settle.recordId === null &&
-        settle.signInNumber === null &&
-        settle.recordRevision === null,
+      settle.success &&
+        settle.data.action === "clear" &&
+        settle.data.recordId === null &&
+        settle.data.signInNumber === null &&
+        settle.data.recordRevision === null,
     ).toBe(true);
   });
 

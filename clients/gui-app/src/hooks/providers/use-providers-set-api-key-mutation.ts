@@ -2,14 +2,14 @@ import type { UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
-  ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderApiKeyChangeResponse } from "@traycer-clients/shared/host-client/provider-api-key-change";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useProviderApiKeyChangeMutation } from "@/hooks/providers/use-provider-api-key-change-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
 export function useProvidersSetApiKey(): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.setApiKey">,
+  ProviderApiKeyChangeResponse,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.setApiKey">,
   { readonly hostId: string | null }
