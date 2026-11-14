@@ -1,5 +1,5 @@
 import type { AccountNotificationSettingsResponse } from "@traycer-clients/shared/environment/account-notification-schemas";
-import { NotificationHooksLocalOnlyError } from "@traycer-clients/shared/environment/account-notifications";
+import { NotificationHookRefusalError } from "@traycer-clients/shared/environment/notification-hook-refusal";
 import { accountHooksForEditor } from "@traycer-clients/shared/environment/notification-hook-values";
 import { useAccountNotificationHooksSave } from "@/hooks/notifications/use-account-notification-settings";
 import { ACCOUNT_NOTIFICATIONS_COPY } from "./cloud-notification-copy";
@@ -10,7 +10,12 @@ export function AccountNotificationHooksSection(props: {
   readonly account: AccountNotificationSettingsResponse;
 }) {
   const save = useAccountNotificationHooksSave();
-  const localOnly = save.error instanceof NotificationHooksLocalOnlyError;
+  const refusal =
+    save.error instanceof NotificationHookRefusalError ? save.error : null;
+  const refusedHookId =
+    refusal !== null && refusal.index !== null
+      ? (save.variables?.hooks[refusal.index]?.id ?? null)
+      : null;
   return (
     <CloudNotificationHooksSection
       scope="account"
@@ -21,8 +26,14 @@ export function AccountNotificationHooksSection(props: {
       }}
       saving={save.isPending}
       error={save.error?.message ?? null}
+      refusedHookId={refusedHookId}
       editorProblem={
-        localOnly ? ACCOUNT_NOTIFICATIONS_COPY.localOnly("$NAME") : null
+        refusal?.code === "hook_local_only"
+          ? {
+              hookId: refusedHookId,
+              message: ACCOUNT_NOTIFICATIONS_COPY.localOnly("$NAME"),
+            }
+          : null
       }
       canEdit
       onClearProblem={() => {

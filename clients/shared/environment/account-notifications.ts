@@ -1,5 +1,7 @@
+import { NotificationHookRefusalError } from "./notification-hook-refusal";
 import {
   accountNotificationSettingsResponseSchema,
+  notificationHookRefusalSchema,
   accountNotificationSettingsConflictSchema,
   accountNotificationMatrixPutRequestSchema,
   accountNotificationHooksPutRequestSchema,
@@ -20,9 +22,9 @@ export const ACCOUNT_NOTIFICATION_SETTINGS_ROUTE =
   "api/v3/user/notification-settings";
 
 /** Only a refusal code crosses this seam, never authn's body or a hook's value. */
-export class NotificationHooksLocalOnlyError extends EnvironmentCloudError {
-  constructor() {
-    super("invalid", "The settings request was refused.");
+export class NotificationHooksLocalOnlyError extends NotificationHookRefusalError {
+  constructor(index: number | null) {
+    super("hook_local_only", index);
     this.name = "NotificationHooksLocalOnlyError";
   }
 }
@@ -91,11 +93,18 @@ async function writeAccountNotificationSettings(
       { ...request, revision: current.revision },
     );
   }
-  if (
-    answer.status === 400 &&
-    errorBodyCode(answer.body) === "hook_local_only"
-  ) {
-    throw new NotificationHooksLocalOnlyError();
+  if (answer.status === 400) {
+    const refusal = notificationHookRefusalSchema.safeParse(answer.body);
+    if (refusal.success) {
+      if (refusal.data.code === "hook_local_only")
+        throw new NotificationHooksLocalOnlyError(refusal.data.index);
+      throw new NotificationHookRefusalError(
+        refusal.data.code,
+        refusal.data.index,
+      );
+    }
+    if (errorBodyCode(answer.body) === "hook_local_only")
+      throw new NotificationHooksLocalOnlyError(null);
   }
   if (answer.status === 409) throw settingsRefusal(answer);
   return parseSettings(answer, accountNotificationSettingsResponseSchema);

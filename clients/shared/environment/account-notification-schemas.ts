@@ -85,6 +85,37 @@ export type AccountNotificationHook = z.infer<
   typeof accountNotificationHookSchema
 >;
 
+/**
+ * What the form check refuses in a hook list: two hooks sharing one id, a
+ * command or an HTTP header value that interpolates a host's environment, and
+ * `held` true.
+ */
+export const NOTIFICATION_HOOK_REFUSAL_CODES = [
+  "hook_id_duplicate",
+  "hook_local_only",
+  "hook_held_invalid",
+] as const;
+export type NotificationHookRefusalCode =
+  (typeof NOTIFICATION_HOOK_REFUSAL_CODES)[number];
+
+/**
+ * The 400 of the form check, on the account route and on a team's
+ * `notification_hooks` item put. `index` is the refused entry's zero-based
+ * position in the list sent; for a duplicate id, the later entry. The body
+ * carries no hook id or URL.
+ */
+export const notificationHookRefusalSchema = lazySchema(() =>
+  z.strictObject({
+    statusCode: z.literal(400),
+    error: z.string(),
+    code: z.enum(NOTIFICATION_HOOK_REFUSAL_CODES),
+    index: z.number().int().nonnegative(),
+  }),
+);
+export type NotificationHookRefusal = z.infer<
+  typeof notificationHookRefusalSchema
+>;
+
 export const accountNotificationSettingsSchema = lazySchema(() =>
   z.strictObject({
     matrix: accountNotificationMatrixSchema,
