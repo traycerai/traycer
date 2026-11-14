@@ -8,9 +8,9 @@
  * sharing from this computer touches, and stopping it.
  *
  * Every answer is value-free: a row names an item and never carries its
- * value, and a row that looks like a key carries only its name. Optional
- * capabilities with `degrade: { kind: "unsupported" }`, off the released
- * floor, like every environment method (`environment/contracts.ts`).
+ * value. Optional capabilities with `degrade: { kind: "unsupported" }`, off
+ * the released floor, like every environment method
+ * (`environment/contracts.ts`).
  */
 import { z } from "zod";
 import {
@@ -71,11 +71,9 @@ export type EnvironmentMovePlanRequest = z.infer<
  * (a terminal sign-in, a held executable); `alreadyInPersonal` are equal
  * there; `differsMasked` exist in Personal with another value, neither shown.
  *
- * A value that reads like a credential is listed under
- * `staysOnThisComputer`: a secret's value does not move in or out of a
- * computer, so the move leaves it where it is rather than offering to store
- * it. `looksLikeAKey` is retired and still declared, because `cli-v1.5.2` and
- * `cli-v1.5.3` require the key: it is empty on every plan this tree builds
+ * `looksLikeAKey` is retired and still declared, because `cli-v1.5.2` and
+ * `cli-v1.5.3` require the key. The host sorts every row into the four groups
+ * above and has no other, so it is empty on every plan this tree builds
  * (`RETIRED_LOOKS_LIKE_A_KEY_ROWS` in `released-wire-rows.ts`).
  */
 export const environmentMovePlanResponseSchema = lazySchema(() =>
@@ -107,12 +105,9 @@ export const environmentMovePlanV10 = defineRpcContract({
 /**
  * `@1.1` adds `sameNameInPersonal` and `guideDiffers`.
  *
- * `sameNameInPersonal` named rows that look like a key whose name Personal
- * already holds as a secret. It is retired with the rest of the key-shaped
- * plane - a value that reads like a credential is listed under
- * `staysOnThisComputer` now and the move offers no choice for it - so no plan
- * this host builds has a row here, and `RETIRED_SAME_NAME_IN_PERSONAL_ROWS`
- * is what fills it. The KEY stays because `cli-v1.5.2` and `cli-v1.5.3`
+ * `sameNameInPersonal` is retired with `looksLikeAKey`: the host sorts every
+ * row into the four groups of `@1.0`, so no plan this host builds has a row
+ * here, and `RETIRED_SAME_NAME_IN_PERSONAL_ROWS` is what fills it. The KEY stays because `cli-v1.5.2` and `cli-v1.5.3`
  * declare it on this released version. It differs from `looksLikeAKey` in one
  * way worth naming: the released schema gives it `.default([])`, so a PARSER
  * tolerates its absence. That is not a licence to omit it when producing one -
