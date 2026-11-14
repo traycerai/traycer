@@ -271,10 +271,15 @@ describe("Personal page chip on a build with a server pool", () => {
       { wrapper: harness.Wrapper },
     );
 
-    await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.host.list")).toEqual([
-        POOL_HOST_ID,
-      ]);
-    });
+    expect(
+      await screen.findByRole("button", {
+        name: "Not on any computer or sandbox",
+      }),
+    ).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([POOL_HOST_ID]);
+    expect(harness.paramsOf("environment.host.list")).toEqual([
+      { environmentId: "env-personal" },
+    ]);
   });
 });

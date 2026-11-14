@@ -911,12 +911,6 @@ describe("the add form's words", () => {
     expect(screen.getByTestId("members-data-handling-notice").textContent).toBe(
       "Traycer's cloud stores the value encrypted. Sandboxes running Personal or a team use the value without seeing it. Share a work credential only if you have the authority to share it. Removing a value stops access from then on. It cannot take back copies a computer already made, task data already published, or exports already shared. Where Traycer processes this data is not yet stated. How long backups keep this data is not yet stated.",
     );
-    expect(
-      screen.getByTestId("members-data-handling-notice").textContent,
-    ).not.toContain("A Personal value also reaches the computers");
-    expect(
-      screen.getByTestId("members-data-handling-notice").textContent,
-    ).not.toContain("A team value reaches no computer.");
 
     fireEvent.click(buttonOf("secret-form-continue"));
     const confirmation = await screen.findByTestId("secret-save-confirmation");

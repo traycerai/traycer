@@ -40,7 +40,6 @@ import type {
   EnvironmentSecretV12,
   EnvironmentSecretsCreateResponse,
   EnvironmentSecretsReplaceValueResponse,
-  EnvironmentSecretsRotationRequestV11,
   EnvironmentSecretsRotationResponse,
   SecretVerifyResult,
   SecretVersion,
@@ -128,7 +127,6 @@ interface TeamSecretsHost {
   readonly verify: Held<SecretVerifyResult>;
   readonly replace: Held<EnvironmentSecretsReplaceValueResponse>;
   rotation: EnvironmentSecretsRotationResponse["rotation"];
-  readonly rotationRequests: EnvironmentSecretsRotationRequestV11[];
 }
 
 function teamSecretsHost(): TeamSecretsHost {
@@ -137,7 +135,6 @@ function teamSecretsHost(): TeamSecretsHost {
     verify: held(),
     replace: held(),
     rotation: null,
-    rotationRequests: [],
   };
 }
 
@@ -152,10 +149,10 @@ function handlersFor(host: TeamSecretsHost): MockHandlerMap<HostRpcRegistry> {
       versions: versionsFixture(),
       removal: null,
     }),
-    "environment.secrets.rotation": (request) => {
-      host.rotationRequests.push(request);
-      return { rotation: host.rotation, lastVerify: null };
-    },
+    "environment.secrets.rotation": () => ({
+      rotation: host.rotation,
+      lastVerify: null,
+    }),
     "environment.secrets.create": () => host.create.promise,
     "environment.secrets.verify": () => host.verify.promise,
     "environment.secrets.replaceValue": () => host.replace.promise,
@@ -308,9 +305,6 @@ describe("a team secret's writes go through the host mutations", () => {
         .map((line) => line.textContent),
     ).toEqual(["https: not confirmed yet"]);
     expect(harness.paramsOf("environment.secrets.rotation")).toEqual([
-      { secretId: "sec-1", environmentId: "env-a" },
-    ]);
-    expect(host.rotationRequests).toEqual([
       { secretId: "sec-1", environmentId: "env-a" },
     ]);
   });

@@ -482,6 +482,11 @@ describe("GettingStartedSettingsPanel", () => {
     );
 
     const card = screen.getByTestId("getting-started-card-move");
+    expect(
+      screen.getByRole("button", {
+        name: "Move this computer to Personal, Not started",
+      }),
+    ).toBe(card);
     expect(card.textContent).toContain("Move this computer to Personal");
     expect(card.textContent).toContain("Move to Personal");
 
