@@ -1,5 +1,13 @@
-import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  fetchEnvironmentTransport,
+  type EnvironmentTransport,
+  type EnvironmentTransportAnswer,
+  type EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import type { AuthService } from "@/lib/auth/auth-service";
 import {
   createInProcessSelectionAuthority,
   inertLocalHostOutageSignal,
@@ -13,6 +21,91 @@ import {
   silentAuthorityLog,
   systemAuthorityClock,
 } from "@traycer-clients/shared/host-selection/selection-authority-engine";
+
+/**
+ * The auth-facing part of the fake runner host. App readers use the real
+ * `auth.listEnvironments()` and `auth.environmentCloud()` seams; these return
+ * the fixture directory and send authn requests through the supplied fake
+ * transport.
+ */
+export function createFakeEnvironmentCloudAuth(options: {
+  readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
+  readonly transport: EnvironmentTransport;
+}): AuthService {
+  const runnerHost = createFakeRunnerHost({
+    listEnvironments: () => options.listEnvironments(),
+    environmentTransport: options.transport,
+  });
+  return {
+    listEnvironments: () => runnerHost.listEnvironments("test-bearer"),
+    environmentCloud: () => ({
+      authnBaseUrl: runnerHost.authnBaseUrl,
+      bearer: {
+        kind: "cloud",
+        getBearerToken: () => Promise.resolve("test-bearer"),
+      },
+      transport: runnerHost.environmentTransport,
+      onOriginSignIn: () => true,
+    }),
+  } as unknown as AuthService;
+}
+
+/** Shared authn transport fake for the list join and settings reads. */
+export function createFakeEnvironmentCloudTransport(options: {
+  readonly environments: () => readonly EnvironmentDescriptorV11[];
+  readonly onRequest?: (
+    request: EnvironmentTransportRequest,
+  ) =>
+    | EnvironmentTransportAnswer
+    | null
+    | Promise<EnvironmentTransportAnswer | null>;
+}): EnvironmentTransport {
+  return async (request) => {
+    const customAnswer = await options.onRequest?.(request);
+    if (customAnswer !== null && customAnswer !== undefined) {
+      return customAnswer;
+    }
+
+    const pathname = new URL(request.url).pathname;
+    const route =
+      /\/api\/v3\/environments\/([^/]+)\/(hosts|members|review)$/u.exec(
+        pathname,
+      );
+    if (route !== null) {
+      const environmentId = decodeURIComponent(route[1] ?? "");
+      const row = options
+        .environments()
+        .find((environment) => environment.environmentId === environmentId);
+      switch (route[2]) {
+        case "hosts":
+          return jsonEnvironmentAnswer({
+            hosts: Array.from({ length: row?.hostCount ?? 0 }, () => ({
+              purgePending: false,
+            })),
+          });
+        case "members":
+          return jsonEnvironmentAnswer({
+            viewer: {
+              effectiveRole: row === undefined ? "viewer" : row.effectiveRole,
+            },
+          });
+        case "review":
+          return jsonEnvironmentAnswer({ review: null });
+      }
+    }
+
+    if (pathname.includes("/configuration/mcp-servers")) {
+      return jsonEnvironmentAnswer({ servers: [] });
+    }
+    return { status: 404, text: "{}" };
+  };
+}
+
+export function jsonEnvironmentAnswer(
+  body: unknown,
+): EnvironmentTransportAnswer {
+  return { status: 200, text: JSON.stringify(body) };
+}
 
 /**
  * Browser/dev topology (D16): the same in-window authority engine

@@ -20,14 +20,22 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  createFakeEnvironmentCloudAuth,
+  createFakeEnvironmentCloudTransport,
+  jsonEnvironmentAnswer,
+} from "../../../../../__tests__/create-fake-runner-host";
 
 /**
  * The shared host client a page under test reads through `useHostClient()`.
@@ -217,6 +225,52 @@ function buildTeamPage(
       mutations: { retry: false },
     },
   });
+  const fallbackRows: EnvironmentDescriptorV11[] =
+    source.kind === "pool"
+      ? [
+          {
+            environmentId: source.environmentId,
+            ownerKind:
+              source.configuration === "personal" ? "user" : "organization",
+            ownerId: source.configuration === "personal" ? "user-me" : "team-a",
+            roomId: source.roomId,
+            label: source.configuration === "personal" ? "Personal" : "Acme",
+            effectiveRole:
+              source.configuration === "personal"
+                ? "owner"
+                : (source.effectiveRole ?? "viewer"),
+            kind: source.configuration,
+            hostCount: 1,
+            providerHandle: source.providerHandle,
+          },
+        ]
+      : [];
+  let currentRows: EnvironmentDescriptorV11[] = [...fallbackRows];
+  const auth = createFakeEnvironmentCloudAuth({
+    listEnvironments: async () => {
+      const response = await handlers["environment.list"]?.({});
+      if (response !== undefined) currentRows = [...response.environments];
+      return { kind: "ok", list: { environments: [...currentRows] } };
+    },
+    transport: createFakeEnvironmentCloudTransport({
+      environments: () => currentRows,
+      onRequest: async (request) => {
+        if (!request.url.includes("/configuration/mcp-servers")) return null;
+        const match = /\/environments\/([^/]+)\//u.exec(
+          new URL(request.url).pathname,
+        );
+        const environmentId = decodeURIComponent(match?.[1] ?? "");
+        const response = await handlers[
+          "environment.configuration.mcpServers.list"
+        ]?.({ environmentId });
+        return response === undefined ? null : jsonEnvironmentAnswer(response);
+      },
+    }),
+  });
+  const authBinding = Object.create(
+    null,
+  ) as HostRuntimeBinding<HostRpcRegistry>;
+  Object.defineProperty(authBinding, "auth", { value: auth });
   let requestCounter = 0;
   const messengerOptions = {
     registry: hostRpcRegistry,
@@ -253,7 +307,19 @@ function buildTeamPage(
   );
   teamHostBoundary.client = spine.createRequester(mockLocalHostEntry);
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
-  useAuthStore.setState({ status: "signed-in" });
+  useAuthStore.setState({
+    status: "signed-in",
+    shareableTeams: [
+      {
+        teamId: "team-a",
+        slug:
+          source.kind === "pool" && source.configuration === "team"
+            ? (source.providerHandle ?? "handle-a")
+            : "handle-a",
+        avatarUrl: null,
+      },
+    ],
+  });
   return {
     messenger,
     queryClient,
@@ -263,9 +329,11 @@ function buildTeamPage(
         .map((call) => call.params),
     Wrapper: (props) => (
       <QueryClientProvider client={queryClient}>
-        <ConfigurationSourceContext.Provider value={source}>
-          {props.children}
-        </ConfigurationSourceContext.Provider>
+        <HostRuntimeContext.Provider value={authBinding}>
+          <ConfigurationSourceContext.Provider value={source}>
+            {props.children}
+          </ConfigurationSourceContext.Provider>
+        </HostRuntimeContext.Provider>
       </QueryClientProvider>
     ),
   };
@@ -275,5 +343,5 @@ export function resetTeamPageHarness(): void {
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
-  useAuthStore.setState({ status: "signed-out" });
+  useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
 }
