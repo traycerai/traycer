@@ -297,6 +297,7 @@ import {
 import {
   isRemovedProfileRefusalCode,
   messageNotAcceptedCircumstance,
+  messageNotAcceptedNoticeCircumstance,
   rejectionReasonText,
   withAppWordsAfterReason,
 } from "@/lib/chats/rejected-frame-reason";
@@ -2929,7 +2930,17 @@ function rejectionNotice(input: {
   readonly account: DeadSendAccount | null;
 }): ChatErrorNotice {
   const lastCopy = rejectionLastCopySend(input);
-  if (lastCopy !== null) return unrecoverableSendNotice(lastCopy);
+  if (lastCopy !== null) {
+    // The record keeps the saved draft's form of the sentence; the notice
+    // opens with its own.
+    return unrecoverableSendNotice({
+      ...lastCopy,
+      circumstance: messageNotAcceptedNoticeCircumstance(
+        input.frame.code,
+        input.frame.reason,
+      ),
+    });
+  }
   const reason = rejectionReasonText(
     input.frame.code,
     input.frame.reason,
