@@ -245,8 +245,9 @@ export function createBrowserSessionsHostDirectory(
     resolve: async (hostId) => {
       const local = localEntryFor(hostId);
       if (local !== null) {
-        if (!cachedRemote.has(hostId)) await refreshOnce();
-        return localEntryFor(hostId);
+        // Registry discovery must not delay the browser on this machine.
+        if (!cachedRemote.has(hostId)) void refreshOnce();
+        return local;
       }
       const cached = cachedRemote.get(hostId);
       if (cached !== undefined) return cached;
