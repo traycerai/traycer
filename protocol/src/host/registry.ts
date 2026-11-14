@@ -1581,11 +1581,13 @@ import {
   providersAddCustomPathResponseSchemaV20,
   providersAwaitLoginRequestSchema,
   providersAwaitLoginRequestSchemaV22,
+  providersAwaitLoginRequestSchemaV23,
   providersAwaitLoginRequestSchemaV10,
   providersAwaitLoginRequestSchemaV20,
   providersAwaitLoginResponseSchema,
   providersAwaitLoginResponseSchemaV22,
   providersAwaitLoginResponseSchemaV23,
+  providersAwaitLoginResponseSchemaV24,
   providersAwaitLoginResponseSchemaV10,
   providersAwaitLoginResponseSchemaV20,
   providersAwaitLoginResponseSchemaV21,
@@ -5056,7 +5058,7 @@ export const providersAwaitLoginUpgradeV21ToV22 = defineUpgradePath<
 export const providersAwaitLoginV23 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 3 } as const,
-  requestSchema: providersAwaitLoginRequestSchema,
+  requestSchema: providersAwaitLoginRequestSchemaV23,
   responseSchema: providersAwaitLoginResponseSchemaV23,
 });
 
@@ -5073,8 +5075,8 @@ export const providersAwaitLoginUpgradeV22ToV23 = defineUpgradePath<
 export const providersAwaitLoginV24 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 4 } as const,
-  requestSchema: providersAwaitLoginRequestSchema,
-  responseSchema: providersAwaitLoginResponseSchema,
+  requestSchema: providersAwaitLoginRequestSchemaV23,
+  responseSchema: providersAwaitLoginResponseSchemaV24,
 });
 
 export const providersAwaitLoginUpgradeV23ToV24 = defineUpgradePath<
@@ -5085,6 +5087,27 @@ export const providersAwaitLoginUpgradeV23ToV24 = defineUpgradePath<
   to: { major: 2, minor: 4 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, profileOutcome: null }),
+});
+
+// v2.5 carries the sign-in request a caller records at authn on the person's
+// own session (`signInRequest`, on an unfinished answer only) and the id the
+// caller recorded (`recordedOperationId`). A 2.4 computer never asks for a
+// recording, and a 2.4 caller never records one.
+export const providersAwaitLoginV25 = defineRpcContract({
+  method: "providers.awaitLogin",
+  schemaVersion: { major: 2, minor: 5 } as const,
+  requestSchema: providersAwaitLoginRequestSchema,
+  responseSchema: providersAwaitLoginResponseSchema,
+});
+
+export const providersAwaitLoginUpgradeV24ToV25 = defineUpgradePath<
+  typeof providersAwaitLoginV24,
+  typeof providersAwaitLoginV25
+>({
+  from: { major: 2, minor: 4 },
+  to: { major: 2, minor: 5 },
+  upgradeRequest: (request) => ({ ...request, recordedOperationId: null }),
+  upgradeResponse: (response) => ({ ...response, signInRequest: null }),
 });
 
 export const providersAwaitLoginDowngradeV21ToV20 = defineDowngradePath<
@@ -5173,6 +5196,18 @@ export const providersAwaitLoginDowngradeV24ToV10 = defineDowngradePath<
     providersAwaitLoginDowngradeV23ToV10.downgradeRequest(request),
   downgradeResponse: (response) =>
     providersAwaitLoginDowngradeV23ToV10.downgradeResponse(response),
+});
+
+export const providersAwaitLoginDowngradeV25ToV10 = defineDowngradePath<
+  typeof providersAwaitLoginV25,
+  typeof providersAwaitLoginV10
+>({
+  from: { major: 2, minor: 5 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    providersAwaitLoginDowngradeV24ToV10.downgradeRequest(request),
+  downgradeResponse: (response) =>
+    providersAwaitLoginDowngradeV24ToV10.downgradeResponse(response),
 });
 
 export const providersCancelLoginV10 = defineRpcContract({
@@ -13335,7 +13370,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: providersAwaitLoginV20,
@@ -13357,9 +13392,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersAwaitLoginV24,
           upgradeFromPreviousVersion: providersAwaitLoginUpgradeV23ToV24,
         },
+        5: {
+          contract: providersAwaitLoginV25,
+          upgradeFromPreviousVersion: providersAwaitLoginUpgradeV24ToV25,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersAwaitLoginDowngradeV24ToV10,
+        1: providersAwaitLoginDowngradeV25ToV10,
       },
     },
   },
