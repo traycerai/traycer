@@ -107,7 +107,10 @@ export function useWindowNarration(): WindowNarrationReading {
       return {
         narration: {
           kind: "narrating",
-          cause: effectiveHostId === null ? "no-usable-host" : "cold-start",
+          cause:
+            hasBeenServed || effectiveHostId === null
+              ? "no-usable-host"
+              : "cold-start",
           variant: olderHostUpdateVariant(
             updateCandidate.hostId,
             updateCandidate.hostId === targetHostId,

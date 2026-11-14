@@ -12,6 +12,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
@@ -26,11 +27,27 @@ import {
   signIn,
   USER_A,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
+import { AuthService } from "@/lib/auth/auth-service";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import { HOST_BOOT_CARD_SURFACE } from "@/components/centered-card";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
@@ -53,20 +70,42 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
+import { installAuthValidationFetch } from "../../../../../__tests__/test-browser-apis";
 
 const signOutRound2Harness = vi.hoisted(() => ({
   signOut: vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
 }));
 const narrationRound2Harness = vi.hoisted(() => ({
   teamMembershipRequired: false,
+  nextInstanceId: 0,
+  activeInstanceId: 0,
 }));
 
 vi.mock("@/lib/host/runtime", async (load) => {
   const actual = await load<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
-    useHostBinding: () => ({ auth: { signOut: signOutRound2Harness.signOut } }),
+    useHostBinding: () =>
+      actual.useHostBinding() ?? {
+        auth: { signOut: signOutRound2Harness.signOut },
+      },
     useAuthService: () => ({ signOut: signOutRound2Harness.signOut }),
+  };
+});
+
+const authErrorToastHarness = vi.hoisted(() => ({
+  show: vi.fn<(error: unknown, fallback: string) => void>(),
+}));
+vi.mock("@/lib/auth-error-toast", async (load) => {
+  const actual = await load<typeof import("@/lib/auth-error-toast")>();
+  return {
+    ...actual,
+    toastFromAuthError: (error: unknown, fallback: string) => {
+      authErrorToastHarness.show(error, fallback);
+      actual.toastFromAuthError(error, fallback);
+    },
   };
 });
 
@@ -76,6 +115,12 @@ vi.mock("@/hooks/host/use-window-narration", async (load) => {
   return {
     ...actual,
     useWindowNarration: () => {
+      const instanceId = useRef<number | null>(null);
+      if (instanceId.current === null) {
+        narrationRound2Harness.nextInstanceId += 1;
+        instanceId.current = narrationRound2Harness.nextInstanceId;
+      }
+      narrationRound2Harness.activeInstanceId = instanceId.current;
       const reading = actual.useWindowNarration();
       return narrationRound2Harness.teamMembershipRequired
         ? {
@@ -149,6 +194,17 @@ vi.mock("@/lib/app-version", () => ({
   getClientAppVersion: () => "1.5.0",
   getClientAppVersionLabel: () => "1.5.0",
 }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (load) => {
+    const actual =
+      await load<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 
 const LOCAL_HOST_ID = "local-host";
 const REMOTE_HOST_ID = "remote-host";
@@ -313,6 +369,167 @@ function renderHostWithGate(
   );
 }
 
+interface ModalHostRuntimeFixture {
+  readonly auth: AuthService;
+  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
+  readonly directory: HostDirectoryService;
+  readonly rows: { current: readonly RemoteHostDirectoryEntry[] };
+  readonly runnerHost: MockRunnerHost;
+  readonly runtime: HostRuntime<HostRpcRegistry>;
+}
+
+type HostPolicyFetchMode = "normal" | "fail-update";
+
+const modalHostRuntimeFixtures: ModalHostRuntimeFixture[] = [];
+const runtimeFetchRestorers: Array<() => void> = [];
+let hostPolicyPatchCalls = 0;
+
+function remoteHostEntry(
+  appVersion: string,
+  updateState: "current" | "pending",
+): RemoteHostDirectoryEntry {
+  const entry = remoteEntry(REMOTE_HOST_ID, null);
+  return {
+    ...entry,
+    version: "9.9.9",
+    remoteStatus: {
+      ...entry.remoteStatus,
+      appVersion,
+      updateState,
+    },
+  };
+}
+
+function installRuntimeFetch(mode: HostPolicyFetchMode): void {
+  const restoreValidation = installAuthValidationFetch();
+  runtimeFetchRestorers.push(restoreValidation);
+  if (mode === "normal") return;
+
+  const validationFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: (input: RequestInfo | URL, init: RequestInit | undefined) => {
+      let url: string;
+      if (typeof input === "string") {
+        url = input;
+      } else if (input instanceof URL) {
+        url = input.toString();
+      } else {
+        url = input.url;
+      }
+      if (
+        init?.method === "PATCH" &&
+        url.includes(`/api/v3/hosts/${REMOTE_HOST_ID}`)
+      ) {
+        hostPolicyPatchCalls += 1;
+        return Promise.resolve(new Response(null, { status: 500 }));
+      }
+      return validationFetch(input, init);
+    },
+  });
+}
+
+async function createModalHostRuntimeFixture(
+  entry: RemoteHostDirectoryEntry,
+  fetchMode: HostPolicyFetchMode,
+): Promise<ModalHostRuntimeFixture> {
+  installRuntimeFetch(fetchMode);
+  const rows: ModalHostRuntimeFixture["rows"] = { current: [entry] };
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: false,
+    traycerCli: undefined,
+  });
+  const auth = new AuthService({ runnerHost });
+  await runnerHost.tokenStore.signIn(
+    { token: "user-token", refreshToken: "user-token-refresh" },
+    { id: "user-1", email: "test@example.com", name: "Test User" },
+  );
+  await auth.start();
+
+  const directory = new HostDirectoryService({
+    runnerHost,
+    remoteFetcher: () =>
+      Promise.resolve({ kind: "hosts", entries: rows.current }),
+    onRegistryPollTick: null,
+    authContextId: () => "user-1",
+    credentialGeneration: () => 0,
+    localHostIdSeeder: () => Promise.resolve(null),
+  });
+  await directory.start();
+  await directory.refresh();
+
+  let requestSeq = 0;
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    onHostTokenRenewal: () => undefined,
+    registry: hostRpcRegistry,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `modal-host-${++requestSeq}`,
+      handlers: {},
+    }),
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+    ),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    connectionRegistry: null,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    selectedHostId: () => null,
+  });
+  const fixture: ModalHostRuntimeFixture = {
+    auth,
+    binding: {
+      runtime,
+      hostClient: runtime.hostClient,
+      directory,
+      auth,
+      hostId: null,
+    },
+    directory,
+    rows,
+    runnerHost,
+    runtime,
+  };
+  modalHostRuntimeFixtures.push(fixture);
+  return fixture;
+}
+
+function renderHostWithRuntime(
+  fixture: ModalHostRuntimeFixture,
+  presentation: DefaultHostReadinessPresentation,
+  bypassed: boolean,
+  readiness: SurfaceReadiness,
+): void {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={fixture.runnerHost}>
+        <HostRuntimeContext.Provider value={fixture.binding}>
+          <HostReadinessControllerContext.Provider
+            value={controllerFor(presentation, readiness)}
+          >
+            <WindowHostModalHost bypassed={bypassed} />
+          </HostReadinessControllerContext.Provider>
+        </HostRuntimeContext.Provider>
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+}
+
 const BOOTSTRAP_MARKERS = {
   bootstrapMarkers: [
     {
@@ -329,6 +546,8 @@ const BOOTSTRAP_MARKERS = {
 beforeEach(() => {
   hostStatus.data = undefined;
   controllerStatus.data = undefined;
+  authErrorToastHarness.show.mockReset();
+  hostPolicyPatchCalls = 0;
   // `ReportIssueAction` gates on this store, defaulting to `false` - so every
   // fixture that checks Report issue's PRESENCE needs it true first, or the
   // absence would be satisfied by the store gate rather than by
@@ -339,6 +558,8 @@ beforeEach(() => {
   signOutRound2Harness.signOut.mockReset();
   signOutRound2Harness.signOut.mockResolvedValue(false);
   narrationRound2Harness.teamMembershipRequired = false;
+  narrationRound2Harness.nextInstanceId = 0;
+  narrationRound2Harness.activeInstanceId = 0;
   useSignOutConfirmStore.getState().setOpen(false);
   // SIGNED IN, because production is: this component is mounted only for a
   // signed-in user (`useWindowNarration`'s latch doc leans on exactly that -
@@ -360,6 +581,14 @@ afterEach(() => {
   FakeNativeWebSocket.instances.length = 0;
   vi.unstubAllGlobals();
   cleanup();
+  for (const fixture of modalHostRuntimeFixtures.splice(0)) {
+    fixture.runtime.dispose();
+    fixture.directory.dispose();
+    fixture.auth.dispose();
+  }
+  for (const restoreFetch of runtimeFetchRestorers.splice(0)) {
+    restoreFetch();
+  }
   useSelectionAuthorityStore.getState().reset();
   useHostDoorStateStore.setState({ byHost: new Map() });
   useDesktopDialogStore.getState().setReportIssueAvailable(false);
@@ -513,6 +742,182 @@ describe("<WindowHostModalHost />", () => {
       client.close("test complete");
       clearHostDoorState(hostId);
     }
+  });
+
+  it("a served remote window follows its live directory row below the floor without replacing the window", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry(MINIMUM_HOST_VERSION, "current"),
+      "normal",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: REMOTE_HOST_ID,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [lease({ hostId: REMOTE_HOST_ID, status: "ready", dead: null })],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+
+    expect(screen.queryByTestId("window-host-modal")).toBeNull();
+    const narrationInstanceId = narrationRound2Harness.activeInstanceId;
+    expect(narrationInstanceId).not.toBe(0);
+    const atFloor = fixture.directory.findById(REMOTE_HOST_ID);
+    if (atFloor === null || !isRemoteHostDirectoryEntry(atFloor)) {
+      throw new Error("the selected remote directory row was missing");
+    }
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      REMOTE_HOST_ID,
+    );
+    expect(atFloor.version).toBe("9.9.9");
+    expect(atFloor.remoteStatus.appVersion).toBe(MINIMUM_HOST_VERSION);
+
+    await act(async () => {
+      fixture.rows.current = [remoteHostEntry("1.5.4", "current")];
+      await fixture.directory.refresh();
+    });
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(narrationRound2Harness.activeInstanceId).toBe(narrationInstanceId);
+    const belowFloor = fixture.directory.findById(REMOTE_HOST_ID);
+    if (belowFloor === null || !isRemoteHostDirectoryEntry(belowFloor)) {
+      throw new Error("the downgraded remote directory row was missing");
+    }
+    expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
+      REMOTE_HOST_ID,
+    );
+    expect(belowFloor.version).toBe(atFloor.version);
+    expect(belowFloor.remoteStatus.appVersion).toBe("1.5.4");
+    expect(surface.getAttribute("data-cause")).toBe("no-usable-host");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(surface).getByTestId("window-host-modal-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(surface).getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+  });
+
+  it("the real older-host cover offers Update now and Open settings before a remote update is pending", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry("1.5.4", "current"),
+      "normal",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(surface).getByTestId("window-host-modal-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(surface).getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    expect(
+      within(surface).queryByRole("button", { name: "Report issue" }),
+    ).toBeNull();
+  });
+
+  it("the real older-host cover replaces Update now with the directory's pending lines", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry("1.5.4", "pending"),
+      "normal",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(surface.getAttribute("data-variant")).toBe("update-host");
+    expect(buttonsOf(surface)).toEqual(["Open settings"]);
+    expect(within(surface).getByText("Update pending")).toBeTruthy();
+    expect(
+      within(surface).getByText(
+        "Applied on this host's next check-in — within ~10 minutes, and only when no sessions are running.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(surface).queryByRole("button", { name: "Report issue" }),
+    ).toBeNull();
+  });
+
+  it("the real older-host cover restores its actions after a failed update and keeps the auth toast", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry("1.5.4", "current"),
+      "fail-update",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_OPEN,
+    );
+
+    const surface = await screen.findByTestId("window-host-modal");
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    fireEvent.click(
+      within(surface).getByTestId("window-host-modal-update-host"),
+    );
+
+    await waitFor(() => {
+      expect(hostPolicyPatchCalls).toBe(1);
+      expect(authErrorToastHarness.show).toHaveBeenCalledTimes(1);
+    });
+    const toastCall = authErrorToastHarness.show.mock.calls[0];
+    if (toastCall === undefined)
+      throw new Error("update failure toast missing");
+    expect(toastCall[1]).toBe("Couldn't update this host.");
+    await waitFor(() => {
+      const updateButton = within(surface).getByTestId(
+        "window-host-modal-update-host",
+      );
+      if (!(updateButton instanceof HTMLButtonElement)) {
+        throw new Error("Update now control is not a button");
+      }
+      expect(updateButton.disabled).toBe(false);
+    });
+    expect(buttonsOf(surface)).toEqual(["Update now", "Open settings"]);
+    expect(
+      within(surface).queryByRole("button", { name: "Report issue" }),
+    ).toBeNull();
   });
 
   it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; progress heading absent; attempt panel + log toggle present", async () => {
@@ -893,6 +1298,48 @@ describe("<WindowHostModalHost />", () => {
     expect(openSettings.textContent).toContain("Open settings");
   });
 
+  it("cold-start older host keeps the update title and exact remote description without Report issue", async () => {
+    const fixture = await createModalHostRuntimeFixture(
+      remoteHostEntry("1.5.4", "current"),
+      "normal",
+    );
+    applySnapshot({
+      attached: true,
+      effectiveHostId: REMOTE_HOST_ID,
+      targetHostId: REMOTE_HOST_ID,
+      leases: [
+        lease({
+          hostId: REMOTE_HOST_ID,
+          status: "connecting",
+          dead: null,
+        }),
+      ],
+    });
+
+    renderHostWithRuntime(
+      fixture,
+      { ...EMPTY_PRESENTATION, targetKind: "remote", localBootIntent: false },
+      false,
+      GATE_BLOCKING,
+    );
+
+    const card = await screen.findByTestId("window-host-startup-card");
+    expect(card.getAttribute("data-cause")).toBe("cold-start");
+    expect(card.getAttribute("data-variant")).toBe("update-host");
+    expect(
+      within(card).getByTestId("window-host-startup-card-title").textContent,
+    ).toBe("Host update needed");
+    expect(
+      within(card).getByTestId("window-host-startup-card-description")
+        .textContent,
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
+    expect(
+      within(card).queryByRole("button", { name: "Report issue" }),
+    ).toBeNull();
+  });
+
   it("cold-start, slow (stage: slow): Retry present, Report issue absent, Open settings present as a button", async () => {
     // The row most likely to get this wrong later: Retry and Report issue sit
     // adjacent in the same row and share the same underlying state, so it is
@@ -968,16 +1415,19 @@ describe("<WindowHostModalHost />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
-    expect(
-      screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
-    ).toBe("cold-start");
+    const card = screen.getByTestId("window-host-startup-card");
+    expect(card.getAttribute("data-cause")).toBe("cold-start");
+    expect(card.getAttribute("data-variant")).toBe("offline");
     const openSettings = screen.getByTestId("window-host-modal-open-settings");
     expect(openSettings).toBeTruthy();
     // A SETTLED failure gets its heading back - a crash report under no title
     // reads as debris. This is the one cold-start face that is titled.
     expect(
       screen.getByTestId("window-host-startup-card-title").textContent,
-    ).toContain("Traycer Host didn't start");
+    ).toBe("Traycer Host didn't start");
+    expect(
+      screen.queryByTestId("window-host-startup-card-description"),
+    ).toBeNull();
 
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
