@@ -256,14 +256,6 @@ export function BotThreadPanel(props: {
           </span>
         </div>
         <div hidden={focusLayout} className="contents">
-          {threadId === null ? null : (
-            <BotThreadFollowControl
-              botId={props.botId}
-              hostId={props.hostId}
-              threadId={threadId}
-              postedByViewer={postedByViewer}
-            />
-          )}
           {thread === null ? null : (
             <Button
               type="button"
@@ -281,6 +273,14 @@ export function BotThreadPanel(props: {
             >
               Thread session
             </Button>
+          )}
+          {threadId === null ? null : (
+            <BotThreadFollowControl
+              botId={props.botId}
+              hostId={props.hostId}
+              threadId={threadId}
+              postedByViewer={postedByViewer}
+            />
           )}
         </div>
         <Button

@@ -1,11 +1,11 @@
 /**
- * The thread header's follow control (decision 137), over a real follows
+ * The thread header's actions menu (decision 137), over a real follows
  * query and mutation against a host that keeps the person's follows. Only the
  * viewer id, the method support and the tab's host client are replaced.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import type { BotThreadFollow } from "@traycer/protocol/host/bot/schemas";
 import {
   createFollowHostFixture,
@@ -27,7 +27,10 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => mocks.supported,
 }));
 
-import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
+import {
+  BotThreadFollowControl,
+  BotThreadRowMenu,
+} from "@/components/bots/bot-thread-follow";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const THREAD_ID = "thread-a";
@@ -60,51 +63,73 @@ afterEach(() => {
   mocks.follows = null;
 });
 
+async function openMenu(user: UserEvent): Promise<void> {
+  await user.click(
+    await screen.findByRole("button", { name: "Thread actions" }),
+  );
+}
+
 describe("<BotThreadFollowControl />", () => {
-  it("offers Follow on an unfollowed thread, and says Following once the follow lands", async () => {
+  it("is one Thread actions button, with no Follow button or Following trigger and no Following text while closed", async () => {
+    mount(
+      { [THREAD_ID]: { state: "following", reason: "participated" } },
+      true,
+    );
+
+    await screen.findByRole("button", { name: "Thread actions" });
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Following/ })).toBeNull();
+    expect(screen.queryByText(/Following/)).toBeNull();
+    expect(document.body.textContent).not.toContain("Following");
+  });
+
+  it("offers Follow in the menu on an unfollowed thread, with no state label, and sends the follow", async () => {
     const user = userEvent.setup();
     const fixture = mount({}, false);
 
-    await user.click(await screen.findByTestId("bot-thread-follow"));
+    await openMenu(user);
 
-    const following = await screen.findByTestId("bot-thread-following");
-    expect(following.textContent).toContain("Following");
-    expect(screen.getByTestId("bot-thread-following-reason").textContent).toBe(
-      "· you chose to",
+    const item = await screen.findByRole("menuitem", { name: "Follow" });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    expect(screen.queryByText(/Following/)).toBeNull();
+    await user.click(item);
+    await waitFor(() =>
+      expect(fixture.writes).toEqual([
+        { botId: BOT_ID, threadId: THREAD_ID, state: "following" },
+      ]),
     );
-    expect(fixture.writes).toEqual([
-      { botId: BOT_ID, threadId: THREAD_ID, state: "following" },
-    ]);
   });
 
   it.each([
-    ["participated", true, "· you posted"],
-    ["participated", false, "· you replied"],
-    ["mentioned", false, "· you were mentioned"],
-    ["manual", false, "· you chose to"],
+    ["participated", true, "Following · you posted"],
+    ["participated", false, "Following · you replied"],
+    ["mentioned", false, "Following · you were mentioned"],
+    ["manual", false, "Following · you chose to"],
   ] as const)(
-    "gives a %s follow (viewer posted: %s) the reason %s",
+    "labels a %s follow (viewer posted: %s) in the menu as %s",
     async (reason, postedByViewer, text) => {
+      const user = userEvent.setup();
       mount({ [THREAD_ID]: { state: "following", reason } }, postedByViewer);
 
-      expect(
-        (await screen.findByTestId("bot-thread-following-reason")).textContent,
-      ).toBe(text);
+      await openMenu(user);
+
+      expect(await screen.findByText(text)).toBeTruthy();
     },
   );
 
-  it("unfollows from its menu and goes back to Follow", async () => {
+  it("unfollows from the menu of a followed thread, which has no Open thread", async () => {
     const user = userEvent.setup();
     const fixture = mount(
       { [THREAD_ID]: { state: "following", reason: "participated" } },
       true,
     );
 
-    await user.click(await screen.findByTestId("bot-thread-following"));
-    await user.click(await screen.findByTestId("bot-thread-unfollow"));
+    await openMenu(user);
+    const item = await screen.findByRole("menuitem", { name: "Unfollow" });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    await user.click(item);
 
-    expect(await screen.findByTestId("bot-thread-follow")).toBeTruthy();
-    expect(screen.queryByTestId("bot-thread-following")).toBeNull();
     await waitFor(() =>
       expect(fixture.writes).toEqual([
         { botId: BOT_ID, threadId: THREAD_ID, state: "unfollowed" },
@@ -113,17 +138,46 @@ describe("<BotThreadFollowControl />", () => {
   });
 
   it("reads an unfollowed row as not followed", async () => {
+    const user = userEvent.setup();
     mount({ [THREAD_ID]: { state: "unfollowed", reason: "manual" } }, false);
 
-    expect(await screen.findByTestId("bot-thread-follow")).toBeTruthy();
-    expect(screen.queryByTestId("bot-thread-following")).toBeNull();
+    await openMenu(user);
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Follow" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Following/)).toBeNull();
   });
 
   it("draws nothing on a host without the methods", () => {
     mocks.supported = false;
     mount({}, false);
 
-    expect(screen.queryByTestId("bot-thread-follow")).toBeNull();
-    expect(screen.queryByTestId("bot-thread-following")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+describe("<BotThreadRowMenu />", () => {
+  it("still offers Open thread and Follow in a Threads card's menu", async () => {
+    const user = userEvent.setup();
+    const onOpenThread = vi.fn();
+    mocks.follows = createFollowHostFixture({});
+    render(
+      <mocks.follows.Wrapper>
+        <BotThreadRowMenu
+          botId={BOT_ID}
+          threadId={THREAD_ID}
+          following={false}
+          onOpenThread={onOpenThread}
+        />
+      </mocks.follows.Wrapper>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Thread actions" }));
+
+    const open = await screen.findByRole("menuitem", { name: "Open thread" });
+    expect(screen.getByRole("menuitem", { name: "Follow" })).toBeTruthy();
+    await user.click(open);
+    expect(onOpenThread).toHaveBeenCalledTimes(1);
   });
 });
