@@ -2736,6 +2736,10 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
   },
+  "environment.providers.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.guide.get": {
     ...LATEST_SCHEDULING,
