@@ -9,11 +9,16 @@ import { toast } from "sonner";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
-import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
+import {
+  HOST_DOOR_STATE_POLICY,
+  hostRefusalOf,
+} from "@traycer-clients/shared/host-transport/host-door-state";
 import { staleWriteOfHostError } from "@/lib/environment/stale-write";
 import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
+import { useHostDoorStateStore } from "@/stores/host/host-door-state-store";
+import { hostOfFailedCall } from "@/lib/host/refused-host";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
@@ -616,27 +621,41 @@ export function toastFromHostErrorWithDetail(
 }
 
 /**
- * A host `UNAUTHORIZED` while the app-level session is still signed in is the
- * recoverable stale-bearer race (the wake-after-suspension case: an in-flight
- * call raced the token refresh). The shared single-flight revalidator owns
- * recovery: on "rotated" the retry succeeds silently, and on "rejected" the
- * revalidator signs out - flipping auth status to `signed-out`, which emits
- * the one authoritative "Session expired - sign in again." toast via
- * `AuthSessionExpiredToastBridge`. Toasting here too produced a "sign in"
- * toast on every overnight wake even though recovery succeeded seconds later.
- * The `retryable` (host-side JWKS outage) variant keeps its distinct copy:
- * it is not a credential statement and never leads to a sign-out.
+ * A credential refusal reaches this file only after recovery has run: the
+ * call was refreshed and sent once more, or recovery ended it. A sign-out
+ * on the way flips auth status to `signed-out`, and
+ * `AuthSessionExpiredToastBridge` says so. Still signed in, the refusal says
+ * nothing only where a door state that blocks now covers the host the call
+ * was sent to: the person sees that cover. Anything else gets the caller's
+ * own line. The `retryable` variant keeps its own copy: it is not a
+ * credential statement.
  */
 function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
+  if (useAuthStore.getState().status === "signed-out") return false;
   const byReason = reasonedDoorRefusal(error);
   if (byReason !== null)
-    return (
-      isCredentialRefusal(byReason) &&
-      useAuthStore.getState().status !== "signed-out"
-    );
+    return isCredentialRefusal(byReason) && doorStateCovers(error);
   if (error.code !== "UNAUTHORIZED") return false;
   if (hostRefusalOf(error)?.retryable === true) return false;
-  return useAuthStore.getState().status !== "signed-out";
+  return doorStateCovers(error);
+}
+
+/** Whether a door state that blocks is up for the host `error` was sent to. */
+function doorStateCovers(error: HostRpcError): boolean {
+  const hostId = hostOfFailedCall(error);
+  if (hostId === null) return false;
+  const state = useHostDoorStateStore.getState().byHost.get(hostId);
+  return state !== undefined && HOST_DOOR_STATE_POLICY[state.kind].blocks;
+}
+
+/**
+ * Sign-in advice, which helps only a person who is signed out. Signed in, a
+ * fresh credential was just refused, so the caller's own line is said.
+ */
+function signInAdvice(fallback: string): string {
+  return useAuthStore.getState().status === "signed-out"
+    ? SIGN_IN_AGAIN_MESSAGE
+    : fallback;
 }
 
 /**
@@ -661,7 +680,22 @@ function reasonedDoorRefusalMessage(
   refusal: FatalErrorDetails,
   fallback: string,
 ): string {
-  return isCredentialRefusal(refusal) ? SIGN_IN_AGAIN_MESSAGE : fallback;
+  return isCredentialRefusal(refusal) ? signInAdvice(fallback) : fallback;
+}
+
+/**
+ * A card's headline for a refusal of the person's credential, or `null` when
+ * the code's own arm decides. A recognised reason decides first; a reasonless
+ * `UNAUTHORIZED` is a credential refusal. Signed out, the sign-in advice;
+ * signed in, the card's `generic` line, as the toast's.
+ */
+export function credentialRefusalHeadline(
+  error: HostRpcError,
+  generic: string,
+): string | null {
+  const byReason = reasonedDoorRefusal(error);
+  if (byReason !== null) return reasonedDoorRefusalMessage(byReason, generic);
+  return error.code === "UNAUTHORIZED" ? signInAdvice(generic) : null;
 }
 
 const SIGN_IN_AGAIN_MESSAGE = "Please sign in again.";
@@ -829,7 +863,7 @@ function codeKeyedMessage(error: HostRpcError, fallback: string): string {
     if (hostRefusalOf(error)?.retryable === true) {
       return "The host couldn't verify your session. Try again in a moment.";
     }
-    return SIGN_IN_AGAIN_MESSAGE;
+    return signInAdvice(fallback);
   }
   if (error.code === "WORKTREE_BUSY") {
     return "Worktree is in use by an active agent or terminal. Stop those runs and try again.";

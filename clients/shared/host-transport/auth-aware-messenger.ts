@@ -5,6 +5,7 @@ import {
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import { hostRefusalOf } from "./host-door-state";
 import {
@@ -34,6 +35,40 @@ function readBearer(source: OpenFrameBearerSource): string | null {
     return source.getBearerToken();
   } catch {
     return null;
+  }
+}
+
+/**
+ * The retry, sent with the fresh host-only token, was refused again for a
+ * reason a fresh token answers: that refusal goes to the revalidator once
+ * more, as a stream's would, so the lease can raise the state that covers
+ * the host. Its answer is not acted on, and the call is not sent a third
+ * time. A refusal with no recognised reason, the server pool's among them, is
+ * never asked twice: there a second ask would renew the sign-in again.
+ */
+async function reportRefusedAgain(
+  auth: AuthorityBoundAuthRevalidator,
+  authority: HostRequestAuthority,
+  retryCause: unknown,
+): Promise<void> {
+  if (!readsHostRefusal(auth) || !(retryCause instanceof HostRpcError)) return;
+  const refusal = hostRefusalOf(retryCause);
+  if (
+    refusal === null ||
+    refusal.retryable === true ||
+    !isCredentialRefusal(refusal)
+  )
+    return;
+  const reason = readDoorReason(refusal.doorReason);
+  if (reason === "absent" || reason === "unrecognised") return;
+  try {
+    await auth.revalidateRefusedBearer(
+      authority.bearer,
+      authority.endpoint.hostId,
+      refusal,
+    );
+  } catch {
+    // The retry's own refusal is what the caller is told.
   }
 }
 
@@ -77,7 +112,9 @@ export function hostRejectedBeforeRequest(error: unknown): boolean {
  * whose bearer is no longer current comes back `"superseded"`.
  *
  * A revalidation that rotated the bearer is followed by one more `request`
- * attempt, whose failure propagates. One that did not rotate rethrows the
+ * attempt, whose failure propagates. If that attempt is refused again for a
+ * recognised credential reason, the refusal is first handed to the
+ * revalidator once more (see `reportRefusedAgain`). One that did not rotate rethrows the
  * original error; an abort during recovery rejects with
  * `HostRequestAbortedError`, and a superseded recovery with
  * `HostAuthoritySupersededError`.
@@ -183,6 +220,7 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       try {
         return await call();
       } catch (retryCause) {
+        await reportRefusedAgain(auth, authority, retryCause);
         throw withEarlierAttemptDispatch(retryCause, method, sentEarlier);
       }
     }

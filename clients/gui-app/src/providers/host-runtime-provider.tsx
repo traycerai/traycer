@@ -45,6 +45,7 @@ import {
 } from "@/lib/host/host-messenger";
 import { subscribeTaskHostRefusalReset } from "@/hooks/epic/use-task-hosts-query";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { recordingRefusedHost } from "@/lib/host/refused-host";
 import { acquireRendererSelectionKernel } from "@/lib/host/renderer-selection-kernel";
 import {
   mountSelectionAuthorityBridge,
@@ -396,9 +397,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           return auth.revalidateExpectedBearer(expected);
         },
       };
-      const messenger: IHostMessenger<Registry> = createRetryingMessenger(
-        createAuthAwareMessenger(rawMessenger, unaryRecovery, "always"),
-        DEFAULT_TRANSPORT_RETRY_POLICY,
+      // Outermost, so the error a caller catches is the one whose host is
+      // recorded: the toast reads it to tell whether a door state covers it.
+      const messenger: IHostMessenger<Registry> = recordingRefusedHost(
+        createRetryingMessenger(
+          createAuthAwareMessenger(rawMessenger, unaryRecovery, "always"),
+          DEFAULT_TRANSPORT_RETRY_POLICY,
+        ),
       );
 
       runtime = new HostRuntime<Registry>({

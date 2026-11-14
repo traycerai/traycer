@@ -125,8 +125,10 @@ export function hostTokenBearerFor(
  * Recovery for a host connection whose token was refused or ran out. Keyed on
  * the host's `doorReason`, never on its code, and a host's refusal never
  * starts sign-in recovery:
- * - no refusal yet (a token already known to have run out), or
- *   `token_expired`: mint a fresh token and reconnect.
+ * - no refusal yet (a token already known to have run out): mint a fresh
+ *   token and reconnect.
+ * - `token_expired`: one fresh token; refused as expired again while this
+ *   clock still calls it unexpired, terminal, with no state.
  * - `not_admitted`: one fresh token; refused again with it, `not-admitted`.
  * - `session_revoked`: the ordinary sign-out path, through the sign-in
  *   token's own refresh.
@@ -148,6 +150,13 @@ export function hostTokenRevalidator(deps: {
   // The token minted in answer to the last `not_admitted`: a second refusal
   // while it is still the one held is final.
   let mintedAfterNotAdmitted: string | null = null;
+  // The token minted for this person in answer to their last
+  // `token_expired`. Refused as expired again while this clock still calls it
+  // usable, another mint cannot help: the next would be refused the same way.
+  let mintedAfterExpiry: {
+    readonly userId: string;
+    readonly token: string;
+  } | null = null;
 
   const mintFresh = async (
     userId: string,
@@ -179,7 +188,20 @@ export function hostTokenRevalidator(deps: {
   ): Promise<RevalidateOutcome> => {
     if (refusal === null) return mintFresh(userId, false);
     const reason = readDoorReason(refusal.doorReason);
-    if (reason === "token_expired") return mintFresh(userId, false);
+    if (reason === "token_expired") {
+      const held = deps.tokens.current(userId, deps.hostId);
+      if (
+        held !== null &&
+        mintedAfterExpiry?.userId === userId &&
+        held.token === mintedAfterExpiry.token &&
+        isUsableHostToken(held, deps.now())
+      )
+        return "rejected";
+      const outcome = await mintFresh(userId, false);
+      const minted = deps.tokens.current(userId, deps.hostId)?.token ?? null;
+      mintedAfterExpiry = minted === null ? null : { userId, token: minted };
+      return outcome;
+    }
     if (reason === "not_admitted") {
       const held = deps.tokens.current(userId, deps.hostId)?.token ?? null;
       if (held !== null && held === mintedAfterNotAdmitted) {
