@@ -101,6 +101,8 @@ export interface PerWindowLandingDraft {
    * renderer parses. Present only while the draft has one.
    */
   readonly returnedSandbox?: JsonValue;
+  /** Present, as `true`, only while nobody chose the draft's account. */
+  readonly accountFollowsDefault?: boolean;
 }
 
 export interface PerWindowSnapshot {

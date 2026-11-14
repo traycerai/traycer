@@ -176,8 +176,55 @@ async function rejection(promise: Promise<unknown>): Promise<CliError> {
   return error;
 }
 
-function sentRequest(call: number) {
-  return createEpicRequestSchemaV13.parse(rpcMock.mock.calls[call][1]);
+function epicCreateCalls() {
+  return rpcMock.mock.calls.filter((call) => call[0] === "epic.create");
+}
+
+function sentRequest(index: number) {
+  const call = epicCreateCalls()[index];
+  if (call === undefined) {
+    throw new Error(`no epic.create call at index ${index}`);
+  }
+  return createEpicRequestSchemaV13.parse(call[1]);
+}
+
+/** An unnamed profile reads `providers.list` before `epic.create`. */
+function answerRpc(create: () => Promise<unknown> | unknown): void {
+  rpcMock.mockImplementation((method) => {
+    if (method === "providers.list") {
+      return Promise.resolve({ providers: [] });
+    }
+    return Promise.resolve().then(create);
+  });
+}
+
+function failFirstCreate(cause: unknown): void {
+  let creates = 0;
+  answerRpc(() => {
+    creates += 1;
+    if (creates === 1) throw cause;
+    return CREATED;
+  });
+}
+
+function answerFirstCreate(value: unknown): void {
+  let creates = 0;
+  answerRpc(() => {
+    creates += 1;
+    return creates === 1 ? value : CREATED;
+  });
+}
+
+/**
+ * The run's `providers.list` read fails, which keeps the Terminal login, and
+ * its create goes through the real send path.
+ */
+function delegateCreatesToRealSend(): void {
+  const send = realSend.call;
+  if (send === null) throw new Error("real send path not captured");
+  rpcMock
+    .mockRejectedValueOnce(new Error("providers.list not served"))
+    .mockImplementationOnce(send);
 }
 
 async function recordFiles(): Promise<string[]> {
@@ -190,7 +237,7 @@ beforeEach(async () => {
   vi.stubEnv("TRAYCER_EPIC_ID", "");
   authMock.mockResolvedValue(AUTH);
   endpointMock.mockResolvedValue(ENDPOINT);
-  rpcMock.mockResolvedValue(CREATED);
+  answerRpc(() => CREATED);
 });
 
 afterEach(async () => {
@@ -293,9 +340,10 @@ describe("task create: the request", () => {
     expect(sentRequest(0).epic.title).toBe("");
   });
 
-  it("sends the ambient login for --profile ambient", async () => {
+  it("sends the ambient login for --profile ambient and does not move it", async () => {
     await run({ profile: "ambient" });
     expect(sentRequest(0).chat?.initialMessage?.settings.profileId).toBeNull();
+    expect(rpcMock.mock.calls.map((call) => call[0])).toEqual(["epic.create"]);
   });
 
   it("writes no key record without --idempotency-key", async () => {
@@ -357,7 +405,7 @@ describe("task create: refusals that create nothing", () => {
 
 describe("task create: a host too old for the local-first create", () => {
   it("says to update the host, and clears the key so a retry after the update creates", async () => {
-    rpcMock.mockRejectedValueOnce(
+    failFirstCreate(
       new HostMethodVersionUnsatisfiedError({
         requirement: { method: "epic.create", version: { major: 1, minor: 1 } },
         negotiated: { major: 1, minor: 0 },
@@ -372,7 +420,7 @@ describe("task create: a host too old for the local-first create", () => {
     expect(await recordFiles()).toEqual([]);
 
     const result = await run({ idempotencyKey: "slot-1" });
-    expect(rpcMock).toHaveBeenCalledTimes(2);
+    expect(rpcMock).toHaveBeenCalledTimes(4);
     expect(result.exitCode).toBe(0);
   });
 });
@@ -381,7 +429,7 @@ describe("task create --idempotency-key", () => {
   it("returns the first run's ids with alreadyCreated for a second run of the same key", async () => {
     const first = await run({ idempotencyKey: "slot-1" });
     const second = await run({ idempotencyKey: "slot-1" });
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledTimes(2);
     expect(second.data).toEqual({
       ...(first.data as Record<string, unknown>),
       alreadyCreated: true,
@@ -391,19 +439,26 @@ describe("task create --idempotency-key", () => {
 
   it("gives two concurrent runs of one key one Task: the second waits on the lock and reads done", async () => {
     let answer = (): void => undefined;
-    rpcMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
+    let creates = 0;
+    rpcMock.mockImplementation((method) => {
+      if (method === "providers.list") {
+        return Promise.resolve({ providers: [] });
+      }
+      creates += 1;
+      if (creates === 1) {
+        return new Promise((resolve) => {
           answer = () => resolve(CREATED);
-        }),
-    );
+        });
+      }
+      return Promise.resolve(CREATED);
+    });
     const first = run({ idempotencyKey: "slot-1" });
-    await vi.waitFor(() => expect(rpcMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(rpcMock).toHaveBeenCalledTimes(2));
     const second = run({ idempotencyKey: "slot-1" });
     await new Promise((resolve) => setTimeout(resolve, 100));
     answer();
     const [a, b] = await Promise.all([first, second]);
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledTimes(2);
     expect(b.data).toEqual({
       ...(a.data as Record<string, unknown>),
       alreadyCreated: true,
@@ -416,7 +471,7 @@ describe("task create --idempotency-key", () => {
       run({ idempotencyKey: "slot-1", message: "Something else" }),
     );
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledTimes(2);
   });
 
   it("exits non-zero naming the ids and the record for an intent with no done, without a send", async () => {
@@ -446,7 +501,7 @@ describe("task create --idempotency-key", () => {
       writtenAt: Date.now() - 25 * 60 * 60 * 1000,
     });
     const result = await run({ idempotencyKey: "slot-1" });
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledTimes(2);
     expect(result.data).toMatchObject({ alreadyCreated: false });
   });
 
@@ -463,11 +518,11 @@ describe("task create --idempotency-key", () => {
     expect(error.code).toBe(CLI_ERROR_CODES.HOST_NOT_RUNNING);
     expect(await recordFiles()).toEqual([]);
     expect((await run({ idempotencyKey: "slot-1" })).exitCode).toBe(0);
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledTimes(2);
   });
 
   it("clears the key on the typed local-store refusal, so the retry after recovery creates", async () => {
-    rpcMock.mockResolvedValueOnce({
+    answerFirstCreate({
       roomInfo: null,
       refusal: {
         kind: "local-store-unavailable",
@@ -480,11 +535,11 @@ describe("task create --idempotency-key", () => {
     expect(error.message).toContain("Stop the other host, then try again.");
     expect(await recordFiles()).toEqual([]);
     expect((await run({ idempotencyKey: "slot-1" })).exitCode).toBe(0);
-    expect(rpcMock).toHaveBeenCalledTimes(2);
+    expect(rpcMock).toHaveBeenCalledTimes(4);
   });
 
   it("dispatches on the preflighted host and clears the key on a failure proven to precede the frame", async () => {
-    rpcMock.mockRejectedValueOnce(
+    failFirstCreate(
       new RetryableTransportError({
         code: "RPC_ERROR",
         message: "dial failed",
@@ -540,7 +595,7 @@ describe("task create --idempotency-key", () => {
   ])(
     "keeps the intent after %s, and the retry refuses",
     async (_label, cause) => {
-      rpcMock.mockRejectedValueOnce(cause);
+      failFirstCreate(cause);
       await rejection(run({ idempotencyKey: "slot-1" }));
       const [file] = await recordFiles();
       const written = JSON.parse(
@@ -552,7 +607,7 @@ describe("task create --idempotency-key", () => {
       const retry = await rejection(run({ idempotencyKey: "slot-1" }));
       expect(retry.code).toBe(CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN);
       expect(retry.message).toContain(sentRequest(0).epic.id);
-      expect(rpcMock).toHaveBeenCalledTimes(1);
+      expect(rpcMock).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -609,7 +664,7 @@ describe("task create --idempotency-key", () => {
       taskId: sent.epic.id,
       alreadyCreated: true,
     });
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledTimes(2);
   });
 
   it("clears an intent the failed write already made visible, so the rerun creates", async () => {
@@ -628,7 +683,7 @@ describe("task create --idempotency-key", () => {
 
     const rerun = await run({ idempotencyKey: "slot-1" });
     expect(rerun.data).toMatchObject({ alreadyCreated: false });
-    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not tell the user to delete a record it cannot read back after a failed done write", async () => {
@@ -649,9 +704,7 @@ describe("task create --idempotency-key", () => {
 
 describe("task create: a refusal answered after an earlier send", () => {
   it("keeps the intent when the send's first attempt may have committed and a retry is refused", async () => {
-    const send = realSend.call;
-    if (send === null) throw new Error("real send path not captured");
-    rpcMock.mockImplementationOnce(send);
+    delegateCreatesToRealSend();
     // Attempt A went out under the negotiated key and its answer was lost:
     // the host may have committed the Task. A retry, if one is made, finds
     // the host's store unavailable and answers the typed refusal as data.
@@ -687,9 +740,7 @@ describe("task create: a refusal answered after an earlier send", () => {
   });
 
   it("refreshes an expired sign-in the host refused before the request frame, and creates", async () => {
-    const send = realSend.call;
-    if (send === null) throw new Error("real send path not captured");
-    rpcMock.mockImplementationOnce(send);
+    delegateCreatesToRealSend();
     storeRotate.mockResolvedValueOnce({
       outcome: "applied",
       credentials: { token: "tok-2" },
@@ -725,9 +776,7 @@ describe("task create: a refusal answered after an earlier send", () => {
   });
 
   it("keeps the intent when a sent attempt ends UNAUTHORIZED, and sends nothing after a refreshed sign-in", async () => {
-    const send = realSend.call;
-    if (send === null) throw new Error("real send path not captured");
-    rpcMock.mockImplementationOnce(send);
+    delegateCreatesToRealSend();
     storeRotate.mockResolvedValueOnce({
       outcome: "applied",
       credentials: { token: "tok-2" },
@@ -774,5 +823,90 @@ describe("task create: input errors name the flag, never echo the value", () => 
     expect(error.message).toContain(flag);
     expect(error.message).not.toContain("private-token");
     expect(error.message).not.toContain("\n");
+  });
+});
+
+describe("task create: a signed-out Terminal login", () => {
+  const signedIn = {
+    providerId: "claude-code",
+    auth: { status: "unauthenticated" },
+    profiles: [
+      {
+        profileId: "ambient",
+        kind: "ambient",
+        enabled: true,
+        auth: { status: "unauthenticated" },
+      },
+      {
+        profileId: "profile-work",
+        kind: "managed",
+        enabled: true,
+        auth: { status: "authenticated" },
+      },
+    ],
+  };
+
+  function listThenCreate(providers: readonly (typeof signedIn)[]): void {
+    rpcMock.mockImplementation((method) =>
+      method === "providers.list"
+        ? Promise.resolve({ providers })
+        : Promise.resolve(CREATED),
+    );
+  }
+
+  async function storedFingerprint(key: string): Promise<string> {
+    const path = taskCreateKeyRecordPath(keysDir.current, "u1", key);
+    const written = JSON.parse(await readFile(path, "utf8")) as {
+      fingerprint: string;
+    };
+    return written.fingerprint;
+  }
+
+  it("sends the one signed-in profile when no --profile was given", async () => {
+    listThenCreate([signedIn]);
+    await run({});
+    expect(sentRequest(0).chat?.initialMessage?.settings.profileId).toBe(
+      "profile-work",
+    );
+    expect(rpcMock.mock.calls.map((call) => call[0])).toEqual([
+      "providers.list",
+      "epic.create",
+    ]);
+  });
+
+  it("leaves the Terminal login when the list cannot be read, and still creates", async () => {
+    rpcMock.mockImplementation((method) => {
+      if (method === "providers.list") {
+        return Promise.reject(new Error("listing unread"));
+      }
+      return Promise.resolve(CREATED);
+    });
+    await run({});
+    expect(sentRequest(0).chat?.initialMessage?.settings.profileId).toBeNull();
+    expect(epicCreateCalls()).toHaveLength(1);
+  });
+
+  it("records the asked-for account, so a later signed-in profile does not refuse the rerun", async () => {
+    let providers: readonly (typeof signedIn)[] = [];
+    rpcMock.mockImplementation((method) =>
+      method === "providers.list"
+        ? Promise.resolve({ providers })
+        : Promise.resolve(CREATED),
+    );
+
+    await run({ idempotencyKey: "slot-open" });
+    expect(sentRequest(0).chat?.initialMessage?.settings.profileId).toBeNull();
+    const open = await storedFingerprint("slot-open");
+
+    providers = [signedIn];
+    await run({ idempotencyKey: "slot-moved" });
+    expect(sentRequest(1).chat?.initialMessage?.settings.profileId).toBe(
+      "profile-work",
+    );
+    expect(await storedFingerprint("slot-moved")).toBe(open);
+
+    const rerun = await run({ idempotencyKey: "slot-open" });
+    expect(rerun.data).toMatchObject({ alreadyCreated: true });
+    expect(epicCreateCalls()).toHaveLength(2);
   });
 });

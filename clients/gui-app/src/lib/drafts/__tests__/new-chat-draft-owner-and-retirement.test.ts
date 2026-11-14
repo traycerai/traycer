@@ -15,6 +15,7 @@ import {
 import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
 import {
   applyNewChatHostDocument,
+  newChatDraftRememberSynced,
   useNewConversationModalStore,
 } from "@/stores/epics/new-conversation-modal-store";
 
@@ -87,6 +88,16 @@ const FROZEN_CODEX_SETTINGS = chatRunSettingsSchemaPreUltracode.parse({
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+});
+
+const FROZEN_OTHER_PROFILE = chatRunSettingsSchemaPreUltracode.parse({
+  harnessId: "claude",
+  model: "claude-opus-4-7",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: "other-profile",
 });
 
 function frozenHostDocument(
@@ -311,5 +322,200 @@ describe("new-chat retired-id fence", () => {
     // content - but it is applied, which is what the fence must not prevent.
     expect(patchForEpic()?.hostRevision).toBe(7);
     expect(patchForEpic()?.ownerHostId).toBe(HOST_ID);
+  });
+});
+
+const ACK_REVISION = 4;
+
+function acknowledgeNewChat(draftId: string, revision: number): void {
+  const patch = patchForEpic();
+  if (patch === undefined) throw new Error("expected a patch");
+  newChatDraftRememberSynced(draftId, revision, patch.generation);
+}
+
+/** A clean Terminal patch whose own write was acknowledged at `ACK_REVISION`. */
+function acknowledgedTerminalPatch(): string {
+  useNewConversationModalStore
+    .getState()
+    .setSettings(EPIC_ID, LIVE_CLAUDE_SETTINGS);
+  const draftId = currentDraftId();
+  useNewConversationModalStore
+    .getState()
+    .setAccountFollowsDefault(EPIC_ID, true);
+  acknowledgeNewChat(draftId, ACK_REVISION);
+  const patch = patchForEpic();
+  if (patch === undefined) throw new Error("expected a patch");
+  expect(patch.generation).toBe(patch.syncedGeneration);
+  expect(patch.hostRevision).toBe(ACK_REVISION);
+  expect(patch.settings?.profileId).toBeNull();
+  expect(patch.accountFollowsDefault).toBe(true);
+  return draftId;
+}
+
+describe("new-chat account provenance follows this window's own acknowledgement", () => {
+  it("keeps the bit when the echo is the acknowledged revision", () => {
+    const draftId = acknowledgedTerminalPatch();
+
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(draftId, ACK_REVISION, FROZEN_CLAUDE_SETTINGS),
+      ),
+    ).toBe(true);
+
+    const patch = patchForEpic();
+    if (patch === undefined) throw new Error("expected a patch");
+    expect(patch.accountFollowsDefault).toBe(true);
+    expect(patch.draftId).toBe(draftId);
+    expect(patch.hostRevision).toBe(ACK_REVISION);
+    expect(patch.content).toEqual(typed("from the host"));
+    expect(patch.settings).toMatchObject({
+      harnessId: "claude",
+      profileId: null,
+    });
+  });
+
+  it("drops the bit when a later write keeps the same Terminal account", () => {
+    const draftId = acknowledgedTerminalPatch();
+
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(draftId, ACK_REVISION + 1, FROZEN_CLAUDE_SETTINGS),
+      ),
+    ).toBe(true);
+
+    const patch = patchForEpic();
+    if (patch === undefined) throw new Error("expected a patch");
+    expect(Object.hasOwn(patch, "accountFollowsDefault")).toBe(false);
+    expect(patch.draftId).toBe(draftId);
+    expect(patch.hostRevision).toBe(ACK_REVISION + 1);
+    expect(patch.content).toEqual(typed("from the host"));
+    expect(patch.settings).toMatchObject({
+      harnessId: "claude",
+      profileId: null,
+    });
+  });
+
+  it("drops the bit when the incoming account is a different profile", () => {
+    const draftId = acknowledgedTerminalPatch();
+
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(draftId, ACK_REVISION + 1, FROZEN_OTHER_PROFILE),
+      ),
+    ).toBe(true);
+
+    const patch = patchForEpic();
+    if (patch === undefined) throw new Error("expected a patch");
+    expect(Object.hasOwn(patch, "accountFollowsDefault")).toBe(false);
+    expect(patch.settings?.profileId).toBe("other-profile");
+    expect(patch.settings?.harnessId).toBe("claude");
+    expect(patch.content).toEqual(typed("from the host"));
+  });
+
+  it("drops the bit when the document is another draft line", () => {
+    const draftId = acknowledgedTerminalPatch();
+    expect(patchForEpic()?.draftId).toBe(draftId);
+    const otherId = "new-chat-other-line";
+
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(otherId, ACK_REVISION, FROZEN_CLAUDE_SETTINGS),
+      ),
+    ).toBe(true);
+
+    const patch = patchForEpic();
+    if (patch === undefined) throw new Error("expected a patch");
+    expect(patch.draftId).toBe(otherId);
+    expect(Object.hasOwn(patch, "accountFollowsDefault")).toBe(false);
+    expect(patch.content).toEqual(typed("from the host"));
+    expect(patch.settings).toMatchObject({
+      harnessId: "claude",
+      profileId: null,
+    });
+  });
+
+  it("keeps the bit when a dirty local patch receives another writer's document", () => {
+    useNewConversationModalStore.getState().setContent(EPIC_ID, typed("local"));
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, LIVE_CLAUDE_SETTINGS);
+    const draftId = currentDraftId();
+    useNewConversationModalStore
+      .getState()
+      .setAccountFollowsDefault(EPIC_ID, true);
+    const before = patchForEpic();
+    if (before === undefined) throw new Error("expected a patch");
+    expect(before.generation).toBeGreaterThan(before.syncedGeneration);
+
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(draftId, ACK_REVISION + 1, FROZEN_CLAUDE_SETTINGS),
+      ),
+    ).toBe(false);
+
+    const patch = patchForEpic();
+    if (patch === undefined) throw new Error("expected a patch");
+    expect(patch.accountFollowsDefault).toBe(true);
+    expect(patch.content).toEqual(typed("local"));
+    expect(patch.settings?.profileId).toBeNull();
+  });
+
+  it("drops the bit when a foreign write is observed before this window's acknowledgement", () => {
+    const ownRevision = 4;
+    useNewConversationModalStore.getState().setContent(EPIC_ID, typed("local"));
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, LIVE_CLAUDE_SETTINGS);
+    const draftId = currentDraftId();
+    useNewConversationModalStore
+      .getState()
+      .setAccountFollowsDefault(EPIC_ID, true);
+    const dirty = patchForEpic();
+    if (dirty === undefined) throw new Error("expected a patch");
+    expect(dirty.generation).toBeGreaterThan(dirty.syncedGeneration);
+    expect(dirty.accountFollowsDefault).toBe(true);
+    expect(dirty.settings?.profileId).toBeNull();
+
+    const foreign = frozenHostDocument(
+      draftId,
+      ownRevision + 1,
+      FROZEN_CLAUDE_SETTINGS,
+    );
+    expect(applyNewChatHostDocument(foreign)).toBe(false);
+    const held = patchForEpic();
+    if (held === undefined) throw new Error("expected a patch");
+    expect(held.content).toEqual(typed("local"));
+    expect(held.accountFollowsDefault).toBe(true);
+    expect(held.hostRevision).toBe(ownRevision + 1);
+
+    newChatDraftRememberSynced(draftId, ownRevision, held.generation);
+    const acked = patchForEpic();
+    if (acked === undefined) throw new Error("expected a patch");
+    expect(acked.generation).toBe(acked.syncedGeneration);
+    expect(acked.hostRevision).toBe(ownRevision + 1);
+
+    expect(applyNewChatHostDocument(foreign)).toBe(true);
+    const after = patchForEpic();
+    if (after === undefined) throw new Error("expected a patch");
+    expect(Object.hasOwn(after, "accountFollowsDefault")).toBe(false);
+    expect(after.content).toEqual(typed("from the host"));
+    expect(after.settings?.profileId).toBeNull();
+  });
+
+  it("refuses a document older than the acknowledged revision", () => {
+    const draftId = acknowledgedTerminalPatch();
+
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(draftId, ACK_REVISION - 1, FROZEN_OTHER_PROFILE),
+      ),
+    ).toBe(false);
+
+    const patch = patchForEpic();
+    if (patch === undefined) throw new Error("expected a patch");
+    expect(patch.accountFollowsDefault).toBe(true);
+    expect(patch.hostRevision).toBe(ACK_REVISION);
+    expect(patch.content).toBeNull();
+    expect(patch.settings?.profileId).toBeNull();
   });
 });

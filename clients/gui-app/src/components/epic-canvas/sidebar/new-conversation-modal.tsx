@@ -213,6 +213,8 @@ import {
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useSignedOutTerminalDefaultAccount } from "@/hooks/providers/use-signed-out-terminal-default-account";
+import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
@@ -237,6 +239,7 @@ import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-to
 import {
   catalogSettledFor,
   chipModelName,
+  withoutDefaultAccount,
 } from "@/stores/composer/composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
@@ -1124,11 +1127,15 @@ export function NewConversationModalBody(props: {
   const setEpicRunSettings = useComposerRunSettingsStore(
     (state) => state.setEpicRunSettings,
   );
+  const setAccountFollowsDefault = useNewConversationModalStore(
+    (state) => state.setAccountFollowsDefault,
+  );
   const handleToolbarSettingsChange = useCallback(
-    (settings: ChatRunSettings): void => {
+    (settings: ChatRunSettings, accountChosen: boolean): void => {
       setSettings(epicId, settings);
+      setAccountFollowsDefault(epicId, !accountChosen);
     },
-    [epicId, setSettings],
+    [epicId, setAccountFollowsDefault, setSettings],
   );
   // `draftSettings` can fall back to `runSettingsSeed`/`latestSettingsSeed`
   // (see `useNewConversationModalSeed`), neither of which is host-scoped or
@@ -1170,6 +1177,22 @@ export function NewConversationModalBody(props: {
       onShownPickKept: (settings) => setSettings(epicId, settings),
     });
   }, [epicId, setSettings, toolbarStore]);
+  // Nobody chose the account while the draft holds no settings of its own, or
+  // only edits made over a default account: its Terminal login starts on the
+  // default account. A draft whose account a person chose keeps it.
+  const draftAccountFollowsDefault = useNewConversationModalStore((state) => {
+    const patch = state.draftPatchesByEpicId[epicId];
+    return (
+      patch === undefined ||
+      patch.settings === null ||
+      patch.accountFollowsDefault === true
+    );
+  });
+  useLayoutEffect(() => {
+    toolbarStore.getState().setAccountChosen(!draftAccountFollowsDefault);
+  }, [draftAccountFollowsDefault, toolbarStore]);
+  const surfaceActive = useSurfaceActivity();
+  useSignedOutTerminalDefaultAccount(toolbarStore, surfaceActive, hostClient);
   const harnessId = useStore(
     toolbarStore,
     (state) => state.selection.harnessId,
@@ -1676,8 +1699,10 @@ export function NewConversationModalBody(props: {
       // new-chat carries them forward, mirroring the chat-tile composer's
       // on-send write. Keyed by the host the chat is actually created on
       // (`activeHostId`: the pinned host, else the active one resolved above).
-      setGlobalRunSettings(activeHostId, settings, now);
-      setEpicRunSettings(epicId, activeHostId, settings, now);
+      // A default account is nobody's last choice, so it is not remembered.
+      const lastRunSettings = withoutDefaultAccount(settings, toolbar);
+      setGlobalRunSettings(activeHostId, lastRunSettings, now);
+      setEpicRunSettings(epicId, activeHostId, lastRunSettings, now);
       const profile = useAuthStore.getState().profile;
       const userId = profile?.userId ?? null;
       const worktreeIntent = worktreeIntentForSubmit();
