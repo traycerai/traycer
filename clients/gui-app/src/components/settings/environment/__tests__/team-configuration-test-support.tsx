@@ -18,6 +18,10 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type {
+  EnvironmentTransportAnswer,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
@@ -159,6 +163,127 @@ export function hostIdsOf(harness: TeamPageHarness, method: string): string[] {
     .map((call) => call.authority.endpoint.hostId);
 }
 
+async function answerEnvironmentReadFromHandlers(
+  request: EnvironmentTransportRequest,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): Promise<EnvironmentTransportAnswer | null> {
+  if (request.method !== "GET") return null;
+
+  const url = new URL(request.url);
+  const match = /\/api\/v3\/environments\/([^/]+)\/(.+)$/u.exec(url.pathname);
+  if (match === null) return null;
+
+  const environmentId = decodeURIComponent(match[1] ?? "");
+  switch (match[2]) {
+    case "items": {
+      const response = await handlers["environment.configuration.items"]?.({
+        environmentId,
+      });
+      if (response === undefined) return null;
+      const kind = url.searchParams.get("kind");
+      return jsonEnvironmentAnswer({
+        items: response.items.filter((item) => item.kind === kind),
+      });
+    }
+    case "revision": {
+      const response = await handlers["environment.configuration.revision"]?.({
+        environmentId,
+      });
+      return response === undefined
+        ? null
+        : jsonEnvironmentAnswer({ revision: response.revision });
+    }
+    case "mcp-servers": {
+      const response = await handlers[
+        "environment.configuration.mcpServers.list"
+      ]?.({ environmentId });
+      return response === undefined ? null : jsonEnvironmentAnswer(response);
+    }
+    case "secrets": {
+      const response = await handlers["environment.secrets.list"]?.({});
+      if (response === undefined) return null;
+      return jsonEnvironmentAnswer({
+        secrets: response.secrets.map((secret) => ({
+          id: secret.secretId,
+          name: secret.name,
+          kind: secret.kind,
+          protocol: secret.protocol ?? secret.kind,
+          hosts: secret.destinations,
+          currentVersionId: secret.currentVersionId ?? secret.secretId,
+          updatedAt: secret.updatedAt,
+          variables: secret.variables.map((name) => ({ name })),
+        })),
+        removed: response.removed,
+      });
+    }
+    case "secrets/harness-connections": {
+      const response = await handlers["environment.plans.list"]?.({
+        environmentId,
+      });
+      if (response === undefined) return null;
+      return jsonEnvironmentAnswer({
+        connections: response.plans.map((plan) => ({
+          profileId: plan.profileId,
+          harnessId: plan.harness,
+          bindingVersion: plan.bindingVersion ?? null,
+          kind: plan.harness === "api_key" ? "api_key" : "harness",
+          status:
+            plan.status === "linked"
+              ? "connected"
+              : plan.status === "empty"
+                ? "absent"
+                : plan.status,
+          linkedBy:
+            plan.linkedBy === null
+              ? null
+              : {
+                  displayName: plan.linkedBy.name,
+                  you: plan.linkedBy.you,
+                },
+        })),
+      });
+    }
+    case "hosts": {
+      if (!url.searchParams.has("include")) return null;
+      const response = await handlers["environment.host.list"]?.({
+        environmentId,
+      });
+      if (response === undefined) return null;
+      return jsonEnvironmentAnswer({
+        hosts: response.hosts.map((host) => ({
+          hostId: host.hostId,
+          hostName: host.hostLabel,
+          hostPlatform: host.hostPlatform,
+          enrolledByUserId: host.enrolledByUserId,
+          hostKind: host.kind,
+          boundAt: host.boundAt,
+          reportedAt: host.lastReportedAt,
+          online: host.reachable,
+          purgePending: false,
+          hasLocalRow: host.hasLocalRow,
+          items: host.applied.map((item) => {
+            const separator = item.itemKey.indexOf(":");
+            return {
+              kind:
+                separator < 0 ? item.itemKey : item.itemKey.slice(0, separator),
+              key: separator < 0 ? "" : item.itemKey.slice(separator + 1),
+              status:
+                item.state === "applied"
+                  ? "applied"
+                  : item.state === "not_applied"
+                    ? "failed"
+                    : "pending",
+              code: item.reason ?? "ok",
+            };
+          }),
+        })),
+      });
+    }
+    default:
+      return null;
+  }
+}
+
 /**
  * A host whose connection negotiated `negotiated` for a method: a request that
  * carries a higher version floor for that method is refused before anything is
@@ -254,17 +379,8 @@ function buildTeamPage(
     },
     transport: createFakeEnvironmentCloudTransport({
       environments: () => currentRows,
-      onRequest: async (request) => {
-        if (!request.url.includes("/configuration/mcp-servers")) return null;
-        const match = /\/environments\/([^/]+)\//u.exec(
-          new URL(request.url).pathname,
-        );
-        const environmentId = decodeURIComponent(match?.[1] ?? "");
-        const response = await handlers[
-          "environment.configuration.mcpServers.list"
-        ]?.({ environmentId });
-        return response === undefined ? null : jsonEnvironmentAnswer(response);
-      },
+      onRequest: (request) =>
+        answerEnvironmentReadFromHandlers(request, handlers),
     }),
   });
   const authBinding = Object.create(

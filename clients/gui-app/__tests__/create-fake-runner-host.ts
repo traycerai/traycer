@@ -66,7 +66,8 @@ export function createFakeEnvironmentCloudTransport(options: {
       return customAnswer;
     }
 
-    const pathname = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const pathname = url.pathname;
     const route =
       /\/api\/v3\/environments\/([^/]+)\/(hosts|members|review)$/u.exec(
         pathname,
@@ -78,15 +79,21 @@ export function createFakeEnvironmentCloudTransport(options: {
         .find((environment) => environment.environmentId === environmentId);
       switch (route[2]) {
         case "hosts":
+          if (url.searchParams.has("include")) {
+            return jsonEnvironmentAnswer({ hosts: [] });
+          }
           return jsonEnvironmentAnswer({
             hosts: Array.from({ length: row?.hostCount ?? 0 }, () => ({
               purgePending: false,
             })),
           });
         case "members":
+          if (row === undefined || row.providerHandle === null) {
+            return { status: 404, text: "{}" };
+          }
           return jsonEnvironmentAnswer({
             viewer: {
-              effectiveRole: row === undefined ? "viewer" : row.effectiveRole,
+              effectiveRole: row.effectiveRole,
             },
           });
         case "review":
@@ -94,8 +101,22 @@ export function createFakeEnvironmentCloudTransport(options: {
       }
     }
 
-    if (pathname.includes("/configuration/mcp-servers")) {
-      return jsonEnvironmentAnswer({ servers: [] });
+    if (request.method === "GET") {
+      if (pathname.endsWith("/items")) {
+        return jsonEnvironmentAnswer({ items: [] });
+      }
+      if (pathname.endsWith("/revision")) {
+        return jsonEnvironmentAnswer({ revision: 0 });
+      }
+      if (pathname.endsWith("/mcp-servers")) {
+        return jsonEnvironmentAnswer({ servers: [] });
+      }
+      if (pathname.endsWith("/secrets/harness-connections")) {
+        return jsonEnvironmentAnswer({ connections: [] });
+      }
+      if (pathname.endsWith("/secrets")) {
+        return jsonEnvironmentAnswer({ secrets: [], removed: [] });
+      }
     }
     return { status: 404, text: "{}" };
   };
