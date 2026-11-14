@@ -48,6 +48,7 @@ import { organizationKeys } from "@/lib/query-keys/organization-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useTabsStore } from "@/stores/tabs/store";
 import { DEFAULT_TAB_CUSTOMIZATION } from "@/stores/tabs/tab-groups";
+import { useAppearanceEdits } from "./use-appearance-edits";
 
 const EMPTY_TASK_IDS: string[] = [];
 
@@ -174,16 +175,20 @@ export function OrganizationProvider({
         return next;
       });
   }, []);
-  const taskIds = useMemo(
-    () => [...new Set([...requests.values()].flat())].sort(),
-    [requests],
-  );
+  const requestedTasks = [...new Set([...requests.values()].flat())]
+    .sort()
+    .join(",");
+  // Keyed on the set's contents, not on `requests`: a control registering a
+  // task that is already subscribed must hand each subscription the same
+  // array, or it reopens its stream and replays the answer it fetched at
+  // mount over newer frames.
   const chunks = useMemo(() => {
+    const taskIds = requestedTasks === "" ? [] : requestedTasks.split(",");
     const result: string[][] = [];
     for (let i = 0; i < taskIds.length; i += 100)
       result.push(taskIds.slice(i, i + 100));
     return [EMPTY_TASK_IDS, ...result];
-  }, [taskIds]);
+  }, [requestedTasks]);
   const query = useHostQuery({
     client,
     method: "organization.read",
@@ -282,7 +287,7 @@ export function OrganizationProvider({
     },
   });
   const { mutateAsync } = mutation;
-  const command = useCallback(
+  const send = useCallback(
     async (action: OrganizationAction) => {
       const commandId = crypto.randomUUID();
       const current = lifecycle.current;
@@ -301,6 +306,13 @@ export function OrganizationProvider({
       retireSupersededDraftIntents(action);
     },
     [mutateAsync, client, userId, hostId],
+  );
+  const appearance = useAppearanceEdits({ scope, view: query.data, send });
+  const { edit: editAppearance } = appearance;
+  const command = useCallback(
+    (action: OrganizationAction) =>
+      action.kind === "appearance" ? editAppearance(action) : send(action),
+    [editAppearance, send],
   );
   // How many times this provider has tried each tab's draft group intent,
   // and which of those sends has not come back - owned by one scope, and
@@ -401,10 +413,19 @@ export function OrganizationProvider({
       recoveries: recoveryCount,
       wake: () => setRecoveries((seen) => seen + 1),
     });
-    projectOrganizationToTabs(query.data, userId);
     // `command` changes with the host/account scope, so scope changes also
     // re-run this effect.
-  }, [supported, query.data, openIds, command, lifecycle, userId, recoveries]);
+  }, [supported, query.data, openIds, command, lifecycle, recoveries]);
+  // Declared after the effect that opens saved siblings, so a tab it opened
+  // is projected in the same pass. It draws the view with unacknowledged
+  // appearance edits applied, which is what the pickers show. `scope` is a
+  // dependency so a host or account change projects again.
+  const projectedView = appearance.view;
+  useEffect(() => {
+    if (!supported || lifecycle.current === null) return;
+    if (projectedView === undefined || !projectedView.ready) return;
+    projectOrganizationToTabs(projectedView, userId);
+  }, [supported, projectedView, openIds, lifecycle, userId, scope]);
   const openDialog = useCallback(
     (value: OrganizationDialog) => {
       const opener = captureOrganizationDialogOpener();
@@ -423,7 +444,7 @@ export function OrganizationProvider({
       hostSupport,
       client,
       userId,
-      view: ownAccount ? query.data : undefined,
+      view: ownAccount ? projectedView : undefined,
       register,
       command,
       refresh,
@@ -435,7 +456,7 @@ export function OrganizationProvider({
       ownAccount,
       client,
       userId,
-      query.data,
+      projectedView,
       register,
       command,
       refresh,

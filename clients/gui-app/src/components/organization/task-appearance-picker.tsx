@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import type { OrganizationAction } from "@traycer/protocol/host/organization/contracts";
 import { Button } from "@/components/ui/button";
@@ -89,29 +89,13 @@ export function TaskAppearancePicker({ taskId }: { readonly taskId: string }) {
             onBlur={saveIcon}
           />
         </div>
-        <div className="space-y-1.5">
-          <Label>Color</Label>
-          <fieldset
-            disabled={!editable || group !== null}
-            className="flex flex-wrap items-center gap-1"
-          >
-            <TabColorPicker
-              menu={false}
-              onDefault={() => {
-                void organization
-                  ?.command({ kind: "appearance", taskId, color: null })
-                  .catch(() => undefined);
-              }}
-              color={effectiveTabColor(group, appearance?.color ?? null)}
-              onChange={(color) => {
-                void organization
-                  ?.command({ kind: "appearance", taskId, color })
-                  .catch(() => undefined);
-              }}
-            />
-          </fieldset>
-          {group === null ? null : <GroupFollowNote name={group.name} />}
-        </div>
+        <TaskColorField
+          taskId={taskId}
+          command={organization?.command}
+          group={group}
+          color={appearance?.color ?? null}
+          editable={editable}
+        />
         {reset === null ? null : (
           <Button
             type="button"
@@ -129,6 +113,62 @@ export function TaskAppearancePicker({ taskId }: { readonly taskId: string }) {
           </Button>
         )}
       </form>
+    </div>
+  );
+}
+
+/**
+ * A custom color the native picker is passing over is drawn on its swatch
+ * only, and saved once: when the picker commits it, or when this control
+ * closes with it still unsaved.
+ */
+function TaskColorField(props: {
+  readonly taskId: string;
+  readonly command: ((action: OrganizationAction) => Promise<void>) | undefined;
+  readonly group: { readonly name: string; readonly color: string } | null;
+  readonly color: string | null;
+  readonly editable: boolean;
+}) {
+  const { taskId, command, group } = props;
+  const [draft, setDraft] = useState<string | null>(null);
+  const unsaved = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      const color = unsaved.current;
+      if (color === null) return;
+      unsaved.current = null;
+      void command?.({ kind: "appearance", taskId, color }).catch(
+        () => undefined,
+      );
+    },
+    [command, taskId],
+  );
+  function save(color: string | null) {
+    unsaved.current = null;
+    setDraft(null);
+    void command?.({ kind: "appearance", taskId, color }).catch(
+      () => undefined,
+    );
+  }
+  return (
+    <div className="space-y-1.5">
+      <Label>Color</Label>
+      <fieldset
+        disabled={!props.editable || group !== null}
+        className="flex flex-wrap items-center gap-1"
+      >
+        <TabColorPicker
+          menu={false}
+          onDefault={() => save(null)}
+          color={effectiveTabColor(group, draft ?? props.color)}
+          onChange={save}
+          onCustomPreview={(color) => {
+            unsaved.current = color;
+            setDraft(color);
+          }}
+        />
+      </fieldset>
+      {group === null ? null : <GroupFollowNote name={group.name} />}
     </div>
   );
 }
