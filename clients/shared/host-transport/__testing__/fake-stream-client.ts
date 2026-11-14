@@ -292,8 +292,11 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     return this.silentFor;
   }
 
+  /** What {@link getMethodSupport} answers; `"unknown"` until a suite says otherwise. */
+  methodSupport: StreamMethodSupport = "unknown";
+
   getMethodSupport(): StreamMethodSupport {
-    return "unknown";
+    return this.methodSupport;
   }
 
   subscribeMethodSupport(): () => void {
