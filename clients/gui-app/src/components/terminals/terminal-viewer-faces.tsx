@@ -51,11 +51,13 @@ function ViewerFaces(props: {
   const viewers = useStore(props.store, (state) => state.viewers);
   const identify = usePersonIdentityResolver();
   if (viewers === null || viewers.length === 0) return null;
+  // Someone the GUI cannot name (no record, or not loaded yet) is shown by id,
+  // never as a blank face.
   const people = viewers.map((userId) => {
     const identity = identify(userId);
     return {
       userId,
-      name: identity?.displayName ?? "",
+      name: identity?.displayName ?? userId,
       avatarUrl: identity?.avatarUrl ?? null,
     };
   });
@@ -79,9 +81,7 @@ function ViewerFaces(props: {
                 />
               </span>
             </TooltipTrigger>
-            {person.name.length === 0 ? null : (
-              <TooltipContent>{person.name}</TooltipContent>
-            )}
+            <TooltipContent>{person.name}</TooltipContent>
           </Tooltip>
         ))}
       </AvatarGroup>
@@ -96,10 +96,7 @@ function ViewerFaces(props: {
             </span>
           </TooltipTrigger>
           <TooltipContent>
-            {rest
-              .map((person) => person.name)
-              .filter((name) => name.length > 0)
-              .join(", ")}
+            {rest.map((person) => person.name).join(", ")}
           </TooltipContent>
         </Tooltip>
       )}
