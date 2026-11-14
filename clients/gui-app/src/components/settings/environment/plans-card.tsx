@@ -15,6 +15,8 @@ export function PlansCard(props: {
   readonly teamName: string;
   readonly plans: readonly ConfigurationPlan[];
   readonly canAdminister: boolean;
+  /** Whether the link call has a host it can go through: off on a team's computer. */
+  readonly linkReachable: boolean;
   readonly adminNames: readonly string[];
   readonly isPending: boolean;
   readonly onLink: () => void;
@@ -41,6 +43,7 @@ export function PlansCard(props: {
       )}
       <PlanActionRow
         canAdminister={props.canAdminister}
+        linkReachable={props.linkReachable}
         isPending={props.isPending}
         selected={selected}
         onLink={props.onLink}
@@ -85,6 +88,7 @@ function LinkedPlanPicker(props: {
 
 function PlanActionRow(props: {
   readonly canAdminister: boolean;
+  readonly linkReachable: boolean;
   readonly isPending: boolean;
   readonly selected: ConfigurationPlan | null;
   readonly onLink: () => void;
@@ -98,7 +102,7 @@ function PlanActionRow(props: {
         type="button"
         variant="outline"
         size="xs"
-        disabled={props.isPending}
+        disabled={props.isPending || !props.linkReachable}
         onClick={props.onLink}
       >
         Link a plan

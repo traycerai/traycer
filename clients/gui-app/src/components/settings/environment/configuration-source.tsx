@@ -21,7 +21,10 @@ export type ConfigurationSource =
       /** `null` for a role that authorizes nothing - an older inventory's
        *  unknown role, or a retired one. */
       readonly effectiveRole: GrantedEnvironmentRole | null;
-      /** The serving computer can read configuration without changing it. */
+      /**
+       * Personal read while the window is on a team's computer: shown, never
+       * changed through that computer. A team's own pages never set it.
+       */
       readonly transportReadOnly?: boolean;
     };
 
