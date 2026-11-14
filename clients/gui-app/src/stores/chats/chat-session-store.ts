@@ -2883,6 +2883,7 @@ function rejectionLastCopySend(input: {
       input.frame.code,
       input.frame.reason,
     ),
+    reasonIsRemovedProfile: isRemovedProfileRefusalCode(input.frame.code),
     account: input.account ?? EMPTY_DEAD_SEND_ACCOUNT,
   };
 }
@@ -7731,6 +7732,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         content: recovery.restore.content,
         browserAnnotations: recovery.restore.browserAnnotations,
         circumstance: reason.replace(/\.$/, ""),
+        // A recovery holds a `MISSING_ATTACHMENT_BYTES` refusal's reason or an
+        // app sentence; a refused retry goes through `rejectionSurfaces`.
+        reasonIsRemovedProfile: false,
         account,
       };
       set((state): Partial<ChatSessionState> => {
@@ -7782,6 +7786,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 // branch is that the first refusal made no noise, so the
                 // hand-back is the first and only statement.
                 stated: false,
+                // A `MISSING_ATTACHMENT_BYTES` reason or an app sentence.
                 reasonIsRemovedProfile: false,
                 displacedReason,
               }
@@ -12309,6 +12314,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 // nothing else will root once the slot is cleared.
                 browserAnnotations: restoration.browserAnnotations,
                 reason: restoration.displacedReason,
+                reasonIsRemovedProfile: restoration.reasonIsRemovedProfile,
               },
             },
           };
@@ -12870,6 +12876,7 @@ function awardHandBackSlot(
       content: restore.content,
       browserAnnotations: restore.browserAnnotations,
       circumstance: copy.circumstance,
+      reasonIsRemovedProfile: copy.reasonIsRemovedProfile,
       // This path composed no account and must not invent one: the cancel is
       // the user's own gesture on a row whose worktree never materialized, so
       // there is no surviving binding to go re-pick and no settings drift to
@@ -13071,6 +13078,8 @@ function partialQueueEditLastCopy(
     content: settlement.restore.content,
     browserAnnotations: settlement.restore.browserAnnotations,
     circumstance: `${outcome}${asked}`,
+    reasonIsRemovedProfile:
+      settlement.refused && isRemovedProfileRefusalCode(settlement.hostCode),
     // No staged worktree and no delivery to account for: the prompt is on the
     // host's queue, under whatever binding that row already has.
     account: EMPTY_DEAD_SEND_ACCOUNT,
@@ -14209,12 +14218,7 @@ function unrecordedPromptSources(sources: {
   }
   for (const prompt of lastCopies) {
     if (byAction.has(prompt.clientActionId)) continue;
-    // A last copy's reason is always a composed sentence, never the bare
-    // pin's words, so it joins the draft's clauses with a space.
-    byAction.set(prompt.clientActionId, {
-      ...prompt,
-      reasonIsRemovedProfile: false,
-    });
+    byAction.set(prompt.clientActionId, prompt);
   }
   for (const record of queueEdits) {
     if (byAction.has(record.editActionId)) continue;
@@ -14223,6 +14227,7 @@ function unrecordedPromptSources(sources: {
       content: record.restore.content,
       browserAnnotations: record.restore.browserAnnotations,
       reason: queueEditHandoffReason(record),
+      // The app's own sentence; it carries no computer reason.
       reasonIsRemovedProfile: false,
     });
   }

@@ -34,6 +34,13 @@ import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic
 import { chatCapHasActiveWork } from "@/stores/chats/session-registry";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
+import {
+  draftPlainText,
+  handedOffDrafts,
+  resetHandedOffDrafts,
+} from "@/stores/chats/__tests__/handoff-draft-observer";
 
 /**
  * traycerai/traycer#2418. A queue edit goes out as TWO independent frames and
@@ -58,6 +65,8 @@ const OWNER_ID = "owner-queue-edit";
 const HOST_ID = "host-a";
 const QUEUE_ITEM_ID = "queue-item-1";
 const MESSAGE_ID = "queued-message-1";
+const REMOVED_PROFILE_REASON =
+  "That profile no longer exists. Choose a profile.";
 
 const SETTINGS: ChatRunSettings = {
   ultracode: false,
@@ -328,9 +337,91 @@ function sendFrameCount(harness: Harness): number {
   return harness.sent.filter((frame) => frame.kind === "send").length;
 }
 
+function rejectSendIntoRestorationSlot(harness: Harness): string {
+  const content = textDoc("earlier send holds the restoration slot");
+  const action = harness.handle.store.getState().sendMessage({
+    content,
+    sender: { type: "user", userId: OWNER_ID },
+    settings: SETTINGS,
+    attachments: [],
+    deliveryPolicy: "auto",
+    restore: { content, browserAnnotations: [] },
+  });
+  if (action === null) throw new Error("expected the first send to dispatch");
+  harness.callbacks().onActionAck({
+    kind: "actionAck",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    clientActionId: action.clientActionId,
+    action: "send",
+    status: "rejected",
+    reason: "The host refused this send.",
+    code: "SEND_REFUSED",
+    backgroundStopTaskIds: [],
+    token: null,
+  });
+  return action.clientActionId;
+}
+
+async function expectHandedOffLastParagraph(
+  marker: string,
+  expected: string,
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      const draft = handedOffDrafts().find((entry) =>
+        draftPlainText(entry.content).includes(marker),
+      );
+      expect(draft).toBeDefined();
+      if (draft === undefined) throw new Error("expected the handed-off draft");
+      expect(draft.content.content?.at(-1)?.content?.[0]?.text).toBe(expected);
+    },
+    { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
+  );
+}
+
+interface QueueEditHandoffCase {
+  readonly code: "removed-by-person" | "RPC_ERROR";
+  readonly reasonIsRemovedProfile: boolean;
+  readonly expectedLastParagraph: string;
+}
+
+const QUEUE_EDIT_HANDBACK_CASES: ReadonlyArray<QueueEditHandoffCase> = [
+  {
+    code: "removed-by-person",
+    reasonIsRemovedProfile: true,
+    expectedLastParagraph:
+      "Unsent — Was removed\nAn edit to a queued message was not saved. A browser annotation was not saved with it.",
+  },
+  {
+    code: "RPC_ERROR",
+    reasonIsRemovedProfile: false,
+    expectedLastParagraph:
+      "Unsent — An edit to a queued message was not saved (That profile no longer exists. Choose a profile). A browser annotation was not saved with it.",
+  },
+];
+
+const QUEUE_EDIT_PARTIAL_CASES: ReadonlyArray<QueueEditHandoffCase> = [
+  {
+    code: "removed-by-person",
+    reasonIsRemovedProfile: true,
+    expectedLastParagraph:
+      "Unsent — Was removed\nText saved; settings/steering were not applied. A browser annotation was not saved with it.",
+  },
+  {
+    code: "RPC_ERROR",
+    reasonIsRemovedProfile: false,
+    expectedLastParagraph:
+      "Unsent — Text saved; settings/steering were not applied (That profile no longer exists. Choose a profile). A browser annotation was not saved with it.",
+  },
+];
+
 let harness: Harness | null = null;
 
 beforeEach(() => {
+  installFreshIndexedDb();
+  resetHandedOffDrafts();
   // A blob confirmation is recorded and read PER ACCOUNT, and a null owner
   // confirms nothing: without an identity the `toBe(false)` below would read
   // "signed out" rather than "the refusal retracted the memo".
@@ -344,6 +435,7 @@ afterEach(() => {
   useAuthStore.setState({ contextMetadata: null });
   harness?.handle.dispose();
   harness = null;
+  resetHandedOffDrafts();
   resetDraftBlobTransportForTests();
 });
 
@@ -637,6 +729,74 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
     expect(stated).toHaveLength(1);
     expect(stated[0].code).toBe(SEND_NOT_RECORDED_NOTICE_CODE);
   });
+
+  it.each(QUEUE_EDIT_HANDBACK_CASES)(
+    "records the removed-profile flag and stashes the displaced edit under $code",
+    async ({ code, reasonIsRemovedProfile, expectedLastParagraph }) => {
+      harness = openWithQueuedRow();
+      const occupantId = rejectSendIntoRestorationSlot(harness);
+      const { editActionId } = submitEdit(harness, "save", SETTINGS, [
+        ANNOTATION,
+      ]);
+      ackWithCode(harness, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "rejected",
+        reason: REMOVED_PROFILE_REASON,
+        code,
+      });
+
+      const state = harness.handle.store.getState();
+      expect(state.failedSendRestoration?.clientActionId).toBe(occupantId);
+      const lastCopy = state.lastCopyPrompts[editActionId];
+      expect(lastCopy.content).toEqual(EDITED);
+      expect(lastCopy.browserAnnotations).toEqual([ANNOTATION]);
+      expect(lastCopy.reasonIsRemovedProfile).toBe(reasonIsRemovedProfile);
+
+      harness.handle.dispose();
+      await expectHandedOffLastParagraph(
+        "the corrected text",
+        expectedLastParagraph,
+      );
+    },
+  );
+
+  it.each(QUEUE_EDIT_PARTIAL_CASES)(
+    "records the removed-profile flag and stashes a partial edit under $code",
+    async ({ code, reasonIsRemovedProfile, expectedLastParagraph }) => {
+      harness = openWithQueuedRow();
+      const { editActionId, followUpActionId } = submitEdit(
+        harness,
+        "steer",
+        SETTINGS,
+        [ANNOTATION],
+      );
+      ack(harness, {
+        clientActionId: editActionId,
+        action: "queueEdit",
+        status: "accepted",
+      });
+      ackWithCode(harness, {
+        clientActionId: followUpActionId,
+        action: "queueSteerNow",
+        status: "rejected",
+        reason: REMOVED_PROFILE_REASON,
+        code,
+      });
+
+      const lastCopy =
+        harness.handle.store.getState().lastCopyPrompts[followUpActionId];
+      expect(lastCopy.content).toEqual(EDITED);
+      expect(lastCopy.browserAnnotations).toEqual([ANNOTATION]);
+      expect(lastCopy.reasonIsRemovedProfile).toBe(reasonIsRemovedProfile);
+
+      harness.handle.dispose();
+      await expectHandedOffLastParagraph(
+        "the corrected text",
+        expectedLastParagraph,
+      );
+    },
+  );
 
   it.each([
     { reason: "That profile no longer exists. Choose a profile." },

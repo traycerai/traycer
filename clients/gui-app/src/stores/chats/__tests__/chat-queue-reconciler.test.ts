@@ -1688,6 +1688,7 @@ describe("chat-queue-reconciler", () => {
         content,
         browserAnnotations: [],
         circumstance: "A message was not recorded",
+        reasonIsRemovedProfile: false,
         account: {
           worktree: NO_WORKTREE_SWEEP,
           sentSettings: SETTINGS,
@@ -1775,6 +1776,7 @@ describe("chat-queue-reconciler", () => {
         content: CONTENT,
         browserAnnotations: [],
         circumstance: "A message was not recorded",
+        reasonIsRemovedProfile: false,
         account: {
           worktree: NO_WORKTREE_SWEEP,
           sentSettings: SETTINGS,
@@ -1797,6 +1799,7 @@ describe("chat-queue-reconciler", () => {
         content: CONTENT,
         browserAnnotations: [],
         circumstance: "A message was not recorded",
+        reasonIsRemovedProfile: false,
         account: {
           worktree: NO_WORKTREE_SWEEP,
           sentSettings: SETTINGS,

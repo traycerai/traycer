@@ -311,6 +311,12 @@ export interface UnrecoverableSend {
   /** How this send died, phrased to open the statement. */
   readonly circumstance: string;
   /**
+   * Whether `circumstance` came from the removed-account code. Set where the
+   * code is known and copied with the reason to the stash handoff, so no
+   * later reader has to decide it.
+   */
+  readonly reasonIsRemovedProfile: boolean;
+  /**
    * Everything said after the content losses. REQUIRED and not defaulted: the
    * clauses it renders name folders to go re-pick and settings that moved, and
    * a caller that cannot answer it is a caller that would have said nothing.
@@ -407,6 +413,8 @@ export interface UnrecoverableSendPrompt {
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /** The same account text the notice renders - `handedBack: false`. */
   readonly reason: string;
+  /** As {@link UnrecoverableSend.reasonIsRemovedProfile}. */
+  readonly reasonIsRemovedProfile: boolean;
 }
 
 /**
@@ -421,6 +429,7 @@ export function unrecoverableSendPrompt(
     content: send.content,
     browserAnnotations: send.browserAnnotations,
     reason: `${send.circumstance}.${deadSendAccountClauses(send.account, false)}`,
+    reasonIsRemovedProfile: send.reasonIsRemovedProfile,
   };
 }
 
@@ -1258,6 +1267,7 @@ export function reconcileSnapshotChange(
           content: pending.restore.content,
           browserAnnotations: pending.restore.browserAnnotations,
           circumstance: "A message was not confirmed after reconnect",
+          reasonIsRemovedProfile: false,
           account: {
             worktree: worktreeSweepFor(
               pending.restoreWorktreeIntent,
@@ -1451,6 +1461,7 @@ function reconcileAcceptedSends(
           content: accepted.restore.content,
           browserAnnotations: accepted.restore.browserAnnotations,
           circumstance: "A queued message was not confirmed after reconnect",
+          reasonIsRemovedProfile: false,
           account,
         };
         return {
@@ -1689,6 +1700,7 @@ export function reconcileTurnSettled(
       content: message.content,
       browserAnnotations: message.restore.browserAnnotations,
       circumstance: "A message was not recorded before the turn stopped",
+      reasonIsRemovedProfile: false,
       account: {
         worktree: worktreeSweepFor(
           message.restoreWorktreeIntent,

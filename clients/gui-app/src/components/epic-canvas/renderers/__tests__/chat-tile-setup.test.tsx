@@ -95,7 +95,7 @@ type Harness = ChatTileHarness;
  */
 function toastText(message: unknown): string {
   if (typeof message === "string") return message;
-  if (isValidElement<{ children?: ReactNode }>(message)) {
+  if (isValidElement<{ children: ReactNode | undefined }>(message)) {
     const children = message.props.children;
     return typeof children === "string" ? children : "";
   }
