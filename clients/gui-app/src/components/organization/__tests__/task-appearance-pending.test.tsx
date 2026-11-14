@@ -486,4 +486,35 @@ describe("task appearance edits in flight", () => {
 
     expect(pressed(RED.name)).toBe(true);
   });
+
+  it("drops a queued edit when the host or account changes before it is sent", async () => {
+    const ui = render(tree(true));
+    await flush();
+    fireEvent.click(swatch(BLUE.name));
+    fireEvent.click(swatch(RED.name));
+    await flush();
+    expect(state.sent).toHaveLength(1);
+
+    state.identity.hostId = "host-2";
+    ui.rerender(tree(true));
+    await flush();
+    state.identity.hostId = "host-1";
+    ui.rerender(tree(true));
+    await flush();
+
+    fireEvent.click(swatch(YELLOW.name));
+    await flush();
+    expect(state.sent).toHaveLength(2);
+    expect(state.sent[1].action).toEqual(appearanceAction(YELLOW.value));
+
+    act(() => state.sent[0].resolve());
+    await flush();
+    await flush();
+
+    expect(state.sent.map((sent) => sent.action)).not.toContainEqual(
+      appearanceAction(RED.value),
+    );
+    expect(state.sent).toHaveLength(2);
+    expect(pressed(YELLOW.name)).toBe(true);
+  });
 });

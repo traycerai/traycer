@@ -268,6 +268,11 @@ export function useAppearanceEdits(args: {
       const done = (): void => undefined;
       const sent = slot.sending.then(done, done).then(() => {
         slot.queued = null;
+        // A host or account change replaced the queues and discarded this
+        // edit's layer while it waited. Sending it now would put an edit the
+        // person can no longer see on top of whatever they chose since.
+        if (sends.current !== tasks)
+          throw new Error("Organization account changed.");
         return start(slot, merged);
       });
       slot.queued = { layerId, patch: merged, sent };
