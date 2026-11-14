@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import {
+  queryOptions,
+  useQueries,
   useQueryClient,
-  type QueryClient,
+  type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { readConfigurationMembers } from "@traycer-clients/shared/environment/configuration-members";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { RequiredHostMethodVersion } from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   grantedEnvironmentRole,
   grantedTeamMemberRole,
@@ -17,27 +18,22 @@ import {
 import type { TeamRole } from "@/components/settings/members/types";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
-  useHostQueries,
-  type HostRequestSpec,
-} from "@/hooks/host/use-host-queries";
-import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import type { HostRpcRegistry } from "@/lib/host";
-import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
-import { queryKeys } from "@/lib/query-keys";
+  ENVIRONMENT_CLOUD_QUERY_SCOPE,
+  useEnvironmentCloud,
+} from "@/hooks/environment/use-environment-cloud";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { environmentCloudHostError } from "@/lib/environment/environment-cloud-calls";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 const METHOD = "environment.members";
-
-/**
- * The members read the GUI needs: `@1.0` names no roles, and its upgrade
- * would show every member as a viewer. A `@1.1` host is still read: its
- * members upgrade with no email, and Members falls back to what it has.
- */
-export const ENVIRONMENT_MEMBERS_FLOOR: RequiredHostMethodVersion = {
-  method: METHOD,
-  version: { major: 1, minor: 1 },
-};
 
 const FIRST_PAGE: ReadonlyArray<string | null> = [null];
 
@@ -69,7 +65,6 @@ export interface EnvironmentMembersListResult {
 
 type Requested = {
   readonly environmentId: string | null;
-  readonly hostId: string | null;
   readonly viewerUserId: string;
   readonly cursors: ReadonlyArray<string | null>;
 };
@@ -94,55 +89,63 @@ const EMPTY_LIST: EnvironmentMembersListResult = {
   retry: retryNothing,
 };
 
+/** Where a page of members is cached: the app's own scope, by viewer. */
+function membersPageKey(
+  environmentId: string,
+  cursor: string | null,
+  viewerUserId: string,
+): QueryKey {
+  return [
+    ...hostQueryKeys.scope(ENVIRONMENT_CLOUD_QUERY_SCOPE),
+    METHOD,
+    { environmentId, cursor },
+    viewerUserId,
+  ];
+}
+
 /**
- * Every page of `environment.members` (`@1.2` once the host serves it) for
- * `environmentId`. The id is never rewritten to Personal. A page that fails
- * surfaces as `isError` with an empty list, so a truncated admin list is
- * never shown as complete.
+ * Every page of `environment.members` for `environmentId`, the app's own
+ * read of authn on the viewer's sign-in. The id is never rewritten to
+ * Personal: Personal's page lists the reader alone, as the host answered it,
+ * so the read waits for the account's environment list to say whose
+ * environment this is. A page that fails surfaces as `isError` with an empty
+ * list, so a truncated admin list is never shown as complete.
  * Pages are partitioned by viewer so an account switch cannot serve the
- * previous viewer's invitedAddress rows from the same host cache.
+ * previous viewer's invitedAddress rows from the same cache.
  */
 export function useEnvironmentMembersList(
-  client: HostClient<HostRpcRegistry> | null,
   environmentId: string | null,
   enabled: boolean,
 ): EnvironmentMembersListResult {
   const queryClient = useQueryClient();
-  const servingClient = useMemo(
-    () => (client === null ? null : resolvePoolTierHostClient(client)),
-    [client],
-  );
-  const hostId = useReactiveHostReadiness(servingClient).hostId;
-  const revisionSupported = useHostMethodSupport(
-    hostId,
-    "environment.configuration.revision",
-  );
+  const cloud = useEnvironmentCloud();
   const viewerUserId = useCloudChatViewerId();
+  const readerName = useAuthStore((state) => state.profile?.userName ?? "");
+  const authorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const environments = useEnvironmentListQuery(
+    enabled && environmentId !== null,
+  );
+  const ownerKind =
+    environmentId === null
+      ? undefined
+      : environments.data?.environments.find(
+          (environment) => environment.environmentId === environmentId,
+        )?.ownerKind;
   const [requested, setRequested] = useState<Requested>({
     environmentId,
-    hostId,
     viewerUserId,
     cursors: FIRST_PAGE,
   });
   let cursors = requested.cursors;
   if (
     requested.environmentId !== environmentId ||
-    requested.hostId !== hostId ||
     requested.viewerUserId !== viewerUserId
   ) {
     cursors = FIRST_PAGE;
-    setRequested({ environmentId, hostId, viewerUserId, cursors });
+    setRequested({ environmentId, viewerUserId, cursors });
   }
-  const requests = useMemo(
-    (): ReadonlyArray<HostRequestSpec<HostRpcRegistry, typeof METHOD>> =>
-      environmentId === null
-        ? []
-        : cursors.map((cursor) => ({
-            method: METHOD,
-            params: { environmentId, cursor },
-          })),
-    [environmentId, cursors],
-  );
   const combine = useCallback(
     (
       results: Array<
@@ -165,20 +168,46 @@ export function useEnvironmentMembersList(
     },
     [],
   );
-  const combined = useHostQueries<
-    HostRpcRegistry,
-    typeof METHOD,
-    CombinedPages
-  >({
-    client: servingClient,
-    requests,
-    cacheKeyIdentity: viewerUserId,
-    requiredHostMethodVersion: () => ENVIRONMENT_MEMBERS_FLOOR,
-    options: {
-      enabled: enabled && environmentId !== null && viewerUserId.length > 0,
-      poll: revisionSupported !== true,
-      refetchOnWindowFocus: false,
-    },
+  const reader =
+    ownerKind === "user"
+      ? { userId: viewerUserId, displayName: readerName }
+      : null;
+  const combined = useQueries({
+    queries:
+      environmentId === null
+        ? []
+        : cursors.map((cursor) =>
+            // `cloud` is the sign-in of the viewer the key already names, and
+            // `reader` follows from the key's environment and viewer; adding
+            // them would refetch on their identity alone.
+            // eslint-disable-next-line @tanstack/query/exhaustive-deps
+            queryOptions<EnvironmentMembersResponseV12, HostRpcError>({
+              queryKey: membersPageKey(environmentId, cursor, viewerUserId),
+              meta: stampHostRpcMethod(undefined, METHOD),
+              queryFn: () =>
+                withHostQueryErrorBoundary(METHOD, async () => {
+                  cloudVerdictPreflight(METHOD)();
+                  if (cloud === null) throw hostClientUnavailableError(METHOD);
+                  try {
+                    return await readConfigurationMembers(
+                      cloud(),
+                      environmentId,
+                      cursor,
+                      reader,
+                    );
+                  } catch (error) {
+                    throw environmentCloudHostError(METHOD, error);
+                  }
+                }),
+              enabled:
+                enabled &&
+                ownerKind !== undefined &&
+                cloud !== null &&
+                viewerUserId.length > 0 &&
+                authorized,
+              refetchOnWindowFocus: false,
+            }),
+          ),
     combine,
   });
   if (
@@ -188,13 +217,12 @@ export function useEnvironmentMembersList(
     !combined.isError
   ) {
     const walked = cursorsNamedByPages(cursors, combined.pages, (cursor) =>
-      cachedPage(queryClient, hostId, viewerUserId, {
-        environmentId,
-        cursor,
-      }),
+      queryClient.getQueryData<EnvironmentMembersResponseV12>(
+        membersPageKey(environmentId, cursor, viewerUserId),
+      ),
     );
     if (!sameCursors(walked, cursors)) {
-      setRequested({ environmentId, hostId, viewerUserId, cursors: walked });
+      setRequested({ environmentId, viewerUserId, cursors: walked });
     }
   }
   return useMemo((): EnvironmentMembersListResult => {
@@ -208,6 +236,21 @@ export function useEnvironmentMembersList(
         isError: false,
         error: null,
         retry: retryNothing,
+      };
+    }
+    // Whose environment this is was not read, so no page could be asked.
+    const listFailed = ownerKind === undefined && environments.isError;
+    if (listFailed) {
+      return {
+        members: [],
+        legacyMembers: [],
+        legacyRoleNoticeSeenAt: null,
+        isPending: false,
+        isError: true,
+        error: environments.error,
+        retry: () => {
+          void environments.refetch();
+        },
       };
     }
     if (combined.isError) {
@@ -261,7 +304,7 @@ export function useEnvironmentMembersList(
       error: null,
       retry: combined.retry,
     };
-  }, [combined, enabled, environmentId, viewerUserId]);
+  }, [combined, enabled, environmentId, environments, ownerKind, viewerUserId]);
 }
 
 export interface TeamEnvironmentDescriptor {
@@ -319,22 +362,6 @@ function cursorsNamedByPages(
     const index = asked.indexOf(cursor);
     return index === -1 ? cached(cursor) : pages[index];
   });
-}
-
-function cachedPage(
-  queryClient: QueryClient,
-  hostId: string | null,
-  viewerUserId: string,
-  params: { readonly environmentId: string; readonly cursor: string | null },
-): EnvironmentMembersResponseV12 | undefined {
-  return queryClient.getQueryData<EnvironmentMembersResponseV12>([
-    ...queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(
-      hostId,
-      METHOD,
-      params,
-    ),
-    viewerUserId,
-  ]);
 }
 
 function walkChain(

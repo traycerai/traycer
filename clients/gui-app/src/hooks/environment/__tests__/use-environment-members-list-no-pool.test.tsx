@@ -9,7 +9,6 @@ import {
   hostIdsOf,
   mountTeamPage,
   poolSource,
-  requireTeamHostClient,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { queryKeys } from "@/lib/query-keys";
@@ -100,12 +99,7 @@ describe("useEnvironmentMembersList without a pool", () => {
     );
 
     const { result } = renderHook(
-      () =>
-        useEnvironmentMembersList(
-          requireTeamHostClient(),
-          ENVIRONMENT_ID,
-          true,
-        ),
+      () => useEnvironmentMembersList(ENVIRONMENT_ID, true),
       { wrapper: harness.Wrapper },
     );
 

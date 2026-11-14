@@ -326,8 +326,6 @@ export function MembersView(props: {
   readonly invitePending: boolean;
   readonly setRolePending: boolean;
   readonly removePending: boolean;
-  /** Whether the host serves `environment.members.seats`, the invite's seat read. */
-  readonly seatsSupported: boolean;
   /** The name a host id shows as, null when this window does not know it. */
   readonly hostLabel: (hostId: string) => string | null;
   /** The admin dismissed the legacy-role notice; nothing else calls it. */
@@ -351,7 +349,6 @@ export function MembersView(props: {
     invitePending,
     setRolePending,
     removePending,
-    seatsSupported,
     hostLabel,
     onNoticeSeen,
   } = props;
@@ -615,13 +612,7 @@ export function MembersView(props: {
         open={inviteOpen}
         teamName={teamName}
         busy={invitePending}
-        seatLine={
-          <InviteSeatLine
-            client={client}
-            environmentId={environmentId}
-            supported={seatsSupported}
-          />
-        }
+        seatLine={<InviteSeatLine environmentId={environmentId} />}
         onOpenChange={setInviteOpen}
         onInvite={onInvite}
       />

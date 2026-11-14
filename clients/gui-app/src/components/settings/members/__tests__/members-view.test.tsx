@@ -196,7 +196,6 @@ function renderView(options: {
           invitePending={false}
           setRolePending={false}
           removePending={false}
-          seatsSupported={false}
           hostLabel={(hostId) => (hostId === "host-local" ? "This Mac" : null)}
           onNoticeSeen={onNoticeSeen}
         />
@@ -1048,10 +1047,7 @@ describe("MembersView pending writes", () => {
       },
     );
     function Wired(): ReactNode {
-      const writes = useEnvironmentMembersWrites(
-        requireTeamHostClient(),
-        "env-1",
-      );
+      const writes = useEnvironmentMembersWrites("env-1");
       return (
         <>
           <button type="button" onClick={() => options.send(writes)}>
@@ -1076,7 +1072,6 @@ describe("MembersView pending writes", () => {
             invitePending={writes.inviteMutation.isPending}
             setRolePending={writes.setRoleMutation.isPending}
             removePending={writes.removeMutation.isPending}
-            seatsSupported={false}
             hostLabel={() => null}
             onNoticeSeen={() => undefined}
           />

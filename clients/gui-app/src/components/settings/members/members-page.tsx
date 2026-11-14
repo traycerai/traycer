@@ -1,10 +1,6 @@
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  HostMethodVersionUnsatisfiedError,
-  negotiatedVersionMeetsRequirement,
-} from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MemberRowDetails } from "@/components/settings/details/member-row-details";
 import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
 import { MembersView } from "@/components/settings/members/members-view";
@@ -14,17 +10,11 @@ import type {
   MembersReadState,
 } from "@/components/settings/members/types";
 import {
-  ENVIRONMENT_MEMBERS_FLOOR,
   useEnvironmentMembersList,
   useTeamEnvironmentDescriptor,
   type EnvironmentMembersListMember,
 } from "@/hooks/environment/use-environment-members-list";
 import { useEnvironmentMembersWrites } from "@/hooks/environment/use-environment-members-writes";
-import {
-  useHostMethodSchemaVersion,
-  useHostMethodSupport,
-} from "@/hooks/host/use-host-supports-method";
-import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostDirectory, useOptionalHostClient } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -91,62 +81,34 @@ function settleRemovals(
 }
 
 function membersReadState(
-  served: boolean | null,
   error: HostRpcError | null,
   waiting: boolean,
 ): MembersReadState {
-  if (served === false) return "unsupported";
-  // A connection that negotiated below the floor refuses the read unsent.
-  if (error instanceof HostMethodVersionUnsatisfiedError) return "unsupported";
   if (error !== null) return "failed";
   return waiting ? "loading" : "ready";
 }
 
 /**
- * Settings ▸ Members for a team pick. Reads `environment.members@1.1` and
- * writes through invite / setRole / remove / noticeSeen; the view's dialogs
- * read removePreview for the member they name, and the invite sheet reads
- * seats when the host serves it.
+ * Settings ▸ Members for a team pick. Reads the members and writes invite /
+ * setRole / remove / noticeSeen as the app's own calls to authn; the view's
+ * dialogs read removePreview for the member they name from the host, and the
+ * invite sheet reads seats from authn.
  */
 export function MembersPage(props: MembersPageProps): ReactNode {
+  // Only a removal's preview is still the host's: what a team sandbox counts
+  // of the member's running work.
   const client = usePoolTierHostClient(useOptionalHostClient());
-  const hostId = useReactiveHostReadiness(client).hostId;
-  const membersPresent = useHostMethodSupport(hostId, "environment.members");
-  const membersVersion = useHostMethodSchemaVersion(
-    hostId,
-    "environment.members",
-  );
-  // `null` until a handshake says; `false` for a host without the read or
-  // below its floor, a name-only recording included.
-  const membersSupport =
-    membersPresent === true
-      ? membersVersion !== null &&
-        negotiatedVersionMeetsRequirement(
-          membersVersion,
-          ENVIRONMENT_MEMBERS_FLOOR,
-        )
-      : membersPresent;
-  const seatsSupported =
-    useHostMethodSupport(hostId, "environment.members.seats") === true;
   const teamLabel = usePickedTeamLabel(props.environmentId);
   const team = useTeamEnvironmentDescriptor(props.environmentId);
-  const list = useEnvironmentMembersList(
-    client,
-    props.environmentId,
-    membersSupport === true,
-  );
-  const writes = useEnvironmentMembersWrites(client, props.environmentId);
+  const list = useEnvironmentMembersList(props.environmentId, true);
+  const writes = useEnvironmentMembersWrites(props.environmentId);
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? "");
   const [pendingRemovals, setPendingRemovals] =
     useState<ReadonlySet<string>>(NO_PENDING_REMOVALS);
   const directory = useHostDirectory();
   const noticeSeenFor = useRef<string | null>(null);
 
-  const membersRead = membersReadState(
-    membersSupport,
-    list.error,
-    client === null || membersSupport === null || list.isPending,
-  );
+  const membersRead = membersReadState(list.error, list.isPending);
   // Each successful read settles the removals once; a new removal clears this
   // so the read already in hand settles it too.
   const [settledRead, setSettledRead] = useState<
@@ -219,7 +181,6 @@ export function MembersPage(props: MembersPageProps): ReactNode {
       invitePending={writes.inviteMutation.isPending}
       setRolePending={writes.setRoleMutation.isPending}
       removePending={writes.removeMutation.isPending}
-      seatsSupported={seatsSupported}
       hostLabel={hostLabel}
       onNoticeSeen={onNoticeSeen}
     />
