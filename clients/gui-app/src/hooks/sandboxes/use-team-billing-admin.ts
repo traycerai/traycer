@@ -3,7 +3,7 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useTeamEnvironmentIds } from "@/hooks/sandboxes/use-team-environment-query";
-import { useHostClient } from "@/lib/host";
+import { useOptionalHostClient } from "@/lib/host";
 
 const NO_TEAM: readonly string[] = [];
 
@@ -12,7 +12,8 @@ const NO_TEAM: readonly string[] = [];
  * seat that may buy the team's credits. Read from the person's own
  * environment list (the team's environment, found by the team's id, and the
  * role the list gives the person there), never from a sandbox's computer.
- * While either read is out or failed, nobody is an Admin: until it is known,
+ * While either read is out or failed, or where no host runtime is above the
+ * surface to read the list through, nobody is an Admin: until it is known,
  * the person is not one. `teamIds` must keep its identity between renders.
  */
 export function useTeamBillingAdminOf(
@@ -20,7 +21,7 @@ export function useTeamBillingAdminOf(
 ): (teamId: string) => boolean {
   const { byTeamId } = useTeamEnvironmentIds(teamIds);
   const environments = useEnvironmentListQuery(
-    useHostClient(),
+    useOptionalHostClient(),
     byTeamId.size > 0,
   );
   const descriptors = environments.isError
@@ -41,7 +42,7 @@ export function useTeamBillingAdminOf(
  * `environmentId`, read as {@link useTeamBillingAdminOf} reads it.
  */
 export function useEnvironmentBillingAdmin(environmentId: string): boolean {
-  const environments = useEnvironmentListQuery(useHostClient(), true);
+  const environments = useEnvironmentListQuery(useOptionalHostClient(), true);
   return adminOf(
     environments.isError ? undefined : environments.data?.environments,
     environmentId,
