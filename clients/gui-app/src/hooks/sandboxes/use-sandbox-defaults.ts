@@ -166,13 +166,16 @@ export function useSandboxDefaultsEnvironments(
     () =>
       new Map(
         (list.data?.environments ?? []).map(
-          (descriptor: EnvironmentDescriptorV11) => [
-            descriptor.ownerKind === "user" ? "personal" : descriptor.ownerId,
-            {
-              environmentId: descriptor.environmentId,
-              role: configurationRoleOf(descriptor),
-            },
-          ],
+          (descriptor: EnvironmentDescriptorV11) => {
+            const role = configurationRoleOf(descriptor);
+            return [
+              descriptor.ownerKind === "user" ? "personal" : descriptor.ownerId,
+              {
+                environmentId: descriptor.environmentId,
+                role: role === "viewer" ? null : role,
+              },
+            ];
+          },
         ),
       ),
     [list.data],

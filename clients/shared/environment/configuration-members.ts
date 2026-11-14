@@ -22,7 +22,6 @@ import type {
   EnvironmentMembersSetRoleRequest,
   EnvironmentMembersSetRoleResponse,
 } from "@traycer/protocol/host/environment/contracts";
-import { WIRE_ROLE_NO_AUTHORITY } from "@traycer/protocol/host/environment/configuration-list";
 import {
   CLOUD_UNAVAILABLE_MESSAGE,
   EnvironmentCloudError,
@@ -56,14 +55,14 @@ const teamMembersSchema = z.object({
           avatarUrl: z.string().nullable(),
         })
         .nullable(),
-      effectiveRole: z.enum(["admin", "editor"]).nullable(),
+      effectiveRole: z.enum(["admin", "editor", "viewer"]),
       linkedPlan: z.boolean(),
       inviteState: z.enum(["pending", "accepted"]),
       invitedAddress: z.string().nullable(),
     }),
   ),
   viewer: z.object({
-    effectiveRole: z.enum(["admin", "editor"]).nullable(),
+    effectiveRole: z.enum(["admin", "editor", "viewer"]),
     legacyRoleNoticeSeenAt: z.string().nullable(),
     legacyMembers: z.array(z.string()),
   }),
@@ -189,7 +188,7 @@ export async function readConfigurationMembers(
         userId: row.user?.id ?? row.id,
         displayName: pending ? null : memberDisplayName(row.user?.name),
         avatarUrl: pending ? null : (row.user?.avatarUrl ?? null),
-        effectiveRole: row.effectiveRole ?? WIRE_ROLE_NO_AUTHORITY,
+        effectiveRole: row.effectiveRole,
         linkedPlan: row.linkedPlan,
         inviteState: row.inviteState,
         invitedAddress:

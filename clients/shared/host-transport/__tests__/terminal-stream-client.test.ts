@@ -626,3 +626,163 @@ describe("TerminalStreamClient viewer frame (terminal.subscribe@1.7)", () => {
     stream.close();
   });
 });
+
+describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
+  const viewersEnvelope = {
+    kind: "viewers",
+    hasBinaryPayload: false,
+    sessionId: "terminal-1",
+    viewers: [{ userId: "member-a" }],
+  };
+  const dataEnvelope = {
+    kind: "data",
+    hasBinaryPayload: false,
+    sessionId: "terminal-1",
+    chunk: "hello",
+  };
+
+  function recordingCallbacks(): {
+    readonly callbacks: TerminalStreamCallbacks;
+    readonly dataChunks: string[];
+    readonly otherKinds: string[];
+  } {
+    const dataChunks: string[] = [];
+    const otherKinds: string[] = [];
+    return {
+      dataChunks,
+      otherKinds,
+      callbacks: {
+        onSnapshot: () => {
+          otherKinds.push("snapshot");
+        },
+        onData: (_frame, chunk) => {
+          if (typeof chunk === "string") {
+            dataChunks.push(chunk);
+          }
+        },
+        onResized: () => {
+          otherKinds.push("resized");
+        },
+        onExit: () => {
+          otherKinds.push("exit");
+        },
+        onActionAck: () => {
+          otherKinds.push("actionAck");
+        },
+        onSessionUpdated: () => {
+          otherKinds.push("sessionUpdated");
+        },
+        onConnectionStatus: () => undefined,
+      },
+    };
+  }
+
+  it("accepts a 1.8 viewers frame silently and still delivers a following data frame", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const recorded = recordingCallbacks();
+    const stream = new TerminalStreamClient({
+      wsStreamClient: client,
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      callbacks: recorded.callbacks,
+    });
+    completeHandshakeAtTerminalMinor(sockets[0], 8);
+    expect(parseText(sockets[0].textSent[1]).schemaVersion).toMatchObject({
+      major: 1,
+      minor: 8,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    sockets[0].fireText(viewersEnvelope);
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(recorded.dataChunks).toEqual([]);
+    expect(recorded.otherKinds).toEqual([]);
+
+    sockets[0].fireText(dataEnvelope);
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(recorded.dataChunks).toEqual(["hello"]);
+    expect(recorded.otherKinds).toEqual([]);
+    warn.mockRestore();
+    stream.close();
+  });
+
+  it("warns about a 1.7 viewers envelope, drops it, and still handles a following data frame", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const recorded = recordingCallbacks();
+    const stream = new TerminalStreamClient({
+      wsStreamClient: client,
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      callbacks: recorded.callbacks,
+    });
+    completeHandshakeAtTerminalMinor(sockets[0], 7);
+    expect(parseText(sockets[0].textSent[1]).schemaVersion).toMatchObject({
+      major: 1,
+      minor: 7,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    sockets[0].fireText(viewersEnvelope);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toEqual(
+      expect.stringContaining(
+        "terminal.subscribe frame failed schema validation (kind=viewers",
+      ),
+    );
+    expect(warn.mock.calls[0][0]).toEqual(
+      expect.stringContaining("dropping frame"),
+    );
+    expect(recorded.dataChunks).toEqual([]);
+    expect(recorded.otherKinds).toEqual([]);
+
+    sockets[0].fireText(dataEnvelope);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(recorded.dataChunks).toEqual(["hello"]);
+    expect(recorded.otherKinds).toEqual([]);
+    warn.mockRestore();
+    stream.close();
+  });
+
+  it("warns about an unknown kind on 1.8 and drops it", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const recorded = recordingCallbacks();
+    const stream = new TerminalStreamClient({
+      wsStreamClient: client,
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      callbacks: recorded.callbacks,
+    });
+    completeHandshakeAtTerminalMinor(sockets[0], 8);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    sockets[0].fireText({
+      kind: "notARealKind",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+    });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toEqual(
+      expect.stringContaining(
+        "terminal.subscribe frame failed schema validation (kind=notARealKind",
+      ),
+    );
+    expect(warn.mock.calls[0][0]).toEqual(
+      expect.stringContaining("dropping frame"),
+    );
+    expect(recorded.dataChunks).toEqual([]);
+    expect(recorded.otherKinds).toEqual([]);
+    warn.mockRestore();
+    stream.close();
+  });
+});

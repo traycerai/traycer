@@ -312,7 +312,7 @@ describe("ConfigurationSourceBoundary", () => {
     },
   );
 
-  it("gives a team naming the retired viewer role no role", async () => {
+  it("gives a Viewer's team the viewer role", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve({
         environments: [personal, team("a", "Acme", "viewer")],
@@ -328,7 +328,7 @@ describe("ConfigurationSourceBoundary", () => {
       { wrapper: Wrapper },
     );
     expect((await screen.findByTestId("probe")).textContent).toBe(
-      "env-a|room-a|handle-a|null|team",
+      "env-a|room-a|handle-a|viewer|team",
     );
   });
 
