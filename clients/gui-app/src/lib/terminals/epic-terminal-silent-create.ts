@@ -7,7 +7,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type {
   CreatePlainTerminalRequest,
   PlainTerminalProjection,
@@ -49,7 +49,7 @@ export async function runSilentCapableEpicTerminalCreate(args: {
   const client = args.client;
   const hostId = client?.getActiveHostId() ?? null;
   try {
-    const response = await withHostQueryErrorBoundary(
+    const response = await withHostMutationErrorBoundary(
       "terminal.plain.create",
       () => {
         if (client === null) {
@@ -63,7 +63,7 @@ export async function runSilentCapableEpicTerminalCreate(args: {
     return response.terminal;
   } catch (error: unknown) {
     if (client === null || hostId === null) throw error;
-    const snapshot = await withHostQueryErrorBoundary(
+    const snapshot = await withHostMutationErrorBoundary(
       "terminal.plain.list",
       () =>
         client.request("terminal.plain.list", { scope: args.request.scope }),
@@ -88,7 +88,7 @@ export async function runSilentLegacyEpicTerminalCreate(args: {
   readonly request: RequestOfMethod<HostRpcRegistry, "terminal.create">;
 }): Promise<CreatedTerminalSession> {
   const response: ResponseOfMethod<HostRpcRegistry, "terminal.create"> =
-    await withHostQueryErrorBoundary("terminal.create", () => {
+    await withHostMutationErrorBoundary("terminal.create", () => {
       if (args.client === null) {
         return Promise.reject(unavailableClientError("terminal.create"));
       }

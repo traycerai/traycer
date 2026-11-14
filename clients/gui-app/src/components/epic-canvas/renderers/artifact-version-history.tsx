@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { hostNameFromLabel } from "@/lib/host/host-name";
 import { useRef, useState, type ReactNode } from "react";
@@ -713,7 +714,10 @@ function ArtifactVersionHistoryPanel(props: {
                   variant="outline"
                   size="sm"
                   className="mt-2"
-                  onClick={() => void history.refetch()}
+                  onClick={() => {
+                    if (showHostUpdateNeededForGesture(props.hostId)) return;
+                    void history.refetch();
+                  }}
                 >
                   Retry
                 </Button>
@@ -729,6 +733,7 @@ function ArtifactVersionHistoryPanel(props: {
               selectedId={selected === null ? null : selected.observationId}
               outcome={outcome}
               onSelect={(observationId) => {
+                if (showHostUpdateNeededForGesture(props.hostId)) return;
                 setSelectedId(observationId);
                 setDetailOpen(true);
               }}
@@ -789,6 +794,7 @@ function ArtifactVersionHistoryPanel(props: {
                   : null
               }
               onRetry={() => {
+                if (showHostUpdateNeededForGesture(props.hostId)) return;
                 if (selectedBlob.isError) void selectedBlob.refetch();
                 if (comparisonBlob.isError) void comparisonBlob.refetch();
               }}

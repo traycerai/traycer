@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useCallback,
   useEffect,
@@ -289,6 +290,7 @@ export function GitDiffPanelBodyLive(
   // against a candidate again. This automatic choice stays unpinned so late
   // task records can still correct the host after recovery.
   const retryUnavailableRoots = useCallback(() => {
+    if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
     const cleared = unavailableGitRootKeys.reset();
     void queryClient.invalidateQueries({
       predicate: (query) =>
@@ -313,6 +315,7 @@ export function GitDiffPanelBodyLive(
   }, [
     gitRows,
     ignoreWhitespace,
+    pin.resolvedHostId,
     props.epicId,
     queryClient,
     setSelectedRepo,
@@ -336,8 +339,9 @@ export function GitDiffPanelBodyLive(
   // is in flight, which is only true if the caller can await it.
   const { refetch: refetchBindings } = bindingsQuery;
   const retryBindings = useCallback(async (): Promise<void> => {
+    if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
     await refetchBindings();
-  }, [refetchBindings]);
+  }, [pin.resolvedHostId, refetchBindings]);
 
   // Returning the surface to following by clearing the pin - the recovery the
   // panel can perform on its own, rather than waiting on the authority to
@@ -559,6 +563,7 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
 
   const handleSelectRoot = useCallback(
     (row: WorktreeBindingSelectorRowV12) => {
+      if (showHostUpdateNeededForGesture(row.hostId)) return;
       onLatchHost();
       setSelectedRepo(epicId, {
         hostId: row.hostId,
@@ -784,6 +789,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
 
   const handleSelectRoot = useCallback(
     (row: WorktreeBindingSelectorRowV12) => {
+      if (showHostUpdateNeededForGesture(row.hostId)) return;
       onLatchHost();
       setSelectedRepo(epicId, {
         hostId: row.hostId,

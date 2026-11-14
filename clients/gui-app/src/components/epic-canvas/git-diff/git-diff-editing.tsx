@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useCallback,
   useEffect,
@@ -493,6 +494,7 @@ export function useGitDiffEditing(
     return diskContent;
   }, [conflictDiskContent, contentsQuery]);
   const keepMine = useCallback((): void => {
+    if (showHostUpdateNeededForGesture(args.hostId)) return;
     void readLatestDisk()
       .then(fileSession.resolveKeepMine)
       .catch((error: unknown) => {
@@ -500,8 +502,13 @@ export function useGitDiffEditing(
           gitConflictResolutionErrorMessage(error),
         );
       });
-  }, [fileSession, readLatestDisk]);
+  }, [args.hostId, fileSession, readLatestDisk]);
   const useDisk = useCallback((): void => {
+    if (
+      conflictDiskContent === null &&
+      showHostUpdateNeededForGesture(args.hostId)
+    )
+      return;
     void readLatestDisk()
       .then(fileSession.resolveUseDisk)
       .catch((error: unknown) => {
@@ -509,7 +516,7 @@ export function useGitDiffEditing(
           gitConflictResolutionErrorMessage(error),
         );
       });
-  }, [fileSession, readLatestDisk]);
+  }, [args.hostId, conflictDiskContent, fileSession, readLatestDisk]);
 
   const gitDiffEditSession = computeGitDiffEditSession(
     active,
@@ -534,7 +541,10 @@ export function useGitDiffEditing(
     state: fileSession.state,
     editableFiles,
     editSession: gitDiffEditSession,
-    retry: fileSession.retry,
+    retry: () => {
+      if (showHostUpdateNeededForGesture(args.hostId)) return;
+      fileSession.retry();
+    },
     keepMine,
     useDisk,
   };

@@ -3,7 +3,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type {
   HostRpcError,
@@ -49,7 +49,7 @@ export function useLandingTerminalKill(): UseMutationResult<
     withHostMutationLifecycleBoundary("terminal.kill", {
       mutationKey: terminalMutationKeys.kill(),
       mutationFn: (variables) =>
-        withHostQueryErrorBoundary("terminal.kill", () => {
+        withHostMutationErrorBoundary("terminal.kill", () => {
           const client = clientForLandingTerminal(
             defaultClient,
             directory.findById(variables.hostId),
