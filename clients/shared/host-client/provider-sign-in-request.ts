@@ -136,31 +136,36 @@ async function post(
     SIGN_IN_REQUEST_FETCH_TIMEOUT_MS,
   );
   try {
-    const response = await untilAborted(
-      fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${bearerToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body,
-        redirect: "error",
-        signal: abort.signal,
-      }),
-      abort.signal,
-    );
-    const text = await untilAborted(response.text(), abort.signal);
+    let response: Response;
+    try {
+      response = await untilAborted(
+        fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${bearerToken}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body,
+          redirect: "error",
+          signal: abort.signal,
+        }),
+        abort.signal,
+      );
+    } catch {
+      return { kind: "no-answer" };
+    }
+    // The status is the answer once it has arrived: a body that cannot be
+    // read or parsed (a proxy's page, a dropped stream, an empty body) reads
+    // as no body, so a 401 or a 403 is still classified as one.
     let parsed: unknown = null;
     try {
+      const text = await untilAborted(response.text(), abort.signal);
       parsed = text.length === 0 ? null : JSON.parse(text);
     } catch {
-      // A proxy's page or an empty body reads as no body; only the status
-      // and a parsed body are ever read.
+      parsed = null;
     }
     return { kind: "response", status: response.status, body: parsed };
-  } catch {
-    return { kind: "no-answer" };
   } finally {
     abort.clear();
   }

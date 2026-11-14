@@ -748,7 +748,12 @@ async function awaitUntilSettled(
     if (signal.aborted) return null;
     if (readProfileOutcome(result.profileOutcome, creatingProfile) !== null)
       return result;
-    const signInRequest = result.signInRequest ?? null;
+    // A final outcome is the answer whatever else it carries, including one
+    // this command does not read as settled.
+    const signInRequest =
+      (result.profileOutcome ?? null) === null
+        ? (result.signInRequest ?? null)
+        : null;
     if (signInRequest !== null) {
       const recording = await recordSignInRequestOnce(
         io.signInRequests,
