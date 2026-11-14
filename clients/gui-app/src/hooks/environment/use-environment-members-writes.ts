@@ -125,7 +125,12 @@ export function useEnvironmentMembersWrites(
           userId: input.userId,
         })
         .then(
-          (response): MembersRemoveOutcome => response,
+          (response): MembersRemoveOutcome =>
+            // authn's answer is the removal done, an invitation's or a
+            // member's; the members re-read once the write settles.
+            response.outcome === "pending" || response.outcome === "revoked"
+              ? { outcome: "removed" }
+              : response,
           (): MembersRemoveOutcome => ({ outcome: "failed" }),
         );
     },

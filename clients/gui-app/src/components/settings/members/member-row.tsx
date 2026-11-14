@@ -11,7 +11,6 @@ import {
   memberDisplayName,
   memberRoleAriaLabel,
   memberRowTitle,
-  PENDING_REMOVAL_LABEL,
 } from "@/components/settings/members/copy";
 import type {
   MembersListMember,
@@ -37,8 +36,7 @@ export function MemberRow(props: {
   const name = memberDisplayName(props.member);
   const title = memberRowTitle(props.member, props.isSelf);
   const pending = props.member.inviteState === "pending";
-  const beingRemoved = props.member.removalState !== "none";
-  const showRemove = props.viewerIsAdmin && !props.isLastAdmin && !beingRemoved;
+  const showRemove = props.viewerIsAdmin && !props.isLastAdmin;
   // A seat with no authority has no role to move: the picker has nothing to
   // show it as, and what an admin does with such a row is remove it.
   const showRoleSelect = showRemove && props.member.effectiveRole !== null;
@@ -55,7 +53,6 @@ export function MemberRow(props: {
       data-testid="members-row"
       data-member-id={props.member.userId}
       data-invite-state={props.member.inviteState ?? "accepted"}
-      data-removal-state={props.member.removalState}
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -79,9 +76,6 @@ export function MemberRow(props: {
           )}
           {props.gainedEditing ? (
             <Badge variant="muted">{GAINED_EDITING_TAG}</Badge>
-          ) : null}
-          {props.member.removalState === "pending" ? (
-            <Badge variant="muted">{PENDING_REMOVAL_LABEL}</Badge>
           ) : null}
         </div>
         {detail.length === 0 ? null : (

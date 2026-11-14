@@ -6,7 +6,6 @@ import {
   SHARED_SIGN_INS_LABEL,
   removeCannotRecall,
   removeConfirmLabel,
-  REMOVE_PENDING_UNTIL_COMMITTED,
   removePreviewFailed,
   removePreviewLead,
   removePreviewTitle,
@@ -118,19 +117,14 @@ export function RemovePreviewDialog(props: {
           </div>
         ) : null}
         {preview.status === "ready" ? (
-          <>
-            <PreviewTable
-              testId="members-remove-preview-table"
-              rows={removePreviewRows(
-                props.memberName,
-                props.teamName,
-                preview.preview,
-              )}
-            />
-            <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-              {REMOVE_PENDING_UNTIL_COMMITTED}
-            </p>
-          </>
+          <PreviewTable
+            testId="members-remove-preview-table"
+            rows={removePreviewRows(
+              props.memberName,
+              props.teamName,
+              preview.preview,
+            )}
+          />
         ) : null}
         {props.blockedReason === null ? null : (
           <p

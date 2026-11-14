@@ -35,7 +35,6 @@ function member(overrides: Partial<MembersListMember>): MembersListMember {
     linkedPlan: false,
     inviteState: "accepted",
     invitedAddress: null,
-    removalState: "none",
     ...overrides,
   };
 }

@@ -54,12 +54,6 @@ export function inviteAcceptTitle(teamName: string): string {
 /** An invitation withdrawn or already answered by the time Accept was pressed. */
 export const INVITATION_GONE = "This invitation is no longer open.";
 
-/**
- * A removal that has not committed yet. A committed removal leaves the list,
- * so it has no label.
- */
-export const PENDING_REMOVAL_LABEL = "removing";
-
 export const RETRY_LABEL = "Retry";
 
 /** A preview row with nothing to show. */
@@ -283,9 +277,9 @@ export function memberGainedEditing(
   );
 }
 
-/** A member still in the team: accepted, and not being removed. */
+/** A member in the team, not an invitation. */
 function isAcceptedMember(member: MembersListMember): boolean {
-  return member.inviteState !== "pending" && member.removalState === "none";
+  return member.inviteState !== "pending";
 }
 
 export function isLastAdminMember(
@@ -358,9 +352,6 @@ export function removeCannotRecall(
 ): string {
   return `Files ${memberName} already copied off a host and work already done upstream with ${teamName}'s services. What ${memberName} started stays, labelled "started by a former member".`;
 }
-
-export const REMOVE_PENDING_UNTIL_COMMITTED =
-  "Removal shows as pending until it commits.";
 
 export function removeConfirmLabel(firstName: string): string {
   return `Remove ${firstName}`;

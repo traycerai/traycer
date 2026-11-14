@@ -79,7 +79,6 @@ function member(
     linkedPlan: false,
     inviteState: "accepted",
     invitedAddress: null,
-    removalState: "none",
     ...overrides,
   };
 }
@@ -212,10 +211,7 @@ function renderView(options: {
 const BASE = {
   currentUserId: "u-admin",
   legacyRoleNoticeSeenAt: 1,
-  removeOutcome: {
-    outcome: "pending",
-    receiptId: "r1",
-  } satisfies MembersRemoveOutcome,
+  removeOutcome: { outcome: "removed" } satisfies MembersRemoveOutcome,
   setRoleOutcome: { outcome: "changed" } satisfies MembersSetRoleOutcome,
   preview: (): EnvironmentMembersRemovePreviewResponse => PREVIEW,
 };

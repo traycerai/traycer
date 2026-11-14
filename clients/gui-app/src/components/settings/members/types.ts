@@ -14,8 +14,6 @@ export type TeamRole = "admin" | "editor";
 /** `null` is an accepted member on a host that has not yet filled inviteState. */
 export type MemberInviteState = "accepted" | "pending" | null;
 
-export type MemberRemovalState = "none" | "pending";
-
 /**
  * `failed` is this client's own: the request got no answer (it was refused
  * unsent, or the connection failed), so nothing about the team is known.
@@ -34,8 +32,7 @@ export type MembersSetRoleOutcome =
   | { readonly outcome: "failed" };
 
 export type MembersRemoveOutcome =
-  | { readonly outcome: "revoked" }
-  | { readonly outcome: "pending"; readonly receiptId: string }
+  | { readonly outcome: "removed" }
   | { readonly outcome: "last_admin" }
   | { readonly outcome: "forbidden" }
   | { readonly outcome: "plan_required" }
@@ -55,7 +52,6 @@ export interface MembersListMember {
   readonly linkedPlan: boolean;
   readonly inviteState: MemberInviteState;
   readonly invitedAddress: string | null;
-  readonly removalState: MemberRemovalState;
 }
 
 /** A member's running work, as a team computer counted it. */
