@@ -1,6 +1,6 @@
 import { CapacitorHttp } from "@capacitor/core";
 import {
-  MAX_ENVIRONMENT_BODY_BYTES,
+  MAX_FAILURE_BODY_BYTES,
   type EnvironmentTransport,
 } from "@traycer-clients/shared/environment/environment-cloud";
 
@@ -19,9 +19,10 @@ import {
  * `application/json` the request names. A failure rejects with nothing of the
  * request or its answer: no URL, header, body or token in its text.
  *
- * The body cap is applied after the body arrives: the native request reads
- * the whole answer before it hands any of it back, and offers neither a
- * stream nor a size limit. A body over the cap is then dropped, as on desktop.
+ * A failure's body cap is applied after the body arrives: the native request
+ * reads the whole answer before it hands any of it back, and offers neither a
+ * stream nor a size limit. A failure's body over the cap is then dropped, as
+ * on desktop; a success is kept whole.
  */
 export const nativeEnvironmentTransport: EnvironmentTransport = async (
   request,
@@ -40,8 +41,10 @@ export const nativeEnvironmentTransport: EnvironmentTransport = async (
     throw new Error("The request was not answered.");
   }
   const text = textOf(answer.data);
+  const success = answer.status >= 200 && answer.status < 300;
   const overCap =
-    new TextEncoder().encode(text).byteLength > MAX_ENVIRONMENT_BODY_BYTES;
+    !success &&
+    new TextEncoder().encode(text).byteLength > MAX_FAILURE_BODY_BYTES;
   return { status: answer.status, text: overCap ? null : text };
 };
 

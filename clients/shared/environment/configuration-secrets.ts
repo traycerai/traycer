@@ -10,7 +10,8 @@
  * Never answered here: create's `pending` arm and replaceValue's `pending`
  * arm (authn answers neither on a person's session; a refusal is an HTTP
  * error). A refusal other than replaceValue's `secret_version_stale` is the
- * caller's error with authn's message, bounded ({@link refusalMessage}).
+ * caller's error with authn's message, bounded, and never one that holds the
+ * request's own bearer or secret value ({@link refusalMessageWithout}).
  */
 import { z } from "zod";
 import { environmentChangedBySchema } from "@traycer/protocol/framework/environment-stale-write";
@@ -65,7 +66,7 @@ import {
   errorBodyCode,
   isCloudFailure,
   isSuccess,
-  sendEnvironmentRequest,
+  sendEnvironmentRequestWithBearer,
   type EnvironmentAnswer,
   type EnvironmentCloud,
   type EnvironmentHttpMethod,
@@ -125,20 +126,34 @@ function listRowOf(row: AuthnSecretRow): EnvironmentSecretV12 {
   };
 }
 
+/** authn's own text in a refusal's body, before anything is done to it. */
+function authnTextOf(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  if ("error" in body && typeof body.error === "string") return body.error;
+  if ("message" in body && typeof body.message === "string")
+    return body.message;
+  return null;
+}
+
+/** A withheld string shorter than this is not searched for: it would match ordinary words. */
+const MIN_WITHHELD_LENGTH = 4;
+
 /**
  * authn's human message, printable and bounded; the generic words when there
- * is none. It goes into the answer to the person whose request it was, who
- * could read the same body from authn on the same sign-in.
+ * is none, or when it holds any of `withheld`: what this request carried that
+ * is never shown (its bearer, and a secret value it sent). It goes into the
+ * error the person sees, which also reaches the app's log.
  */
-export function refusalMessage(body: unknown): string {
-  if (typeof body !== "object" || body === null) return REFUSED;
-  const text =
-    "error" in body && typeof body.error === "string"
-      ? body.error
-      : "message" in body && typeof body.message === "string"
-        ? body.message
-        : null;
+function refusalMessageWithout(
+  body: unknown,
+  withheld: readonly string[],
+): string {
+  const text = authnTextOf(body);
   if (text === null) return REFUSED;
+  const holdsWithheld = withheld.some(
+    (value) => value.length >= MIN_WITHHELD_LENGTH && text.includes(value),
+  );
+  if (holdsWithheld) return REFUSED;
   const printable = text.replace(/[\p{Cc}\u2028\u2029]/gu, " ").trim();
   if (printable.length === 0) return REFUSED;
   return printable.length > MAX_MESSAGE_LENGTH
@@ -162,24 +177,35 @@ function createBodyOf(
   return { ...rest, plaintextConsent: plaintextConsent !== null };
 }
 
-function send(
+/** An answer, with what its request carried that authn's text must never show. */
+interface SecretsAnswer extends EnvironmentAnswer {
+  readonly withheld: readonly string[];
+}
+
+/** One secrets call; `secretValue` is the secret value its body carries, if any. */
+async function send(
   cloud: EnvironmentCloud,
   environmentId: string,
   method: EnvironmentHttpMethod,
   suffix: string,
   body: unknown,
-): Promise<EnvironmentAnswer> {
-  return sendEnvironmentRequest(
+  secretValue: string | null,
+): Promise<SecretsAnswer> {
+  const sent = await sendEnvironmentRequestWithBearer(
     cloud,
     "secrets",
     method,
     `${environmentPath(environmentId)}/secrets${suffix}`,
     body,
   );
+  return {
+    ...sent.answer,
+    withheld: secretValue === null ? [sent.bearer] : [sent.bearer, secretValue],
+  };
 }
 
 /** The caller's error for an HTTP refusal. */
-function refusal(answer: EnvironmentAnswer): EnvironmentCloudError {
+function refusal(answer: SecretsAnswer): EnvironmentCloudError {
   if (answer.status === 401) {
     return new EnvironmentCloudError(
       "unauthorized",
@@ -190,7 +216,10 @@ function refusal(answer: EnvironmentAnswer): EnvironmentCloudError {
     return new EnvironmentCloudError("forbidden", NEEDS_PERMISSION_MESSAGE);
   if (isCloudFailure(answer))
     return new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
-  return new EnvironmentCloudError("invalid", refusalMessage(answer.body));
+  return new EnvironmentCloudError(
+    "invalid",
+    refusalMessageWithout(answer.body, answer.withheld),
+  );
 }
 
 function unreadable(): EnvironmentCloudError {
@@ -198,7 +227,7 @@ function unreadable(): EnvironmentCloudError {
 }
 
 /** Parses a 2xx answer with `schema`, else throws the matching error. */
-function answerAs<T>(answer: EnvironmentAnswer, schema: z.ZodType<T>): T {
+function answerAs<T>(answer: SecretsAnswer, schema: z.ZodType<T>): T {
   if (!isSuccess(answer)) throw refusal(answer);
   const parsed = schema.safeParse(answer.body);
   if (!parsed.success) throw unreadable();
@@ -216,6 +245,7 @@ export async function listSecrets(
     environmentId,
     "GET",
     `?include=${SECRETS_LIST_INCLUDES.join(",")}`,
+    null,
     null,
   );
   const list = answerAs(answer, authnSecretsListSchema);
@@ -253,6 +283,7 @@ export async function createSecret(
     "POST",
     "",
     createBodyOf(request),
+    request.value,
   );
   // A server address with no address of its own: the screen names what the
   // person typed. Every other refusal keeps authn's own words.
@@ -270,7 +301,7 @@ export async function verifySecret(
   environmentId: string,
   request: EnvironmentSecretsVerifyRequestV11,
 ): Promise<EnvironmentSecretsVerifyResponse> {
-  let answer: EnvironmentAnswer;
+  let answer: SecretsAnswer;
   if (request.target === "secret") {
     answer = await send(
       cloud,
@@ -278,23 +309,31 @@ export async function verifySecret(
       "POST",
       `${id(request.secretId)}/verify`,
       {},
+      null,
     );
   } else {
     // authn's candidate body is strict: every binding field, no `target`.
-    answer = await send(cloud, environmentId, "POST", "/verify", {
-      kind: request.kind,
-      protocol: request.protocol,
-      hosts: request.hosts,
-      port: request.port,
-      identity: request.identity,
-      database: request.database,
-      policy: request.policy,
-      tlsPolicy: request.tlsPolicy,
-      pinnedHostKeys: request.pinnedHostKeys,
-      connectorId: request.connectorId,
-      confirmedAddresses: request.confirmedAddresses,
-      value: request.value,
-    });
+    answer = await send(
+      cloud,
+      environmentId,
+      "POST",
+      "/verify",
+      {
+        kind: request.kind,
+        protocol: request.protocol,
+        hosts: request.hosts,
+        port: request.port,
+        identity: request.identity,
+        database: request.database,
+        policy: request.policy,
+        tlsPolicy: request.tlsPolicy,
+        pinnedHostKeys: request.pinnedHostKeys,
+        connectorId: request.connectorId,
+        confirmedAddresses: request.confirmedAddresses,
+        value: request.value,
+      },
+      request.value,
+    );
   }
   return answerAs(answer, environmentSecretsVerifyResponseSchema);
 }
@@ -310,6 +349,7 @@ export async function replaceSecretValue(
     "PATCH",
     id(request.secretId),
     { value: request.value, expectedVersionId: request.expectedVersionId },
+    request.value,
   );
   if (answer.status === 409) {
     const stale = authnStaleSchema.safeParse(answer.body);
@@ -342,6 +382,7 @@ export async function readSecretVersions(
       "GET",
       `${id(request.secretId)}/versions`,
       null,
+      null,
     ),
     environmentSecretsVersionsResponseSchemaV11,
   );
@@ -359,6 +400,7 @@ export async function undoSecretVersion(
       "POST",
       `${id(request.secretId)}/versions${id(request.versionId)}/undo`,
       { regrant: request.regrant },
+      null,
     ),
     environmentSecretsUndoResponseSchema,
   );
@@ -380,6 +422,7 @@ export async function destroySecretVersion(
     "POST",
     `${id(request.secretId)}/versions${id(request.versionId)}/destroy`,
     { allowCurrent },
+    null,
   );
   return allowCurrent
     ? answerAs(answer, environmentSecretsDestroyResponseSchemaV11)
@@ -397,6 +440,7 @@ export async function readSecretRotation(
       environmentId,
       "GET",
       `${id(request.secretId)}/rotation`,
+      null,
       null,
     ),
     environmentSecretsRotationResponseSchema,
@@ -423,6 +467,7 @@ export async function consentToSecret(
       "POST",
       `${id(request.secretId)}/consent`,
       { disclosureVersion: request.disclosureVersion },
+      null,
     ),
     environmentSecretsConsentResponseSchema,
   );

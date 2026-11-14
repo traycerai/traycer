@@ -77,11 +77,11 @@ export const CLOUD_UNAVAILABLE_MESSAGE =
 export const ENVIRONMENT_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
- * No answer's body is read past this many bytes, whatever its status. A
- * failure over it counts by its status alone; a success over it is one this
- * client cannot read (`unavailable`), as it was before the read was bounded.
+ * No failure's body is read past this many bytes: one over it counts by its
+ * status alone. A success is read whole, as the host reads it today: an
+ * environment's items list has no size of its own to cap.
  */
-export const MAX_ENVIRONMENT_BODY_BYTES = 256 * 1024;
+export const MAX_FAILURE_BODY_BYTES = 256 * 1024;
 
 /**
  * Where a call goes and on whose sign-in.
@@ -108,8 +108,8 @@ export interface EnvironmentTransportRequest {
 }
 
 /**
- * The answer as received: its status and its body's text, or null when the
- * body was over {@link MAX_ENVIRONMENT_BODY_BYTES}.
+ * The answer as received: its status and its body's text, or null when a
+ * failure's body was over {@link MAX_FAILURE_BODY_BYTES}.
  */
 export interface EnvironmentTransportAnswer {
   readonly status: number;
@@ -139,12 +139,16 @@ export const fetchEnvironmentTransport: EnvironmentTransport = async (
     redirect: "manual",
     signal: request.signal,
   });
-  return { status: response.status, text: await boundedText(response) };
+  const success = response.status >= 200 && response.status < 300;
+  return {
+    status: response.status,
+    text: success ? await response.text() : await boundedText(response),
+  };
 };
 
 /**
- * The body's text, read chunk by chunk: at the first chunk that takes it past
- * {@link MAX_ENVIRONMENT_BODY_BYTES} the rest of the stream is cancelled and
+ * A failure's text, read chunk by chunk: at the first chunk that takes it past
+ * {@link MAX_FAILURE_BODY_BYTES} the rest of the stream is cancelled and
  * nothing more is pulled; the answer is then null.
  */
 async function boundedText(response: Response): Promise<string | null> {
@@ -156,7 +160,7 @@ async function boundedText(response: Response): Promise<string | null> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_ENVIRONMENT_BODY_BYTES) {
+    if (size > MAX_FAILURE_BODY_BYTES) {
       await reader.cancel().catch(() => undefined);
       return null;
     }
@@ -220,6 +224,28 @@ export async function sendEnvironmentRequest(
   path: string,
   body: unknown,
 ): Promise<EnvironmentAnswer> {
+  const sent = await sendEnvironmentRequestWithBearer(
+    cloud,
+    purpose,
+    method,
+    path,
+    body,
+  );
+  return sent.answer;
+}
+
+/**
+ * {@link sendEnvironmentRequest}, also answering the bearer the request
+ * carried, for a caller that must keep it out of anything it shows. The
+ * bearer is used for that comparison and never kept.
+ */
+export async function sendEnvironmentRequestWithBearer(
+  cloud: EnvironmentCloud,
+  purpose: EnvironmentPurpose,
+  method: EnvironmentHttpMethod,
+  path: string,
+  body: unknown,
+): Promise<{ readonly answer: EnvironmentAnswer; readonly bearer: string }> {
   const bearer = cloud.bearer.getBearerToken();
   if (bearer === null || bearer.length === 0) {
     throw new EnvironmentCloudError(
@@ -246,7 +272,10 @@ export async function sendEnvironmentRequest(
       }),
       abort.signal,
     );
-    return { status: answer.status, body: bodyOf(answer.text) };
+    return {
+      answer: { status: answer.status, body: bodyOf(answer.text) },
+      bearer,
+    };
   } catch {
     throw new EnvironmentCloudError(
       "no_response",
