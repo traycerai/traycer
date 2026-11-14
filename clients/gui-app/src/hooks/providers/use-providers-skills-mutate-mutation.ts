@@ -61,7 +61,8 @@ export function useProvidersSkillsMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  // What this installs can run on the host, so it carries the grant.
+  // What this installs can run on the host, so it carries the grant; the host
+  // no longer reads it on a remove, which is sent without.
   const grant = useExecutableWriteGrant();
   return useMutation<
     SkillsMutateData,
@@ -74,9 +75,7 @@ export function useProvidersSkillsMutate(): UseMutationResult<
       const environmentId = variables.environmentId ?? null;
       if (environmentId !== null)
         cloudVerdictPreflight("providers.nativeMutate")();
-      const request = await grant<
-        RequestOfMethod<HostRpcRegistry, "providers.nativeMutate">
-      >(
+      const unsent: RequestOfMethod<HostRpcRegistry, "providers.nativeMutate"> =
         {
           providerId: variables.providerId,
           executableWriteGrant: null,
@@ -87,9 +86,11 @@ export function useProvidersSkillsMutate(): UseMutationResult<
             workspaceRoot: variables.workspaceRoot,
             mutation: variables.mutation,
           },
-        },
-        client,
-      );
+        };
+      const request =
+        variables.mutation.action === "remove"
+          ? unsent
+          : await grant(unsent, client);
       const response =
         environmentId === null
           ? await client.request("providers.nativeMutate", request)

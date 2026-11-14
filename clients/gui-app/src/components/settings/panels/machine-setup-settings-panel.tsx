@@ -12,7 +12,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { MACHINE_SETUP } from "@/components/settings/panels/machine-setup.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -130,12 +129,9 @@ function SetupScriptEditor(props: {
 }): ReactNode {
   const saved = props.script?.text ?? "";
   const [text, setText] = useState(saved);
-  // The script runs on every computer of that OS, so a save carries the grant.
-  const grant = useExecutableWriteGrant();
   const queryClient = useQueryClient();
   const put = useHostScopedMutationForClient(useHostClient(), {
     method: "environment.setup.put",
-    prepareRequest: grant,
     mutationKey: environmentMutationKeys.setupPut(),
     errorMessage: "Couldn't save the setup script.",
     invalidateMethods: [

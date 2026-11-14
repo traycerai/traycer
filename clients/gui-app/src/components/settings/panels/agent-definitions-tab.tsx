@@ -7,7 +7,6 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -69,11 +68,8 @@ function useAgentDefinitionWrites() {
   // A write that authn holds shows in the review the app reads from authn.
   const rereadReview = () =>
     void invalidateEnvironmentReads(queryClient, ["environment.review"]);
-  // An agent definition is content an agent runs, so a save carries the grant.
-  const grant = useExecutableWriteGrant();
   const put = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.put",
-    prepareRequest: grant,
     mutationKey: environmentMutationKeys.agentDefinitionsPut(),
     errorMessage: "Couldn't save the agent definition.",
     invalidateMethods: [LIST, "environment.status", "environment.review"],
