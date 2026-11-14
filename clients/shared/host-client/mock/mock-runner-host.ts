@@ -4,9 +4,7 @@ import {
 } from "../host-ownership";
 import {
   listTeamComputersViaHttp,
-  setEnvironmentBotHostViaHttp,
   type TeamComputersResult,
-  type SetEnvironmentBotHostResult,
 } from "../team-computers";
 import {
   mintTeamComputerInstallTokenViaHttp,
@@ -715,20 +713,6 @@ export class MockRunnerHost implements IRunnerHost {
     environmentId: string,
   ): Promise<TeamComputersResult> {
     return listTeamComputersViaHttp(this.authnBaseUrl, bearer, environmentId);
-  }
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult> {
-    return setEnvironmentBotHostViaHttp(
-      this.authnBaseUrl,
-      bearer,
-      environmentId,
-      hostId,
-      sharingGeneration,
-    );
   }
   mintTeamComputerInstallToken(
     bearerToken: string,
