@@ -40,6 +40,7 @@ import {
   environmentConfigurationSkillsUpdateV10,
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
+  environmentProvidersListV10,
   environmentPlansListV10,
   environmentPlansListV11,
   environmentPlansUnlinkV11,
@@ -1282,6 +1283,14 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
       hostStates: [],
     },
     badResponse: { entries: [], readerScope: "everything", hostStates: [] },
+  },
+  {
+    method: "environment.providers.list",
+    contract: environmentProvidersListV10,
+    request: { environmentId: TEAM.environmentId },
+    badRequest: { environmentId: "" },
+    response: { profileSyncEnabled: false, providers: [] },
+    badResponse: { providers: [] },
   },
   {
     method: "environment.plans.list",

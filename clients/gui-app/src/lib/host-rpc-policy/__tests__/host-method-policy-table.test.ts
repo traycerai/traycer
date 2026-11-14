@@ -350,6 +350,8 @@ describe("host method poll policy table", () => {
       "environment.configuration.items",
       "environment.configuration.skills.list",
       "environment.configuration.skills.state",
+      "environment.plans.list",
+      "environment.providers.list",
     ] as const) {
       expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
         mode: "latest",

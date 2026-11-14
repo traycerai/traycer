@@ -36,6 +36,7 @@ import {
   environmentPlansUnlinkV10,
   environmentPlansUnlinkV11,
   environmentPlansUnlinkUpgradeV10ToV11,
+  environmentProvidersListV10,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   environmentReviewHeldApplyRequestSchema,
@@ -558,6 +559,19 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentReviewRecordV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.providers.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentProvidersListV10,
           upgradeFromPreviousVersion: null,
         },
       },
