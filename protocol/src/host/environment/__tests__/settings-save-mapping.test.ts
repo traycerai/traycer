@@ -1132,22 +1132,6 @@ describe("settingsSaveItemEdit", () => {
   });
 
   describe("variable", () => {
-    it("leaves a null variable or override local_only, apart from its delete", () => {
-      expect(settingsSaveItemEdit(envSet(null), LINUX_NULL)).toEqual(
-        LOCAL_ONLY,
-      );
-      expect(settingsSaveItemEdit(envDelete(), LINUX_NULL)).toEqual(
-        variableDelete("linux"),
-      );
-
-      expect(settingsSaveItemEdit(overrideSet(null), LINUX_NULL)).toEqual(
-        LOCAL_ONLY,
-      );
-      expect(settingsSaveItemEdit(overrideDeleteSave(), LINUX_NULL)).toEqual(
-        overrideDelete("linux"),
-      );
-    });
-
     it("puts a different variable on the host OS, or on any when that OS has no row", () => {
       expect(settingsSaveItemEdit(envSet("kept"), LINUX_NULL)).toEqual(
         variablePut("linux"),
@@ -1160,9 +1144,13 @@ describe("settingsSaveItemEdit", () => {
       );
     });
 
-    it("deletes a variable on the row it targets and leaves a missing target local_only", () => {
+    it("deletes a variable on the row it targets, keeps a null variable local_only, and leaves a missing target local_only", () => {
       expect(settingsSaveItemEdit(envDelete(), LINUX_NULL)).toEqual(
         variableDelete("linux"),
+      );
+      // A null value is not a delete: it masks the variable on this host only.
+      expect(settingsSaveItemEdit(envSet(null), LINUX_NULL)).toEqual(
+        LOCAL_ONLY,
       );
       expect(settingsSaveItemEdit(envDelete(), ANY_KEPT)).toEqual(
         variableDelete("any"),
@@ -1181,9 +1169,13 @@ describe("settingsSaveItemEdit", () => {
       );
     });
 
-    it("deletes an override on the host OS row and leaves a missing row local_only", () => {
+    it("deletes an override on the host OS row, keeps a null override local_only, and leaves a missing row local_only", () => {
       expect(settingsSaveItemEdit(overrideDeleteSave(), LINUX_NULL)).toEqual(
         overrideDelete("linux"),
+      );
+      // A null value is not a delete: it masks the override on this host only.
+      expect(settingsSaveItemEdit(overrideSet(null), LINUX_NULL)).toEqual(
+        LOCAL_ONLY,
       );
       expect(settingsSaveItemEdit(overrideDeleteSave(), EMPTY)).toEqual(
         LOCAL_ONLY,

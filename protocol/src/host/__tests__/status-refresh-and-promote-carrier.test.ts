@@ -89,6 +89,7 @@ describe("dormant status refresh and promote carrier contracts", () => {
   it("upgrades only the promote arm with a null intent", () => {
     const promote =
       providersNativeMutateV14.requestSchema.parse(promoteRequestV14);
+    expect(promote).toEqual(promoteRequestV14);
     const promoted =
       providersNativeMutateUpgradeV14ToV15.upgradeRequest(promote);
     expect(promoted).toEqual({
@@ -116,10 +117,7 @@ describe("dormant status refresh and promote carrier contracts", () => {
     );
   });
 
-  it("keeps the v1.4 carrier shape and strips the v1.5 intent on downgrade parsing", () => {
-    expect(
-      providersNativeMutateV14.requestSchema.parse(promoteRequestV14),
-    ).toEqual(promoteRequestV14);
+  it("strips a v1.5 intent when v1.4's request schema parses the request", () => {
     const current = providersNativeMutateV15.requestSchema.parse({
       ...promoteRequestV14,
       mutation: { ...promoteMutationV14, intentOperationId: UUID },

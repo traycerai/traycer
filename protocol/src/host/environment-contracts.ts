@@ -277,9 +277,12 @@ export const hostRemoteAccessSetV20 = defineRpcContract({
  * whether the row was read, unreachable or refused. It has no refusals of its
  * own. A host with no environment domain running answers at once and does
  * nothing. The answer carries no result on purpose (see
- * `hostStatusRefreshResponseSchema`). Defined and not registered: it
- * registers with the app's Remote access caller. Not an agent capability, and
- * not on the host-to-host allowlist.
+ * `hostStatusRefreshResponseSchema`). Any person the door admits may call
+ * it, with no role: it reads only this computer's own row. Defined and not
+ * registered: it registers with the app's Remote access caller, off
+ * `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`, so
+ * a host without the method keeps today's two-minute interval. Not an agent
+ * capability, and not on the host-to-host allowlist.
  */
 export const hostStatusRefreshV10 = defineRpcContract({
   method: "host.status.refresh",
