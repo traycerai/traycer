@@ -17,15 +17,20 @@ import { resolveUnavailableMethodDegrade } from "@traycer/protocol/host-transpor
 
 /**
  * `providers.list@10.11` publishes four profile keys and `removedProfiles`.
- * A 10.9 or 10.10 peer parses that minor's contract, and every older major
- * takes the registry downgrade, so none of the five keys survive. A 10.11
- * client upgrades an older host's answer to the documented defaults.
+ * `providers.list@10.12` adds optional `offersSignIns` on the envelope.
+ * A 10.9 or 10.10 peer receives none of those keys; 10.11 retains the profile
+ * keys and removed ids but strips `offersSignIns`. Every older major takes
+ * the registry downgrade and receives none. A 10.11 client upgrades an older
+ * host's answer to the documented defaults. A 10.12 client reads an older
+ * answer as `offersSignIns: false`.
  * `providers.answerProfileName@1.0` stays off the released floor.
  */
 const METHOD = "providers.answerProfileName";
-const listLine = hostRpcRegistry["providers.list"][10];
+const listRegistry = hostRpcRegistry["providers.list"];
+const listLine = listRegistry[10];
 const peer1010 = listLine.versions[10].contract.responseSchema;
-const headResponse = listLine.versions[11].contract.responseSchema;
+const peer1011 = listLine.versions[11].contract.responseSchema;
+const headResponse = listLine.versions[12].contract.responseSchema;
 const answerLine = hostRpcRegistry[METHOD];
 const answerRequest = answerLine[1].versions[0].contract.requestSchema;
 const answerResponse = answerLine[1].versions[0].contract.responseSchema;
@@ -149,7 +154,7 @@ function providersListDowngradeMajors(): ProvidersListDowngradeMajor[] {
 }
 
 function expectUpgradeDefaults(upgraded: unknown): void {
-  const parsed = headResponse.parse(upgraded);
+  const parsed = peer1011.parse(upgraded);
   expect(parsed.removedProfiles).toEqual([]);
   expect(parsed.providers[0]?.profiles).toEqual([
     expect.objectContaining({
@@ -199,9 +204,17 @@ const host1011Answer = {
   ],
 };
 
+const host1012Answer = {
+  ...host1011Answer,
+  offersSignIns: true,
+};
+
+const emptyList = { providers: [], native: null };
+const offeredList = { ...emptyList, offersSignIns: true };
+
 describe("providers.list@10.11 projected to an older minor", () => {
   it("keeps the four row keys and removedProfiles on the 10.11 line", () => {
-    const live = headResponse.parse(host1011Answer);
+    const live = peer1011.parse(host1011Answer);
     expect(live.removedProfiles).toEqual(host1011Answer.removedProfiles);
     expect(live.providers[0]?.profiles[0]).toMatchObject({
       aliases: ["former-ambient"],
@@ -240,9 +253,56 @@ describe("providers.list@10.11 projected to an older minor", () => {
   );
 });
 
+describe("providers.list@10.12 offersSignIns", () => {
+  it("keeps an explicit boolean and does not invent one when the key is absent", () => {
+    const present = headResponse.parse(host1012Answer);
+    expect(present.offersSignIns).toBe(true);
+    expect(present.removedProfiles).toEqual(host1011Answer.removedProfiles);
+    expect(present.providers[0]?.profiles[0]).toMatchObject({
+      aliases: ["former-ambient"],
+    });
+    expect(
+      headResponse.parse({ ...host1011Answer, offersSignIns: false })
+        .offersSignIns,
+    ).toBe(false);
+    expect(headResponse.parse(host1011Answer)).not.toHaveProperty(
+      "offersSignIns",
+    );
+  });
+
+  it("drops offersSignIns for a 10.11 peer and keeps removedProfiles", () => {
+    const received = peer1011.parse(host1012Answer);
+    expect(keysAtAnyDepth(received)).not.toContain("offersSignIns");
+    expect(received.removedProfiles).toEqual(host1011Answer.removedProfiles);
+  });
+
+  it.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const)(
+    "drops offersSignIns when a 10.%s peer parses it",
+    (minor) => {
+      const received =
+        listLine.versions[minor].contract.responseSchema.parse(offeredList);
+      expect(keysAtAnyDepth(received)).not.toContain("offersSignIns");
+    },
+  );
+
+  it("keeps the 10.11 request on the 10.12 line", () => {
+    expect(listLine.versions[12].contract.requestSchema).toBe(
+      listLine.versions[11].contract.requestSchema,
+    );
+    expect(listLine.versions[12].contract.schemaVersion).toEqual({
+      major: 10,
+      minor: 12,
+    });
+    expect(listLine.versions[12]).not.toHaveProperty(
+      "responseGrowthProjectionGated",
+    );
+  });
+});
+
 describe("providers.list downgrade from major 10", () => {
-  it("strips the four row keys and removedProfiles for every older major", () => {
-    const canonical = headResponse.parse(host1011Answer);
+  it("strips the profile-sync keys and offersSignIns for every older major", () => {
+    const canonical = headResponse.parse(host1012Answer);
+    expect(canonical.offersSignIns).toBe(true);
     const toMajors = providersListDowngradeMajors();
     expect(toMajors).toHaveLength(
       Object.keys(listLine.downgradePathsFromLatest).length,
@@ -253,14 +313,14 @@ describe("providers.list downgrade from major 10", () => {
     const majorsMissingProvider: number[] = [];
     for (const toMajor of toMajors) {
       const result = downgradeResponseAcrossMajors(
-        hostRpcRegistry["providers.list"],
+        listRegistry,
         10,
         toMajor,
         canonical,
       );
       expect(result.ok).toBe(true);
       if (!result.ok) continue;
-      for (const key of PROFILE_SYNC_KEYS) {
+      for (const key of [...PROFILE_SYNC_KEYS, "offersSignIns"]) {
         expect(keysAtAnyDepth(result.value), `${toMajor} ${key}`).not.toContain(
           key,
         );
@@ -288,7 +348,7 @@ describe("providers.list upgrade to 10.11", () => {
   it("fills the defaults when a 10.11 client reads a 10.10 host", () => {
     const parsed = peer1010.parse(olderHost);
     const upgraded = upgradeResponseToVersion(
-      hostRpcRegistry["providers.list"],
+      listRegistry,
       { major: 10, minor: 10 },
       { major: 10, minor: 11 },
       parsed,
@@ -300,7 +360,7 @@ describe("providers.list upgrade to 10.11", () => {
     const parsed =
       listLine.versions[8].contract.responseSchema.parse(olderHost);
     const upgraded = upgradeResponseToVersion(
-      hostRpcRegistry["providers.list"],
+      listRegistry,
       { major: 10, minor: 8 },
       { major: 10, minor: 11 },
       parsed,
@@ -309,9 +369,69 @@ describe("providers.list upgrade to 10.11", () => {
   });
 });
 
+describe("providers.list upgrade to 10.12", () => {
+  it("sets offersSignIns false when a 10.12 client reads a 10.11 host", () => {
+    const parsed = peer1011.parse(host1011Answer);
+    const upgraded = upgradeResponseToVersion(
+      listRegistry,
+      { major: 10, minor: 11 },
+      { major: 10, minor: 12 },
+      parsed,
+    );
+    expect(upgraded.offersSignIns).toBe(false);
+    expect(upgraded.removedProfiles).toEqual(host1011Answer.removedProfiles);
+  });
+
+  it.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const)(
+    "sets offersSignIns false when a 10.12 client reads a 10.%s host",
+    (minor) => {
+      const parsed =
+        listLine.versions[minor].contract.responseSchema.parse(emptyList);
+      const upgraded = upgradeResponseToVersion(
+        listRegistry,
+        { major: 10, minor },
+        { major: 10, minor: 12 },
+        parsed,
+      );
+      expect(upgraded.offersSignIns).toBe(false);
+    },
+  );
+
+  it.each([1, 2, 3, 4, 5, 6, 7, 8] as const)(
+    "sets offersSignIns false when a 10.12 client reads major %s",
+    (major) => {
+      const parsed = listRegistry[
+        major
+      ].versions[0].contract.responseSchema.parse({
+        providers: [],
+      });
+      const upgraded = upgradeResponseToVersion(
+        listRegistry,
+        { major, minor: 0 },
+        { major: 10, minor: 12 },
+        parsed,
+      );
+      expect(upgraded.offersSignIns).toBe(false);
+    },
+  );
+
+  it("sets offersSignIns false when a 10.12 client reads a 9.2 host", () => {
+    const parsed = listRegistry[9].versions[2].contract.responseSchema.parse({
+      providers: [],
+    });
+    const upgraded = upgradeResponseToVersion(
+      listRegistry,
+      { major: 9, minor: 2 },
+      { major: 10, minor: 12 },
+      parsed,
+    );
+    expect(upgraded.offersSignIns).toBe(false);
+  });
+});
+
 describe("providers.list@10.11 field fallback", () => {
   it("drops an unknown personNotice or a malformed otherNames and keeps the row", () => {
-    const parsed = headResponse.parse(
+    const parsed = peer1011.parse(
       listResponse([
         {
           ...ambient,
