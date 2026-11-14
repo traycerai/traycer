@@ -18,11 +18,9 @@ export interface AttachGrantResponse {
   /** Grant lifetime in seconds (the relay enforces its own `exp ≤ 5m`). */
   expires_in: number;
   /**
-   * Present only when a user bearer mints for a `kind: sandbox` host: the
-   * host-bound session grant (`typ: "session-grant"`, `hostId`, `jti`, 10
-   * minute `exp`) the client presents in `OPEN.authz` v2 INSTEAD of its user
-   * bearer, so no user credential ever reaches a sandbox. Absent for every
-   * other target.
+   * Present when the request asked `session_grant_version: 2`: the host-only
+   * token the client presents in `OPEN.authz` v2 instead of its sign-in, for
+   * every host kind. An older request receives it only for a sandbox.
    */
   session_grant?: string;
   /** The session grant's lifetime in seconds; present with `session_grant`. */

@@ -1,4 +1,8 @@
-import type { LocalOpenAuth } from "@traycer-clients/shared/host-transport/local-open-auth";
+import {
+  hostTokenBearer,
+  hostTokenSessionAuth,
+} from "@traycer-clients/shared/auth/host-token-lease";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 /**
  * Main's subscription to THIS machine's host for the account's registry.
  *
@@ -371,11 +375,10 @@ export function startLocalHostInventorySubscription(
    * reported as covering B.
    *
    * The SAME account with a new token is an in-place update. The host closes
-   * an admitted connection at its bearer's own `exp`
-   * (`connection-reauthorization.ts`), and this client carries no revalidator,
-   * so without this every ordinary renewal would end the push for the rest of
-   * the session. `notifyBearerRotated()` pushes a `credentialUpdate` on the
-   * live socket, which is what the host re-validates on.
+   * an admitted connection at its token's own `exp`
+   * (`connection-reauthorization.ts`). `notifyBearerRotated()` pushes a
+   * `credentialUpdate` carrying the host-only token held now; the renewed one
+   * follows through the client's own renewal subscription.
    *
    * Deliberately NOT the other half of `browser-sessions-owner`'s version: it
    * also restarts a stream that already died on the old bearer, and this one
@@ -413,19 +416,18 @@ export function startLocalHostInventorySubscription(
 /**
  * The production client: a plain local WebSocket to this machine's host.
  *
- * `auth` and `hostCredentialMint` are null for the reason
- * `browser-sessions-transport.ts` states about its own local client - the
- * credential recoveries are app-wide single-flight machinery owned by the
- * renderer, and a second implementation in main would double-spend a
- * single-use refresh token. What that costs here is self-healing on an
- * UNAUTHORIZED, and what an unhealed stream costs is the poll, which is where
- * this read was going to be made anyway.
+ * It opens with main's host-only token and recovers a refused or expired one
+ * by minting again here; it never refreshes the sign-in token, which is the
+ * renderer's single-flight machinery. A refusal that recovery cannot answer
+ * ends the stream, and what that costs is the poll, which is where this read
+ * was going to be made anyway. `hostCredentialMint` is null because
+ * provisioning the host's own credential is the renderer's too.
  *
  * The endpoint is re-read per dial rather than captured, so a host that moved
  * between reconnect attempts is followed to its new port.
  */
 export function createLocalHostInventoryStreamClient(deps: {
-  readonly localOpenAuth?: LocalOpenAuth;
+  readonly hostTokens: HostTokenSource;
   readonly localHost: () => LocalHostEndpoint | null;
   readonly bearer: BearerSourceProvider;
   readonly appVersion: string | null;
@@ -433,9 +435,8 @@ export function createLocalHostInventoryStreamClient(deps: {
   endpoint: LocalHostEndpoint,
   userId: string,
 ) => IHostStreamClient<HostStreamRpcRegistry> {
-  return (endpoint, userId) =>
-    new WsStreamClient<HostStreamRpcRegistry>({
-      localOpenAuth: deps.localOpenAuth,
+  return (endpoint, userId) => {
+    const client = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
       userId,
@@ -444,8 +445,23 @@ export function createLocalHostInventoryStreamClient(deps: {
         if (current === null) return null;
         return { hostId: current.hostId, websocketUrl: current.websocketUrl };
       },
-      bearer: deps.bearer,
-      auth: null,
+      bearer: hostTokenBearer(
+        deps.hostTokens,
+        deps.bearer,
+        endpoint.hostId,
+        ignoreHostTokenState,
+      ),
+      ...hostTokenSessionAuth(
+        {
+          tokens: deps.hostTokens,
+          currentUserId: () => deps.bearer()?.identity.userId ?? null,
+          hostId: endpoint.hostId,
+          signInRecovery: null,
+          onState: ignoreHostTokenState,
+          now: Date.now,
+        },
+        null,
+      ),
       clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
@@ -463,4 +479,15 @@ export function createLocalHostInventoryStreamClient(deps: {
         appVersion: deps.appVersion,
       } satisfies FirstPartyClientIdentity,
     });
+    // A renewed token reaches the open stream in place.
+    const stopRenewals = deps.hostTokens.subscribe((change) => {
+      if (change.userId === userId && change.hostId === endpoint.hostId)
+        client.notifyBearerRotated();
+    });
+    client.onClosed(stopRenewals);
+    return client;
+  };
 }
+
+/** Main draws no state of a host; the renderer's own connections raise it. */
+function ignoreHostTokenState(): void {}

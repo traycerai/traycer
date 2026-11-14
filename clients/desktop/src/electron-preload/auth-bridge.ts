@@ -10,6 +10,7 @@ import { ipcRenderer } from "electron";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
+  RunnerHostSync,
 } from "../ipc-contracts/ipc-channels";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type {
@@ -73,6 +74,15 @@ import type {
 } from "../ipc-contracts/window-types";
 import type { SoundtrackSetReadResult } from "../ipc-contracts/soundtrack-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
+import {
+  NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenBridgeChange,
+  type HostTokenEraReply,
+  type HostTokenObtainReply,
+  type HostTokenRenewReply,
+  type HostTokensBridgeSurface,
+} from "../ipc-contracts/host-token-types";
+import { readSyncNumberFor } from "./sync-bootstrap";
 
 /**
  * Eagerly subscribe at module load so a cold-start browser-return deep link
@@ -657,6 +667,50 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
         legacy,
       ) as Promise<CredentialsMigrationOutcome>,
+  };
+}
+
+export function buildHostTokensBridge(): HostTokensBridgeSurface {
+  return {
+    era: (userId) =>
+      readSyncNumberFor(
+        RunnerHostSync.hostTokensEra,
+        userId,
+        NO_ISSUED_HOST_TOKEN_ERA,
+      ),
+    obtain: (userId, hostId, fresh, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensObtain,
+        userId,
+        hostId,
+        fresh,
+        expectedEra,
+      ) as Promise<HostTokenObtainReply>,
+    renew: (userId, hostIds, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensRenew,
+        userId,
+        hostIds,
+        expectedEra,
+      ) as Promise<HostTokenRenewReply>,
+    adopt: (userId, hostId, token, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensAdopt,
+        userId,
+        hostId,
+        token,
+        expectedEra,
+      ) as Promise<HostTokenEraReply>,
+    forgetUser: (userId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensForgetUser,
+        userId,
+      ) as Promise<HostTokenEraReply>,
+    subscribe: (handler) =>
+      subscribe<HostTokenBridgeChange>(
+        RunnerHostEvent.hostTokensChange,
+        handler,
+      ),
   };
 }
 

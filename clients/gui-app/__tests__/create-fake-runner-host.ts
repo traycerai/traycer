@@ -1,3 +1,8 @@
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   createInProcessSelectionAuthority,
@@ -49,6 +54,34 @@ function createDefaultLocalSelectionAuthority(localHostId: string) {
  * here is a deterministic no-op; pass `overrides` for whatever a given test
  * actually exercises (spies, `hostTray`/`hostManagement` doubles, etc.).
  */
+/** A token source that never mints: the fake has no verified sign-in. */
+export function inertHostTokenSource(): HostTokenSource {
+  return createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => Promise.resolve({ kind: "no-sign-in" }),
+    signIn: null,
+    now: () => 0,
+  });
+}
+
+/** A token source holding one live host-only token, so a door can open. */
+export async function heldHostTokenSource(
+  userId: string,
+  hostId: string,
+): Promise<HostTokenSource> {
+  const tokens = inertHostTokenSource();
+  await tokens.adopt(
+    userId,
+    hostId,
+    {
+      token: `host-token-${hostId}`,
+      expiresAtMs: Date.now() + 3_600_000,
+    },
+    tokens.era(userId),
+  );
+  return tokens;
+}
+
 export function createFakeRunnerHost(
   overrides: Partial<IRunnerHost>,
 ): IRunnerHost {
@@ -81,6 +114,7 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const }),
     mintHostCredential: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    hostTokens: inertHostTokenSource(),
     requestStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>

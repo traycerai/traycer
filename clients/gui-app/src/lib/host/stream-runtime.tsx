@@ -39,6 +39,7 @@ import {
   wireAvailabilityRecovery,
 } from "@/lib/host/availability-recovery";
 import { appLogger } from "@/lib/logger";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -74,7 +75,7 @@ export interface HostStreamProviderProps {
 export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   const binding = useHostBinding();
   const auth = useStreamAuthRevalidator();
-  const authnBaseUrl = useRunnerHost().authnBaseUrl;
+  const { authnBaseUrl, hostTokens } = useRunnerHost();
   // The app-wide client, APP-WIDE BY CONSTRUCTION: this is a top-level
   // provider, so no re-provided `HostRuntimeContext` is above it. Stated
   // explicitly all the same, because the failure if one ever were is that the
@@ -180,6 +181,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         authorizesCloudCapability(useAuthStore.getState().status),
       authnBaseUrl,
       auth,
+      hostTokens,
       userId: requestContextUserId,
       // The app-wide epic stream: snapshot-shaped, replay-safe.
       proactiveWakeEligible: true,
@@ -266,6 +268,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     appHostClient,
     auth,
     authnBaseUrl,
+    hostTokens,
     identityKey,
     requestContextUserId,
     readiness.hostId,
@@ -312,18 +315,31 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         setRebuildNonce((nonce) => nonce + 1);
       }, delayMs);
     };
+    // The person's Retry runs a waiting rebuild now; the streak it earned
+    // stays, so a rebuild refused again waits as long as it would have.
+    const stopRetry =
+      value.hostId === null
+        ? () => undefined
+        : onHostDoorRetry(value.hostId, () => {
+            if (backoffTimer === null) return;
+            window.clearTimeout(backoffTimer);
+            backoffTimer = null;
+            setRebuildNonce((nonce) => nonce + 1);
+          });
     if (client.isClosed()) {
       rebuild();
     } else {
       const unsubscribe = client.onClosed(rebuild);
       return () => {
         unsubscribe();
+        stopRetry();
         if (backoffTimer !== null) {
           window.clearTimeout(backoffTimer);
         }
       };
     }
     return () => {
+      stopRetry();
       if (backoffTimer !== null) {
         window.clearTimeout(backoffTimer);
       }

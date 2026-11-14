@@ -6,6 +6,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -18,17 +19,13 @@ import {
   type CreateRemoteTransportOptions,
   type IRemoteSession,
 } from "@traycer-clients/shared/host-transport/remote/index";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import type {
   FatalErrorDetails,
   SchemaVersion,
 } from "@traycer/protocol/framework/index";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-
-type HostRemoteTransportOptions = CreateRemoteTransportOptions<
-  HostRpcRegistry,
-  HostStreamRpcRegistry
->;
 
 // One global client shared between the mocked `useHostClient` and the tests.
 const globalClientRef = vi.hoisted(() => ({
@@ -84,12 +81,25 @@ vi.mock("@/lib/host/runtime", () => {
   };
 });
 
+// The build effect lists `hostTokens` by identity. A fresh source on every
+// read retriggers that effect for as long as the hook stays mounted.
+const runnerHost = vi.hoisted(() => ({
+  hostTokens: null as HostTokenSource | null,
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ authnBaseUrl: "http://localhost:5005" }),
+  useRunnerHost: () => {
+    runnerHost.hostTokens ??= inertHostTokenSource();
+    return {
+      authnBaseUrl: "http://localhost:5005",
+      hostTokens: runnerHost.hostTokens,
+    };
+  },
 }));
 
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { resetHostStreamClientCacheForTest } from "@/lib/host/host-stream-client-cache";
+import { retryHostDoor } from "@/lib/host/host-door-retry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 // The SPINE `useHostClient` hands back in this suite - never bound to any one
@@ -324,6 +334,59 @@ describe("useHostStreamClientFor", () => {
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
   });
 
+  it("reopens this host's paced rebuild now and keeps the quick-close streak", async () => {
+    vi.useFakeTimers();
+    globalClientRef.value = buildGlobalClient(true);
+    const sessions: ControllableSession[] = [];
+    mocks.createRemoteHostTransport.mockImplementation(() => {
+      const session = controllableSession();
+      sessions.push(session);
+      return { session, streamClient: new RemoteStreamClient(session) };
+    });
+    const retryTarget: RemoteHostDirectoryEntry = {
+      ...FROZEN_SANDBOX_TARGET,
+      hostId: "host-retry-binding",
+      label: "Retry host",
+      sandbox: null,
+    };
+
+    renderHook(() => useHostStreamClientFor(retryTarget, null));
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      sessions[0].emitClosed();
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      sessions[1].emitClosed();
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await retryHostDoor("another-host", inertHostTokenSource());
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await retryHostDoor(retryTarget.hostId, inertHostTokenSource());
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(3);
+
+    act(() => {
+      sessions[2].emitClosed();
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_999);
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(4);
+  });
+
   it("returns null when there is no target", () => {
     globalClientRef.value = buildGlobalClient(true);
     const { result } = renderHook(() => useHostStreamClientFor(null, null));
@@ -463,12 +526,19 @@ describe("useHostStreamClientFor", () => {
     expect(closeSpy.mock.contexts[1]).toBe(second);
   });
 
-  it("rebuilds a physical remote stream when ownership changes to a team", () => {
+  it("keeps one host-token transport when a physical remote's owner becomes a team", () => {
     const transportSessions: ControllableSession[] = [];
-    const openAuthModes: HostRemoteTransportOptions["openAuth"][] = [];
+    const opened: Array<
+      CreateRemoteTransportOptions<HostRpcRegistry, HostStreamRpcRegistry>
+    > = [];
     mocks.createRemoteHostTransport.mockImplementation(
-      (options: HostRemoteTransportOptions) => {
-        openAuthModes.push(options.openAuth);
+      (
+        options: CreateRemoteTransportOptions<
+          HostRpcRegistry,
+          HostStreamRpcRegistry
+        >,
+      ) => {
+        opened.push(options);
         const session = controllableSession();
         transportSessions.push(session);
         return { session, streamClient: new RemoteStreamClient(session) };
@@ -512,17 +582,18 @@ describe("useHostStreamClientFor", () => {
 
     personalSurface.rerender({ target: teamEntry });
 
-    expect(personalSurface.result.current).not.toBe(first);
+    // Both owners open with the host-only token, so the owner change is not a
+    // new transport. The sibling keeps the one session this host already has.
+    expect(personalSurface.result.current).toBe(first);
     expect(siblingPersonalSurface.result.current).toBe(first);
-    expect(transportSessions).toHaveLength(2);
+    expect(transportSessions).toHaveLength(1);
+    expect(opened[0]?.hostTokens).toBe(runnerHost.hostTokens);
     expect(transportSessions[0].closeCalls).toBe(0);
-    expect(openAuthModes).toEqual(["user-bearer", "session-grant"]);
 
     personalSurface.unmount();
     expect(transportSessions[0].closeCalls).toBe(0);
     siblingPersonalSurface.unmount();
     expect(transportSessions[0].closeCalls).toBe(1);
-    expect(transportSessions[1].closeCalls).toBe(1);
   });
 
   it("keeps a healthy LOCAL client across a cloud-capability restoration", async () => {

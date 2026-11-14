@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { QueryClient } from "@tanstack/react-query";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type {
   ListTasksResponse,
@@ -77,6 +78,7 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type {
   DesktopOwnershipClaimResult,
@@ -102,7 +104,9 @@ import { cloudQueryKeys } from "@/lib/query-keys";
 // OTHER test in this file drives the controller directly and never mounts
 // anything, so these mocks are inert for them.
 const authServiceStub = vi.hoisted(() => ({
-  revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
+  revalidateCurrentContext: vi.fn(() =>
+    Promise.resolve({ kind: "valid" as const }),
+  ),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
 
@@ -136,6 +140,19 @@ function resetAuth(
     return;
   }
   useAuthStore.setState({ status, profile: null, contextMetadata: null });
+}
+
+function unauthorizedEpicClose(doorReason: string | null): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "test host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      ...(doorReason === null ? {} : { doorReason }),
+    },
+  };
 }
 
 interface ControlledEpicStream {
@@ -409,6 +426,60 @@ describe("EpicSessionController: session lifecycle with no surface mounted", () 
     expect(status?.demandHeld).toBe(true);
     expect(status?.metadataHold).toBe(true);
     expect(status?.suspended).toBe(false);
+  });
+
+  it.each(["enrolment_broken", "host_claimed", null] as const)(
+    "does not revalidate sign-in when host-token epic closes (%s)",
+    async (doorReason) => {
+      const streams: ControlledEpicStream[] = [];
+      const revalidateAuth = vi.fn();
+      installLegacyStreamFactory(streams);
+      installTestEpicSessionEnvironment({
+        ...defaultTestEpicSessionEnvironment(),
+        revalidateAuth,
+      });
+      openTestEpicTab("tab-host-token-close", "epic-host-token-close", "");
+      await waitFor(() => expect(streams).toHaveLength(1));
+      const stream = streams.at(0);
+      if (stream === undefined) throw new Error("expected an epic stream");
+
+      act(() => {
+        stream.callbacks.onConnectionStatus(
+          "closed",
+          unauthorizedEpicClose(doorReason),
+          false,
+          null,
+        );
+      });
+
+      expect(revalidateAuth).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still revalidates sign-in when the pool-host epic closes unauthorized", async () => {
+    const streams: ControlledEpicStream[] = [];
+    const revalidateAuth = vi.fn();
+    installLegacyStreamFactory(streams);
+    installTestEpicSessionEnvironment({
+      ...defaultTestEpicSessionEnvironment(),
+      revalidateAuth,
+    });
+    setTestEffectiveHost(POOL_HOST_ID, true);
+    openTestEpicTab("tab-pool-close", "epic-pool-close", "");
+    await waitFor(() => expect(streams).toHaveLength(1));
+    const stream = streams.at(0);
+    if (stream === undefined) throw new Error("expected an epic stream");
+
+    act(() => {
+      stream.callbacks.onConnectionStatus(
+        "closed",
+        unauthorizedEpicClose(null),
+        false,
+        null,
+      );
+    });
+
+    expect(revalidateAuth).toHaveBeenCalledTimes(1);
   });
 
   it("a named hidden tab at restore stays suspended and builds nothing", () => {

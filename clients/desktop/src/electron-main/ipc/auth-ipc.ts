@@ -1,4 +1,10 @@
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
+import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
+import type {
+  HostTokenMintOutcome,
+  HostTokenRenewal,
+} from "@traycer-clients/shared/auth/host-token-source";
+import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-token-sign-out";
 import {
   listTeamComputersViaHttp,
   setEnvironmentBotHostViaHttp,
@@ -9,7 +15,13 @@ import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/s
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
+  RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
+import type {
+  HostTokenEraReply,
+  HostTokenObtainReply,
+  HostTokenRenewReply,
+} from "../../ipc-contracts/host-token-types";
 import {
   listUserSessionsViaHttp,
   mintHostCredentialViaHttp,
@@ -111,6 +123,172 @@ function assertBoolean(
   if (typeof value !== "boolean") {
     throw new Error(`${context} requires a boolean argument`);
   }
+}
+
+function hostIdsOf(value: unknown): readonly string[] {
+  if (!Array.isArray(value))
+    throw new Error("hostTokensRenew.hostIds requires an array argument");
+  return value.map((hostId: unknown) => {
+    assertString(hostId, "hostTokensRenew.hostIds[]");
+    return hostId;
+  });
+}
+
+function hostTokenOf(value: unknown): HostToken {
+  if (typeof value !== "object" || value === null)
+    throw new Error("hostTokensAdopt.token requires an object argument");
+  const token: unknown = Reflect.get(value, "token");
+  const expiresAtMs: unknown = Reflect.get(value, "expiresAtMs");
+  assertString(token, "hostTokensAdopt.token.token");
+  assertNumber(expiresAtMs, "hostTokensAdopt.token.expiresAtMs");
+  return { token, expiresAtMs };
+}
+
+/**
+ * Main's host-only tokens, reached by every window. Main mints with its own
+ * verified copy of the sign-in, coalesced per person, host and refresh, so no
+ * channel here carries a sign-in token; each change goes to every window with
+ * the host token, and a sign-out removes that person's tokens.
+ */
+function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
+  const tokens = bridge.hostTokens;
+  // A window asks for renewal as its sign-in refreshes, and can ask before
+  // the refreshed sign-in reaches this process. Then nothing is minted now and
+  // the ask is answered on this process's next sign-in change: one waiting
+  // ask per person, replaced by a newer one, which answers the older ask
+  // `already-current`.
+  // The ask keeps the era it was made in: one from before a sign-out is
+  // answered `superseded`, and never mints in the era after it.
+  const waitingRenewals = new Map<string, () => void>();
+  const renewOnNextSignIn = (
+    userId: string,
+    hostIds: readonly string[],
+    era: number,
+  ): Promise<HostTokenRenewal> =>
+    new Promise((resolve) => {
+      waitingRenewals.get(userId)?.();
+      const onChange = (): void => {
+        bridge.authSession.off("change", onChange);
+        if (waitingRenewals.get(userId) === stop)
+          waitingRenewals.delete(userId);
+        if (tokens.era(userId) !== era) {
+          resolve({ kind: "superseded" });
+          return;
+        }
+        tokens.renew(userId, hostIds).then(resolve, () => {
+          resolve({ kind: "already-current" });
+        });
+      };
+      const stop = (): void => {
+        bridge.authSession.off("change", onChange);
+        if (waitingRenewals.get(userId) === stop)
+          waitingRenewals.delete(userId);
+        resolve({ kind: "already-current" });
+      };
+      bridge.authSession.on("change", onChange);
+      waitingRenewals.set(userId, stop);
+    });
+  bridge.disposeFns.push(() => {
+    for (const stop of Array.from(waitingRenewals.values())) stop();
+  });
+  // Main's era is the only one: a window reads it here, and every write a
+  // window asks for names the era it began in. Each handler compares that era
+  // and starts the source's work in one step, and the source reads its own era
+  // as that work starts, so nothing begun in an earlier era is kept.
+  bridge.handleSync(RunnerHostSync.hostTokensEra, (_event, userId: unknown) => {
+    assertString(userId, "hostTokensEra.userId");
+    return tokens.era(userId);
+  });
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensObtain,
+    async (
+      _event,
+      userId: unknown,
+      hostId: unknown,
+      fresh: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenObtainReply> => {
+      assertString(userId, "hostTokensObtain.userId");
+      assertString(hostId, "hostTokensObtain.hostId");
+      assertBoolean(fresh, "hostTokensObtain.fresh");
+      assertNumber(expectedEra, "hostTokensObtain.expectedEra");
+      const outcome: HostTokenMintOutcome =
+        tokens.era(userId) === expectedEra
+          ? await tokens.obtain(userId, hostId, fresh, null)
+          : { kind: "superseded" };
+      return { outcome, era: tokens.era(userId) };
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensRenew,
+    async (
+      _event,
+      userId: unknown,
+      hostIds: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenRenewReply> => {
+      assertString(userId, "hostTokensRenew.userId");
+      assertNumber(expectedEra, "hostTokensRenew.expectedEra");
+      const wanted = hostIdsOf(hostIds);
+      if (tokens.era(userId) !== expectedEra)
+        return { renewal: { kind: "superseded" }, era: tokens.era(userId) };
+      const renewal = await tokens.renew(userId, wanted);
+      return {
+        renewal:
+          renewal.kind === "already-current"
+            ? await renewOnNextSignIn(userId, wanted, expectedEra)
+            : renewal,
+        era: tokens.era(userId),
+      };
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensAdopt,
+    async (
+      _event,
+      userId: unknown,
+      hostId: unknown,
+      token: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenEraReply> => {
+      assertString(userId, "hostTokensAdopt.userId");
+      assertString(hostId, "hostTokensAdopt.hostId");
+      assertNumber(expectedEra, "hostTokensAdopt.expectedEra");
+      await tokens.adopt(userId, hostId, hostTokenOf(token), expectedEra);
+      return { era: tokens.era(userId) };
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensForgetUser,
+    async (_event, userId: unknown): Promise<HostTokenEraReply> => {
+      assertString(userId, "hostTokensForgetUser.userId");
+      await tokens.forgetUser(userId);
+      return { era: tokens.era(userId) };
+    },
+  );
+  bridge.disposeFns.push(
+    tokens.subscribe(({ userId, hostId }) => {
+      bridge.fanOut(RunnerHostEvent.hostTokensChange, {
+        userId,
+        hostId,
+        token: tokens.current(userId, hostId),
+        era: tokens.era(userId),
+      });
+    }),
+  );
+  bridge.disposeFns.push(
+    forgetHostTokensOnSignOut(
+      {
+        current: async () =>
+          (await bridge.authTokenStore.get())?.user.id ?? null,
+        onChange: (listener) =>
+          bridge.authTokenStore.subscribe((change) => {
+            listener(change.present ? change.userId : null);
+          }),
+      },
+      tokens,
+    ),
+  );
 }
 
 /** The renderer's mint request, checked field by field before it is sent. */
@@ -776,6 +954,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   registerSandboxControlPlaneIpc(bridge);
+  registerHostTokensIpc(bridge);
 
   // Fan the owned-watcher change events out to every window (source lands in §4;
   // a live registration that never fires until then). Torn down on dispose,

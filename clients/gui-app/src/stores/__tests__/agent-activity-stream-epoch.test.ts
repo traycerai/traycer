@@ -166,6 +166,7 @@ function createStubReconnectEngine(): HostReconnectEngine {
     openReopenLane: vi.fn(createStubReopenLane),
     claimWakeEpisode: vi.fn(() => true),
     isWithinWakeEpisode: vi.fn(() => false),
+    reopenNow: () => undefined,
     dispose: vi.fn(),
   };
 }
@@ -189,6 +190,7 @@ function createReopenCapturingReconnectEngine(): {
     }),
     claimWakeEpisode: vi.fn(() => true),
     isWithinWakeEpisode: vi.fn(() => false),
+    reopenNow: () => undefined,
     dispose: vi.fn(),
   };
   return {

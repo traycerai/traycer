@@ -3,7 +3,6 @@ import type {
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import {
   bearerSourceForUser,
   cloudVerdictForUser,
@@ -22,15 +21,18 @@ import {
 import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
 import {
-  createAttachGrantProvider,
-  createSandboxAttachGrantProvider,
+  mintRelayPassWithHostTokenViaHttp,
+  type AttachGrantProvider,
 } from "./grant-client";
-import type { RemoteOpenAuth } from "./open-auth";
-export {
-  remoteOpenAuthFor,
-  type RemoteOpenAuth,
-  type HostOpenAuthFacts,
-} from "./open-auth";
+import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
+import {
+  isIssuedHostTokenEra,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
+import {
+  hostTokenSessionAuth,
+  type HostTokenStateSink,
+} from "@traycer-clients/shared/auth/host-token-lease";
 import { decodeHostPublicKey } from "./noise-channel";
 import {
   acquireRemoteSession,
@@ -74,19 +76,15 @@ export interface CreateRemoteTransportOptions<
   /** Serves the in-channel bearer AND (derived) the grant-mint user bearer. */
   readonly bearer: BearerSourceProvider;
   /**
-   * What `OPEN` presents. `user-bearer` for a personal host. `session-grant`
-   * for a `kind: sandbox` host: the attach-grant mint must also
-   * return a host-bound session grant, `OPEN` carries it in `authz` v2 with an
-   * empty bearer, and the user bearer never leaves this client - it only
-   * authorizes the mint at authn. Read it off the directory entry with
-   * {@link remoteOpenAuthFor}.
-   *
-   * Part of the session cache identity (`RemoteSessionIdentity.openAuth`): a
-   * host's kind is fixed for its life, but a directory correction or ownership change
-   * can require a session grant, and a consumer must not adopt an earlier
-   * user-bearer session for that target.
+   * The person's host-only tokens. `OPEN` presents this host's, in `authz` v2
+   * with an empty bearer, for every host kind; a renewed one goes out as a
+   * `CREDENTIAL_UPDATE`. The sign-in token only buys them at authn.
    */
-  readonly openAuth: RemoteOpenAuth;
+  readonly hostTokens: HostTokenSource;
+  /** Told of the host's own refusals and admissions; `null` for none. */
+  readonly door: SessionDoorObserver | null;
+  /** Where the states this app raises itself for this host go. */
+  readonly onState: HostTokenStateSink;
   /**
    * Whether this client currently holds a CLOUD capability - a session the
    * account's authn has confirmed - read live, per attach.
@@ -194,19 +192,6 @@ export interface CreateRemoteTransportOptions<
    * inferred from `auth`.
    */
   readonly proactiveWakeEligible: boolean;
-  /**
-   * Mints the member credential a team host spends for this session's member
-   * (`RemoteSessionOptions.mintMemberCredential`). Handed to the session only
-   * when {@link openAuth} is `session-grant`; a personal computer takes the user
-   * bearer on `open` and never offers the capability.
-   *
-   * Not part of the cache identity: every consumer in the process passes the
-   * app's one mint flow, so a cache hit inheriting it inherits the only value
-   * any consumer could have passed.
-   */
-  readonly mintMemberCredential:
-    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
-    | null;
 }
 
 export interface RemoteHostTransport<
@@ -285,7 +270,7 @@ export function createRemoteHostTransport<
     // Same reasoning applied to WHICH auth context wired those closures, not
     // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
     authEpoch: authEpochFor(bearerSource),
-    openAuth: options.openAuth,
+    openAuth: "session-grant",
   };
   const session = acquireRemoteSession(
     identity,
@@ -296,40 +281,78 @@ export function createRemoteHostTransport<
       // through an existing, tested path rather than inventing a failure
       // mode. See `cloudAuthorized` for why the check lives in here and not
       // at build time.
-      const getBearerToken = (): string | null =>
-        cloudAuthorized() ? deriveBearerToken(bearer) : null;
-      const sandboxGrants =
-        options.openAuth === "session-grant"
-          ? createSandboxAttachGrantProvider({
-              authnBaseUrl: options.authnBaseUrl,
-              hostId: options.hostId,
-              getBearerToken,
-              purpose: "remote",
-            })
+      const grantProvider: AttachGrantProvider = async () => {
+        const signInToken = cloudAuthorized()
+          ? deriveBearerToken(bearer)
           : null;
-      const grantProvider =
-        sandboxGrants === null
-          ? createAttachGrantProvider({
-              authnBaseUrl: options.authnBaseUrl,
-              hostId: options.hostId,
-              getBearerToken,
-            })
-          : sandboxGrants.provider;
+        if (signInToken === null)
+          return {
+            kind: "unavailable",
+            detail: "no user bearer available (signed out?)",
+            context: "",
+          };
+        // No era, no mint: the sign-in is never sent for work that cannot
+        // keep what it brings.
+        const era = options.hostTokens.era(options.userId);
+        if (!isIssuedHostTokenEra(era))
+          return {
+            kind: "unavailable",
+            detail: "no host-token era for this person",
+            context: "",
+          };
+        const minted = await mintRelayPassWithHostTokenViaHttp(
+          options.authnBaseUrl,
+          options.hostId,
+          signInToken,
+        );
+        // The person signed out or was replaced while authn answered: keep
+        // nothing of theirs and raise nothing.
+        if (options.hostTokens.era(options.userId) !== era)
+          return {
+            kind: "unavailable",
+            detail: "signed out while the relay pass was minted",
+            context: "",
+          };
+        if (minted.kind === "ok") {
+          await options.hostTokens.adopt(
+            options.userId,
+            options.hostId,
+            minted.hostToken,
+            era,
+          );
+          return { kind: "ok", grant: minted.grant };
+        }
+        if (minted.kind === "not-admitted")
+          options.onState(options.hostId, "not-admitted");
+        else if (minted.kind === "unreachable")
+          options.onState(options.hostId, "token-unavailable");
+        return minted.provision;
+      };
       const created = new RemoteSession<RpcRegistry, StreamRegistry>({
         hostId: options.hostId,
         attachBaseUrl: options.relayAttachUrl,
         hostStaticPublicKey,
         grantProvider,
-        bearer,
-        sessionGrant:
-          sandboxGrants === null ? null : sandboxGrants.readSessionGrant,
+        hostToken: () =>
+          options.hostTokens.current(options.userId, options.hostId)?.token ??
+          null,
         // The SAME read the grant provider above uses, now also reported to the
         // host at the far end. The mint gate decides whether this client may
         // reach the relay; this tells the host what the session it reaches may
         // spend, which is a different question with a different consumer - the
         // host's own background workers, which no client-side gate can reach.
         cloudAuthorized,
-        auth: options.auth,
+        ...hostTokenSessionAuth(
+          {
+            tokens: options.hostTokens,
+            currentUserId: () => bearer()?.identity.userId ?? null,
+            hostId: options.hostId,
+            signInRecovery: options.auth,
+            onState: options.onState,
+            now: Date.now,
+          },
+          options.door,
+        ),
         clock: options.clock,
         rpcRegistry: options.rpcRegistry,
         streamRegistry: options.streamRegistry,
@@ -341,16 +364,22 @@ export function createRemoteHostTransport<
         // verdict; a composition that should not make silence claims (a
         // host-to-host dialer) passes `null` at its own constructor.
         livenessProbe: HOST_STATUS_LIVENESS_PROBE,
-        mintMemberCredential:
-          options.openAuth === "session-grant"
-            ? options.mintMemberCredential
-            : null,
+        mintMemberCredential: null,
+      });
+      // A renewed token reaches the open connection in place.
+      const stopRenewals = options.hostTokens.subscribe((change) => {
+        if (
+          change.userId === options.userId &&
+          change.hostId === options.hostId
+        )
+          created.notifyBearerRotated();
       });
       // A team host ends a removed member's session with this fatal; the app
       // turns the first report for a team into its one toast and one close of
       // the team's tiles. Once per session: the session is shared by every
       // consumer of this host, and closes once.
       created.onClosed(() => {
+        stopRenewals();
         if (created.terminalFatal()?.code === TEAM_MEMBER_REMOVED_FATAL_CODE) {
           reportTeamMemberRemovedClose(options.hostId);
         }

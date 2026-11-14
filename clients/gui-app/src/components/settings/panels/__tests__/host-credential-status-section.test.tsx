@@ -85,6 +85,7 @@ import { HostEnvironmentSection } from "@/components/settings/panels/host-enviro
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useHostCredentialStatusStore } from "@/stores/host/host-credential-status-store";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
+import { inertHostTokenSource } from "../../../../../__tests__/create-fake-runner-host";
 
 function ownershipResult(): HostOwnershipResult {
   return {
@@ -125,6 +126,7 @@ function reportThroughBuiltStream(state: HostCredentialState): void {
     cloudAuthorized: () => false,
     authnBaseUrl: "http://localhost:5005",
     auth: null,
+    hostTokens: inertHostTokenSource(),
     proactiveWakeEligible: false,
     autoStart: false,
   });

@@ -865,6 +865,19 @@ export function wakeHeldRemoteSessions(
  * false negative while the current identity finishes dialing, which is the safe
  * direction.
  */
+/**
+ * The hosts `userId` holds a live remote session to: the ones whose host-only
+ * token is renewed with each sign-in refresh.
+ */
+export function liveRemoteSessionHostIds(userId: string): readonly string[] {
+  const hostIds = new Set<string>();
+  for (const entry of entriesByKey.values()) {
+    if (entry.identity.userId === userId && !entry.superseded)
+      hostIds.add(entry.identity.hostId);
+  }
+  return Array.from(hostIds);
+}
+
 export function hasReadyRemoteSession(hostId: string): boolean {
   for (const entry of entriesByKey.values()) {
     if (

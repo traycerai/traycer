@@ -1,4 +1,6 @@
+import { z } from "zod";
 import { attachGrantResponseSchema } from "@traycer/protocol/host/attach-grant";
+import { hostSessionGrantResponseSchema } from "@traycer/protocol/host/session-grant";
 import {
   SANDBOX_REFUSAL_CODE_FROZEN,
   sandboxRefusalBodySchema,
@@ -11,6 +13,8 @@ import type {
   AttachGrantProvision,
 } from "@traycer/protocol/host-transport/remote/grant";
 import { composeRequestAbort, untilAborted } from "../../auth/request-abort";
+import type { HostTokenMintOutcome } from "../../auth/host-token-source";
+import type { HostToken } from "../../auth/host-token-store";
 import { SANDBOX_FROZEN_MESSAGE } from "../../host-client/sandbox-control";
 
 export type {
@@ -596,5 +600,234 @@ export function createSandboxAttachGrantProvider(deps: {
   return {
     provider,
     readSessionGrant: () => latestSessionGrant,
+  };
+}
+
+/** The attach-grant answer to `session_grant_version: 2`: the pass and the token both. */
+const relayPassWithHostTokenSchema = z.object({
+  grant: z.string().min(1),
+  expires_in: z.number(),
+  session_grant: z.string().min(1),
+  session_grant_expires_in: z.number().positive(),
+});
+
+const TEAM_MEMBERSHIP_REQUIRED_CODE = "team_membership_required";
+
+function hostRouteUrl(
+  authnBaseUrl: string,
+  hostId: string,
+  route: "session-grant" | "attach-grant",
+): string {
+  const base = authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`;
+  return new URL(
+    `api/v3/hosts/${encodeURIComponent(hostId)}/${route}`,
+    base,
+  ).toString();
+}
+
+type HostRouteAnswer =
+  | { readonly kind: "answered"; readonly body: unknown }
+  | {
+      readonly kind: "refused";
+      readonly status: number;
+      readonly bodyText: string;
+    }
+  | { readonly kind: "unavailable"; readonly detail: string };
+
+async function postHostRoute(
+  url: string,
+  signInToken: string,
+  body: string | null,
+  signal: AbortSignal | null,
+): Promise<HostRouteAnswer> {
+  const abort = composeRequestAbort(signal, GRANT_FETCH_TIMEOUT_MS);
+  try {
+    let response: Response;
+    try {
+      response = await untilAborted(
+        fetch(url, {
+          method: "POST",
+          headers:
+            body === null
+              ? {
+                  Authorization: `Bearer ${signInToken}`,
+                  Accept: "application/json",
+                }
+              : {
+                  Authorization: `Bearer ${signInToken}`,
+                  "Content-Type": "application/json",
+                  Accept: "application/json",
+                },
+          ...(body === null ? {} : { body }),
+          signal: abort.signal,
+          // The sign-in rides in a header, so a redirect is never followed:
+          // it would carry the sign-in to wherever the answer pointed.
+          redirect: "manual",
+        }),
+        abort.signal,
+      );
+    } catch (error) {
+      return {
+        kind: "unavailable",
+        detail: `the mint request never completed (${describeFetchFailure(error).classification})`,
+      };
+    }
+    // A redirect is an answer that minted nothing, refused like any status
+    // this route does not name. A browser reports it as an opaque response
+    // with status 0, which the range check below also refuses.
+    if (response.status < 200 || response.status >= 300)
+      return {
+        kind: "refused",
+        status: response.status,
+        bodyText: await readBodyText(response, abort.signal),
+      };
+    try {
+      return {
+        kind: "answered",
+        body: await untilAborted(response.json(), abort.signal),
+      };
+    } catch {
+      return {
+        kind: "unavailable",
+        detail: `authn answered HTTP ${response.status} with a body that is not valid JSON`,
+      };
+    }
+  } finally {
+    abort.clear();
+  }
+}
+
+function hostTokenOf(seconds: number, token: string): HostToken {
+  return { token, expiresAtMs: Date.now() + seconds * 1000 };
+}
+
+/**
+ * The local route's refusals. Only `team_membership_required` (403) says the
+ * computer is a team's; a bare 404 covers every other computer the person may
+ * not open. Nothing else is expected as a 403 here: one reads as not admitted
+ * and its status is logged.
+ */
+function localMintRefusal(
+  status: number,
+  bodyText: string,
+): Exclude<HostTokenMintOutcome, { readonly kind: "ok" }> {
+  if (status === 404) return { kind: "not-admitted" };
+  if (status === 403) {
+    if (membershipRefusalCode(bodyText) === TEAM_MEMBERSHIP_REQUIRED_CODE)
+      return { kind: "not-a-member" };
+    console.warn(
+      `[host-token] authn refused a host-only token mint with an unexpected HTTP ${status}`,
+    );
+    return { kind: "not-admitted" };
+  }
+  if (status === 401) return { kind: "sign-in-rejected" };
+  if (status === 402 && isSandboxFrozenRefusal(bodyText))
+    return { kind: "sandbox-frozen" };
+  return { kind: "unavailable", detail: `authn answered HTTP ${status}` };
+}
+
+/** `POST /api/v3/hosts/:hostId/session-grant`: a local open's host-only token. */
+export async function mintHostTokenViaHttp(
+  authnBaseUrl: string,
+  hostId: string,
+  signInToken: string,
+  signal: AbortSignal | null,
+): Promise<HostTokenMintOutcome> {
+  const answer = await postHostRoute(
+    hostRouteUrl(authnBaseUrl, hostId, "session-grant"),
+    signInToken,
+    null,
+    signal,
+  );
+  if (answer.kind === "unavailable") return answer;
+  if (answer.kind === "refused")
+    return localMintRefusal(answer.status, answer.bodyText);
+  const parsed = hostSessionGrantResponseSchema.safeParse(answer.body);
+  if (!parsed.success)
+    return {
+      kind: "unavailable",
+      detail: "authn answered but the body is not a host-only token",
+    };
+  return {
+    kind: "ok",
+    token: hostTokenOf(
+      parsed.data.session_grant_expires_in,
+      parsed.data.session_grant,
+    ),
+  };
+}
+
+export type RelayPassMintOutcome =
+  | {
+      readonly kind: "ok";
+      readonly grant: AttachGrant;
+      readonly hostToken: HostToken;
+    }
+  /** A bare 404, any computer this person may not open: refused as today. */
+  | { readonly kind: "not-admitted"; readonly provision: AttachGrantProvision }
+  /** authn could not be reached (a transport failure or a 5xx). */
+  | { readonly kind: "unreachable"; readonly provision: AttachGrantProvision }
+  /** Every other refusal, handled exactly as a relay pass mint is today. */
+  | { readonly kind: "as-today"; readonly provision: AttachGrantProvision };
+
+/**
+ * A remote open's one call: the relay pass and, beside it, the host-only
+ * token (`session_grant_version: 2`). Never sends `purpose`. A revoked
+ * computer (403) and an owner's computer with remote access off (403
+ * `remote_access_off`) are answered as they are today.
+ */
+export async function mintRelayPassWithHostTokenViaHttp(
+  authnBaseUrl: string,
+  hostId: string,
+  signInToken: string,
+): Promise<RelayPassMintOutcome> {
+  const answer = await postHostRoute(
+    hostRouteUrl(authnBaseUrl, hostId, "attach-grant"),
+    signInToken,
+    JSON.stringify({ role: "client", session_grant_version: 2 }),
+    null,
+  );
+  if (answer.kind === "unavailable")
+    return {
+      kind: "unreachable",
+      provision: { kind: "unavailable", detail: answer.detail, context: "" },
+    };
+  if (answer.kind === "refused") {
+    if (answer.status === 404)
+      return {
+        kind: "not-admitted",
+        provision: provisionOfFailedMint({
+          kind: "team-membership-required",
+          detail: "membership refused",
+          context: "",
+        }),
+      };
+    const refusal = classifyOtherRefusal(answer.status, answer.bodyText);
+    return {
+      kind: answer.status >= 500 ? "unreachable" : "as-today",
+      provision: provisionOfFailedMint(refusal),
+    };
+  }
+  const parsed = relayPassWithHostTokenSchema.safeParse(answer.body);
+  if (!parsed.success)
+    return {
+      kind: "as-today",
+      provision: {
+        kind: "unavailable",
+        detail:
+          "authn answered but the body carries no relay pass and host-only token",
+        context: "",
+      },
+    };
+  return {
+    kind: "ok",
+    grant: {
+      grant: parsed.data.grant,
+      expiresInSeconds: parsed.data.expires_in,
+    },
+    hostToken: hostTokenOf(
+      parsed.data.session_grant_expires_in,
+      parsed.data.session_grant,
+    ),
   };
 }
