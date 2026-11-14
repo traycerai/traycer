@@ -57,6 +57,12 @@ export type WindowNarrationVariant =
   | { readonly kind: "offline" }
   | { readonly kind: "team-membership-required" }
   | { readonly kind: "not-admitted" }
+  /**
+   * The `offline` cover for a host whose refusal carries a reason this app
+   * does not know: a newer host, never an older one. Its own kind only so the
+   * card can show the refusal's code beneath the unchanged `offline` words.
+   */
+  | { readonly kind: "unrecognised-refusal"; readonly code: string }
   | {
       readonly kind: "update-host";
       readonly hostId: string;
@@ -382,6 +388,9 @@ function doorStateVariant(
     input.hasBeenServed &&
     isServingLease(findLease(input.leases, input.effectiveHostId));
   if (alreadyServing) return null;
+  if (state.kind === "unrecognised-refusal" && state.detail !== null) {
+    return { kind: "unrecognised-refusal", code: state.detail.code };
+  }
   return { kind: "offline" };
 }
 
