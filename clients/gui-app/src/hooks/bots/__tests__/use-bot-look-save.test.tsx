@@ -458,6 +458,17 @@ function refusalUnder(section: "eyewear" | "accessory"): string | null {
   );
 }
 
+function savingShownUnder(section: "colour" | "eyewear"): boolean {
+  const labelId = screen
+    .getByTestId(`bot-settings-${section}`)
+    .getAttribute("aria-labelledby");
+  const label = labelId === null ? null : document.getElementById(labelId);
+  expect(label).not.toBeNull();
+  return (
+    label?.querySelector('span[aria-hidden="true"]') instanceof HTMLElement
+  );
+}
+
 describe("a run of look saves when a choice is made through another host", () => {
   const SHADES = { eyewear: "shades" } as const;
   const CHOSEN = {
@@ -521,6 +532,26 @@ describe("a run of look saves when a choice is made through another host", () =>
     expect(cachedLook()).toEqual({ ...LISTED, ...SHADES });
     expect(pressedIn("eyewear")).toBe("Shades");
     takenOver.answer({ ...CHOSEN, background: 2 });
+  });
+
+  it("keeps the saving indicator under a part the old host is still saving, beside the colour chosen through the new host, until both are answered", async () => {
+    const { second, held } = await handOver(false);
+
+    expect(savingShownUnder("eyewear")).toBe(true);
+    expect(savingShownUnder("colour")).toBe(true);
+
+    act(() => {
+      held.answer({ ...LISTED, ...SHADES });
+    });
+    const takenOver = await writeAt(second, 0);
+
+    expect(savingShownUnder("eyewear")).toBe(false);
+    expect(savingShownUnder("colour")).toBe(true);
+    takenOver.answer({ ...LISTED, ...SHADES, color: 7 });
+    await waitFor(() => {
+      expect(savingShownUnder("colour")).toBe(false);
+    });
+    expect(savingShownUnder("eyewear")).toBe(false);
   });
 
   it("does not replay a part the old host saved when only a colour is chosen through the new host", async () => {

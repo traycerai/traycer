@@ -277,6 +277,11 @@ export function useBotLookSaver(
   const save = useBotLookSaveStore(
     (state) => state.saves[botId] ?? NO_BOT_LOOK_SAVE,
   );
+  // A save taken over from another host is still on its way: its parts are
+  // in neither `sending` nor `waiting` of the run that holds the bot now.
+  const flight = useBotLookSaveStore((state) =>
+    Object.hasOwn(state.flights, botId) ? state.flights[botId] : null,
+  );
   useEffect(() => {
     const move = (by: number): number => {
       const open = panelsOpenOn(botId) + by;
@@ -341,7 +346,9 @@ export function useBotLookSaver(
       );
     },
     saving: (part) =>
-      save.sending?.[part] !== undefined || save.waiting?.[part] !== undefined,
+      flight?.parts[part] !== undefined ||
+      save.sending?.[part] !== undefined ||
+      save.waiting?.[part] !== undefined,
     refusal: (part) => save.refusals[part] ?? null,
   };
 }
