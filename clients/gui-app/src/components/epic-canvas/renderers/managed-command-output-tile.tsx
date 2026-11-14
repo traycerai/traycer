@@ -255,11 +255,14 @@ function ManagedCommandOutputTileLive(props: {
   readonly onClose: () => void;
 }) {
   const { epicId, node } = props;
-  const { session, reopen } = useManagedCommandOutputSession({
-    target: { kind: "epic", epicId },
-    commandId: node.id,
-    hostId: node.hostId,
-  });
+  const { session, reopen } = useManagedCommandOutputSession(
+    {
+      target: { kind: "epic", epicId },
+      commandId: node.id,
+      hostId: node.hostId,
+    },
+    null,
+  );
 
   if (session === null) {
     return (

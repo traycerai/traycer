@@ -23,9 +23,9 @@ import {
 const transportOpens: string[] = [];
 let hostClients = new Map<string, FakeStreamClient>();
 
-// The output session waits for the bound host's directory entry before it
-// creates a bot stream and reads the directory itself, so the directory is a
-// fixture: every host is named, and nothing changes.
+// The bot session waits for the bound host's directory entry before it creates
+// a stream, so the directory handed to it is a fixture: every host is named,
+// and nothing changes.
 const namedHostDirectory = {
   findById: (hostId: string) => ({
     hostId,
@@ -37,10 +37,6 @@ const namedHostDirectory = {
   }),
   onChange: () => ({ dispose: () => undefined }),
 };
-vi.mock("@/lib/host/runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
-  useHostDirectory: () => namedHostDirectory,
-}));
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory:
     () =>
@@ -103,11 +99,14 @@ function install(hostId: string): SupportScriptedClient {
 
 function botSession(hostId: string): BotWindow {
   return renderHook(() =>
-    useManagedCommandOutputSession({
-      target: { kind: "bot", botId: "bot-1", sessionChatId: "chat-thread-1" },
-      commandId: "cmd-1",
-      hostId,
-    }),
+    useManagedCommandOutputSession(
+      {
+        target: { kind: "bot", botId: "bot-1", sessionChatId: "chat-thread-1" },
+        commandId: "cmd-1",
+        hostId,
+      },
+      namedHostDirectory,
+    ),
   );
 }
 
@@ -188,11 +187,14 @@ describe("a bot's shell output window", () => {
     const bound = install(SANDBOX_HOST);
 
     renderHook(() =>
-      useManagedCommandOutputSession({
-        target: { kind: "epic", epicId: "epic-1" },
-        commandId: "cmd-1",
-        hostId: SANDBOX_HOST,
-      }),
+      useManagedCommandOutputSession(
+        {
+          target: { kind: "epic", epicId: "epic-1" },
+          commandId: "cmd-1",
+          hostId: SANDBOX_HOST,
+        },
+        null,
+      ),
     );
 
     expect(bound.subscribes).toEqual([
@@ -219,11 +221,14 @@ describe("a bot's shell output window", () => {
   it("lets the epic window be live on its open snapshot, with no liveness frame", () => {
     const bound = install(SANDBOX_HOST);
     const view = renderHook(() =>
-      useManagedCommandOutputSession({
-        target: { kind: "epic", epicId: "epic-1" },
-        commandId: "cmd-1",
-        hostId: SANDBOX_HOST,
-      }),
+      useManagedCommandOutputSession(
+        {
+          target: { kind: "epic", epicId: "epic-1" },
+          commandId: "cmd-1",
+          hostId: SANDBOX_HOST,
+        },
+        null,
+      ),
     );
     expect(view.result.current.session?.store.getState().live).toBe(false);
 

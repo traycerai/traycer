@@ -5,24 +5,6 @@ import type { ManagedCommandOutputStreamClientHandle } from "@/stores/managed-co
 
 // The transport factory is only read for a real stream; the stub below stands
 // in for it.
-// The output session waits for the bound host's directory entry before it
-// creates a bot stream and reads the directory itself, so the directory is a
-// fixture: every host is named, and nothing changes.
-const namedHostDirectory = {
-  findById: (hostId: string) => ({
-    hostId,
-    label: hostId,
-    kind: "remote" as const,
-    websocketUrl: `wss://${hostId}.example/rpc`,
-    version: null,
-    transportDialability: "dialable" as const,
-  }),
-  onChange: () => ({ dispose: () => undefined }),
-};
-vi.mock("@/lib/host/runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
-  useHostDirectory: () => namedHostDirectory,
-}));
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => () => {
     throw new Error("the stub factory owns the stream");
@@ -57,11 +39,14 @@ describe("useManagedCommandOutputSession", () => {
     );
 
     const view = renderHook(() =>
-      useManagedCommandOutputSession({
-        target: { kind: "epic", epicId: "epic-1" },
-        commandId: "command-1",
-        hostId: "sbx-host",
-      }),
+      useManagedCommandOutputSession(
+        {
+          target: { kind: "epic", epicId: "epic-1" },
+          commandId: "command-1",
+          hostId: "sbx-host",
+        },
+        null,
+      ),
     );
 
     expect(opened).toHaveBeenCalledTimes(1);

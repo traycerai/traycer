@@ -3,9 +3,9 @@ import {
   ManagedCommandOutputStreamClient,
   type ManagedCommandOutputTarget,
 } from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
+import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
-import { useHostDirectory } from "@/lib/host";
 import { getManagedCommandOutputStreamClientFactoryOverride } from "@/providers/managed-command-output-stream-factory-override";
 import {
   createManagedCommandOutputStore,
@@ -32,11 +32,14 @@ export interface ManagedCommandOutputSession {
  * reopening it re-reads the tail. The transport is owned by the stream client
  * (see `openOwnedDurableStreamClient`) and bound to the tab's host for life.
  */
-export function useManagedCommandOutputSession(args: {
-  readonly target: ManagedCommandOutputTarget;
-  readonly commandId: string;
-  readonly hostId: string;
-}): ManagedCommandOutputSession {
+export function useManagedCommandOutputSession(
+  args: {
+    readonly target: ManagedCommandOutputTarget;
+    readonly commandId: string;
+    readonly hostId: string;
+  },
+  directory: Pick<HostDirectoryService, "findById" | "onChange"> | null,
+): ManagedCommandOutputSession {
   const { commandId, target, hostId } = args;
   const targetId = target.kind === "epic" ? target.epicId : target.botId;
   const targetKind = target.kind;
@@ -49,7 +52,6 @@ export function useManagedCommandOutputSession(args: {
     [targetKind, targetId, sessionChatId],
   );
   const openTransport = useDurableStreamTransportFactory();
-  const directory = useHostDirectory();
   // Read live rather than as an effect dependency: reopening the stream costs
   // the viewer their scroll position and re-reads the tail, so only the command
   // or host actually changing - or an explicit reopen - may do it.
@@ -106,8 +108,7 @@ export function useManagedCommandOutputSession(args: {
     let subscription: { dispose(): void } | null = null;
     const acquire = () => {
       if (next !== null) return;
-      if (streamTarget.kind === "bot" && directory.findById(hostId) === null)
-        return;
+      if (directory !== null && directory.findById(hostId) === null) return;
       next = createManagedCommandOutputStore({
         target: streamTarget,
         commandId,
@@ -117,7 +118,7 @@ export function useManagedCommandOutputSession(args: {
       subscription = null;
       setHandle(next);
     };
-    if (streamTarget.kind === "bot") {
+    if (directory !== null) {
       subscription = directory.onChange(acquire);
     }
     acquire();

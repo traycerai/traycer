@@ -71,23 +71,6 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 const refuseDurableTransport = vi.hoisted(() => () => {
   throw new Error("no durable transport in tests");
 });
-// The output session reads the host directory itself, so the directory is a
-// fixture: every host is named, and nothing changes.
-const namedHostDirectory = {
-  findById: (hostId: string) => ({
-    hostId,
-    label: hostId,
-    kind: "remote" as const,
-    websocketUrl: `wss://${hostId}.example/rpc`,
-    version: null,
-    transportDialability: "dialable" as const,
-  }),
-  onChange: () => ({ dispose: () => undefined }),
-};
-vi.mock("@/lib/host/runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
-  useHostDirectory: () => namedHostDirectory,
-}));
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => refuseDurableTransport,
 }));

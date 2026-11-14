@@ -8,6 +8,7 @@ import {
 import { ManagedCommandOutputBody } from "@/components/epic-canvas/renderers/managed-command-output-tile";
 import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useHostDirectory } from "@/lib/host";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 
 export function BotShellOutputModal(props: {
@@ -97,15 +98,19 @@ function BotShellOutputLive(props: {
   readonly frozen: boolean;
   readonly hostReachable: boolean;
 }) {
-  const { session, reopen } = useManagedCommandOutputSession({
-    target: {
-      kind: "bot",
-      botId: props.botId,
-      sessionChatId: props.sessionChatId,
+  const directory = useHostDirectory();
+  const { session, reopen } = useManagedCommandOutputSession(
+    {
+      target: {
+        kind: "bot",
+        botId: props.botId,
+        sessionChatId: props.sessionChatId,
+      },
+      hostId: props.hostId,
+      commandId: props.commandId,
     },
-    hostId: props.hostId,
-    commandId: props.commandId,
-  });
+    directory,
+  );
   useLayoutEffect(() => {
     if (!props.frozen) return;
     session?.freeze();
