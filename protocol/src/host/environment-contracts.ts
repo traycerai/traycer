@@ -271,6 +271,26 @@ export const hostRemoteAccessSetV20 = defineRpcContract({
   responseSchema: schemas.hostRemoteAccessSetResponseSchemaV20,
 });
 
+/**
+ * `host.status.refresh@1.0`: this computer reads its own row now, through
+ * the status read it already runs, and answers once that read has ended,
+ * whether the row was read, unreachable or refused. It has no refusals of its
+ * own. A host with no environment domain running answers at once and does
+ * nothing. The answer carries no result on purpose (see
+ * `hostStatusRefreshResponseSchema`). Any person the door admits may call
+ * it, with no role: it reads only this computer's own row. Defined and not
+ * registered: it registers with the app's Remote access caller, off
+ * `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`, so
+ * a host without the method keeps today's two-minute interval. Not an agent
+ * capability, and not on the host-to-host allowlist.
+ */
+export const hostStatusRefreshV10 = defineRpcContract({
+  method: "host.status.refresh",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.hostStatusRefreshRequestSchema,
+  responseSchema: schemas.hostStatusRefreshResponseSchema,
+});
+
 export const environmentReviewV10 = defineRpcContract({
   method: "environment.review",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -469,6 +489,31 @@ export const providersLinkCompleteUpgradeV10ToV11 = defineUpgradePath<
   to: providersLinkCompleteV11.schemaVersion,
   upgradeRequest: (request) => ({ ...request, environmentId: null }),
   upgradeResponse: (response) => response,
+});
+
+/**
+ * `providers.link@2.0` and `providers.linkComplete@2.0`: the intent arm only
+ * (shapes and reasons in `environment-schemas.ts`). Defined and not
+ * registered: both register in the host's intent-arm commit, paired with the
+ * app's caller, as a new major beside major 1 with no downgrade to it. A host
+ * without `@2.0` answers `E_HOST_UNSUPPORTED`, and the app does not call
+ * major 1 instead. Major 1 keeps what it serves today. Off
+ * `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`, not on
+ * the host-to-host allowlist, and not agent capabilities.
+ */
+export const providersLinkV20 = defineRpcContract({
+  method: "providers.link",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: schemas.providersLinkRequestSchemaV20,
+  responseSchema: schemas.providersLinkResponseSchemaV20,
+});
+
+/** A poll; it may re-run the handoff. */
+export const providersLinkCompleteV20 = defineRpcContract({
+  method: "providers.linkComplete",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: schemas.providersLinkCompleteRequestSchemaV20,
+  responseSchema: schemas.providersLinkCompleteResponseSchemaV20,
 });
 
 export const ENVIRONMENT_RPC_METHODS = {

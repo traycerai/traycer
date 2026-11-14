@@ -727,6 +727,11 @@ describe("<BotChatTranscript /> the pictures on members' rows", () => {
     expect(pictureOn("mine")).toBeNull();
 
     act(() => {
+      signIn("owner-1", VIEWER_PICTURE);
+    });
+    expect(pictureOn("mine")).toBe(VIEWER_PICTURE);
+
+    act(() => {
       useAuthStore.getState().setSignedOut();
     });
     expect(pictureOn("mine")).toBeNull();

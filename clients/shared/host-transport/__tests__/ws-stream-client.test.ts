@@ -1746,7 +1746,7 @@ describe("WsStreamClient", () => {
     expect(parseText(terminalSocket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "terminal.subscribe",
-      schemaVersion: { major: 1, minor: 7 },
+      schemaVersion: { major: 1, minor: 8 },
       params: {
         sessionId: "terminal-session-1",
         cols: 80,

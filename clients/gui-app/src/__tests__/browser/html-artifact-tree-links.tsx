@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { encodeBase64 } from "@traycer-clients/shared/cloud-chat/bytes";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   SandboxArtifactBridge,
@@ -64,12 +65,6 @@ const readSpan: ArtifactReadSpan = (hash, offset, length, signal) => {
   });
 };
 
-function base64Of(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 class Bridge implements SandboxArtifactBridge {
   readonly policySource = null;
   private readonly handlers = new Set<
@@ -131,7 +126,7 @@ class Bridge implements SandboxArtifactBridge {
         return {
           status: 200,
           mediaType: reply.mediaType,
-          base64: base64Of(whole),
+          base64: encodeBase64(whole),
         };
       }
     }

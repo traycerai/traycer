@@ -666,6 +666,7 @@ import {
   managedCommandStopUpgradeV10ToV11,
   managedCommandStopV10,
   managedCommandStopV11,
+  managedCommandSubscribeBotOutputV10,
   managedCommandSubscribeOutputV10,
   managedCommandSubscribeOutputV11,
   managedCommandViewV10,
@@ -1153,6 +1154,7 @@ import {
   terminalSubscribeV15,
   terminalSubscribeV16,
   terminalSubscribeV17,
+  terminalSubscribeV18,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   browserSavedLoginSitesV10,
@@ -1428,6 +1430,7 @@ import {
   providersChangedV11,
   providersChangedV12,
 } from "@traycer/protocol/host/providers-changed-stream";
+import { cloudRecoveredV10 } from "@traycer/protocol/host/cloud-recovered-stream";
 import {
   epicCommunicationGraphSubscribeV10,
   epicCommunicationGraphSubscribeV11,
@@ -1591,10 +1594,12 @@ import {
   providersNativeMutateRequestSchemaV10Preimage,
   providersNativeMutateRequestSchemaV11,
   providersNativeMutateRequestSchemaV14,
+  providersNativeMutateRequestSchemaV15,
   providersNativeMutateResponseSchema,
   providersNativeMutateResponseSchemaV10Preimage,
   providersNativeMutateResponseSchemaV11Preimage,
   providersNativeMutateResponseSchemaV14,
+  providersNativeMutateResponseSchemaV15,
   providersCancelLoginResponseSchemaV10,
   providersClearApiKeyRequestSchema,
   providersClearApiKeyRequestSchemaV10,
@@ -5213,6 +5218,39 @@ export const providersNativeMutateUpgradeV13ToV14 = defineUpgradePath<
   from: { major: 1, minor: 3 },
   to: { major: 1, minor: 4 },
   upgradeRequest: (request) => ({ ...request, expectedEnvironmentId: null }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `providers.nativeMutate@1.5`: the `promoteToPersonal` arm carries the app's
+ * `intentOperationId`, and the result gains the seven codes only that arm
+ * answers (`providerNativeMutateErrorCodeSchemaV15`). Defined and not
+ * registered: it registers with the app's click that sends it, and its entry
+ * then declares `responseGrowthProjectionGated`, since the host never answers
+ * the seven to a `@1.4` caller. A `@1.5` request to a `@1.4` host is
+ * re-parsed onto `@1.4`, whose non-strict arm strips the key.
+ */
+export const providersNativeMutateV15 = defineRpcContract({
+  method: "providers.nativeMutate",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: providersNativeMutateRequestSchemaV15,
+  responseSchema: providersNativeMutateResponseSchemaV15,
+});
+
+/** A `@1.4` caller states no intent: its promote arm gains null. */
+export const providersNativeMutateUpgradeV14ToV15 = defineUpgradePath<
+  typeof providersNativeMutateV14,
+  typeof providersNativeMutateV15
+>({
+  from: { major: 1, minor: 4 },
+  to: { major: 1, minor: 5 },
+  upgradeRequest: (request) => ({
+    ...request,
+    mutation:
+      request.mutation.kind === "promoteToPersonal"
+        ? { ...request.mutation, intentOperationId: null }
+        : request.mutation,
+  }),
   upgradeResponse: (response) => response,
 });
 
@@ -15947,7 +15985,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -15972,6 +16010,9 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         },
         7: {
           contract: terminalSubscribeV17,
+        },
+        8: {
+          contract: terminalSubscribeV18,
         },
       },
     },
@@ -16000,6 +16041,12 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // the open as an unknown method. The SET of a chat's commands is not a method
   // here: it rides `chat.subscribe@1.6` (see the re-entry note in
   // `host/managed-command/subscribe.ts` for what a global panel would re-add).
+  "managedCommand.subscribeBotOutput": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: managedCommandSubscribeBotOutputV10 } },
+    },
+  },
   "managedCommand.subscribeOutput": {
     1: {
       // `1.1` adds `relaunchOnHostRestart` to the snapshot/status headers;
@@ -16583,6 +16630,16 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         2: {
           contract: providersChangedV12,
+        },
+      },
+    },
+  },
+  "cloud.recovered.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: cloudRecoveredV10,
         },
       },
     },
