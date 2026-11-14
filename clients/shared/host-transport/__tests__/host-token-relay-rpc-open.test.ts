@@ -352,6 +352,11 @@ describe("remote RPC relay OPEN host-token frame", () => {
 
     try {
       transport.session.start();
+      await vi.waitFor(() => expect(peer.openCount).toBe(2), WAIT);
+      await vi.waitFor(
+        () => expect(transport.session.terminalFatal()).not.toBeNull(),
+        WAIT,
+      );
       const pending = transport.messenger
         .request(
           "host.status",
@@ -374,11 +379,6 @@ describe("remote RPC relay OPEN host-token frame", () => {
           () => null,
           (cause: unknown) => cause,
         );
-      await vi.waitFor(() => expect(peer.openCount).toBe(2), WAIT);
-      await vi.waitFor(
-        () => expect(transport.session.terminalFatal()).not.toBeNull(),
-        WAIT,
-      );
       const error = await pending;
       expect(error).toBeInstanceOf(HostRpcError);
       if (!(error instanceof HostRpcError))
@@ -389,7 +389,7 @@ describe("remote RPC relay OPEN host-token frame", () => {
       expect(peer.opens.map((open) => open.authz)).toEqual([
         {
           v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
-          grant: "held-relay-host-token",
+          grant: "relay-session-grant",
         },
         {
           v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
@@ -418,6 +418,12 @@ describe("remote RPC relay OPEN host-token frame", () => {
 
     try {
       test.transport.session.start();
+
+      await vi.waitFor(() => expect(test.peer.openCount).toBe(2), WAIT);
+      await vi.waitFor(
+        () => expect(test.transport.session.terminalFatal()).not.toBeNull(),
+        WAIT,
+      );
       const pending = test.transport.messenger
         .request(
           "host.status",
@@ -440,12 +446,6 @@ describe("remote RPC relay OPEN host-token frame", () => {
           () => null,
           (cause: unknown) => cause,
         );
-
-      await vi.waitFor(() => expect(test.peer.openCount).toBe(2), WAIT);
-      await vi.waitFor(
-        () => expect(test.transport.session.terminalFatal()).not.toBeNull(),
-        WAIT,
-      );
       const error = await pending;
       expect(error).toBeInstanceOf(HostRpcError);
       if (!(error instanceof HostRpcError))
