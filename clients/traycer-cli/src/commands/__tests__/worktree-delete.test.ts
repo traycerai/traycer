@@ -40,7 +40,7 @@ type FakeSession = {
 };
 
 type CapturedStreamOptions = {
-  readonly bearer: () => () => OpenFrameBearerSource | null;
+  readonly bearer: () => OpenFrameBearerSource | null;
 };
 
 // Shared, hoisted so the module mock factory can reference them.

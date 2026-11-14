@@ -265,7 +265,7 @@ describe("runDoctor port-conflict detection", () => {
         const { RetryEpisodeOutcomeUnknownError } =
           await import("../../../../shared/host-transport/retrying-messenger");
         const refusal = new HostRpcError({
-          code,
+          code: code === "TEAM_MEMBERSHIP_REQUIRED" ? "FORBIDDEN" : code,
           message: "no applicable key found in the JSON Web Key Set",
           requestId: "r",
           method: "host.status",

@@ -283,7 +283,7 @@ function agentSendCommand(): Promise<unknown> {
 }
 
 function fatalDoorError(args: {
-  readonly code: "UNAUTHORIZED" | "FORBIDDEN" | "TEAM_MEMBERSHIP_REQUIRED";
+  readonly code: "UNAUTHORIZED" | "FORBIDDEN";
   readonly doorReason: HostDoorReason;
   readonly message: string;
   readonly method: string;
@@ -655,7 +655,11 @@ describe("callHostRpc", () => {
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
 
-  const listParams = { epicId: "e", senderAgentId: "agent-1", scope: "user" };
+  const listParams = {
+    epicId: "e",
+    senderAgentId: "agent-1",
+    scope: "user",
+  } satisfies Parameters<typeof callHostRpc>[1];
   it.each([
     ["callHostRpc", () => callHostRpc(METHOD, listParams), null],
     [
@@ -851,7 +855,7 @@ describe("callHostRpc", () => {
     async ({ code, doorReason, hostReason, line, attempts }) => {
       const refusal = (requestId: string) =>
         new HostRpcError({
-          code,
+          code: code === "TEAM_MEMBERSHIP_REQUIRED" ? "FORBIDDEN" : code,
           message: hostReason,
           requestId,
           method: METHOD,
@@ -890,7 +894,7 @@ describe("callHostRpc", () => {
     async (code) => {
       requestMock.mockRejectedValue(
         new HostRpcError({
-          code,
+          code: code === "TEAM_MEMBERSHIP_REQUIRED" ? "FORBIDDEN" : code,
           message: "legacy host refusal",
           requestId: "r1",
           method: METHOD,
@@ -924,7 +928,7 @@ describe("callHostRpc", () => {
   it("uses the access-unconfirmed line for retryable membership lookup failures", async () => {
     requestMock.mockRejectedValue(
       new HostRpcError({
-        code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+        code: "FORBIDDEN",
         message: "membership check is temporarily unavailable",
         requestId: "r1",
         method: METHOD,
