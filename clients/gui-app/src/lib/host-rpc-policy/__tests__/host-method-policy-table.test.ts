@@ -375,6 +375,22 @@ describe("host method poll policy table", () => {
     }
   });
 
+  it("schedules a team account's sign-out, removal and rename like unlinking a plan", () => {
+    const unlink = HOST_METHOD_POLL_TABLE["environment.plans.unlink"];
+    expect(unlink).toEqual({
+      mode: "fifo",
+      joinResponseTimeoutMs: null,
+      poll: null,
+    });
+    for (const method of [
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ] as const) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toEqual(unlink);
+    }
+  });
+
   it("narrows null and fixed policies", () => {
     const neverPolled: null = HOST_METHOD_POLL_TABLE["host.identity.get"].poll;
     expect(neverPolled).toBeNull();

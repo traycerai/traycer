@@ -37,6 +37,9 @@ import {
   environmentPlansUnlinkV11,
   environmentPlansUnlinkUpgradeV10ToV11,
   environmentProvidersListV10,
+  environmentProvidersSignOutProfileV10,
+  environmentProvidersRemoveProfileV10,
+  environmentProvidersRenameProfileV10,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   environmentReviewHeldApplyRequestSchema,
@@ -572,6 +575,45 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentProvidersListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.providers.signOutProfile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentProvidersSignOutProfileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.providers.removeProfile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentProvidersRemoveProfileV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.providers.renameProfile": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentProvidersRenameProfileV10,
           upgradeFromPreviousVersion: null,
         },
       },
