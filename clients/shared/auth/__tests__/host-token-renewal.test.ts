@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BearerSourceProvider } from "../bearer-source";
-import { hostTokenBearer, hostTokenBearerFor } from "../host-token-lease";
+import {
+  hostTokenBearer,
+  hostTokenBearerFor,
+  hostTokenRevalidator,
+  type HostTokenAccess,
+} from "../host-token-lease";
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
@@ -171,10 +176,15 @@ describe("host-token renewal", () => {
       signIn: (userId) => (userId === USER_A ? localSignInToken : null),
       now: () => Date.now(),
     });
-    await localTokens.adopt(USER_A, hostId, {
-      token: "local-host-token-before-rotation",
-      expiresAtMs: Date.now() + 3_600_000,
-    });
+    await localTokens.adopt(
+      USER_A,
+      hostId,
+      {
+        token: "local-host-token-before-rotation",
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      localTokens.era(USER_A),
+    );
     const localClient = new WsStreamClient({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
@@ -231,10 +241,15 @@ describe("host-token renewal", () => {
       signIn: (userId) => (userId === USER_A ? relaySignInValue : null),
       now: () => Date.now(),
     });
-    await relayTokens.adopt(USER_A, relayHostId, {
-      token: "relay-host-token-before-rotation",
-      expiresAtMs: Date.now() + 3_600_000,
-    });
+    await relayTokens.adopt(
+      USER_A,
+      relayHostId,
+      {
+        token: "relay-host-token-before-rotation",
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      relayTokens.era(USER_A),
+    );
     const remote = createRemoteHostTransport({
       hostId: relayHostId,
       userId: USER_A,
@@ -348,6 +363,7 @@ describe("host-token lease after a user era changes", () => {
   it("does not raise state when hostTokenBearer's pending refusal is superseded", async () => {
     const answer = deferred<HostTokenMintOutcome>();
     const started = deferred<void>();
+    const bearerMint = deferred<Promise<HostTokenMintOutcome>>();
     const hostId = "era-stream-computer";
     const states: string[] = [];
     const tokens = createHostTokenSource({
@@ -363,8 +379,17 @@ describe("host-token lease after a user era changes", () => {
       identity: { userId: USER_A },
       getBearerToken: () => "sign-in-a",
     };
+    const access: HostTokenAccess = {
+      current: (userId, requestedHostId) =>
+        tokens.current(userId, requestedHostId),
+      obtain: (userId, requestedHostId, fresh, signal) => {
+        const pending = tokens.obtain(userId, requestedHostId, fresh, signal);
+        bearerMint.resolve(pending);
+        return pending;
+      },
+    };
     const bearer = hostTokenBearer(
-      tokens,
+      access,
       () => signInLease,
       hostId,
       (_refusedHostId, state) => states.push(state),
@@ -372,11 +397,11 @@ describe("host-token lease after a user era changes", () => {
 
     expect(bearer()).toBeNull();
     await started.promise;
-    const observed = tokens.obtain(USER_A, hostId, false, null);
+    const mintChain = await bearerMint.promise;
     await tokens.forgetUser(USER_A);
     answer.resolve({ kind: "not-a-member" });
 
-    await expect(observed).resolves.toEqual({ kind: "superseded" });
+    await expect(mintChain).resolves.toEqual({ kind: "superseded" });
     expect(states).toEqual([]);
   });
 
@@ -408,5 +433,99 @@ describe("host-token lease after a user era changes", () => {
 
     await expect(pending).resolves.toBeNull();
     expect(states).toEqual([]);
+  });
+});
+
+describe("host-token revalidation after an era changes", () => {
+  it("retries one superseded mint for the same signed-in person", async () => {
+    const firstAnswer = deferred<HostTokenMintOutcome>();
+    const firstStarted = deferred<void>();
+    let mintCalls = 0;
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        if (mintCalls === 1) {
+          firstStarted.resolve();
+          return firstAnswer.promise;
+        }
+        return Promise.resolve({
+          kind: "ok",
+          token: {
+            token: "current-era-token",
+            expiresAtMs: Date.now() + 60_000,
+          },
+        });
+      },
+      signIn: (userId) => (userId === USER_A ? "sign-in-a" : null),
+      now: () => Date.now(),
+    });
+    const revalidator = hostTokenRevalidator({
+      tokens,
+      currentUserId: () => USER_A,
+      hostId: "era-retry-host",
+      signInRecovery: null,
+      onState: () => undefined,
+      now: () => Date.now(),
+    });
+
+    const pending = revalidator.revalidateRefused({
+      code: "UNAUTHORIZED",
+      retryable: false,
+      doorReason: "token_expired",
+    });
+    await firstStarted.promise;
+    await tokens.forgetUser(USER_A);
+    firstAnswer.resolve({
+      kind: "ok",
+      token: { token: "stale-era-token", expiresAtMs: Date.now() + 60_000 },
+    });
+
+    await expect(pending).resolves.toBe("rotated");
+    expect(mintCalls).toBe(2);
+    expect(tokens.current(USER_A, "era-retry-host")?.token).toBe(
+      "current-era-token",
+    );
+  });
+
+  it("does not retry a superseded mint after another person signs in", async () => {
+    const firstAnswer = deferred<HostTokenMintOutcome>();
+    const firstStarted = deferred<void>();
+    let currentUserId: string | null = USER_A;
+    let mintCalls = 0;
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        firstStarted.resolve();
+        return firstAnswer.promise;
+      },
+      signIn: (userId) => (userId === USER_A ? "sign-in-a" : null),
+      now: () => Date.now(),
+    });
+    const revalidator = hostTokenRevalidator({
+      tokens,
+      currentUserId: () => currentUserId,
+      hostId: "era-retry-host",
+      signInRecovery: null,
+      onState: () => undefined,
+      now: () => Date.now(),
+    });
+
+    const pending = revalidator.revalidateRefused({
+      code: "UNAUTHORIZED",
+      retryable: false,
+      doorReason: "token_expired",
+    });
+    await firstStarted.promise;
+    currentUserId = "user-b";
+    await tokens.forgetUser(USER_A);
+    firstAnswer.resolve({
+      kind: "ok",
+      token: { token: "stale-era-token", expiresAtMs: Date.now() + 60_000 },
+    });
+
+    await expect(pending).resolves.toBe("rejected");
+    expect(mintCalls).toBe(1);
   });
 });

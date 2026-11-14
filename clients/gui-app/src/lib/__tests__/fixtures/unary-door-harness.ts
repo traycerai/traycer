@@ -132,10 +132,15 @@ export async function unaryDoorHarness(
       userId === UNARY_DOOR_USER_ID ? UNARY_DOOR_SIGN_IN : null,
     now: () => now,
   });
-  await tokens.adopt(UNARY_DOOR_USER_ID, options.hostId, {
-    token: "held-host-token",
-    expiresAtMs: now + 60_000,
-  });
+  await tokens.adopt(
+    UNARY_DOOR_USER_ID,
+    options.hostId,
+    {
+      token: "held-host-token",
+      expiresAtMs: now + 60_000,
+    },
+    tokens.era(UNARY_DOOR_USER_ID),
+  );
   const signInRecovery: StreamAuthRevalidator = {
     revalidateForReconnect: () => {
       signInRevalidationCalls.push("stream");

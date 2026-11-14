@@ -12,6 +12,9 @@ import type {
   DesktopLocalAuthSessionRestoreResult,
   DesktopMenuSnapshot,
 } from "../../ipc-contracts/window-types";
+import type { HostTokensBridgeSurface } from "../../ipc-contracts/host-token-types";
+import { createDesktopHostTokenSource } from "../../renderer-shell/desktop-host-tokens";
+import { hostTokenBearer } from "@traycer-clients/shared/auth/host-token-lease";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -242,6 +245,7 @@ interface PreloadBridge {
     respondToQuitRequest(response: unknown): Promise<void>;
     onQuitState(handler: (event: unknown) => void): { dispose: () => void };
   };
+  readonly hostTokens: HostTokensBridgeSurface;
   readonly localHostCapability: "managed" | "none";
   readonly soundtrackSourceAvailable: boolean;
   readSoundtrackSet(): Promise<unknown>;
@@ -1506,4 +1510,90 @@ describe("preload exposes the soundtrack source", () => {
     });
     expect(invoked).toEqual([RunnerHostInvoke.readSoundtrackSet]);
   });
+});
+
+describe("preload host-token era reads", () => {
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the main-era sync read once and keeps current and bearer reads local", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: (channel) =>
+        channel === RunnerHostSync.hostTokensEra ? 0 : null,
+    });
+    const tokens = createDesktopHostTokenSource(bridge.hostTokens);
+    const hostId = "computer-a";
+    fakeElectron.emit(RunnerHostEvent.hostTokensChange, {
+      userId: "user-a",
+      hostId,
+      token: { token: "host-token", expiresAtMs: Date.now() + 60_000 },
+      era: 0,
+    });
+    const callsBeforeEraRead = fakeElectron.syncCalls.length;
+    const knownEra = tokens.era("user-a");
+    expect(
+      fakeElectron.syncCalls
+        .slice(callsBeforeEraRead)
+        .map((call) => call.channel),
+    ).toEqual([RunnerHostSync.hostTokensEra]);
+    const callsBeforeReads = fakeElectron.syncCalls.length;
+    const signInLease = {
+      identity: { userId: "user-a" },
+      getBearerToken: () => "sign-in-token",
+    };
+    const bearer = hostTokenBearer(
+      tokens,
+      () => signInLease,
+      hostId,
+      () => undefined,
+    );
+
+    expect(knownEra).toBe(0);
+    expect(tokens.current("user-a", hostId)?.token).toBe("host-token");
+    expect(bearer()).not.toBeNull();
+    expect(fakeElectron.syncCalls).toHaveLength(callsBeforeReads);
+  });
+
+  it("does not invoke a token operation when main's era read answers null", async () => {
+    const invoked: string[] = [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel) => {
+        invoked.push(channel);
+        return Promise.resolve(undefined);
+      },
+      sendSyncFn: () => null,
+    });
+    const tokens = createDesktopHostTokenSource(bridge.hostTokens);
+
+    await expect(
+      tokens.obtain("user-a", "computer-a", false, null),
+    ).resolves.toEqual({
+      kind: "superseded",
+    });
+    expect(invoked).toEqual([]);
+  });
+
+  it.each([-1, 1.5, Number.NaN, "0", null])(
+    "validates readSyncNumberFor like readSyncNumber for %s",
+    async (badValue) => {
+      fakeElectron.sendSyncFn = () => badValue;
+      const { readSyncNumber, readSyncNumberFor } =
+        await import("../sync-bootstrap");
+
+      expect(readSyncNumber(RunnerHostSync.hostTokensEra, 91)).toBe(91);
+      expect(
+        readSyncNumberFor(RunnerHostSync.hostTokensEra, "user-a", 91),
+      ).toBe(91);
+      expect(fakeElectron.syncCalls).toHaveLength(2);
+    },
+  );
 });

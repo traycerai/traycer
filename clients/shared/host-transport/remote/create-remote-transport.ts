@@ -307,6 +307,7 @@ export function createRemoteHostTransport<
             options.userId,
             options.hostId,
             minted.hostToken,
+            era,
           );
           return { kind: "ok", grant: minted.grant };
         }

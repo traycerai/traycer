@@ -212,10 +212,15 @@ describe("remote RPC relay OPEN host-token frame", () => {
       signIn: (userId) => (userId === USER_ID ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await hostTokens.adopt(USER_ID, entry.hostId, {
-      token: "held-relay-host-token",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    await hostTokens.adopt(
+      USER_ID,
+      entry.hostId,
+      {
+        token: "held-relay-host-token",
+        expiresAtMs: Date.now() + 60_000,
+      },
+      hostTokens.era(USER_ID),
+    );
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
         new Response(

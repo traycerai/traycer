@@ -280,6 +280,7 @@ function buildFakeBridge(
       };
     })(),
     hostTokens: {
+      era: (_userId: string) => 0,
       obtain: () => Promise.resolve({ kind: "no-sign-in" as const }),
       renew: () => Promise.resolve({ kind: "already-current" as const }),
       adopt: () => Promise.resolve(),

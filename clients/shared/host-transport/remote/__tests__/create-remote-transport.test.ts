@@ -952,4 +952,73 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       new Response("", { status: 404 }),
     );
   });
+
+  it("adopts a relay grant at the current era in a newly opened window", async () => {
+    const hostId = "era-new-window-relay";
+    const userId = "user-new-window";
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    await tokens.forgetUser(userId);
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            grant: "new-window-relay-pass",
+            role: "client",
+            expires_in: 300,
+            session_grant: "new-window-host-token",
+            session_grant_expires_in: 3_600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const bearerSource: OpenFrameBearerSource = {
+      getBearerToken: () => "new-sign-in-token",
+      identity: { userId },
+    };
+    const built = createRemoteHostTransport<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      hostId,
+      userId,
+      relayAttachUrl: "wss://relay.invalid/attach",
+      authnBaseUrl: "https://authn.invalid",
+      hostPublicKey: VALID_PUBLIC_KEY,
+      bearer: () => bearerSource,
+      hostTokens: tokens,
+      door: null,
+      onState: () => undefined,
+      cloudAuthorized: () => true,
+      auth: null,
+      clock: null,
+      rpcRegistry: emptyRpcRegistry,
+      streamRegistry: emptyStreamRegistry,
+      webSocketFactory: { create: () => new InertFakeSocket() },
+      requestId: () => `req-${hostId}`,
+      proactiveWakeEligible: true,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    if (built === null) throw new Error("expected a built remote transport");
+
+    try {
+      expect(tokens.era(userId)).toBe(1);
+      built.session.start();
+      await vi.waitFor(() =>
+        expect(tokens.current(userId, hostId)?.token).toBe(
+          "new-window-host-token",
+        ),
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(tokens.era(userId)).toBe(1);
+    } finally {
+      closeAndRetire(built.session);
+    }
+  });
 });

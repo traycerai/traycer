@@ -114,10 +114,15 @@ describe("local stream host-token open frame", () => {
       signIn: null,
       now: () => Date.now(),
     });
-    await tokens.adopt(USER_A, hostId, {
-      token,
-      expiresAtMs: Date.now() + 3_600_000,
-    });
+    await tokens.adopt(
+      USER_A,
+      hostId,
+      {
+        token,
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      tokens.era(USER_A),
+    );
     return tokens;
   }
 
@@ -342,10 +347,15 @@ describe("local stream host-token open frame", () => {
       signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await hostTokens.adopt(USER_A, hostId, {
-      token: "held-before-outage",
-      expiresAtMs: initialTokenExpiresAtMs,
-    });
+    await hostTokens.adopt(
+      USER_A,
+      hostId,
+      {
+        token: "held-before-outage",
+        expiresAtMs: initialTokenExpiresAtMs,
+      },
+      hostTokens.era(USER_A),
+    );
     const client = buildLocalClient(target, provider, hostTokens);
     const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
     let connected = false;
@@ -468,10 +478,12 @@ describe("local stream host-token open frame", () => {
       signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await hostTokens.adopt(USER_A, hostId, {
-      token: "initial-held-token",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    await hostTokens.adopt(
+      USER_A,
+      hostId,
+      { token: "initial-held-token", expiresAtMs: Date.now() + 60_000 },
+      hostTokens.era(USER_A),
+    );
     const client = buildLocalClient(
       { ...mockLocalHostEntry, hostId },
       provider,

@@ -73,10 +73,15 @@ async function harness(
     signIn: (userId) => (userId === USER_ID ? "signed-in" : null),
     now: () => NOW,
   });
-  await tokens.adopt(USER_ID, HOST_ID, {
-    token: "held-token",
-    expiresAtMs: NOW + 10_000,
-  });
+  await tokens.adopt(
+    USER_ID,
+    HOST_ID,
+    {
+      token: "held-token",
+      expiresAtMs: NOW + 10_000,
+    },
+    tokens.era(USER_ID),
+  );
   const recovery = signInRecovery ?? {
     revalidateForReconnect: () => {
       signInCalls.push("sign-in");
@@ -263,10 +268,15 @@ describe("host-token refusal recovery", () => {
       signIn: (userId) => (userId === USER_ID ? "signed-in" : null),
       now: () => Date.now(),
     });
-    await tokens.adopt(USER_ID, HOST_ID, {
-      token: "held-token",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    await tokens.adopt(
+      USER_ID,
+      HOST_ID,
+      {
+        token: "held-token",
+        expiresAtMs: Date.now() + 60_000,
+      },
+      tokens.era(USER_ID),
+    );
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
         new Response(

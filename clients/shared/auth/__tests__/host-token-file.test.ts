@@ -19,6 +19,7 @@ import {
   forgetHostTokensOnSignOut,
   type SignedInWatch,
 } from "../host-token-sign-out";
+import { hostTokenBearer } from "../host-token-lease";
 
 const USER_A = "user-a";
 
@@ -170,14 +171,24 @@ describe("host-token file persistence", () => {
       signIn: null,
       now: () => 1,
     });
-    await tokens.adopt(USER_A, "computer-a", {
-      token: "host-token-a",
-      expiresAtMs: 10_000,
-    });
-    await tokens.adopt(USER_A, "computer-b", {
-      token: "host-token-b",
-      expiresAtMs: 20_000,
-    });
+    await tokens.adopt(
+      USER_A,
+      "computer-a",
+      {
+        token: "host-token-a",
+        expiresAtMs: 10_000,
+      },
+      tokens.era(USER_A),
+    );
+    await tokens.adopt(
+      USER_A,
+      "computer-b",
+      {
+        token: "host-token-b",
+        expiresAtMs: 20_000,
+      },
+      tokens.era(USER_A),
+    );
 
     const watch: {
       onChange: ((userId: string | null) => void) | null;
@@ -298,10 +309,15 @@ describe("host-token source per-person eras", () => {
       announced.push(`${userId}:${hostId}`);
     });
 
-    const adoption = tokens.adopt(USER_A, "computer-a", {
-      token: "late-adopted-token",
-      expiresAtMs: 10_000,
-    });
+    const adoption = tokens.adopt(
+      USER_A,
+      "computer-a",
+      {
+        token: "late-adopted-token",
+        expiresAtMs: 10_000,
+      },
+      tokens.era(USER_A),
+    );
     const forgetting = tokens.forgetUser(USER_A);
     expect(tokens.era(USER_A)).toBe(1);
     load.resolve(new Map());
@@ -435,6 +451,68 @@ describe("host-token source per-person eras", () => {
     expect(announced).toEqual([]);
   });
 
+  it("does not read a prior-era token while forgetUser waits to persist", async () => {
+    const initialTable: HostTokenTable = new Map([
+      [
+        USER_A,
+        new Map([
+          [
+            "computer-a",
+            { token: "prior-era-token", expiresAtMs: Date.now() + 60_000 },
+          ],
+        ]),
+      ],
+    ]);
+    const updateStarted = deferred<void>();
+    const releaseUpdate = deferred<void>();
+    let table = initialTable;
+    const persistence: HostTokenPersistence = {
+      load: () => Promise.resolve(initialTable),
+      update: async (change) => {
+        updateStarted.resolve();
+        await releaseUpdate.promise;
+        table = change(table);
+        return table;
+      },
+    };
+    let mintCalls = 0;
+    const tokens = createHostTokenSource({
+      persistence,
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve({ kind: "no-sign-in" });
+      },
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const held = await tokens.obtain(USER_A, "computer-a", false, null);
+    expect(held.kind).toBe("ok");
+    const bearer = hostTokenBearer(
+      tokens,
+      () => ({
+        identity: { userId: USER_A },
+        getBearerToken: () => "sign-in-token",
+      }),
+      "computer-a",
+      () => undefined,
+    );
+    expect(bearer()).not.toBeNull();
+
+    const forgetting = tokens.forgetUser(USER_A);
+    await updateStarted.promise;
+
+    expect(tokens.current(USER_A, "computer-a")).toBeNull();
+    const obtain = tokens.obtain(USER_A, "computer-a", false, null);
+    await expect(obtain).resolves.toEqual({ kind: "no-sign-in" });
+    expect(bearer()).toBeNull();
+    expect(mintCalls).toBe(0);
+
+    releaseUpdate.resolve();
+    await forgetting;
+    expect(tokens.current(USER_A, "computer-a")).toBeNull();
+    expect(table.has(USER_A)).toBe(false);
+  });
+
   it("supersedes obtain when sign-out lands during the initial persistence load", async () => {
     const initialTable: HostTokenTable = new Map([
       [
@@ -491,6 +569,7 @@ describe("forgetHostTokensOnSignOut with a late initial read", () => {
     const unsubscribe = forgetHostTokensOnSignOut(signedIn.watch, tokens);
 
     signedIn.emit(null);
+    signedIn.emit(USER_A);
     signedIn.settleCurrent(USER_A);
     await signedIn.settled;
 
@@ -520,6 +599,7 @@ describe("forgetHostTokensOnSignOut with a late initial read", () => {
     const signedIn = deferredSignedInWatch();
     const unsubscribe = forgetHostTokensOnSignOut(signedIn.watch, tokens);
 
+    signedIn.emit(USER_A);
     signedIn.emit(USER_A);
     signedIn.settleCurrent(USER_A);
     await signedIn.settled;

@@ -688,4 +688,23 @@ describe("HostRuntime host-token era lifecycle", () => {
       runtime.dispose();
     }
   });
+
+  it("forgets A when sign-out and sign-in arrive before the initial read settles", async () => {
+    const { runtime, provider, runnerHost } = buildRuntime({
+      initialSignedIn: { userId: "user-1", bearer: "tok-1" },
+    });
+    const forgetUser = vi.spyOn(runnerHost.hostTokens, "forgetUser");
+
+    try {
+      runtime.start();
+      provider.signOut();
+      signInProvider(provider, "user-1", "tok-2");
+
+      await vi.waitFor(() => expect(forgetUser).toHaveBeenCalledTimes(1));
+      expect(forgetUser).toHaveBeenCalledWith("user-1");
+      expect(runnerHost.hostTokens.era("user-1")).toBe(1);
+    } finally {
+      runtime.dispose();
+    }
+  });
 });

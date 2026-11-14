@@ -66,7 +66,10 @@ export interface HostTokenPersistence {
 }
 
 export interface HostTokenSource {
-  /** The token this process last knew for the pair, read synchronously at open. */
+  /**
+   * The token this process last knew for the pair, read synchronously at
+   * open. Only a token stored in the person's current {@link era} is returned.
+   */
   current(userId: string, hostId: string): HostToken | null;
   /**
    * An unexpired token for the pair: the one on disk, else a fresh mint.
@@ -88,11 +91,15 @@ export interface HostTokenSource {
   renew(userId: string, hostIds: readonly string[]): Promise<HostTokenRenewal>;
   /**
    * Keeps a token authn returned beside a relay pass, unless the person
-   * signed out or was replaced since this call. The caller compares
-   * {@link era} from before its mint with the era now, and calls this in the
-   * same tick.
+   * signed out or was replaced since `era`, the {@link era} the caller read
+   * before its mint.
    */
-  adopt(userId: string, hostId: string, token: HostToken): Promise<void>;
+  adopt(
+    userId: string,
+    hostId: string,
+    token: HostToken,
+    era: number,
+  ): Promise<void>;
   /**
    * Signing out, or another account replacing this one: every token of that
    * person goes, and their {@link era} advances at once, so anything begun
@@ -141,6 +148,18 @@ export function createHostTokenSource(deps: {
   const eraOf = (userId: string): number => eras.get(userId) ?? 0;
   const keyOf = (userId: string, hostId: string): string =>
     `${userId}\u0000${hostId}`;
+  // The era each held token was stored in. A token read from disk at load
+  // carries none, and counts as the first era. A token is read back only in
+  // the era it was stored in, so advancing a person's era makes every token of
+  // theirs unreadable at once, before the update that deletes them lands.
+  const storedIn = new Map<string, number>();
+  const held = (userId: string, hostId: string): HostToken | null => {
+    const token = table.get(userId)?.get(hostId) ?? null;
+    if (token === null) return null;
+    return (storedIn.get(keyOf(userId, hostId)) ?? 0) === eraOf(userId)
+      ? token
+      : null;
+  };
 
   const announce = (change: HostTokenChange): void => {
     for (const listener of Array.from(listeners)) listener(change);
@@ -159,6 +178,7 @@ export function createHostTokenSource(deps: {
     table = await deps.persistence.update((latest) => {
       kept = eraOf(userId) === era;
       if (!kept) return latest;
+      storedIn.set(keyOf(userId, hostId), era);
       const next = new Map(latest);
       const forUser = new Map(latest.get(userId) ?? []);
       forUser.set(hostId, token);
@@ -205,15 +225,15 @@ export function createHostTokenSource(deps: {
   };
 
   return {
-    current: (userId, hostId) => table.get(userId)?.get(hostId) ?? null,
+    current: held,
 
     obtain: async (userId, hostId, fresh, signal) => {
       const era = eraOf(userId);
       await loaded;
       if (eraOf(userId) !== era) return { kind: "superseded" };
-      const held = table.get(userId)?.get(hostId) ?? null;
-      if (!fresh && isUsableHostToken(held, deps.now()))
-        return { kind: "ok", token: held };
+      const token = held(userId, hostId);
+      if (!fresh && isUsableHostToken(token, deps.now()))
+        return { kind: "ok", token };
       return mintOnce(userId, hostId, era, signal);
     },
 
@@ -241,8 +261,8 @@ export function createHostTokenSource(deps: {
       };
     },
 
-    adopt: async (userId, hostId, token) => {
-      const era = eraOf(userId);
+    adopt: async (userId, hostId, token, era) => {
+      if (eraOf(userId) !== era) return;
       await loaded;
       await store(userId, hostId, token, era);
     },
@@ -251,6 +271,8 @@ export function createHostTokenSource(deps: {
       eras.set(userId, eraOf(userId) + 1);
       for (const key of Array.from(mintedWith.keys()))
         if (key.startsWith(`${userId}\u0000`)) mintedWith.delete(key);
+      for (const key of Array.from(storedIn.keys()))
+        if (key.startsWith(`${userId}\u0000`)) storedIn.delete(key);
       await loaded;
       const hostIds = Array.from(table.get(userId)?.keys() ?? []);
       table = await deps.persistence.update((latest) => {

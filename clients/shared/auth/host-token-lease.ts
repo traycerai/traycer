@@ -250,18 +250,26 @@ function revalidatorWithBound(
   const mintFresh = async (
     userId: string,
     signInRetried: boolean,
+    eraRetried: boolean,
   ): Promise<RevalidateOutcome> => {
     const held = deps.tokens.current(userId, deps.hostId);
     const outcome = await deps.tokens.obtain(userId, deps.hostId, true, null);
     if (outcome.kind === "ok") return "rotated";
     if (outcome.kind === "no-sign-in") return "network-error";
-    // The person signed out or was replaced meanwhile: nothing of theirs is
+    // A sign-out ended the era this mint began in. If the same person is
+    // signed in again, the action is theirs in the new era: ask once more
+    // there. Anyone else, or no one, signed in now: nothing of theirs is
     // raised, and their connection is ended with them.
-    if (outcome.kind === "superseded") return "rejected";
+    if (outcome.kind === "superseded")
+      return !eraRetried && deps.currentUserId() === userId
+        ? mintFresh(userId, signInRetried, true)
+        : "rejected";
     if (outcome.kind === "sign-in-rejected") {
       if (signInRetried || deps.signInRecovery === null) return "rejected";
       const recovered = await deps.signInRecovery.revalidateForReconnect();
-      return recovered === "rotated" ? mintFresh(userId, true) : recovered;
+      return recovered === "rotated"
+        ? mintFresh(userId, true, eraRetried)
+        : recovered;
     }
     const state = stateOfFailedMint(
       outcome,
@@ -275,7 +283,7 @@ function revalidatorWithBound(
     userId: string,
     refusal: FatalErrorDetails | null,
   ): Promise<RevalidateOutcome> => {
-    if (refusal === null) return mintFresh(userId, false);
+    if (refusal === null) return mintFresh(userId, false, false);
     const reason = readDoorReason(refusal.doorReason);
     if (reason === "token_expired") {
       const held = deps.tokens.current(userId, deps.hostId);
@@ -286,7 +294,7 @@ function revalidatorWithBound(
         isUsableHostToken(held, deps.now())
       )
         return "rejected";
-      const outcome = await mintFresh(userId, false);
+      const outcome = await mintFresh(userId, false, false);
       // Only a token that was in fact minted becomes the replacement: after
       // a failed mint the old token is still the one held, and its next
       // refusal earns another try once authn answers.
@@ -302,7 +310,7 @@ function revalidatorWithBound(
         deps.onState(deps.hostId, "not-admitted");
         return "rejected";
       }
-      const outcome = await mintFresh(userId, false);
+      const outcome = await mintFresh(userId, false, false);
       // Likewise: a failed mint spends nothing of the bound.
       if (outcome === "rotated")
         notAdmitted.retried(
