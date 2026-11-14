@@ -343,21 +343,30 @@ describe("MembersView", () => {
     ).toBeTruthy();
   });
 
-  it("shows a non-admin the list without controls and a pending summary, not the address", () => {
-    renderView({
-      ...BASE,
-      viewerRole: null,
-      currentUserId: "u-editor",
-      members: [ADMIN, EDITOR, PENDING],
-    });
-    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
-    expect(screen.queryByRole("combobox")).toBeNull();
-    expect(screen.queryByText("new@acme.test")).toBeNull();
-    const summary = screen.getByTestId("members-pending-summary");
-    expect(within(summary).getByText("Invited · 1 pending")).toBeTruthy();
-  });
+  it.each([
+    ["Editor", "editor"],
+    ["not known", null],
+  ] as const)(
+    "shows a %s seat no membership controls and a pending summary",
+    (_label, viewerRole) => {
+      renderView({
+        ...BASE,
+        viewerRole,
+        currentUserId: "u-editor",
+        members: [ADMIN, EDITOR, PENDING],
+      });
+      expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Manage seats and allowances/ }),
+      ).toBeNull();
+      expect(screen.queryByRole("combobox")).toBeNull();
+      expect(screen.queryByText("new@acme.test")).toBeNull();
+      const summary = screen.getByTestId("members-pending-summary");
+      expect(within(summary).getByText("Invited · 1 pending")).toBeTruthy();
+    },
+  );
 
   it("refuses the last admin with the remedy, no role select and no Remove", () => {
     renderView({ ...BASE, viewerRole: "admin", members: [ADMIN, EDITOR] });

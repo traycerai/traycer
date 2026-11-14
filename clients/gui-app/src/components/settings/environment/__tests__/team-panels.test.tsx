@@ -152,46 +152,65 @@ describe("BrowserAgentAccessGroup on a team", () => {
       revision,
     });
 
-  it("lets an admin flip the switch against the displayed revision", async () => {
-    const harness = mountTeamPage(poolSource("admin"), {
-      "environment.configuration.items": () => ({ items: [access(true, 4)] }),
-      "environment.configuration.items.put": () => ({
-        outcome: "saved",
-        revision: 5,
-      }),
-    });
-    render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s flip the switch against the displayed revision",
+    async (role) => {
+      const harness = mountTeamPage(poolSource(role), {
+        "environment.configuration.items": () => ({ items: [access(true, 4)] }),
+        "environment.configuration.items.put": () => ({
+          outcome: "saved",
+          revision: 5,
+        }),
+      });
+      render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
 
-    const toggle = await screen.findByRole("switch", {
-      name: "Let agents use the in-app browser",
-    });
-    await waitFor(() => {
-      expect(toggle).toHaveProperty("ariaChecked", "true");
-    });
-    await userEvent.click(toggle);
+      const toggle = await screen.findByRole("switch", {
+        name: "Let agents use the in-app browser",
+      });
+      await waitFor(() => {
+        expect(toggle).toHaveProperty("ariaChecked", "true");
+      });
+      await userEvent.click(toggle);
 
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "browser_agent_access",
-        key: "browser",
-        os: null,
-        value: { enabled: false },
-        revision: 4,
-      },
-    ]);
-    expect(harness.paramsOf("config.browser.get")).toHaveLength(0);
-  });
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        {
+          environmentId: "env-a",
+          kind: "browser_agent_access",
+          key: "browser",
+          os: null,
+          value: { enabled: false },
+          revision: 4,
+        },
+      ]);
+      expect(harness.paramsOf("config.browser.get")).toHaveLength(0);
+    },
+  );
 
-  it("shows a viewer the setting without a switch", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
-      "environment.configuration.items": () => ({ items: [access(true, 4)] }),
-    });
-    render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
+  it.each([
+    ["Viewer", poolSource("viewer"), true, "On"],
+    [
+      "unrecognized role",
+      { ...poolSource("viewer"), effectiveRole: null },
+      false,
+      "Off",
+    ],
+  ] as const)(
+    "shows a %s the setting without a switch",
+    async (_role, source, enabled, expected) => {
+      const harness = mountTeamPage(source, {
+        "environment.configuration.items": () => ({
+          items: [access(enabled, 4)],
+        }),
+      });
+      render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });
 
-    expect(await screen.findByText("On")).toBeTruthy();
-    expect(screen.queryByRole("switch")).toBeNull();
-  });
+      expect(await screen.findByText(expected)).toBeTruthy();
+      expect(screen.queryByRole("switch")).toBeNull();
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
+    },
+  );
 
   it("reads an absent row as on, and the first flip creates it with a null revision", async () => {
     const harness = mountTeamPage(poolSource("admin"), {

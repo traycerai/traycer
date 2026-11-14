@@ -1397,9 +1397,9 @@ describe("the viewer's standing line", () => {
 });
 
 describe("transport-scoped configuration access", () => {
-  async function expectReadOnlyAdmin(): Promise<void> {
+  async function expectReadOnlyRole(role: "admin" | "editor"): Promise<void> {
     const probe = await screen.findByTestId("configuration-permission-probe");
-    expect(probe.getAttribute("data-effective-role")).toBe("admin");
+    expect(probe.getAttribute("data-effective-role")).toBe(role);
     expect(probe.getAttribute("data-provider-handle")).toBe("handle-a");
     expect(probe.getAttribute("data-can-edit")).toBe("false");
     expect(
@@ -1409,15 +1409,18 @@ describe("transport-scoped configuration access", () => {
     ).toBeTruthy();
   }
 
-  it("makes a team admin read-only on a team-owned physical remote host", async () => {
-    mountConfigurationPermissionBoundary({
-      target: { kind: "team", environmentId: "env-a" },
-      environments: [PERSONAL, team("admin")],
-      activeHost: TEAM_OWNED_PHYSICAL_HOST,
-    });
+  it.each(["admin", "editor"] as const)(
+    "keeps a team %s read-only on a team-owned physical remote host",
+    async (role) => {
+      mountConfigurationPermissionBoundary({
+        target: { kind: "team", environmentId: "env-a" },
+        environments: [PERSONAL, team(role)],
+        activeHost: TEAM_OWNED_PHYSICAL_HOST,
+      });
 
-    await expectReadOnlyAdmin();
-  });
+      await expectReadOnlyRole(role);
+    },
+  );
 
   it("keeps Personal's owner editable on the user's physical remote host", async () => {
     mountConfigurationPermissionBoundary({

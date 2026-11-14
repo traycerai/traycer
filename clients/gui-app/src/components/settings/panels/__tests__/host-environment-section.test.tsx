@@ -377,8 +377,8 @@ describe("HostEnvironmentSection", () => {
       within(dialog).getByRole("button", { name: "Confirm at this computer" }),
     );
 
-    expect((await screen.findByRole("status")).textContent).toContain(
-      "Mac mini now belongs to Acme.",
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Mac mini now belongs to Acme. Any member of the team can claim it as their own.",
     );
     expect(events.slice(0, 3)).toEqual([
       "ownership-read",
@@ -562,84 +562,146 @@ describe("HostEnvironmentSection", () => {
     },
   );
 
-  it("claims a local team-owned computer through auth without an environment move", async () => {
-    const runnerHost = dashboardRunnerHost();
-    mocks.state.binding = teamBinding(true);
-    mocks.auth.readHostOwnership
-      .mockResolvedValueOnce(ownershipResult(TEAM_OWNER))
-      .mockResolvedValue(ownershipResult(PERSON_OWNER));
-    const claim = Promise.withResolvers<TeamComputerReleaseResult>();
-    mocks.auth.releaseTeamComputer.mockReturnValue(claim.promise);
-    const stopRequests: unknown[] = [];
-    let stopPreviewCalls = 0;
-    const queryClient = renderSection("personal", {
-      owner: TEAM_OWNER,
-      isLocalMachine: true,
-      runnerHost,
-      handlers: {
-        "environment.move.stop": (request) => {
-          stopRequests.push(request);
-          return { outcome: "stopped" };
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s claim a local team-owned computer through auth",
+    async (role) => {
+      const runnerHost = dashboardRunnerHost();
+      mocks.state.binding = teamBinding(true);
+      mocks.auth.readHostOwnership
+        .mockResolvedValueOnce(ownershipResult(TEAM_OWNER))
+        .mockResolvedValue(ownershipResult(PERSON_OWNER));
+      const claim = Promise.withResolvers<TeamComputerReleaseResult>();
+      mocks.auth.releaseTeamComputer.mockReturnValue(claim.promise);
+      const stopRequests: unknown[] = [];
+      let stopPreviewCalls = 0;
+      const queryClient = renderSection("personal", {
+        owner: TEAM_OWNER,
+        isLocalMachine: true,
+        runnerHost,
+        handlers: {
+          "environment.list": () => ({
+            environments: [
+              listedEnvironment(PERSONAL),
+              { ...listedEnvironment(TEAM), effectiveRole: role },
+            ],
+          }),
+          "environment.move.stop": (request) => {
+            stopRequests.push(request);
+            return { outcome: "stopped" };
+          },
+          "environment.move.stopPreview": () => {
+            stopPreviewCalls += 1;
+            throw new Error(
+              "returning a team computer does not need a preview",
+            );
+          },
         },
-        "environment.move.stopPreview": () => {
-          stopPreviewCalls += 1;
-          throw new Error("returning a team computer does not need a preview");
-        },
-      },
-    });
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Claim this computer" }),
-    );
-    const dialog = await screen.findByRole("dialog");
-    expect(
-      within(dialog).getByText(
-        "This computer will become yours. The team will lose access to it.",
-      ),
-    ).toBeTruthy();
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Claim this computer" }),
-    );
-
-    const confirm = screen.getByRole("button", {
-      name: "Claim this computer",
-    });
-    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
-    expect(
-      within(confirm).getByTestId("team-computer-claim-progress"),
-    ).toBeTruthy();
-    await act(async () => {
-      claim.resolve({ kind: "ok" });
-      await claim.promise;
-    });
-    await waitFor(() => {
-      expect(noteHostMembershipChanged).toHaveBeenCalledWith("host-a");
-    });
-    expect(
-      await screen.findByText(
-        "This computer is now yours. The team can no longer run work on it.",
-      ),
-    ).toBeTruthy();
-
-    await act(async () => {
-      await queryClient.invalidateQueries({
-        queryKey: authQueryKeys.hostOwnership(mocks.auth, "user-me", "host-a"),
       });
-    });
-    await waitFor(() => {
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Claim this computer" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).getByText(
+          "This computer will become yours. The team will lose access to it.",
+        ),
+      ).toBeTruthy();
+      expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Claim this computer" }),
+      );
+
+      const confirm = screen.getByRole("button", {
+        name: "Claim this computer",
+      });
+      await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
+      expect(
+        within(confirm).getByTestId("team-computer-claim-progress"),
+      ).toBeTruthy();
+      await act(async () => {
+        claim.resolve({ kind: "ok" });
+        await claim.promise;
+      });
+      await waitFor(() => {
+        expect(noteHostMembershipChanged).toHaveBeenCalledWith("host-a");
+      });
+      expect(
+        await screen.findByText(
+          "This computer is now yours. The team can no longer run work on it.",
+        ),
+      ).toBeTruthy();
+
+      await act(async () => {
+        await queryClient.invalidateQueries({
+          queryKey: authQueryKeys.hostOwnership(
+            mocks.auth,
+            "user-me",
+            "host-a",
+          ),
+        });
+      });
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("button", { name: "Claim this computer" }),
+        ).toBeNull();
+      });
       expect(
         screen.queryByRole("button", { name: "Claim this computer" }),
       ).toBeNull();
+      expect(mocks.auth.releaseTeamComputer).toHaveBeenCalledWith(
+        "host-a",
+        "env-team",
+      );
+      expect(stopRequests).toEqual([]);
+      expect(stopPreviewCalls).toBe(0);
+    },
+  );
+
+  it("does not offer a claim to a Viewer on a local team-owned computer", async () => {
+    mocks.state.binding = teamBinding(true);
+    renderSection("personal", {
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+      handlers: {
+        "environment.list": () => ({
+          environments: [
+            listedEnvironment(PERSONAL),
+            { ...listedEnvironment(TEAM), effectiveRole: "viewer" },
+          ],
+        }),
+      },
     });
+
+    const selector = screen.getByRole("combobox", { name: "Environment" });
+    fireEvent.keyDown(selector, { key: "ArrowDown" });
+    expect(await screen.findByRole("option", { name: /^Acme/ })).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Claim this computer" }),
     ).toBeNull();
-    expect(mocks.auth.releaseTeamComputer).toHaveBeenCalledWith(
-      "host-a",
-      "env-team",
-    );
-    expect(stopRequests).toEqual([]);
-    expect(stopPreviewCalls).toBe(0);
+  });
+
+  it("does not offer a claim when the team role is not known", async () => {
+    mocks.state.binding = teamBinding(true);
+    renderSection("personal", {
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+      handlers: {
+        "environment.list": () => ({
+          environments: [listedEnvironment(PERSONAL)],
+        }),
+      },
+    });
+
+    const selector = screen.getByRole("combobox", { name: "Environment" });
+    fireEvent.keyDown(selector, { key: "ArrowDown" });
+    expect(
+      await screen.findByRole("option", { name: /^Personal/ }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Acme/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
   });
 
   it("does not offer Claim this computer on a remote team-owned host", () => {

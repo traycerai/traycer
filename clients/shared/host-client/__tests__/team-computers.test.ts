@@ -63,6 +63,7 @@ describe("listTeamComputersViaHttp", () => {
       hostName: "Studio",
       hostKind: "personal",
       sharingGeneration: SHARING_GENERATION,
+      holdsBotSlot: true,
       purgePending: false,
       futureProjectionField: "ignored",
     };

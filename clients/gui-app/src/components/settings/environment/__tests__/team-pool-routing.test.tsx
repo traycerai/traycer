@@ -114,7 +114,7 @@ function removeSurfaceHost(): void {
 
 describe("team pages on a build with a server pool", () => {
   it("reads the team's records and members from the pool, whichever host the window is on", async () => {
-    const harness = mountTeamPageOnPoolBuild(poolSource("viewer"), {
+    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
       "environment.configuration.items": () => ({
         items: [
           configurationItem({

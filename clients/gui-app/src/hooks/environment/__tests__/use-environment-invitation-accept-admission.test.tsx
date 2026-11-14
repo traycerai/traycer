@@ -11,6 +11,7 @@ import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type { EnvironmentInvitationsAcceptResponse } from "@traycer/protocol/host/environment/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { authQueryKeys } from "@/lib/query-keys/auth-query-keys";
 import {
   hostDoorStateFor,
   noteHostDoorState,
@@ -62,6 +63,9 @@ const mocks = vi.hoisted(() => ({
     };
   } | null,
 }));
+const runnerHost = vi.hoisted(() => ({
+  refreshHostFleet: vi.fn<() => Promise<void>>(),
+}));
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => mocks.binding,
@@ -83,7 +87,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     hostManagement: null,
-    refreshHostFleet: () => Promise.resolve(),
+    refreshHostFleet: runnerHost.refreshHostFleet,
   }),
 }));
 
@@ -124,7 +128,10 @@ function installAuth(
     }),
     acceptEnvironmentInvitation,
   };
-  mocks.binding = { auth, directory: { refresh: () => Promise.resolve([]) } };
+  mocks.binding = {
+    auth,
+    directory: { refresh: vi.fn(() => Promise.resolve([])) },
+  };
 }
 
 function createContext(userId: string): RequestContext {
@@ -181,6 +188,8 @@ describe("invitation acceptance clears the local host door state", () => {
 
   beforeEach(() => {
     queryClient = createQueryClient();
+    vi.spyOn(queryClient, "invalidateQueries");
+    runnerHost.refreshHostFleet.mockReset().mockResolvedValue(undefined);
     useHostDoorStateStore.setState({ byHost: new Map() });
     mocks.localHostId = localHostId;
     mocks.methodSupport = false;
@@ -214,6 +223,7 @@ describe("invitation acceptance clears the local host door state", () => {
 
     expect(accept).toHaveBeenCalledWith("team-1");
     expectLocalDoorCleared();
+    expectHostListRefreshed();
   });
 
   it("does not invalidate after a direct invitation was not found", async () => {
@@ -229,6 +239,7 @@ describe("invitation acceptance clears the local host door state", () => {
     });
 
     expectDoorStatesKept();
+    expectHostListNotRefreshed();
   });
 
   it("invalidates after an RPC accepted invitation", async () => {
@@ -248,6 +259,7 @@ describe("invitation acceptance clears the local host door state", () => {
     });
 
     expectLocalDoorCleared();
+    expectHostListRefreshed();
   });
 
   it("does not invalidate after an RPC invitation was not found", async () => {
@@ -267,6 +279,7 @@ describe("invitation acceptance clears the local host door state", () => {
     });
 
     expectDoorStatesKept();
+    expectHostListNotRefreshed();
   });
 
   it("does not invalidate on failure or when the account context changes before success", async () => {
@@ -286,6 +299,7 @@ describe("invitation acceptance clears the local host door state", () => {
       ).rejects.toThrow("request failed");
     });
     expectDoorStatesKept();
+    expectHostListNotRefreshed();
     failed.unmount();
 
     const accountChangeContext = createContext("before-switch");
@@ -317,5 +331,22 @@ describe("invitation acceptance clears the local host door state", () => {
     });
 
     expectDoorStatesKept();
+    expectHostListNotRefreshed();
   });
+
+  function expectHostListRefreshed(): void {
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: authQueryKeys.registeredHostsAll(),
+    });
+    expect(mocks.binding?.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(runnerHost.refreshHostFleet).toHaveBeenCalledTimes(1);
+  }
+
+  function expectHostListNotRefreshed(): void {
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: authQueryKeys.registeredHostsAll(),
+    });
+    expect(mocks.binding?.directory.refresh).not.toHaveBeenCalled();
+    expect(runnerHost.refreshHostFleet).not.toHaveBeenCalled();
+  }
 });

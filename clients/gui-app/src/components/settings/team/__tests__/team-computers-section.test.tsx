@@ -30,6 +30,7 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useTeamComputersSeenStore } from "@/stores/hosts/claimed-computer-notice-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
@@ -212,7 +213,7 @@ describe("TeamComputersSection", () => {
   });
 
   it("prints install and use commands with the team's provider handle", async () => {
-    mountSection(ENVIRONMENT_ID, "owner", `handle-${ENVIRONMENT_ID}`);
+    mountSection(ENVIRONMENT_ID, "admin", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
     await user.click(
@@ -222,18 +223,61 @@ describe("TeamComputersSection", () => {
     expect(screen.getByTestId("team-computers-add-command").textContent).toBe(
       "traycer host install --team handle-env-a",
     );
+    expect(
+      screen.getByText(
+        "Run this on the computer. If nobody is signed in to Traycer there, it asks you to sign in.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Run this on the computer, then sign in as a team member.",
+      ),
+    ).toBeNull();
     expect(screen.getByText(/Already installed\? Run/).textContent).toContain(
       "traycer host use handle-env-a",
     );
   });
 
   it("does not offer a command when the team has no provider handle", async () => {
-    mountSection(ENVIRONMENT_ID, "owner", null);
+    mountSection(ENVIRONMENT_ID, "admin", null);
 
     await waitFor(() =>
       expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID),
     );
     expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
+  });
+
+  it("keeps the Computers list and row states without the removed bot-host control", async () => {
+    listTeamComputers.mockResolvedValue({
+      kind: "ok",
+      hosts: [
+        computer({ hostName: "Studio", ...{ holdsBotSlot: true } }),
+        computer({
+          hostId: "host-unavailable",
+          hostName: null,
+          purgePending: true,
+        }),
+      ],
+    });
+    mountSection(ENVIRONMENT_ID, "admin", `handle-${ENVIRONMENT_ID}`);
+
+    const section = screen.getByRole("region", { name: "Computers" });
+    expect(await within(section).findByText("Studio")).toBeTruthy();
+    expect(
+      within(section).getByRole("button", { name: "Refresh" }),
+    ).toBeTruthy();
+    expect(
+      within(section).getByText("Unnamed computer · Unavailable"),
+    ).toBeTruthy();
+    expect(
+      within(section).getAllByRole("button", { name: "Claim this computer" }),
+    ).toHaveLength(2);
+    expect(
+      within(section).queryByRole("combobox", { name: "Bot host" }),
+    ).toBeNull();
+    expect(within(section).queryByText("Run the team's bots on")).toBeNull();
+    expect(within(section).queryByText("No bot computer chosen")).toBeNull();
+    expect(within(section).queryByText(/ · Runs the team's bots/)).toBeNull();
   });
 
   it("refreshes a successful empty list after an external enrollment", async () => {
@@ -267,72 +311,80 @@ describe("TeamComputersSection", () => {
     expect(within(row).getByText(hostName)).toBeTruthy();
   });
 
-  it("lets a team member claim a computer after confirming", async () => {
-    const pending = Promise.withResolvers<TeamComputerReleaseResult>();
-    releaseTeamComputer.mockReturnValue(pending.promise);
-    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
-    const user = userEvent.setup();
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s claim a computer after confirming",
+    async (role) => {
+      useTeamComputersSeenStore.setState({ byViewer: {} });
+      useTeamComputersSeenStore.getState().setSeen(CURRENT_USER, {
+        "host-computer-a": { teamId: ENVIRONMENT_ID, teamName: "Acme" },
+      });
+      const pending = Promise.withResolvers<TeamComputerReleaseResult>();
+      releaseTeamComputer.mockReturnValue(pending.promise);
+      mountSection(ENVIRONMENT_ID, role, `handle-${ENVIRONMENT_ID}`);
+      const user = userEvent.setup();
 
-    expect(
-      await screen.findByRole("button", {
+      expect(
+        await screen.findByRole("button", {
+          name: "Claim this computer",
+        }),
+      ).toBeTruthy();
+      const dialog = await openClaimDialog(user);
+      expect(
+        screen.getByRole("heading", { name: "Claim Studio?" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          "This computer will become yours. The team will lose access to it.",
+        ),
+      ).toBeTruthy();
+      expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
+      expect(releaseTeamComputer).not.toHaveBeenCalled();
+
+      await user.click(
+        within(dialog).getByRole("button", { name: "Claim this computer" }),
+      );
+
+      const confirm = screen.getByRole("button", {
         name: "Claim this computer",
-      }),
-    ).toBeTruthy();
-    const dialog = await openClaimDialog(user);
-    expect(screen.getByRole("heading", { name: "Claim Studio?" })).toBeTruthy();
-    expect(
-      screen.getByText(
-        "This computer will become yours. The team will lose access to it.",
-      ),
-    ).toBeTruthy();
-    expect(releaseTeamComputer).not.toHaveBeenCalled();
+      });
+      await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
+      expect(
+        confirm.querySelector('[data-testid="team-computer-claim-progress"]'),
+      ).not.toBeNull();
+      await act(async () => {
+        pending.resolve({ kind: "ok" });
+        await pending.promise;
+      });
+      await waitFor(() =>
+        expect(noteHostMembershipChanged).toHaveBeenCalledWith(
+          "host-computer-a",
+        ),
+      );
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
-    await user.click(
-      within(dialog).getByRole("button", { name: "Claim this computer" }),
-    );
+      await waitFor(() =>
+        expect(releaseTeamComputer).toHaveBeenCalledWith(
+          "host-computer-a",
+          ENVIRONMENT_ID,
+        ),
+      );
+      expect(noteHostMembershipChanged).toHaveBeenCalledTimes(1);
+      expect(
+        useTeamComputersSeenStore.getState().byViewer[CURRENT_USER]?.[
+          "host-computer-a"
+        ],
+      ).toBeUndefined();
+    },
+  );
 
-    const confirm = screen.getByRole("button", { name: "Claim this computer" });
-    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
-    expect(
-      confirm.querySelector('[data-testid="team-computer-claim-progress"]'),
-    ).not.toBeNull();
-    await act(async () => {
-      pending.resolve({ kind: "ok" });
-      await pending.promise;
-    });
-    await waitFor(() =>
-      expect(noteHostMembershipChanged).toHaveBeenCalledWith("host-computer-a"),
-    );
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-
-    await waitFor(() =>
-      expect(releaseTeamComputer).toHaveBeenCalledWith(
-        "host-computer-a",
-        ENVIRONMENT_ID,
-      ),
-    );
-    expect(noteHostMembershipChanged).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps claiming available when team configuration editing is not authorized", async () => {
+  it("does not offer claiming when the team role is not known", async () => {
     mountSection(ENVIRONMENT_ID, null, `handle-${ENVIRONMENT_ID}`);
-    const user = userEvent.setup();
 
     await screen.findByText("Studio");
-    await user.click(
-      screen.getByRole("button", { name: "Claim this computer" }),
-    );
-    const dialog = await screen.findByRole("dialog");
-    await user.click(
-      within(dialog).getByRole("button", { name: "Claim this computer" }),
-    );
-    await waitFor(() =>
-      expect(releaseTeamComputer).toHaveBeenCalledWith(
-        "host-computer-a",
-        ENVIRONMENT_ID,
-      ),
-    );
-    expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
+    expect(releaseTeamComputer).not.toHaveBeenCalled();
     expect(
       screen.getByRole("button", { name: "Refresh" }).hasAttribute("disabled"),
     ).toBe(false);

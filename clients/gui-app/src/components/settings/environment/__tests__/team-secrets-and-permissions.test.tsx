@@ -1,4 +1,6 @@
+import "../../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -6,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { EditorView } from "@uiw/react-codemirror";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
@@ -605,6 +608,75 @@ describe("TeamPermissions", () => {
     expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
       environmentId: "env-a",
     });
+  });
+
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s edit and save the approval policy",
+    async (role) => {
+      const harness = mountTeamPage(poolSource(role), {
+        "environment.configuration.items": () => ({
+          items: [policy(3, "Allow reads")],
+        }),
+        "environment.members": () => members,
+        "environment.configuration.policy.put": () => ({ outcome: "saved" }),
+      });
+      render(<TeamPermissions>{null}</TeamPermissions>, {
+        wrapper: harness.Wrapper,
+      });
+
+      const editor = await screen.findByRole("textbox", {
+        name: "Approval policy",
+      });
+      const view = EditorView.findFromDOM(editor);
+      if (view === null) throw new Error("no approval policy editor");
+      expect(view.state.readOnly).toBe(false);
+      expect(
+        screen.getByRole("button", { name: "Reset to default" }),
+      ).toBeTruthy();
+      await userEvent.click(screen.getByRole("tab", { name: "Preview" }));
+      expect(await screen.findByText("Allow reads")).toBeTruthy();
+      await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
+
+      act(() => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "Ask first" },
+        });
+      });
+      const save = screen.getByRole("button", { name: "Save" });
+      expect(save.hasAttribute("disabled")).toBe(false);
+      await userEvent.click(save);
+
+      expect(harness.paramsOf("environment.configuration.policy.put")).toEqual([
+        { environmentId: "env-a", body: "Ask first", policyVersion: "3" },
+      ]);
+    },
+  );
+
+  it("keeps an unrecognized team role read-only", async () => {
+    const harness = mountTeamPage(
+      { ...poolSource("viewer"), effectiveRole: null },
+      {
+        "environment.configuration.items": () => ({
+          items: [policy(3, "Allow reads")],
+        }),
+        "environment.members": () => members,
+      },
+    );
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(await screen.findByText("Admins change this: Ada.")).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Approval policy" }).textContent,
+    ).toContain("Allow reads");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reset to default" }),
+    ).toBeNull();
+    expect(harness.paramsOf("environment.configuration.policy.put")).toEqual(
+      [],
+    );
   });
 
   it("draws the page's regions below the policy", async () => {
