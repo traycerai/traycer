@@ -24,6 +24,8 @@
  * picker offers it and the selection authority never chooses it.
  */
 
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+
 export type HostKind = "local" | "remote" | "mock" | "pool";
 
 /**
@@ -120,6 +122,13 @@ export interface HostDirectoryEntry {
   readonly websocketUrl: string | null;
   readonly version: string | null;
   readonly transportDialability: HostTransportDialability;
+  /** The registry's owner, independent of how this client reaches the host. */
+  readonly owner?: HostOwnerPrincipal | null;
+}
+
+export interface LocalHostDirectoryEntry extends HostDirectoryEntry {
+  readonly kind: "local";
+  readonly owner: HostOwnerPrincipal | null;
 }
 
 /** A directory entry for the server pool. See {@link poolHostDirectoryEntry}. */

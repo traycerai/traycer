@@ -4,6 +4,7 @@ import {
   poolHostDirectoryEntry,
   POOL_HOST_ID,
   type HostDirectoryEntry,
+  type LocalHostDirectoryEntry,
   type PoolHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import { hostDirectoryEntryEquals } from "@traycer-clients/shared/host-client/host-connection-registry";
@@ -158,7 +159,7 @@ export class HostDirectoryService implements IHostDirectoryService {
   private readonly authContextId: () => string | null;
   private readonly credentialGeneration: () => number;
   private readonly localHostIdSeeder: () => Promise<string | null>;
-  private localEntry: HostDirectoryEntry | null = null;
+  private localEntry: LocalHostDirectoryEntry | null = null;
   /**
    * The hostId this MACHINE's local host last published.
    *
@@ -635,8 +636,14 @@ export class HostDirectoryService implements IHostDirectoryService {
     return null;
   }
 
-  getLocalEntry(): HostDirectoryEntry | null {
-    return this.localEntry;
+  getLocalEntry(): LocalHostDirectoryEntry | null {
+    const local = this.localEntry;
+    if (local === null) return null;
+    // The process snapshot proves locality; only the registry names its owner.
+    const twin = this.remoteEntries.find(
+      (entry) => entry.hostId === local.hostId,
+    );
+    return { ...local, owner: twin?.owner ?? null };
   }
 
   /**
@@ -661,8 +668,9 @@ export class HostDirectoryService implements IHostDirectoryService {
    * merged directory, answered in one place - for the surfaces that ask it.
    */
   getDefaultEntry(): HostDirectoryEntry | null {
-    if (this.localEntry !== null) {
-      return this.localEntry;
+    const local = this.getLocalEntry();
+    if (local !== null) {
+      return local;
     }
     const entries = this.snapshot();
     if (entries.length === 1) {
@@ -1357,9 +1365,10 @@ export class HostDirectoryService implements IHostDirectoryService {
   private snapshot(): readonly HostDirectoryEntry[] {
     const entries: HostDirectoryEntry[] = [];
     const seenHostIds = new Set<string>();
-    if (this.localEntry !== null) {
-      entries.push(this.localEntry);
-      seenHostIds.add(this.localEntry.hostId);
+    const local = this.getLocalEntry();
+    if (local !== null) {
+      entries.push(local);
+      seenHostIds.add(local.hostId);
     }
     for (const entry of this.remoteEntries) {
       if (seenHostIds.has(entry.hostId)) {
@@ -1385,7 +1394,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     const snapshot = this.snapshot();
     this.lastEmittedSnapshot = snapshot;
     for (const listener of this.listeners) {
-      listener(snapshot, this.localEntry);
+      listener(snapshot, this.getLocalEntry());
     }
   }
 
@@ -1495,11 +1504,12 @@ function hostDirectorySnapshotsEqual(
  * `host-starting`, the same verdict the empty directory has produced since
  * 2026-07-14 for the same "not published yet" reason.
  */
-function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
+function bootingLocalEntry(twin: HostDirectoryEntry): LocalHostDirectoryEntry {
   return {
     hostId: twin.hostId,
     label: twin.label,
     kind: "local",
+    owner: twin.owner ?? null,
     websocketUrl: null,
     version: twin.version,
     transportDialability: "not-dialable",
@@ -1514,7 +1524,7 @@ function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
  */
 function toLocalEntry(
   snapshot: LocalHostSnapshot | null,
-): HostDirectoryEntry | null {
+): LocalHostDirectoryEntry | null {
   if (snapshot === null) {
     return null;
   }
@@ -1522,6 +1532,7 @@ function toLocalEntry(
     hostId: snapshot.hostId,
     label: snapshot.displayName,
     kind: "local",
+    owner: null,
     websocketUrl: snapshot.websocketUrl,
     version: snapshot.version,
     // Projected from the shell, never assumed. This is the ONE place a

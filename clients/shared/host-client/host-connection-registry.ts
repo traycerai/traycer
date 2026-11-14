@@ -487,7 +487,7 @@ export function hostDirectoryEntryEquals(
     // A host with a populated cache and nobody holding it is exactly the case
     // this module cannot see.
     remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
-    remoteOwnerKeyOf(a) === remoteOwnerKeyOf(b) &&
+    hostOwnerKeyOf(a) === hostOwnerKeyOf(b) &&
     // A sandbox's lifecycle moves with its connectivity mostly, not always (a
     // frozen flag set on an already-suspended row moves nothing else), and a
     // tab deciding whether its open wakes the sandbox must hear the move.
@@ -495,8 +495,8 @@ export function hostDirectoryEntryEquals(
   );
 }
 
-function remoteOwnerKeyOf(entry: HostDirectoryEntry): string | null {
-  if (!isRemoteHostDirectoryEntry(entry) || entry.owner == null) return null;
+function hostOwnerKeyOf(entry: HostDirectoryEntry): string | null {
+  if (entry.owner == null) return null;
   const owner = entry.owner;
   return JSON.stringify([
     owner.kind,

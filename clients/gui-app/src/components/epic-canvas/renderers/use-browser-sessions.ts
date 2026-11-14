@@ -201,6 +201,7 @@ export function jarBridgeForHost(
   browserView: BrowserViewBridge | null,
   hostEntry: HostDirectoryEntry | null,
 ): BrowserViewBridge | null {
+  if (hostEntry?.owner?.kind === "team") return null;
   if (
     hostEntry !== null &&
     isRemoteHostDirectoryEntry(hostEntry) &&

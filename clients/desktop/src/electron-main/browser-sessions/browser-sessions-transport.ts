@@ -15,7 +15,10 @@ import {
   hostTokenRevalidator,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type {
+  HostDirectoryEntry,
+  LocalHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   fetchRegisteredHostsViaHttp,
@@ -202,13 +205,14 @@ export function createBrowserSessionsHostDirectory(
     return started;
   };
 
-  const localEntryFor = (hostId: string): HostDirectoryEntry | null => {
+  const localEntryFor = (hostId: string): LocalHostDirectoryEntry | null => {
     const local = deps.localHost();
     if (local === null || local.hostId !== hostId) return null;
     return {
       hostId,
       label: hostId,
       kind: "local",
+      owner: cachedRemote.get(hostId)?.owner ?? null,
       websocketUrl: local.websocketUrl,
       version: local.version,
       transportDialability: "dialable",
@@ -239,7 +243,10 @@ export function createBrowserSessionsHostDirectory(
     },
     resolve: async (hostId) => {
       const local = localEntryFor(hostId);
-      if (local !== null) return local;
+      if (local !== null) {
+        if (!cachedRemote.has(hostId)) await refreshOnce();
+        return localEntryFor(hostId);
+      }
       const cached = cachedRemote.get(hostId);
       if (cached !== undefined) return cached;
       await refreshOnce();
@@ -253,10 +260,9 @@ export function browserSessionsOwnerKey(
   entry: HostDirectoryEntry | null,
 ): string | null {
   if (entry === null) return null;
-  if (!isRemoteHostDirectoryEntry(entry))
-    return JSON.stringify([entry.kind, entry.hostId]);
   return JSON.stringify([
     entry.kind,
+    entry.hostId,
     entry.owner?.kind ?? null,
     entry.owner?.id ?? null,
   ]);
@@ -410,6 +416,7 @@ function jarTransportLane(target: HostDirectoryEntry):
       readonly entry: RemoteHostDirectoryEntry;
     }
   | null {
+  if (target.owner?.kind === "team") return null;
   if (target.kind === "local") {
     return { kind: "local" };
   }

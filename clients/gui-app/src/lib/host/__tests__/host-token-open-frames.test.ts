@@ -240,7 +240,7 @@ describe("local stream host-token open frame", () => {
   it("admits a member's first team-computer open with no cover and one authn mint", async () => {
     const provider = newProvider();
     signIn(provider, USER_A, SIGN_IN_TOKEN);
-    const entry = {
+    const entry: HostDirectoryEntry & { readonly owner: HostOwnerPrincipal } = {
       ...mockLocalHostEntry,
       hostId: "local-first-team-computer",
       owner: { kind: "team", id: "team-a", name: "Alpha" },
