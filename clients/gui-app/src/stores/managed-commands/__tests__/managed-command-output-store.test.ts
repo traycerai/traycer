@@ -78,7 +78,7 @@ function harness(): Harness {
   const sent: ManagedCommandSubscribeOutputClientFrame[] = [];
   let resnapshotCalls = 0;
   const handle = createManagedCommandOutputStore({
-    epicId: "epic-1",
+    target: { kind: "epic", epicId: "epic-1" },
     commandId: "cmd-1",
     streamClientFactory: (_epicId, _commandId, callbacks) => {
       captured = callbacks;

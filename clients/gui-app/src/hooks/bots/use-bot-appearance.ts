@@ -5,6 +5,11 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { HomeBotsModel } from "@/lib/home-bots/bots-model";
 import { botColorAt } from "@/lib/providers/profile-accent-color";
+import {
+  NO_BOT_LOOK_SAVE,
+  partsOf,
+  useBotLookSaveStore,
+} from "@/stores/bots/bot-look-save-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 /**
@@ -47,6 +52,14 @@ export function botLooksOf(
   };
 }
 
+const NO_LOOK: BotAppearance = {
+  mark: null,
+  color: null,
+  background: null,
+  eyewear: null,
+  accessory: null,
+};
+
 /** The directory's own row, so an unchanged directory selects the same value. */
 function directoryRow(
   model: HomeBotsModel,
@@ -62,15 +75,20 @@ function directoryRow(
 /**
  * What a bot's picture is drawn from: the surface's list first, else the
  * app's directory. `null` when neither names its look, which draws every
- * choice at its default.
+ * choice at its default. A part chosen in the bot's settings and not yet
+ * answered is drawn as chosen, over both.
  */
 export function useBotLook(botId: string): BotAppearance | null {
   const surface = use(BotLooksContext)?.appearances.get(botId) ?? null;
   const row = useStandaloneBotsStore((state) =>
     directoryRow(state.directory.model, botId),
   );
-  if (surface !== null) return surface;
-  return row?.appearance ?? null;
+  const chosen = useBotLookSaveStore(
+    (state) => (state.saves[botId] ?? NO_BOT_LOOK_SAVE).chosen,
+  );
+  const held = surface ?? row?.appearance ?? null;
+  if (partsOf(chosen).length === 0) return held;
+  return { ...(held ?? NO_LOOK), ...chosen };
 }
 
 /**
@@ -99,7 +117,7 @@ const CHANNEL_TINT_CLASS = "bg-(--channel-tint)/10";
  * index), its class and its colour (as `--channel-tint`), each `undefined`
  * while the channel keeps the page's own.
  */
-export interface ChannelBackground {
+interface ChannelBackground {
   readonly index: number | undefined;
   readonly className: string | undefined;
   readonly color: string | undefined;

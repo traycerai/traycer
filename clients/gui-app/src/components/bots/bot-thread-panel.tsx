@@ -1,5 +1,4 @@
 import {
-  use,
   useCallback,
   useEffect,
   useMemo,
@@ -17,7 +16,6 @@ import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
-import { BotTranscriptFlowAllShownContext } from "@/components/bots/bot-transcript-flow-context";
 import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
@@ -133,8 +131,7 @@ export type BotThreadPanelThread =
  * Where a thread's post, replies and box are drawn: in the panel beside the
  * channel, which scrolls them in the pane, or as a card on the Threads page
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
- * card's reply count, drawn while it folds replies away, opens the thread in
- * its channel's panel (`onOpenThread`), its post's time shows the post in the channel
+ * card's post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
  * in full), and the reply its reading would acknowledge is marked
  * (`readMark`, `null` for none).
@@ -144,7 +141,6 @@ export type BotThreadLayout =
   | {
       readonly kind: "card";
       readonly fold: BotTranscriptFold | null;
-      readonly onOpenThread: () => void;
       readonly onShowPost: () => void;
       readonly readMark: BotTranscriptMark | null;
     };
@@ -260,14 +256,6 @@ export function BotThreadPanel(props: {
           </span>
         </div>
         <div hidden={focusLayout} className="contents">
-          {threadId === null ? null : (
-            <BotThreadFollowControl
-              botId={props.botId}
-              hostId={props.hostId}
-              threadId={threadId}
-              postedByViewer={postedByViewer}
-            />
-          )}
           {thread === null ? null : (
             <Button
               type="button"
@@ -285,6 +273,14 @@ export function BotThreadPanel(props: {
             >
               Thread session
             </Button>
+          )}
+          {threadId === null ? null : (
+            <BotThreadFollowControl
+              botId={props.botId}
+              hostId={props.hostId}
+              threadId={threadId}
+              postedByViewer={postedByViewer}
+            />
           )}
         </div>
         <Button
@@ -1079,8 +1075,7 @@ function KnownThread(
   const replyCount = listed?.replyCount ?? 0;
   const hasReplies = replyCount > 0;
   const replies = replyCount === 1 ? "1 reply" : `${replyCount} replies`;
-  // A card's count opens the thread in its channel's panel.
-  const openThread = layout.kind === "card" ? layout.onOpenThread : null;
+  const onCard = layout.kind === "card";
   const listHeader = useMemo(
     () =>
       hasReplies ? (
@@ -1095,10 +1090,10 @@ function KnownThread(
           >
             {origin}
           </div>
-          <ThreadReplyCount replies={replies} onOpenThread={openThread} />
+          <ThreadReplyCount replies={replies} onCard={onCard} />
         </>
       ) : null,
-    [hasReplies, openThread, openingHighlighted, openingRef, origin, replies],
+    [hasReplies, onCard, openingHighlighted, openingRef, origin, replies],
   );
   const flow = useMemo(
     () =>
@@ -1151,18 +1146,16 @@ function KnownThread(
 }
 
 /**
- * The line between a thread's post and its replies: how many replies it has,
- * which on a card opens the thread in its channel's panel (`onOpenThread`).
- * Where the flow under it draws every reply, the line says nothing the
- * replies do not, so only assistive technology is told the count.
+ * How many replies a thread has, between its post and them: a line in the
+ * panel, and on a card, where the replies under it say as much, for
+ * assistive technology alone.
  */
 function ThreadReplyCount(props: {
   readonly replies: string;
-  readonly onOpenThread: (() => void) | null;
+  readonly onCard: boolean;
 }): ReactNode {
-  const { replies, onOpenThread } = props;
-  const allShown = use(BotTranscriptFlowAllShownContext);
-  if (allShown) {
+  const { replies, onCard } = props;
+  if (onCard) {
     return (
       <span className="sr-only" data-testid="bot-thread-reply-count-sr">
         {replies}
@@ -1174,19 +1167,7 @@ function ThreadReplyCount(props: {
       className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
       data-testid="bot-thread-reply-count"
     >
-      {onOpenThread === null ? (
-        <span className="shrink-0">{replies}</span>
-      ) : (
-        <Button
-          type="button"
-          variant="link"
-          size="inline-xs"
-          data-testid="bot-thread-reply-count-open"
-          onClick={onOpenThread}
-        >
-          {replies}
-        </Button>
-      )}
+      <span className="shrink-0">{replies}</span>
       <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
     </div>
   );

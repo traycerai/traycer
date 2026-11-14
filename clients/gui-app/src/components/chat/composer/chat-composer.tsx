@@ -40,6 +40,7 @@ import {
   useComposerFileRoute,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
 import {
   containsFileAttachments,
   containsPendingFileAttachment,
@@ -565,6 +566,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
     putFileBlob,
     settleDraft: settleDraftFile,
   });
+  // A typed path is read where the turn runs, which for a resting sandbox's
+  // chat is the sandbox, not the tab's host.
+  const pathsReachTarget = useTypedPathsReach(
+    resting ? restingSandbox.sandbox.hostId : tabHostId,
+  );
   const guideRef = useRef<HTMLDivElement | null>(null);
   const submitWithGuide = useFirstTaskSubmit(
     onSubmitMessage,
@@ -894,12 +900,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isResolvingFilePaths,
     isAttachingFiles,
     runPendingImageJob,
-  } = useComposerHashPaste(
-    editorRef,
-    runnerHost.fileDrops,
-    resolvedMentionRoots,
+  } = useComposerHashPaste(editorRef, {
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots: resolvedMentionRoots,
     fileRoute,
-  );
+    pathsReachTarget,
+  });
   // The rich-clipboard channel and the mount-time restart. A file paste is
   // already hashed before insertion; these two cover the HTML paste (whose
   // nodes must keep their positions, so they go in with bytes and flip in

@@ -369,7 +369,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // are the configuration's, whichever computer the agent runs on.
   {
     id: "agent-memories",
-    label: "Agent memories",
+    label: "Memories",
     icon: BrainCircuit,
     group: "personal",
   },
