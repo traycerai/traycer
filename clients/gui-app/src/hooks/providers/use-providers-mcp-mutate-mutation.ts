@@ -10,6 +10,10 @@ import type {
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import {
+  sendFollowedSave,
+  useSettingsSave,
+} from "@/hooks/environment/use-settings-save";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isProviderNativeRpcError,
@@ -20,6 +24,8 @@ import {
 import { providersMutationKeys } from "@/lib/query-keys";
 import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+
+const SAVED_KINDS = ["mcp_server"] as const;
 
 // Count only mutation completions, including writes that structural sharing
 // makes referentially identical. Keep this out of shared list data and let the
@@ -97,6 +103,7 @@ export function useProvidersMcpMutate(): UseMutationResult<
   // What this installs can run on the host, so it carries the grant; the host
   // no longer reads it on a remove or a tool toggle, which are sent without.
   const grant = useExecutableWriteGrant();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
   return useMutation<
     McpMutateResult,
     HostRpcError,
@@ -141,12 +148,17 @@ export function useProvidersMcpMutate(): UseMutationResult<
           mutation: variables.mutation,
         },
       };
-      const response = await client.request(
-        "providers.nativeMutate",
+      const sent =
         variables.mutation.action === "remove" ||
-          variables.mutation.action === "toggleTool"
+        variables.mutation.action === "toggleTool"
           ? request
-          : await grant(request, client),
+          : await grant(request, client);
+      const response = await sendFollowedSave(
+        await prepareSave(
+          { method: "providers.nativeMutate", request: sent },
+          hostId,
+        ),
+        () => client.request("providers.nativeMutate", sent),
       );
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
     },

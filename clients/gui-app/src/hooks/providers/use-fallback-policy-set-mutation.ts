@@ -13,6 +13,9 @@ import {
   providersMutationKeys,
 } from "@/lib/query-keys";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+
+const SAVED_KINDS = ["fallback_policy"] as const;
 
 interface FallbackPolicySaveContext {
   readonly hostId: string | null;
@@ -41,6 +44,7 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
   const client = useHostClient();
   const queryClient = useQueryClient();
   const requesterHostId = useRequesterHostId(client);
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
   return useHostMutation<
     HostRpcRegistry,
     "providers.fallbackPolicy.set",
@@ -49,6 +53,11 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
     client,
     method: "providers.fallbackPolicy.set",
     mapVariables: (variables) => variables,
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "providers.fallbackPolicy.set", request },
+        sentOn.getActiveHostId(),
+      ),
     options: {
       mutationKey: providersMutationKeys.setFallbackPolicy(),
       // Shared with the restore and reset hooks beside this one - see

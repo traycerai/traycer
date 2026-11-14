@@ -40,6 +40,7 @@ import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form
 import { CommandPaletteProvider } from "@/providers/command-palette-provider";
 import { HostCredentialProvisionProvider } from "@/providers/host-credential-provision-provider";
 import { ComposerRunSettingsPersistLifecycleBridge } from "@/providers/composer-run-settings-persist-lifecycle-bridge";
+import { SettingsSaveCoordinatorProvider } from "@/providers/settings-save-coordinator-provider";
 import { SurfaceHostSelectionPersistLifecycleBridge } from "@/providers/surface-host-selection-persist-lifecycle-bridge";
 import { GithubMentionFiltersPersistLifecycleBridge } from "@/providers/github-mention-filters-persist-lifecycle-bridge";
 import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/composer-harness-memory-persist-lifecycle-bridge";
@@ -289,61 +290,63 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
           <HostTrustAlertBridge />
           <HostCredentialProvisionProvider>
             <EpicSessionLifecycleBridge>
-              <ComposerRunSettingsPersistLifecycleBridge>
-                <SurfaceHostSelectionPersistLifecycleBridge>
-                  <GithubMentionFiltersPersistLifecycleBridge>
-                    <ComposerHarnessMemoryPersistLifecycleBridge>
-                      <WorktreeIntentMemoryPersistLifecycleBridge>
-                        <WorktreeIntentStagingPersistLifecycleBridge>
-                          <EpicCanvasPersistLifecycleBridge>
-                            <LandingTerminalPersistLifecycleBridge>
-                              <LandingTerminalTombstoneRecoveryBridge />
-                              <EpicSessionControllerBridge />
-                              <EpicTabExistenceReconciler />
-                              <PoolSessionMount />
-                              <PendingSandboxSendsDriver />
-                              <ViewReplicaLifecycleMount />
-                              <HistoryLocalContributionMount />
-                              <HostStreamProvider>
-                                <HostScopeReady scope="default-host">
-                                  <WorktreeChangedStreamMount />
-                                  <ProvidersChangedStreamMount />
-                                  <ChatRecordsStreamMount />
-                                  <LandingDraftMirrorMount />
-                                </HostScopeReady>
-                                {/* Outside the default-host gate: a read stranded on
+              <SettingsSaveCoordinatorProvider>
+                <ComposerRunSettingsPersistLifecycleBridge>
+                  <SurfaceHostSelectionPersistLifecycleBridge>
+                    <GithubMentionFiltersPersistLifecycleBridge>
+                      <ComposerHarnessMemoryPersistLifecycleBridge>
+                        <WorktreeIntentMemoryPersistLifecycleBridge>
+                          <WorktreeIntentStagingPersistLifecycleBridge>
+                            <EpicCanvasPersistLifecycleBridge>
+                              <LandingTerminalPersistLifecycleBridge>
+                                <LandingTerminalTombstoneRecoveryBridge />
+                                <EpicSessionControllerBridge />
+                                <EpicTabExistenceReconciler />
+                                <PoolSessionMount />
+                                <PendingSandboxSendsDriver />
+                                <ViewReplicaLifecycleMount />
+                                <HistoryLocalContributionMount />
+                                <HostStreamProvider>
+                                  <HostScopeReady scope="default-host">
+                                    <WorktreeChangedStreamMount />
+                                    <ProvidersChangedStreamMount />
+                                    <ChatRecordsStreamMount />
+                                    <LandingDraftMirrorMount />
+                                  </HostScopeReady>
+                                  {/* Outside the default-host gate: a read stranded on
                                   any host, a remote one included, rings that host's
                                   own doorbell. */}
-                                <CloudRecoveryDoorbellMount />
-                                {/* Above the shell split on purpose: the onboarding tour
+                                  <CloudRecoveryDoorbellMount />
+                                  {/* Above the shell split on purpose: the onboarding tour
                                   renders through `StandaloneShell`, not `AppShell`, so a
                                   mount inside the app shell left the tour's Import button
                                   with no run handle to call. This is the lowest node both
                                   shells share that still has the host stream. */}
-                                <SessionImportRunController />
-                                <EnvironmentArmScopeMount />
-                                <AppLocalNotificationsPersistLifecycleBridge>
-                                  <ReadingPositionPersistLifecycleBridge>
-                                    <NotificationsSessionProvider
-                                      navigate={props.router.navigate}
-                                    >
-                                      <ChatServingWitnessProvider>
-                                        <TraycerAppRuntimeSurface
-                                          router={props.router}
-                                        />
-                                      </ChatServingWitnessProvider>
-                                    </NotificationsSessionProvider>
-                                  </ReadingPositionPersistLifecycleBridge>
-                                </AppLocalNotificationsPersistLifecycleBridge>
-                              </HostStreamProvider>
-                            </LandingTerminalPersistLifecycleBridge>
-                          </EpicCanvasPersistLifecycleBridge>
-                        </WorktreeIntentStagingPersistLifecycleBridge>
-                      </WorktreeIntentMemoryPersistLifecycleBridge>
-                    </ComposerHarnessMemoryPersistLifecycleBridge>
-                  </GithubMentionFiltersPersistLifecycleBridge>
-                </SurfaceHostSelectionPersistLifecycleBridge>
-              </ComposerRunSettingsPersistLifecycleBridge>
+                                  <SessionImportRunController />
+                                  <EnvironmentArmScopeMount />
+                                  <AppLocalNotificationsPersistLifecycleBridge>
+                                    <ReadingPositionPersistLifecycleBridge>
+                                      <NotificationsSessionProvider
+                                        navigate={props.router.navigate}
+                                      >
+                                        <ChatServingWitnessProvider>
+                                          <TraycerAppRuntimeSurface
+                                            router={props.router}
+                                          />
+                                        </ChatServingWitnessProvider>
+                                      </NotificationsSessionProvider>
+                                    </ReadingPositionPersistLifecycleBridge>
+                                  </AppLocalNotificationsPersistLifecycleBridge>
+                                </HostStreamProvider>
+                              </LandingTerminalPersistLifecycleBridge>
+                            </EpicCanvasPersistLifecycleBridge>
+                          </WorktreeIntentStagingPersistLifecycleBridge>
+                        </WorktreeIntentMemoryPersistLifecycleBridge>
+                      </ComposerHarnessMemoryPersistLifecycleBridge>
+                    </GithubMentionFiltersPersistLifecycleBridge>
+                  </SurfaceHostSelectionPersistLifecycleBridge>
+                </ComposerRunSettingsPersistLifecycleBridge>
+              </SettingsSaveCoordinatorProvider>
             </EpicSessionLifecycleBridge>
           </HostCredentialProvisionProvider>
         </WindowsBridgeAuthSessionBridge>
