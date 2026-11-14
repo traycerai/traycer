@@ -34,6 +34,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
+import { ProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers-workspace-selection-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
@@ -496,6 +497,35 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     expect(screen.queryByText("No MCP servers")).toBeNull();
     expect(screen.queryByText("Loading MCP servers")).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  });
+
+  it("renders the unsupported-action copy for a promote-only v1.5 list refusal", async () => {
+    const fixture = createFixture();
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "pending",
+      promise: Promise.resolve({
+        providers: [],
+        native: { ok: false, code: "needs_connection", detail: null },
+      }),
+    });
+    renderTab(fixture, "codex");
+
+    expect(
+      await screen.findByText(
+        "This action is not supported for this provider.",
+      ),
+    ).toBeDefined();
+    const query = fixture.queryClient.getQueryCache().find({
+      queryKey: providersNativeQueryKeys.mcpList(HOST_A, {
+        providerId: "codex",
+        scope: GLOBAL,
+        workspaceRoot: null,
+      }),
+    });
+    expect(query?.state.error).toBeInstanceOf(ProviderNativeRpcError);
+    expect(query?.state.error).toMatchObject({
+      nativeCode: "unsupported_action",
+    });
   });
 
   it("disables Retry while a retry is pending, then replaces rows and clears stale state on success", async () => {
