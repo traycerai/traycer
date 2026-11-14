@@ -71,6 +71,7 @@ import {
   environmentMembersRemoveV10,
   environmentMembersSetRoleV10,
   environmentMembersV10,
+  environmentPreviewLocalFactsV10,
   environmentSetMainBotV10,
   type EnvironmentMembersResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
@@ -1394,6 +1395,20 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     badRequest: { environmentId: "" },
     response: { seats: { used: 4, total: 5 } },
     badResponse: { seats: { used: -1, total: 5 } },
+  },
+  {
+    method: "environment.previewLocalFacts",
+    contract: environmentPreviewLocalFactsV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      subject: { kind: "computer" },
+    },
+    badRequest: {
+      environmentId: TEAM.environmentId,
+      subject: { kind: "host" },
+    },
+    response: { activeTurns: 3, terminals: 1 },
+    badResponse: { activeTurns: -1, terminals: null },
   },
   {
     method: "environment.invitations.list",
