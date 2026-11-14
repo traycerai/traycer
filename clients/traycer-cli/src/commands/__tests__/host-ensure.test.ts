@@ -9,7 +9,7 @@ import {
   LegacyTeamHost,
   LEGACY_TEAM,
 } from "../../host/__tests__/legacy-team-host";
-import { CLI_ERROR_CODES } from "../../runner/errors";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `traycer host ensure` is the desktop's idempotent post-auth
@@ -61,6 +61,8 @@ const mocks = vi.hoisted(() => ({
   credentialsPath: "",
   legacyHost: null as LegacyTeamHost | null,
   ensureHostMock: vi.fn(),
+  attendedTeamInstallMock: vi.fn(),
+  stagedTeamTokenMock: vi.fn(),
   runSignInPreflightMock: vi.fn(),
   maybeProvisionCredentialMock: vi.fn(),
   completeTeamInstallMock: vi.fn(),
@@ -121,6 +123,9 @@ vi.mock("../../host/team-install-token", async (importOriginal) => {
       mocks.callOrder.push("team-token-wait");
       return mocks.waitForTeamTokenInstallMock(...callArgs);
     },
+    withStagedTeamToken: (
+      ...callArgs: Parameters<typeof actual.withStagedTeamToken>
+    ) => mocks.stagedTeamTokenMock(...callArgs),
   };
 });
 
@@ -169,10 +174,9 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
       mocks.callOrder.push("credential-provision");
       return mocks.maybeProvisionCredentialMock(...callArgs);
     },
-    runTeamInstallAuthPreflight: async () => ({
-      preflight: await mocks.runSignInPreflightMock(),
-      inlineSignInToken: null,
-    }),
+    beginAttendedTeamInstall: (
+      ...callArgs: Parameters<typeof actual.beginAttendedTeamInstall>
+    ) => mocks.attendedTeamInstallMock(...callArgs),
     completeTeamInstall: (
       ...callArgs: Parameters<typeof actual.completeTeamInstall>
     ) => mocks.completeTeamInstallMock(...callArgs),
@@ -304,6 +308,16 @@ describe("buildHostEnsureCommand", () => {
     mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
     mocks.ensureHostMock.mockResolvedValue(baseEnsureResult({}));
     mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
+    mocks.attendedTeamInstallMock.mockResolvedValue({
+      kind: "give",
+      session: { preflight: signedInPreflight(), inlineSignInToken: null },
+    });
+    mocks.stagedTeamTokenMock.mockImplementation(
+      async (_environment, _token, environmentId, run) => {
+        mocks.callOrder.push("team-token-stage");
+        return run({ environmentId, tokenHash: "d".repeat(64) });
+      },
+    );
     mocks.teamTokenPreparationMock.mockResolvedValue(null);
     mocks.waitForTeamTokenInstallMock.mockResolvedValue({
       hostId: "host-local",
@@ -312,6 +326,7 @@ describe("buildHostEnsureCommand", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.resetAllMocks();
     mocks.callOrder = [];
   });
@@ -339,6 +354,8 @@ describe("buildHostEnsureCommand", () => {
     );
 
     expect(result.data).toMatchObject({ teamBinding: teamBindingFixture });
+    expect(result.human).toContain("belongs to acme");
+    expect(result.human).not.toContain("belongs to Acme");
 
     expect(mocks.completeTeamInstallMock).toHaveBeenCalledWith(
       "acme",
@@ -348,6 +365,99 @@ describe("buildHostEnsureCommand", () => {
       }),
       ctx.progress,
     );
+  });
+
+  it("stages the attended token before ensure starts and waits for enrolment without provisioning or transfer", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        urls.push(String(input));
+        return new Response("", { status: 404 });
+      }),
+    );
+    mocks.attendedTeamInstallMock.mockResolvedValue({
+      kind: "enrol",
+      session: { preflight: signedInPreflight(), inlineSignInToken: null },
+      slug: "acme",
+      token: "attended-install-token",
+      environmentId: "resolved-environment-acme",
+    });
+    const prepared = {
+      environmentId: "resolved-environment-acme",
+      tokenHash: "d".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    mocks.stagedTeamTokenMock.mockImplementation(
+      async (_environment, token, environmentId, run) => {
+        mocks.callOrder.push("team-token-stage");
+        expect(token).toBe("attended-install-token");
+        expect(environmentId).toBe("resolved-environment-acme");
+        try {
+          return await run(prepared);
+        } finally {
+          mocks.callOrder.push("team-token-finished");
+        }
+      },
+    );
+    const receipt = {
+      hostId: "host-local",
+      environmentId: "resolved-environment-acme",
+    };
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({
+        action: "started",
+        serviceLifecycle: lifecycle({ postSwapAction: "start" }),
+        postSwapError: null,
+      }),
+    );
+
+    const result = await buildHostEnsureCommand(
+      baseArgs({ team: "team/acme" }),
+    )(fakeCtx());
+
+    expect(mocks.callOrder).toEqual([
+      "team-token-prepare",
+      "team-token-stage",
+      "ensure-enter",
+      "ensure-exit",
+      "team-token-wait",
+      "team-token-finished",
+    ]);
+    expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
+      "production",
+      prepared,
+      60_000,
+    );
+    expect(result.human).toContain("This computer belongs to acme.");
+    expect(result.data).toMatchObject({ teamInstallReceipt: receipt });
+    expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+    expect(urls).toEqual([]);
+  });
+
+  it("does not ensure or stage files when authn rejects a non-member", async () => {
+    mocks.attendedTeamInstallMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message:
+          "Enter the slug of a team you belong to, as shown in its dashboard address.",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+
+    await expect(
+      buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "Enter the slug of a team you belong to, as shown in its dashboard address.",
+    });
+
+    expect(mocks.callOrder).toEqual(["team-token-prepare"]);
+    expect(mocks.stagedTeamTokenMock).not.toHaveBeenCalled();
+    expect(mocks.ensureHostMock).not.toHaveBeenCalled();
   });
 
   it("the CLI does not send a team target to a host that cannot transfer", async () => {
@@ -377,7 +487,7 @@ describe("buildHostEnsureCommand", () => {
       const token = "inline-team-token";
       const ctx = fakeCtx();
       const preflight = vi
-        .spyOn(installAuthModule, "runTeamInstallAuthPreflight")
+        .spyOn(installAuthModule, "beginAttendedTeamInstall")
         .mockImplementation(async () => {
           await writeCredentialsFile(
             mocks.credentialsPath,
@@ -394,8 +504,11 @@ describe("buildHostEnsureCommand", () => {
             0,
           );
           return {
-            preflight: { state: "signed-in-inline", reason: null },
-            inlineSignInToken: token,
+            kind: "give",
+            session: {
+              preflight: { state: "signed-in-inline", reason: null },
+              inlineSignInToken: token,
+            },
           };
         });
       if (failure === "ensure")
@@ -466,9 +579,9 @@ describe("buildHostEnsureCommand", () => {
         postSwapError: null,
       }),
     );
-    const teamPreflight = vi.spyOn(
+    const attendedTeamInstall = vi.spyOn(
       installAuthModule,
-      "runTeamInstallAuthPreflight",
+      "beginAttendedTeamInstall",
     );
     const signInPreflight = vi.spyOn(installAuthModule, "runSignInPreflight");
 
@@ -488,7 +601,7 @@ describe("buildHostEnsureCommand", () => {
       prepared,
       60_000,
     );
-    expect(teamPreflight).not.toHaveBeenCalled();
+    expect(attendedTeamInstall).not.toHaveBeenCalled();
     expect(signInPreflight).not.toHaveBeenCalled();
     expect(mocks.runSignInPreflightMock).not.toHaveBeenCalled();
     expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();

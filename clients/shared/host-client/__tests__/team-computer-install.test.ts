@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mintTeamComputerInstallTokenViaHttp } from "../team-computer-install";
+import {
+  mintTeamComputerInstallTokenBySlugViaHttp,
+  mintTeamComputerInstallTokenViaHttp,
+} from "../team-computer-install";
 
 const AUTHN = "https://authn.example.test";
 const BEARER = "user-jwt-secret";
@@ -48,11 +51,64 @@ describe("mintTeamComputerInstallTokenViaHttp", () => {
     );
     expect(url).not.toContain("/bots/");
     expect(init?.method).toBe("POST");
+    expect(init?.redirect).toBe("manual");
     expect(new Headers(init?.headers).get("authorization")).toBe(
       `Bearer ${BEARER}`,
     );
     expect(new Headers(init?.headers).get("accept")).toBe("application/json");
     expect(init?.body).toBe(JSON.stringify({ environmentId: ENVIRONMENT_ID }));
+  });
+
+  it("accepts authn's resolved environment id when minting by team slug", async () => {
+    const resolvedEnvironmentId = "resolved-environment-acme";
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(201, {
+        token: INSTALL_TOKEN,
+        environmentId: resolvedEnvironmentId,
+        expiresAt: 1_800_000_000,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      mintTeamComputerInstallTokenBySlugViaHttp(AUTHN, BEARER, "acme"),
+    ).resolves.toEqual({
+      kind: "ok",
+      token: INSTALL_TOKEN,
+      environmentId: resolvedEnvironmentId,
+      expiresAt: 1_800_000_000,
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      "https://authn.example.test/api/v3/hosts/team-install-tokens",
+    );
+    expect(init?.body).toBe(JSON.stringify({ environmentId: "acme" }));
+    expect(init?.redirect).toBe("manual");
+  });
+
+  it("treats a redirect as a non-success without exposing its token", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(302, {
+          token: INSTALL_TOKEN,
+          environmentId: ENVIRONMENT_ID,
+          expiresAt: 1_800_000_000,
+        }),
+      ),
+    );
+
+    const result = await mintTeamComputerInstallTokenBySlugViaHttp(
+      AUTHN,
+      BEARER,
+      "acme",
+    );
+
+    expect(result).toEqual({
+      kind: "network-error",
+      detail: "the install-token request answered HTTP 302",
+    });
+    expect(JSON.stringify(result)).not.toContain(INSTALL_TOKEN);
   });
 
   it("rejects malformed or mismatched success bodies without exposing body secrets", async () => {

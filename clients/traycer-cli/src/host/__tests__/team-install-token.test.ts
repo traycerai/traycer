@@ -22,6 +22,7 @@ import type { Environment } from "../../runner/environment";
 import { hostTeamInstallTokenPath } from "../../store/paths";
 import {
   MAX_INSTALL_TOKEN_LENGTH,
+  withStagedTeamToken,
   withTeamTokenInstall,
   waitForTeamTokenInstall,
   type PreparedTeamTokenInstall,
@@ -352,6 +353,46 @@ describe("withTeamTokenInstall", () => {
     });
     expect(oldPipe.promptFlags).toEqual([false]);
     expect(newPipe.promptFlags).toEqual([false]);
+  });
+});
+
+describe("withStagedTeamToken", () => {
+  const environment: Environment = "production";
+  const resolvedEnvironmentId = "environment-resolved-from-acme";
+  const hostId = "0b6f6a3e-6f4c-4a0e-9d6e-0d7a4c1f2a11";
+
+  it("stages against authn's resolved id and accepts only its matching receipt", async () => {
+    const tokenHash = createHash("sha256").update(TOKEN).digest("hex");
+
+    await expect(
+      withStagedTeamToken(
+        environment,
+        TOKEN,
+        resolvedEnvironmentId,
+        async (prepared) => {
+          expect(prepared).toEqual({
+            environmentId: resolvedEnvironmentId,
+            tokenHash,
+          });
+          expect(
+            JSON.parse(
+              await readFile(hostTeamInstallTokenPath(environment), "utf8"),
+            ),
+          ).toEqual({ token: TOKEN, environmentId: resolvedEnvironmentId });
+
+          await writeFile(
+            identityFile(environment, "team-install-completed.json"),
+            JSON.stringify({
+              tokenHash,
+              environmentId: resolvedEnvironmentId,
+              hostId,
+            }),
+            { mode: 0o600 },
+          );
+          return waitForTeamTokenInstall(environment, prepared, 1_000);
+        },
+      ),
+    ).resolves.toEqual({ hostId, environmentId: resolvedEnvironmentId });
   });
 });
 

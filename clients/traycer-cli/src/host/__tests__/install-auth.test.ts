@@ -9,7 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -56,6 +56,8 @@ const mocks = vi.hoisted(() => ({
   probeHostHealthMock: vi.fn(),
   replacementMetadata: null as HostPidMetadata | null,
   credentialsPath: "",
+  enrollmentRecordPath: "",
+  mintTeamInstallTokenMock: vi.fn(),
   legacyHost: null as LegacyTeamHost | null,
 }));
 
@@ -119,8 +121,27 @@ vi.mock("../../store/paths", async (importOriginal) => {
   return {
     ...actual,
     cliCredentialsPath: () => mocks.credentialsPath,
+    hostEnrollmentRecordPath: () => mocks.enrollmentRecordPath,
   };
 });
+
+vi.mock(
+  "@traycer-clients/shared/host-client/team-computer-install",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/team-computer-install")
+      >();
+    return {
+      ...actual,
+      mintTeamComputerInstallTokenBySlugViaHttp: (
+        ...callArgs: Parameters<
+          typeof actual.mintTeamComputerInstallTokenBySlugViaHttp
+        >
+      ) => mocks.mintTeamInstallTokenMock(...callArgs),
+    };
+  },
+);
 
 vi.mock(
   "@traycer-clients/shared/host-client/host-ownership",
@@ -141,6 +162,7 @@ vi.mock(
 );
 
 import {
+  beginAttendedTeamInstall,
   completeTeamInstall,
   maybeProvisionCredential,
   warnIfTeamInstallSignInRemains,
@@ -349,6 +371,11 @@ describe("install auth helpers", () => {
     );
     caseCredentialsRoot = mkdtempSync(join(credentialsRoot, "case-"));
     mocks.credentialsPath = join(caseCredentialsRoot, "cli", "credentials");
+    mocks.enrollmentRecordPath = join(
+      caseCredentialsRoot,
+      "identity",
+      "enrollment.json",
+    );
     mocks.callHostRpcMock.mockImplementation((method: string) => {
       if (method === "environment.list") {
         return Promise.resolve({ environments: [teamEnvironment] });
@@ -373,12 +400,120 @@ describe("install auth helpers", () => {
       authnBaseUrl: "https://authn.test",
       userId: "member-1",
     });
+    mocks.mintTeamInstallTokenMock.mockResolvedValue({
+      kind: "ok",
+      token: "team-install-secret",
+      environmentId: "resolved-environment-acme",
+      expiresAt: 1_800_000_000,
+    });
     mocks.readHostOwnershipMock.mockResolvedValue(
       hostOwnership({ kind: "user", id: "member-1" }, "personal"),
     );
     mocks.provisionInstalledHostCredentialMock.mockResolvedValue({
       kind: "active",
       minted: true,
+    });
+  });
+
+  it("mints by slug and uses authn's resolved environment id when no enrollment record exists", async () => {
+    const result = await beginAttendedTeamInstall(fakeCtx(), "team/acme");
+
+    expect(result).toEqual({
+      kind: "enrol",
+      session: { preflight: signedIn(), inlineSignInToken: null },
+      slug: "acme",
+      token: "team-install-secret",
+      environmentId: "resolved-environment-acme",
+    });
+    expect(mocks.mintTeamInstallTokenMock).toHaveBeenCalledWith(
+      "https://authn.test",
+      "stored-bearer",
+      "acme",
+    );
+  });
+
+  it("takes the give path without minting when the enrollment record is present", async () => {
+    mkdirSync(join(caseCredentialsRoot, "identity"), { recursive: true });
+    writeFileSync(mocks.enrollmentRecordPath, "registered");
+
+    await expect(beginAttendedTeamInstall(fakeCtx(), "acme")).resolves.toEqual({
+      kind: "give",
+      session: { preflight: signedIn(), inlineSignInToken: null },
+    });
+    expect(mocks.mintTeamInstallTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("takes the give path without minting when the enrollment record cannot be read", async () => {
+    writeFileSync(join(caseCredentialsRoot, "identity"), "blocks-directory");
+
+    await expect(beginAttendedTeamInstall(fakeCtx(), "acme")).resolves.toEqual({
+      kind: "give",
+      session: { preflight: signedIn(), inlineSignInToken: null },
+    });
+    expect(mocks.mintTeamInstallTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("directs a non-member to use their team's dashboard slug", async () => {
+    mocks.mintTeamInstallTokenMock.mockResolvedValue({
+      kind: "refused",
+      status: 404,
+      code: "environment_not_found",
+    });
+
+    await expect(
+      beginAttendedTeamInstall(fakeCtx(), "acme"),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "Enter the slug of a team you belong to, as shown in its dashboard address.",
+    });
+    expect(mocks.mintTeamInstallTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks the person to sign in again when authn refuses the bearer", async () => {
+    mocks.mintTeamInstallTokenMock.mockResolvedValue({ kind: "unauthorized" });
+
+    await expect(
+      beginAttendedTeamInstall(fakeCtx(), "acme"),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: expect.stringContaining("Sign in with `traycer login`"),
+    });
+  });
+
+  it.each([
+    ["environment_action_forbidden", 403],
+    ["seat_without_write", 403],
+    ["broker_unavailable", 503],
+  ] as const)(
+    "keeps the generic no-install message for %s",
+    async (code, status) => {
+      mocks.mintTeamInstallTokenMock.mockResolvedValue({
+        kind: "refused",
+        status,
+        code,
+      });
+
+      await expect(
+        beginAttendedTeamInstall(fakeCtx(), "acme"),
+      ).rejects.toMatchObject({
+        message:
+          "The computer was not added to the team. No host files were installed.",
+      });
+    },
+  );
+
+  it("keeps the generic no-install message after a mint network error", async () => {
+    mocks.mintTeamInstallTokenMock.mockResolvedValue({
+      kind: "network-error",
+      detail: "safe detail",
+    });
+
+    await expect(
+      beginAttendedTeamInstall(fakeCtx(), "acme"),
+    ).rejects.toMatchObject({
+      message:
+        "The computer was not added to the team. No host files were installed.",
     });
   });
 
