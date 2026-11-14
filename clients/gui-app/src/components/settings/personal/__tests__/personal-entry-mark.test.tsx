@@ -31,6 +31,11 @@ vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
   }),
 }));
 
+// The person may change the environment the host serves.
+vi.mock("@/hooks/environment/use-served-environment-row", () => ({
+  useMayChangeServedEnvironment: () => true,
+}));
+
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
