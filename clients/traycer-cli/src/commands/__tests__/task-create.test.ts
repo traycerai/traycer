@@ -31,6 +31,15 @@ import {
 } from "../../store/task-create-keys";
 
 const keysDir = vi.hoisted(() => ({ current: "" }));
+const fetchMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: () => keysDir.current || actual.homedir(),
+  };
+});
 
 vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();
@@ -113,6 +122,13 @@ const AUTH = { token: "tok", authnBaseUrl: "https://authn.test", userId: "u1" };
 const ENDPOINT = { hostId: "host-1", websocketUrl: "ws://127.0.0.1:9/rpc" };
 const CREATED = { roomInfo: null, task: null, initialTurnStarted: false };
 
+function hostTokenResponse(token: string): Response {
+  return new Response(
+    JSON.stringify({ session_grant: token, session_grant_expires_in: 3600 }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
 function ctx(): CommandContext {
   return {
     runtime: {
@@ -191,10 +207,16 @@ beforeEach(async () => {
   authMock.mockResolvedValue(AUTH);
   endpointMock.mockResolvedValue(ENDPOINT);
   rpcMock.mockResolvedValue(CREATED);
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async () =>
+    hostTokenResponse(`task-host-token-${fetchMock.mock.calls.length}`),
+  );
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
   // A one-attempt send leaves a queued socket answer unread.
   socketRequest.mockReset();
@@ -650,32 +672,22 @@ describe("task create --idempotency-key", () => {
 });
 
 describe("task create: a refusal answered after an earlier send", () => {
-  it("keeps the intent when the send's first attempt may have committed and a retry is refused", async () => {
+  it("keeps the intent when a sent attempt may have committed, so a rerun sends nothing", async () => {
     const send = realSend.call;
     if (send === null) throw new Error("real send path not captured");
     rpcMock.mockImplementationOnce(send);
-    // Attempt A went out under the negotiated key and its answer was lost:
-    // the host may have committed the Task. A retry, if one is made, finds
-    // the host's store unavailable and answers the typed refusal as data.
-    socketRequest
-      .mockRejectedValueOnce(
-        new RetryableTransportError({
-          code: "RPC_ERROR",
-          message: "connection closed after the request was sent",
-          requestId: "req-a",
-          method: "epic.create",
-          fatalDetails: null,
-          replaySafetyFromKey: true,
-        }),
-      )
-      .mockResolvedValueOnce({
-        roomInfo: null,
-        refusal: {
-          kind: "local-store-unavailable",
-          message: "Another Traycer host holds this store.",
-          remedy: "Stop the other host, then try again.",
-        },
-      });
+    // The one attempt went out under the negotiated key and its answer was
+    // lost: the host may have committed the Task.
+    socketRequest.mockRejectedValueOnce(
+      new RetryableTransportError({
+        code: "RPC_ERROR",
+        message: "connection closed after the request was sent",
+        requestId: "req-a",
+        method: "epic.create",
+        fatalDetails: null,
+        replaySafetyFromKey: true,
+      }),
+    );
 
     await rejection(run({ idempotencyKey: "slot-1" }));
 
@@ -686,17 +698,33 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(written.state).toBe("intent");
     const retry = await rejection(run({ idempotencyKey: "slot-1" }));
     expect(retry.code).toBe(CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN);
+    expect(socketRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(storeRotate).not.toHaveBeenCalled();
   });
 
-  it("refreshes an expired sign-in the host refused before the request frame, and creates", async () => {
+  it("refreshes sign-in after a refused fresh host-token mint, then creates", async () => {
     const send = realSend.call;
     if (send === null) throw new Error("real send path not captured");
     rpcMock.mockImplementationOnce(send);
+    fetchMock
+      .mockResolvedValueOnce(hostTokenResponse("task-host-token-initial"))
+      .mockResolvedValueOnce(new Response("", { status: 401 }))
+      .mockResolvedValueOnce(
+        hostTokenResponse("task-host-token-after-refresh"),
+      );
     storeRotate.mockResolvedValueOnce({
       outcome: "applied",
-      credentials: { token: "tok-2" },
+      credentials: {
+        token: "tok-2",
+        refreshToken: "tok-2-refresh",
+        savedAt: "2026-01-01T00:00:00.000Z",
+        user: { id: "u1", email: "a@b.c", name: "A" },
+      },
     });
-    // The host refused the open frame's bearer: nothing was dispatched.
+    // The first host-only token is refused before the request frame. A fresh
+    // mint finds the sign-in expired, so it is refreshed once before minting
+    // the token used by the successful request.
     socketRequest
       .mockRejectedValueOnce(
         new HostRpcError({
@@ -709,6 +737,7 @@ describe("task create: a refusal answered after an earlier send", () => {
             reason: "bearer expired",
             incompatibleMethods: null,
             upgradeGuidance: null,
+            doorReason: "token_expired",
           },
         }),
       )
@@ -719,6 +748,7 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(result.data).toMatchObject({ alreadyCreated: false });
     expect(socketRequest).toHaveBeenCalledTimes(2);
     expect(storeRotate).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
@@ -726,17 +756,13 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(written.state).toBe("done");
   });
 
-  it("keeps the intent when a sent attempt ends UNAUTHORIZED, and sends nothing after a refreshed sign-in", async () => {
+  it("keeps the intent when a sent attempt ends UNAUTHORIZED, without refreshing or resending", async () => {
     const send = realSend.call;
     if (send === null) throw new Error("real send path not captured");
     rpcMock.mockImplementationOnce(send);
-    storeRotate.mockResolvedValueOnce({
-      outcome: "applied",
-      credentials: { token: "tok-2" },
-    });
+    fetchMock.mockResolvedValueOnce(hostTokenResponse("task-host-token"));
     // The session went fatal UNAUTHORIZED with the request pending, so the
-    // host may have committed the Task. A send after a refreshed sign-in
-    // would find the store unavailable and answer the typed refusal.
+    // host may have committed the Task. A second send could create a duplicate.
     const unauthorized = new HostRpcError({
       code: "UNAUTHORIZED",
       message: "session expired with the request pending",
@@ -759,6 +785,8 @@ describe("task create: a refusal answered after an earlier send", () => {
     const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
     expect(error.message).toContain(path);
     expect(socketRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(storeRotate).not.toHaveBeenCalled();
     const written = JSON.parse(await readFile(path, "utf8")) as {
       state: string;
     };
