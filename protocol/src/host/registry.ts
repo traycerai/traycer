@@ -55,6 +55,10 @@ import {
   organizationSubscribeV11,
 } from "./organization/contracts";
 import {
+  providersCommitProfileMoveV10,
+  providersPreviewProfileMoveV10,
+} from "./profile-move-schemas";
+import {
   defineDowngradePath,
   defineFloorAwareVersionedRpcRegistry,
   defineRpcContract,
@@ -13342,6 +13346,32 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersAnswerProfileNameV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.previewProfileMove": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersPreviewProfileMoveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.commitProfileMove": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersCommitProfileMoveV10,
           upgradeFromPreviousVersion: null,
         },
       },
