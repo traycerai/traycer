@@ -50,6 +50,25 @@ export interface AgentSessionCapability {
   readonly streamRecovery: () => Promise<RevalidateOutcome>;
 }
 
+/**
+ * Host refusals of a call that presented the capability, marked by the call
+ * that presented it so the command's error mapping can tell them from a
+ * refusal of this CLI's host-only token.
+ */
+const refusalsOfCapability = new WeakSet<object>();
+
+export function markRefusalOfAgentSessionCapability(refusal: object): void {
+  refusalsOfCapability.add(refusal);
+}
+
+export function isRefusalOfAgentSessionCapability(refusal: unknown): boolean {
+  return (
+    typeof refusal === "object" &&
+    refusal !== null &&
+    refusalsOfCapability.has(refusal)
+  );
+}
+
 /** The capability `environment` carries, or `null` when it carries none. */
 export function readAgentSessionCapability(
   environment: AgentEnvironment,

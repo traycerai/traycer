@@ -296,7 +296,7 @@ export function readBotSnapshot(
         // No sign-in is refreshed while this read runs (`auth: null`), so
         // nothing here knows the machine to be signed out.
         const fatalError =
-          hostDoorRefusalCliError(details, false, readFailed) ??
+          hostDoorRefusalCliError(details, false, "host-token", readFailed) ??
           localTeamAdmissionCliError(details) ??
           readFailed();
         finish(() => reject(fatalError));

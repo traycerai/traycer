@@ -598,7 +598,9 @@ function streamDroppedCliError(): CliError {
  */
 export function fatalCloseToCliError(details: FatalErrorDetails): CliError {
   return (
-    hostDoorRefusalCliError(details, false, () => fatalCloseByCode(details)) ??
+    hostDoorRefusalCliError(details, false, "host-token", () =>
+      fatalCloseByCode(details),
+    ) ??
     localTeamAdmissionCliError(details) ??
     fatalCloseByCode(details)
   );

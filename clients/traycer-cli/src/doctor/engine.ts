@@ -1726,7 +1726,11 @@ async function probeHostRpc(
       const door =
         doorRefusal === null
           ? null
-          : hostDoorRefusalKind(doorRefusal, isRefusalAfterRejectedSignIn(err));
+          : hostDoorRefusalKind(
+              doorRefusal,
+              isRefusalAfterRejectedSignIn(err),
+              "host-token",
+            );
       if (door === "older-host") {
         return {
           code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,

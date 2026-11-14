@@ -1,6 +1,8 @@
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import { openCliHostSession } from "./cli-host-tokens";
 import {
+  isRefusalOfAgentSessionCapability,
+  markRefusalOfAgentSessionCapability,
   PROCESS_AGENT_ENVIRONMENT,
   readAgentSessionCapability,
 } from "./agent-session-capability";
@@ -293,18 +295,26 @@ export async function callAgentHostRpcWithDispatch<
     },
   );
   const endpoint = await resolveEndpoint();
-  return requestWithHostToken(
-    method,
-    params,
-    endpoint,
-    capability.bearer,
-    capability.recovery,
-    dispatch.failFast
-      ? NO_RETRY_TRANSPORT_POLICY
-      : DEFAULT_TRANSPORT_RETRY_POLICY,
-    dispatch,
-    () => false,
-  );
+  try {
+    return await requestWithHostToken(
+      method,
+      params,
+      endpoint,
+      capability.bearer,
+      capability.recovery,
+      dispatch.failFast
+        ? NO_RETRY_TRANSPORT_POLICY
+        : DEFAULT_TRANSPORT_RETRY_POLICY,
+      dispatch,
+      () => false,
+    );
+  } catch (err) {
+    const refusal = finalRefusalOf(err);
+    if (refusal instanceof HostRpcError) {
+      markRefusalOfAgentSessionCapability(refusal);
+    }
+    throw err;
+  }
 }
 
 /** {@link callHostRpc} for an agent's own commands; see {@link callAgentHostRpcWithDispatch}. */
@@ -867,6 +877,9 @@ function mapHostRpcError(err: HostRpcError): CliError {
       : hostDoorRefusalCliError(
           doorRefusal,
           isRefusalAfterRejectedSignIn(err),
+          isRefusalOfAgentSessionCapability(err)
+            ? "agent-capability"
+            : "host-token",
           () => unexpectedHostCliError(err),
         );
   if (doorError !== null) return doorError;

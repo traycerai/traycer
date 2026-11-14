@@ -5,6 +5,7 @@ import {
   TEAM_MEMBERSHIP_UNAVAILABLE,
 } from "../../../shared/host-transport/local-open-auth";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
+import { ACCESS_UNCONFIRMED_MESSAGE } from "./host-door-words";
 import { createLocalOpenAuth } from "../../../shared/host-transport/create-local-open-auth";
 import type { LocalOpenAuth } from "../../../shared/host-transport/local-open-auth";
 
@@ -36,8 +37,7 @@ export function localTeamAdmissionCliError(
   if (details.code === TEAM_MEMBERSHIP_UNAVAILABLE) {
     return cliError({
       code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_UNAVAILABLE,
-      message:
-        "traycer: could not reach the cloud to check team membership. Try the command again.",
+      message: ACCESS_UNCONFIRMED_MESSAGE,
       details: null,
       exitCode: 1,
     });

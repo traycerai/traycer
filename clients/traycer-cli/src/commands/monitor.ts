@@ -1,6 +1,9 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
-import { hostDoorRefusalCliError } from "../internal/host-door-words";
+import {
+  hostDoorRefusalCliError,
+  type HostDoorCredential,
+} from "../internal/host-door-words";
 import {
   createCliHostTokens,
   type SignInRevalidator,
@@ -269,6 +272,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           ? Promise.resolve<RevalidateOutcome>("network-error")
           : credential.recover(endpoint.hostId, details),
       credential.signInRejected,
+      credential.presented,
       { agentId, epicId },
       logger,
       stdoutReaderClosed(),
@@ -291,6 +295,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
 
 /** What the monitor presents to its host, and the upkeep that keeps it good. */
 interface MonitorCredential {
+  readonly presented: HostDoorCredential;
   readonly userId: string;
   readonly bearer: (hostId: string) => BearerSourceProvider;
   readonly recover: (
@@ -359,6 +364,7 @@ async function signInMonitorCredential(
   const hostTokens = createCliHostTokens({ lease, refresh: refreshSignIn });
   let refreshScheduler: { readonly stop: () => void } | null = null;
   return {
+    presented: "host-token",
     userId: lease.identity.userId,
     bearer: (hostId) => hostTokens.streamBearer(hostId),
     recover: (hostId, details) =>
@@ -424,6 +430,7 @@ function capabilityMonitorCredential(
   capability: AgentSessionCapability,
 ): MonitorCredential {
   return {
+    presented: "agent-capability",
     userId: capability.bearer.identity.userId,
     bearer: () => capability.streamBearer,
     recover: () => capability.streamRecovery(),
@@ -461,6 +468,7 @@ function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   recover: InboxRecovery,
   signInRejected: () => boolean,
+  presented: HostDoorCredential,
   target: InboxTarget,
   logger: ILogger,
   readerClosed: AbortSignal,
@@ -598,7 +606,7 @@ function runInboxSubscription(
           epicId: target.epicId,
         });
         fail(
-          hostDoorRefusalCliError(details, false, hostClosed) ??
+          hostDoorRefusalCliError(details, false, presented, hostClosed) ??
             localTeamAdmissionCliError(details) ??
             hostClosed(),
         );
@@ -657,8 +665,12 @@ function runInboxSubscription(
         return;
       }
       fail(
-        hostDoorRefusalCliError(details, signInRejected(), hostClosed) ??
-          hostClosed(),
+        hostDoorRefusalCliError(
+          details,
+          signInRejected(),
+          presented,
+          hostClosed,
+        ) ?? hostClosed(),
       );
     };
 
