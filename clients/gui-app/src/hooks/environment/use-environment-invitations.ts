@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { noteHostMembershipChanged } from "@/lib/host/local-admission-invalidation";
+import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   queryOptions,
   useMutation,
@@ -204,6 +206,7 @@ export function useEnvironmentInvitationAcceptMutation(
   const auth = binding?.auth ?? null;
   const viewerUserId = useCloudChatViewerId();
   const queryClient = useQueryClient();
+  const runnerHost = useRunnerHost();
   const captureAdmission = () => ({
     context: auth?.getRequestContextProvider().current() ?? null,
     localHostId: readLocalHostIdSnapshot(),
@@ -221,6 +224,15 @@ export function useEnvironmentInvitationAcceptMutation(
       return;
     noteHostMembershipChanged(captured.localHostId);
   };
+  // The team's computers join the person's host list now, not at the next
+  // picker open or poll.
+  const refreshHostList = (): void => {
+    void queryClient.invalidateQueries({
+      queryKey: authQueryKeys.registeredHostsAll(),
+    });
+    void binding?.directory.refresh();
+    requestFleetRefresh(runnerHost);
+  };
   const rpc = useHostScopedMutationForClient(route.servingClient, {
     method: "environment.invitations.accept",
     mutationKey: environmentMutationKeys.invitationsAccept(),
@@ -228,7 +240,9 @@ export function useEnvironmentInvitationAcceptMutation(
     invalidateMethods: ["environment.invitations.list", "environment.list"],
     captureContext: captureAdmission,
     onSuccess: (answer, _request, _hostId, captured) => {
-      if (answer.outcome === "accepted") noteMembershipChange(captured);
+      if (answer.outcome !== "accepted") return;
+      noteMembershipChange(captured);
+      refreshHostList();
     },
   });
   const direct = useMutation({
@@ -239,7 +253,10 @@ export function useEnvironmentInvitationAcceptMutation(
     },
     onMutate: () => ({ auth, viewerUserId, ...captureAdmission() }),
     onSuccess: async (answer, _request, captured) => {
-      if (answer.outcome === "accepted") noteMembershipChange(captured);
+      if (answer.outcome === "accepted") {
+        noteMembershipChange(captured);
+        refreshHostList();
+      }
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: authQueryKeys.environmentInvitations(

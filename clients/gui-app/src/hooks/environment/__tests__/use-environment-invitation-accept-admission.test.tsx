@@ -57,6 +57,9 @@ const mocks = vi.hoisted(() => ({
         environmentId: string,
       ) => Promise<EnvironmentInvitationsAcceptResponse>;
     };
+    readonly directory: {
+      refresh: () => Promise<readonly HostDirectoryEntry[]>;
+    };
   } | null,
 }));
 
@@ -78,7 +81,10 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ hostManagement: null }),
+  useRunnerHost: () => ({
+    hostManagement: null,
+    refreshHostFleet: () => Promise.resolve(),
+  }),
 }));
 
 const localEntry: HostDirectoryEntry = {
@@ -118,7 +124,7 @@ function installAuth(
     }),
     acceptEnvironmentInvitation,
   };
-  mocks.binding = { auth };
+  mocks.binding = { auth, directory: { refresh: () => Promise.resolve([]) } };
 }
 
 function createContext(userId: string): RequestContext {
