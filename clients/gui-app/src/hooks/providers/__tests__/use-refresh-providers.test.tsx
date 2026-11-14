@@ -6,6 +6,7 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProviderCliState,
   ProviderId,
@@ -20,6 +21,9 @@ import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-e
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+
+type ProvidersList = ResponseOfMethod<HostRpcRegistry, "providers.list">;
+type ExtendedProvidersList = ProvidersList & { readonly futureKey: string };
 
 const runtimeMock = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
@@ -230,5 +234,80 @@ describe("useRefreshProviders", () => {
     });
     expect(queryClient.getQueryState(guiKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(tuiKey)?.isInvalidated).toBe(true);
+  });
+
+  it("commits the complete host answer through active and tab refresh", async () => {
+    const queryClient = createAppQueryClient();
+    let nextAnswer: ExtendedProvidersList = {
+      providers: [pendingProvider()],
+      native: null,
+      offersSignIns: true,
+      removedProfiles: [
+        {
+          providerId: "claude-code",
+          profileId: "removed-work",
+          aliases: ["old-work"],
+        },
+      ],
+      futureKey: "active-answer",
+    };
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-full-providers-answer",
+      handlers: {
+        "providers.list": () => nextAnswer,
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-full-providers-answer",
+      }),
+    );
+    runtimeMock.client = spine.createRequester(mockLocalHostEntry);
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      mockLocalHostEntry.hostId,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, {
+      providers: [pendingProvider()],
+      native: null,
+      offersSignIns: false,
+    });
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => ({ active: useRefreshProviders(), tab: useTabRefreshProviders() }),
+      { wrapper: Wrapper },
+    );
+
+    await act(async () => {
+      await result.current.active();
+    });
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.list"),
+    ).toHaveLength(1);
+    expect(queryClient.getQueryData(listKey)).toEqual(nextAnswer);
+
+    nextAnswer = { ...nextAnswer, futureKey: "tab-answer" };
+    await act(async () => {
+      await result.current.tab();
+    });
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.list"),
+    ).toHaveLength(2);
+    expect(queryClient.getQueryData(listKey)).toEqual(nextAnswer);
   });
 });

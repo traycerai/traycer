@@ -231,6 +231,7 @@ function ConfigurationProfileEditor(props: {
       open={props.open}
       onOpenChange={props.onOpenChange}
       switchingAccount={false}
+      signInSettled={false}
       label={label}
       onLabelChange={setLabel}
       accentColor={accentColor}

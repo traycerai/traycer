@@ -7,9 +7,11 @@ import {
   type ProviderAuth,
   type ProviderCliCandidate,
   type ProviderCliState,
+  type ProviderMutationCliStateV21,
   type ProviderProfile,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ProviderId } from "@traycer/protocol/host/provider-ids";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import {
   pinProfile,
@@ -22,14 +24,18 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostRpcError,
+  ResponseOfMethod,
   RequestOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 import {
   PROVIDER_SETTINGS_UNREADABLE_COPY,
   PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX,
@@ -108,6 +114,7 @@ type AwaitLoginVariables = {
     readonly profileId: string | null;
   };
   readonly signal: AbortSignal | undefined;
+  readonly readsProfileOutcome: boolean;
 };
 type AwaitLoginOptions = {
   readonly onSuccess: (data: unknown) => void;
@@ -178,6 +185,41 @@ type CancelLoginVariables = RequestOfMethod<
   "providers.cancelLogin"
 >;
 
+const providersChangedMock = vi.hoisted(
+  (): {
+    hostId: string;
+    onChanged: ((providerId: ProviderId) => void) | null;
+  } => ({
+    hostId: "host-panel-notification",
+    onChanged: null,
+  }),
+);
+
+const providersChangedStreamStub = vi.hoisted((): { readonly stub: true } => ({
+  stub: true,
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/providers-changed-stream-client",
+  () => ({
+    ProvidersChangedStreamClient: class {
+      constructor(options: {
+        readonly onChanged: (providerId: ProviderId) => void;
+      }) {
+        providersChangedMock.onChanged = options.onChanged;
+      }
+
+      close(): void {}
+    },
+  }),
+);
+
+vi.mock("@/lib/host/stream-runtime-context", () => ({
+  useWsStreamClient: () => providersChangedStreamStub,
+  useStreamMethodSupport: () => "supported",
+  useStreamHostId: () => providersChangedMock.hostId,
+}));
+
 // The `providers.list` envelope as this harness serves it. The flag is the
 // `providers.list@10.5` key a sandbox host sets; every other host omits it.
 interface ProvidersListEnvelope {
@@ -204,6 +246,9 @@ const providerMocks = vi.hoisted(() => {
         | undefined,
       refetch: vi.fn(() => Promise.resolve({})),
     },
+    liveList: false,
+    liveClient: null as HostClient<HostRpcRegistry> | null,
+    realStartLogin: false,
     setSelectionMutate: vi.fn(),
     addCustomPathMutate: vi.fn(),
     removeCustomPathMutate: vi.fn(),
@@ -342,9 +387,25 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => providerMocks.listResult,
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-list-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-list-query")
+      >();
+    return {
+      ...actual,
+      useProvidersList: (activity: {
+        readonly enabled: boolean;
+        readonly subscribed: boolean;
+      }) =>
+        providerMocks.liveList
+          ? actual.useProvidersList(activity)
+          : providerMocks.listResult,
+    };
+  },
+);
 
 vi.mock("@/hooks/providers/use-providers-plugins-list-query", () => ({
   useProvidersPluginsList: () => ({
@@ -541,38 +602,71 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
 // `*ForClient` variants with an explicit client (also Settings' own host in
 // this tree - see the `@/lib/host` mock below). Both resolve to the same
 // recorded mock so assertions don't care which path fired.
-vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => {
-  // The login flow starts through `mutateAsync` (its promise settles even
-  // where StrictMode detached the observer); this adapts it onto the
-  // recorded `(variables, { onSuccess, onError })` fake every test drives.
-  const useProvidersStartLogin = () => ({
-    mutateAsync: (variables: StartLoginVariables) =>
-      new Promise<StartLoginData>((resolve, reject) => {
-        providerMocks.startLoginMutate(variables, {
-          onSuccess: resolve,
-          onError: reject,
-        });
-      }),
-    isPending: false,
-    error: null,
-  });
-  return {
-    useProvidersStartLogin,
-    useProvidersStartLoginForClient: useProvidersStartLogin,
-  };
-});
+vi.mock(
+  "@/hooks/providers/use-providers-start-login-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-start-login-mutation")
+      >();
+    // The login flow starts through `mutateAsync` (its promise settles even
+    // where StrictMode detached the observer); this adapts it onto the
+    // recorded `(variables, { onSuccess, onError })` fake every test drives.
+    const mockedMutation = () => ({
+      mutateAsync: (variables: StartLoginVariables) =>
+        new Promise<StartLoginData>((resolve, reject) => {
+          providerMocks.startLoginMutate(variables, {
+            onSuccess: resolve,
+            onError: reject,
+          });
+        }),
+      isPending: false,
+      error: null,
+    });
+    const useProvidersStartLogin = () => {
+      const realMutation = actual.useProvidersStartLogin();
+      return providerMocks.realStartLogin ? realMutation : mockedMutation();
+    };
+    const useProvidersStartLoginForClient = (
+      client: HostClient<HostRpcRegistry> | null,
+    ) => {
+      const realMutation = actual.useProvidersStartLoginForClient(client);
+      return providerMocks.realStartLogin ? realMutation : mockedMutation();
+    };
+    return { useProvidersStartLogin, useProvidersStartLoginForClient };
+  },
+);
 
-vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
-  const useProvidersAwaitLogin = () => ({
-    mutate: providerMocks.awaitLoginMutate,
-    isPending: false,
-    error: null,
-  });
-  return {
-    useHostScopedProvidersAwaitLogin: useProvidersAwaitLogin,
-    useProvidersAwaitLoginForClient: useProvidersAwaitLogin,
-  };
-});
+vi.mock(
+  "@/hooks/providers/use-providers-await-login-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-await-login-mutation")
+      >();
+    const useProvidersAwaitLogin = () => ({
+      mutate: providerMocks.awaitLoginMutate,
+      isPending: false,
+      error: null,
+    });
+    return {
+      ...actual,
+      useHostScopedProvidersAwaitLogin: () => {
+        const liveMutation = actual.useHostScopedProvidersAwaitLogin();
+        const mockedMutation = useProvidersAwaitLogin();
+        return providerMocks.liveList ? liveMutation : mockedMutation;
+      },
+      useProvidersAwaitLoginForClient: (args: {
+        readonly client: HostClient<HostRpcRegistry> | null;
+        readonly getCacheHostId: () => string | null;
+      }) => {
+        const liveMutation = actual.useProvidersAwaitLoginForClient(args);
+        const mockedMutation = useProvidersAwaitLogin();
+        return providerMocks.liveList ? liveMutation : mockedMutation;
+      },
+    };
+  },
+);
 
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
   const useProvidersCancelLogin = () => ({
@@ -659,7 +753,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
   // `useHostClient()` directly (Settings always targets the selected/default
   // host, never a tab) - this harness has no real `<HostRuntimeProvider>`, so
   // stub it the same way every other provider hook here is stubbed.
-  return { ...actual, useHostClient: () => null };
+  return {
+    ...actual,
+    useHostClient: () => providerMocks.liveClient,
+  };
 });
 
 vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
@@ -814,7 +911,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     // this one - so a fixture answering `null` here silently withholds the
     // wrapper and the selected-host refresh lands on the ambient host.
     useHostBinding: () => providerMocks.ambientBinding,
-    useHostClient: () => null,
+    useHostClient: () => providerMocks.liveClient,
     // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
   };
@@ -861,12 +958,24 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 vi.mock("@/components/settings/personal/use-secret-claimed-names", () => ({
   useSecretClaimedNames: () => new Map<string, string>(),
 }));
-vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
-  useHostScopedMutationForClient: () => ({
-    mutate: () => {},
-    isPending: false,
-  }),
-}));
+vi.mock("@/hooks/host/use-host-scoped-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-scoped-mutation")
+    >();
+  return {
+    ...actual,
+    useHostScopedMutationForClient: (
+      ...args: Parameters<typeof actual.useHostScopedMutationForClient>
+    ) =>
+      providerMocks.realStartLogin
+        ? actual.useHostScopedMutationForClient(...args)
+        : {
+            mutate: () => {},
+            isPending: false,
+          },
+  };
+});
 
 // Pure side-effect hook in the Traycer subscription card; no render output, and
 // it needs a QueryClient this harness doesn't set up.
@@ -1124,6 +1233,7 @@ import {
   providerRowUnreadableCopy,
 } from "@/components/settings/panels/provider-row-reset-copy";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { ProvidersChangedStreamMount } from "@/providers/providers-changed-stream-mount";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
@@ -1136,6 +1246,7 @@ import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
 
 const OPENCODE_CANDIDATES: readonly ProviderCliCandidate[] = [
   {
@@ -1370,6 +1481,20 @@ function firstAwaitLoginCall(): readonly [
   const call = providerMocks.awaitLoginMutate.mock.calls.at(0);
   if (call === undefined) throw new Error("Expected await login call.");
   return call;
+}
+
+function expectNoProviderLoginRequests(
+  calls: readonly { readonly method: string }[],
+): void {
+  expect(
+    calls.filter((call) => call.method === "providers.startLogin"),
+  ).toHaveLength(0);
+  expect(
+    calls.filter((call) => call.method === "providers.awaitLogin"),
+  ).toHaveLength(0);
+  expect(
+    calls.filter((call) => call.method === "providers.cancelLogin"),
+  ).toHaveLength(0);
 }
 
 function firstSetEnabledCall(): SetEnabledVariables {
@@ -1799,6 +1924,9 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 beforeEach(() => {
+  providerMocks.liveList = false;
+  providerMocks.liveClient = null;
+  providerMocks.realStartLogin = false;
   useSettingsEnvironmentPickStore.setState({
     defaultPick: { kind: "personal" },
   });
@@ -1811,6 +1939,207 @@ afterEach(() => {
 });
 
 describe("<ProvidersSettingsPanel />", () => {
+  it.each([true, false, "absent"] as const)(
+    "refetches the Settings providers list once after providers.changed when offersSignIns is %s",
+    async (offersSignIns) => {
+      const hostId = "host-panel-notification";
+      const providerList: ResponseOfMethod<HostRpcRegistry, "providers.list"> =
+        {
+          providers: [
+            providerState({
+              providerId: "claude-code",
+              selected: { kind: "bundled" },
+              candidates: [],
+              envOverrides: [],
+              nativeCapabilities: FULL_TABS,
+            }),
+          ],
+          native: null,
+        };
+      const answer =
+        offersSignIns === "absent"
+          ? providerList
+          : { ...providerList, offersSignIns };
+      let listCalls = 0;
+      const { client, messenger } = buildEnvironmentClient({
+        hostId,
+        handlers: {
+          "providers.list": () => {
+            listCalls += 1;
+            return answer;
+          },
+        },
+      });
+      providerMocks.liveList = true;
+      providerMocks.liveClient = client;
+      hostScopeMocks.hostId = hostId;
+      hostScopeMocks.client = { getActiveHostId: () => hostId };
+      providersChangedMock.hostId = hostId;
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "local", hostId, hostName: "dev-box" },
+      });
+      recordNegotiatedHostManifest(hostId, {
+        "providers.list": { major: 10, minor: 12 },
+        "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
+      });
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+        hostId,
+        "providers.list",
+        { native: null },
+      );
+      rtlRender(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <ProvidersChangedStreamMount />
+            <ProvidersSettingsPanel />
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+      await screen.findByRole("tab", { name: "Profiles & Limits" });
+      await waitFor(() => {
+        expect(listCalls).toBe(1);
+        expect(queryClient.getQueryState(listKey)?.fetchStatus).toBe("idle");
+      });
+      const initialListReads = messenger.calls.filter(
+        (call) => call.method === "providers.list",
+      ).length;
+      expect(initialListReads).toBe(1);
+
+      const onChanged = providersChangedMock.onChanged;
+      if (onChanged === null) {
+        throw new Error("providers.changed stream did not open");
+      }
+      act(() => {
+        onChanged("claude-code");
+      });
+      await waitFor(() => {
+        expect(
+          messenger.calls.filter((call) => call.method === "providers.list")
+            .length,
+        ).toBe(initialListReads + 1);
+        expect(listCalls).toBe(initialListReads + 1);
+        expect(queryClient.getQueryState(listKey)?.fetchStatus).toBe("idle");
+        expect(queryClient.getQueryData(listKey)).toEqual(answer);
+      });
+      expect(initialListReads).toBe(1);
+      expectNoProviderLoginRequests(messenger.calls);
+    },
+  );
+
+  it("opens Add from the Terminal row without starting that ambient profile's login", async () => {
+    const hostId = "host-terminal-add-sign-in";
+    const terminalProfileId = "terminal-ambient-profile";
+    const terminalProfile = profile({
+      profileId: terminalProfileId,
+      kind: "ambient",
+      label: "Terminal account",
+      email: "terminal@example.test",
+      tier: null,
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const answer: ResponseOfMethod<HostRpcRegistry, "providers.list"> = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "claude-code",
+            selected: { kind: "bundled" },
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/claude",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+            profiles: [terminalProfile],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: {},
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+      native: null,
+      offersSignIns: true,
+    };
+    const { client, messenger } = buildEnvironmentClient({
+      hostId,
+      handlers: {
+        "providers.list": () => answer,
+        "providers.startLogin": () => ({
+          url: null,
+          started: false,
+          profileId: null,
+          userCode: null,
+          failure: null,
+          pending: null,
+          pack: null,
+        }),
+      },
+    });
+    providerMocks.liveList = true;
+    providerMocks.liveClient = client;
+    providerMocks.realStartLogin = true;
+    hostScopeMocks.hostId = hostId;
+    hostScopeMocks.client = { getActiveHostId: () => hostId };
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId, hostName: "dev-box" },
+    });
+    recordNegotiatedHostManifest(hostId, {
+      "providers.list": { major: 10, minor: 12 },
+      "providers.startLogin": { major: 1, minor: 4 },
+      "providers.awaitLogin": { major: 2, minor: 2 },
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    await screen.findByRole("tab", { name: "Profiles & Limits" });
+    openProfilesTab();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Sign in to use everywhere",
+      }),
+    );
+    await screen.findByRole("dialog", { name: "Add a profile" });
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.startLogin"),
+    ).toHaveLength(0);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "providers.startLogin",
+        ),
+      ).toHaveLength(1);
+    });
+    const startCall = messenger.calls.find(
+      (call) => call.method === "providers.startLogin",
+    );
+    if (startCall === undefined) {
+      throw new Error("providers.startLogin request was not recorded");
+    }
+    expect(startCall.params).toMatchObject({ profileId: null });
+    expect(startCall.params).not.toMatchObject({
+      profileId: terminalProfileId,
+    });
+  });
+
   beforeEach(() => {
     // The Permissions tab reads the NEGOTIATED `agent.gui.listHarnesses` line
     // (see `permissionsTab`), through the real manifest registry - only the
@@ -1906,7 +2235,411 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.ambientBinding = null;
     providerMocks.credentialRefusal = null;
     hostScopeMocks.client = null;
+    providersChangedMock.onChanged = null;
+    providersChangedMock.hostId = "host-panel-notification";
     useProvidersFocusStore.getState().clearFocusHarnessId();
+    resetHostConnectionRegistryForTest();
+  });
+
+  it("shows the page read error after a sign-in echo has no row, then renders the profile after Retry", async () => {
+    let listCalls = 0;
+    const signedInProfile = pinProfile({
+      profileId: "managed-profile",
+      label: "Work",
+      kind: "managed",
+      enabled: true,
+      authStatus: "authenticated",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: false,
+      otherNames: [],
+    });
+    const existingProfile = pinProfile({
+      profileId: "existing-profile",
+      label: "Existing",
+      kind: "managed",
+      enabled: true,
+      authStatus: "authenticated",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: false,
+      otherNames: [],
+    });
+    const claudeCli: ProviderCliCandidate = {
+      kind: "bundled",
+      path: "/bundled/claude",
+      version: "1.0.0",
+      available: true,
+      versionPending: false,
+    };
+    const emptyEcho: ProviderMutationCliStateV21 = {
+      providerId: "claude-code",
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled" },
+      candidates: [],
+      auth: {
+        status: "unauthenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
+      profiles: [],
+    };
+    const listResponse = (
+      profiles: readonly ProviderProfile[],
+    ): ResponseOfMethod<HostRpcRegistry, "providers.list"> => {
+      const state = providerState({
+        providerId: "claude-code",
+        selected: { kind: "bundled" },
+        candidates: [claudeCli],
+        envOverrides: [],
+        nativeCapabilities: FULL_TABS,
+        profiles,
+      });
+      return {
+        providers: [
+          {
+            ...state,
+            loginCapability: {
+              oauthArgs: ["auth", "login"],
+              token: null,
+              codePaste: null,
+              terminalLogin: null,
+              remoteSafe: {},
+              selfOpensBrowser: null,
+            },
+          },
+        ],
+        native: null,
+        offersSignIns: true,
+      };
+    };
+    const { client } = buildEnvironmentClient({
+      hostId: "host-1",
+      handlers: {
+        "providers.list": () => {
+          listCalls += 1;
+          if (listCalls === 2) throw new Error("list read failed");
+          return listResponse(
+            listCalls >= 3
+              ? [existingProfile, signedInProfile]
+              : [existingProfile],
+          );
+        },
+        "providers.awaitLogin": () => ({
+          state: emptyEcho,
+          existingProfileId: null,
+          codeRejected: false,
+          refusal: null,
+          installation: null,
+          profileOutcome: {
+            kind: "signed-in",
+            profileId: signedInProfile.profileId,
+          },
+        }),
+      },
+    });
+    providerMocks.liveList = true;
+    providerMocks.liveClient = client;
+    hostScopeMocks.hostId = "host-1";
+    hostScopeMocks.client = { getActiveHostId: () => "host-1" };
+    recordNegotiatedHostManifest("host-1", {
+      "providers.list": { major: 10, minor: 12 },
+      "providers.startLogin": { major: 1, minor: 4 },
+      "providers.awaitLogin": { major: 2, minor: 2 },
+    });
+    providerMocks.startLoginMutate.mockImplementation((_variables, options) => {
+      options.onSuccess({
+        url: "https://example.test/sign-in",
+        started: true,
+        profileId: "managed-profile",
+      });
+    });
+
+    const pageQueryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    rtlRender(
+      <QueryClientProvider client={pageQueryClient}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("tab", { name: "Profiles & Limits" });
+    openProfilesTab();
+    const addProfile = screen.getByRole("button", { name: "Add a profile" });
+    expect(addProfile.getAttribute("disabled")).toBeNull();
+    fireEvent.click(addProfile);
+    await screen.findByRole("dialog", { name: "Add a profile" });
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    const unreadable = await screen.findAllByText(
+      "Couldn't load provider state.",
+    );
+    expect(unreadable).toHaveLength(1);
+    expect(listCalls).toBe(2);
+    const pageError = unreadable.at(0);
+    if (pageError === undefined) throw new Error("Page error is missing");
+    expect(pageError.closest('[role="dialog"]')).toBeNull();
+    const pageErrorCard = pageError.parentElement;
+    if (pageErrorCard === null) throw new Error("Page error card is missing");
+    fireEvent.click(
+      within(pageErrorCard).getByRole("button", { name: "Retry" }),
+    );
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      "host-1",
+      "providers.list",
+      { native: null },
+    );
+    await waitFor(() => {
+      expect(
+        pageQueryClient
+          .getQueryData<ResponseOfMethod<HostRpcRegistry, "providers.list">>(
+            listKey,
+          )
+          ?.providers.flatMap((state) =>
+            state.profiles.map((profile) => profile.profileId),
+          ),
+      ).toEqual([existingProfile.profileId, signedInProfile.profileId]);
+    });
+    expect(listCalls).toBe(3);
+  });
+
+  it("shows the page read error after Sign in again cannot read the named profile, then keeps the editor closed", async () => {
+    let listCalls = 0;
+    let awaitCalls = 0;
+    const existingProfile = profile({
+      profileId: "existing-profile",
+      kind: "managed",
+      label: "Work",
+      email: "work@example.test",
+      tier: "Pro",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const updatedProfile = profile({
+      profileId: existingProfile.profileId,
+      kind: "managed",
+      label: "Work",
+      email: "new@example.test",
+      tier: "Pro",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const signedInProfile = profile({
+      profileId: "new-profile",
+      kind: "managed",
+      label: "Personal",
+      email: "personal@example.test",
+      tier: "Pro",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    const candidate: ProviderCliCandidate = {
+      kind: "bundled",
+      path: "/bundled/claude",
+      version: "1.0.0",
+      available: true,
+      versionPending: false,
+    };
+    const listResponse = (
+      profiles: readonly ProviderProfile[],
+    ): ResponseOfMethod<HostRpcRegistry, "providers.list"> => ({
+      providers: [
+        {
+          ...providerState({
+            providerId: "claude-code",
+            selected: { kind: "bundled" },
+            candidates: [candidate],
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+            profiles,
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+      native: null,
+      offersSignIns: true,
+    });
+    const echoState = (
+      profiles: readonly ProviderProfile[],
+    ): ProviderMutationCliStateV21 => ({
+      providerId: "claude-code",
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled" },
+      candidates: [candidate],
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
+      profiles: [...profiles],
+    });
+    const { client, messenger } = buildEnvironmentClient({
+      hostId: "host-reauth-page",
+      handlers: {
+        "providers.list": () => {
+          listCalls += 1;
+          if (listCalls === 3) throw new Error("list read failed");
+          if (listCalls === 1) return listResponse([existingProfile]);
+          if (listCalls === 2) return listResponse([updatedProfile]);
+          return listResponse([updatedProfile, signedInProfile]);
+        },
+        "providers.awaitLogin": () => {
+          awaitCalls += 1;
+          return awaitCalls === 1
+            ? {
+                state: echoState([updatedProfile]),
+                existingProfileId: null,
+                codeRejected: false,
+                refusal: null,
+                installation: null,
+                profileOutcome: null,
+              }
+            : {
+                state: echoState([updatedProfile]),
+                existingProfileId: null,
+                codeRejected: false,
+                refusal: null,
+                installation: null,
+                profileOutcome: {
+                  kind: "signed-in",
+                  profileId: signedInProfile.profileId,
+                },
+              };
+        },
+      },
+    });
+    providerMocks.liveList = true;
+    providerMocks.liveClient = client;
+    hostScopeMocks.hostId = "host-reauth-page";
+    hostScopeMocks.client = { getActiveHostId: () => "host-reauth-page" };
+    useSettingsEnvironmentPickStore.setState({
+      pick: {
+        kind: "local",
+        hostId: "host-reauth-page",
+        hostName: "dev-box",
+      },
+    });
+    recordNegotiatedHostManifest("host-reauth-page", {
+      "providers.list": { major: 10, minor: 12 },
+      "providers.startLogin": { major: 1, minor: 4 },
+      "providers.awaitLogin": { major: 2, minor: 2 },
+    });
+    providerMocks.startLoginMutate.mockImplementation((variables, options) => {
+      options.onSuccess({
+        url: "https://example.test/sign-in",
+        started: true,
+        profileId: variables.profileId,
+      });
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      "host-reauth-page",
+      "providers.list",
+      { native: null },
+    );
+    rtlRender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("tab", { name: "Profiles & Limits" });
+    openProfilesTab();
+    await screen.findByRole("button", { name: "Manage profile" });
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    await screen.findByRole("dialog", { name: "Edit profile" });
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+      expect(awaitCalls).toBe(1);
+      expect(listCalls).toBe(2);
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in again" }),
+    );
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(2);
+      expect(awaitCalls).toBe(2);
+      expect(listCalls).toBe(3);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    const unreadable = await screen.findAllByText(
+      "Couldn't load provider state.",
+    );
+    expect(unreadable).toHaveLength(1);
+    expect(listCalls).toBe(3);
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.list"),
+    ).toHaveLength(3);
+    expect(
+      queryClient
+        .getQueryData<ResponseOfMethod<HostRpcRegistry, "providers.list">>(
+          listKey,
+        )
+        ?.providers[0]?.profiles.map((row) => row.profileId),
+    ).toEqual([existingProfile.profileId]);
+    const pageError = unreadable.at(0);
+    if (pageError === undefined) throw new Error("Page error is missing");
+    expect(pageError.closest('[role="dialog"]')).toBeNull();
+    const pageErrorCard = pageError.parentElement;
+    if (pageErrorCard === null) throw new Error("Page error card is missing");
+    fireEvent.click(
+      within(pageErrorCard).getByRole("button", { name: "Retry" }),
+    );
+    await waitFor(() => {
+      expect(listCalls).toBe(4);
+      expect(
+        queryClient
+          .getQueryData<ResponseOfMethod<HostRpcRegistry, "providers.list">>(
+            listKey,
+          )
+          ?.providers.flatMap((state) =>
+            state.profiles.map((row) => row.profileId),
+          ),
+      ).toEqual([updatedProfile.profileId, signedInProfile.profileId]);
+    });
+    expect(screen.queryAllByRole("dialog")).toHaveLength(0);
   });
 
   afterEach(() => {
@@ -5349,6 +6082,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-1",
       createProfile: null,
       holderId: null,
+      target: null,
     });
   });
 
@@ -6013,6 +6747,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
       holderId: null,
+      target: null,
     });
     expect(typeof startOptions.onSuccess).toBe("function");
 
@@ -6678,6 +7413,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "ambient",
       createProfile: null,
       holderId: null,
+      target: null,
     });
     // From here on the re-poll's timer is the only thing being waited on -
     // drive it deterministically instead of sleeping out the real delay.
@@ -7629,6 +8365,7 @@ describe("<ProvidersSettingsPanel />", () => {
           profileId: "work-profile",
           createProfile: null,
           holderId: null,
+          target: null,
         },
         expect.anything(),
       );
@@ -7735,6 +8472,7 @@ describe("<ProvidersSettingsPanel />", () => {
           profileId: "ambient",
           createProfile: null,
           holderId: null,
+          target: null,
         },
         expect.anything(),
       );
@@ -7892,6 +8630,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-1",
       createProfile: null,
       holderId: null,
+      target: null,
     });
 
     await act(() => {
@@ -7963,6 +8702,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-1",
       createProfile: null,
       holderId: null,
+      target: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -8585,6 +9325,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
       holderId: null,
+      target: null,
     });
   });
 
@@ -8647,6 +9388,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: true },
       holderId: null,
+      target: null,
     });
   });
 
@@ -8758,6 +9500,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
       holderId: null,
+      target: null,
     });
   });
 
@@ -9352,6 +10095,7 @@ describe("<ProvidersSettingsPanel />", () => {
         shareSkillsAndPlugins: false,
       },
       holderId: null,
+      target: null,
     });
 
     const [, startOptions] = firstStartLoginCall();

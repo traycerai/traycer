@@ -986,7 +986,11 @@ function SignInToEnableButton(props: {
         };
         const awaitOnce = (): void => {
           awaitLogin.mutate(
-            { request: { providerId, profileId: null }, signal: undefined },
+            {
+              request: { providerId, profileId: null },
+              signal: undefined,
+              readsProfileOutcome: false,
+            },
             {
               onSuccess: handleCompletion,
               // A failed await ends the attempt: the mutation's own

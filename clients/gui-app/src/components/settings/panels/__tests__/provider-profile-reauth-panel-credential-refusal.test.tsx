@@ -144,6 +144,7 @@ function renderPanel(onCancel: () => void) {
         onSameAccountReconnected={null}
         onCancel={onCancel}
         onDone={() => undefined}
+        signInOutcomes={null}
       />
     </TooltipProvider>,
   );

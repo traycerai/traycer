@@ -8,6 +8,7 @@ import {
   EyeOff,
   ExternalLink,
   Link2,
+  LogIn,
 } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -20,6 +21,23 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
+import { AccentDot } from "@/components/providers/accent-dot";
+import {
+  ADD_PROFILE_DIALOG_TITLE,
+  alreadySignedInAsText,
+  SIGN_IN_TEXT,
+  SIGN_IN_WITH_ANOTHER_TEXT,
+  signedInAsText,
+  USE_PROFILE_TEXT,
+  WAITING_FOR_PROFILE_TEXT,
+} from "@/components/providers/profile-sync-copy";
+import {
+  useCachedProviderProfilesReader,
+  useCachedProvidersList,
+  type CachedProviderProfilesReader,
+} from "@/hooks/providers/use-cached-providers-list";
+import { listOffersSignIns } from "@/components/providers/provider-profile-model";
+import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -63,7 +81,7 @@ import {
 } from "./use-auto-open-login-url";
 import { waitingStepCopy } from "./waiting-step-copy";
 import {
-  useProviderProfileLoginFlow,
+  useProviderProfileOutcomeLoginFlow,
   providerProfileLoginProgress,
   type ProviderProfileLoginFlowCodePaste,
   type ProviderProfileLoginFlowState,
@@ -202,27 +220,34 @@ export function AddProviderProfileDialog({
   const supportsLoginOwnership = useProvidersLoginOwnershipForClient(client);
   const hostBlock = providerHostBlock(state, "sign-in-and-enable");
   const macosBlock = hostBlock?.kind === "macos" ? hostBlock : null;
-  const flow = useProviderProfileLoginFlow({
-    hostBlock,
-    supportsLoginOwnership,
-    mode: "create",
-    providerId: state.providerId,
-    existingProfileId: null,
-    loginCapability: state.loginCapability,
-    startLogin,
-    awaitLogin,
-    cancelLogin,
-    submitLoginCode,
-    touchLogin,
-    ensurePack,
-    failureMessages: {
-      notStarted:
-        "Sign-in did not start. You can retry when the provider is available.",
-      notFinished: "Sign-in did not finish. Retry when you are ready.",
+  const { offersSignIns, profileOutcomes } = useAddProfileOutcomes(
+    client,
+    state.providerId,
+  );
+  const flow = useProviderProfileOutcomeLoginFlow(
+    {
+      hostBlock,
+      supportsLoginOwnership,
+      mode: "create",
+      providerId: state.providerId,
+      existingProfileId: null,
+      loginCapability: state.loginCapability,
+      startLogin,
+      awaitLogin,
+      cancelLogin,
+      submitLoginCode,
+      touchLogin,
+      ensurePack,
+      failureMessages: {
+        notStarted:
+          "Sign-in did not start. You can retry when the provider is available.",
+        notFinished: "Sign-in did not finish. Retry when you are ready.",
+      },
+      onFailed: (message) =>
+        onFailedAttempt({ providerId: state.providerId, message }),
     },
-    onFailed: (message) =>
-      onFailedAttempt({ providerId: state.providerId, message }),
-  });
+    profileOutcomes,
+  );
   const trimmedLabel = label.trim();
   const linking = flow.state.kind !== "start";
   const { finalizing, dismissalLocked } = resolveDialogLockState({
@@ -348,23 +373,19 @@ export function AddProviderProfileDialog({
       <DialogContent
         layout="banded"
         className="flex max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
-        showCloseButton={!linking}
+        showCloseButton={dialogShowsCloseButton(flow.state)}
         onEscapeKeyDown={(event) => {
           if (dismissalLocked) event.preventDefault();
         }}
         onPointerDownOutside={(event) => {
           if (dismissalLocked) event.preventDefault();
         }}
+        {...dialogDescriptionProps(offersSignIns)}
       >
-        <DialogHeader className="gap-1.5">
-          <DialogTitle>
-            Add new {PROVIDER_DISPLAY_NAMES[state.providerId]} profile
-          </DialogTitle>
-          <DialogDescription>
-            Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
-            its color, then link the account it should use.
-          </DialogDescription>
-        </DialogHeader>
+        <AddProfileDialogHeader
+          offersSignIns={offersSignIns}
+          providerId={state.providerId}
+        />
 
         <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
           <ProviderProfileCard
@@ -396,6 +417,7 @@ export function AddProviderProfileDialog({
             flowState={flow.state}
             loginCapability={state.loginCapability}
             isLocalHost={isLocalHost}
+            offersSignIns={offersSignIns}
             startPending={flow.startPending}
             startingCopy={flow.startingCopy}
             cancelPending={flow.cancelPending}
@@ -450,6 +472,21 @@ export function AddProviderProfileDialog({
             </Button>
           </DialogFooter>
         ) : null}
+        <AddProfileOutcomeFooter
+          flowState={flow.state}
+          offersSignIns={offersSignIns}
+          showsSignedIn={naming === null && recolorProfile.error === null}
+          finalizing={finalizing}
+          signInAgainDisabled={credentialRefusal !== null}
+          onUse={complete}
+          onSignInWithAnother={linkAccount}
+          listRereadPending={flow.listRereadPending}
+          onRetryListRead={flow.retryListRead}
+          onDone={() => {
+            onFailedAttempt(null);
+            onOpenChange(false);
+          }}
+        />
         {duplicateProfile !== null ? (
           <DialogFooter>
             <Button
@@ -476,6 +513,83 @@ export function AddProviderProfileDialog({
   );
 }
 
+/**
+ * Whether this dialog reads a completed sign-in's `profileOutcome`: only on a
+ * computer that offers sign-ins by itself, by the list `state` came from (read
+ * from the cache its caller keeps, never fetched here).
+ */
+function useAddProfileOutcomes(
+  client: HostClient<HostRpcRegistry> | null,
+  providerId: ProviderCliState["providerId"],
+): {
+  readonly offersSignIns: boolean;
+  readonly profileOutcomes: CachedProviderProfilesReader | null;
+} {
+  const offersSignIns = listOffersSignIns(useCachedProvidersList(client));
+  const reader = useCachedProviderProfilesReader(client, providerId);
+  return { offersSignIns, profileOutcomes: offersSignIns ? reader : null };
+}
+
+function addProfileDialogTitle(
+  offersSignIns: boolean,
+  providerId: ProviderCliState["providerId"],
+): string {
+  return offersSignIns
+    ? ADD_PROFILE_DIALOG_TITLE
+    : `Add new ${PROVIDER_DISPLAY_NAMES[providerId]} profile`;
+}
+
+const NO_DIALOG_DESCRIPTION = { "aria-describedby": undefined } as const;
+
+/**
+ * A computer that offers sign-ins draws no line under the header, so the
+ * dialog says it has no description; any other keeps today's, which Radix
+ * links by itself.
+ */
+function dialogDescriptionProps(
+  offersSignIns: boolean,
+): typeof NO_DIALOG_DESCRIPTION | null {
+  return offersSignIns ? NO_DIALOG_DESCRIPTION : null;
+}
+
+function AddProfileDialogHeader({
+  offersSignIns,
+  providerId,
+}: {
+  readonly offersSignIns: boolean;
+  readonly providerId: ProviderCliState["providerId"];
+}): ReactNode {
+  return (
+    <DialogHeader className="gap-1.5">
+      <DialogTitle>
+        {addProfileDialogTitle(offersSignIns, providerId)}
+      </DialogTitle>
+      {offersSignIns ? null : (
+        <DialogDescription>
+          Name this {PROVIDER_DISPLAY_NAMES[providerId]} profile, choose its
+          color, then link the account it should use.
+        </DialogDescription>
+      )}
+    </DialogHeader>
+  );
+}
+
+/**
+ * The × is held while a sign-in runs and its profile is set up, and returns
+ * once a completed sign-in rests on a sentence the person reads: closing then
+ * never cancels, since the sign-in is already done.
+ */
+function dialogShowsCloseButton(
+  flowState: ProviderProfileLoginFlowState,
+): boolean {
+  return (
+    flowState.kind === "start" ||
+    flowState.kind === "already-signed-in" ||
+    flowState.kind === "waiting-for-profile" ||
+    flowState.kind === "list-unread"
+  );
+}
+
 function ProfileMacosNotice({
   block,
   providerId,
@@ -498,6 +612,7 @@ function AddProfileAccountSection({
   flowState,
   loginCapability,
   isLocalHost,
+  offersSignIns,
   startPending,
   startingCopy,
   cancelPending,
@@ -521,6 +636,7 @@ function AddProfileAccountSection({
   readonly flowState: ProviderProfileLoginFlowState;
   readonly loginCapability: ProviderCliState["loginCapability"] | null;
   readonly isLocalHost: boolean;
+  readonly offersSignIns: boolean;
   readonly startPending: boolean;
   readonly startingCopy: ProviderLoginStartCopy | null;
   readonly cancelPending: boolean;
@@ -540,6 +656,20 @@ function AddProfileAccountSection({
   readonly onRetryLogin: () => void;
   readonly onRetryFinalize: () => void;
 }): ReactNode {
+  const signInBody = offersSignIns
+    ? signInAccountBody({
+        providerId,
+        flowState,
+        settingUp:
+          duplicateProfile === null &&
+          naming === null &&
+          finalizeError === null,
+        linkDisabled,
+        onLink,
+      })
+    : null;
+  if (signInBody !== null) return signInBody;
+
   if (flowState.kind === "start") {
     return (
       <button
@@ -639,6 +769,247 @@ function AddProfileAccountSection({
       <span>{finalizing ? "Finishing profile setup" : "Account linked"}</span>
     </div>
   );
+}
+
+/**
+ * What the account section shows on a computer that offers sign-ins by
+ * itself, where that differs from any other computer, or null: the Sign in
+ * card, the profile an existing account already has, the provider while the
+ * list catches up, and a new profile's row while it is set up (`settingUp`:
+ * no duplicate notice, naming step or failed recolor stands in front of it).
+ */
+function signInAccountBody({
+  providerId,
+  flowState,
+  settingUp,
+  linkDisabled,
+  onLink,
+}: {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly flowState: ProviderProfileLoginFlowState;
+  readonly settingUp: boolean;
+  readonly linkDisabled: boolean;
+  readonly onLink: () => void;
+}): ReactNode {
+  switch (flowState.kind) {
+    case "start":
+      return <SignInCard disabled={linkDisabled} onSignIn={onLink} />;
+    case "already-signed-in":
+      return (
+        <AlreadySignedInBody
+          providerId={providerId}
+          profile={flowState.profile}
+        />
+      );
+    case "waiting-for-profile":
+    case "list-unread":
+      return (
+        <p className="text-ui-sm text-muted-foreground">
+          {PROVIDER_DISPLAY_NAMES[providerId]}
+        </p>
+      );
+    case "identity":
+      return settingUp ? (
+        <ProfileAccountRow
+          providerId={providerId}
+          profile={flowState.profile}
+        />
+      ) : null;
+    default:
+      return null;
+  }
+}
+
+/** The account card of a computer that offers sign-ins by itself. */
+function SignInCard({
+  disabled,
+  onSignIn,
+}: {
+  readonly disabled: boolean;
+  readonly onSignIn: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      aria-label={SIGN_IN_TEXT}
+      className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={disabled}
+      onClick={onSignIn}
+    >
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
+        <LogIn className="size-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-ui-sm font-medium text-foreground">
+          {SIGN_IN_TEXT}
+        </span>
+        <span className="block text-ui-xs text-muted-foreground">
+          Sign in to the account this profile should use.
+        </span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+    </button>
+  );
+}
+
+/** A profile's name and dot with its provider, as the dialog's body. */
+function ProfileAccountRow({
+  providerId,
+  profile,
+}: {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly profile: ProviderProfile;
+}): ReactNode {
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 text-ui-sm">
+      <span className="flex min-w-0 items-center gap-2">
+        <AccentDot
+          profileId={profile.profileId}
+          accentColor={profile.accentColor}
+          label={profile.label}
+          variant="inline"
+          size="default"
+          className={undefined}
+        />
+        <span className="min-w-0 truncate font-medium text-foreground">
+          {profile.label}
+        </span>
+      </span>
+      <span className="shrink-0 text-muted-foreground">
+        {PROVIDER_DISPLAY_NAMES[providerId]}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The body when Add finished as an account that already has a profile: that
+ * profile's row and nothing else. `DuplicateAccountNotice` is the computer
+ * that does not offer sign-ins by itself.
+ */
+function AlreadySignedInBody({
+  providerId,
+  profile,
+}: {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly profile: ProviderProfile;
+}): ReactNode {
+  return <ProfileAccountRow providerId={providerId} profile={profile} />;
+}
+
+/** One footer sentence beside the footer's buttons. */
+function FooterSentence({
+  children,
+}: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <p
+      role="status"
+      className="min-w-0 text-ui-sm text-foreground sm:order-first sm:mr-auto sm:self-center"
+    >
+      {children}
+    </p>
+  );
+}
+
+/**
+ * The footer a completed sign-in ends on, on a computer that offers sign-ins
+ * by itself: `Signed in as` while a new profile finishes, `Already signed in
+ * as` with Use and Sign in with another, or the wait for the list with Done.
+ * Nothing on any other computer.
+ */
+function AddProfileOutcomeFooter({
+  flowState,
+  offersSignIns,
+  showsSignedIn,
+  finalizing,
+  signInAgainDisabled,
+  onUse,
+  onSignInWithAnother,
+  listRereadPending,
+  onRetryListRead,
+  onDone,
+}: {
+  readonly flowState: ProviderProfileLoginFlowState;
+  readonly offersSignIns: boolean;
+  /** No naming step and no failed recolor stands in front of it. */
+  readonly showsSignedIn: boolean;
+  readonly finalizing: boolean;
+  readonly signInAgainDisabled: boolean;
+  readonly onUse: (profileId: string) => void;
+  readonly onSignInWithAnother: () => void;
+  readonly listRereadPending: boolean;
+  readonly onRetryListRead: () => void;
+  readonly onDone: () => void;
+}): ReactNode {
+  if (!offersSignIns) return null;
+  if (flowState.kind === "list-unread") {
+    return (
+      <DialogFooter>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={listRereadPending}
+          onClick={onRetryListRead}
+        >
+          {listRereadPending ? <MutedAgentSpinner /> : null}
+          Retry
+        </Button>
+        <FooterSentence>{PROVIDER_STATE_UNREADABLE_COPY}</FooterSentence>
+      </DialogFooter>
+    );
+  }
+  if (
+    flowState.kind === "identity" &&
+    flowState.existingProfileId === null &&
+    showsSignedIn
+  ) {
+    return (
+      <DialogFooter>
+        {finalizing ? <MutedAgentSpinner /> : null}
+        <FooterSentence>
+          {signedInAsText(flowState.profile.label)}
+        </FooterSentence>
+      </DialogFooter>
+    );
+  }
+  if (flowState.kind === "already-signed-in") {
+    const { profile } = flowState;
+    return (
+      <DialogFooter>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={signInAgainDisabled}
+          onClick={onSignInWithAnother}
+        >
+          {SIGN_IN_WITH_ANOTHER_TEXT}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => onUse(profile.profileId)}
+        >
+          {USE_PROFILE_TEXT}
+        </Button>
+        <FooterSentence>{alreadySignedInAsText(profile.label)}</FooterSentence>
+      </DialogFooter>
+    );
+  }
+  if (flowState.kind === "waiting-for-profile") {
+    return (
+      <DialogFooter>
+        <Button type="button" size="sm" onClick={onDone}>
+          Done
+        </Button>
+        <FooterSentence>{WAITING_FOR_PROFILE_TEXT}</FooterSentence>
+      </DialogFooter>
+    );
+  }
+  return null;
 }
 
 function DuplicateAccountNotice({
