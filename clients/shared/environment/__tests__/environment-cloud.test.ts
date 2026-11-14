@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  MAX_FAILURE_BODY_BYTES,
-  sendEnvironmentRequestWithBearer,
-} from "../environment-cloud";
+import { sendEnvironmentRequestWithBearer } from "../environment-cloud";
 import { createEnvironmentCloud } from "./environment-cloud-test-support";
 
 afterEach(() => {
@@ -12,10 +9,11 @@ afterEach(() => {
 describe("environment authn request body limit", () => {
   it("cancels a failure response at the first chunk over the cap", async () => {
     let pulledChunks = 0;
+    let pulledBytes = 0;
     let cancelled = false;
     const chunks = [
-      new Uint8Array(MAX_FAILURE_BODY_BYTES / 2),
-      new Uint8Array(MAX_FAILURE_BODY_BYTES / 2),
+      new Uint8Array(131_072),
+      new Uint8Array(131_072),
       new Uint8Array(1),
       new Uint8Array(1),
     ];
@@ -29,6 +27,7 @@ describe("environment authn request body limit", () => {
               return;
             }
             pulledChunks += 1;
+            pulledBytes += chunk.byteLength;
             controller.enqueue(chunk);
           },
           cancel() {
@@ -49,13 +48,14 @@ describe("environment authn request body limit", () => {
       null,
     );
 
+    expect(pulledBytes).toBe(262_144);
     expect(pulledChunks).toBe(3);
     expect(cancelled).toBe(true);
     expect(sent.answer).toEqual({ status: 500, body: null });
   });
 
   it("reads and parses a success body larger than the failure cap", async () => {
-    const body = { detail: "x".repeat(MAX_FAILURE_BODY_BYTES + 1) };
+    const body = { detail: "x".repeat(262_145) };
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify(body), { status: 200 }),
     );

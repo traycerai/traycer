@@ -16,6 +16,7 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useCanEditConfiguration } from "@/components/settings/environment/configuration-source";
+import { EnvironmentMcpServersPage } from "@/components/settings/environment/environment-mcp-servers";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
@@ -224,6 +225,34 @@ describe("a team page under PersonalPageFrame", () => {
         "value",
         "staging",
       );
+    });
+  });
+
+  it("rereads Personal's MCP servers from authn when the window regains focus", async () => {
+    const harness = mountFrame(
+      { kind: "personal" },
+      {
+        "environment.list": () => ({ environments: [personal] }),
+        "environment.host.list": () => ({ hosts: [] }),
+        "environment.configuration.mcpServers.list": () => ({ servers: [] }),
+      },
+      { section: "mcp-servers", element: <EnvironmentMcpServersPage /> },
+    );
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.list"),
+      ).toHaveLength(1);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.mcpServers.list"),
+      ).toHaveLength(2);
     });
   });
 

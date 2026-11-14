@@ -20,6 +20,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   ConfigurationSourceContext,
   type ConfigurationSource,
@@ -59,6 +60,13 @@ export const viewingHostBoundary: {
 export const windowHostBoundary: { hostId: string | null } = { hostId: null };
 
 let activeEnvironmentAuthn: FakeEnvironmentAuthn | null = null;
+let environmentCloudOverride: EnvironmentCloud | null = null;
+
+export function setTeamEnvironmentCloudOverride(
+  cloud: EnvironmentCloud | null,
+): void {
+  environmentCloudOverride = cloud;
+}
 
 const AUTHN_METHODS = new Set([
   "environment.configuration.items",
@@ -93,7 +101,9 @@ export function requireTeamEnvironmentAuthnBinding(): {
   return {
     hostClient: requireTeamHostClient(),
     hostId: null,
-    auth: { environmentCloud: () => authn.cloud },
+    auth: {
+      environmentCloud: () => environmentCloudOverride ?? authn.cloud,
+    },
   };
 }
 
@@ -332,6 +342,7 @@ function buildTeamPage(
 export function resetTeamPageHarness(): void {
   activeEnvironmentAuthn?.restore();
   activeEnvironmentAuthn = null;
+  environmentCloudOverride = null;
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;

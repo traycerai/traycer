@@ -276,42 +276,6 @@ async function routeItemPut(
     kind,
   });
   if (!parsed.success) return answer({ error: "Invalid item request." }, 400);
-  if (kind === "mcp_server") {
-    const value = objectBody(parsed.data.value);
-    const serverId = value?.mcpServerId;
-    const servers = await legacyMcpServers(environmentId, context);
-    const reenabled =
-      typeof serverId === "string" &&
-      servers.some(
-        (server) => server.serverId === serverId && server.item === null,
-      );
-    if (reenabled) {
-      const enabledHandler =
-        context.handlers["environment.configuration.mcpServers.setEnabled"];
-      context.calls.push({
-        method: "environment.configuration.mcpServers.setEnabled",
-        params: { environmentId, serverId, enabled: true },
-      });
-      if (enabledHandler !== undefined) {
-        const result = await enabledHandler({
-          environmentId,
-          serverId,
-          enabled: true,
-        });
-        if (result.outcome !== "saved") {
-          return answer(
-            { code: result.reason ?? "item_refused" },
-            statusForWrite(result.outcome),
-          );
-        }
-      }
-      context.mcpServerLists.delete(environmentId);
-      return answer(
-        { item: null, replayed: false, revision: parsed.data.revision ?? 1 },
-        200,
-      );
-    }
-  }
   context.calls.push({
     method: "environment.configuration.items.put",
     params: parsed.data,
@@ -363,7 +327,6 @@ async function routeItemDelete(
     kind,
   });
   if (!parsed.success) return answer({ error: "Invalid item request." }, 400);
-  if (kind === "mcp_server") return { status: 204, text: null };
   context.calls.push({
     method: "environment.configuration.items.delete",
     params: parsed.data,
@@ -403,6 +366,7 @@ async function routeItemDelete(
       409,
     );
   }
+  if (result.outcome === "saved") context.mcpServerLists.delete(environmentId);
   return writeAnswer(result);
 }
 
@@ -463,28 +427,10 @@ async function listMcpServers(
 
 async function setMcpServerEnabled(
   environmentId: string,
-  serverId: string,
   context: RouteContext,
 ): Promise<EnvironmentTransportAnswer> {
-  const enabledHandler =
-    context.handlers["environment.configuration.mcpServers.setEnabled"];
-  context.calls.push({
-    method: "environment.configuration.mcpServers.setEnabled",
-    params: { environmentId, serverId, enabled: false },
-  });
-  if (enabledHandler !== undefined) {
-    const result = await enabledHandler({
-      environmentId,
-      serverId,
-      enabled: false,
-    });
-    if (result.outcome !== "saved") {
-      return answer(
-        { code: result.reason ?? "item_refused" },
-        statusForWrite(result.outcome),
-      );
-    }
-  }
+  // This PATCH only keeps the current tool switches. The actual disable is
+  // the revision-guarded DELETE of the mcp_server item that follows.
   context.mcpServerLists.delete(environmentId);
   return answer({ outcome: "saved" }, 200);
 }
@@ -576,11 +522,7 @@ async function routeMcpServers(
       Object.keys(body).length === 1 &&
       "toolToggles" in body
     ) {
-      return setMcpServerEnabled(
-        environmentId,
-        decodeURIComponent(serverId),
-        context,
-      );
+      return setMcpServerEnabled(environmentId, context);
     }
     return putMcpServer(
       request,

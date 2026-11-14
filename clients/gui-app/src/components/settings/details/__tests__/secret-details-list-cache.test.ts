@@ -8,7 +8,10 @@
  * the read, however fresh the client calls it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   mountTeamPage,
   poolSource,
@@ -87,10 +90,13 @@ const listKey = (): readonly unknown[] =>
     [],
   );
 
-const mountDetails = (): TeamPageHarness =>
+const mountDetails = (onList: (() => void) | null = null): TeamPageHarness =>
   mountTeamPage(poolSource("editor"), {
     "environment.list": () => ({ environments: [] }),
-    "environment.secrets.list": () => ({ secrets: [], removed: [REMOVED] }),
+    "environment.secrets.list": () => {
+      onList?.();
+      return { secrets: [], removed: [REMOVED] };
+    },
     // The versions read (@1.1) carries no host failure.
     "environment.secrets.versions": () => ({
       versions: [],
@@ -191,5 +197,41 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       { environmentId: ENVIRONMENT },
     ]);
     expect(loaded.status.summary).toContain("dev-box couldn't delete its copy");
+  });
+
+  it("does not send the versions read after sign-in changes between list and versions", async () => {
+    let onOriginSignIn = true;
+    const harness = mountDetails(() => {
+      onOriginSignIn = false;
+    });
+    const client = requireTeamHostClient();
+    const baseCloud =
+      requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
+
+    const loaded = loadSecretDetails(
+      { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
+      {
+        hostId: client.getActiveHostId(),
+        client,
+        environmentCloud: beginEnvironmentCloudOperation(() => ({
+          ...baseCloud,
+          onOriginSignIn: () => onOriginSignIn,
+        })),
+        queryClient: harness.queryClient,
+      },
+      STATUS,
+    );
+
+    const failure = loaded.catch((error: unknown) => error);
+    const error = await failure;
+    expect(error).toBeInstanceOf(HostRpcError);
+    expect(error).toMatchObject({
+      method: "environment.secrets.versions",
+      message: "Connect to manage secrets.",
+    });
+    expect(harness.paramsOf("environment.secrets.list")).toEqual([
+      { environmentId: ENVIRONMENT },
+    ]);
+    expect(harness.paramsOf("environment.secrets.versions")).toEqual([]);
   });
 });

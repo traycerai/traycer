@@ -864,4 +864,35 @@ describe("TeamPermissions", () => {
       ).toContain("Ask before writes");
     });
   });
+
+  it("shows the policy-specific permission line when authn answers 403", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.configuration.items": () => ({
+        items: [policy(3, "Allow reads")],
+      }),
+      "environment.members": () => members,
+      "environment.configuration.policy.put": () => ({
+        outcome: "forbidden",
+        reason: null,
+      }),
+    });
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Reset to default" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Reset to default" }),
+    );
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "You no longer have access to change this policy.",
+    );
+    expect(harness.paramsOf("environment.configuration.policy.put")).toEqual([
+      { environmentId: "env-a", body: "", policyVersion: "3" },
+    ]);
+  });
 });
