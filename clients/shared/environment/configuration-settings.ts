@@ -1,6 +1,6 @@
 /**
  * `environment.configuration.items*`, `.revision`, `.mcpServers.*`,
- * `.policy.put` and `environment.plans.*` as the app's
+ * `.policy.put`, `environment.history` and `environment.plans.*` as the app's
  * own calls to authn's environment routes (`environment-cloud.ts`). Each
  * function answers exactly what the host's and the pool's forwarder answered
  * for the same method (`packages/common/src/environments/configuration-
@@ -23,6 +23,8 @@ import {
   type EnvironmentConfigurationPolicyPutRequest,
   type EnvironmentConfigurationRevisionResponse,
   type EnvironmentConfigurationWriteResponse,
+  type EnvironmentHistoryRequest,
+  type EnvironmentHistoryResponse,
   type EnvironmentPlansListResponse,
   type EnvironmentPlansUnlinkResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -586,7 +588,7 @@ export async function setConfigurationMcpServerEnabled(
   return mutationOutcome(answer);
 }
 
-// ── policy ─────────────────────────────────────────────────────────────────
+// ── policy, history ─────────────────────────────────────────────────────────
 
 export async function putConfigurationPolicy(
   cloud: EnvironmentCloud,
@@ -600,6 +602,31 @@ export async function putConfigurationPolicy(
       { body: request.body, policyVersion: request.policyVersion },
     ),
   );
+}
+
+export async function readConfigurationHistory(
+  cloud: EnvironmentCloud,
+  request: EnvironmentHistoryRequest,
+): Promise<EnvironmentHistoryResponse> {
+  const query = new URLSearchParams();
+  if (request.subject !== null) {
+    query.set("subject", `${request.subject.kind}:${request.subject.key}`);
+  }
+  const history = parseSettings(
+    await sendSettings(
+      cloud,
+      "GET",
+      `${environmentPath(request.environmentId)}/history${query.size === 0 ? "" : `?${query.toString()}`}`,
+      null,
+    ),
+    environmentHistoryResponseSchema,
+  );
+  // The contract answers newest first; authn lists them oldest first.
+  // `toSorted` is stable, so entries of one time keep authn's order.
+  return {
+    ...history,
+    entries: history.entries.toSorted((a, b) => b.at - a.at),
+  };
 }
 
 // ── plans ───────────────────────────────────────────────────────────────────
