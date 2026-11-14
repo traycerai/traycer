@@ -15,7 +15,10 @@ import type {
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   advanceLegendListTime,
   installLegendListTestClock,
@@ -303,6 +306,13 @@ function face(): HTMLElement {
 }
 
 /** The corner accent dot the picker button draws on the closed face. */
+function withAliases(
+  row: ProviderProfile,
+  aliases: readonly string[],
+): ProviderProfile {
+  return { ...row, aliases: [...aliases] };
+}
+
 function faceAccentDot(): HTMLSpanElement | null {
   const dot = Array.from(face().querySelectorAll("span")).find(
     (element) =>
@@ -873,7 +883,7 @@ describe("JudgeTab", () => {
       renderTab();
 
       expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
-        "Billed to your Claude Code account (ambient)",
+        "Billed to your Claude Code account",
       );
     });
 
@@ -898,8 +908,8 @@ describe("JudgeTab", () => {
       expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
         "Billed to your Claude Code account (work)",
       );
-      // The chip names it under the same rule.
-      expect(face().textContent).toContain("work");
+      // Two rows: the closed face and the billed line both name the account.
+      expect(face().textContent).toContain("Claude Sonnet · work");
     });
 
     it("names the one account of a profile provider on the closed face, with its accent dot", () => {
@@ -917,6 +927,9 @@ describe("JudgeTab", () => {
       const dot = faceAccentDot();
       expect(dot).not.toBeNull();
       expect(dot?.textContent).toBe("A");
+      expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+        "Billed to your Claude Code account",
+      );
     });
 
     it("names no account and draws no accent dot for one account of a provider that cannot have profiles", () => {
@@ -970,6 +983,76 @@ describe("JudgeTab", () => {
       expect(face().textContent).not.toContain("ambient");
       expect(face().textContent).not.toContain("gone-row");
       expect(faceAccentDot()).toBeNull();
+      expect(screen.getByTestId("auto-judge-warning").textContent).toBe(
+        "The account this judge used was removed from Claude Code. Pick another account, or Auto mode asks you instead.",
+      );
+    });
+
+    it("a judge pinned to an unambiguous alias of a live account shows no removed warning", () => {
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          withAliases(profile("desk-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = {
+        selection: { ...CLAUDE_STORED, profileId: "pin-x" },
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(screen.queryByTestId("auto-judge-warning")).toBeNull();
+      expect(face().textContent).toContain("Claude Sonnet · desk-row");
+    });
+
+    it("a last pick pinned to an unambiguous alias restores on a click and is not last-broken", async () => {
+      const stored = { ...CLAUDE_STORED, profileId: "pin-x" };
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          withAliases(profile("desk-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = { selection: null, lastSelection: stored };
+      renderTab();
+
+      expect(isChecked(automaticRadio())).toBe(true);
+      expect(face().textContent).not.toContain("Account removed");
+      expect(faceDimmed()).toBe(true);
+      expect(faceInert()).toBe(true);
+      fireEvent.click(face());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(pickerPanel()).toBeNull();
+      expect(writes()).toEqual([stored]);
+    });
+
+    it("a pin that is one row's id and another's alias shows the removed warning", () => {
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          profile("pin-x", "managed"),
+          withAliases(profile("second-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = {
+        selection: { ...CLAUDE_STORED, profileId: "pin-x" },
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(screen.getByTestId("auto-judge-warning").textContent).toBe(
+        "The account this judge used was removed from Claude Code. Pick another account, or Auto mode asks you instead.",
+      );
     });
 
     it("shows the spinner alone while a pick saves", async () => {
@@ -1593,7 +1676,7 @@ describe("JudgeTab", () => {
         expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
         expect(face().textContent).toContain("Claude Opus");
         expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
-          "Billed to your Claude Code account (ambient)",
+          "Billed to your Claude Code account",
         );
         expect(setJudgeMutate).not.toHaveBeenCalled();
 
@@ -2006,7 +2089,7 @@ describe("JudgeTab", () => {
         expect(droppedLine()?.textContent).toBe(judgeModelsFailedLine("Codex"));
         expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
         expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
-          "Billed to your Claude Code account (ambient)",
+          "Billed to your Claude Code account",
         );
 
         act(() => {
@@ -2026,7 +2109,7 @@ describe("JudgeTab", () => {
         expect(droppedLine()?.textContent).toBe(judgeNoModelsLine("Codex"));
         expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
         expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
-          "Billed to your Claude Code account (ambient)",
+          "Billed to your Claude Code account",
         );
 
         act(() => {
