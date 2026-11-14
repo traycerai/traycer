@@ -3837,6 +3837,77 @@ export type ProvidersSetApiKeyResponse = z.infer<
   typeof providersSetApiKeyResponseSchema
 >;
 
+/** Captures the computer's joining and local choice before the client changes the record. */
+export const providersBeginApiKeyChangeRequestSchema = lazySchema(() =>
+  z.strictObject({ providerId: providerIdSchema }),
+);
+export type ProvidersBeginApiKeyChangeRequest = z.infer<
+  typeof providersBeginApiKeyChangeRequestSchema
+>;
+
+/** The token is opaque and single-use; the legacy path has no record change to settle. */
+export const providersBeginApiKeyChangeResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("mode", [
+    z.strictObject({
+      mode: z.literal("legacy"),
+      changeToken: z.null(),
+      environmentId: z.null(),
+    }),
+    z.strictObject({
+      mode: z.literal("record"),
+      changeToken: z.string().min(1),
+      environmentId: z.string().min(1),
+    }),
+  ]),
+);
+export type ProvidersBeginApiKeyChangeResponse = z.infer<
+  typeof providersBeginApiKeyChangeResponseSchema
+>;
+
+const providerApiKeyRecordChangeSchema = lazySchema(() =>
+  z.strictObject({
+    providerId: providerIdSchema,
+    changeToken: z.string().min(1),
+    recordId: z.string().min(1),
+    signInNumber: z.string().regex(/^(0|[1-9][0-9]{0,18})$/),
+    recordRevision: z.string().regex(/^(0|[1-9][0-9]{0,18})$/),
+  }),
+);
+
+/** The client sends the key to the broker itself; only the accepted record's numbers reach the computer. */
+export const providersSettleApiKeyChangeRequestSchema = lazySchema(() =>
+  z.union([
+    providerApiKeyRecordChangeSchema.extend({ action: z.literal("set") }),
+    providerApiKeyRecordChangeSchema.extend({ action: z.literal("clear") }),
+    // A key held only on this computer has no broker record to remove.
+    providerApiKeyRecordChangeSchema.extend({
+      action: z.literal("clear"),
+      recordId: z.null(),
+      signInNumber: z.null(),
+      recordRevision: z.null(),
+    }),
+  ]),
+);
+export type ProvidersSettleApiKeyChangeRequest = z.infer<
+  typeof providersSettleApiKeyChangeRequestSchema
+>;
+
+export const providersSettleApiKeyChangeResponseSchema = lazySchema(() =>
+  providersSetApiKeyResponseSchema.extend({
+    result: z.enum([
+      "installed",
+      "unchanged",
+      "kept-local",
+      "refused",
+      "dropped",
+      "unavailable",
+    ]),
+  }),
+);
+export type ProvidersSettleApiKeyChangeResponse = z.infer<
+  typeof providersSettleApiKeyChangeResponseSchema
+>;
+
 export const providersClearApiKeyRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,

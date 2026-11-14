@@ -91,6 +91,7 @@ import { sha256Hex } from "@/lib/composer/landing-image-store";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
+import { withAppWordsAfterReason } from "@/lib/chats/rejected-frame-reason";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
@@ -210,6 +211,11 @@ export async function buildUnrecordedPromptHandoff(args: {
    */
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
+  /**
+   * Whether `reason` came from the removed-account code, which puts the
+   * draft's own clauses on the next line after the bare pin's words.
+   */
+  readonly reasonIsRemovedProfile: boolean;
   readonly readHashImage: HandoffImageResolver;
   readonly stillCurrent: () => boolean;
   /**
@@ -271,6 +277,7 @@ export async function buildUnrecordedPromptHandoff(args: {
         durability: args.durability,
         qualification: teardownQualification({
           reason: args.reason,
+          reasonIsRemovedProfile: args.reasonIsRemovedProfile,
           // Inline images whose format the host's writer will not accept are
           // the only loss on this path: everything else was materialized into
           // the landing partition above.
@@ -429,6 +436,8 @@ export interface TextOnlyPromptHandoffInput {
    */
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
+  /** As {@link buildUnrecordedPromptHandoff}'s. */
+  readonly reasonIsRemovedProfile: boolean;
   readonly cause: DroppedImageCause;
   readonly stillCurrent: () => boolean;
   /** Where the draft's message goes, or `null`; the draft is created with it. */
@@ -470,6 +479,7 @@ function installTextOnly(
         durability: args.durability,
         qualification: teardownQualification({
           reason: args.reason,
+          reasonIsRemovedProfile: args.reasonIsRemovedProfile,
           droppedImages: stripped.dropped,
           droppedImageCause: args.cause,
           // EVERY record, not a subset: this path carries no images at all,
@@ -576,6 +586,7 @@ function blobReaderFor(
  */
 function teardownQualification(args: {
   readonly reason: string;
+  readonly reasonIsRemovedProfile: boolean;
   readonly droppedImages: number;
   readonly droppedImageCause: DroppedImageCause | null;
   readonly droppedAnnotations: number;
@@ -606,7 +617,11 @@ function teardownQualification(args: {
     // than none: it points the reader at a remedy that does not apply.
     clauses.push(`${subject} not saved with it.`);
   }
-  return [`Unsent — ${args.reason}`, ...clauses].join(" ");
+  return `Unsent — ${withAppWordsAfterReason(
+    args.reason,
+    clauses.map((clause) => ` ${clause}`).join(""),
+    args.reasonIsRemovedProfile,
+  )}`;
 }
 
 /**

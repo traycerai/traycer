@@ -587,6 +587,7 @@ export function createPublishedChatSessionHandle(
     userId: input.ownerUserId,
     sessionGeneration: 0,
     store: boundStore,
+    lineBreakNotices: new WeakSet(),
     deliveredNotices: {
       notices: new WeakSet(),
       retainedClientActionIds: new Set<string>(),
