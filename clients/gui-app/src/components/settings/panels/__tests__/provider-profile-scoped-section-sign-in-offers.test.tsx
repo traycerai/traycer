@@ -190,8 +190,8 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       offers: true,
       row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
       signedOut: true,
-      onHostOnly: false,
-      advertiseLink: false,
+      onHostOnly: true,
+      advertiseLink: true,
     });
     const button = await screen.findByRole("button", {
       name: SIGN_IN_EVERYWHERE,
@@ -199,6 +199,11 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
     fireEvent.click(button);
     expect(harness.onAddProfile).toHaveBeenCalledTimes(1);
     expect(harness.startLogins()).toBe(0);
+    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Link account" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Link account" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Link" })).toBeNull();
     expect(harness.listCalls()).toBe(1);
   });
 

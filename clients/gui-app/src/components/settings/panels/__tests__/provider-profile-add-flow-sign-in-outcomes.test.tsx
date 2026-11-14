@@ -873,8 +873,10 @@ describe("Add a profile around one sign-in", () => {
           methodCount(harness.messenger.calls, "providers.submitLoginCode"),
         ).toBe(1);
       });
-      await screen.findByRole("button", { name: "Cancel sign-in" });
-      fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+      expect(
+        await screen.findByRole("button", { name: "Cancel sign-in" }),
+      ).toHaveProperty("disabled", false);
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
       await waitFor(() => {
         expect(
           methodCount(harness.messenger.calls, "providers.cancelLogin"),
