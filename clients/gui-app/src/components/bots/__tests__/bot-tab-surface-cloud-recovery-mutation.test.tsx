@@ -446,18 +446,23 @@ async function failMountOpensUntilReconnecting(): Promise<number> {
   return failed;
 }
 
+/**
+ * Settles the opens the mount asked and no other: every one of them is handed
+ * to the lane before the first reaches the host, and the next reaches the host
+ * only once the one before it settles. An open asked after that stays
+ * unsettled, keeps the wait for idle from passing, and is not counted.
+ */
 async function settleMountOpensUntilIdle(
   settleOpen: (open: HeldOpen) => void,
 ): Promise<number> {
-  await waitFor(async () => {
-    for (const held of opens.filter((open) => !open.settled)) {
-      await settle(held, settleOpen);
-    }
-    expect(
-      queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
-    ).toBe(0);
-  });
-  return opens.length;
+  await waitFor(() => expect(opens.length).toBeGreaterThan(0));
+  const asked = openSubmissions;
+  for (let index = 0; index < asked; index += 1) {
+    await waitFor(() => expect(opens.length).toBeGreaterThan(index));
+    await settle(heldOpen(index), settleOpen);
+  }
+  await waitForNoOpenInFlight();
+  return asked;
 }
 
 async function waitForOpenCount(count: number): Promise<void> {
