@@ -171,6 +171,7 @@ import {
   RETRY,
   STOP,
   DETAILS,
+  teamCreditsRanOutLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
 import { sandboxMutationKeys } from "@/lib/query-keys";
@@ -2408,9 +2409,15 @@ function PendingDispatchItem(props: {
           />
         )}
         <span>
-          {view.line === "settings"
-            ? pendingSettingsTitle(row.row, settings.data)
-            : pendingDispatchLineCopy(send.request.kind, view.line)}
+          {view.line === "settings" ? (
+            pendingSettingsTitle(row.row, settings.data)
+          ) : (
+            <PendingDispatchLine
+              kind={send.request.kind}
+              line={view.line}
+              row={row.row}
+            />
+          )}
         </span>
         {view.line === "settings" ? (
           <PendingDispatchSettingsDetail row={row.row} status={settings.data} />
@@ -2507,6 +2514,34 @@ function pendingDispatchLineCopy(
     delivered: message ? "Message sent." : "Agent ready.",
   };
   return copy[line];
+}
+
+/**
+ * The dispatch's line. Out of credits on a team's sandbox, anyone who cannot
+ * buy the team's credits is told whose ran out, not to add them.
+ */
+function PendingDispatchLine(props: {
+  readonly kind: PendingSandboxSendRequest["kind"];
+  readonly line: Exclude<PendingSendView["line"], "settings">;
+  readonly row: SandboxSummary | null;
+}): ReactNode {
+  if (props.line === "credits" && props.row !== null)
+    return <PendingDispatchCreditsLine kind={props.kind} row={props.row} />;
+  return pendingDispatchLineCopy(props.kind, props.line);
+}
+
+function PendingDispatchCreditsLine(props: {
+  readonly kind: PendingSandboxSendRequest["kind"];
+  readonly row: SandboxSummary;
+}): ReactNode {
+  const { configurations } = useSandboxConfigurations();
+  const configuration = sandboxConfigurationOf(props.row, configurations);
+  const offersAddCredits = useOffersAddCredits(
+    configuration ?? { kind: "personal" },
+  );
+  if (configuration?.kind === "team" && !offersAddCredits)
+    return teamCreditsRanOutLine(configuration.teamName);
+  return pendingDispatchLineCopy(props.kind, "credits");
 }
 
 /** Repairs a live sandbox without releasing a possibly accepted request. */

@@ -1,4 +1,4 @@
-import { useCallback, useContext } from "react";
+import { useCallback, useContext, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ENV_CREDENTIAL_AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -13,7 +13,15 @@ import {
   type RoutingSettledNotice,
 } from "@/components/chat/fallback/routing-settled-card";
 import { routingSettledReportText } from "@/components/chat/fallback/routing-receipt";
-import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
+import {
+  isSandboxFrozenRefusal,
+  sandboxRefusalCopyFor,
+  teamFrozenRefusalCopy,
+  type SandboxRefusalCopy,
+} from "@/components/chat/segments/sandbox-refusal-copy";
+import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
+import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useTeamBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
 import { ProviderUpdateAction } from "@/components/chat/segments/provider-update-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
@@ -213,6 +221,11 @@ export function ErrorSegment({
   settledNoticeFindUnitId,
 }: ErrorSegmentProps) {
   const readOnly = useContext(ChatStatusReadOnlyContext);
+  // The chat's own sandbox, from the person's host directory: a team's one
+  // out of credits names the team.
+  const teamSandbox = useSandboxHostConfiguration(
+    useMaybeChatTranscript()?.hostId ?? null,
+  );
   // Built at CLICK time, never at render. This row is durable transcript: it
   // mounts whenever the chat is opened, which is one or more commits BEFORE
   // `SupportContextRegistryBridge`'s effects publish that chat's own
@@ -297,6 +310,76 @@ export function ErrorSegment({
   // `sandbox-refusal-copy.ts`, in place of the host's message; the report
   // still carries the raw message and code.
   const sandboxRefusal = sandboxRefusalCopyFor(code, message);
+  const row = {
+    findUnitId,
+    message,
+    harnessId,
+    failure,
+    code,
+    actions,
+    reportAction,
+  };
+  if (
+    sandboxRefusal !== null &&
+    teamSandbox?.kind === "team" &&
+    teamSandbox.teamName.length > 0 &&
+    isSandboxFrozenRefusal(code, message)
+  ) {
+    return (
+      <TeamFrozenErrorSegmentRow
+        {...row}
+        copy={sandboxRefusal}
+        teamId={teamSandbox.teamId}
+        teamName={teamSandbox.teamName}
+      />
+    );
+  }
+  return <ErrorSegmentRow {...row} sandboxRefusal={sandboxRefusal} />;
+}
+
+interface ErrorSegmentRowProps {
+  readonly findUnitId: string | null;
+  readonly message: string;
+  readonly harnessId: GuiHarnessId | null;
+  readonly failure: AgentFailure | null;
+  readonly code: string | null;
+  readonly actions: ReactNode;
+  readonly reportAction: ReactNode;
+}
+
+/**
+ * A team's sandbox out of credits mid-turn: the title names the team, and
+ * the line under it is worded for whether the person can buy its credits.
+ */
+function TeamFrozenErrorSegmentRow(
+  props: ErrorSegmentRowProps & {
+    readonly copy: SandboxRefusalCopy;
+    readonly teamId: string;
+    readonly teamName: string;
+  },
+): ReactNode {
+  const { copy, teamId, teamName, ...row } = props;
+  const buysTeamCredits = useTeamBillingAdmin(teamId);
+  return (
+    <ErrorSegmentRow
+      {...row}
+      sandboxRefusal={teamFrozenRefusalCopy(copy, teamName, buysTeamCredits)}
+    />
+  );
+}
+
+function ErrorSegmentRow({
+  findUnitId,
+  message,
+  harnessId,
+  failure,
+  code,
+  actions,
+  reportAction,
+  sandboxRefusal,
+}: ErrorSegmentRowProps & {
+  readonly sandboxRefusal: SandboxRefusalCopy | null;
+}): ReactNode {
   const { presentation, headline } =
     sandboxRefusal === null
       ? errorRowPresentation(failure?.reason ?? null, code)

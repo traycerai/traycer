@@ -10,8 +10,12 @@ import {
   DETAILS,
   RETRY,
   sandboxVerbFailureLine,
+  teamSandboxOutOfCreditsLine,
 } from "@/lib/sandboxes/sandbox-strings";
-import { SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT } from "@traycer/protocol/host/sandbox-control";
+import {
+  SANDBOX_REFUSAL_CODE_FROZEN,
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+} from "@traycer/protocol/host/sandbox-control";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
@@ -60,7 +64,12 @@ export function useSandboxOperationFailure(
   const creditFailure = creditRefusalOf(operation.error);
   const message =
     creditFailure === null
-      ? `${sandboxVerbFailureLine(operation.verb, props.name)}${safeFailureClause(operation.error)}`
+      ? operationFailureLine(
+          operation,
+          props.name,
+          configuration,
+          offersAddCredits,
+        )
       : `Couldn't ${operation.verb} ${props.name} · ${sandboxCreditShortLine(configuration, creditFailure.creditSource ?? null, creditFailure.shortfallMc, { waking: true, context: "clause" })}`;
   return (
     <div
@@ -102,6 +111,35 @@ export function useSandboxOperationFailure(
       </Button>
     </div>
   );
+}
+
+/**
+ * A failure other than a credit refusal. A team's sandbox refused for being
+ * out of credits says whose bundle is out to anyone who cannot buy it, in
+ * place of telling them to add credits.
+ */
+function operationFailureLine(
+  operation: Extract<SandboxRowOperation, { kind: "failed" }>,
+  name: string,
+  configuration: StageConfiguration,
+  offersAddCredits: boolean,
+): string {
+  const failed = sandboxVerbFailureLine(operation.verb, name);
+  const failure =
+    operation.error instanceof SandboxOperationError
+      ? operation.error.failure
+      : null;
+  const frozen =
+    failure?.kind === "refused" && failure.code === SANDBOX_REFUSAL_CODE_FROZEN;
+  if (
+    frozen &&
+    configuration.kind === "team" &&
+    configuration.teamName.length > 0 &&
+    !offersAddCredits
+  ) {
+    return `${failed}. ${teamSandboxOutOfCreditsLine(configuration.teamName)}`;
+  }
+  return `${failed}${safeFailureClause(operation.error)}`;
 }
 
 /** Only translated control failures are safe to show inline. */

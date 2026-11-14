@@ -383,7 +383,7 @@ function EnableTeamCloudAction(props: {
   const catalogue = useSandboxCatalogue(true);
   const defaults = useSandboxDefaults([environmentId]).get(environmentId);
   const sandboxes = useSandboxList();
-  const create = useSandboxCreate("inline");
+  const create = useSandboxCreate({ kind: "inline" });
   // Held outside the card: a create outlives the card that sent it, and the
   // list's refresh answers after the create settles, so a card mounted in
   // between must still know the team's sandbox is coming.

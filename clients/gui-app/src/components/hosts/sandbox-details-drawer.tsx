@@ -25,7 +25,12 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  SandboxOperationError,
+  sandboxFailureMessageFor,
+} from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useSampledNow } from "@/lib/relative-time";
@@ -130,6 +135,15 @@ function withOperationFailure(
   };
 }
 
+function operationFailureMessage(
+  error: Error,
+  buysTeamCredits: boolean,
+): string {
+  return error instanceof SandboxOperationError
+    ? sandboxFailureMessageFor(error.failure, error.message, buysTeamCredits)
+    : error.message;
+}
+
 function SandboxDetailsSections(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
@@ -139,6 +153,13 @@ function SandboxDetailsSections(props: {
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const configurations = useSandboxConfigurations();
+  const configuration = sandboxConfigurationOf(
+    summary,
+    configurations.configurations,
+  );
+  const buysTeamCredits = useOffersAddCredits(
+    configuration ?? { kind: "personal" },
+  );
   const now = useSampledNow();
   const entry = sandboxDetailsEntry({
     summary,
@@ -149,10 +170,7 @@ function SandboxDetailsSections(props: {
     viewerUserId,
     // Personal only once every team answered: a team row from a server
     // that names no creator is never the viewer's.
-    personal:
-      configurations.complete &&
-      sandboxConfigurationOf(summary, configurations.configurations)?.kind ===
-        "personal",
+    personal: configurations.complete && configuration?.kind === "personal",
     now,
   });
   const clipboard = useClipboardCopy({
@@ -197,7 +215,7 @@ function SandboxDetailsSections(props: {
               <p>
                 {sandboxVerbFailureLine(operation.verb, summary.displayName)}
               </p>
-              <p>{operation.error.message}</p>
+              <p>{operationFailureMessage(operation.error, buysTeamCredits)}</p>
               <p>{`Support reference: ${operation.reference}`}</p>
             </li>
           ) : null}

@@ -12,6 +12,7 @@ import {
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import {
@@ -54,7 +55,10 @@ export function SandboxFailedRowActions(props: {
   readonly configuration: SandboxPageConfiguration | null;
 }): ReactNode {
   const { summary, configuration } = props;
-  const create = useSandboxCreate("toast");
+  const buysTeamCredits = useOffersAddCredits(
+    configuration ?? { kind: "personal" },
+  );
+  const create = useSandboxCreate({ kind: "toast", buysTeamCredits });
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
   const [destroyOpen, setDestroyOpen] = useState(false);

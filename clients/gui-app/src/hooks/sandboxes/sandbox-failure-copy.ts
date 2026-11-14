@@ -16,6 +16,7 @@ import {
   SANDBOX_REFUSAL_CODE_VERB_NOT_AVAILABLE,
 } from "@traycer/protocol/host/sandbox-control";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
+import { TEAM_CREDITS_DONT_COVER_AN_HOUR } from "@/lib/sandboxes/sandbox-strings";
 import {
   SANDBOX_CREATE_ENVIRONMENT_UNAVAILABLE_LINE,
   sandboxNotAMemberLine,
@@ -135,6 +136,28 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
     default:
       return REFUSAL_COPY.get(failure.code) ?? "Traycer refused that request.";
   }
+}
+
+/**
+ * A failure's sentence as its reader reads it. A refusal for want of the
+ * team's credits tells only a reader who can buy them how much to add;
+ * anyone else reads its first sentence alone. Every other failure is
+ * `message`, the sentence its error carries.
+ */
+export function sandboxFailureMessageFor(
+  failure: SandboxControlFailure,
+  message: string,
+  buysTeamCredits: boolean,
+): string {
+  const teamCreditRefusal =
+    failure.kind === "refused" &&
+    failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&
+    failure.creditSource === "team" &&
+    failure.reason !== "unverified" &&
+    failure.reason !== "unsupported-subscription";
+  return teamCreditRefusal && !buysTeamCredits
+    ? TEAM_CREDITS_DONT_COVER_AN_HOUR
+    : message;
 }
 
 /**

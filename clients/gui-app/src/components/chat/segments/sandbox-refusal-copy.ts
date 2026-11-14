@@ -16,6 +16,10 @@ import {
   NO_EGRESS_REFUSAL_SUBJECT,
   sandboxEgressRefusalCopyFor,
 } from "@/lib/sandboxes/sandbox-egress-refusal-copy";
+import {
+  onceTeamHasCreditsLine,
+  teamOutOfCreditsHeadline,
+} from "@/lib/sandboxes/sandbox-strings";
 
 export interface SandboxRefusalCopy {
   /** The row's headline, in the interrupted (warning) presentation. */
@@ -42,7 +46,7 @@ interface SandboxRefusalRow {
  * to the generic red failure with the host's raw message.
  */
 const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
-  SANDBOX_FROZEN: {
+  [SANDBOX_FROZEN]: {
     headline: "Paused: account out of credits",
     description:
       "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
@@ -67,6 +71,37 @@ const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
     showsHostDetail: false,
   },
 };
+
+const SANDBOX_FROZEN = "SANDBOX_FROZEN";
+
+/** Whether the block is a turn a sandbox's want of credits ended. */
+export function isSandboxFrozenRefusal(
+  code: string | null,
+  message: string,
+): boolean {
+  return code !== null && code.length > 0
+    ? code === SANDBOX_FROZEN
+    : message.startsWith(`${SANDBOX_FROZEN}:`);
+}
+
+/**
+ * That turn's copy on a team's sandbox. The title names the team for
+ * everyone; the line under it tells only someone who can buy the team's
+ * credits to add them.
+ */
+export function teamFrozenRefusalCopy(
+  copy: SandboxRefusalCopy,
+  teamName: string,
+  buysTeamCredits: boolean,
+): SandboxRefusalCopy {
+  return {
+    ...copy,
+    headline: teamOutOfCreditsHeadline(teamName),
+    description: buysTeamCredits
+      ? copy.description
+      : onceTeamHasCreditsLine(teamName),
+  };
+}
 
 export function sandboxRefusalCopyFor(
   code: string | null,

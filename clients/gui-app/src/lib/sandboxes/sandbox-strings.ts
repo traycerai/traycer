@@ -250,6 +250,40 @@ export const ONLY_TEAM_ADMINS_LINE: { readonly shown: boolean } = {
   shown: false,
 };
 
+// ── Telling a member to add credits ───────────────────────────────────────
+//
+// Built to the Proposal of board C29, provisional until that board is ruled;
+// its Alternative takes these out and gives everyone today's sentences back.
+// Only a team's Admin can buy the team's credits, so on a team's sandbox
+// anyone else reads these in place of a sentence telling them to add credits.
+// The Admin and a Personal sandbox keep today's, except the chat's title,
+// which the team's Admin reads too. A wake refused by an older server, which
+// does not say whose credits were short, keeps today's sentence.
+
+/** Under a message sent to a team's sandbox that is out of credits. */
+export function teamCreditsRanOutLine(teamName: string): string {
+  return `${teamPossessive(teamName)} credits ran out.`;
+}
+
+/** After "Couldn't resume build-box." on a team's sandbox row. */
+export function teamSandboxOutOfCreditsLine(teamName: string): string {
+  return `This sandbox is out of credits. ${teamPossessive(teamName)} bundle is out.`;
+}
+
+/** A chat's title when a team's sandbox ran out of credits mid-turn. */
+export function teamOutOfCreditsHeadline(teamName: string): string {
+  return `Paused: ${teamName} is out of credits`;
+}
+
+/** The line under that title. */
+export function onceTeamHasCreditsLine(teamName: string): string {
+  return `This sandbox ran out of credits, which ended the turn. Once ${teamName} has credits again, send a message to pick up where it stopped.`;
+}
+
+/** A team sandbox's create or wake refused for want of the team's credits. */
+export const TEAM_CREDITS_DONT_COVER_AN_HOUR =
+  "The team's credits don't cover an hour of this sandbox.";
+
 // ── The consequences block ────────────────────────────────────────────────
 
 /** The audience clause: the task has or may gain readers beyond the person. */
