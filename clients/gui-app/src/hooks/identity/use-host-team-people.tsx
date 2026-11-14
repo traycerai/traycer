@@ -27,7 +27,8 @@ import {
  * directory a surface above already offers, and for an id no directory names
  * once the team's is complete, authn's person read, which still names someone
  * who has left the team. Both are read in the team's environment, which the
- * viewer's `environment.list` names; until it answers, nobody is named. A
+ * viewer's `environment.list` names; until it answers, no member is read or
+ * named (the viewer and the task's collaborators still are). A
  * host no team owns, or one whose owner cannot be read yet, passes the
  * surface above's directory through unchanged, so a personal computer asks
  * for nothing.
@@ -82,7 +83,7 @@ function useHostTeamMembers(hostId: string): BotMemberResolver {
     [team, outer, former],
   );
   if (!readsTeam) return outer;
-  // Until the list names the team's environment, nobody on this host is
+  // Until the list names the team's environment, no member of this host is
   // known: the surface's own directory is not the team's people.
   if (listed === undefined) return nobodyKnown;
   // The list answered without the team: its directory is not the viewer's
