@@ -9,6 +9,7 @@ import {
   ConfigurationSourceContext,
   configurationRoleOf,
   mayChangeConfiguration,
+  personalReadOnlyOnTeamComputer,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { seeButNotChangeLine } from "@/components/settings/members/copy";
@@ -127,18 +128,18 @@ export function ConfigurationSourceBoundary(props: {
   );
   const source = useMemo<ConfigurationSource>(() => {
     if (descriptor === undefined) return { kind: "host" };
-    const personal = descriptor.ownerKind === "user";
+    const configuration = descriptor.ownerKind === "user" ? "personal" : "team";
     return {
       kind: "pool",
-      configuration: personal ? "personal" : "team",
+      configuration,
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
       effectiveRole: configurationRoleOf(descriptor),
-      // A team's own settings follow the role authn answers, whichever
-      // computer the window is on; Personal is never changed through a
-      // team's computer.
-      transportReadOnly: personal && onTeamComputer,
+      transportReadOnly: personalReadOnlyOnTeamComputer(
+        configuration,
+        onTeamComputer,
+      ),
     };
   }, [descriptor, onTeamComputer]);
   useConfigurationRevision(descriptor?.environmentId ?? null);
