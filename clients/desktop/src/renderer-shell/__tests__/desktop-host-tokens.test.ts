@@ -201,6 +201,56 @@ describe("desktop host-token source eras", () => {
     await forgetting;
   });
 
+  it("announces each copied host when forgetting begins before main answers", async () => {
+    const forgetAnswer = deferred<{ era: number }>();
+    const { bridge, setEra } = bridgeFixture();
+    Reflect.set(bridge, "forgetUser", () => forgetAnswer.promise);
+    const tokens = createDesktopHostTokenSource(bridge);
+    const otherHostId = "computer-b";
+    await tokens.obtain(USER_ID, HOST_ID, false, null);
+    await tokens.obtain(USER_ID, otherHostId, false, null);
+    const changes: Array<{ readonly userId: string; readonly hostId: string }> =
+      [];
+    const unsubscribe = tokens.subscribe(({ userId, hostId }) =>
+      changes.push({ userId, hostId }),
+    );
+
+    const forgetting = tokens.forgetUser(USER_ID);
+    expect(changes).toEqual([
+      { userId: USER_ID, hostId: HOST_ID },
+      { userId: USER_ID, hostId: otherHostId },
+    ]);
+
+    setEra(1);
+    forgetAnswer.resolve({ era: 1 });
+    await forgetting;
+    unsubscribe();
+  });
+
+  it("announces every copied host when another host reports a newer era", async () => {
+    const { bridge, emit, setEra } = bridgeFixture();
+    const tokens = createDesktopHostTokenSource(bridge);
+    const otherHostId = "computer-b";
+    const eventHostId = "computer-c";
+    await tokens.obtain(USER_ID, HOST_ID, false, null);
+    await tokens.obtain(USER_ID, otherHostId, false, null);
+    const changes: Array<{ readonly userId: string; readonly hostId: string }> =
+      [];
+    const unsubscribe = tokens.subscribe(({ userId, hostId }) =>
+      changes.push({ userId, hostId }),
+    );
+
+    setEra(1);
+    emit({ userId: USER_ID, hostId: eventHostId, token: null, era: 1 });
+
+    expect(changes).toEqual([
+      { userId: USER_ID, hostId: HOST_ID },
+      { userId: USER_ID, hostId: otherHostId },
+      { userId: USER_ID, hostId: eventHostId },
+    ]);
+    unsubscribe();
+  });
+
   it("empties all copied hosts on a newer-era event", async () => {
     const { bridge, emit, setEra } = bridgeFixture();
     const tokens = createDesktopHostTokenSource(bridge);
