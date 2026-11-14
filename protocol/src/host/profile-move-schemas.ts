@@ -65,13 +65,17 @@ const profileMoveTargetSchema = lazySchema(() =>
   ]),
 );
 
+const profileMoveAgentTargetRefSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("agent"),
+    epicId: z.string().min(1),
+    agentId: z.string().min(1),
+  }),
+);
+
 const profileMoveTargetRefSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("agent"),
-      epicId: z.string().min(1),
-      agentId: z.string().min(1),
-    }),
+    profileMoveAgentTargetRefSchema,
     z.object({
       kind: z.literal("bot"),
       botId: botIdSchema,
@@ -153,12 +157,53 @@ export const providersPreviewProfileMoveResponseSchema = lazySchema(() =>
           }
         });
       }
+      const seenTargets = new Set<string>();
+      value.targets.forEach((target, index) => {
+        const key = profileMoveTargetRefKey(target);
+        if (seenTargets.has(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["targets", index],
+            message: "a target is listed once",
+          });
+        }
+        seenTargets.add(key);
+      });
+      const seenTerminals = new Set<string>();
+      value.terminals.forEach((terminal, index) => {
+        const key = JSON.stringify([terminal.epicId, terminal.agentId]);
+        if (seenTerminals.has(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["terminals", index],
+            message: "a terminal is listed once",
+          });
+        }
+        seenTerminals.add(key);
+      });
+      const seenComputers = new Set<string>();
+      value.pendingComputers.forEach((computer, index) => {
+        if (seenComputers.has(computer.hostId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["pendingComputers", index],
+            message: "a computer is listed once",
+          });
+        }
+        seenComputers.add(computer.hostId);
+      });
     }),
 );
 export type ProvidersPreviewProfileMoveResponse = z.infer<
   typeof providersPreviewProfileMoveResponseSchema
 >;
 
+/**
+ * A bot is never deferred; it moves by one cloud write at commit and its
+ * outcome is `moved` even while one of its threads is in a turn; that
+ * thread keeps the settings it started with; the count of targets that
+ * move when their turns end never includes a bot.
+ */
 const profileMoveResultSchema = lazySchema(() =>
   z.discriminatedUnion("outcome", [
     z.object({
@@ -174,8 +219,8 @@ const profileMoveResultSchema = lazySchema(() =>
     }),
     z.object({
       outcome: z.literal("deferred"),
-      target: profileMoveTargetRefSchema,
-      row: profileMoveTargetSchema.nullable(),
+      target: profileMoveAgentTargetRefSchema,
+      row: profileMoveAgentTargetSchema.nullable(),
     }),
     z.object({
       outcome: z.literal("pending"),
@@ -184,6 +229,36 @@ const profileMoveResultSchema = lazySchema(() =>
     }),
   ]),
 );
+
+/** A colon inside an id must not make two different refs one key. */
+function profileMoveTargetRefKey(
+  target:
+    | { kind: "agent"; epicId: string; agentId: string }
+    | { kind: "bot"; botId: string },
+): string {
+  if (target.kind === "agent") {
+    return JSON.stringify([target.kind, target.epicId, target.agentId]);
+  }
+  return JSON.stringify([target.kind, target.botId]);
+}
+
+function profileMoveRowIsTarget(
+  target:
+    | { kind: "agent"; epicId: string; agentId: string }
+    | { kind: "bot"; botId: string },
+  row:
+    | { kind: "agent"; epicId: string; agentId: string }
+    | { kind: "bot"; botId: string },
+): boolean {
+  if (target.kind === "agent") {
+    return (
+      row.kind === "agent" &&
+      row.epicId === target.epicId &&
+      row.agentId === target.agentId
+    );
+  }
+  return row.kind === "bot" && row.botId === target.botId;
+}
 
 export const providersCommitProfileMoveRequestSchema = lazySchema(() =>
   z
@@ -205,10 +280,7 @@ export const providersCommitProfileMoveRequestSchema = lazySchema(() =>
       }
       const seen = new Set<string>();
       value.targets.forEach((target, index) => {
-        const key =
-          target.kind === "agent"
-            ? `agent:${target.epicId}:${target.agentId}`
-            : `bot:${target.botId}`;
+        const key = profileMoveTargetRefKey(target);
         if (seen.has(key)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -233,15 +305,34 @@ export const providersCommitProfileMoveResponseSchema = lazySchema(() =>
       results: z.array(profileMoveResultSchema).max(2000),
     })
     .superRefine((value, ctx) => {
-      if (value.mode !== "waiting") return;
+      const seen = new Set<string>();
       value.results.forEach((result, index) => {
-        if (result.outcome === "deferred") {
+        if (value.mode === "waiting" && result.outcome === "deferred") {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["results", index, "outcome"],
             message: "waiting mode does not defer",
           });
         }
+        if (
+          result.row !== null &&
+          !profileMoveRowIsTarget(result.target, result.row)
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["results", index, "row"],
+            message: "the row is the target",
+          });
+        }
+        const key = profileMoveTargetRefKey(result.target);
+        if (seen.has(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["results", index],
+            message: "a target is listed once",
+          });
+        }
+        seen.add(key);
       });
     }),
 );
