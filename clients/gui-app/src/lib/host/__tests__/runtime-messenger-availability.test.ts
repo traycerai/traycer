@@ -14,9 +14,25 @@
  * against it sit on an error card until their own retry backoff fires. So the
  * subscription has to outlive the binding.
  */
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  HostRequestOptions,
+  IHostMessenger,
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  FakeNativeWebSocket,
+  sentFramesOfKind,
+} from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 vi.mock(
   "@traycer-clients/shared/host-client/minimum-host-version",
   async (importOriginal) => {
@@ -49,7 +65,13 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
+import {
+  heldHostTokenSource,
+  inertHostTokenSource,
+} from "../../../../__tests__/create-fake-runner-host";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import {
   buildRuntimeHostMessenger,
   type RuntimeHostMessengerBinding,
@@ -237,6 +259,36 @@ const localEntry: HostDirectoryEntry = {
   transportDialability: "dialable",
 };
 
+const hostStatusResponse = {
+  ready: true,
+  hostVersion: "2.0.0",
+  protocolVersion: { major: 1, minor: 0 },
+  busy: false,
+  busySessionCount: 0,
+  updateProgress: null,
+  busyBreakdown: null,
+  updateOperation: null,
+  updateTransaction: null,
+  storeFormats: null,
+  install: null,
+  processMemory: null,
+  crossHostMessaging: null,
+  sessions: null,
+  updatesExternallyManaged: null,
+  previousExit: null,
+} satisfies ResponseOfMethod<HostRpcRegistry, "host.status">;
+
+let hostTokensForHarness = inertHostTokenSource();
+let invalidateRecoveredHostScope: (hostId: string) => void = () => undefined;
+
+class CloseableFakeNativeWebSocket extends FakeNativeWebSocket {
+  close(code: number, reason: string): void {
+    if (this.closed !== null) return;
+    this.closed = { code, reason };
+    this.fireClose(code, reason);
+  }
+}
+
 const bearer = {
   getBearerToken: () => "bearer-token",
   identity: { userId: "user-1" },
@@ -255,6 +307,8 @@ function harness(): {
   sessions: readonly ControllableSession[];
   recovered: string[];
   terminals: { readonly hostId: string; readonly fatal: FatalErrorDetails }[];
+  messenger: RuntimeHostMessengerBinding<HostRpcRegistry>["messenger"];
+  remoteRequests: { value: number };
   requestRemote: () => void;
   requestRemoteRaw: () => Promise<unknown>;
   requestRemoteWithSignal: (abortSignal: AbortSignal) => Promise<unknown>;
@@ -268,6 +322,10 @@ function harness(): {
   ) => Promise<unknown>;
   setRemoteEntry: (entry: RemoteHostDirectoryEntry) => void;
   setLocalEntry: (entry: HostDirectoryEntry) => void;
+  setRemoteResponse: (
+    response: ResponseOfMethod<HostRpcRegistry, "host.status">,
+  ) => void;
+  findEntry: (hostId: string) => HostDirectoryEntry | null;
   hostListChanged: () => void;
   reset: () => void;
   dispose: () => void;
@@ -277,6 +335,12 @@ function harness(): {
   let cachedSession: ControllableSession | null = firstSession;
   let currentRemoteEntry = remoteEntry;
   let currentLocalEntry = localEntry;
+  let currentRemoteResponse: unknown = {};
+  const remoteRequests = { value: 0 };
+  const requestRemote = (): Promise<unknown> => {
+    remoteRequests.value += 1;
+    return Promise.resolve(currentRemoteResponse);
+  };
   mocks.createRemoteHostTransport.mockImplementation(() => {
     if (cachedSession === null || cachedSession.isClosed()) {
       cachedSession = controllableSession();
@@ -286,8 +350,8 @@ function harness(): {
     return {
       session,
       messenger: {
-        request: () => Promise.resolve({}),
-        requestWithResponseTimeout: () => Promise.resolve({}),
+        request: requestRemote,
+        requestWithResponseTimeout: requestRemote,
       },
       streamClient: {},
     };
@@ -303,10 +367,11 @@ function harness(): {
       hostId === REMOTE_HOST_ID ? currentRemoteEntry : currentLocalEntry,
     auth: null,
     authnBaseUrl: "https://authn.invalid",
-    hostTokens: inertHostTokenSource(),
+    hostTokens: hostTokensForHarness,
     requestId: () => "req-1",
     onRemoteAvailabilityRecovered: (hostId) => {
       recovered.push(hostId);
+      invalidateRecoveredHostScope(hostId);
     },
     onRemoteSessionTerminal: (hostId, fatal) => {
       terminals.push({ hostId, fatal });
@@ -317,6 +382,8 @@ function harness(): {
     sessions,
     recovered,
     terminals,
+    messenger: binding.messenger,
+    remoteRequests,
     requestRemote: () => {
       void binding.messenger
         .request(
@@ -402,6 +469,14 @@ function harness(): {
     setLocalEntry: (entry) => {
       currentLocalEntry = entry;
     },
+    setRemoteResponse: (response) => {
+      currentRemoteResponse = response;
+    },
+    findEntry: (hostId) => {
+      if (hostId === REMOTE_HOST_ID) return currentRemoteEntry;
+      if (hostId === LOCAL_HOST_ID) return currentLocalEntry;
+      return null;
+    },
     hostListChanged: () => binding.hostListChanged(),
     reset: () => {
       // Auth reset changes the cache identity even if the old shared session
@@ -430,11 +505,199 @@ function harness(): {
 }
 
 afterEach(() => {
+  cleanup();
+  for (const socket of FakeNativeWebSocket.instances) {
+    if (socket.closed === null) socket.fireClose(1000, "test-cleanup");
+  }
+  FakeNativeWebSocket.instances.splice(0, FakeNativeWebSocket.instances.length);
+  hostTokensForHarness = inertHostTokenSource();
+  invalidateRecoveredHostScope = () => undefined;
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("RuntimeHostMessenger availability forwarding", () => {
+  it("recovers real local and remote host queries in place through host-list invalidation", async () => {
+    FakeNativeWebSocket.instances.length = 0;
+    vi.stubGlobal("WebSocket", CloseableFakeNativeWebSocket);
+    const requestContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "query-recovery-bearer",
+    });
+    hostTokensForHarness = await heldHostTokenSource(
+      requestContext.identity.userId,
+      LOCAL_HOST_ID,
+    );
+    const h = harness();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 0, gcTime: 0 },
+      },
+    });
+    const floorRefusals: string[] = [];
+    const forwardingMessenger: IHostMessenger<HostRpcRegistry> = {
+      request<Method extends keyof HostRpcRegistry & string>(
+        method: Method,
+        params: RequestOfMethod<HostRpcRegistry, Method>,
+        options: HostRequestOptions,
+      ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+        return h.messenger.request(method, params, options).catch((cause) => {
+          if (cause instanceof HostBelowMinimumError) {
+            floorRefusals.push(options.authority.endpoint.hostId);
+          }
+          throw cause;
+        });
+      },
+      requestWithResponseTimeout<Method extends keyof HostRpcRegistry & string>(
+        method: Method,
+        params: RequestOfMethod<HostRpcRegistry, Method>,
+        responseTimeoutMs: number,
+        options: HostRequestOptions,
+      ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+        return h.messenger
+          .requestWithResponseTimeout(
+            method,
+            params,
+            responseTimeoutMs,
+            options,
+          )
+          .catch((cause) => {
+            if (cause instanceof HostBelowMinimumError) {
+              floorRefusals.push(options.authority.endpoint.hostId);
+            }
+            throw cause;
+          });
+      },
+    };
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: h.findEntry,
+      messenger: forwardingMessenger,
+    });
+    client.setRequestContext(requestContext);
+    invalidateRecoveredHostScope = (hostId) =>
+      client.invalidateHostScopeUnannounced(hostId);
+
+    h.setLocalEntry({ ...localEntry, version: "1.5.4" });
+    h.setRemoteEntry({
+      ...remoteEntry,
+      version: "9.9.9",
+      remoteStatus: { ...remoteEntry.remoteStatus, appVersion: "1.5.4" },
+    });
+    h.setRemoteResponse(hostStatusResponse);
+
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    const localRequester: HostRequester<HostRpcRegistry> =
+      client.createRequesterForHostId(LOCAL_HOST_ID);
+    const remoteRequester: HostRequester<HostRpcRegistry> =
+      client.createRequesterForHostId(REMOTE_HOST_ID);
+    const localQuery = renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: localRequester,
+          method: "host.status",
+          params: {},
+          options: null,
+        }),
+      { wrapper: Wrapper },
+    );
+    const remoteQuery = renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: remoteRequester,
+          method: "host.status",
+          params: {},
+          options: null,
+        }),
+      { wrapper: Wrapper },
+    );
+
+    try {
+      await waitFor(() => expect(floorRefusals).toHaveLength(2));
+      expect(floorRefusals).toEqual(
+        expect.arrayContaining([LOCAL_HOST_ID, REMOTE_HOST_ID]),
+      );
+      expect(localQuery.result.current.error).toBeNull();
+      expect(remoteQuery.result.current.error).toBeNull();
+      expect(FakeNativeWebSocket.instances).toHaveLength(0);
+      expect(mocks.createRemoteHostTransport).not.toHaveBeenCalled();
+      expect(h.remoteRequests.value).toBe(0);
+
+      act(() => {
+        h.setLocalEntry({ ...localEntry, version: "2.0.0" });
+        h.setRemoteEntry({
+          ...remoteEntry,
+          version: "9.9.9",
+          remoteStatus: { ...remoteEntry.remoteStatus, appVersion: "2.0.0" },
+        });
+        h.hostListChanged();
+      });
+
+      await waitFor(() => {
+        expect(FakeNativeWebSocket.instances).toHaveLength(1);
+      });
+      const [socket] = FakeNativeWebSocket.instances;
+      if (socket === undefined) {
+        throw new Error("Expected the recovered local query to open a socket");
+      }
+      socket.fireOpen();
+      await waitFor(() => {
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1);
+      });
+      socket.fireMessage(
+        JSON.stringify({
+          kind: "openAck",
+          manifest: { "host.status": { major: 1, minor: 0 } },
+          optionalManifest: {},
+        }),
+      );
+      await waitFor(() => {
+        expect(sentFramesOfKind(socket, "request")).toHaveLength(1);
+      });
+      const [requestFrame] = sentFramesOfKind(socket, "request");
+      if (
+        requestFrame === undefined ||
+        typeof requestFrame.requestId !== "string"
+      ) {
+        throw new Error("Expected the local status request frame");
+      }
+      socket.fireMessage(
+        JSON.stringify({
+          kind: "response",
+          requestId: requestFrame.requestId,
+          method: "host.status",
+          schemaVersion: { major: 1, minor: 0 },
+          result: hostStatusResponse,
+          error: null,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(localQuery.result.current.data).toEqual(hostStatusResponse);
+        expect(remoteQuery.result.current.data).toEqual(hostStatusResponse);
+      });
+      expect(h.recovered).toEqual(
+        expect.arrayContaining([LOCAL_HOST_ID, REMOTE_HOST_ID]),
+      );
+      expect(h.recovered).toHaveLength(2);
+      expect(h.remoteRequests.value).toBe(1);
+    } finally {
+      cleanup();
+      h.dispose();
+      client.dispose();
+      queryClient.clear();
+    }
+  });
+
   it("still delivers the ready boundary after an interleaved local request replaced the binding", () => {
     const h = harness();
     h.requestRemote();
