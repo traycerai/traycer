@@ -78,6 +78,20 @@ export const sandboxQueryKeys = {
     authService: object,
     userId: string | null,
   ): readonly unknown[] => ["auth", "traycer-models", authService, userId],
+  // A team's own bundle balance, from authn's organization read on the
+  // person's sign-in: what every wake of the team's sandboxes draws. Not
+  // under `registeredHostsAll`: it refreshes on mount and focus only.
+  teamBalance: (
+    authService: object | null,
+    userId: string | null,
+    providerHandle: string,
+  ): readonly unknown[] => [
+    "auth",
+    "team-balance",
+    authService,
+    userId,
+    providerHandle,
+  ],
   traycerModelsMissing: (): readonly unknown[] => [
     "auth",
     "traycer-models",

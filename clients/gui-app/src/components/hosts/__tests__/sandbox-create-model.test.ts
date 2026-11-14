@@ -18,7 +18,6 @@ import {
   sandboxTeamCreateLines,
   teamCannotCoverAnHour,
   teamHasNoProviders,
-  teamSandboxBalanceMc,
   type SandboxCreateTeam,
 } from "@/components/hosts/sandbox-create-model";
 
@@ -178,69 +177,6 @@ describe("sandboxTeamCreateLines", () => {
       "Chats on it are visible to the people of the task you use it in, which can include people outside acme.",
       "Agents on it work with acme's hosts only; they cannot work with agents on your own computer. The task still shares its files and chats.",
     ]);
-  });
-});
-
-describe("teamSandboxBalanceMc", () => {
-  it("is the remaining plan, bonus and bundle credits of that team's entry, in millicredits", () => {
-    const user = userInTeams([
-      teamEntry("team-acme", "acme", {
-        totalPlanCredits: 100,
-        consumedFromPlan: 40,
-        bonusCredits: 10,
-        consumedFromBonus: 4,
-        bundleRemaining: 5,
-      }),
-      teamEntry("team-zeta", "zeta", {
-        totalPlanCredits: 9_000,
-        consumedFromPlan: 0,
-        bonusCredits: 0,
-        consumedFromBonus: 0,
-        bundleRemaining: 0,
-      }),
-    ]);
-    // 60 plan + 6 bonus + 5 bundle = 71 credits, under acme only.
-    expect(teamSandboxBalanceMc(user, "team-acme")).toBe(71_000);
-  });
-
-  it("does not read the personal subscription", () => {
-    const user = userInTeams([teamEntry("team-acme", "acme", NO_CREDITS)]);
-    expect(teamSandboxBalanceMc(user, "team-acme")).toBe(0);
-  });
-
-  it("clamps an overspent team balance to zero", () => {
-    const user = userInTeams([
-      teamEntry("team-acme", "acme", {
-        totalPlanCredits: 10,
-        consumedFromPlan: 10,
-        bonusCredits: 2,
-        consumedFromBonus: 9,
-        bundleRemaining: 0,
-      }),
-    ]);
-    expect(teamSandboxBalanceMc(user, "team-acme")).toBe(0);
-  });
-
-  it("floors a fractional credit balance to whole millicredits", () => {
-    const user = userInTeams([
-      teamEntry("team-acme", "acme", {
-        totalPlanCredits: 1,
-        consumedFromPlan: 0.0004,
-        bonusCredits: 0,
-        consumedFromBonus: 0,
-        bundleRemaining: 0,
-      }),
-    ]);
-    expect(teamSandboxBalanceMc(user, "team-acme")).toBe(999);
-  });
-
-  it("is null for a team the user has no entry under", () => {
-    const user = userInTeams([teamEntry("team-acme", "acme", NO_CREDITS)]);
-    expect(teamSandboxBalanceMc(user, "team-gone")).toBeNull();
-  });
-
-  it("is null until a user has loaded", () => {
-    expect(teamSandboxBalanceMc(null, "team-acme")).toBeNull();
   });
 });
 

@@ -22,6 +22,7 @@ import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useTeamBundleBalances } from "@/hooks/sandboxes/use-team-bundle-balances";
 import {
   useSandboxRepairGuestConfigurationOnHost,
   useSandboxSettingsOperation,
@@ -478,6 +479,7 @@ export function useSetupLineFacts(
   stage: StagedSandbox | null,
 ): SandboxSetupLineFacts | null {
   const user = useAuthUser().data ?? null;
+  const teamBalanceMc = useTeamBundleBalances();
   const catalogue = useSandboxCatalogue(stage !== null).data ?? null;
   const readinessLine = useSandboxGetStagedReadinessLine(stage);
   const sandboxList = useSandboxList();
@@ -564,7 +566,7 @@ export function useSetupLineFacts(
         smallest !== null &&
         !smallest.isStaged &&
         !teamCannotCoverAnHour(
-          stageBalanceMc(user, configuration),
+          stageBalanceMc(user, configuration, teamBalanceMc),
           smallest.awakeMcPerHour,
         ),
       offeredAgents: catalogue.offeredAgents ?? null,
@@ -580,6 +582,7 @@ export function useSetupLineFacts(
     sandboxResting,
     sandboxStoppable,
     stage,
+    teamBalanceMc,
     user,
   ]);
 }
