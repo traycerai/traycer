@@ -1,3 +1,4 @@
+import { TeamNotificationHooksSettingsPanel } from "@/components/settings/environment/team-notification-hooks-settings-panel";
 import type { ReactNode } from "react";
 import { ArtifactProofRoute } from "@/routes/settings-dev-artifact-proof-route-components";
 import { CanvasProofRoute } from "@/routes/settings-dev-canvas-proof-route-components";
@@ -141,6 +142,7 @@ const SETTINGS_PANELS = {
   sandboxes: SandboxesSettingsPanel,
   storage: StorageSettingsPanel,
   members: MembersSettingsPanel,
+  "notification-hooks": TeamNotificationHooksSettingsPanel,
 } satisfies Record<SettingsSectionId, () => ReactNode>;
 
 export function SettingsPanelForSection(props: {

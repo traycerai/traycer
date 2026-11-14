@@ -1,3 +1,4 @@
+import { TEAM_NOTIFICATION_HOOKS_COPY } from "@/components/settings/panels/cloud-notification-copy";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
@@ -53,6 +54,7 @@ export type SettingsSectionId =
   | "sandboxes"
   | "storage"
   | "members"
+  | "notification-hooks"
   | "mcp-servers"
   | "skills"
   | "agent-definitions"
@@ -440,6 +442,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "members",
     label: "Members",
     icon: Users,
+    group: "personal",
+  },
+  {
+    id: "notification-hooks",
+    label: TEAM_NOTIFICATION_HOOKS_COPY.title,
+    icon: Bell,
     group: "personal",
   },
   // The agent definition files every host gets. Not offered in navigation

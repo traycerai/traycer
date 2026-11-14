@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import { useState } from "react";
 import type { CloudNotificationHook } from "@traycer-clients/shared/environment/notification-hook-values";
 import { Plus } from "lucide-react";
@@ -6,6 +7,7 @@ import {
   draftFromHook,
   emptyDraft,
   HOOK_SEVERITIES,
+  type HookDraft,
 } from "./notification-hook-draft";
 import { CloudNotificationHookEditorDialog } from "./notification-hook-editor-dialog";
 import { CLOUD_NOTIFICATION_LIST_COPY } from "./cloud-notification-copy";
@@ -24,20 +26,27 @@ export interface CloudHookSnapshot {
 interface HookEditorState {
   readonly hook: CloudNotificationHook | null;
   readonly snapshot: CloudHookSnapshot;
+  readonly draft: HookDraft;
 }
 
 /** A cloud list's editor always saves against the snapshot the gesture opened. */
 export function CloudNotificationHooksSection(props: {
   readonly scope: "account" | "team";
+  readonly teamName: string | null;
   readonly snapshot: CloudHookSnapshot;
   readonly saving: boolean;
   readonly error: string | null;
-  readonly editorProblem: string | null;
+  readonly refusedHookId: string | null;
+  readonly editorProblem: {
+    readonly hookId: string | null;
+    readonly message: string;
+  } | null;
   readonly canEdit: boolean;
   readonly onSave: (
     hooks: readonly CloudNotificationHook[],
     revision: number | null,
     onSuccess: () => void,
+    onConflict: () => void,
   ) => void;
   readonly onClearProblem: () => void;
 }) {
@@ -49,19 +58,38 @@ export function CloudNotificationHooksSection(props: {
   const disabled = props.saving || !props.canEdit;
   const addHook = () => {
     props.onClearProblem();
-    setEditor({ hook: null, snapshot: props.snapshot });
+    setEditor({
+      hook: null,
+      snapshot: props.snapshot,
+      draft: { ...emptyDraft(), actionType: "http" },
+    });
   };
   const save = (
     hooks: readonly CloudNotificationHook[],
     revision: number | null,
     done: string,
   ) => {
-    props.onSave(hooks, revision, () => {
-      setEditor(null);
-      setPendingDelete(null);
-      toast.success(done);
-    });
+    props.onSave(
+      hooks,
+      revision,
+      () => {
+        setEditor(null);
+        setPendingDelete(null);
+        toast.success(done);
+      },
+      () => {
+        setEditor(null);
+        setPendingDelete(null);
+      },
+    );
   };
+  const editorProblem =
+    props.editorProblem !== null &&
+    editor !== null &&
+    (props.editorProblem.hookId === null ||
+      props.editorProblem.hookId === editor.draft.id)
+      ? props.editorProblem.message
+      : null;
   return (
     <SettingsGroup
       group={HOST_NOTIFICATIONS.definitions.notificationHooks}
@@ -88,8 +116,7 @@ export function CloudNotificationHooksSection(props: {
           </Button>
         ) : null}
       </div>
-      {props.error === null ||
-      (props.editorProblem !== null && editor !== null) ? null : (
+      {props.error === null || editorProblem !== null ? null : (
         <p role="alert" className="px-4 py-3 text-ui-sm text-destructive">
           {props.error}
         </p>
@@ -101,7 +128,12 @@ export function CloudNotificationHooksSection(props: {
           {props.snapshot.hooks.map((hook) => (
             <div
               key={hook.id}
-              className="flex flex-wrap items-center gap-3 px-3 py-3"
+              aria-invalid={props.refusedHookId === hook.id ? true : undefined}
+              className={cn(
+                "flex flex-wrap items-center gap-3 px-3 py-3",
+                props.refusedHookId === hook.id &&
+                  "outline outline-destructive",
+              )}
             >
               <div className="min-w-0 flex-1 space-y-0.5">
                 <div className="flex flex-wrap items-center gap-2">
@@ -152,7 +184,11 @@ export function CloudNotificationHooksSection(props: {
                       disabled={disabled}
                       onClick={() => {
                         props.onClearProblem();
-                        setEditor({ hook, snapshot: props.snapshot });
+                        setEditor({
+                          hook,
+                          snapshot: props.snapshot,
+                          draft: draftFromHook(hook),
+                        });
                       }}
                     >
                       Edit
@@ -178,14 +214,10 @@ export function CloudNotificationHooksSection(props: {
       {editor === null || !props.canEdit ? null : (
         <CloudNotificationHookEditorDialog
           scope={props.scope}
-          initialDraft={
-            editor.hook === null
-              ? { ...emptyDraft(), actionType: "http" }
-              : draftFromHook(editor.hook)
-          }
+          initialDraft={editor.draft}
           title={editor.hook === null ? "Add hook" : "Edit hook"}
           saving={props.saving}
-          serverProblem={props.editorProblem}
+          serverProblem={editorProblem}
           onChange={props.onClearProblem}
           onCancel={() => setEditor(null)}
           onSave={(hook) => {
@@ -211,7 +243,10 @@ export function CloudNotificationHooksSection(props: {
           blockedReason={null}
           open
           title={CLOUD_NOTIFICATION_LIST_COPY.deleteTitle}
-          description={CLOUD_NOTIFICATION_LIST_COPY.deleteDescription}
+          description={CLOUD_NOTIFICATION_LIST_COPY.deleteDescription(
+            pendingDelete.hook.name ?? pendingDelete.hook.id,
+            props.teamName,
+          )}
           cascadeSummary={null}
           actionLabel="Delete"
           isPending={props.saving}
