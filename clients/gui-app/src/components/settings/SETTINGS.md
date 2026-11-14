@@ -952,7 +952,7 @@ Account; the rest is the app itself.
   {relative}, or **Signing out**. The icon is decorative. **Sign out** is on
   the row; **Sign out everywhere** is on the list.
 - **Environment** (group id `personal`) - Providers, MCP servers, Skills,
-  Permissions, Agent memories (id `agent-memories`), Agents (id `agents`:
+  Permissions, Memories (id `agent-memories`), Agents (id `agents`:
   tabs Selection guide and Definitions), Model routing, Variables & shells
   (id `shell`), Secrets, Sandboxes, Storage, and Members on a team; a Local
   row shows only Providers, Permissions, Agents,
@@ -964,9 +964,10 @@ Account; the rest is the app itself.
   Permissions (`RETIRED_SECTION_REPLACEMENTS`, and their routes). These pages
   read through the window's own host (`usePersonalHostScope()`), never
   through the picker.
-  - **Agent memories** is one switch: whether the configuration's agents are
-    shown its shared memories and keep them current (`agent_memory`, key
-    `memory`). Its own page rather than a Permissions tab, because
+  - **Memories** is one switch, "Agents use shared memories": whether the
+    configuration's agents are shown its shared memories and keep them
+    current (`agent_memory`, key `memory`; the route and section id stay
+    `agent-memories`). Its own page rather than a Permissions tab, because
     Permissions is what an agent may do inside a task and this is what it
     carries between tasks. Read from the configuration on its own pages and
     from `config.agentMemories.get` otherwise, the same two sources as
@@ -3354,8 +3355,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     only when the surface's host advertises both (the method is optional), so
     an older host shows nothing here. Holds a local echo of a flip until the
     host's read-back lands, like the per-provider judge select.
-  - **Memories** (`provider-native-memory-group.tsx`), one switch, "Use this
-    provider's memories", on by default. On applies NO override - the
+  - **Provider memories** (`provider-native-memory-group.tsx`), one switch,
+    "Use this provider's memories", on by default. On applies NO override - the
     provider's memory behaves exactly as it does without this setting, which
     is why it is not a claim that the provider has memories switched on. Off
     makes the host turn the provider's AUTOMATIC memory off for the sessions
@@ -3937,8 +3938,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
         written one id at a time by `providers.setModelProviderHidden` (an
         optional method). A host without either draws no switch and no
         sentence, and its pickers hide nothing. Each row holds its own echo
-        until `providers.list` reads back, as the Memories switch does. A
-        provider that is not connected never reaches a picker, so the All
+        until `providers.list` reads back, as the Provider memories switch
+        does. A provider that is not connected never reaches a picker, so the All
         providers card has no switch; a hidden provider that is disconnected and
         later reconnected comes back with its switch off.
       - **One filter beside the search box**
