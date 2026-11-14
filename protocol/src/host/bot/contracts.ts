@@ -17,6 +17,7 @@ import {
   botListResponseSchema,
   botListResponseSchemaV10,
   botListResponseSchemaV11,
+  botListResponseSchemaV12,
   botMemorySubscribeClientFrameSchema,
   botMemorySubscribeOpenRequestSchema,
   botMemorySubscribeServerFrameSchema,
@@ -25,6 +26,7 @@ import {
   botReadRequestSchema,
   botReadResponseSchema,
   botReadResponseSchemaV10,
+  botReadResponseSchemaV11,
   botSubscribeClientFrameSchema,
   botSubscribeOpenRequestSchema,
   botSubscribeServerFrameSchema,
@@ -151,7 +153,7 @@ export const botListV12 = defineRpcContract({
   method: "bot.list",
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: botListRequestSchema,
-  responseSchema: botListResponseSchema,
+  responseSchema: botListResponseSchemaV12,
 });
 export const botListUpgradeV11ToV12 = defineUpgradePath<
   typeof botListV11,
@@ -159,6 +161,22 @@ export const botListUpgradeV11ToV12 = defineUpgradePath<
 >({
   from: botListV11.schemaVersion,
   to: botListV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const botListV13 = defineRpcContract({
+  method: "bot.list",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: botListRequestSchema,
+  responseSchema: botListResponseSchema,
+});
+export const botListUpgradeV12ToV13 = defineUpgradePath<
+  typeof botListV12,
+  typeof botListV13
+>({
+  from: botListV12.schemaVersion,
+  to: botListV13.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -175,7 +193,7 @@ export const botReadV11 = defineRpcContract({
   method: "bot.read",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: botReadRequestSchema,
-  responseSchema: botReadResponseSchema,
+  responseSchema: botReadResponseSchemaV11,
 });
 export const botReadUpgradeV10ToV11 = defineUpgradePath<
   typeof botReadV10,
@@ -183,6 +201,22 @@ export const botReadUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: botReadV10.schemaVersion,
   to: botReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const botReadV12 = defineRpcContract({
+  method: "bot.read",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botReadRequestSchema,
+  responseSchema: botReadResponseSchema,
+});
+export const botReadUpgradeV11ToV12 = defineUpgradePath<
+  typeof botReadV11,
+  typeof botReadV12
+>({
+  from: botReadV11.schemaVersion,
+  to: botReadV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

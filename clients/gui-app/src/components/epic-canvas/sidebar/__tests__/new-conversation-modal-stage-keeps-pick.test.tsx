@@ -13,7 +13,9 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { DraftDocument } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -38,7 +40,17 @@ const host = vi.hoisted(() => ({
   cloudModels: undefined as ReadonlyArray<string> | undefined,
   /** The host's Traycer list, by slug and chip label. */
   traycerHostModels: [{ slug: "traycer-default", label: "traycer-default" }],
-  createChat: vi.fn(),
+  createChat: vi.fn((_input: unknown): Promise<unknown> => Promise.resolve({})),
+  providers: [] as {
+    readonly providerId: string;
+    readonly auth: { readonly status: string };
+    readonly profiles: readonly {
+      readonly profileId: string;
+      readonly kind: string;
+      readonly enabled: boolean;
+      readonly auth: { readonly status: string };
+    }[];
+  }[],
 }));
 
 function modelOption(harnessId: GuiHarnessId, slug: string): ModelOption {
@@ -142,6 +154,28 @@ vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
 vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
   useResolvedSeededProfileId: (_harnessId: string, profileId: string | null) =>
     profileId,
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => ({
+    status: "success" as const,
+    isStale: false,
+    data: { providers: host.providers },
+    isError: false,
+    isPending: false,
+    isSuccess: true,
+    isFetching: false,
+    fetchStatus: "idle" as const,
+  }),
+  useProvidersListForClient: () => ({
+    status: "success" as const,
+    isStale: false,
+    data: { providers: host.providers },
+    isError: false,
+    isPending: false,
+    isSuccess: true,
+    isFetching: false,
+    fetchStatus: "idle" as const,
+  }),
 }));
 
 // The editor and toolbar chrome are held by their own suites; the body hands
@@ -369,7 +403,12 @@ import { chipModelName } from "@/stores/composer/composer-toolbar-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import {
+  applyNewChatHostDocument,
+  newChatDraftRememberSynced,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import {
   useStagedSandboxStore,
   type StagedSandboxTarget,
@@ -500,6 +539,7 @@ beforeEach(() => {
     { slug: "traycer-default", label: "traycer-default" },
   ];
   host.createChat.mockReset();
+  host.providers = [];
   useStagedSandboxStore.setState({ bySurface: {} });
   useComposerHarnessMemoryStore.getState().resetForTests();
   useNewConversationModalStore.getState().resetForTests();
@@ -509,7 +549,11 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  useAuthStore.setState({
+    status: "signed-out",
+    contextMetadata: null,
+    profile: null,
+  });
   useNewConversationModalStore.getState().resetForTests();
 });
 
@@ -606,3 +650,336 @@ describe("a new-conversation modal with a sandbox staged", () => {
     expect(pickedRunSettings(toolbar().getState()).model).toBe("trc-a");
   });
 });
+
+const EMPTY_TERMINAL_SEED: ChatRunSettings = {
+  ultracode: false,
+  harnessId: "claude",
+  model: "sonnet-5.5",
+  permissionMode: "supervised",
+  reasoningEffort: "low",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+};
+
+function claudeListing(profileIds: readonly string[]) {
+  return [
+    {
+      providerId: "claude-code",
+      auth: { status: "unauthenticated" },
+      profiles: [
+        {
+          profileId: "ambient",
+          kind: "ambient",
+          enabled: true,
+          auth: { status: "unauthenticated" },
+        },
+        ...profileIds.map((profileId) => ({
+          profileId,
+          kind: "managed",
+          enabled: true,
+          auth: { status: "authenticated" },
+        })),
+      ],
+    },
+  ];
+}
+
+function payloadAt(root: unknown, path: readonly string[]): unknown {
+  let current = root;
+  for (const key of path) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      Array.isArray(current)
+    ) {
+      throw new Error(`createChat payload is missing ${path.join(".")}`);
+    }
+    if (!Object.hasOwn(current, key)) {
+      throw new Error(`createChat payload is missing ${path.join(".")}`);
+    }
+    current = Object.getOwnPropertyDescriptor(current, key)?.value;
+  }
+  return current;
+}
+
+function payloadProfileId(root: unknown, path: readonly string[]): string {
+  const value = payloadAt(root, path);
+  if (typeof value !== "string") {
+    throw new Error(`createChat payload ${path.join(".")} is not a profile id`);
+  }
+  return value;
+}
+
+describe("a new conversation seeded on a signed-out Terminal login", () => {
+  beforeEach(() => {
+    useNewConversationModalStore.getState().resetForTests();
+    useComposerRunSettingsStore.getState().resetForTests();
+    useComposerRunSettingsStore
+      .getState()
+      .setEpicRunSettings(EPIC_ID, "host-a", EMPTY_TERMINAL_SEED, 1);
+    host.providers = claudeListing(["profile-work"]);
+  });
+
+  afterEach(() => {
+    useComposerRunSettingsStore.getState().resetForTests();
+    host.providers = [];
+  });
+
+  it("selects the one signed-in profile", async () => {
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe("profile-work"),
+    );
+  });
+
+  it("keeps the Terminal login when two profiles are signed in", async () => {
+    host.providers = claudeListing(["profile-work", "profile-home"]);
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("keeps a Terminal login the person already chose", async () => {
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, EMPTY_TERMINAL_SEED);
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("shows the signed-in profile when the patch follows the default account", async () => {
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, EMPTY_TERMINAL_SEED);
+    useNewConversationModalStore
+      .getState()
+      .setAccountFollowsDefault(EPIC_ID, true);
+    renderModal();
+
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe("profile-work"),
+    );
+  });
+
+  it("creates the chat on the signed-in profile and leaves last-run on Terminal", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "user-a" },
+      profile: {
+        userId: "user-a",
+        userName: "user-a",
+        email: "user-a@example.com",
+      },
+    });
+    useNewConversationModalStore.getState().setContent(EPIC_ID, DIRTY_CONTENT);
+    host.createChat.mockResolvedValue({});
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe("profile-work"),
+    );
+    const installEditor = host.installEditor;
+    const submit = host.bodySubmit;
+    if (installEditor === null || submit === null) {
+      throw new Error("the modal did not mount");
+    }
+    act(() => {
+      installEditor();
+    });
+    act(() => {
+      submit();
+    });
+
+    await waitFor(() => expect(host.createChat).toHaveBeenCalledTimes(1));
+    const request = host.createChat.mock.calls[0]?.[0];
+    expect(payloadProfileId(request, ["settings", "profileId"])).toBe(
+      "profile-work",
+    );
+    expect(
+      payloadProfileId(request, ["initialMessage", "settings", "profileId"]),
+    ).toBe("profile-work");
+    const recorded = useComposerRunSettingsStore.getState();
+    const globalLastRun = recorded.getGlobalRunSettings("host-a");
+    const epicLastRun = recorded.getEpicRunSettings(EPIC_ID, "host-a");
+    if (globalLastRun === null || epicLastRun === null) {
+      throw new Error("submit did not record last-run settings");
+    }
+    expect(globalLastRun.profileId).toBeNull();
+    expect(epicLastRun.profileId).toBeNull();
+  });
+
+  it("creates the chat on Terminal after another writer keeps the same Terminal account", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "user-a" },
+      profile: {
+        userId: "user-a",
+        userName: "user-a",
+        email: "user-a@example.com",
+      },
+    });
+    useNewConversationModalStore.getState().setContent(EPIC_ID, DIRTY_CONTENT);
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, EMPTY_TERMINAL_SEED);
+    useNewConversationModalStore
+      .getState()
+      .setAccountFollowsDefault(EPIC_ID, true);
+    const patch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (patch === undefined || patch.draftId === null) {
+      throw new Error("expected a draft id");
+    }
+    newChatDraftRememberSynced(patch.draftId, 2, patch.generation);
+    expect(applyNewChatHostDocument(terminalEcho(patch.draftId, 3))).toBe(true);
+    const after =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (after === undefined) throw new Error("the echo did not land");
+    expect(Object.hasOwn(after, "accountFollowsDefault")).toBe(false);
+    expect(after.settings?.profileId).toBeNull();
+
+    host.createChat.mockResolvedValue({});
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(toolbar().getState().selection.profileId).toBeNull();
+
+    const installEditor = host.installEditor;
+    const submit = host.bodySubmit;
+    if (installEditor === null || submit === null) {
+      throw new Error("the modal did not mount");
+    }
+    act(() => {
+      installEditor();
+    });
+    act(() => {
+      submit();
+    });
+
+    await waitFor(() => expect(host.createChat).toHaveBeenCalledTimes(1));
+    const request = host.createChat.mock.calls[0]?.[0];
+    expect(payloadAt(request, ["settings", "profileId"])).toBeNull();
+    expect(
+      payloadAt(request, ["initialMessage", "settings", "profileId"]),
+    ).toBeNull();
+  });
+
+  it("creates the chat on Terminal when a foreign write arrived before this window's acknowledgement", async () => {
+    const ownRevision = 4;
+    const localContent: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "local" }] },
+      ],
+    };
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "user-a" },
+      profile: {
+        userId: "user-a",
+        userName: "user-a",
+        email: "user-a@example.com",
+      },
+    });
+    useNewConversationModalStore.getState().setContent(EPIC_ID, localContent);
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, EMPTY_TERMINAL_SEED);
+    useNewConversationModalStore
+      .getState()
+      .setAccountFollowsDefault(EPIC_ID, true);
+    const patch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (patch === undefined || patch.draftId === null) {
+      throw new Error("expected a draft id");
+    }
+    expect(
+      applyNewChatHostDocument(terminalEcho(patch.draftId, ownRevision + 1)),
+    ).toBe(false);
+    const held =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (held === undefined)
+      throw new Error("the foreign document dropped the patch");
+    expect(held.content).toEqual(localContent);
+    expect(held.hostRevision).toBe(ownRevision + 1);
+    newChatDraftRememberSynced(patch.draftId, ownRevision, held.generation);
+    expect(
+      applyNewChatHostDocument(terminalEcho(patch.draftId, ownRevision + 1)),
+    ).toBe(true);
+
+    host.createChat.mockResolvedValue({});
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const installEditor = host.installEditor;
+    const submit = host.bodySubmit;
+    if (installEditor === null || submit === null) {
+      throw new Error("the modal did not mount");
+    }
+    act(() => {
+      installEditor();
+    });
+    act(() => {
+      submit();
+    });
+
+    await waitFor(() => expect(host.createChat).toHaveBeenCalledTimes(1));
+    const request = host.createChat.mock.calls[0]?.[0];
+    expect(payloadAt(request, ["settings", "profileId"])).toBeNull();
+    expect(
+      payloadAt(request, ["initialMessage", "settings", "profileId"]),
+    ).toBeNull();
+  });
+});
+
+function terminalEcho(draftId: string, revision: number): DraftDocument {
+  return {
+    draftId,
+    kind: "new-chat",
+    target: { epicId: EPIC_ID, chatId: null, blockId: null },
+    revision,
+    lastTouchedAt: 99,
+    workspace: null,
+    ownerHostId: "host-a",
+    origin: "own",
+    adoption: { state: "adopted", hostId: "host-a" },
+    publication: {
+      status: "unpublished",
+      lastPublishedAt: null,
+      publishedRevision: null,
+      halted: null,
+    },
+    supersedes: null,
+    portable: {
+      content: DIRTY_CONTENT,
+      selection: null,
+      runSettings: chatRunSettingsSchemaPreUltracode.parse({
+        harnessId: "claude",
+        model: "sonnet-5.5",
+        permissionMode: "supervised",
+        reasoningEffort: "low",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      }),
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+    },
+  };
+}
