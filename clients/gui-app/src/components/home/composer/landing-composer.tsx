@@ -40,6 +40,7 @@ import { useProfileEligibilityGate } from "@/components/chat/composer/use-profil
 import { ProviderReauthBanner } from "@/components/chat/composer/provider-reauth-banner";
 import {
   SIGNED_OUT_SEND_HINT,
+  continueOnTerminalOffered,
   useLandingProviderReauthGate,
   type ProviderReauthGate,
 } from "@/components/chat/composer/use-provider-reauth-gate";
@@ -70,6 +71,7 @@ import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-to
 import {
   catalogSettledFor,
   chipModelName,
+  showsDefaultAccount,
 } from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
@@ -141,6 +143,7 @@ import {
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useSignedOutTerminalDefaultAccount } from "@/hooks/providers/use-signed-out-terminal-default-account";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
@@ -405,17 +408,28 @@ export function LandingComposer(props: LandingComposerProps) {
     resolvedHostId,
     seedUnseededDraft,
   ]);
+  const setDraftAccountFollowsDefault = useLandingDraftStore(
+    (state) => state.setDraftAccountFollowsDefault,
+  );
   const handleToolbarSettingsChange = useCallback(
-    (settings: ChatRunSettings) => {
+    (settings: ChatRunSettings, accountChosen: boolean) => {
       setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
+        setDraftAccountFollowsDefault(draftId, !accountChosen);
       }
       // After the write: the fork copies the row as it is, so the setting
       // rides into the fork and the old row is retired locally unpublished.
       authority.noteEdit();
     },
-    [activeHostId, authority, draftId, setDraftSettings, setGlobalRunSettings],
+    [
+      activeHostId,
+      authority,
+      draftId,
+      setDraftAccountFollowsDefault,
+      setDraftSettings,
+      setGlobalRunSettings,
+    ],
   );
   // The window's pin key, which a staged sandbox is staged under.
   const composerSurfaceKey = useComposerSurfaceHostKey();
@@ -475,6 +489,19 @@ export function LandingComposer(props: LandingComposerProps) {
             },
     });
   }, [authority, draftId, setDraftSettings, toolbarStore]);
+  // Nobody chose the account of an unbound page, or of a draft whose settings
+  // came from the host's last-run settings: its Terminal login starts on the
+  // default account. A draft whose account a person chose keeps it.
+  const draftAccountFollowsDefault = useLandingDraftStore(
+    (state) =>
+      draftId === null ||
+      state.drafts.find((entry) => entry.id === draftId)
+        ?.accountFollowsDefault === true,
+  );
+  useLayoutEffect(() => {
+    toolbarStore.getState().setAccountChosen(!draftAccountFollowsDefault);
+  }, [draftAccountFollowsDefault, toolbarStore]);
+  useSignedOutTerminalDefaultAccount(toolbarStore, activityEnabled, hostClient);
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
@@ -868,10 +895,11 @@ export function LandingComposer(props: LandingComposerProps) {
     // new draft's id so activeDraftId's null -> id flip lines up with the
     // key the parent already mounted under (no editor remount). Falls back
     // to a fresh id when the caller has not pre-minted one.
+    const toolbar = toolbarStore.getState();
     const createdDraftId = useLandingDraftStore.getState().createDraftWithId(
       props.pendingCreateId ?? uuidv4(),
       landingMintedDraftSettings(
-        toolbarStore.getState(),
+        toolbar,
         useComposerRunSettingsStore
           .getState()
           // The composer's own resolved placement host - not the app
@@ -880,6 +908,9 @@ export function LandingComposer(props: LandingComposerProps) {
           .getGlobalRunSettings(activeHostId),
       ),
     );
+    useLandingDraftStore
+      .getState()
+      .setDraftAccountFollowsDefault(createdDraftId, !toolbar.accountChosen);
     // Keep the workspace aligned with the caller's captured placement, which
     // supplied the settings above, before accepting a submit.
     useLandingDraftStore
@@ -1096,6 +1127,8 @@ export function LandingComposer(props: LandingComposerProps) {
         serviceTier: toolbar.serviceTier,
         permission: toolbar.permission,
         ultracode: toolbar.ultracode,
+        accountChosen: toolbar.accountChosen,
+        showsDefaultAccount: showsDefaultAccount(toolbar),
       },
       owner,
       teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
@@ -1195,6 +1228,7 @@ export function LandingComposer(props: LandingComposerProps) {
               stagedTerminalLaunch,
               toolbarStore.getState(),
               providers,
+              stagedProviders.data?.removedProfiles ?? [],
             );
             if (launch === null) return false;
             return dispatchStartTerminal(launch)
@@ -1380,9 +1414,7 @@ function LandingReauthBanner(props: {
         epicId={null}
         viewTabId={null}
         onContinueOnAmbient={
-          gate.reason === "provider_unauthenticated"
-            ? null
-            : props.onContinueOnAmbient
+          continueOnTerminalOffered(gate) ? props.onContinueOnAmbient : null
         }
       />
     </TabHostContext.Provider>

@@ -18,6 +18,7 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import {
   environmentItemKindSchema,
   environmentOsSchema,
@@ -368,6 +369,63 @@ export const environmentMoveStopPreviewUpgradeV10ToV11 = defineUpgradePath<
 });
 
 /**
+ * One Personal folder retained at leave. Its own id may be a visible row's
+ * id or an alias in the providers list; two folders of one account stay
+ * separate entries. Credential kind determines whether sign-in is offered,
+ * which cannot be inferred from that list's row status.
+ */
+export const environmentMovePersonalProfileSchema = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    profileId: z.string().min(1),
+    label: z.string(),
+    signIn: z.enum(["offered", "not-needed"]),
+  }),
+);
+export type EnvironmentMovePersonalProfile = z.infer<
+  typeof environmentMovePersonalProfileSchema
+>;
+
+export const environmentMoveStopPreviewRequestSchemaV12 = lazySchema(() =>
+  z.object({
+    profileMode: z.literal("keep-personal").nullable().default(null),
+  }),
+);
+export type EnvironmentMoveStopPreviewRequestV12 = z.infer<
+  typeof environmentMoveStopPreviewRequestSchemaV12
+>;
+
+/** Absent/null is a legacy preview; an empty array is active with no folders. */
+export const environmentMoveStopPreviewResponseSchemaV12 = lazySchema(() =>
+  environmentMoveStopPreviewResponseSchemaV11.extend({
+    personalProfiles: z
+      .array(environmentMovePersonalProfileSchema)
+      .nullable()
+      .optional(),
+  }),
+);
+export type EnvironmentMoveStopPreviewResponseV12 = z.infer<
+  typeof environmentMoveStopPreviewResponseSchemaV12
+>;
+
+export const environmentMoveStopPreviewV12 = defineRpcContract({
+  method: "environment.move.stopPreview",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: environmentMoveStopPreviewRequestSchemaV12,
+  responseSchema: environmentMoveStopPreviewResponseSchemaV12,
+});
+
+export const environmentMoveStopPreviewUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentMoveStopPreviewV11,
+  typeof environmentMoveStopPreviewV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => ({ ...request, profileMode: null }),
+  upgradeResponse: (response) => ({ ...response, personalProfiles: null }),
+});
+
+/**
  * One `needsChoice` row's answer, by the row's `kind` and `key`: a key alone
  * does not name a row, since a variable and a skill can share one.
  */
@@ -408,4 +466,89 @@ export const environmentMoveStopV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMoveStopRequestSchema,
   responseSchema: environmentMoveStopResponseSchema,
+});
+
+/**
+ * A choice for an exact folder. `admissionId` is the opaque startLogin
+ * handle of its held leave sign-in, not the destination folder's id.
+ */
+export const environmentMoveProfileSignInChoiceSchema = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    profileId: z.string().min(1),
+    signIn: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("skip") }),
+      z.object({
+        kind: z.literal("signed-in"),
+        admissionId: z.string().min(1),
+      }),
+    ]),
+  }),
+);
+export type EnvironmentMoveProfileSignInChoice = z.infer<
+  typeof environmentMoveProfileSignInChoiceSchema
+>;
+
+export const environmentMoveStopRequestSchemaV11 = lazySchema(() =>
+  environmentMoveStopRequestSchema.extend({
+    profileMode: z.literal("keep-personal").nullable().default(null),
+    profileSignIns: z
+      .array(environmentMoveProfileSignInChoiceSchema)
+      .default([]),
+  }),
+);
+export type EnvironmentMoveStopRequestV11 = z.infer<
+  typeof environmentMoveStopRequestSchemaV11
+>;
+
+export const environmentMoveProfileResultSchema = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    profileId: z.string().min(1),
+    signIn: z.enum([
+      "not-needed",
+      "skipped",
+      "installed",
+      "installation-pending",
+      "sign-in-unavailable",
+      "installation-failed",
+    ]),
+  }),
+);
+export type EnvironmentMoveProfileResult = z.infer<
+  typeof environmentMoveProfileResultSchema
+>;
+
+/** Absent/null promises no per-folder result; only an active stop returns an array. */
+export const environmentMoveStopResponseSchemaV11 = lazySchema(() =>
+  environmentMoveStopResponseSchema.extend({
+    profileResults: z
+      .array(environmentMoveProfileResultSchema)
+      .nullable()
+      .optional(),
+  }),
+);
+export type EnvironmentMoveStopResponseV11 = z.infer<
+  typeof environmentMoveStopResponseSchemaV11
+>;
+
+export const environmentMoveStopV11 = defineRpcContract({
+  method: "environment.move.stop",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentMoveStopRequestSchemaV11,
+  responseSchema: environmentMoveStopResponseSchemaV11,
+});
+
+export const environmentMoveStopUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentMoveStopV10,
+  typeof environmentMoveStopV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => ({
+    ...request,
+    profileMode: null,
+    profileSignIns: [],
+  }),
+  upgradeResponse: (response) => ({ ...response, profileResults: null }),
 });

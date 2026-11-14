@@ -4,11 +4,17 @@ import {
   fireEvent,
   render as baseRender,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { providersAwaitLoginResponseSchema } from "@traycer/protocol/host/provider-schemas";
 import type {
   ProviderCliState,
   ProviderLoginCapability,
@@ -29,6 +35,7 @@ type AwaitLoginVariables = {
     readonly profileId: string | null;
   };
   readonly signal: AbortSignal | undefined;
+  readonly readsProfileOutcome: boolean;
 };
 // Mirrors `providers.cancelLogin`'s request fields the mocked hook forwards -
 // same rationale as `AwaitLoginVariables` above.
@@ -98,6 +105,9 @@ const mocks = vi.hoisted(() => ({
   openSettings: vi.fn(),
   reportContexts: new Array<ReportIssueContext>(),
   hostKind: "local",
+  realAwaitClient: null as HostClient<HostRpcRegistry> | null,
+  useRealAwaitLogin: false,
+  realAwaitLoginSuccess: false,
   /** What `useHostCredentialRefusal` answers for the tab's host; `null` takes sign-ins. */
   credentialRefusal: null as string | null,
   /** What `useTabHostClient` answers; `null` is a tab host not reachable now. */
@@ -111,6 +121,9 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
 afterEach(() => {
   mocks.credentialRefusal = null;
   mocks.tabClient = { id: "tab-client" };
+  mocks.realAwaitClient = null;
+  mocks.useRealAwaitLogin = false;
+  mocks.realAwaitLoginSuccess = false;
 });
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -126,7 +139,8 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => mocks.tabClient,
+  useTabHostClient: () =>
+    mocks.useRealAwaitLogin ? mocks.realAwaitClient : mocks.tabClient,
 }));
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
@@ -150,9 +164,26 @@ vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => ({
     isPending: false,
   }),
 }));
-vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
-  useProvidersAwaitLogin: () => ({ mutate: mocks.awaitLoginMutate }),
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-await-login-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-await-login-mutation")
+      >();
+    return {
+      ...actual,
+      useProvidersAwaitLogin: () => {
+        if (mocks.useRealAwaitLogin) {
+          const result = actual.useProvidersAwaitLogin();
+          mocks.realAwaitLoginSuccess = result.isSuccess;
+          return result;
+        }
+        return { mutate: mocks.awaitLoginMutate };
+      },
+    };
+  },
+);
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
   useProvidersCancelLogin: () => ({
     mutate: mocks.cancelLoginMutate,
@@ -234,6 +265,30 @@ function render(ui: ReactElement) {
   function QueryWrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+  }
+  return baseRender(ui, { wrapper: QueryWrapper });
+}
+
+function RealProviderListObserver(): null {
+  useProvidersListForClient(mocks.realAwaitClient, {
+    enabled: true,
+    subscribed: true,
+  });
+  return null;
+}
+
+function renderWithRealListObserver(ui: ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  renderedClients.push(client);
+  function QueryWrapper({ children }: { readonly children: ReactNode }) {
+    return (
+      <QueryClientProvider client={client}>
+        <RealProviderListObserver />
+        {children}
+      </QueryClientProvider>
     );
   }
   return baseRender(ui, { wrapper: QueryWrapper });
@@ -1093,7 +1148,55 @@ describe("<ProviderReauthBanner />", () => {
       lastSeenReaderCount: null,
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
+    expect(awaitVariables.readsProfileOutcome).toBe(false);
     expect(typeof awaitOptions.onSuccess).toBe("function");
+  });
+
+  it("does not re-read providers.list for a named completion on the real reauth await path", async () => {
+    mocks.useRealAwaitLogin = true;
+    const { client, messenger } = buildEnvironmentClient({
+      hostId: "host-1",
+      handlers: {
+        "providers.list": () => ({ providers: [], native: null }),
+        "providers.awaitLogin": () =>
+          providersAwaitLoginResponseSchema.parse({
+            state: null,
+            profileOutcome: {
+              kind: "signed-in",
+              profileId: "not-in-list",
+            },
+          }),
+      },
+    });
+    mocks.realAwaitClient = client;
+    mockStartLoginAlwaysSucceeds();
+    renderWithRealListObserver(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter((call) => call.method === "providers.list"),
+      ).toHaveLength(1);
+    });
+
+    await clickAuthenticate();
+    await waitFor(() => expect(mocks.realAwaitLoginSuccess).toBe(true));
+
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.list"),
+    ).toHaveLength(1);
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.awaitLogin"),
+    ).toHaveLength(1);
   });
 
   it("does not show a code-paste field for a provider without the codePaste capability", async () => {

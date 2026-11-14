@@ -24,6 +24,7 @@ const REQUEST: ProviderStartLoginRequest = {
   profileId: null,
   createProfile: null,
   holderId: null,
+  target: null,
 };
 
 function answer(

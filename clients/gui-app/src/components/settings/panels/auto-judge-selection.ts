@@ -14,12 +14,19 @@ import {
   modelMatchIsCovered,
   resolveModelBySlug,
 } from "@traycer/protocol/host/agent/gui/model-slug-resolution";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import type {
   AutoJudgeBlocked,
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
+import {
+  profileCommitId,
+  resolvedProfileRow,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
 /**
@@ -214,7 +221,11 @@ export function judgeProfileUnavailable(
 }
 
 /**
- * The profile commit ids a harness's provider currently offers.
+ * The stored profile ids that name an account a harness's provider currently
+ * offers: each row's commit id and each of its `aliases`, kept only when it
+ * resolves to exactly one row. An id two rows list is left out, so it reads
+ * as an unknown id does, and a removed id is never listed. Without aliases
+ * this is the rows' commit ids.
  *
  * `undefined` for every "cannot say" - the providers read has not answered, or
  * the harness maps to no provider - which is the value
@@ -226,7 +237,20 @@ export function offeredJudgeProfileIds(
   harnessId: string,
 ): ReadonlyArray<string | null> | undefined {
   if (providers === undefined) return undefined;
-  return providerForHarness(providers, harnessId)?.profiles.map(
-    profileCommitId,
-  );
+  const provider = providerForHarness(providers, harnessId);
+  if (provider === undefined) return undefined;
+  const profiles: readonly ProviderProfile[] = provider.profiles;
+  return profiles
+    .flatMap((profile) => [
+      profileCommitId(profile),
+      ...(profile.aliases ?? []),
+    ])
+    .filter(
+      (id) =>
+        id === null ||
+        resolvedProfileRow(profiles, NO_REMOVED_PROFILES, id) !== null,
+    );
 }
+
+// An id no row lists is unavailable whether or not it is listed as removed.
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];

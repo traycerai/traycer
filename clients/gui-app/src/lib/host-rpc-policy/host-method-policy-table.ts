@@ -2201,6 +2201,17 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Each begin captures its own choice; each settle must consume its own token.
+  "providers.beginApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.settleApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an API key changes persisted credentials.
   "providers.setApiKey": {
     mode: "fifo",
@@ -2314,6 +2325,22 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Signing out revokes credentials; an identical repeat must not coalesce.
   "providers.signOutProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A name answer writes the account's label everywhere; an identical repeat
+  // must not coalesce.
+  "providers.answerProfileName": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A preview is a read of who may move. Identical in-flight calls coalesce.
+  "providers.previewProfileMove": { ...LATEST_SCHEDULING, poll: null },
+  // A commit records an operation. An identical repeat must not coalesce,
+  // so a retry still receives the recorded results.
+  "providers.commitProfileMove": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2729,6 +2756,10 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
   },
+  "environment.providers.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
   "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.guide.get": {
     ...LATEST_SCHEDULING,
@@ -2858,6 +2889,21 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.plans.unlink": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.providers.signOutProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.providers.removeProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.providers.renameProfile": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

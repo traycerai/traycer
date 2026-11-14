@@ -1,6 +1,11 @@
+import type { ProvidersListResponse } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
+import {
+  profileCommitId,
+  removedProfilesForProvider,
+  resolvedProfileRow,
+} from "@/components/providers/provider-profile-model";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
   useProviderProfileEnablementPending,
@@ -16,12 +21,16 @@ export interface ProfileEligibilityGate {
   readonly enableProfile: () => void;
 }
 
+interface ObservedProfileEligibilityGate extends ProfileEligibilityGate {
+  readonly providersList: ProvidersListResponse | undefined;
+}
+
 export function useProfileEligibilityGate(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId,
   profileId: string | null,
   active: boolean,
-): ProfileEligibilityGate {
+): ObservedProfileEligibilityGate {
   const providerId = guiHarnessIdToProviderId(harnessId);
   const providersQuery = useProvidersListForClient(client, {
     enabled: active,
@@ -32,15 +41,24 @@ export function useProfileEligibilityGate(
     client,
     providerId,
   );
-  const enablePending = profileEnablementPending(profileId);
   const provider = providersQuery.data?.providers.find(
     (candidate) => candidate.providerId === providerId,
   );
-  const profile = provider?.profiles.find(
-    (candidate) => profileCommitId(candidate) === profileId,
+  // The row the pin or its alias names; a removed or unknown pin has none.
+  const profile =
+    provider === undefined
+      ? undefined
+      : (resolvedProfileRow(
+          provider.profiles,
+          removedProfilesForProvider(providersQuery.data, providerId),
+          profileId,
+        ) ?? undefined);
+  const enablePending = profileEnablementPending(
+    profile === undefined ? profileId : profileCommitId(profile),
   );
 
   return {
+    providersList: providersQuery.data,
     disabled: profile?.enabled === false || enablePending,
     profileLabel: profile?.label ?? null,
     enablePending,

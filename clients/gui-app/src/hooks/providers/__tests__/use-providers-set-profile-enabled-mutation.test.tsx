@@ -117,6 +117,57 @@ function providersListWithPersonalProfile(
   };
 }
 
+type ProjectedProvidersList = ProvidersListResponse & {
+  readonly futureKey: string;
+};
+
+function projectedProvidersList(enabled: boolean): ProjectedProvidersList {
+  const base = providersListWithPersonalProfile(enabled);
+  return {
+    ...base,
+    offersSignIns: true,
+    removedProfiles: [
+      {
+        providerId: "claude-code",
+        profileId: "removed-work",
+        aliases: ["old-work"],
+      },
+    ],
+    futureKey: "kept",
+    providers: base.providers.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles.map((candidate) =>
+        candidate.profileId === "work"
+          ? {
+              ...candidate,
+              aliases: ["legacy-work"],
+              otherNames: ["Claude account"],
+              personNotice: "waiting",
+            }
+          : candidate,
+      ),
+    })),
+  };
+}
+
+function withProfileEnabled(
+  answer: ProjectedProvidersList,
+  profileId: string,
+  enabled: boolean,
+): ProjectedProvidersList {
+  return {
+    ...answer,
+    providers: answer.providers.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles.map((candidate) =>
+        candidate.profileId === profileId
+          ? { ...candidate, enabled }
+          : candidate,
+      ),
+    })),
+  };
+}
+
 function profileEnabled(
   response: ProvidersListResponse | undefined,
   profileId: string,
@@ -223,6 +274,80 @@ describe("useProvidersSetProfileEnabledForClient host-scoped mutation", () => {
       expect(pending.result.current("work")).toBe(false);
       expect(pending.result.current("personal")).toBe(false);
     });
+  });
+
+  it("keeps the list envelope and projected profile fields through optimistic enable and rollback", async () => {
+    const queryClient = createAppQueryClient();
+    let rejectRequest: (error: Error) => void = () => undefined;
+    const pendingRequest = new Promise<{
+      profileId: string;
+      enabled: boolean;
+    }>((_resolve, reject) => {
+      rejectRequest = (error) => reject(error);
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-profile-enabled-preservation",
+      handlers: {
+        "providers.setProfileEnabled": () => pendingRequest,
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: findTestHost,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-profile-enabled-preservation",
+      }),
+    );
+    const client = spine.createRequester(HOST_A);
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_A.hostId,
+      "providers.list",
+      { native: null },
+    );
+    const snapshot = projectedProvidersList(false);
+    queryClient.setQueryData(listKey, snapshot);
+    const mutation = renderHook(
+      () => useProvidersSetProfileEnabledForClient(client, "claude-code"),
+      { wrapper: wrapperFor(queryClient) },
+    );
+
+    act(() => {
+      mutation.result.current.mutate({
+        providerId: "claude-code",
+        profileId: "work",
+        enabled: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryData(listKey)).toEqual(
+        withProfileEnabled(snapshot, "work", true),
+      );
+    });
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "providers.setProfileEnabled",
+        ),
+      ).toHaveLength(1);
+    });
+    act(() => rejectRequest(new Error("profile write rejected")));
+    await waitFor(() => expect(mutation.result.current.isError).toBe(true));
+    expect(queryClient.getQueryData(listKey)).toEqual(snapshot);
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "providers.setProfileEnabled",
+      ),
+    ).toHaveLength(1);
+    expect(messenger.calls.map((call) => call.method)).toEqual([
+      "providers.setProfileEnabled",
+    ]);
   });
 
   it("rolls back only the failed profile across overlapping optimistic enables", async () => {

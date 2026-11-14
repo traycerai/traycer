@@ -1,4 +1,5 @@
 export const providersMutationKeys = {
+  commitProfileMove: () => ["providers.commitProfileMove"] as const,
   signOutProfile: () => ["providers.signOutProfile"] as const,
   setSelection: () => ["providers.setSelection"] as const,
   addCustomPath: () => ["providers.addCustomPath"] as const,
@@ -44,6 +45,7 @@ export const providersMutationKeys = {
   setPackPolicy: () => ["providers.setPackPolicy"] as const,
   refreshPackDiscovery: () => ["providers.refreshPackDiscovery"] as const,
   renameProfile: () => ["providers.renameProfile"] as const,
+  answerProfileName: () => ["providers.answerProfileName"] as const,
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,
   refresh: () => ["providers.refresh"] as const,

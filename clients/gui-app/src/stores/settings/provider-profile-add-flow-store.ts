@@ -11,7 +11,7 @@ interface ProviderProfileAddFlowState {
    *  SAME host scope the picker was actually browsing, never silently
    *  falling back to the renderer-default host for a tab bound elsewhere. */
   readonly hostId: string | null;
-  /** Captured alongside `harnessId`/`hostId` at the same "Create new profile"
+  /** Captured alongside `harnessId`/`hostId` at the same "Add a profile"
    *  click - lets the flow host jump the OPENING picker's own selection to
    *  the newly created profile once it's saved, without this globally-mounted
    *  store knowing anything about which composer/picker instance opened it. */

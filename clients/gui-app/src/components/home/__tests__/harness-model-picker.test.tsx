@@ -110,6 +110,11 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     ),
   };
 });
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   act,
   cleanup,
@@ -162,10 +167,28 @@ interface MockHostClient {
   readonly id: string;
   getActiveHostId(): string | null;
   getActiveHost(): { readonly websocketUrl: string | null } | null;
+  request(
+    method: string,
+    params: {
+      readonly providerId: string;
+      readonly scope: { readonly kind: "epic" | "independent" };
+      readonly cols: number;
+      readonly rows: number;
+    },
+  ): Promise<void>;
 }
 
 function mockHostClientKey(client: MockHostClient): string {
   return client.id;
+}
+
+/** Includes `removedProfiles` only when the fixture set the 10.11 key. */
+function providersListEnvelope(providers: readonly ProviderCliState[]) {
+  const removedProfiles = queryMock.removedProfiles;
+  if (removedProfiles === undefined) {
+    return { providers };
+  }
+  return { providers, removedProfiles };
 }
 
 const queryMock = vi.hoisted(() => ({
@@ -180,6 +203,15 @@ const queryMock = vi.hoisted(() => ({
   catalogHarnessesLoading: false,
   modelsLoading: false,
   providerStates: [] as ProviderCliState[],
+  // `undefined` omits the envelope key, the way a 10.10 computer does.
+  // An array, including an empty one, is the 10.11 key.
+  removedProfiles: undefined as
+    | ReadonlyArray<{
+        readonly providerId: string;
+        readonly profileId: string;
+        readonly aliases: readonly string[];
+      }>
+    | undefined,
   // Per-target-host override for `useProvidersListForClient` - keyed by the
   // sentinel `useHostClientForHostId` returns ("default" for a null host id,
   // else the raw host id). A test that never populates this map gets
@@ -211,6 +243,11 @@ const queryMock = vi.hoisted(() => ({
   >(),
   concreteDefaultHostId: null as string | null,
   cloneCatalogOnRead: false,
+  terminalLoginRequests: [] as Array<{
+    readonly method: string;
+    readonly providerId: string;
+    readonly scopeKind: "epic" | "independent";
+  }>,
   calls: {
     harnesses: [] as Array<{
       readonly enabled: boolean;
@@ -277,7 +314,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     });
     return {
       data: activity.enabled
-        ? { providers: queryMock.providerStates }
+        ? providersListEnvelope(queryMock.providerStates)
         : undefined,
       isPending: false,
       isError: false,
@@ -324,7 +361,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       queryMock.providerStatesByClient.get(mockHostClientKey(client)) ??
       queryMock.providerStates;
     return {
-      data: activity.enabled ? { providers } : undefined,
+      data: activity.enabled ? providersListEnvelope(providers) : undefined,
       isPending: false,
       isError: false,
       error: null,
@@ -358,8 +395,19 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
           ? null
           : "ws://127.0.0.1:59998/stream",
       }),
+      request: (method, params) => {
+        queryMock.terminalLoginRequests.push({
+          method,
+          providerId: params.providerId,
+          scopeKind: params.scope.kind,
+        });
+        return new Promise(() => undefined);
+      },
     };
   },
+  // No directory row, so a record that is this computer's Terminal login
+  // draws no computer name.
+  useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
@@ -393,7 +441,7 @@ vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
   },
 }));
 
-// The capability gate resolves the "Create new profile" row's target host
+// The capability gate resolves the "Add a profile" row's target host
 // via `useAddressableHostId()` / `useHostDirectoryList()` - stub both to a
 // single local host so the row is enabled by default (mirrors
 // `providers-settings-panel.test.tsx`'s equivalent stubs).
@@ -721,6 +769,7 @@ import {
   type HarnessModelPickerEmbedding,
   type OpenForHarness,
 } from "@/components/home/pickers/harness-model-picker";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import {
   PaneActivationFocusIntentContext,
@@ -728,6 +777,11 @@ import {
 } from "@/components/epic-canvas/pane-activation";
 import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
 import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
+import {
+  legacyProfile,
+  pinProfile,
+  removedEntry,
+} from "@/components/providers/__tests__/profile-pin-fixtures";
 import {
   createComposerToolbarStore,
   type ComposerToolbarStore,
@@ -934,7 +988,7 @@ function providerCliStateWithProfiles(input: {
     terminalAgentArgs: "",
     envOverrides: [],
     // Capable by default (local host, OAuth login args) so the picker's
-    // "Create new profile" row is enabled unless a test explicitly narrows
+    // "Add a profile" row is enabled unless a test explicitly narrows
     // this to exercise the capability gate.
     loginCapability:
       input.loginCapability === undefined
@@ -960,6 +1014,21 @@ function providerCliStateWithProfiles(input: {
     advisory: null,
     profiles: input.profiles,
   };
+}
+
+function claudeTerminalLoginCapability(): ProviderCliState["loginCapability"] {
+  return {
+    oauthArgs: ["setup"],
+    token: null,
+    codePaste: null,
+    terminalLogin: {},
+    remoteSafe: null,
+    selfOpensBrowser: null,
+  };
+}
+
+function landingTerminalSurface(): ProviderTerminalLoginSurface {
+  return { kind: "landing", resolveLandingPageId: () => "draft-1" };
 }
 
 const PICKER_BODY_HEIGHT =
@@ -1088,6 +1157,8 @@ interface RenderPickerInput {
   readonly embedding?: HarnessModelPickerEmbedding | null;
   readonly hostId?: string | null;
   readonly maxModeContext?: MaxModeContext;
+  readonly terminalLoginSurface?: ProviderTerminalLoginSurface | null;
+  readonly runTargetHostId?: string | null;
 }
 
 interface PickerHarness {
@@ -1194,9 +1265,13 @@ function pickerHarnessWith(
           disabled={disabled}
           registerActivation={resolvedInput.registerActivation ?? false}
           createProfileHostId={resolvedInput.createProfileHostId ?? null}
-          runTargetHostId={resolvedInput.createProfileHostId ?? null}
+          runTargetHostId={
+            resolvedInput.runTargetHostId === undefined
+              ? (resolvedInput.createProfileHostId ?? null)
+              : resolvedInput.runTargetHostId
+          }
           profileAdmission={resolvedInput.profileAdmission ?? null}
-          terminalLoginSurface={null}
+          terminalLoginSurface={resolvedInput.terminalLoginSurface ?? null}
           embedding={embedding}
         />
       </TooltipProvider>
@@ -1236,6 +1311,21 @@ function renderPicker(input: RenderPickerInput | undefined): PickerHarness {
   return harness;
 }
 
+function renderPickerWithTerminalLogin(
+  input: RenderPickerInput,
+): PickerHarness {
+  const harness = pickerHarness(input);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      {harness.element(false, undefined)}
+    </QueryClientProvider>,
+  );
+  return harness;
+}
+
 function renderPickerWith(
   input: RenderPickerInput | undefined,
   surface: UltracodeSurface,
@@ -1267,6 +1357,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.catalogHarnessesLoading = false;
     queryMock.modelsLoading = false;
     queryMock.providerStates = [];
+    queryMock.removedProfiles = undefined;
     queryMock.providerStatesByClient = new Map();
     queryMock.harnessesByClient = new Map();
     queryMock.modelsByClient = new Map();
@@ -1277,6 +1368,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.reachabilityByHost = new Map();
     queryMock.concreteDefaultHostId = null;
     queryMock.cloneCatalogOnRead = false;
+    queryMock.terminalLoginRequests = [];
     queryMock.calls.harnesses = [];
     queryMock.calls.harnessClients = [];
     queryMock.calls.catalog = [];
@@ -1301,6 +1393,7 @@ describe("<HarnessModelPicker />", () => {
   });
 
   afterEach(() => {
+    resetNegotiatedManifests();
     vi.restoreAllMocks();
     cleanup();
     resetActiveModelPickerForTests();
@@ -3192,9 +3285,7 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
     expect(profileUsageHookMock.runTargetHostIds).toContain(null);
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
 
     // The add-profile flow opens in its own global host, outside the picker
     // popover - the create-row must close the picker itself so the two never
@@ -3229,9 +3320,7 @@ describe("<HarnessModelPicker />", () => {
 
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
 
     const onProfileCreated =
       useProviderProfileAddFlowStore.getState().onProfileCreated;
@@ -3327,9 +3416,7 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
     expect(profileUsageHookMock.runTargetHostIds).toContain("tab-host-1");
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
 
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBe("claude");
     expect(useProviderProfileAddFlowStore.getState().hostId).toBe("tab-host-1");
@@ -3708,13 +3795,13 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
     expect(row.disabled).toBe(true);
     expect(tooltipTextNear(row)).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "Add profiles from a local computer with browser sign-in available.",
     );
     fireEvent.click(row);
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBeNull();
@@ -3776,7 +3863,7 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
@@ -3845,10 +3932,9 @@ describe("<HarnessModelPicker />", () => {
     // Target host: DOES advertise OAuth login capability. The rail's own
     // visible profiles now ALSO resolve through `runTargetHostId` (this
     // migration; it used to read the app-wide default's `providers.list`
-    // unconditionally), so this fixture needs 2+ profiles of its own for the
-    // dropdown - and thus the "Create new profile" row - to render at all;
-    // otherwise the picker falls back to the single-profile ambient-auth
-    // line and the row this test targets never exists to click.
+    // unconditionally). Claude can have profiles, so the account dropdown
+    // and its "Add a profile" row render from one row; this fixture keeps
+    // two profiles so the row this test clicks is the same one as before.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
@@ -3868,7 +3954,7 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
@@ -3892,9 +3978,9 @@ describe("<HarnessModelPicker />", () => {
         profiles: claudeProfilesForDropdown(),
       }),
     ];
-    // Target host: no OAuth login capability. See the sibling "enables…"
-    // test above for why this needs 2+ profiles of its own now that the
-    // rail's visible profiles also resolve through `runTargetHostId`.
+    // Target host: no OAuth login capability. The rail's visible profiles
+    // resolve through `runTargetHostId`. Claude draws the dropdown from one
+    // row; this fixture keeps two profiles, matching the sibling above.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
@@ -3907,13 +3993,13 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
     expect(row.disabled).toBe(true);
     expect(tooltipTextNear(row)).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "Add profiles from a local computer with browser sign-in available.",
     );
   });
 
@@ -4059,6 +4145,43 @@ describe("<HarnessModelPicker />", () => {
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
     expect(selections.at(-1)?.profileId).toBe("work-profile");
+  });
+
+  it("commits the only account of a profile provider via the ⌘⇧ leader digit", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          legacyProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+          }),
+        ],
+      }),
+    ];
+    const { selections } = renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: null,
+      },
+    });
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+    const committedBeforeDigit = selections.length;
+
+    act(() => {
+      fireLeaderDigit(1, "modShift", false);
+    });
+
+    expect(selections.length).toBeGreaterThan(committedBeforeDigit);
+    expect(selections.at(-1)).toEqual({
+      harnessId: "claude",
+      modelSlug: "claude-opus-4-7",
+      profileId: "desk-row",
+    });
   });
 
   it("refuses the ⌘⇧ leader digit for an admission-disabled row - the shortcut must not bypass the gate the row itself enforces", async () => {
@@ -6059,6 +6182,435 @@ describe("<HarnessModelPicker />", () => {
       await openPicker();
 
       expect(screen.queryByRole("switch", { name: "Ultracode" })).toBeNull();
+    });
+  });
+
+  it("shows the account dropdown for one 10.10 row of a provider that can have profiles", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "codex",
+        profiles: [
+          legacyProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+          }),
+        ],
+      }),
+    ];
+    renderPicker(undefined);
+    await openPicker();
+
+    expect(
+      screen.getByRole("button", { name: "Codex profile: Desk" }),
+    ).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: "Desk" })).toBeDefined();
+    expect(screen.queryByText("Not authenticated")).toBeNull();
+  });
+
+  it("shows one 10.11 row's other name, Terminal line and person state in the account dropdown", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          pinProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+            aliases: [],
+            personNotice: "needs-sign-in",
+            terminalOnThisComputer: true,
+            otherNames: ["Home"],
+          }),
+        ],
+      }),
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(
+      screen.getByRole("button", { name: "Claude profile: Desk" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Desk, Terminal account, Also named Home, Needs a sign-in",
+      }),
+    ).toBeDefined();
+    expect(screen.getByText("Home")).toBeDefined();
+    expect(screen.getByText("Terminal account")).toBeDefined();
+    expect(screen.getByText("Needs a sign-in")).toBeDefined();
+    expect(screen.queryByTestId("terminal-account-first-mention")).toBeNull();
+    expect(screen.queryByText("Not authenticated")).toBeNull();
+  });
+
+  it("shows the account dropdown for one signed-out Terminal row instead of the auth line", async () => {
+    const signedOut = providerCliStateWithProfiles({
+      providerId: "claude-code",
+      profiles: [
+        legacyProfile({
+          profileId: "ambient",
+          label: "Terminal account",
+          kind: "ambient",
+          enabled: true,
+          authStatus: "unauthenticated",
+        }),
+      ],
+    });
+    queryMock.providerStates = [
+      {
+        ...signedOut,
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(
+      screen.getByRole("button", {
+        name: "Claude profile: Terminal account, Terminal",
+      }),
+    ).toBeDefined();
+    expect(screen.queryByText("Not authenticated")).toBeNull();
+  });
+
+  it("shows terminal setup under the dropdown for one signed-out Terminal row and starts the login when that action is used", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.startTerminalLogin": { major: 2, minor: 0 },
+    });
+    const signedOut = providerCliStateWithProfiles({
+      providerId: "claude-code",
+      loginCapability: claudeTerminalLoginCapability(),
+      profiles: [
+        legacyProfile({
+          profileId: "ambient",
+          label: "Terminal account",
+          kind: "ambient",
+          enabled: true,
+          authStatus: "unauthenticated",
+        }),
+      ],
+    });
+    queryMock.providerStates = [
+      {
+        ...signedOut,
+        auth: {
+          status: "unauthenticated",
+          badgeText: "Key file",
+          label: "Saved key",
+          detail: null,
+        },
+      },
+    ];
+    renderPickerWithTerminalLogin({
+      terminalLoginSurface: landingTerminalSurface(),
+      runTargetHostId: TEST_HOST_ID,
+    });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(
+      screen.getByRole("button", {
+        name: "Claude profile: Terminal account, Terminal",
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Terminal account, Terminal, Signed out",
+      }),
+    ).toBeDefined();
+    expect(screen.getAllByText("Signed out")).toHaveLength(1);
+    expect(screen.queryByText("Not authenticated")).toBeNull();
+    expect(screen.queryByText("Key file")).toBeNull();
+    expect(screen.queryByText("Saved key")).toBeNull();
+    const note = screen.getByRole("note", { name: "Setup required" });
+    expect(
+      within(note).getByText(
+        "Claude Code signs in from a terminal: it prints a sign-in code that only exists there.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(note)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Complete the sign-in in that terminal.", "Refresh this list."]);
+    expect(note.querySelector("code")).toBeNull();
+    const action = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Sign in from a terminal",
+    });
+    expect(action.disabled).toBe(false);
+    expect(
+      screen.getByRole("option", { name: /Claude Opus 4\.7/ }),
+    ).toBeDefined();
+
+    fireEvent.click(action);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
+      expect(queryMock.terminalLoginRequests).toEqual([
+        {
+          method: "providers.startTerminalLogin",
+          providerId: "claude-code",
+          scopeKind: "independent",
+        },
+      ]);
+    });
+  });
+
+  it("omits terminal setup guidance for a signed-in Terminal row and for a signed-out record", async () => {
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "providers.startTerminalLogin": { major: 2, minor: 0 },
+    });
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        loginCapability: claudeTerminalLoginCapability(),
+        profiles: [
+          legacyProfile({
+            profileId: "ambient",
+            label: "Terminal account",
+            kind: "ambient",
+            enabled: true,
+            authStatus: "authenticated",
+          }),
+        ],
+      }),
+    ];
+    renderPickerWithTerminalLogin({
+      terminalLoginSurface: landingTerminalSurface(),
+      runTargetHostId: TEST_HOST_ID,
+    });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(
+      screen.getByRole("button", {
+        name: "Claude profile: Terminal account, Terminal",
+      }),
+    ).toBeDefined();
+    expect(screen.queryByRole("note", { name: "Setup required" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Sign in from a terminal" }),
+    ).toBeNull();
+
+    cleanup();
+    queryMock.providerStates = [
+      {
+        ...providerCliStateWithProfiles({
+          providerId: "claude-code",
+          loginCapability: claudeTerminalLoginCapability(),
+          profiles: [
+            legacyProfile({
+              profileId: "desk-row",
+              label: "Desk",
+              kind: "managed",
+              enabled: true,
+              authStatus: "unauthenticated",
+            }),
+          ],
+        }),
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    renderPickerWithTerminalLogin({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "desk-row",
+      },
+      terminalLoginSurface: landingTerminalSurface(),
+      runTargetHostId: TEST_HOST_ID,
+    });
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+
+    expect(
+      screen.getByRole("button", { name: "Claude profile: Desk" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("menuitem", { name: "Desk, Signed out" }),
+    ).toBeDefined();
+    expect(screen.getByText("Signed out")).toBeDefined();
+    expect(screen.queryByRole("note", { name: "Setup required" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Sign in from a terminal" }),
+    ).toBeNull();
+    expect(screen.queryByText("Not authenticated")).toBeNull();
+  });
+
+  it("keeps today's status line for one row of a provider that cannot have profiles", async () => {
+    const copilot: HarnessOption = {
+      id: "copilot",
+      label: "Copilot",
+      enabled: true,
+      available: true,
+      error: null,
+      modes: ["gui", "tui"],
+      requiresApiKey: false,
+      supportedPermissionModes: [...ALL_PERMISSION_MODES],
+      nativeAutoJudge: false,
+      availabilityPending: false,
+    };
+    queryMock.harnesses = [...queryMock.harnesses, copilot];
+    queryMock.catalogHarnesses = [
+      ...queryMock.catalogHarnesses,
+      catalogHarness(copilot, []),
+    ];
+    const state = providerCliStateWithProfiles({
+      providerId: "copilot",
+      profiles: [
+        legacyProfile({
+          profileId: "copilot-row",
+          label: "Desk",
+          kind: "managed",
+          enabled: true,
+          authStatus: "authenticated",
+        }),
+      ],
+    });
+    queryMock.providerStates = [
+      {
+        ...state,
+        auth: {
+          status: "authenticated",
+          badgeText: "GitHub CLI",
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Copilot" }));
+
+    expect(screen.getByText("GitHub CLI")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /profile:/ })).toBeNull();
+  });
+
+  it("shows the status line and no account dropdown when a provider has no row and no removed pin", async () => {
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "unauthenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(screen.getByText("Not authenticated")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /profile:/ })).toBeNull();
+  });
+
+  it("keeps a removed pin on the trigger and on a model pick when one live row remains", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          legacyProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+          }),
+        ],
+      }),
+    ];
+    queryMock.removedProfiles = [
+      removedEntry({
+        providerId: "claude-code",
+        profileId: "gone-row",
+        aliases: [],
+      }),
+    ];
+    const { selections } = renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "gone-row",
+      },
+    });
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+
+    expect(
+      screen.getByRole("button", { name: "Claude profile: Was removed" }),
+    ).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: "Desk" })).toBeDefined();
+    fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet 4\.6/ }));
+    expect(selections.at(-1)?.profileId).toBe("gone-row");
+  });
+
+  it("keeps a removed pin on the trigger and on a model pick when no live row remains", async () => {
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "authenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+    queryMock.removedProfiles = [
+      removedEntry({
+        providerId: "claude-code",
+        profileId: "gone-row",
+        aliases: [],
+      }),
+    ];
+    const { selections } = renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "gone-row",
+      },
+    });
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+
+    expect(
+      screen.getByRole("button", { name: "Claude profile: Was removed" }),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet 4\.6/ }));
+    expect(selections.at(-1)?.profileId).toBe("gone-row");
+  });
+
+  it("a one-row Add a profile entry sets the add-flow intent and closes the picker", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          legacyProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+          }),
+        ],
+      }),
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
+
+    expect(useProviderProfileAddFlowStore.getState().harnessId).toBe("claude");
+    expect(useProviderProfileAddFlowStore.getState().hostId).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
     });
   });
 });

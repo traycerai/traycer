@@ -10,6 +10,14 @@ import {
   type RefObject,
 } from "react";
 import { useStore } from "zustand";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import {
+  profileCommitId,
+  removedProfilesForProvider,
+  resolvedProfileRow,
+} from "@/components/providers/provider-profile-model";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
 import type {
   ChatRunSettings,
   LastFailedAttempt,
@@ -233,7 +241,8 @@ export function RoutingDestinationPicker(props: {
     open,
     enabled: canAct,
   });
-  const { data, failedTuple, labelFor, modelLabelFor, modelFor } = listing;
+  const { data, failedTuple, labelFor, sameAccount, modelLabelFor, modelFor } =
+    listing;
   // The existing fallback catalogue is availability-gated and uses the same
   // null-directory cache slot as the picker. A profile id is not a directory.
   const failedModel =
@@ -348,6 +357,7 @@ export function RoutingDestinationPicker(props: {
         failedTierName={failedTierName}
         data={data}
         labelFor={labelFor}
+        sameAccount={sameAccount}
         modelLabelFor={modelLabelFor}
         refusal={footerRefusal}
         canAct={canAct}
@@ -370,6 +380,7 @@ export function RoutingDestinationPicker(props: {
       modelLabelFor,
       onBotSettings,
       onConfirm,
+      sameAccount,
       store,
       verbs.busy,
     ],
@@ -534,6 +545,7 @@ function useRoutingListing(input: {
             listedFailedTuple.harnessId === "claude" && entryTuple.ultracode,
         };
   const labelFor = useFallbackProfileLabels(client, open);
+  const sameAccount = useSameAccountResolver(client, open);
   // The failed tuple's harness, plus one per equivalent-model row: the
   // destinations a listed target can name.
   const modelCatalogues = useFallbackModelCatalogues(
@@ -550,6 +562,7 @@ function useRoutingListing(input: {
     data,
     failedTuple,
     labelFor,
+    sameAccount,
     modelLabelFor: modelCatalogues.labelFor,
     modelFor: modelCatalogues.modelFor,
   };
@@ -1296,6 +1309,7 @@ function RoutingConfirmFooter({
   failedTierName,
   data,
   labelFor,
+  sameAccount,
   modelLabelFor,
   refusal,
   canAct,
@@ -1310,6 +1324,7 @@ function RoutingConfirmFooter({
   readonly failedTierName: string | null;
   readonly data: ChatFallbackListTargetsResponse | undefined;
   readonly labelFor: FallbackProfileLabelResolver;
+  readonly sameAccount: SameAccountResolver;
   readonly modelLabelFor: FallbackModelLabelResolver;
   readonly refusal: string | null;
   readonly canAct: boolean;
@@ -1328,7 +1343,7 @@ function RoutingConfirmFooter({
   // does not advertise, and a clamp is not the user choosing a new one.
   const rawReasoning = useStore(store, (state) => state.values.reasoning);
   const moved =
-    !selectionIsTuple(selection, failedTuple) ||
+    !selectionIsTuple(selection, failedTuple, sameAccount) ||
     rawReasoning !== (failedTuple.reasoningEffort ?? "");
   const target = confirmTarget(
     { selection, reasoning, selectedModel },
@@ -1448,16 +1463,57 @@ function switchLine(input: {
 
 function selectionIsTuple(
   selection: {
-    readonly harnessId: string;
+    readonly harnessId: GuiHarnessId;
     readonly modelSlug: string;
     readonly profileId: string | null;
   },
   tuple: ChatRunSettings,
+  sameAccount: SameAccountResolver,
 ): boolean {
   return (
     selection.harnessId === tuple.harnessId &&
     selection.modelSlug === tuple.model &&
-    selection.profileId === tuple.profileId
+    sameAccount(selection.harnessId, selection.profileId, tuple.profileId)
+  );
+}
+
+/**
+ * Whether two profile ids name one account on the tab's host: the same id,
+ * or ids that resolve to the same row - a pin to an id a row folded in as an
+ * alias is that row, so picking the row is not a switch.
+ */
+type SameAccountResolver = (
+  harnessId: GuiHarnessId,
+  left: string | null,
+  right: string | null,
+) => boolean;
+
+function useSameAccountResolver(
+  client: HostClient<HostRpcRegistry> | null,
+  enabled: boolean,
+): SameAccountResolver {
+  const data = useProvidersListForClient(client, {
+    enabled,
+    subscribed: enabled,
+  }).data;
+  return useCallback(
+    (harnessId, left, right) => {
+      if (left === right) return true;
+      const providerId = providerCliIdForHarness(harnessId);
+      const state = data?.providers.find(
+        (provider) => provider.providerId === providerId,
+      );
+      if (state === undefined) return false;
+      const removed = removedProfilesForProvider(data, providerId);
+      const leftRow = resolvedProfileRow(state.profiles, removed, left);
+      const rightRow = resolvedProfileRow(state.profiles, removed, right);
+      return (
+        leftRow !== null &&
+        rightRow !== null &&
+        profileCommitId(leftRow) === profileCommitId(rightRow)
+      );
+    },
+    [data],
   );
 }
 

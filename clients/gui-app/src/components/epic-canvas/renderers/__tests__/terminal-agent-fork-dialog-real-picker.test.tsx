@@ -174,7 +174,12 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) => hostId ?? "default",
+  useHostClientForHostId: (hostId: string | null) => ({
+    getActiveHostId: () => hostId ?? "default",
+  }),
+  // No directory row, so a record that is this computer's Terminal login
+  // draws no computer name.
+  useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({

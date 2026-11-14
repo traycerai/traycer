@@ -27,7 +27,7 @@ export function useProvidersStartLogin(): StartLoginMutationResult {
 }
 
 /** Client-scoped variant - lets a caller outside `HostRuntimeContext` (e.g.
- *  the picker's tab-scoped "Create new profile" flow) target an explicit
+ *  the picker's tab-scoped "Add a profile" flow) target an explicit
  *  host instead of the app-wide default. */
 export function useProvidersStartLoginForClient(
   client: HostClient<HostRpcRegistry> | null,

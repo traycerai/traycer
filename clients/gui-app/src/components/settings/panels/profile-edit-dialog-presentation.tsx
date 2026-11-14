@@ -28,6 +28,9 @@ export function ProfileEditDialogPresentation(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly switchingAccount: boolean;
+  /** The sign-in under `switchingAccount` has ended on a sentence the person
+   *  reads and leaves: the dialog closes again, by its × too. */
+  readonly signInSettled: boolean;
   readonly label: string;
   readonly onLabelChange: (label: string) => void;
   readonly accentColor: ProviderProfileAccentColor | null;
@@ -52,7 +55,11 @@ export function ProfileEditDialogPresentation(props: {
       <Dialog
         open={props.open}
         onOpenChange={(nextOpen) => {
-          if (!nextOpen && (props.savePending || props.switchingAccount))
+          if (
+            !nextOpen &&
+            (props.savePending ||
+              (props.switchingAccount && !props.signInSettled))
+          )
             return;
           props.onOpenChange(nextOpen);
         }}
@@ -60,7 +67,7 @@ export function ProfileEditDialogPresentation(props: {
         <DialogContent
           layout="banded"
           className="flex max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
-          showCloseButton={!props.switchingAccount}
+          showCloseButton={!props.switchingAccount || props.signInSettled}
         >
           <DialogHeader className="gap-1.5">
             <DialogTitle>{props.title}</DialogTitle>

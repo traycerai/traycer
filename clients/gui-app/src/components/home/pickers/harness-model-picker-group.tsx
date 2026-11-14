@@ -34,6 +34,7 @@ import {
 } from "@/components/providers/provider-pack-readiness";
 import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type { RemovedProviderProfile } from "@/components/providers/provider-profile-model";
 
 const LOCKED_PROVIDER_TOOLTIP =
   "Provider cannot be changed while forking terminal agent";
@@ -44,6 +45,10 @@ interface ProviderRailProps {
   readonly profilesByHarnessId: ReadonlyMap<
     GuiHarnessId,
     ReadonlyArray<ProviderProfile>
+  >;
+  readonly removedProfilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    readonly RemovedProviderProfile[]
   >;
   readonly activeProviderId: ProviderId;
   readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
@@ -68,6 +73,7 @@ export function ProviderRail(props: ProviderRailProps) {
     harnesses,
     fallbackHarnesses,
     profilesByHarnessId,
+    removedProfilesByHarnessId,
     activeProviderId,
     activeProfileIdByHarnessId,
     lockedHarnessId,
@@ -87,6 +93,7 @@ export function ProviderRail(props: ProviderRailProps) {
     degradedHarnessIds,
     preparingByHarnessId,
     profilesByHarnessId,
+    removedProfilesByHarnessId,
     activeProfileIdByHarnessId,
     offeredAgents,
   });

@@ -469,6 +469,7 @@ export function hostClientModule() {
   return {
     useHostClientForHostId: (hostId: string | null): KitClient =>
       clientFor(hostId),
+    useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
   };
 }
 

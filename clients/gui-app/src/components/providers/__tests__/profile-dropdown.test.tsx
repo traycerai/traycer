@@ -9,7 +9,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileDropdownShortcutHint } from "../profile-dropdown";
-import { profileCommitId } from "../provider-profile-model";
+import { profileCommitId, resolveProfilePin } from "../provider-profile-model";
 
 // Render the Radix dropdown menu inline + always-open so tests can assert /
 // click its rows without fighting pointer-open semantics in jsdom (mirrors
@@ -179,7 +179,7 @@ function renderDropdown(
     <ProfileDropdown
       providerLabel="Codex"
       profiles={input.profiles}
-      activeProfileId={input.activeProfileId}
+      pin={resolveProfilePin(input.profiles, [], input.activeProfileId)}
       onSelectProfile={input.onSelectProfile}
       onCreateProfile={input.onCreateProfile}
       createProfileDisabled={input.createProfileDisabled}
@@ -201,6 +201,7 @@ function renderDropdown(
       }
       admissionByProfileId={input.admissionByProfileId}
       showTerminalBadge={showTerminalBadge}
+      terminalComputerName={null}
     />,
   );
 }
@@ -687,9 +688,7 @@ describe("<ProfileDropdown />", () => {
     const onCreateProfile = vi.fn();
     renderDropdown(baseDropdownInput({ onCreateProfile }), true);
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     expect(onCreateProfile).toHaveBeenCalledTimes(1);
   });
 
@@ -707,7 +706,7 @@ describe("<ProfileDropdown />", () => {
       true,
     );
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create row mock to render as a button.");
     }

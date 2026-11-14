@@ -40,6 +40,10 @@ import {
   environmentConfigurationSkillsUpdateV10,
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
+  environmentProvidersListV10,
+  environmentProvidersRemoveProfileV10,
+  environmentProvidersRenameProfileV10,
+  environmentProvidersSignOutProfileV10,
   environmentPlansListV10,
   environmentPlansListV11,
   environmentPlansUnlinkV11,
@@ -1284,6 +1288,64 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     badResponse: { entries: [], readerScope: "everything", hostStates: [] },
   },
   {
+    method: "environment.providers.list",
+    contract: environmentProvidersListV10,
+    request: { environmentId: TEAM.environmentId },
+    badRequest: { environmentId: "" },
+    response: { profileSyncEnabled: false, providers: [] },
+    badResponse: { providers: [] },
+  },
+  {
+    method: "environment.providers.signOutProfile",
+    contract: environmentProvidersSignOutProfileV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      providerId: "future-provider",
+      profileId: "1",
+    },
+    badRequest: {
+      environmentId: TEAM.environmentId,
+      providerId: "future-provider",
+      profileId: "",
+    },
+    response: { signedOut: true },
+    badResponse: { signedOut: false },
+  },
+  {
+    method: "environment.providers.removeProfile",
+    contract: environmentProvidersRemoveProfileV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      providerId: "future-provider",
+      profileId: "1",
+    },
+    badRequest: {
+      environmentId: TEAM.environmentId,
+      providerId: "future-provider",
+      profileId: "",
+    },
+    response: { removed: true },
+    badResponse: { removed: false },
+  },
+  {
+    method: "environment.providers.renameProfile",
+    contract: environmentProvidersRenameProfileV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      providerId: "future-provider",
+      profileId: "1",
+      label: "Chosen",
+    },
+    badRequest: {
+      environmentId: TEAM.environmentId,
+      providerId: "future-provider",
+      profileId: "",
+      label: "Chosen",
+    },
+    response: { label: "Chosen" },
+    badResponse: { label: 1 },
+  },
+  {
     method: "environment.plans.list",
     contract: environmentPlansListV10,
     request: { environmentId: TEAM.environmentId },
@@ -1449,9 +1511,10 @@ describe("the environments redesign's new @1.0 methods", () => {
         "1",
       ]);
       expect(entry[1].latestMinor).toBe(
-        wire.method === "environment.move.plan"
+        wire.method === "environment.move.plan" ||
+          wire.method === "environment.move.stopPreview"
           ? 2
-          : wire.method === "environment.move.stopPreview" ||
+          : wire.method === "environment.move.stop" ||
               wire.method === "environment.configuration.mcpServers.put" ||
               wire.method === "environment.configuration.guide.get" ||
               wire.method === "environment.configuration.skills.list" ||

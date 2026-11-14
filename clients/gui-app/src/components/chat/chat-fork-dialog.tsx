@@ -10,6 +10,7 @@ import {
   type RefObject,
 } from "react";
 import { useStore } from "zustand";
+import { useProfilePinRemoved } from "@/hooks/providers/use-profile-pin-removed";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { CreateChatForkSourceV11 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -637,6 +638,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // A harness a team sandbox does not offer holds Fork shut on that host, and
   // the dialog says so.
   const forkHarnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const forkProfileId = useStore(toolbarStore, (s) => s.selection.profileId);
+  const forkProfileRemoved = useProfilePinRemoved(
+    selectedHostClient,
+    forkHarnessId,
+    forkProfileId,
+    open,
+  );
   const pickedHarnessId = useStore(
     toolbarStore,
     (s) => s.values.selection.harnessId,
@@ -806,6 +814,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     createPending: createChat.isPending || attachEnvironment.isPending,
     hostClientResolved: selectedHostClient !== null,
     teamSandboxHarnessBlocked,
+    forkProfileRemoved,
     // Not a host-build fact any more, and the name says so. This one boolean
     // now carries the SOURCE CHAT's publication too - a frozen publication and
     // a boundary the published head does not cover both hold Fork shut, the
@@ -1560,6 +1569,9 @@ function canSubmitFork(input: {
   readonly hostClientResolved: boolean;
   /** The selected host is a team sandbox that does not offer the harness. */
   readonly teamSandboxHarnessBlocked: boolean;
+  /** The picked account was removed by a person: the picker says so, and
+   *  Fork waits for another pick. */
+  readonly forkProfileRemoved: boolean;
   /**
    * The combined Layer-1 verdict allows a submit - see `chat-fork-target`. It
    * spans BOTH subjects the dialog gates on: the selected host's build, and the
@@ -1575,6 +1587,7 @@ function canSubmitFork(input: {
   if (input.createPending) return false;
   if (!input.hostClientResolved) return false;
   if (input.teamSandboxHarnessBlocked) return false;
+  if (input.forkProfileRemoved) return false;
   if (!input.verdictAllowsSubmit) return false;
   if (input.requiresStagedPreselection && !input.hasStagedPreselection) {
     return false;

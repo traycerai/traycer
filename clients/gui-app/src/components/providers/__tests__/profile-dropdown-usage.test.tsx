@@ -92,6 +92,7 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
 });
 
 import { ProfileDropdown } from "../profile-dropdown";
+import { resolveProfilePin } from "../provider-profile-model";
 
 const NOW = Date.now();
 
@@ -220,7 +221,7 @@ function renderDropdown(
     <ProfileDropdown
       providerLabel="Codex"
       profiles={[AMBIENT, WORK]}
-      activeProfileId="work"
+      pin={resolveProfilePin([AMBIENT, WORK], [], "work")}
       onSelectProfile={onSelectProfile}
       onCreateProfile={vi.fn()}
       createProfileDisabled={false}
@@ -236,6 +237,7 @@ function renderDropdown(
       eligibilityControls={null}
       admissionByProfileId={null}
       showTerminalBadge
+      terminalComputerName={null}
     />,
   );
 }

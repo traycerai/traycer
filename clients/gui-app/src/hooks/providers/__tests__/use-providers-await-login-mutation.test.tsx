@@ -2,7 +2,10 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { ProviderMutationCliStateV21 } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderLoginProfileOutcome,
+  ProviderMutationCliStateV21,
+} from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-schemas";
 import {
   HostRequestAbortedError,
@@ -48,6 +51,8 @@ import {
   useProvidersAwaitLoginForClient,
   type AwaitLoginVariables,
 } from "@/hooks/providers/use-providers-await-login-mutation";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 type ProvidersListResponse = ResponseOfMethod<
@@ -229,6 +234,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -287,6 +293,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -329,6 +336,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -374,6 +382,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -405,6 +414,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -433,6 +443,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -463,6 +474,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -671,6 +683,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const first = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: firstAttempt.signal,
+      readsProfileOutcome: false,
     });
     const firstOutcome = trackOutcome(first);
     await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
@@ -695,6 +708,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const second = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: secondAttempt.signal,
+      readsProfileOutcome: false,
     });
     // Before the fix this attached to attempt one's in-flight request and no
     // second dispatch ever reached the host.
@@ -734,6 +748,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const first = startWait(result.current.mutateAsync, {
       request: firstRequest,
       signal: undefined,
+      readsProfileOutcome: false,
     });
     await expect(firstArrival).resolves.toEqual(firstRequest);
 
@@ -742,6 +757,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const second = startWait(result.current.mutateAsync, {
       request: secondRequest,
       signal: undefined,
+      readsProfileOutcome: false,
     });
     await expect(secondArrival).resolves.toEqual(secondRequest);
     expect(awaitDispatches(messenger)).toHaveLength(2);
@@ -772,6 +788,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const wait = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: attempt.signal,
+      readsProfileOutcome: false,
     });
     const outcome = trackOutcome(wait);
     await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
@@ -806,6 +823,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const wait = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: liveAttempt.signal,
+      readsProfileOutcome: false,
     });
     await expect(wait).rejects.toBeInstanceOf(HostRpcError);
 
@@ -818,4 +836,244 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
       "Couldn't confirm sign-in.",
     );
   });
+});
+
+// A null state re-reads providers.list only when profileOutcome names a
+// profile. Invalidation does not fetch with no observer, so the list hook
+// stays mounted and the count is the handler, not invalidateQueries.
+describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
+  type AwaitLoginResponse = ResponseOfMethod<
+    HostRpcRegistry,
+    "providers.awaitLogin"
+  >;
+
+  function awaitBody(
+    outcome: ProviderLoginProfileOutcome | null,
+    state: ProviderMutationCliStateV21 | null,
+  ): AwaitLoginResponse {
+    return {
+      state,
+      existingProfileId: null,
+      codeRejected: false,
+      refusal: null,
+      installation: null,
+      profileOutcome: outcome,
+    };
+  }
+
+  function useListAndAwait(client: HostClient<HostRpcRegistry>) {
+    const list = useProvidersListForClient(client, {
+      enabled: true,
+      subscribed: true,
+    });
+    const awaitLogin = useProvidersAwaitLoginForClient({
+      client,
+      getCacheHostId: () => HOST_ID,
+    });
+    return { list, awaitLogin };
+  }
+
+  function readingClient(answer: AwaitLoginResponse): {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly reads: () => number;
+  } {
+    let reads = 0;
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "providers.list": () => {
+          reads += 1;
+          return seededProvidersList();
+        },
+        "providers.awaitLogin": () => answer,
+      },
+    });
+    return { client, reads: () => reads };
+  }
+
+  const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+    HOST_ID,
+    "providers.list",
+    { native: null },
+  );
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function settleMount(input: {
+    readonly outcome: ProviderLoginProfileOutcome | null;
+    readonly state: ProviderMutationCliStateV21 | null;
+  }) {
+    const { client, reads } = readingClient(
+      awaitBody(input.outcome, input.state),
+    );
+    const { queryClient, wrapper } = makeWrapper();
+    const { result } = renderHook(() => useListAndAwait(client), { wrapper });
+    await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
+    const mountReads = reads();
+    expect(mountReads).toBe(1);
+    return { reads, mountReads, queryClient, result };
+  }
+
+  function recordCallerRead(input: {
+    readonly reads: () => number;
+    readonly queryClient: QueryClient;
+    readonly readsProfileOutcome: boolean;
+    readonly mutate: (
+      variables: AwaitLoginVariables,
+      options: { readonly onSuccess: () => void },
+    ) => void;
+  }): {
+    readonly readsWhenCallerRan: () => number;
+    readonly fetchStatus: () => string;
+  } {
+    let readsWhenCallerRan = 0;
+    let fetchStatusWhenCallerRan = "";
+    act(() => {
+      input.mutate(
+        {
+          request: { providerId: "copilot", profileId: null },
+          signal: undefined,
+          readsProfileOutcome: input.readsProfileOutcome,
+        },
+        {
+          onSuccess: () => {
+            readsWhenCallerRan = input.reads();
+            fetchStatusWhenCallerRan =
+              input.queryClient.getQueryState(listKey)?.fetchStatus ?? "absent";
+          },
+        },
+      );
+    });
+    return {
+      readsWhenCallerRan: () => readsWhenCallerRan,
+      fetchStatus: () => fetchStatusWhenCallerRan,
+    };
+  }
+
+  it("reads providers.list once when profileOutcome is null and state is present", async () => {
+    const { reads, mountReads, queryClient, result } = await settleMount({
+      outcome: null,
+      state: v21Echo({}),
+    });
+    const caller = recordCallerRead({
+      reads,
+      queryClient,
+      readsProfileOutcome: false,
+      mutate: (variables, options) => {
+        result.current.awaitLogin.mutate(variables, options);
+      },
+    });
+    await waitFor(() =>
+      expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+    );
+    expect(caller.fetchStatus()).toBe("idle");
+    expect(reads()).toBe(mountReads + 1);
+  });
+
+  it("reads providers.list no further time when profileOutcome and state are both null", async () => {
+    const { reads, mountReads, queryClient, result } = await settleMount({
+      outcome: null,
+      state: null,
+    });
+    act(() => {
+      result.current.awaitLogin.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.awaitLogin.isSuccess).toBe(true));
+    expect(reads()).toBe(mountReads);
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+  });
+
+  it.each(["signed-in", "already-signed-in"] as const)(
+    "reads providers.list once, finished before the caller, when state is null and the outcome is %s",
+    async (kind) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome: { kind, profileId: "work" },
+        state: null,
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() =>
+        expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+      );
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(mountReads + 1);
+    },
+  );
+
+  it.each(["signed-in", "already-signed-in"] as const)(
+    "reads providers.list once, not twice, when state is present and the outcome is %s",
+    async (kind) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome: { kind, profileId: "work" },
+        state: v21Echo({}),
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() =>
+        expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+      );
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(mountReads + 1);
+    },
+  );
+
+  it.each([
+    {
+      name: "waiting-for-profile",
+      outcome: { kind: "waiting-for-profile" },
+    },
+    { name: "account-mismatch", outcome: { kind: "account-mismatch" } },
+    { name: "account-unproven", outcome: { kind: "account-unproven" } },
+    {
+      name: "target-refused",
+      outcome: { kind: "target-refused", reason: "offer-refused" },
+    },
+    {
+      name: "staged-for-leave",
+      outcome: { kind: "staged-for-leave", profileId: "work" },
+    },
+  ] satisfies readonly {
+    readonly name: string;
+    readonly outcome: ProviderLoginProfileOutcome;
+  }[])(
+    "does not reread providers.list for the no-state $name outcome",
+    async ({ outcome }) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome,
+        state: null,
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() => {
+        expect(result.current.awaitLogin.isSuccess).toBe(true);
+        expect(caller.readsWhenCallerRan()).toBe(mountReads);
+      });
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(1);
+    },
+  );
 });

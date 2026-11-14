@@ -34,12 +34,20 @@ import {
   AddProfileWaitingStep,
 } from "./add-provider-profile-dialog";
 import {
-  useProviderProfileLoginFlow,
+  useProviderProfileOutcomeLoginFlow,
   providerProfileLoginProgress,
   type ProviderProfileLoginFlow,
 } from "./use-provider-profile-login-flow";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import type { CachedProviderProfilesReader } from "@/hooks/providers/use-cached-providers-list";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import {
+  ADD_AS_NEW_PROFILE_TEXT,
+  differentAccountText,
+  profileNotChangedText,
+  SIGN_IN_UNPROVEN_TEXT,
+  WAITING_FOR_PROFILE_TEXT,
+} from "@/components/providers/profile-sync-copy";
 
 function noop(): void {}
 
@@ -65,6 +73,20 @@ interface ProviderProfileReauthPanelProps {
     | null;
   readonly onCancel: () => void;
   readonly onDone: () => void;
+  /** Null on a computer that does not offer sign-ins by itself: a completed
+   *  sign-in's `profileOutcome` is then not read. */
+  readonly signInOutcomes: ReauthSignInOutcomes | null;
+}
+
+/** A completed Sign in again on a computer that offers sign-ins by itself. */
+export interface ReauthSignInOutcomes {
+  /** The cached list a completed sign-in's profile is looked up in. */
+  readonly reader: CachedProviderProfilesReader;
+  /** Leaves this sign-in for Add, on the same provider. */
+  readonly onAddAsNewProfile: () => void;
+  /** True while the sign-in rests on a sentence the person only reads and
+   *  leaves (the list has not caught up, or nothing was changed). */
+  readonly onSettledChange: (settled: boolean) => void;
 }
 
 export function ProviderProfileReauthPanel({
@@ -74,6 +96,7 @@ export function ProviderProfileReauthPanel({
   onSameAccountReconnected,
   onCancel,
   onDone,
+  signInOutcomes,
 }: ProviderProfileReauthPanelProps): ReactNode {
   const openLink = useOpenLink();
   // The floor under every way in (Sign in, Switch account, a deep link's
@@ -100,25 +123,30 @@ export function ProviderProfileReauthPanel({
   const [entryProfile] = useState(profile);
   const supportsLoginOwnership = useProvidersLoginOwnership();
   const hostBlock = providerHostBlock(state, "sign-in");
-  const flow = useProviderProfileLoginFlow({
-    hostBlock,
-    supportsLoginOwnership,
-    mode: "reauth",
-    providerId: state.providerId,
-    existingProfileId: entryProfile.profileId,
-    loginCapability: state.loginCapability,
-    startLogin,
-    awaitLogin,
-    cancelLogin,
-    submitLoginCode,
-    touchLogin,
-    ensurePack,
-    failureMessages: {
-      notStarted: "Sign-in did not start. Try again when ready.",
-      notFinished: "Sign-in did not finish. Try again.",
+  const profileOutcomes =
+    signInOutcomes === null ? null : signInOutcomes.reader;
+  const flow = useProviderProfileOutcomeLoginFlow(
+    {
+      hostBlock,
+      supportsLoginOwnership,
+      mode: "reauth",
+      providerId: state.providerId,
+      existingProfileId: entryProfile.profileId,
+      loginCapability: state.loginCapability,
+      startLogin,
+      awaitLogin,
+      cancelLogin,
+      submitLoginCode,
+      touchLogin,
+      ensurePack,
+      failureMessages: {
+        notStarted: "Sign-in did not start. Try again when ready.",
+        notFinished: "Sign-in did not finish. Try again.",
+      },
+      onFailed: noop,
     },
-    onFailed: noop,
-  });
+    profileOutcomes,
+  );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const startedRef = useRef(false);
   const handedOffRef = useRef(false);
@@ -133,6 +161,7 @@ export function ProviderProfileReauthPanel({
     !sameProfileIdentity(entryProfile, flow.state.profile);
   const handingOff =
     onSameAccountReconnected !== null && showIdentity && !identityChanged;
+  useSettledReport(signInOutcomes, flow.state);
   // Suppressed from the render, not just skipped afterwards: the hand-off
   // runs in an effect, so the card would otherwise paint for a frame - and
   // stay painted for the caller's exit animation - before vanishing. A card
@@ -227,8 +256,93 @@ export function ProviderProfileReauthPanel({
         onSignInAgain={signInAgain}
         onDone={onDone}
       />
+      {signInOutcomes === null ? null : (
+        <ProviderProfileReauthOutcome
+          flowState={flow.state}
+          entryProfile={entryProfile}
+          onAddAsNewProfile={signInOutcomes.onAddAsNewProfile}
+          onDone={onDone}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * Where a completed Sign in again rests, on a computer that offers sign-ins
+ * by itself: the list has not caught up yet, or the sign-in was another
+ * account, or one that cannot be matched to this profile's account. In the
+ * last two the profile is left as it was.
+ */
+function ProviderProfileReauthOutcome({
+  flowState,
+  entryProfile,
+  onAddAsNewProfile,
+  onDone,
+}: {
+  readonly flowState: ProviderProfileLoginFlow["state"];
+  readonly entryProfile: ProviderProfile;
+  readonly onAddAsNewProfile: () => void;
+  readonly onDone: () => void;
+}): ReactNode {
+  if (flowState.kind === "waiting-for-profile") {
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <p role="status" className="min-w-0 flex-1 text-ui-sm text-foreground">
+          {WAITING_FOR_PROFILE_TEXT}
+        </p>
+        <Button type="button" size="sm" onClick={onDone}>
+          Done
+        </Button>
+      </div>
+    );
+  }
+  if (flowState.kind !== "not-changed") return null;
+  const mismatch = flowState.reason === "account-mismatch";
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        role="status"
+        className="flex flex-col gap-1 text-ui-sm text-foreground"
+      >
+        {mismatch ? (
+          <p>{differentAccountText(entryProfile.label)}</p>
+        ) : (
+          <>
+            <p>{SIGN_IN_UNPROVEN_TEXT}</p>
+            <p>{profileNotChangedText(entryProfile.label)}</p>
+          </>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {mismatch ? (
+          <Button type="button" size="sm" variant="outline" onClick={onDone}>
+            Done
+          </Button>
+        ) : null}
+        <Button type="button" size="sm" onClick={onAddAsNewProfile}>
+          {ADD_AS_NEW_PROFILE_TEXT}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Tells the dialog when the sign-in rests on a sentence the person leaves. */
+function useSettledReport(
+  signInOutcomes: ReauthSignInOutcomes | null,
+  flowState: ProviderProfileLoginFlow["state"],
+): void {
+  const onSettledChange =
+    signInOutcomes === null ? null : signInOutcomes.onSettledChange;
+  const settled =
+    flowState.kind === "waiting-for-profile" ||
+    flowState.kind === "not-changed";
+  useEffect(() => {
+    if (onSettledChange === null) return;
+    onSettledChange(settled);
+    return () => onSettledChange(false);
+  }, [onSettledChange, settled]);
 }
 
 function ProviderProfileReauthState({

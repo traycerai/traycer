@@ -890,7 +890,13 @@ function SignInToEnableButton(props: {
       // Ambient login, not a managed profile: onboarding has no profile
       // management surface, and the account a first sign-in creates is the
       // provider's own CLI login.
-      request: { providerId, profileId: null, createProfile: null, holderId },
+      request: {
+        providerId,
+        profileId: null,
+        createProfile: null,
+        holderId,
+        target: null,
+      },
       startLogin: (request) => startLogin.mutateAsync(request),
       ensurePack: () => ensurePack.mutateAsync({ providerId }),
       retryPackFirst,
@@ -980,7 +986,11 @@ function SignInToEnableButton(props: {
         };
         const awaitOnce = (): void => {
           awaitLogin.mutate(
-            { request: { providerId, profileId: null }, signal: undefined },
+            {
+              request: { providerId, profileId: null },
+              signal: undefined,
+              readsProfileOutcome: false,
+            },
             {
               onSuccess: handleCompletion,
               // A failed await ends the attempt: the mutation's own

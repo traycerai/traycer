@@ -2063,6 +2063,154 @@ describe("<RateLimitPopover /> rail", () => {
     }
   });
 
+  function configureAliasedCodex(): void {
+    const withoutIdentity = (
+      profile: ProviderProfile,
+      aliases: readonly string[],
+    ): ProviderProfile => ({
+      ...profile,
+      identity: null,
+      aliases: [...aliases],
+    });
+    const codexProfiles = [
+      withoutIdentity(
+        providerProfile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Default Codex",
+          tier: "Terminal",
+          usageUpdatedAt: NOW - 10_000,
+        }),
+        [],
+      ),
+      withoutIdentity(
+        providerProfile({
+          profileId: "work-profile",
+          kind: "managed",
+          label: "Work",
+          tier: "Pro 5x",
+          usageUpdatedAt: NOW - 10_000,
+        }),
+        ["alias-work"],
+      ),
+    ];
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: codexProfiles,
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+  }
+
+  it("scrolls the canonical card when the deep link names an alias of that account", () => {
+    configureAliasedCodex();
+    const scrolled: Element[] = [];
+    const scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+    try {
+      useRateLimitPopoverStore.getState().requestRevealProfile({
+        providerId: "codex",
+        profileId: "alias-work",
+      });
+      renderPopover();
+
+      expect(scrolled).toEqual([
+        screen.getByTestId("rate-limit-profile-card-codex-work-profile"),
+      ]);
+      expect(useRateLimitPopoverStore.getState().revealProfile).toBeNull();
+    } finally {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      } else {
+        Object.defineProperty(Element.prototype, "scrollIntoView", descriptor);
+      }
+    }
+  });
+
+  it("scrolls neither card when the deep link is one row's id and another's alias", () => {
+    const withoutIdentity = (
+      profileId: string,
+      label: string,
+      aliases: readonly string[],
+    ): ProviderProfile => ({
+      ...providerProfile({
+        profileId,
+        kind: "managed",
+        label,
+        tier: null,
+        usageUpdatedAt: NOW - 10_000,
+      }),
+      identity: null,
+      aliases: [...aliases],
+    });
+    const first = withoutIdentity("pin-x", "First", []);
+    const second = withoutIdentity("second-row", "Second", ["pin-x"]);
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [first, second],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "pin-x")]: readyResult(codexReady()),
+      [resultKey("codex", "second-row")]: readyResult(codexReady()),
+    };
+    const scrolled: Element[] = [];
+    const scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+    try {
+      useRateLimitPopoverStore.getState().requestRevealProfile({
+        providerId: "codex",
+        profileId: "pin-x",
+      });
+      renderPopover();
+
+      expect(
+        screen.getByTestId("rate-limit-profile-card-codex-pin-x"),
+      ).toBeDefined();
+      expect(
+        screen.getByTestId("rate-limit-profile-card-codex-second-row"),
+      ).toBeDefined();
+      expect(scrolled).toEqual([]);
+      expect(useRateLimitPopoverStore.getState().revealProfile).toEqual({
+        providerId: "codex",
+        profileId: "pin-x",
+      });
+    } finally {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      } else {
+        Object.defineProperty(Element.prototype, "scrollIntoView", descriptor);
+      }
+    }
+  });
+
   it("still consumes a deep-link request where scrollIntoView does not exist", () => {
     configureTwoAccountProviders();
     // The suite setup stubs `scrollIntoView`; take it away for this case so

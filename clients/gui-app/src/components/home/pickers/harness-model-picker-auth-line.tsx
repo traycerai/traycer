@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type {
   ProviderCliState,
   ProviderId,
+  ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { Badge } from "@/components/ui/badge";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
@@ -82,6 +83,7 @@ export function PickerProviderAuthLine(props: {
         <SetupGuidanceRow
           providerId={verdict.providerId}
           setup={verdict.setup}
+          statusShown
           terminalLoginSurface={props.terminalLoginSurface}
           runTargetHostId={props.runTargetHostId}
           onClosePicker={props.onClosePicker}
@@ -92,6 +94,34 @@ export function PickerProviderAuthLine(props: {
         <AuthLineRow badgeText={verdict.badgeText} label={verdict.label} />
       );
   }
+}
+
+/**
+ * The set-up guidance under the account dropdown, when its selected row is the
+ * signed-out Terminal account: the same steps the line above draws in that
+ * state, without the status words, which the row already says.
+ */
+export function PickerTerminalSetupGuidance(props: {
+  readonly selectedProfile: ProviderProfile | null;
+  readonly state: ProviderCliState | null;
+  readonly harness: GuiHarnessCatalogEntry | null;
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  readonly runTargetHostId: string | null;
+  readonly onClosePicker: () => void;
+}): ReactNode {
+  if (props.selectedProfile?.kind !== "ambient") return null;
+  const verdict = pickerAuthLineVerdict(props.state, props.harness);
+  if (verdict.kind !== "setup") return null;
+  return (
+    <SetupGuidanceRow
+      providerId={verdict.providerId}
+      setup={verdict.setup}
+      statusShown={false}
+      terminalLoginSurface={props.terminalLoginSurface}
+      runTargetHostId={props.runTargetHostId}
+      onClosePicker={props.onClosePicker}
+    />
+  );
 }
 
 type PickerAuthLineVerdict =
@@ -192,6 +222,7 @@ function AuthLineRow(props: {
 function SetupGuidanceRow(props: {
   readonly providerId: ProviderId;
   readonly setup: ProviderTerminalSetup;
+  readonly statusShown: boolean;
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly runTargetHostId: string | null;
   readonly onClosePicker: () => void;
@@ -218,7 +249,9 @@ function SetupGuidanceRow(props: {
       aria-label="Setup required"
       className="flex min-w-0 shrink-0 flex-col gap-1.5 border-b px-3 py-2 text-ui-xs text-muted-foreground"
     >
-      <span className="text-foreground/90">Not authenticated</span>
+      {props.statusShown ? (
+        <span className="text-foreground/90">Not authenticated</span>
+      ) : null}
       <span>{guidance.summary}</span>
       <ProviderSetupTerminalAction
         providerId={props.providerId}

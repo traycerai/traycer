@@ -86,7 +86,7 @@ import {
   judgeCauseShortLabel,
   judgeFaceDimmed,
   judgeFaceInert,
-  judgePickAccount,
+  judgeFaceAccount,
   judgePickerDisabled,
   judgeSeedSelection,
   judgeSelectionMarked,
@@ -697,7 +697,7 @@ function PickTileContent(
           // the palette's "Change model…" belong to the chat behind Settings.
           registerActivation={false}
           // The machine Settings is scoped to, for the catalog and for
-          // "Create new profile", whose flow mounts outside Settings' binding.
+          // "Add a profile", whose flow mounts outside Settings' binding.
           // `null` only while Settings follows the effective host, where the
           // two are the same machine.
           createProfileHostId={props.hostId}
@@ -880,8 +880,9 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
  * The provider icon, the model's catalog label (else its slug), the effort
  * the host runs it at when the model advertises one and the host applies it
  * (the stored effort while the model still offers it, else its lowest -
- * `effectiveJudgeReasoningEffort`, the host's own rule), and the account when
- * that provider has more than one here.
+ * `effectiveJudgeReasoningEffort`, the host's own rule), and the account
+ * when the composer button would name it: one account of a provider that
+ * can have profiles, or two of any other.
  */
 function judgeFace(input: {
   readonly state: JudgeTileState;
@@ -902,7 +903,7 @@ function judgeFace(input: {
       inert,
     };
   }
-  const account = judgePickAccount(input.providers, shown);
+  const account = judgeFaceAccount(input.providers, shown);
   const blocker =
     state.lastCause === null ? null : judgeCauseShortLabel(state.lastCause);
   const effort =

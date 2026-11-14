@@ -19,7 +19,7 @@ import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type {
   EnvironmentMoveStopPreviewResponseV11,
-  EnvironmentMoveStopRequest,
+  EnvironmentMoveStopRequestV11,
 } from "@traycer/protocol/host/environment/move-contracts";
 import {
   hostSettingsCardState,
@@ -737,7 +737,7 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       { managed: [], needsChoice: [logLevel, editor] },
     ];
     let previewReads = 0;
-    const sent: EnvironmentMoveStopRequest[] = [];
+    const sent: EnvironmentMoveStopRequestV11[] = [];
     renderCard(environmentStatusFixture({}), {
       "environment.status": () => environmentStatusFixture({}),
       "environment.move.stopPreview": () => {
@@ -776,6 +776,8 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
 
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toEqual({
+      profileMode: null,
+      profileSignIns: [],
       choices: [
         { kind: "variable", key: "LOG_LEVEL", choice: "keep_locally" },
         {

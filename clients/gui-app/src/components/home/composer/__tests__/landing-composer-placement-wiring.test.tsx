@@ -234,6 +234,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    setDraftAccountFollowsDefault: vi.fn(),
     seedUnseededDraft: vi.fn(() => false),
     createDraft: vi.fn(() => "draft-for-test"),
     // handleSnapshot's unbound-create branch now calls createDraftWithId
@@ -287,9 +288,30 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   interface ToolbarMockState {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: {
+      readonly harnessId: string;
+      readonly profileId: string;
+    } | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (
+      account: {
+        readonly harnessId: string;
+        readonly profileId: string;
+      } | null,
+    ) => void;
     readonly selectedModel: null;
     readonly values: {
       readonly selection: {
@@ -313,7 +335,68 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       readonly modelsLoaded: boolean;
     };
   }
-  const toolbarStore = createStore<ToolbarMockState>(() => ({
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => ({
+    accountChosen: false,
+    defaultAccount: null,
+    setAccountChosen: (chosen) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const account = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        account !== null &&
+        state.selection.profileId === account.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        accountChosen: chosen,
+        selection: presentedSelection,
+      });
+    },
+    setDefaultAccount: (account) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        state.defaultAccount !== null &&
+        state.selection.profileId === state.defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        defaultAccount: account,
+        selection: presentedSelection,
+      });
+    },
     ultracode: false,
     selectedModel: null,
     selection: {

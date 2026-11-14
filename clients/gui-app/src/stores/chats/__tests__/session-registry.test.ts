@@ -1384,6 +1384,7 @@ describe("ChatSessionRegistry on a sandbox host", () => {
         reason: "The host did not take the message.",
         stated: true,
         displacedReason: "The host did not take the message.",
+        reasonIsRemovedProfile: false,
       },
     });
 

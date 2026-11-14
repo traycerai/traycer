@@ -138,6 +138,7 @@ function plainUserMessage(sessionAnchor: ChatSessionAnchor): ChatMessageModel {
 function renderAnchoredMessage(anchorHostId: string) {
   return render(
     <TombstonedProfileProvider
+      removedProfiles={[]}
       providers={[claudeStateWithoutProfile()]}
       hostId={THIS_HOST}
     >

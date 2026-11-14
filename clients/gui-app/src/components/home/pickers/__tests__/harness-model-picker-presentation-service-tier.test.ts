@@ -40,6 +40,7 @@ function presentationFor(value: ServiceTier, selectedModel: ModelOption) {
     modelsPending: false,
     selectedHarnessAvailable: true,
     selectedHarnessProfiles: [],
+    selectedHarnessRemovedProfiles: [],
   });
 }
 

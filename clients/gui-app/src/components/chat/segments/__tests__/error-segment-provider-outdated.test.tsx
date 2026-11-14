@@ -27,6 +27,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import type {
   ProviderCliState,
@@ -43,6 +44,9 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import { createAppQueryClient } from "@/lib/query-client";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { ErrorSegment } from "../error-segment";
+
+type ProvidersList = ResponseOfMethod<HostRpcRegistry, "providers.list">;
+type ExtendedProvidersList = ProvidersList & { readonly futureKey: string };
 
 /** The host that ran the turn: the one the recording client addresses. */
 const HOST_ID = mockRemoteHostEntry.hostId;
@@ -87,6 +91,8 @@ type FakeHost = {
    * as it stood when the read arrived (a slow host).
    */
   listHeld: Promise<void> | null;
+  /** Full answer for a test pinning the post-update list cache write. */
+  listAnswer: ExtendedProvidersList | null;
   /** How many of the next `providers.list` reads fail. */
   listRefusals: number;
 };
@@ -139,7 +145,10 @@ function hostClientPlaying(
           host.listRefusals -= 1;
           throw new Error("The host did not answer the list.");
         }
-        const answer = { providers: [grokRow()], native: null };
+        const answer = host.listAnswer ?? {
+          providers: [grokRow()],
+          native: null,
+        };
         await host.listHeld;
         return answer;
       },
@@ -280,6 +289,7 @@ beforeEach(() => {
     install: { status: "installed", version: INSTALLED },
     ensure: "starts",
     listHeld: null,
+    listAnswer: null,
     listRefusals: 0,
   };
   hostOffers(["providers.ensurePack"]);
@@ -342,6 +352,43 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
       "check grok",
       "update grok",
     ]);
+  });
+
+  it("writes the full post-update providers.list answer, including new envelope fields", async () => {
+    const user = userEvent.setup();
+    const answer: ExtendedProvidersList = {
+      providers: [grokRow()],
+      native: null,
+      offersSignIns: true,
+      removedProfiles: [
+        {
+          providerId: "grok",
+          profileId: "removed-work",
+          aliases: ["old-work"],
+        },
+      ],
+      futureKey: "kept",
+    };
+    host.listAnswer = answer;
+    const queryClient = renderRow("provider_outdated", OUTDATED);
+
+    await user.click(updateButton());
+
+    await waitFor(() => {
+      expect(
+        host.asked.filter((asked) => asked === "update grok"),
+      ).toHaveLength(1);
+    });
+    await waitFor(() => expect(listReads()).toBe(1));
+    await waitFor(() => {
+      expect(queryClient.getQueryData(LIST_KEY)).toEqual(answer);
+      expect(updateButton().disabled).toBe(false);
+    });
+    expect(host.asked).toEqual(["update grok", "list"]);
+    expect(host.asked.filter((asked) => asked === "update grok")).toHaveLength(
+      1,
+    );
+    expect(listReads()).toBe(1);
   });
 
   it("stays pending until a list read the host answered after it took the request, and an install that finished before the answer settles", async () => {

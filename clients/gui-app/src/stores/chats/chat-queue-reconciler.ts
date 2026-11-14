@@ -26,6 +26,7 @@ import type {
   StagedWorktreeIntentSource,
 } from "@/stores/chats/chat-session-store";
 import { queueItemCanPauseFromQueueHeader } from "@/lib/chat/queue-item-predicates";
+import { withAppWordsAfterReason } from "@/lib/chats/rejected-frame-reason";
 
 import type {
   OpenChatEvent,
@@ -51,12 +52,9 @@ export const SEND_NOT_RECORDED_NOTICE_CODE = "SEND_NOT_RECORDED";
  * back in the composer, and this carries the account of why it came back and
  * what changed underneath it.
  *
- * The qualifications were being written to `failedSendRestoration.reason` and
- * read by nobody. `nextHandoffTransition` is that field's only consumer, and
- * both of its branches are dead ends for it - `markFailedByAction` routes it
- * to `InitialChatHandoff.failureReason`, which no component renders, and
- * `restoreAndAckFailed` drops it. So the composer surface those statements
- * were written for did not exist; this is it.
+ * Its message is `failedSendRestoration.reason`. `ackFailedSendRestoration`
+ * appends it when the draft lands in the composer, unless the path that built
+ * the slot already stated it in a notice that reached the screen.
  *
  * NOT a last-copy notice. {@link noticeCarriesOnlyCopy} means "the message
  * body IS the draft", which buys never-evict and never-expire; here the draft
@@ -313,6 +311,12 @@ export interface UnrecoverableSend {
   /** How this send died, phrased to open the statement. */
   readonly circumstance: string;
   /**
+   * Whether `circumstance` came from the removed-account code. Set where the
+   * code is known and copied with the reason to the stash handoff, so no
+   * later reader has to decide it.
+   */
+  readonly reasonIsRemovedProfile: boolean;
+  /**
    * Everything said after the content losses. REQUIRED and not defaulted: the
    * clauses it renders name folders to go re-pick and settings that moved, and
    * a caller that cannot answer it is a caller that would have said nothing.
@@ -409,6 +413,8 @@ export interface UnrecoverableSendPrompt {
   readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /** The same account text the notice renders - `handedBack: false`. */
   readonly reason: string;
+  /** As {@link UnrecoverableSend.reasonIsRemovedProfile}. */
+  readonly reasonIsRemovedProfile: boolean;
 }
 
 /**
@@ -423,6 +429,7 @@ export function unrecoverableSendPrompt(
     content: send.content,
     browserAnnotations: send.browserAnnotations,
     reason: `${send.circumstance}.${deadSendAccountClauses(send.account, false)}`,
+    reasonIsRemovedProfile: send.reasonIsRemovedProfile,
   };
 }
 
@@ -531,6 +538,7 @@ export function displacedRestorationNotice(
   clientActionId: string,
   content: JsonContent,
   reason: string,
+  reasonIsRemovedProfile: boolean,
 ): ChatErrorNotice {
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
@@ -540,7 +548,11 @@ export function displacedRestorationNotice(
       // second time. The shared builder deliberately stops at the losses.
       contentLossStatement(
         content,
-        `${reason} It was not put back in the composer, because you have started another message there.`,
+        withAppWordsAfterReason(
+          reason,
+          " It was not put back in the composer, because you have started another message there.",
+          reasonIsRemovedProfile,
+        ),
       ),
       quotedDraftOf(content),
     ),
@@ -1255,6 +1267,7 @@ export function reconcileSnapshotChange(
           content: pending.restore.content,
           browserAnnotations: pending.restore.browserAnnotations,
           circumstance: "A message was not confirmed after reconnect",
+          reasonIsRemovedProfile: false,
           account: {
             worktree: worktreeSweepFor(
               pending.restoreWorktreeIntent,
@@ -1325,6 +1338,7 @@ export function reconcileSnapshotChange(
           )}`,
           // This pass has no surface of its own; the ack speaks for it.
           stated: false,
+          reasonIsRemovedProfile: false,
         },
         // The prompt goes back to the composer, so its worktree goes back to
         // the staging slot with it.
@@ -1447,6 +1461,7 @@ function reconcileAcceptedSends(
           content: accepted.restore.content,
           browserAnnotations: accepted.restore.browserAnnotations,
           circumstance: "A queued message was not confirmed after reconnect",
+          reasonIsRemovedProfile: false,
           account,
         };
         return {
@@ -1479,6 +1494,7 @@ function reconcileAcceptedSends(
             false,
           )}`,
           stated: false,
+          reasonIsRemovedProfile: false,
         },
         restoredWorktreeIntent: accepted,
       };
@@ -1684,6 +1700,7 @@ export function reconcileTurnSettled(
       content: message.content,
       browserAnnotations: message.restore.browserAnnotations,
       circumstance: "A message was not recorded before the turn stopped",
+      reasonIsRemovedProfile: false,
       account: {
         worktree: worktreeSweepFor(
           message.restoreWorktreeIntent,
@@ -1726,6 +1743,7 @@ export function reconcileTurnSettled(
               false,
             )}`,
             stated: false,
+            reasonIsRemovedProfile: false,
           },
     // Only when THIS pass handed the prompt back - an already-occupied slot
     // restored nothing here, so there is no binding to re-stage with it.

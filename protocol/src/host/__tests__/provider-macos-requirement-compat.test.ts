@@ -16,6 +16,9 @@ import {
   providersListResponseSchemaV106Preimage,
   providersListResponseSchemaV107Preimage,
   providersListResponseSchemaV109Preimage,
+  providersListResponseSchemaV1010Preimage,
+  providersListResponseSchemaV1011Preimage,
+  providersListResponseSchemaV1012Preimage,
   providersUsePackVersionResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -71,9 +74,10 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     const entry = hostRpcRegistry["providers.list"][10];
     // 10.3 (MCP origin), 10.4 (open-chat plugins), 10.5 (the envelope keys),
     // 10.6 (OpenCode's managed lines), 10.7 (`chatsFollow`),
-    // 10.8 (native memory), 10.9 (credential facts) and
-    // 10.10 (hidden model providers) opened above it.
-    expect(entry.latestMinor).toBe(10);
+    // 10.8 (native memory), 10.9 (credential facts),
+    // 10.10 (hidden model providers), 10.11 (profile-sync keys) and
+    // 10.12 (the sign-in offer) and 10.13 (key-record environment) opened above it.
+    expect(entry.latestMinor).toBe(13);
     expect(entry.versions[2].contract.schemaVersion).toEqual({
       major: 10,
       minor: 2,
@@ -207,8 +211,26 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     ).toMatchObject({
       responseSchema: providersListResponseSchemaV109Preimage,
     });
+    // 10.10 froze when the profile-sync keys opened 10.11, so its response is
+    // the preimage. 10.11 froze when the sign-in offer opened 10.12. 10.12
+    // froze when key-record environment opened 10.13; 10.13 names the live response.
     expect(
       hostRpcRegistry["providers.list"][10].versions[10].contract,
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV1010Preimage,
+    });
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[11].contract,
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV1011Preimage,
+    });
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[12].contract,
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV1012Preimage,
+    });
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[13].contract,
     ).toMatchObject({ responseSchema: providersListResponseSchema });
   });
 

@@ -15,6 +15,10 @@
  * `environment.configuration.guide.get` / `.set` / `.reset` - the agent
  * selection guide. `environment.plans.list` / `.unlinkPreview` / `.unlink` -
  * the plans linked into a configuration.
+ * `environment.providers.list` - the environment's accounts on the caller's
+ * session, in the same profile projection as the computer's own list.
+ * `environment.providers.signOutProfile` / `.removeProfile` / `.renameProfile`
+ * - act on an environment's account on that same caller's session.
  * `environment.history` - what happened to a configuration, or to one thing
  * in it.
  *
@@ -33,6 +37,12 @@ import {
   environmentOsSchema,
 } from "@traycer/protocol/host/environment-schemas";
 import { providerSkillInspectCandidateSchema } from "@traycer/protocol/host/provider-native-schemas";
+import {
+  providerProfileProjectionSchema,
+  providersAnswerProfileNameRequestSchema,
+  providersAnswerProfileNameResponseSchema,
+  providersSignOutProfileResponseSchema,
+} from "@traycer/protocol/host/provider-schemas";
 
 const environmentIdSchema = lazySchema(() => z.string().min(1));
 const itemKeySchema = lazySchema(() => z.string().min(1).max(3072));
@@ -1162,6 +1172,152 @@ export const environmentConfigurationPolicyPutV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentConfigurationPolicyPutRequestSchema,
   responseSchema: environmentConfigurationWriteResponseSchema,
+});
+
+// ── environment.providers.list ──────────────────────────────────────────────
+
+export const environmentProvidersListRequestSchema = lazySchema(() =>
+  z.object({ environmentId: environmentIdSchema }),
+);
+export type EnvironmentProvidersListRequest = z.infer<
+  typeof environmentProvidersListRequestSchema
+>;
+
+/**
+ * The environment's accounts, read on the caller's session. A provider with no
+ * account is absent, never present with an empty `profiles`. An account a
+ * person removed is absent; absence never means "unknown".
+ *
+ * Every account kind is listed: sign-in, API key and setup token. `authType`
+ * is `"oauth"` on every row, as on a computer's own list. An API-key account
+ * carries `apiKey: { supported: false, configured: true }`: the key is set,
+ * but no method sets a key on this row from the caller. A setup-token account
+ * is a sign-in row with `apiKey` absent or null.
+ *
+ * A row carries no fact from any computer: `terminalOnThisComputer` and
+ * `aliases` are absent; `identity` is null (no email or account id).
+ * `usageUpdatedAt: null` and `rateLimitStatus: "unknown"` are true values,
+ * not a fault. `kind` is always `"managed"`; `profileId` is the account's own
+ * profile id, the same id a computer of that environment shows for it.
+ *
+ * Never include the caller's Personal rows, `onHostOnly`, `removedProfiles`,
+ * candidates, paths, install or version state, tokens or configuration-item
+ * revisions. The shared row decoder retains its forward-row fallback.
+ */
+export const environmentProvidersListResponseSchema = lazySchema(() =>
+  z.object({
+    // True only when the environment named in the request has its profile-sync
+    // switch on. Says nothing about any computer. When false, `providers` is
+    // empty and means nothing, and the page that reads it stays as it is today.
+    profileSyncEnabled: z.boolean(),
+    providers: z.array(
+      z.object({
+        // Preserve providers added after this reader's build. A reader skips
+        // a group whose provider it does not know and narrows a known id
+        // where it needs one.
+        providerId: z.string().min(1),
+        profiles: z.array(providerProfileProjectionSchema).min(1),
+      }),
+    ),
+  }),
+);
+export type EnvironmentProvidersListResponse = z.infer<
+  typeof environmentProvidersListResponseSchema
+>;
+
+export const environmentProvidersListV10 = defineRpcContract({
+  method: "environment.providers.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentProvidersListRequestSchema,
+  responseSchema: environmentProvidersListResponseSchema,
+});
+
+/**
+ * Caller-session actions on the row's own id from `environment.providers.list`.
+ * No revision or harness id is on the wire, and no answer carries an account
+ * identifier. A refusal by the answering side is an ordinary error of this
+ * seam, as for `environment.plans.unlink`; there is no new error code.
+ */
+const environmentProviderProfileTargetRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: environmentIdSchema,
+    // The answering side maps this to the broker's harness id and refuses a
+    // provider it does not know.
+    providerId: z.string().min(1),
+    profileId: z.string().min(1),
+  }),
+);
+
+/**
+ * Signs the account out for the environment; its row and other ids stay.
+ * Repeating it succeeds and changes nothing.
+ */
+export const environmentProvidersSignOutProfileRequestSchema =
+  environmentProviderProfileTargetRequestSchema;
+export type EnvironmentProvidersSignOutProfileRequest = z.infer<
+  typeof environmentProvidersSignOutProfileRequestSchema
+>;
+export const environmentProvidersSignOutProfileResponseSchema =
+  providersSignOutProfileResponseSchema;
+export type EnvironmentProvidersSignOutProfileResponse = z.infer<
+  typeof environmentProvidersSignOutProfileResponseSchema
+>;
+
+export const environmentProvidersSignOutProfileV10 = defineRpcContract({
+  method: "environment.providers.signOutProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentProvidersSignOutProfileRequestSchema,
+  responseSchema: environmentProvidersSignOutProfileResponseSchema,
+});
+
+/**
+ * Removes the account from the environment and its list. Repeating it succeeds
+ * and changes nothing.
+ */
+export const environmentProvidersRemoveProfileRequestSchema =
+  environmentProviderProfileTargetRequestSchema;
+export type EnvironmentProvidersRemoveProfileRequest = z.infer<
+  typeof environmentProvidersRemoveProfileRequestSchema
+>;
+export const environmentProvidersRemoveProfileResponseSchema = lazySchema(() =>
+  z.object({ removed: z.literal(true) }),
+);
+export type EnvironmentProvidersRemoveProfileResponse = z.infer<
+  typeof environmentProvidersRemoveProfileResponseSchema
+>;
+
+export const environmentProvidersRemoveProfileV10 = defineRpcContract({
+  method: "environment.providers.removeProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentProvidersRemoveProfileRequestSchema,
+  responseSchema: environmentProvidersRemoveProfileResponseSchema,
+});
+
+/**
+ * Sets the account's name everywhere and clears its other names, as
+ * `providers.answerProfileName` does on a computer. Sending the current name
+ * keeps it and clears the others. No revision and no conflict: the later write
+ * is the name. The answer is the name the account uses after this call.
+ */
+export const environmentProvidersRenameProfileRequestSchema = lazySchema(() =>
+  environmentProviderProfileTargetRequestSchema.extend({
+    label: providersAnswerProfileNameRequestSchema.shape.label,
+  }),
+);
+export type EnvironmentProvidersRenameProfileRequest = z.infer<
+  typeof environmentProvidersRenameProfileRequestSchema
+>;
+export const environmentProvidersRenameProfileResponseSchema =
+  providersAnswerProfileNameResponseSchema;
+export type EnvironmentProvidersRenameProfileResponse = z.infer<
+  typeof environmentProvidersRenameProfileResponseSchema
+>;
+
+export const environmentProvidersRenameProfileV10 = defineRpcContract({
+  method: "environment.providers.renameProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentProvidersRenameProfileRequestSchema,
+  responseSchema: environmentProvidersRenameProfileResponseSchema,
 });
 
 // ── environment.plans.* ─────────────────────────────────────────────────────

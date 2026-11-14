@@ -216,6 +216,7 @@ describe("nextHandoffTransition", () => {
         browserAnnotations: [],
         reason: "Rejected",
         displacedReason: "Rejected",
+        reasonIsRemovedProfile: false,
         stated: false,
       },
     });
@@ -239,6 +240,7 @@ describe("nextHandoffTransition", () => {
         browserAnnotations: [],
         reason: "Rejected",
         displacedReason: "Rejected",
+        reasonIsRemovedProfile: false,
         stated: false,
       },
     });
@@ -259,6 +261,7 @@ describe("nextHandoffTransition", () => {
         browserAnnotations: [],
         reason: "Rejected",
         displacedReason: "Rejected",
+        reasonIsRemovedProfile: false,
         stated: false,
       },
     });

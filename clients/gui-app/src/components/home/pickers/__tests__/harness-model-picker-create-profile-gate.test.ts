@@ -197,7 +197,7 @@ describe("resolveCreateProfileGate", () => {
     );
     expect(gate.disabled).toBe(true);
     expect(gate.reason).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "Add profiles from a local computer with browser sign-in available.",
     );
   });
 
@@ -215,7 +215,7 @@ describe("resolveCreateProfileGate", () => {
     );
     expect(gate.disabled).toBe(true);
     expect(gate.reason).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "Add profiles from a local computer with browser sign-in available.",
     );
   });
 
@@ -227,7 +227,7 @@ describe("resolveCreateProfileGate", () => {
     const gate = resolveCreateProfileGate(null, true, undefined);
     expect(gate.disabled).toBe(true);
     expect(gate.reason).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "Add profiles from a local computer with browser sign-in available.",
     );
   });
 
