@@ -1602,7 +1602,7 @@ describe("<WindowHostModalHost />", () => {
     ).toContain("Restarting Traycer Host…");
   });
 
-  it("update-host: offers Update host and Open settings, and no Report issue, when the HOST is the outdated leg", async () => {
+  it("update-host: offers Update now and Open settings, and no Report issue, when the HOST is the outdated leg", async () => {
     applySnapshot({
       attached: true,
       effectiveHostId: null,
@@ -1638,7 +1638,7 @@ describe("<WindowHostModalHost />", () => {
       screen.getByTestId("window-host-modal").getAttribute("data-variant"),
     ).toBe("update-host");
     expect(buttonsOf(screen.getByTestId("window-host-modal"))).toEqual([
-      "Update host",
+      "Update now",
       "Open settings",
     ]);
   });
