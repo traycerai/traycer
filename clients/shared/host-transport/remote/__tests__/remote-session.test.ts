@@ -1563,7 +1563,11 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     "leaves a host's own refusal unmarked",
     async () => {
       const relay = new FakeRelayHost();
-      relay.unaryError = { code: "FORBIDDEN", message: "not yours" };
+      relay.unaryError = {
+        code: "FORBIDDEN",
+        message: "not yours",
+        holders: undefined,
+      };
       const session = await readySession(relay);
       try {
         const error = await sendBindingUnary(session);
@@ -6343,7 +6347,11 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
-      relay.unaryError = { code: "WORKTREE_BUSY", message: "in use" };
+      relay.unaryError = {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders: undefined,
+      };
       const lease = new MutableBearerLease("token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -9859,7 +9867,11 @@ describe("RemoteSession probed silence verdict (D4)", () => {
       const relay = new FakeRelayHost();
       applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
       relay.silentMethods = new Set(["worktree.getBinding"]);
-      relay.unaryError = { code: "WORKTREE_BUSY", message: "busy" };
+      relay.unaryError = {
+        code: "WORKTREE_BUSY",
+        message: "busy",
+        holders: undefined,
+      };
       const lease = new MutableBearerLease("valid-token", "user-1");
       const recorder = new RecordingEvidence();
       const session = buildProbedSession(

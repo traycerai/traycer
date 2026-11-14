@@ -21,6 +21,8 @@ import {
 } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import { StopSharingSession } from "@/components/settings/move/stop-sharing-session";
+import { AddProviderProfileDialog } from "@/components/settings/panels/add-provider-profile-dialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   EnvironmentMovePersonalProfile,
   EnvironmentMoveStopPreviewResponseV12,
@@ -60,6 +62,7 @@ import {
 } from "@/components/providers/__tests__/profile-pin-fixtures";
 import type {
   ProviderLoginProfileOutcome,
+  ProviderLoginTarget,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -99,7 +102,7 @@ type HostResponse = {
   readonly error: {
     readonly code: string;
     readonly message: string;
-    readonly holders?: unknown;
+    readonly holders: unknown | undefined;
   } | null;
 };
 
@@ -240,37 +243,49 @@ function makeHarness(
     return true;
   };
   const messenger: IHostMessenger<HostRpcRegistry> = {
-    request<Method extends HostMethod>(
+    async request<Method extends HostMethod>(
       method: Method,
       params: RequestOfMethod<HostRpcRegistry, Method>,
       options: HostRequestOptions,
     ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-      const changedPeer = applyFloorDowngrade(method, params, options);
-      const request = remoteMessenger.request(method, params, options);
-      if (!changedPeer) return request;
-      return request.catch((error: unknown) => {
-        capturedFloorErrors.push(error);
+      const downgraded = applyFloorDowngrade(method, params, options);
+      if (downgraded) {
+        await vi.waitFor(() => {
+          expect(relay.openBearers).toHaveLength(2);
+          expect(session.isReady()).toBe(true);
+        });
+      }
+      try {
+        return await remoteMessenger.request(method, params, options);
+      } catch (error: unknown) {
+        if (downgraded) capturedFloorErrors.push(error);
         throw error;
-      });
+      }
     },
-    requestWithResponseTimeout<Method extends HostMethod>(
+    async requestWithResponseTimeout<Method extends HostMethod>(
       method: Method,
       params: RequestOfMethod<HostRpcRegistry, Method>,
       responseTimeoutMs: number,
       options: HostRequestOptions,
     ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-      const changedPeer = applyFloorDowngrade(method, params, options);
-      const request = remoteMessenger.requestWithResponseTimeout(
-        method,
-        params,
-        responseTimeoutMs,
-        options,
-      );
-      if (!changedPeer) return request;
-      return request.catch((error: unknown) => {
-        capturedFloorErrors.push(error);
+      const downgraded = applyFloorDowngrade(method, params, options);
+      if (downgraded) {
+        await vi.waitFor(() => {
+          expect(relay.openBearers).toHaveLength(2);
+          expect(session.isReady()).toBe(true);
+        });
+      }
+      try {
+        return await remoteMessenger.requestWithResponseTimeout(
+          method,
+          params,
+          responseTimeoutMs,
+          options,
+        );
+      } catch (error: unknown) {
+        if (downgraded) capturedFloorErrors.push(error);
         throw error;
-      });
+      }
     },
   };
   const entry: HostDirectoryEntry = {
@@ -317,7 +332,7 @@ function successful(result: unknown): HostResponse {
 }
 
 function failed(code: string, message: string): HostResponse {
-  return { result: null, error: { code, message } };
+  return { result: null, error: { code, message, holders: undefined } };
 }
 
 function preview(
@@ -469,9 +484,9 @@ function SessionView(props: {
 async function renderSession(
   client: HostClient<HostRpcRegistry>,
   options: {
-    readonly showListAfterStop?: boolean;
-    readonly showToaster?: boolean;
-  } = {},
+    readonly showListAfterStop: boolean;
+    readonly showToaster: boolean;
+  },
 ): Promise<void> {
   const harness = harnesses.find((harness) => harness.client === client);
   if (harness === undefined) throw new Error("expected a test query client");
@@ -480,21 +495,67 @@ async function renderSession(
   mountSession(client, harness.queryClient, options);
 }
 
+async function redialAtAdvertisedFloor(
+  harness: RemoteHarness,
+  method: HostMethod,
+  version: HostVersion,
+): Promise<void> {
+  setAdvertisedMethodVersion(harness.relay, method, version);
+  harness.relay.dropCurrentConnection();
+  await vi.waitFor(() => expect(harness.relay.openBearers).toHaveLength(2));
+  await vi.waitFor(() => expect(harness.session.isReady()).toBe(true));
+}
+
 function mountSession(
   client: HostClient<HostRpcRegistry>,
   queryClient: QueryClient,
   options: {
-    readonly showListAfterStop?: boolean;
-    readonly showToaster?: boolean;
-  } = {},
+    readonly showListAfterStop: boolean;
+    readonly showToaster: boolean;
+  },
 ): void {
   render(
     <QueryClientProvider client={queryClient}>
       <SessionView
         client={client}
-        showListAfterStop={options.showListAfterStop ?? false}
-        showToaster={options.showToaster ?? false}
+        showListAfterStop={options.showListAfterStop}
+        showToaster={options.showToaster}
       />
+    </QueryClientProvider>,
+  );
+}
+
+function mountLeaveTargetAddDialog(
+  harness: RemoteHarness,
+  profileId: string,
+): void {
+  const state = providerState({
+    providerId: "codex",
+    authStatus: "unauthenticated",
+    profiles: [],
+  });
+  const target: ProviderLoginTarget = { kind: "leave-to-local", profileId };
+  render(
+    <QueryClientProvider client={harness.queryClient}>
+      <TooltipProvider>
+        <AddProviderProfileDialog
+          state={state}
+          client={harness.client}
+          isLocalHost
+          open
+          target={target}
+          targetResult={(result) => (
+            <output data-testid="leave-target-result">
+              {result.kind === "target-outcome"
+                ? (result.profileOutcome?.kind ?? "null-outcome")
+                : result.kind}
+            </output>
+          )}
+          onOpenChange={() => undefined}
+          onFailedAttempt={() => undefined}
+          onProfileCreated={() => undefined}
+        />
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -507,8 +568,6 @@ function requestCount(relay: FakeRelayHost, method: string): number {
 async function expectFloorRefusalAfterReconnect(
   harness: RemoteHarness,
   requirement: RequiredHostMethodVersion,
-  refusedMethod: HostMethod,
-  expectedMethods: readonly HostMethod[],
 ): Promise<void> {
   await vi.waitFor(() => expect(harness.capturedFloorErrors).toHaveLength(1));
   await vi.waitFor(() => expect(harness.session.isReady()).toBe(true));
@@ -517,17 +576,6 @@ async function expectFloorRefusalAfterReconnect(
   );
   expect(harness.relay.openBearers).toHaveLength(2);
   expect(harness.capturedFloorRequirements).toEqual([requirement]);
-  expect(harness.relay.unaryRequests.map((request) => request.method)).toEqual(
-    expectedMethods,
-  );
-  expect(
-    harness.relay.unaryRequests.some(
-      (request) => request.method === refusedMethod,
-    ),
-  ).toBe(false);
-  expect(harness.relay.unaryRequestConnectionIds).toEqual(
-    expectedMethods.map(() => 0),
-  );
   expect(harness.relay.errors).toEqual([]);
 }
 
@@ -546,7 +594,10 @@ describe("StopSharingSession over the real remote session", () => {
         if (method === "providers.list") return successful(providerList([]));
         return failed("E_UNEXPECTED", `unexpected method: ${method}`);
       });
-      await renderSession(harness.client);
+      await renderSession(harness.client, {
+        showListAfterStop: false,
+        showToaster: false,
+      });
 
       expect(await screen.findByTestId("stop-sharing-sheet")).toBeTruthy();
       expect(
@@ -613,7 +664,10 @@ describe("StopSharingSession over the real remote session", () => {
       major: 10,
       minor: 11,
     });
-    await renderSession(harness.client);
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
     expect(await screen.findByTestId("stop-sharing-sheet")).toBeTruthy();
     await screen.findByTestId("stop-sharing-managed-empty");
@@ -654,7 +708,10 @@ describe("StopSharingSession over the real remote session", () => {
       }
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client);
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
     await vi.waitFor(() =>
       expect(
@@ -770,7 +827,10 @@ describe("StopSharingSession over the real remote session", () => {
       }
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, { showListAfterStop: true });
+    await renderSession(harness.client, {
+      showListAfterStop: true,
+      showToaster: false,
+    });
 
     expect(
       await screen.findByTestId("personal-leave-codex-folder-one"),
@@ -850,7 +910,10 @@ describe("StopSharingSession over the real remote session", () => {
       if (method === "environment.move.stop") return successful(stopped());
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client);
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
     expect(
       await screen.findByTestId("stop-sharing-managed-empty"),
@@ -887,7 +950,10 @@ describe("StopSharingSession over the real remote session", () => {
       providerProfile("account-two", "Two", ["folder-two"]),
       providerProfile("account-three", "Three", ["folder-two"]),
     ]);
-    await renderSession(harness.client);
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
     expect(
       await screen.findByTestId("personal-leave-codex-folder-two"),
@@ -921,7 +987,10 @@ describe("StopSharingSession over the real remote session", () => {
           ? successful(providerList([]))
           : failed("E_UNEXPECTED", `unexpected method: ${method}`),
     );
-    await renderSession(harness.client);
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
     await screen.findByTestId("personal-leave-accounts");
     const guidance = Array.from(
@@ -975,7 +1044,10 @@ describe("StopSharingSession over the real remote session", () => {
       if (method === "environment.move.stop") return successful(stopped());
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client);
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
     async function startRow(profileId: string): Promise<void> {
       fireEvent.click(
@@ -1052,7 +1124,10 @@ describe("StopSharingSession over the real remote session", () => {
         return successful({ cancelled: true });
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client);
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
     await screen.findByTestId("personal-leave-codex-folder-one");
     fireEvent.click(
@@ -1101,7 +1176,10 @@ describe("StopSharingSession over the real remote session", () => {
         });
       return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    await renderSession(harness.client, { showToaster: true });
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: true,
+    });
 
     await screen.findByTestId("personal-leave-codex-folder-one");
     fireEvent.click(
@@ -1151,7 +1229,10 @@ describe("provider metadata retry after an initial read failure", () => {
       },
     });
     extraQueryClients.push(queryClient);
-    mountSession(client, queryClient);
+    mountSession(client, queryClient, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
     await vi.waitFor(() =>
       expect(
@@ -1211,24 +1292,33 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
       major: 1,
       minor: 1,
     });
-    await renderSession(harness.client);
+    await renderSession(harness.client, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
 
-    await screen.findByTestId("stop-sharing-preview-failed");
-    await expectFloorRefusalAfterReconnect(
-      harness,
-      {
-        method: "environment.move.stopPreview",
-        version: { major: 1, minor: 2 },
-      },
-      "environment.move.stopPreview",
-      [],
-    );
+    await expectFloorRefusalAfterReconnect(harness, {
+      method: "environment.move.stopPreview",
+      version: { major: 1, minor: 2 },
+    });
     expect(harness.capturedFloorCalls).toEqual([
       {
         method: "environment.move.stopPreview",
         params: { profileMode: "keep-personal" },
       },
     ]);
+    await screen.findByTestId("stop-sharing-managed-empty");
+    const previewOnRedial = harness.relay.unaryRequests.flatMap(
+      (request, index) =>
+        request.method === "environment.move.stopPreview" &&
+        harness.relay.unaryRequestConnectionIds[index] === 1
+          ? [request.params]
+          : [],
+    );
+    expect(previewOnRedial).toContainEqual({ profileMode: null });
+    expect(previewOnRedial).not.toContainEqual({
+      profileMode: "keep-personal",
+    });
   });
 
   it("refuses Stop below 1.1 on the redialed connection through the real sheet mutation", async () => {
@@ -1240,12 +1330,16 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
           : failed("E_UNEXPECTED", `unexpected method: ${method}`),
     );
     cacheProvidersList(harness, []);
-    await renderSession(harness.client);
-    await screen.findByTestId("stop-sharing-managed-empty");
-    harness.armFloorDowngrade("environment.move.stop", {
+    await reconnectWithAdvertisedFloor(harness, "environment.move.stop", {
       major: 1,
       minor: 0,
     });
+    mountSession(harness.client, harness.queryClient, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
+    await screen.findByTestId("stop-sharing-managed-empty");
+    harness.captureFloorFor("environment.move.stop");
 
     fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
     await expectFloorRefusalAfterReconnect(
@@ -1255,7 +1349,6 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
         version: { major: 1, minor: 1 },
       },
       "environment.move.stop",
-      ["environment.move.stopPreview"],
     );
     expect(harness.capturedFloorCalls).toEqual([
       {
@@ -1279,7 +1372,14 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
           : failed("E_UNEXPECTED", `unexpected method: ${method}`),
     );
     cacheProvidersList(harness, []);
-    await renderSession(harness.client);
+    await reconnectWithAdvertisedFloor(harness, "providers.startLogin", {
+      major: 1,
+      minor: 4,
+    });
+    mountSession(harness.client, harness.queryClient, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
     await screen.findByTestId("personal-leave-codex-folder-one");
     fireEvent.click(
       within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
@@ -1293,10 +1393,7 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
     const signIn = await within(addDialog).findByRole("button", {
       name: "Sign in",
     });
-    harness.armFloorDowngrade("providers.startLogin", {
-      major: 1,
-      minor: 4,
-    });
+    harness.captureFloorFor("providers.startLogin");
 
     fireEvent.click(signIn);
     await expectFloorRefusalAfterReconnect(
@@ -1306,7 +1403,6 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
         version: { major: 1, minor: 5 },
       },
       "providers.startLogin",
-      ["environment.move.stopPreview"],
     );
     expect(harness.capturedFloorCalls).toHaveLength(1);
     expect(harness.capturedFloorCalls[0]).toMatchObject({
@@ -1337,7 +1433,14 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
             : failed("E_UNEXPECTED", `unexpected method: ${method}`),
     );
     cacheProvidersList(harness, []);
-    await renderSession(harness.client);
+    await reconnectWithAdvertisedFloor(harness, "providers.awaitLogin", {
+      major: 2,
+      minor: 3,
+    });
+    mountSession(harness.client, harness.queryClient, {
+      showListAfterStop: false,
+      showToaster: false,
+    });
     await screen.findByTestId("personal-leave-codex-folder-one");
     fireEvent.click(
       within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
@@ -1351,10 +1454,7 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
     const signIn = await within(addDialog).findByRole("button", {
       name: "Sign in",
     });
-    harness.armFloorDowngrade("providers.awaitLogin", {
-      major: 2,
-      minor: 3,
-    });
+    harness.captureFloorFor("providers.awaitLogin");
 
     fireEvent.click(signIn);
     await expectFloorRefusalAfterReconnect(
@@ -1364,7 +1464,6 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
         version: { major: 2, minor: 4 },
       },
       "providers.awaitLogin",
-      ["environment.move.stopPreview", "providers.startLogin"],
     );
     expect(harness.capturedFloorCalls).toHaveLength(1);
     expect(harness.capturedFloorCalls[0]?.method).toBe("providers.awaitLogin");

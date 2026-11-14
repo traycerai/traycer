@@ -197,7 +197,7 @@ export class FakeRelayHost {
   unaryError: {
     readonly code: string;
     readonly message: string;
-    readonly holders?: unknown;
+    readonly holders: unknown | undefined;
   } | null = null;
   /** Per-request response override for integrated consumer tests. */
   unaryResponseFor:
@@ -206,7 +206,7 @@ export class FakeRelayHost {
         readonly error: {
           readonly code: string;
           readonly message: string;
-          readonly holders?: unknown;
+          readonly holders: unknown | undefined;
         } | null;
       })
     | null = null;
@@ -244,7 +244,7 @@ export class FakeRelayHost {
     error: {
       readonly code: string;
       readonly message: string;
-      readonly holders?: unknown;
+      readonly holders: unknown | undefined;
     } | null;
   }[] = [];
   /** streamId of every CLOSE frame the CLIENT sent, in arrival order. */

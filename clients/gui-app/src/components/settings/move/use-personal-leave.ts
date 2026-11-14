@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
+  HostMethodVersionUnsatisfiedError,
   negotiatedVersionMeetsRequirement,
   type RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -50,16 +51,22 @@ function supports(
   );
 }
 
-export function personalLeaveSupported(
+export function requirePersonalLeaveSupport(
   client: HostClient<HostRpcRegistry> | null,
-): boolean {
+): void {
   const hostId = client?.getActiveHostId() ?? null;
-  return [PREVIEW, STOP, START, AWAIT].every((floor) =>
-    negotiatedVersionMeetsRequirement(
-      readHostMethodSchemaVersion(hostId, floor.method) ?? undefined,
-      floor,
-    ),
-  );
+  for (const floor of [PREVIEW, STOP, START, AWAIT]) {
+    const negotiated = readHostMethodSchemaVersion(hostId, floor.method);
+    if (negotiatedVersionMeetsRequirement(negotiated ?? undefined, floor))
+      continue;
+    throw new HostMethodVersionUnsatisfiedError({
+      requirement: floor,
+      negotiated: negotiated ?? undefined,
+      requestId: "",
+      method: "environment.move.stopPreview",
+      hostId: hostId ?? "",
+    });
+  }
 }
 
 export function usePersonalLeaveSupport(

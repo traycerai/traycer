@@ -18,7 +18,7 @@ import {
 } from "./personal-leave-copy";
 import {
   personalLeaveSignIns,
-  personalLeaveSupported,
+  requirePersonalLeaveSupport,
   usePersonalLeaveAccounts,
   usePersonalLeaveProviders,
   usePersonalLeaveSupport,
@@ -72,10 +72,9 @@ function OpenStopSharingSession(props: StopSharingSessionProps): ReactNode {
       client: props.client,
       method: "environment.move.stopPreview",
       params: { profileMode: offersLeave ? "keep-personal" : null },
-      buildRequest: (params) =>
-        params.profileMode !== null && !personalLeaveSupported(props.client)
-          ? { profileMode: null }
-          : params,
+      preflight: () => {
+        if (offersLeave) requirePersonalLeaveSupport(props.client);
+      },
       requiredHostMethodVersion: () =>
         offersLeave
           ? {
