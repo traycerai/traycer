@@ -453,7 +453,7 @@ export interface TeamInstallAuthSession {
   readonly inlineSignInToken: string | null;
 }
 
-export async function runTeamInstallAuthPreflight(
+async function runTeamInstallAuthPreflight(
   ctx: CommandContext,
 ): Promise<TeamInstallAuthSession> {
   let inlineSignInToken: string | null = null;
