@@ -407,7 +407,7 @@ function TeamEnvironmentSourceControl(
     readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
-  const environments = useEnvironmentListQuery(props.client, true);
+  const environments = useEnvironmentListQuery(true);
   const teams = (environments.data?.environments ?? []).filter(
     (environment) => environment.ownerKind === "organization",
   );

@@ -16,11 +16,15 @@ import type {
   EnvironmentDescriptor,
   EnvironmentDescriptorV11,
 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
 import {
+  CLOUD_UNAVAILABLE_MESSAGE,
   EnvironmentCloudError,
   environmentPath,
+  NEEDS_CONNECTION_MESSAGE,
   parseSettings,
   sendSettings,
+  SIGN_IN_AGAIN_MESSAGE,
   type EnvironmentCloud,
 } from "./environment-cloud";
 
@@ -38,6 +42,31 @@ const viewerRoleSchema = z.object({
 export interface EnvironmentListTeam {
   readonly id: string;
   readonly slug: string;
+}
+
+/**
+ * The directory's rows, or its failure as the caller's error, in the words a
+ * settings call gives the same outcome.
+ */
+export function environmentDirectoryRows(
+  result: EnvironmentDirectoryResult,
+): readonly EnvironmentDescriptor[] {
+  switch (result.kind) {
+    case "ok":
+      return result.list.environments;
+    case "unauthorized":
+      throw new EnvironmentCloudError(
+        "unauthorized",
+        SIGN_IN_AGAIN_MESSAGE.settings,
+      );
+    case "unavailable":
+      throw new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
+    case "no_response":
+      throw new EnvironmentCloudError(
+        "no_response",
+        NEEDS_CONNECTION_MESSAGE.settings,
+      );
+  }
 }
 
 export function readEnvironmentList(

@@ -29,7 +29,7 @@ export interface TeamRowsProps {
  */
 export function TeamRows(props: TeamRowsProps): ReactNode {
   const client = useHostClient();
-  const query = useEnvironmentListQuery(client, true);
+  const query = useEnvironmentListQuery(true);
   const invitationsQuery = useEnvironmentInvitationsQuery(client);
   const teams =
     query.data?.environments.filter(

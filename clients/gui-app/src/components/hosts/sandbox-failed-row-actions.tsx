@@ -6,7 +6,6 @@ import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-fa
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   sandboxConfigurationOf,
   useSandboxConfigurations,
@@ -28,7 +27,6 @@ export function SandboxFailedChatActions(props: {
 }): ReactNode {
   const { configurations } = useSandboxConfigurations();
   const environments = useEnvironmentListQuery(
-    useTabHostClient(),
     props.summary.environmentId !== null,
   );
   const configuration = sandboxConfigurationOf(props.summary, configurations);

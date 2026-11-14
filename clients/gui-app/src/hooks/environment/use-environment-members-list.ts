@@ -15,9 +15,9 @@ import {
   type EnvironmentMembersResponseV12,
 } from "@traycer/protocol/host/environment/contracts";
 import type { TeamRole } from "@/components/settings/members/types";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
   useHostQueries,
   type HostRequestSpec,
@@ -40,8 +40,6 @@ export const ENVIRONMENT_MEMBERS_FLOOR: RequiredHostMethodVersion = {
 };
 
 const FIRST_PAGE: ReadonlyArray<string | null> = [null];
-
-const EMPTY_LIST_PARAMS = {};
 
 export interface EnvironmentMembersListMember {
   readonly userId: string;
@@ -285,25 +283,10 @@ const EMPTY_TEAM: TeamEnvironmentDescriptor = {
  * `kind: "personal"` and never rewritten to another environment.
  */
 export function useTeamEnvironmentDescriptor(
-  client: HostClient<HostRpcRegistry> | null,
   environmentId: string | null,
   enabled: boolean,
 ): TeamEnvironmentDescriptor {
-  const servingClient = useMemo(
-    () => (client === null ? null : resolvePoolTierHostClient(client)),
-    [client],
-  );
-  const viewerUserId = useCloudChatViewerId();
-  const query = useHostQuery<HostRpcRegistry, "environment.list">({
-    cacheKeyIdentity: [viewerUserId],
-    client: servingClient,
-    method: "environment.list",
-    params: EMPTY_LIST_PARAMS,
-    options: {
-      enabled: enabled && environmentId !== null && viewerUserId.length > 0,
-      refetchOnWindowFocus: false,
-    },
-  });
+  const query = useEnvironmentListQuery(enabled && environmentId !== null);
   return useMemo((): TeamEnvironmentDescriptor => {
     if (environmentId === null) return EMPTY_TEAM;
     const data: EnvironmentListResponseV11 | undefined = query.data;

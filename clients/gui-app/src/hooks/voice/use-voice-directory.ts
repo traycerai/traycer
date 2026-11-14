@@ -20,7 +20,7 @@ export function useVoiceDirectory(
     useHostMethodSupport(hostId, "bot.list") === true && enabled;
   const environmentsSupported =
     useHostMethodSupport(hostId, "environment.list") === true && enabled;
-  const environments = useEnvironmentListQuery(client, environmentsSupported);
+  const environments = useEnvironmentListQuery(environmentsSupported);
   const bots = useBotListQuery(client, botsSupported);
   const environmentRows = environments.data?.environments;
   const botRows = bots.data?.bots;

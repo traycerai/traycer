@@ -210,7 +210,6 @@ function MovedNotice(props: {
     (props.status.setup.state === "done" ||
       props.status.setup.stage === "done");
   const notices = useEnvironmentNoticesRead(
-    props.client,
     setupDone && props.status.principal?.kind === "personal",
   );
   const dismissed = useHostAccessPromptsStore((state) =>

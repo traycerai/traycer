@@ -67,10 +67,7 @@ export function RetrospectiveSession(props: {
   );
   const record = useEnvironmentReviewRecordMutation(props.client);
   const entries = review.data?.entries ?? [];
-  const heldApply = useEnvironmentReviewHeldApplyMutation(
-    props.client,
-    entries,
-  );
+  const heldApply = useEnvironmentReviewHeldApplyMutation(entries);
   const recordMutate = record.mutate;
   const queryClient = useQueryClient();
   const retryReview = (): void => {
@@ -227,10 +224,7 @@ function useAppliedOnHosts(
   open: boolean,
 ): readonly string[] {
   const listSupported = useHostMethodSupport(reviewHostId, "environment.list");
-  const environments = useEnvironmentListQuery(
-    client,
-    open && listSupported === true,
-  );
+  const environments = useEnvironmentListQuery(open && listSupported === true);
   const personalEnvironmentId =
     environments.data?.environments.find(
       (environment) => environment.ownerKind === "user",

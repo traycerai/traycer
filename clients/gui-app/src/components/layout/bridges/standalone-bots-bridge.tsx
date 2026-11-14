@@ -54,7 +54,7 @@ export function StandaloneBotsBridge(): null {
   // does not answer the method would silently leave the list stale.
   const hostKey = hostId ?? UNKNOWN_HOST_PLACEHOLDER;
   useBotListChangedSubscriptionForHost(hostKey, supported);
-  const environments = useEnvironmentListQuery(client, supported);
+  const environments = useEnvironmentListQuery(supported);
   const bots = useBotListQuery(client, supported);
   const environmentData = environments.data;
   const botData = bots.data;

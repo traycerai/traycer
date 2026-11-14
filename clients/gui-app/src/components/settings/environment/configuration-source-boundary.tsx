@@ -162,7 +162,7 @@ export function ConfigurationSourceBoundary(props: {
     readTransportReadOnly,
     readTransportReadOnly,
   );
-  const list = useEnvironmentListQuery(client, true);
+  const list = useEnvironmentListQuery(true);
   const descriptor = list.data?.environments.find((entry) =>
     target.kind === "team"
       ? entry.environmentId === target.environmentId &&

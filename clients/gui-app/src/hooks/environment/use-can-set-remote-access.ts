@@ -18,7 +18,7 @@ export function useCanSetRemoteAccess(
   const needsTeamRole =
     enabled && supported === true && principal?.kind === "team";
   const read = useEnvironmentHostReadQuery(client, hostId, needsTeamRole);
-  const environments = useEnvironmentListQuery(client, needsTeamRole);
+  const environments = useEnvironmentListQuery(needsTeamRole);
   if (!enabled || supported !== true) return false;
   if (principal?.kind !== "team") return true;
   const binding = read.kind === "binding" ? settledData(read.query) : null;

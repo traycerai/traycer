@@ -6,7 +6,6 @@ import {
   type EnvironmentArmMethod,
 } from "@/hooks/environment/use-environment-arms";
 import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
-import { useHostClient } from "@/lib/host";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import {
   authorizesCloudCapability,
@@ -45,7 +44,7 @@ function PoolEnvironmentArmScope(): null {
     client,
     "environment.communicationGraph.subscribe",
   );
-  const environments = useEnvironmentListQuery(useHostClient(), authorized);
+  const environments = useEnvironmentListQuery(authorized);
   const environmentData = environments.data;
   const scope = useMemo(() => {
     const teams = (environmentData?.environments ?? []).filter(

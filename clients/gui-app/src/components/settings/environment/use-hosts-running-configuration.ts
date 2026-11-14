@@ -56,7 +56,7 @@ export function useHostsRunningConfiguration(
 ): HostsRunningConfiguration {
   const client = usePoolTierHostClient(useHostClient());
   const personalTarget = target.kind === "personal";
-  const personal = usePersonalEnvironment(client, personalTarget);
+  const personal = usePersonalEnvironment(personalTarget);
   const environmentId =
     target.kind === "team" ? target.environmentId : personal.environmentId;
   const viewerUserId = useCloudChatViewerId();

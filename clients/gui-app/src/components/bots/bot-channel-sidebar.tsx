@@ -115,7 +115,7 @@ export function BotChannelSidebar(props: {
 }): ReactNode {
   const { activeBotId, hostId, threadsView, onChannelOpened } = props;
   const client = useTabHostClient();
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   useRereadEnvironmentListOnFocus(true);
   const bots = useBotListQuery(client, true);
   const connectable = useConnectableHostIds();

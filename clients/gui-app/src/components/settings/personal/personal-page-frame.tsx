@@ -83,7 +83,7 @@ function useWindowHostEnvironmentState(
   // on a host without them, or on a team's host.
   const personal =
     state.kind === "ready" && state.status.principal?.kind === "personal";
-  const notices = useEnvironmentNoticesRead(scope.client, personal);
+  const notices = useEnvironmentNoticesRead(personal);
   const review = useEnvironmentReviewRead(scope.client, scope.hostId, personal);
   return {
     state,

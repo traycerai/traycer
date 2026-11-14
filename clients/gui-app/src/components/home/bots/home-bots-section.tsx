@@ -65,7 +65,7 @@ export function HomeBotsSection(): ReactNode {
   const client = useHostClient();
   const support = useHostMethodSupport(hostId, "bot.list");
   const enabled = support === true;
-  const environments = useEnvironmentListQuery(client, enabled);
+  const environments = useEnvironmentListQuery(enabled);
   useRereadEnvironmentListOnFocus(enabled);
   const bots = useBotListQuery(client, enabled);
   // A teammate's change to the list refetches it without waiting for focus.

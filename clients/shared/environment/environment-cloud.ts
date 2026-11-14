@@ -56,7 +56,9 @@ export class EnvironmentCloudError extends Error {
   }
 }
 
-const NEEDS_CONNECTION_MESSAGE: Readonly<Record<EnvironmentPurpose, string>> = {
+export const NEEDS_CONNECTION_MESSAGE: Readonly<
+  Record<EnvironmentPurpose, string>
+> = {
   settings: "Connect to manage settings.",
   secrets: "Connect to manage secrets.",
 };

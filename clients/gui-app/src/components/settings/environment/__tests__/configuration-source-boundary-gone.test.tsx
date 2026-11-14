@@ -255,7 +255,7 @@ const INVITATION: EnvironmentInvitation = {
  */
 function WarmOtherHost(): ReactNode {
   const client = requireViewingHostClient();
-  useEnvironmentListQuery(client, true);
+  useEnvironmentListQuery(true);
   useEnvironmentInvitationsQuery(client);
   return null;
 }

@@ -932,7 +932,7 @@ function ThreadCardScope(props: {
 }): ReactNode {
   const { bot, hostId, tasks, surfaceActions, members, resolveMember } = props;
   const client = useTabHostClient();
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   const environment =
     environments.data?.environments.find(
       (candidate) => candidate.environmentId === bot.environmentId,

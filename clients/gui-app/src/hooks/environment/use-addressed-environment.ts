@@ -1,9 +1,7 @@
 import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useCallback } from "react";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 /**
@@ -29,11 +27,8 @@ const PENDING: AddressedEnvironment = { environmentId: null, resolved: false };
  * has no usable answer, or holds no Personal, names the host's own. A failed
  * refresh retains the last answer unless it explicitly refuses authority.
  */
-export function usePersonalEnvironment(
-  client: HostClient<HostRpcRegistry> | null,
-  enabled: boolean,
-): PersonalEnvironment {
-  const environments = useEnvironmentListQuery(client, enabled);
+export function usePersonalEnvironment(enabled: boolean): PersonalEnvironment {
+  const environments = useEnvironmentListQuery(enabled);
   const { refetch } = environments;
   const retry = useCallback(() => {
     void refetch();
@@ -59,7 +54,7 @@ export function useAddressedEnvironment(): AddressedEnvironment {
   const source = useConfigurationSource();
   const pick = useEnvironmentPick();
   const onPersonal = source.kind === "host" && pick.kind === "personal";
-  const personal = usePersonalEnvironment(useHostClient(), onPersonal);
+  const personal = usePersonalEnvironment(onPersonal);
   if (source.kind === "pool") {
     return { environmentId: source.environmentId, resolved: true };
   }

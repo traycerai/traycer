@@ -35,7 +35,7 @@ export function RemovedSecretRow(props: {
     removing: true,
     onChanged: props.onChanged,
   });
-  const environmentId = useDetailsEnvironmentId(props.client);
+  const environmentId = useDetailsEnvironmentId();
   const retry = useSecretRemovalRetry();
   // The versions read is the newer fact: it follows a Retry the list has not.
   // Only the list carries a host's failure.

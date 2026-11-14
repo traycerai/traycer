@@ -19,7 +19,6 @@ import {
   beginEnvironmentCloudOperation,
   useEnvironmentCloud,
 } from "@/hooks/environment/use-environment-cloud";
-import { useHostClient } from "@/lib/host";
 import type { SandboxConfigurationDefaults } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   authorizesCloudCapability,
@@ -162,7 +161,7 @@ export interface SandboxDefaultsEnvironment {
 export function useSandboxDefaultsEnvironments(
   enabled: boolean,
 ): ReadonlyMap<string, SandboxDefaultsEnvironment> {
-  const list = useEnvironmentListQuery(useHostClient(), enabled);
+  const list = useEnvironmentListQuery(enabled);
   return useMemo(
     () =>
       new Map(

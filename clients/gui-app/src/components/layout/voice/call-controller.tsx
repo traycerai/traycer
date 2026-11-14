@@ -228,7 +228,7 @@ export function CallController(): ReactNode {
 
   const botsSupported = useHostMethodSupport(appHostId, "bot.list") === true;
   const bots = useBotListQuery(appClient, botsSupported);
-  const environments = useEnvironmentListQuery(surfaceClient, true);
+  const environments = useEnvironmentListQuery(true);
   const botTitle = useCallback(
     (botId: string): string =>
       bots.data?.bots.find((bot) => bot.botId === botId)?.title ?? "the bot",

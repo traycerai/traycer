@@ -67,7 +67,7 @@ export function useChatTileHostLabel(
     authorized &&
     listSupport === true &&
     hostListSupport === true;
-  const environments = useEnvironmentListQuery(client, enabled);
+  const environments = useEnvironmentListQuery(enabled);
   // Fresh each render is fine: the lists key their requests by the ids' text.
   const environmentIds = enabled
     ? (environments.data?.environments ?? []).map(
