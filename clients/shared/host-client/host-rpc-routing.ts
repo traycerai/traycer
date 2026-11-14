@@ -673,6 +673,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.service.register": "target-host",
   "host.service.status": "target-host",
   "host.status": "addressed-peer",
+  "host.status.refresh": "target-host",
   "host.update.activate": "target-host",
   "host.update.check": "target-host",
   "host.update.continue": "target-host",
@@ -839,6 +840,9 @@ export const HOST_STREAM_RPC_ROUTES = {
   "browser.sessions": "target-host",
   "chat.serving.subscribe": "pool-only",
   "chat.subscribe": "target-host-live-pool-at-rest",
+  // The doorbell of the host that answered a read, never another: its
+  // `recovered` re-asks only that host's own failed reads.
+  "cloud.recovered.subscribe": "target-host",
   "drafts.subscribe": "target-host",
   "epic.communicationGraph.subscribe": "target-host",
   "epic.state.subscribe": "target-host",
@@ -861,6 +865,7 @@ export const HOST_STREAM_RPC_ROUTES = {
   "host.notifications.subscribe": "target-host",
   "host.sandbox.egress.subscribe": "target-host",
   "host.tunnel.open": "target-host",
+  "managedCommand.subscribeBotOutput": "target-host",
   "managedCommand.subscribeOutput": "target-host",
   "migration.run": "target-host",
   "notifications.subscribe": "target-host",

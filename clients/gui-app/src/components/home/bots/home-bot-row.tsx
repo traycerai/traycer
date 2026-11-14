@@ -6,7 +6,7 @@ import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/c
 import { Badge } from "@/components/ui/badge";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
+import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
 import { botWorkingOf, liveActivityOf } from "@/hooks/bots/use-bot-activity";
 import {
   buildHomeBotRow,
@@ -43,8 +43,9 @@ const STATE_BADGE_VARIANTS = {
 } as const satisfies Record<HomeBotState, "success" | "muted" | "warning">;
 
 /**
- * One bot on Home. The row subscribes to its own `bot.subscribe` through the
- * app-wide host and renders whatever the snapshot says as it arrives: the
+ * One bot on Home. The row subscribes to its own `bot.subscribe` through
+ * this window's host, on the stream an open tab of the same bot there
+ * already holds, and renders whatever the snapshot says as it arrives: the
  * title, its state, the tasks it spun and still runs, and the
  * open-request HINT. The hint is shown only when it is above zero, because
  * the conversation's rows, not this number, decide what is open.
@@ -80,7 +81,7 @@ export function HomeBotRow(props: {
     isMain,
   } = props;
   const hostId = useEffectiveHostId();
-  const subscription = useBotSubscription({
+  const subscription = useBotSubscriptionForHost({
     hostId,
     botId: bot.botId,
     enabled: hostId !== null,

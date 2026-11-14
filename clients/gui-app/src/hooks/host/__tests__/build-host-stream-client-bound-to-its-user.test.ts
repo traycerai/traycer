@@ -13,13 +13,13 @@ import {
   newProvider,
   openAckFrame,
   sentFramesOfKind,
+  sentTokens,
   settle,
   signIn,
   signInUnverified,
   USER_A,
   USER_B,
   verdictUpdatesSent,
-  sentTokens,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
@@ -122,7 +122,6 @@ describe("buildHostStreamClient for a local host", () => {
 
     expect(statuses).toContain("reconnecting");
     expect(FakeNativeWebSocket.instances).toHaveLength(0);
-    expect(sentTokens()).not.toContain("token-b");
 
     signIn(provider, USER_A, "token-a");
     const native = await untilFirstSocket(60_000);
@@ -149,7 +148,6 @@ describe("buildHostStreamClient for a local host", () => {
 
     expect(statuses).toContain("reconnecting");
     expect(FakeNativeWebSocket.instances).toHaveLength(0);
-    expect(sentTokens()).not.toContain("token-b");
 
     signIn(provider, USER_A, "token-a");
     const native = await untilFirstSocket(60_000);

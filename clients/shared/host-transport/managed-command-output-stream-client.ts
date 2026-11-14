@@ -1,9 +1,9 @@
 import {
+  managedCommandSubscribeBotOutputServerFrameSchema,
   managedCommandSubscribeOutputServerFrameSchema,
   type ManagedCommandLogLine,
   type ManagedCommandLogPosition,
   type ManagedCommandSubscribeOutputClientFrame,
-  type ManagedCommandSubscribeOutputServerFrame,
 } from "@traycer/protocol/host/managed-command/subscribe";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -48,12 +48,21 @@ export interface ManagedCommandOutputStreamCallbacks {
   readonly onOlder: (window: ManagedCommandOutputOlderWindow) => void;
   readonly onStatus: (command: ManagedCommand) => void;
   readonly onDeleted: () => void;
+  readonly onLiveness: (state: "live" | "holding") => void;
   readonly onConnectionStatus: StatusChangeHandler;
 }
 
+export type ManagedCommandOutputTarget =
+  | { readonly kind: "epic"; readonly epicId: string }
+  | {
+      readonly kind: "bot";
+      readonly botId: string;
+      readonly sessionChatId: string;
+    };
+
 export interface ManagedCommandOutputStreamClientOptions {
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
-  readonly epicId: string;
+  readonly target: ManagedCommandOutputTarget;
   readonly commandId: string;
   readonly callbacks: ManagedCommandOutputStreamCallbacks;
 }
@@ -66,16 +75,28 @@ export interface ManagedCommandOutputStreamClientOptions {
 export class ManagedCommandOutputStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: ManagedCommandOutputStreamCallbacks;
+  private readonly bot: boolean;
   private closed: boolean;
 
   constructor(options: ManagedCommandOutputStreamClientOptions) {
     this.callbacks = options.callbacks;
+    this.bot = options.target.kind === "bot";
     this.closed = false;
 
-    this.session = options.wsStreamClient.subscribe(
-      "managedCommand.subscribeOutput",
-      { epicId: options.epicId, commandId: options.commandId },
-    );
+    this.session =
+      options.target.kind === "epic"
+        ? options.wsStreamClient.subscribe("managedCommand.subscribeOutput", {
+            epicId: options.target.epicId,
+            commandId: options.commandId,
+          })
+        : options.wsStreamClient.subscribe(
+            "managedCommand.subscribeBotOutput",
+            {
+              botId: options.target.botId,
+              sessionChatId: options.target.sessionChatId,
+              commandId: options.commandId,
+            },
+          );
     this.session.onServerFrame((envelope) => {
       this.handleServerFrame(envelope);
     });
@@ -106,10 +127,11 @@ export class ManagedCommandOutputStreamClient {
   }
 
   private handleServerFrame(envelope: StreamFrameEnvelope): void {
-    const parsed =
-      managedCommandSubscribeOutputServerFrameSchema.safeParse(envelope);
+    const parsed = this.bot
+      ? managedCommandSubscribeBotOutputServerFrameSchema.safeParse(envelope)
+      : managedCommandSubscribeOutputServerFrameSchema.safeParse(envelope);
     if (!parsed.success) return;
-    const frame: ManagedCommandSubscribeOutputServerFrame = parsed.data;
+    const frame = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onSnapshot({
@@ -143,6 +165,10 @@ export class ManagedCommandOutputStreamClient {
       }
       case "pong": {
         // The stream client handles pong internally for heartbeat bookkeeping.
+        return;
+      }
+      case "liveness": {
+        this.callbacks.onLiveness(frame.state);
         return;
       }
     }

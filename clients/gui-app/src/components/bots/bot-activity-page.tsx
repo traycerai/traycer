@@ -346,8 +346,7 @@ function ActiveTaskRowBody(
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
   const activity = useAttestedEpicAgentActivity(taskId);
   const tiers = agentActivityTiers(activity);
-  const resolvedAgentStates = useTaskAgentStates(taskId, agents);
-  const agentStates = resolvedAgentStates;
+  const agentStates = useTaskAgentStates(taskId, agents);
   const rollup = useMemo(
     () =>
       taskRollup({
@@ -642,8 +641,8 @@ function Age(props: { readonly at: number }): ReactNode {
 
 /**
  * "agents on {host}, offline" for a task whose agents this window cannot
- * read because the host that last reported it is unreachable. Nothing while
- * no host has reported the task.
+ * read because the host that last reported it is unreachable. If no host has
+ * reported the task, show unknown only when no positive status is known.
  */
 function TaskHostOffline(props: {
   readonly task: BotTaskEntry;

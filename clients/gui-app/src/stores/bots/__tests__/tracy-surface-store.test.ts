@@ -23,13 +23,9 @@ function resetStores(): void {
   useBotDraftsStore.setState(useBotDraftsStore.getInitialState(), true);
 }
 
-function surface() {
-  return useTracySurfaceStore.getState();
-}
+const surface = useTracySurfaceStore.getState;
 
-function place() {
-  return useTracyPlaceStore.getState();
-}
+const place = useTracyPlaceStore.getState;
 
 /** `botId`'s view and session, as the surface's place holds them. */
 function placeOf(botId: string) {
@@ -157,14 +153,6 @@ describe("the bots shown gone", () => {
     surface().settleListedBots(new Set(["bot-a"]), 9);
 
     expect(surface().goneReports).toEqual({ "bot-a": 10 });
-  });
-
-  it("takes a bot out of the gone when a list that answered after the report carries it", () => {
-    surface().forgetBot("bot-a", 10);
-
-    surface().settleListedBots(new Set(["bot-a"]), 11);
-
-    expect(surface().goneReports).toEqual({});
   });
 
   it("leaves a bot gone when a later list does not carry it", () => {

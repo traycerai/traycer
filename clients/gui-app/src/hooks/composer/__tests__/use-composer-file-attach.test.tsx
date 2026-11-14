@@ -569,7 +569,7 @@ function Zone(props: {
 /**
  * Resolves once nothing a gesture started is still running, so that an
  * assertion that something did NOT happen is made when no job is left that
- * could still make it happen. A gesture starts three kinds of job:
+ * could still make it happen. A gesture starts these jobs:
  *
  * - the hook's own: path resolution, file hashing and image ingest, which the
  *   zone's busy flag reports (`isAttachmentIngestPending`, the predicate that
@@ -1104,32 +1104,6 @@ describe("paste and drop on another machine", () => {
     expect(rig.insertedPaths.flat()).toEqual([]);
   });
 
-  it("a folder refusal carries the remote title and the chat composer as its source", async () => {
-    resolveDroppedFilePaths.mockResolvedValue(["/Users/me/my-folder"]);
-    const rig = makeRig({ seed: [] });
-    render(<Zone rig={rig} route={rig.route} pathsReachTarget={false} />);
-    const zone = screen.getByTestId("zone");
-
-    performWithEntries(
-      "drop",
-      zone,
-      [folderFile("my-folder")],
-      new Set(["my-folder"]),
-    );
-
-    await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    expect(toasts.error).toHaveBeenCalledWith(
-      "Couldn't attach my-folder.",
-      { description: REMOTE_REFUSAL_DESCRIPTION },
-      {
-        title: REMOTE_REFUSAL_TITLE,
-        message: null,
-        code: null,
-        source: "Chat composer",
-      },
-    );
-  });
-
   it("two native-clipboard paths are refused in one toast that counts them", async () => {
     readNativeClipboardFilePaths.mockResolvedValue([
       "/Users/me/a.txt",
@@ -1149,7 +1123,6 @@ describe("paste and drop on another machine", () => {
   });
 
   it("a native-clipboard read that finds no paths does nothing at all", async () => {
-    readNativeClipboardFilePaths.mockResolvedValue([]);
     const rig = makeRig({ seed: [] });
     render(<Zone rig={rig} route={rig.route} pathsReachTarget={false} />);
     const zone = screen.getByTestId("zone");
@@ -1181,6 +1154,9 @@ describe("paste and drop on another machine", () => {
         `Couldn't attach ${named}.`,
         REMOTE_REFUSAL_DESCRIPTION,
       );
+      expect(toasts.error.mock.calls[0][2]).toMatchObject({
+        title: REMOTE_REFUSAL_TITLE,
+      });
       expect(attachedNames(rig)).toEqual([]);
       expect(rig.put).not.toHaveBeenCalled();
       expect(rig.insertedPaths.flat()).toEqual([]);

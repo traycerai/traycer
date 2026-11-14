@@ -9,7 +9,7 @@ import {
 import { BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
-import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { LiveBotAvatar, NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -727,7 +727,7 @@ function ChannelRow(props: {
         bold && !active && "font-semibold text-foreground",
       )}
     >
-      <NamedBotAvatar botId={bot.botId} size="sm" />
+      <LiveBotAvatar botId={bot.botId} hostId={hostId} size="sm" />
       {/* The star sits on the name, before any count. */}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="truncate">{bot.title}</span>

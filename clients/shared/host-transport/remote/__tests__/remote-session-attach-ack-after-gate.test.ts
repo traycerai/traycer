@@ -154,7 +154,6 @@ class Leg {
   session: HostSession | null = null;
 
   constructor(
-    readonly index: number,
     readonly url: string,
     private readonly relay: FakeRelay,
   ) {
@@ -247,7 +246,7 @@ class FakeRelay {
 
   /** Called by the fake native the real factory constructs. */
   attach(native: NativeSurface, url: string): Leg {
-    const leg = new Leg(this.legs.length, url, this);
+    const leg = new Leg(url, this);
     this.legs.push(leg);
     leg.onopen = () => native.fire("open", "", 0, "");
     leg.onmessage = (event) => {
@@ -589,19 +588,16 @@ class RecordingEvidence<
   /** The fake time of each refusal, in report order. */
   readonly refusals: number[] = [];
 
-  /** The attempt id and fake time of each indeterminate outcome. */
-  readonly indeterminates: {
-    readonly attemptId: string;
-    readonly at: number;
-  }[] = [];
+  /** The number of indeterminate outcomes reported. */
+  indeterminates = 0;
 
   sessionEstablished(): void {}
   sessionLost(): void {}
   reportDialSuccess(): void {}
   reportRestartIntent(): void {}
 
-  reportDialIndeterminate(_hostId: string, attemptId: string): void {
-    this.indeterminates.push({ attemptId, at: Date.now() });
+  reportDialIndeterminate(): void {
+    this.indeterminates += 1;
   }
 
   reportDialRefusal(): void {
@@ -1017,7 +1013,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(refusalOffsets(evidence, queuedAt, 0)).toEqual([]);
-    expect(evidence.indeterminates).toHaveLength(1);
+    expect(evidence.indeterminates).toBe(1);
 
     await advanceUntil(() => grants.count === 2, 30_000);
     await advanceUntil(() => session.isReady(), 30_000);
@@ -1041,7 +1037,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await advanceUntil(() => hostDialGate.stats().queued === 1, 5_000);
     const queuedAt = Date.now();
     const reportedAtDrop = evidence.refusals.length;
-    const indeterminateAtDrop = evidence.indeterminates.length;
+    const indeterminateAtDrop = evidence.indeterminates;
     await step(GRANT_LIFETIME_MS + 1_000);
     expect(refusalOffsets(evidence, queuedAt, reportedAtDrop)).toEqual([]);
     expect(grants.count).toBe(2);
@@ -1051,7 +1047,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(refusalOffsets(evidence, queuedAt, reportedAtDrop)).toEqual([]);
-    expect(evidence.indeterminates).toHaveLength(indeterminateAtDrop + 1);
+    expect(evidence.indeterminates).toBe(indeterminateAtDrop + 1);
 
     await advanceUntil(() => relay.resumes.length === 1, 60_000);
     await advanceUntil(() => session.isReady(), 5_000);
@@ -1072,7 +1068,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(evidence.refusals).toHaveLength(1);
-    expect(evidence.indeterminates).toEqual([]);
+    expect(evidence.indeterminates).toBe(0);
   });
 
   it("still reports a refusal when a live leg drops after its grant expired", async () => {
@@ -1127,7 +1123,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(evidence.refusals).toEqual([]);
-    expect(evidence.indeterminates).toHaveLength(1);
+    expect(evidence.indeterminates).toBe(1);
 
     await advanceUntil(() => grants.count === 2, 60_000);
     await advanceUntil(() => session.isReady(), 60_000);
@@ -1147,7 +1143,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     relay.dropLeg(1006, "net");
     await advanceUntil(() => hostDialGate.stats().queued === 1, 20_000);
     const reportedAtDrop = evidence.refusals.length;
-    const indeterminateAtDrop = evidence.indeterminates.length;
+    const indeterminateAtDrop = evidence.indeterminates;
     await step(grants.mintedAt[1] + SLOW_RELEASE_MS - Date.now());
 
     holders[0].fireClose(1006, "released");
@@ -1155,7 +1151,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(evidence.refusals).toHaveLength(reportedAtDrop);
-    expect(evidence.indeterminates).toHaveLength(indeterminateAtDrop + 1);
+    expect(evidence.indeterminates).toBe(indeterminateAtDrop + 1);
 
     await advanceUntil(() => relay.resumes.length === 1, 120_000);
     await advanceUntil(() => session.isReady(), 60_000);
@@ -1179,7 +1175,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(evidence.refusals).toHaveLength(1);
-    expect(evidence.indeterminates).toEqual([]);
+    expect(evidence.indeterminates).toBe(0);
   });
 
   it("retires a dial the relay rejected for an expired grant as indeterminate when its grant was requested late in a second", async () => {
@@ -1202,7 +1198,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(evidence.refusals).toEqual([]);
-    expect(evidence.indeterminates).toHaveLength(1);
+    expect(evidence.indeterminates).toBe(1);
 
     await advanceUntil(() => grants.count === 2, 60_000);
     await advanceUntil(() => session.isReady(), 60_000);
@@ -1226,7 +1222,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(requestedAt % 1_000).toBe(LATE_IN_SECOND_MS);
     const expMs = relayExpiryMs(requestedAt);
     const reportedAtDrop = evidence.refusals.length;
-    const indeterminateAtDrop = evidence.indeterminates.length;
+    const indeterminateAtDrop = evidence.indeterminates;
     await step(expMs + 100 - Date.now());
 
     holders[0].fireClose(1006, "released");
@@ -1234,7 +1230,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(evidence.refusals).toHaveLength(reportedAtDrop);
-    expect(evidence.indeterminates).toHaveLength(indeterminateAtDrop + 1);
+    expect(evidence.indeterminates).toBe(indeterminateAtDrop + 1);
 
     await advanceUntil(() => relay.resumes.length === 1, 120_000);
     await advanceUntil(() => session.isReady(), 60_000);
@@ -1262,7 +1258,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     await step(0);
 
     expect(evidence.refusals).toHaveLength(1);
-    expect(evidence.indeterminates).toEqual([]);
+    expect(evidence.indeterminates).toBe(0);
   });
 
   it("does not put a sign-in token in OPEN when the account switches during a queued attach", async () => {

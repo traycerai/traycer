@@ -19,10 +19,15 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { useStore } from "zustand";
 import { ArrowDownToLine, Info } from "lucide-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  useVirtualizer,
+  type VirtualItem,
+  type Virtualizer,
+} from "@tanstack/react-virtual";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -250,11 +255,14 @@ function ManagedCommandOutputTileLive(props: {
   readonly onClose: () => void;
 }) {
   const { epicId, node } = props;
-  const { session, reopen } = useManagedCommandOutputSession({
-    epicId,
-    commandId: node.id,
-    hostId: node.hostId,
-  });
+  const { session, reopen } = useManagedCommandOutputSession(
+    {
+      target: { kind: "epic", epicId },
+      commandId: node.id,
+      hostId: node.hostId,
+    },
+    null,
+  );
 
   if (session === null) {
     return (
@@ -268,10 +276,14 @@ function ManagedCommandOutputTileLive(props: {
     );
   }
   return (
-    <ManagedCommandOutputTileBody
-      epicId={epicId}
-      node={node}
-      viewTabId={props.viewTabId}
+    <ManagedCommandOutputBody
+      instanceId={node.instanceId}
+      mode={{
+        kind: "epic",
+        epicId,
+        hostId: node.hostId,
+        viewTabId: props.viewTabId,
+      }}
       onClose={props.onClose}
       onReopen={reopen}
       session={session}
@@ -279,19 +291,30 @@ function ManagedCommandOutputTileLive(props: {
   );
 }
 
-function ManagedCommandOutputTileBody(props: {
-  readonly epicId: string;
-  readonly node: ManagedCommandOutputTileRef;
-  readonly viewTabId: string;
+export function ManagedCommandOutputBody(props: {
+  readonly instanceId: string;
+  readonly mode:
+    | {
+        readonly kind: "epic";
+        readonly epicId: string;
+        readonly hostId: string;
+        readonly viewTabId: string;
+      }
+    | {
+        readonly kind: "bot";
+        readonly hostReachable: boolean;
+        readonly frozen: boolean;
+      };
   readonly onClose: () => void;
   readonly onReopen: () => void;
   readonly session: ManagedCommandOutputStoreHandle;
 }) {
-  const { epicId, node, session } = props;
+  const { instanceId, mode, session } = props;
   const store = session.store;
   const command = useStore(store, (state) => state.command);
   const lines = useStore(store, (state) => state.lines);
   const deleted = useStore(store, (state) => state.deleted);
+  const live = useStore(store, (state) => state.live);
   const fatalClose = useStore(store, (state) => state.fatalClose);
   const connectionStatus = useStore(store, (state) => state.connectionStatus);
   const reachedStart = useStore(store, (state) => state.reachedStart);
@@ -315,15 +338,17 @@ function ManagedCommandOutputTileBody(props: {
   // an old host's refusal for a deletion.
   const streamSupport = useStreamMethodSupportFor(
     session.streamMethodSupport,
-    "managedCommand.subscribeOutput",
+    mode.kind === "bot"
+      ? "managedCommand.subscribeBotOutput"
+      : "managedCommand.subscribeOutput",
   );
   const terminalFont = useEffectiveTerminalFont();
   const findAdapter = useMemo(
     () =>
       createManagedCommandOutputFindAdapter({
-        tileInstanceId: node.instanceId,
+        tileInstanceId: instanceId,
       }),
-    [node.instanceId],
+    [instanceId],
   );
   useRegisterTileFindAdapter(findAdapter);
   const [findPaint, setFindPaint] = useState(EMPTY_FIND_PAINT);
@@ -331,10 +356,10 @@ function ManagedCommandOutputTileBody(props: {
   const visible = useTileBodyVisible();
   const readingIdentity = useMemo(
     () => ({
-      ...readingPositionIdentityForTileInstance(node.instanceId),
-      viewKey: managedOutputSessionViewKey(node.instanceId, store),
+      ...readingPositionIdentityForTileInstance(instanceId),
+      viewKey: managedOutputSessionViewKey(instanceId, store),
     }),
-    [node.instanceId, store],
+    [instanceId, store],
   );
   const restoredReadingAnchor = useMemo(
     () =>
@@ -455,11 +480,11 @@ function ManagedCommandOutputTileBody(props: {
   useLayoutEffect(
     () =>
       registerReadingPositionCapture({
-        captureKey: node.instanceId,
+        captureKey: instanceId,
         identity: readingIdentity,
         capture: captureReadingPosition,
       }),
-    [captureReadingPosition, node.instanceId, readingIdentity],
+    [captureReadingPosition, instanceId, readingIdentity],
   );
 
   useLayoutEffect(() => {
@@ -580,7 +605,14 @@ function ManagedCommandOutputTileBody(props: {
     deleted,
     fatalClose,
   });
-  const findAvailable = managedCommandOutputFindAvailability(availability);
+  const botUnavailable =
+    mode.kind === "bot" &&
+    (streamSupport === "unsupported" || deleted || fatalClose !== null);
+  const botNotLive = mode.kind === "bot" && (!live || !mode.hostReachable);
+  const findAvailable =
+    mode.kind === "bot"
+      ? lines.length > 0
+      : managedCommandOutputFindAvailability(availability);
 
   useEffect(() => {
     findAdapter.updateEnvironment({
@@ -601,7 +633,7 @@ function ManagedCommandOutputTileBody(props: {
   // had read is not the history any more - the host destroyed or withdrew
   // that - and a ghost of it contradicted every other surface's account of a
   // deleted shell.
-  if (isShellOutputPanelReplacement(availability)) {
+  if (mode.kind === "epic" && isShellOutputPanelReplacement(availability)) {
     return (
       <ShellOutputAvailabilityNotice
         availability={availability}
@@ -615,7 +647,16 @@ function ManagedCommandOutputTileBody(props: {
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col bg-canvas">
-      {isShellOutputBanner(availability) ? (
+      {mode.kind === "bot" ? (
+        <BotOutputNotices
+          command={command}
+          unavailable={botUnavailable}
+          notLive={botNotLive}
+          hasLines={lines.length > 0}
+          frozen={mode.frozen}
+        />
+      ) : null}
+      {mode.kind === "epic" && isShellOutputBanner(availability) ? (
         <ShellOutputAvailabilityNotice
           availability={availability}
           onClose={props.onClose}
@@ -625,149 +666,289 @@ function ManagedCommandOutputTileBody(props: {
         />
       ) : null}
 
-      <div className="relative min-h-0 flex-1">
-        {/*
-         * Present whenever a snapshot has said what this shell is - including
-         * under a failed stream. Process status and stream status are two
-         * different facts: a broken output stream must never hide Stop for a
-         * process that is still running.
-         */}
-        {command === null ? null : (
-          <>
-            {/*
-             * The fade the floating cluster is legible against. Sits under the
-             * cluster and over the log, and is painted in the tile's own
-             * surface token so every preset theme dissolves scrolling text
-             * into its own background rather than into a grey of ours.
-             */}
-            <div
-              aria-hidden
-              data-testid="managed-command-output-scrim"
-              className="pointer-events-none absolute inset-x-0 top-0 z-5 h-13 bg-linear-to-b from-canvas/95 via-canvas/75 via-45% to-canvas/0"
-            />
-            <ManagedCommandOutputControls
-              command={command}
-              epicId={epicId}
-              hostId={node.hostId}
-              viewTabId={props.viewTabId}
-            />
-          </>
-        )}
-        <div
-          ref={viewRef}
-          onScroll={onScroll}
-          onKeyDown={onTimelineKeyDown}
-          tabIndex={0}
-          data-testid="managed-command-output-timeline"
-          role="textbox"
-          aria-readonly="true"
-          aria-multiline="true"
-          aria-live="polite"
-          aria-label={
-            command === null ? "Output" : MANAGED_COMMAND_OUTPUT_WINDOW_TITLE
-          }
-          // Command output is terminal output, so it follows the Terminal
-          // typography settings the way a terminal tile does. `font-mono` and
-          // the `text-*` scales would silently track the Code font instead,
-          // leaving a Terminal override with no effect on the one surface
-          // whose whole content is a program's stdout. Colours stay the log
-          // view's own (stderr tint, lifecycle rows).
-          style={{
-            fontFamily: terminalFont.fontFamily,
-            fontSize: `${terminalFont.fontSize}px`,
-          }}
-          // The log keeps the full width of the pane. The cluster used to buy
-          // its clearance with a reserved right lane, which cost every line a
-          // share of the width for a collision that only ever happens in the
-          // top row - and cost most on a split pane, where the log is already
-          // narrow. Clearance is bought vertically instead: the log starts
-          // below the cluster, so nothing is under it at rest, and a line
-          // scrolled up dissolves into the scrim rather than colliding with
-          // the label. Only the flow of the log moves; the cluster is still
-          // lifted out of it.
-          className={cn(
-            "h-full w-full overflow-y-auto px-3 leading-relaxed focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none",
-            command === null ? "py-2" : "pt-9.5 pb-2",
-          )}
-        >
-          {loadingOlder ? (
-            <div className="flex justify-center py-1">
-              <AgentSpinningDots
-                className={undefined}
-                testId="managed-command-output-loading-older"
-                variant={undefined}
-                tone="muted"
-              />
-            </div>
-          ) : null}
-          {reachedStart && lines.length > 0 ? (
-            <p className="py-1 text-center text-muted-foreground/60">
-              Start of the retained log
-            </p>
-          ) : null}
+      <ManagedOutputTimeline
+        mode={mode}
+        command={command}
+        viewRef={viewRef}
+        onScroll={onScroll}
+        onTimelineKeyDown={onTimelineKeyDown}
+        terminalFont={terminalFont}
+        loadingOlder={loadingOlder}
+        reachedStart={reachedStart}
+        lines={lines}
+        availability={availability}
+        botUnavailable={botUnavailable}
+        botNotLive={botNotLive}
+        onClose={props.onClose}
+        onReopen={props.onReopen}
+        virtualRows={virtualRows}
+        outputVirtualizer={outputVirtualizer}
+        findPaint={findPaint}
+        following={following}
+        resyncPending={resyncPending}
+        setFollowMode={setFollowMode}
+        detached={detached}
+        scrollToNewest={scrollToNewest}
+        jumpLiveLabel={jumpLiveLabel}
+      />
+    </div>
+  );
+}
+
+function ManagedOutputTimeline(props: {
+  readonly mode:
+    | {
+        readonly kind: "epic";
+        readonly epicId: string;
+        readonly hostId: string;
+        readonly viewTabId: string;
+      }
+    | {
+        readonly kind: "bot";
+        readonly hostReachable: boolean;
+        readonly frozen: boolean;
+      };
+  readonly command: ManagedCommand | null;
+  readonly viewRef: RefObject<HTMLDivElement | null>;
+  readonly onScroll: () => void;
+  readonly onTimelineKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+  readonly terminalFont: {
+    readonly fontFamily: string;
+    readonly fontSize: number;
+  };
+  readonly loadingOlder: boolean;
+  readonly reachedStart: boolean;
+  readonly lines: readonly ManagedCommandTimelineLine[];
+  readonly availability: ShellOutputAvailability;
+  readonly botUnavailable: boolean;
+  readonly botNotLive: boolean;
+  readonly onClose: () => void;
+  readonly onReopen: () => void;
+  readonly virtualRows: readonly VirtualItem[];
+  readonly outputVirtualizer: Virtualizer<HTMLDivElement, Element>;
+  readonly findPaint: FindPaint;
+  readonly following: boolean;
+  readonly resyncPending: boolean;
+  readonly setFollowMode: (following: boolean) => void;
+  readonly detached: boolean;
+  readonly scrollToNewest: () => void;
+  readonly jumpLiveLabel: string;
+}) {
+  const {
+    mode,
+    command,
+    viewRef,
+    onScroll,
+    onTimelineKeyDown,
+    terminalFont,
+    loadingOlder,
+    reachedStart,
+    lines,
+    availability,
+    botUnavailable,
+    botNotLive,
+    virtualRows,
+    outputVirtualizer,
+    findPaint,
+    following,
+    resyncPending,
+    setFollowMode,
+    detached,
+    scrollToNewest,
+    jumpLiveLabel,
+  } = props;
+  return (
+    <div className="relative min-h-0 flex-1">
+      {/*
+       * Present whenever a snapshot has said what this shell is - including
+       * under a failed stream. Process status and stream status are two
+       * different facts: a broken output stream must never hide Stop for a
+       * process that is still running.
+       */}
+      {command === null || mode.kind === "bot" ? null : (
+        <>
           {/*
-           * An opened, empty log says so. Blank, it was indistinguishable from
-           * a stream that never connected.
+           * The fade the floating cluster is legible against. Sits under the
+           * cluster and over the log, and is painted in the tile's own
+           * surface token so every preset theme dissolves scrolling text
+           * into its own background rather than into a grey of ours.
            */}
-          {availability.kind === "empty" ? (
-            <ShellOutputAvailabilityNotice
-              availability={availability}
-              onClose={props.onClose}
-              onReopen={props.onReopen}
+          <div
+            aria-hidden
+            data-testid="managed-command-output-scrim"
+            className="pointer-events-none absolute inset-x-0 top-0 z-5 h-13 bg-linear-to-b from-canvas/95 via-canvas/75 via-45% to-canvas/0"
+          />
+          <ManagedCommandOutputControls
+            command={command}
+            epicId={mode.epicId}
+            hostId={mode.hostId}
+            viewTabId={mode.viewTabId}
+          />
+        </>
+      )}
+      <div
+        ref={viewRef}
+        onScroll={onScroll}
+        onKeyDown={onTimelineKeyDown}
+        tabIndex={0}
+        data-testid="managed-command-output-timeline"
+        role="textbox"
+        aria-readonly="true"
+        aria-multiline="true"
+        aria-live="polite"
+        aria-label={
+          command === null ? "Output" : MANAGED_COMMAND_OUTPUT_WINDOW_TITLE
+        }
+        // Command output is terminal output, so it follows the Terminal
+        // typography settings the way a terminal tile does. `font-mono` and
+        // the `text-*` scales would silently track the Code font instead,
+        // leaving a Terminal override with no effect on the one surface
+        // whose whole content is a program's stdout. Colours stay the log
+        // view's own (stderr tint, lifecycle rows).
+        style={{
+          fontFamily: terminalFont.fontFamily,
+          fontSize: `${terminalFont.fontSize}px`,
+        }}
+        // The log keeps the full width of the pane. The cluster used to buy
+        // its clearance with a reserved right lane, which cost every line a
+        // share of the width for a collision that only ever happens in the
+        // top row - and cost most on a split pane, where the log is already
+        // narrow. Clearance is bought vertically instead: the log starts
+        // below the cluster, so nothing is under it at rest, and a line
+        // scrolled up dissolves into the scrim rather than colliding with
+        // the label. Only the flow of the log moves; the cluster is still
+        // lifted out of it.
+        className={cn(
+          "h-full w-full overflow-y-auto px-3 leading-relaxed focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset focus-visible:outline-none",
+          command === null || mode.kind === "bot" ? "py-2" : "pt-9.5 pb-2",
+        )}
+      >
+        {loadingOlder ? (
+          <div className="flex justify-center py-1">
+            <AgentSpinningDots
               className={undefined}
-              testId={AVAILABILITY_NOTICE_TEST_ID}
+              testId="managed-command-output-loading-older"
+              variant={undefined}
+              tone="muted"
             />
-          ) : null}
-          {lines.length === 0 ? null : (
-            <div
-              data-testid="managed-command-output-virtual-list"
-              className="relative w-full"
-              style={{ height: `${outputVirtualizer.getTotalSize()}px` }}
-            >
-              {virtualRows.map((virtualRow) => {
-                const line = lines[virtualRow.index];
-                return (
-                  <div
-                    key={virtualRow.key}
-                    data-index={virtualRow.index}
-                    ref={outputVirtualizer.measureElement}
-                    className="absolute top-0 left-0 w-full"
-                    style={{
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <OutputRow
-                      line={line}
-                      matches={
-                        findPaint.matchesBySeq.get(line.seq) ??
-                        EMPTY_ROW_FIND_MATCHES
-                      }
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        {following && !resyncPending ? null : (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            data-testid="managed-command-output-jump-live"
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-sm"
-            disabled={resyncPending}
-            onClick={() => {
-              setFollowMode(true);
-              if (!detached) scrollToNewest();
-            }}
+          </div>
+        ) : null}
+        {reachedStart && lines.length > 0 ? (
+          <p className="py-1 text-center text-muted-foreground/60">
+            Start of the retained log
+          </p>
+        ) : null}
+        {/*
+         * An opened, empty log says so. Blank, it was indistinguishable from
+         * a stream that never connected.
+         */}
+        {availability.kind === "empty" && !botUnavailable && !botNotLive ? (
+          <ShellOutputAvailabilityNotice
+            availability={availability}
+            onClose={props.onClose}
+            onReopen={props.onReopen}
+            className={undefined}
+            testId={AVAILABILITY_NOTICE_TEST_ID}
+          />
+        ) : null}
+        {lines.length === 0 ? null : (
+          <div
+            data-testid="managed-command-output-virtual-list"
+            className="relative w-full"
+            style={{ height: `${outputVirtualizer.getTotalSize()}px` }}
           >
-            <ArrowDownToLine aria-hidden className="size-3.5" />
-            {jumpLiveLabel}
-          </Button>
+            {virtualRows.map((virtualRow) => {
+              const line = lines[virtualRow.index];
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={outputVirtualizer.measureElement}
+                  className="absolute top-0 left-0 w-full"
+                  style={{
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <OutputRow
+                    line={line}
+                    matches={
+                      findPaint.matchesBySeq.get(line.seq) ??
+                      EMPTY_ROW_FIND_MATCHES
+                    }
+                  />
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
+      {following && !resyncPending ? null : (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          data-testid="managed-command-output-jump-live"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-sm"
+          disabled={resyncPending}
+          onClick={() => {
+            setFollowMode(true);
+            if (!detached) scrollToNewest();
+          }}
+        >
+          <ArrowDownToLine aria-hidden className="size-3.5" />
+          {jumpLiveLabel}
+        </Button>
+      )}
     </div>
+  );
+}
+
+function BotOutputNotices(props: {
+  readonly command: ManagedCommand | null;
+  readonly unavailable: boolean;
+  readonly notLive: boolean;
+  readonly hasLines: boolean;
+  readonly frozen: boolean;
+}) {
+  return (
+    <>
+      {props.command !== null && !props.unavailable ? (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-border/60 px-3 py-2 text-ui-xs text-muted-foreground">
+          <ManagedCommandStatusDot
+            status={props.command.status}
+            className={undefined}
+          />
+          {managedCommandStatusLabel(props.command.status)}
+        </div>
+      ) : null}
+      {props.unavailable ? (
+        <div
+          role="status"
+          data-testid="bot-shell-output-unavailable"
+          className="border-b border-border/60 px-3 py-2 text-ui-sm text-muted-foreground"
+        >
+          Output unavailable
+        </div>
+      ) : null}
+      {props.notLive &&
+      (props.command !== null || props.hasLines || props.frozen) ? (
+        <div
+          role="status"
+          data-testid="bot-shell-output-not-live"
+          className="border-b border-border/60 px-3 py-2 text-ui-sm text-muted-foreground"
+        >
+          Not live
+        </div>
+      ) : null}
+      {!props.unavailable && !props.frozen && props.command === null ? (
+        <div
+          role="status"
+          className="px-3 py-2 text-ui-sm text-muted-foreground"
+        >
+          Loading output…
+        </div>
+      ) : null}
+    </>
   );
 }
 

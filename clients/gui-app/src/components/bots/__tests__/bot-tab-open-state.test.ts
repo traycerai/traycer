@@ -65,7 +65,7 @@ describe("botTabOpenState", () => {
     expect(
       botTabOpenState({
         response: undefined,
-        error: "the host is unreachable",
+        error: { message: "the host is unreachable", transient: false },
       }),
     ).toEqual({ kind: "failed", message: "the host is unreachable" });
   });
@@ -114,7 +114,7 @@ describe("botTabOpenState", () => {
     expect(
       botTabOpenState({
         response: response({ kind: "serve-here", claimed: null }),
-        error: "boom",
+        error: { message: "boom", transient: false },
       }),
     ).toEqual({ kind: "failed", message: "boom" });
   });

@@ -19,6 +19,7 @@
 // output, not a live release or a successful production cutover.
 
 const { fork, spawnSync } = require("node:child_process");
+const { once } = require("node:events");
 const { createServer } = require("node:http");
 const { createHash } = require("node:crypto");
 const { tmpdir } = require("node:os");
@@ -34,6 +35,10 @@ const binaryPath = path.join(workspaceRoot, "dist-sea", binaryName);
 // caps CI jobs at ten minutes and the SEA build eats most of it, so keep the
 // default modest and let the workflow raise it via the env var.
 const DEFAULT_ITERATIONS = 15;
+
+// How long the fixture may take to do one thing the script is waiting on: its
+// origin to start, and Windows to release its executable.
+const FIXTURE_WAIT_LIMIT_MS = 10_000;
 
 function fail(msg) {
   console.error(`[cli exit-code] FAIL: ${msg}`);
@@ -149,7 +154,33 @@ async function main() {
     );
   } finally {
     process.removeListener("exit", fixture.cleanup);
-    fixture.cleanup();
+    await fixture.dispose();
+  }
+}
+
+// Windows refuses to delete a file that is still mapped as a process image
+// (EPERM; a plain open handle is EBUSY), and it can report a process as exited
+// before it lets the image go. There is no event for that release, so the
+// delete itself is the signal: only this one file is waited for, and the
+// folder is removed afterwards with no tolerance.
+async function removeExitedExecutable(file) {
+  const startedAt = Date.now();
+  let refusals = 0;
+  for (;;) {
+    try {
+      fs.rmSync(file, { force: true });
+      break;
+    } catch (error) {
+      if (error.code !== "EPERM" && error.code !== "EBUSY") throw error;
+      if (Date.now() - startedAt >= FIXTURE_WAIT_LIMIT_MS) throw error;
+      refusals += 1;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  if (refusals > 0) {
+    console.log(
+      `[cli exit-code] Windows released ${path.basename(file)} ${Date.now() - startedAt} ms after its last run exited (${refusals} refused deletes)`,
+    );
   }
 }
 
@@ -231,15 +262,27 @@ async function createFixture() {
   const child = fork(__filename, ["--serve-fixture"], {
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
+  // Synchronous and best effort: all an `exit` or signal handler can do.
   const cleanup = () => {
     child.kill();
+    fs.rmSync(root, { recursive: true, force: true });
+  };
+  const fixtureBinary = path.join(root, binaryName);
+  const dispose = async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      child.kill();
+      await exited;
+    }
+    if (process.platform === "win32")
+      await removeExitedExecutable(fixtureBinary);
     fs.rmSync(root, { recursive: true, force: true });
   };
   try {
     const origin = await new Promise((resolve, reject) => {
       const timeout = setTimeout(
         () => reject(new Error("fixture origin startup timed out")),
-        10_000,
+        FIXTURE_WAIT_LIMIT_MS,
       );
       child.once("error", (error) => {
         clearTimeout(timeout);
@@ -286,7 +329,6 @@ async function createFixture() {
     const onInterrupt = () => onSignal(130);
     const onTerminate = () => onSignal(143);
     const originalBinary = fs.readFileSync(binaryPath);
-    const fixtureBinary = path.join(root, binaryName);
     const stamped = source
       .replace(
         /(releaseCdnBaseUrl:\s*)"[^"]*"/,
@@ -362,7 +404,7 @@ async function createFixture() {
     );
     const home = path.join(root, "home");
     fs.mkdirSync(home);
-    return { binaryPath: fixtureBinary, home, cleanup };
+    return { binaryPath: fixtureBinary, home, cleanup, dispose };
   } catch (error) {
     cleanup();
     throw error;
