@@ -3,7 +3,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import type { EnvironmentCloudSource } from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   readMcpPromoteIntent,
   recordMcpPromoteIntent,
@@ -85,6 +85,8 @@ interface PromoteContext {
 interface RecordedIntent {
   readonly environmentId: string;
   readonly operationId: string;
+  /** The click's sign-in, which the read back goes on too. */
+  readonly operation: EnvironmentCloud;
 }
 
 /**
@@ -96,8 +98,10 @@ interface RecordedIntent {
  * For an MCP server, on a host that takes it, the click first records an
  * `mcp_promote` intent on the person's sign-in for this computer at its
  * sharing generation and the server's name; the computer uploads on its own
- * token against it, and the intent is read back. A skill is promoted as
- * today, with no intent.
+ * token against it, and the intent is read back. The click is one operation
+ * on the sign-in current when it was pressed: both authn calls go on it, and
+ * the upload is not asked for once that sign-in is gone. A skill is promoted
+ * as today, with no intent.
  *
  * A refusal is an answer, not a transport error: it comes back as
  * `refused` with its words, and only a failed send toasts.
@@ -126,15 +130,18 @@ export function useProvidersPromoteToPersonal(
         withHostQueryErrorBoundary(METHOD, async () => {
           let intent: RecordedIntent | null = null;
           if (variables.entryKind === "mcp" && takesIntent(client)) {
+            if (cloud === null) return intentOutcome(null, environmentName);
+            const operation = cloud();
             const operationId = crypto.randomUUID();
             const recorded = await recordIntent(
               client,
-              cloud,
+              operation,
               operationId,
               variables.name,
             );
-            if (recorded === null) return intentOutcome(null, environmentName);
-            intent = { environmentId: recorded, operationId };
+            if (recorded === null || !operation.onOriginSignIn())
+              return intentOutcome(null, environmentName);
+            intent = { environmentId: recorded, operationId, operation };
           }
           const promote: NativePromoteToPersonalMutationV15 = {
             kind: "promoteToPersonal",
@@ -166,10 +173,7 @@ export function useProvidersPromoteToPersonal(
             };
           }
           if (intent === null) return { kind: "added" };
-          return intentOutcome(
-            await readIntentState(cloud, intent),
-            environmentName,
-          );
+          return intentOutcome(await readIntentState(intent), environmentName);
         }),
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (outcome, variables, context) => {
@@ -237,16 +241,15 @@ function takesIntent(client: HostRequester<HostRpcRegistry>): boolean {
  */
 async function recordIntent(
   client: HostRequester<HostRpcRegistry>,
-  cloud: EnvironmentCloudSource | null,
+  operation: EnvironmentCloud,
   operationId: string,
   serverName: string,
 ): Promise<string | null> {
-  if (cloud === null) return null;
   const binding = await client.request("environment.host.read", {});
   if (binding.sharingGeneration === null) return null;
   const environmentId = binding.environment.environmentId;
   try {
-    await recordMcpPromoteIntent(cloud(), environmentId, {
+    await recordMcpPromoteIntent(operation, environmentId, {
       operationId,
       sourceHostId: binding.hostId,
       sourceSharingGeneration: binding.sharingGeneration,
@@ -260,13 +263,11 @@ async function recordIntent(
 
 /** The intent's state, or null when it could not be read. */
 async function readIntentState(
-  cloud: EnvironmentCloudSource | null,
   intent: RecordedIntent,
 ): Promise<McpPromoteIntentState | null> {
-  if (cloud === null) return null;
   try {
     return await readMcpPromoteIntent(
-      cloud(),
+      intent.operation,
       intent.environmentId,
       intent.operationId,
     );
