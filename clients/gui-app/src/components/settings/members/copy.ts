@@ -59,8 +59,6 @@ export const RETRY_LABEL = "Retry";
 /** A preview row with nothing to show. */
 const NONE = "None.";
 
-export const MEMBERS_NEED_UPDATED_HOST = "These members need an updated host.";
-
 export function membersReadFailed(teamName: string): string {
   return `Couldn't load ${teamName}'s members.`;
 }
@@ -318,8 +316,8 @@ export function removePreviewLead(
 }
 
 /** What a removal does to the member's work, with or without its count. */
-export function removeWorkContinues(teamName: string): string {
-  return `Their connections close now. Work they started keeps running for ${teamName} under their name.`;
+function removeWorkContinues(teamName: string): string {
+  return `Their connections close. Work they started keeps running for ${teamName} under their name.`;
 }
 
 /**

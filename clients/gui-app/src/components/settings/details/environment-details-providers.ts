@@ -281,7 +281,7 @@ async function loadEnvironmentDetails(
   context: DetailsProviderContext,
   diagnostics: boolean,
 ): Promise<DetailsEntry> {
-  const response = await context.client.request("environment.history", {
+  const response = await context.environmentCloud("environment.history", {
     environmentId: subject.environmentId,
     subject: historySubject(subject),
   });

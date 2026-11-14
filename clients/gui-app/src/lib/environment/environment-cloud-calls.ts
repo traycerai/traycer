@@ -10,6 +10,7 @@ import {
   listConfigurationPlans,
   putConfigurationItem,
   putConfigurationPolicy,
+  readConfigurationHistory,
   readConfigurationItems,
   readConfigurationRevision,
   setConfigurationMcpServerEnabled,
@@ -56,6 +57,7 @@ export type EnvironmentCloudMethod =
   | "environment.configuration.mcpServers.delete"
   | "environment.configuration.mcpServers.setEnabled"
   | "environment.configuration.policy.put"
+  | "environment.history"
   | "environment.host.list"
   | "environment.members.seats"
   | "environment.members.invite"
@@ -109,6 +111,7 @@ const CALLS: {
   "environment.configuration.mcpServers.setEnabled":
     setConfigurationMcpServerEnabled,
   "environment.configuration.policy.put": putConfigurationPolicy,
+  "environment.history": readConfigurationHistory,
   "environment.host.list": (cloud, request) =>
     listConfigurationHosts(cloud, request.environmentId),
   "environment.members.seats": (cloud, request) =>
