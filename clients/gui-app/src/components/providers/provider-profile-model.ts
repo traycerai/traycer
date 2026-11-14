@@ -370,9 +370,12 @@ export function profileEligibilityToggleDisabledReason(
   providerEnabled: boolean,
   providerLabel: string,
   profile: ProviderProfile,
-  profiles: readonly ProviderProfile[],
-  offersSignIns: boolean,
+  inventory: {
+    readonly profiles: readonly ProviderProfile[];
+    readonly offersSignIns: boolean;
+  },
 ): string | null {
+  const { profiles, offersSignIns } = inventory;
   if (profileUsesRecord(profile, offersSignIns)) return null;
   if (!providerEnabled) {
     const anyEnabled = profiles.some((candidate) => candidate.enabled);

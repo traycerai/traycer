@@ -2,6 +2,7 @@ import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/ho
 import {
   setProfileRecordEnabledViaHttp,
   type ProfileRecordEnablementClient,
+  type ProfileRecordEnabledChange,
   type ProfileRecordEnablementResult,
 } from "@traycer-clients/shared/host-client/provider-profile-enablement";
 import {
@@ -3593,8 +3594,7 @@ export class AuthService implements ProfileRecordEnablementClient {
   async setProfileRecordEnabled(
     environmentId: string,
     harnessId: string,
-    profileId: string,
-    enabled: boolean,
+    change: ProfileRecordEnabledChange,
     callerSignal: AbortSignal | null,
   ): Promise<ProfileRecordEnablementResult> {
     const bearer = this.cloudBearer();
@@ -3604,8 +3604,8 @@ export class AuthService implements ProfileRecordEnablementClient {
       bearer,
       environmentId,
       harnessId,
-      profileId,
-      enabled,
+      change.profileId,
+      change.enabled,
       callerSignal,
     );
   }
