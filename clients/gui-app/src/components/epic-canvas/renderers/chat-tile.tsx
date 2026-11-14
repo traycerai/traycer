@@ -331,9 +331,11 @@ import {
   resolveAgentReasoningLabel,
   resolveAgentServiceTierLabel,
   resolveAgentSenderDisplay,
-  resolveSenderLabel,
+  otherPersonSenderId,
+  resolvePersonSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
+import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
 import { getModelLabelIndex } from "@/lib/chat/model-label-index";
 import {
   selectEpicRunSettingsEntry,
@@ -2582,12 +2584,19 @@ function useChatTileSessionViewModel(
     tabHostCatalogClient,
     surfaceVisible,
   );
+  const identifyPerson = usePersonIdentityResolver();
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
       resolveProfileLabel: resolveRunProfileLabel,
       resolveUserSenderLabel: (sender) =>
-        resolveSenderLabel(sender, displayContext),
-      resolveUserSenderAvatarUrl: () => null,
+        resolvePersonSenderLabel(sender, displayContext, identifyPerson),
+      resolveUserSenderAvatarUrl: (sender) => {
+        const userId = otherPersonSenderId(sender, profile);
+        return userId === null
+          ? null
+          : (identifyPerson(userId)?.avatarUrl ?? null);
+      },
+      resolveUserSenderId: (sender) => otherPersonSenderId(sender, profile),
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
@@ -2596,7 +2605,7 @@ function useChatTileSessionViewModel(
         resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
-    [displayContext, resolveRunProfileLabel],
+    [displayContext, identifyPerson, profile, resolveRunProfileLabel],
   );
   // Read from the full store: its effective activity includes the handoff
   // carry, even before the next host turn is named.
