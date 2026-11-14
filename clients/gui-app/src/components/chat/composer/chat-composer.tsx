@@ -1,3 +1,5 @@
+import { useChatAccountWait } from "@/components/chat/fallback/use-chat-account-wait";
+import { AccountWaitSurface } from "@/components/chat/fallback/account-wait-card";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useChatPrestartRuntime } from "@/hooks/chats/use-chat-prestart-runtime";
@@ -1004,11 +1006,19 @@ function ChatComposerImpl(props: ChatComposerProps) {
     steerProtocolSupported,
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
+  const accountWait = useChatAccountWait({
+    fallbackCardVisible: fallbackComposerCardVisible(providerFallback.pending),
+    providersList: profileEligibility.providersList,
+    epicId: currentEpicId,
+    chatId: taskId,
+    hostId: tabHostId,
+  });
   const topBannerKind = resolveComposerTopBannerKind({
-    // The UNION of the two card predicates, and only for the slot question -
-    // which banner wins. Which CARD renders is decided inside
-    // `ChatComposerFallbackBanners`, by each predicate on its own.
-    fallbackVisible: fallbackComposerCardVisible(providerFallback.pending),
+    // Account waits and timed routing share the fallback slot; a live
+    // traversal retains its own card and actions.
+    fallbackVisible:
+      accountWait !== null ||
+      fallbackComposerCardVisible(providerFallback.pending),
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
     // BY VALUE. The key is present on every live `1.12` frame with `undefined`
@@ -1079,16 +1089,27 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   return (
     <>
-      <ChatComposerFallbackBanners
-        topBannerKind={topBannerKind}
-        fallback={providerFallback}
-        rateLimitAdvisory={rateLimitAdvisory}
-        client={hostClient}
-        chatId={taskId}
+      <AccountWaitSurface
         epicId={currentEpicId}
+        chatId={taskId}
+        providersList={profileEligibility.providersList}
+        wait={accountWait}
+        client={runHostClient}
         hostId={tabHostId}
+        toolbarStore={toolbarStore}
         canAct={fallbackControlsCanAct(sendDisabled)}
-      />
+      >
+        <ChatComposerFallbackBanners
+          topBannerKind={topBannerKind}
+          fallback={providerFallback}
+          rateLimitAdvisory={rateLimitAdvisory}
+          client={hostClient}
+          chatId={taskId}
+          epicId={currentEpicId}
+          hostId={tabHostId}
+          canAct={fallbackControlsCanAct(sendDisabled)}
+        />
+      </AccountWaitSurface>
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
           <div className="pointer-events-none px-4">
