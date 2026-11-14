@@ -38,6 +38,11 @@ import {
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
+import {
+  armTerminalAgentContinueProfile,
+  consumeTerminalAgentContinueProfile,
+  useTerminalAgentContinueProfile,
+} from "@/stores/terminals/terminal-agent-continue-profile";
 import { ProfileDropdown } from "@/components/providers/profile-dropdown";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { resolveProfilePin } from "@/components/providers/provider-profile-model";
@@ -328,6 +333,21 @@ function renderWithClient(
   );
 }
 
+function ContinueProfileRequestProbe(): ReactNode {
+  const request = useTerminalAgentContinueProfile(
+    HOST_ID,
+    "epic-terminal",
+    "agent-terminal",
+  );
+  return (
+    <output data-testid="continue-profile-request">
+      {request === null
+        ? "none"
+        : `${request.hostId}|${request.epicId}|${request.agentId}`}
+    </output>
+  );
+}
+
 beforeEach(() => {
   mockState.sessions.clear();
   mockState.sessions.set("active", {
@@ -342,6 +362,12 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mockState.sessions.clear();
+  const cleanupRequestId = armTerminalAgentContinueProfile(
+    "cleanup-host",
+    "cleanup-epic",
+    "cleanup-agent",
+  );
+  consumeTerminalAgentContinueProfile(cleanupRequestId);
 });
 
 afterAll(() => {
@@ -508,18 +534,21 @@ describe("account wait choices", () => {
     const { client, previewRequests, queryClient } = createMoveClient();
     const toolbar = toolbarStore();
     renderWithClient(
-      <AccountWaitSurface
-        epicId="epic-test"
-        chatId="chat-test"
-        providersList={providersList(true)}
-        wait={{ ...SOURCE_WAIT, reason: "waiting-for-traycer" }}
-        client={client}
-        hostId={HOST_ID}
-        toolbarStore={toolbar}
-        canAct
-      >
-        {null}
-      </AccountWaitSurface>,
+      <>
+        <AccountWaitSurface
+          epicId="epic-test"
+          chatId="chat-test"
+          providersList={providersList(true)}
+          wait={{ ...SOURCE_WAIT, reason: "waiting-for-traycer" }}
+          client={client}
+          hostId={HOST_ID}
+          toolbarStore={toolbar}
+          canAct
+        >
+          {null}
+        </AccountWaitSurface>
+        <ContinueProfileRequestProbe />
+      </>,
       queryClient,
     );
 
@@ -545,6 +574,9 @@ describe("account wait choices", () => {
       "agent-terminal",
       HOST_ID,
     );
+    expect(
+      await screen.findByText(`${HOST_ID}|epic-terminal|agent-terminal`),
+    ).toBeTruthy();
     expect(toolbar.getState().selection.profileId).toBe(PROFILE_A.profileId);
     expect(mockState.openSettings).not.toHaveBeenCalled();
   });
