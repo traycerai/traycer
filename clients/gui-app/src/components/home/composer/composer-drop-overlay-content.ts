@@ -1,5 +1,9 @@
-import { FileText, Files, ImageIcon } from "lucide-react";
+import { FileText, Files, ImageIcon, Paperclip } from "lucide-react";
+import { FILE_ATTACHMENT_MAX_BYTES } from "@traycer/protocol/host/drafts/schemas";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
+import { formatByteSize } from "@/lib/format-byte-size";
+
+const ATTACHED_FILES_SUBTITLE = `Files up to ${formatByteSize(FILE_ATTACHMENT_MAX_BYTES)}`;
 
 export const FILE_DROP_OVERLAY_CONTENT = {
   images: {
@@ -16,6 +20,16 @@ export const FILE_DROP_OVERLAY_CONTENT = {
     Icon: Files,
     title: "Drop to attach images and insert file paths",
     subtitle: "Images attach; file paths are inserted",
+  },
+  files: {
+    Icon: Paperclip,
+    title: "Drop to attach files",
+    subtitle: ATTACHED_FILES_SUBTITLE,
+  },
+  imagesAndFiles: {
+    Icon: Files,
+    title: "Drop to attach images and files",
+    subtitle: ATTACHED_FILES_SUBTITLE,
   },
 } satisfies Record<
   FileTransferDragOverlayVariant,
