@@ -81,6 +81,11 @@ function withoutLoginCapability(
   };
 }
 
+function awaitAnswerNamesProfile(data: AwaitLoginResponse): boolean {
+  const kind = data.profileOutcome?.kind;
+  return kind === "signed-in" || kind === "already-signed-in";
+}
+
 /**
  * Awaits the honest login-completion edge for a provider on the CURRENT tab's
  * host: the host blocks the response until the `<cli> auth login` child
@@ -92,7 +97,8 @@ function withoutLoginCapability(
  * cache, so the re-auth gate flips (and unmounts the banner) without a second
  * probe. A `null` state means nothing about the provider changed - nothing was
  * in flight to await, or the host could not install an approved sign-in - and
- * leaves the cache untouched.
+ * leaves the cache untouched, except that an answer whose `profileOutcome`
+ * names a profile has the list read again.
  */
 export function useProvidersAwaitLogin(): UseMutationResult<
   AwaitLoginResponse,
@@ -161,8 +167,23 @@ export function useProvidersAwaitLoginForClient(args: {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
       onSuccess: async (data: AwaitLoginResponse, _variables, context) => {
+        if (context.hostId === null) return;
         const next = data.state;
-        if (next === null || context.hostId === null) return;
+        if (next === null) {
+          // An outcome that names a profile is looked up in the list by the
+          // dialog that waits for this answer, so the list is read again
+          // here first, whether or not the answer carries a state: this read
+          // is the one that lookup uses, and this handler finishes before
+          // the caller's own.
+          if (!awaitAnswerNamesProfile(data)) return;
+          await queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              context.hostId,
+              "providers.list",
+            ),
+          });
+          return;
+        }
         await commitAuthoritativeProvidersList({
           queryClient,
           hostId: context.hostId,

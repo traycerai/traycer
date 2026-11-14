@@ -30,6 +30,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
   duplicateProfileLabel,
+  listOffersSignIns,
   profileEligibilityToggleDisabledReason,
   profileInventorySummary,
   profileInventoryAttributes,
@@ -45,6 +46,10 @@ import {
 } from "@/components/providers/provider-profile-model";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { ProfileOtherNames } from "./provider-profile-other-names";
+import {
+  NOT_ON_THIS_COMPUTER_YET_TEXT,
+  SIGN_IN_TO_USE_EVERYWHERE_TEXT,
+} from "@/components/providers/profile-sync-copy";
 import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 import {
   isRateLimitProfileFetchEligible,
@@ -316,10 +321,15 @@ export function ProviderProfileScopedSection(
   const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
     startInReauth ? "sign-in" : "manage",
   );
+  const providersList = useProvidersList({
+    enabled: true,
+    subscribed: true,
+  }).data;
   const removedProfiles = removedProfilesForProvider(
-    useProvidersList({ enabled: true, subscribed: true }).data,
+    providersList,
     state.providerId,
   );
+  const offersSignIns = listOffersSignIns(providersList);
 
   if (profiles.length === 0) return null;
 
@@ -433,10 +443,12 @@ export function ProviderProfileScopedSection(
           state={state}
           profile={selectedProfile}
           computerName={hostName}
+          offersSignIns={offersSignIns}
           canAddProfile={canAddProfile}
           signInUnavailableHint={signInUnavailableHint}
           managementHeldReason={managementHeldReason}
           onSignIn={openProfileSignIn}
+          onAddProfile={onAddProfile}
           onManage={openProfileEditor}
         />
         {profileOtherNames(selectedProfile).length > 0 ? (
@@ -504,18 +516,26 @@ export function ProviderProfileScopedSection(
  * The selected profile's row under the dropdown. Identity, status and plan
  * wrap with Sign in and Manage profile. The terminal login uses this same
  * row. Details is not on this row.
+ *
+ * On a computer that offers sign-ins by itself, the Terminal login's own row
+ * (one the environment does not have yet) carries `Sign in to use everywhere`
+ * in place of Sign in: it opens the same sign-in Add a profile does, and the
+ * tool's own login is never touched from here.
  */
 function SelectedProfileRow(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly computerName: string | null;
+  readonly offersSignIns: boolean;
   readonly canAddProfile: boolean;
   readonly signInUnavailableHint: string | null;
   readonly managementHeldReason: string | null;
   readonly onSignIn: () => void;
+  readonly onAddProfile: () => void;
   readonly onManage: () => void;
 }): ReactNode {
   const { profile, managementHeldReason } = props;
+  const signInEverywhere = props.offersSignIns && profile.kind === "ambient";
   return (
     <ProfileSummaryActions
       onManage={props.onManage}
@@ -527,8 +547,31 @@ function SelectedProfileRow(props: {
         state={props.state}
         profile={profile}
         computerName={props.computerName}
+        offersSignIns={props.offersSignIns}
       />
-      {profileOffersSignIn(props.state, profile) ? (
+      {signInEverywhere ? (
+        <TooltipWrapper
+          label={props.canAddProfile ? null : props.signInUnavailableHint}
+          side="top"
+          sideOffset={6}
+          align="start"
+        >
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              className="shrink-0"
+              disabled={!props.canAddProfile}
+              onClick={props.onAddProfile}
+            >
+              <LogIn data-icon="inline-start" />
+              {SIGN_IN_TO_USE_EVERYWHERE_TEXT}
+            </Button>
+          </span>
+        </TooltipWrapper>
+      ) : null}
+      {!signInEverywhere && profileOffersSignIn(props.state, profile) ? (
         <TooltipWrapper
           label={props.canAddProfile ? null : props.signInUnavailableHint}
           side="top"
@@ -633,10 +676,12 @@ function ProfileSummary({
   state,
   profile,
   computerName,
+  offersSignIns,
 }: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly computerName: string | null;
+  readonly offersSignIns: boolean;
 }): ReactNode {
   const tier = profile.identity?.tier;
   const planText =
@@ -689,7 +734,9 @@ function ProfileSummary({
         )}
         {profile.presence?.kind === "no-home" ? (
           <p className="min-w-0 whitespace-normal break-words">
-            Not on this device yet
+            {offersSignIns
+              ? NOT_ON_THIS_COMPUTER_YET_TEXT
+              : "Not on this device yet"}
           </p>
         ) : null}
         {profile.presence?.kind === "placeholder-only" ? (

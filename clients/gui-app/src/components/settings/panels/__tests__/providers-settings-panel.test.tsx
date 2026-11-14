@@ -7,6 +7,7 @@ import {
   type ProviderAuth,
   type ProviderCliCandidate,
   type ProviderCliState,
+  type ProviderMutationCliStateV21,
   type ProviderProfile,
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
@@ -22,14 +23,18 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   HostRpcError,
+  ResponseOfMethod,
   RequestOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 import {
   PROVIDER_SETTINGS_UNREADABLE_COPY,
   PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX,
@@ -204,6 +209,8 @@ const providerMocks = vi.hoisted(() => {
         | undefined,
       refetch: vi.fn(() => Promise.resolve({})),
     },
+    liveList: false,
+    liveClient: null as HostClient<HostRpcRegistry> | null,
     setSelectionMutate: vi.fn(),
     addCustomPathMutate: vi.fn(),
     removeCustomPathMutate: vi.fn(),
@@ -342,9 +349,25 @@ vi.mock(
   }),
 );
 
-vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => providerMocks.listResult,
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-list-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-list-query")
+      >();
+    return {
+      ...actual,
+      useProvidersList: (activity: {
+        readonly enabled: boolean;
+        readonly subscribed: boolean;
+      }) =>
+        providerMocks.liveList
+          ? actual.useProvidersList(activity)
+          : providerMocks.listResult,
+    };
+  },
+);
 
 vi.mock("@/hooks/providers/use-providers-plugins-list-query", () => ({
   useProvidersPluginsList: () => ({
@@ -562,17 +585,32 @@ vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => {
   };
 });
 
-vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
-  const useProvidersAwaitLogin = () => ({
-    mutate: providerMocks.awaitLoginMutate,
-    isPending: false,
-    error: null,
-  });
-  return {
-    useHostScopedProvidersAwaitLogin: useProvidersAwaitLogin,
-    useProvidersAwaitLoginForClient: useProvidersAwaitLogin,
-  };
-});
+vi.mock(
+  "@/hooks/providers/use-providers-await-login-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-await-login-mutation")
+      >();
+    const useProvidersAwaitLogin = () => ({
+      mutate: providerMocks.awaitLoginMutate,
+      isPending: false,
+      error: null,
+    });
+    return {
+      ...actual,
+      useHostScopedProvidersAwaitLogin: useProvidersAwaitLogin,
+      useProvidersAwaitLoginForClient: (args: {
+        readonly client: HostClient<HostRpcRegistry> | null;
+        readonly getCacheHostId: () => string | null;
+      }) => {
+        const liveMutation = actual.useProvidersAwaitLoginForClient(args);
+        const mockedMutation = useProvidersAwaitLogin();
+        return providerMocks.liveList ? liveMutation : mockedMutation;
+      },
+    };
+  },
+);
 
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
   const useProvidersCancelLogin = () => ({
@@ -814,7 +852,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     // this one - so a fixture answering `null` here silently withholds the
     // wrapper and the selected-host refresh lands on the ambient host.
     useHostBinding: () => providerMocks.ambientBinding,
-    useHostClient: () => null,
+    useHostClient: () => providerMocks.liveClient,
     // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
   };
@@ -1799,6 +1837,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 beforeEach(() => {
+  providerMocks.liveList = false;
+  providerMocks.liveClient = null;
   useSettingsEnvironmentPickStore.setState({
     defaultPick: { kind: "personal" },
   });
@@ -1907,6 +1947,178 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.credentialRefusal = null;
     hostScopeMocks.client = null;
     useProvidersFocusStore.getState().clearFocusHarnessId();
+  });
+
+  it("shows the page read error after a sign-in echo has no row, then renders the profile after Retry", async () => {
+    let listCalls = 0;
+    const signedInProfile = pinProfile({
+      profileId: "managed-profile",
+      label: "Work",
+      kind: "managed",
+      enabled: true,
+      authStatus: "authenticated",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: false,
+      otherNames: [],
+    });
+    const existingProfile = pinProfile({
+      profileId: "existing-profile",
+      label: "Existing",
+      kind: "managed",
+      enabled: true,
+      authStatus: "authenticated",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: false,
+      otherNames: [],
+    });
+    const claudeCli: ProviderCliCandidate = {
+      kind: "bundled",
+      path: "/bundled/claude",
+      version: "1.0.0",
+      available: true,
+      versionPending: false,
+    };
+    const emptyEcho: ProviderMutationCliStateV21 = {
+      providerId: "claude-code",
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled" },
+      candidates: [],
+      auth: {
+        status: "unauthenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
+      profiles: [],
+    };
+    const listResponse = (
+      profiles: readonly ProviderProfile[],
+    ): ResponseOfMethod<HostRpcRegistry, "providers.list"> => {
+      const state = providerState({
+        providerId: "claude-code",
+        selected: { kind: "bundled" },
+        candidates: [claudeCli],
+        envOverrides: [],
+        nativeCapabilities: FULL_TABS,
+        profiles,
+      });
+      return {
+        providers: [
+          {
+            ...state,
+            loginCapability: {
+              oauthArgs: ["auth", "login"],
+              token: null,
+              codePaste: null,
+              terminalLogin: null,
+              remoteSafe: {},
+              selfOpensBrowser: null,
+            },
+          },
+        ],
+        native: null,
+        offersSignIns: true,
+      };
+    };
+    const { client } = buildEnvironmentClient({
+      hostId: "host-1",
+      handlers: {
+        "providers.list": () => {
+          listCalls += 1;
+          if (listCalls === 2) throw new Error("list read failed");
+          return listResponse(
+            listCalls >= 3
+              ? [existingProfile, signedInProfile]
+              : [existingProfile],
+          );
+        },
+        "providers.awaitLogin": () => ({
+          state: emptyEcho,
+          existingProfileId: null,
+          codeRejected: false,
+          refusal: null,
+          installation: null,
+          profileOutcome: {
+            kind: "signed-in",
+            profileId: signedInProfile.profileId,
+          },
+        }),
+      },
+    });
+    providerMocks.liveList = true;
+    providerMocks.liveClient = client;
+    hostScopeMocks.hostId = "host-1";
+    hostScopeMocks.client = { getActiveHostId: () => "host-1" };
+    recordNegotiatedHostManifest("host-1", {
+      "providers.list": { major: 10, minor: 12 },
+      "providers.startLogin": { major: 1, minor: 4 },
+      "providers.awaitLogin": { major: 2, minor: 2 },
+    });
+    providerMocks.startLoginMutate.mockImplementation((_variables, options) => {
+      options.onSuccess({
+        url: "https://example.test/sign-in",
+        started: true,
+        profileId: "managed-profile",
+      });
+    });
+
+    const pageQueryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    rtlRender(
+      <QueryClientProvider client={pageQueryClient}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("tab", { name: "Profiles & Limits" });
+    openProfilesTab();
+    const addProfile = screen.getByRole("button", { name: "Add a profile" });
+    expect(addProfile.getAttribute("disabled")).toBeNull();
+    fireEvent.click(addProfile);
+    await screen.findByRole("dialog", { name: "Add a profile" });
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    const unreadable = await screen.findAllByText(
+      "Couldn't load provider state.",
+    );
+    expect(unreadable).toHaveLength(1);
+    expect(listCalls).toBe(2);
+    const pageError = unreadable.at(0);
+    if (pageError === undefined) throw new Error("Page error is missing");
+    expect(pageError.closest('[role="dialog"]')).toBeNull();
+    const pageErrorCard = pageError.parentElement;
+    if (pageErrorCard === null) throw new Error("Page error card is missing");
+    fireEvent.click(
+      within(pageErrorCard).getByRole("button", { name: "Retry" }),
+    );
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      "host-1",
+      "providers.list",
+      { native: null },
+    );
+    await waitFor(() => {
+      expect(
+        pageQueryClient
+          .getQueryData<ResponseOfMethod<HostRpcRegistry, "providers.list">>(
+            listKey,
+          )
+          ?.providers.flatMap((state) =>
+            state.profiles.map((profile) => profile.profileId),
+          ),
+      ).toEqual([existingProfile.profileId, signedInProfile.profileId]);
+    });
+    expect(listCalls).toBe(3);
   });
 
   afterEach(() => {
