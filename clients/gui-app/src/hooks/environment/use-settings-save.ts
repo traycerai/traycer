@@ -92,7 +92,7 @@ const NOTHING_TO_FOLLOW: PendingSettingsSave = {
  * Read once per editor session and kept: the revision the person edits over
  * is the one read when the editor opened, so a newer value from another
  * device makes the hold a conflict that waits in the review list. Only the
- * session's own saves move it ({@link keepOwnWrite}).
+ * session's own applied saves move it ({@link keepOwnWrite}).
  */
 const EDIT_BASE_READ = {
   staleTime: Number.POSITIVE_INFINITY,
@@ -200,12 +200,13 @@ function withOwnWrite(
 }
 
 /**
- * Once a save of this session has settled, moves the base of its row to the
- * row authn holds, when that row is the one the save wrote: the person has
- * seen their own write, and their next edit is made over it. A row anyone
- * else wrote leaves the base where the person last saw it, whether the next
- * edit began before this save settled or after, so that edit waits in the
- * review list against the change instead of overwriting it.
+ * Once this window has applied a save of this session's own hold, moves the
+ * base of its row to the row authn holds, when that row is still the one the
+ * save wrote: the person has seen their own write, and their next edit is
+ * made over it. Neither the send nor a reconcile that leaves the save queued
+ * moves it. A row anyone else wrote leaves the base where the person last saw
+ * it, whether the next edit began before this apply or after, so that edit
+ * waits in the review list against the change instead of overwriting it.
  */
 async function keepOwnWrite(
   scope: SaveScope,
@@ -253,13 +254,19 @@ async function followSave(
     address?.kind === edit.kind && address.key === edit.key
       ? baseRows
       : await rowsOf(edit.kind, edit.key);
-  const beginning = await coordinator.begin(mapping, {
-    accountId,
-    environmentId,
-    hostId,
-    sharingGeneration: host.sharingGeneration,
-    expectedLiveRevision: liveRowAt(editRows, edit.os)?.revision ?? null,
-  });
+  const beginning = await coordinator.begin(
+    mapping,
+    {
+      accountId,
+      environmentId,
+      hostId,
+      sharingGeneration: host.sharingGeneration,
+      expectedLiveRevision: liveRowAt(editRows, edit.os)?.revision ?? null,
+    },
+    () => {
+      void keepOwnWrite(scope, edit).catch(() => undefined);
+    },
+  );
   if (beginning.kind === "account_changed") {
     return { kind: "abandoned", method: save.method };
   }
@@ -268,10 +275,7 @@ async function followSave(
   return {
     kind: "send",
     answered: () => {
-      void coordinator
-        .settle(ticket, true)
-        .then(() => keepOwnWrite(scope, edit))
-        .catch(() => undefined);
+      void coordinator.settle(ticket, true);
     },
     failed: () => {
       void coordinator.settle(ticket, false);
