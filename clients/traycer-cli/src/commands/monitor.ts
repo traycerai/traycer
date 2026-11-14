@@ -2,6 +2,7 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import {
   hostDoorRefusalCliError,
+  hostTokenFailureCliError,
   olderHostCliError,
   type HostDoorCredential,
 } from "../internal/host-door-words";
@@ -11,6 +12,8 @@ import {
 } from "@traycer-clients/shared/host-client/minimum-host-version";
 import {
   createCliHostTokens,
+  type CliHostTokenFailure,
+  type CliMintRefusalListener,
   type SignInRevalidator,
 } from "../internal/cli-host-tokens";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
@@ -62,7 +65,7 @@ import { resolveHostAuth } from "../internal/host-auth";
 import { callAgentHostRpc } from "../internal/host-rpc";
 import {
   PROCESS_AGENT_ENVIRONMENT,
-  readAgentSessionCapability,
+  readAgentCommandCredential,
   type AgentSessionCapability,
 } from "../internal/agent-session-capability";
 import {
@@ -195,11 +198,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   });
   // After the floor, so a host below it is refused before any credential is
   // read.
-  const capability = readAgentSessionCapability(PROCESS_AGENT_ENVIRONMENT);
+  const agentCredential = readAgentCommandCredential(PROCESS_AGENT_ENVIRONMENT);
   const credential =
-    capability === null
-      ? await signInMonitorCredential(logger, { agentId, epicId })
-      : capabilityMonitorCredential(capability);
+    agentCredential.kind === "capability"
+      ? capabilityMonitorCredential(agentCredential.capability)
+      : await signInMonitorCredential(
+          logger,
+          { agentId, epicId },
+          agentCredential.kind === "none",
+        );
   let pollInFlight = false;
   const poll = setInterval(() => {
     if (pollInFlight) {
@@ -281,6 +288,10 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           ? Promise.resolve<RevalidateOutcome>("network-error")
           : credential.recover(endpoint.hostId, details),
       credential.signInRejected,
+      (listener) =>
+        credential.onMintRefused((hostId, failure) => {
+          if (endpoint?.hostId === hostId) listener(failure);
+        }),
       credential.presented,
       { agentId, epicId },
       logger,
@@ -313,6 +324,8 @@ interface MonitorCredential {
   ) => Promise<RevalidateOutcome>;
   /** Whether this machine is signed out in fact; see `runInboxSubscription`. */
   readonly signInRejected: () => boolean;
+  /** Mints for a host refused for good, until the returned stop is called. */
+  readonly onMintRefused: (listener: CliMintRefusalListener) => () => void;
   readonly hostCredentialMint: HostCredentialMintFlow | null;
   /** `onRenewed` pushes a renewed token onto the open stream. */
   readonly startUpkeep: (
@@ -324,13 +337,17 @@ interface MonitorCredential {
 
 /**
  * The stored sign-in, spent at authn alone: the host receives this CLI's
- * host-only token for it, never the sign-in.
+ * host-only token for it, never the sign-in. `inCapabilitylessSession`: a
+ * session of the host's that carries no capability, which presents nothing in
+ * its place and fails as a monitor with no credential does, reading no
+ * sign-in.
  */
 async function signInMonitorCredential(
   logger: ILogger,
   target: InboxTarget,
+  inCapabilitylessSession: boolean,
 ): Promise<MonitorCredential> {
-  const auth = await resolveHostAuth();
+  const auth = inCapabilitylessSession ? null : await resolveHostAuth();
   if (auth === null) {
     logger.warn("Monitor cannot start without credentials", {
       environment: config.environment,
@@ -379,6 +396,7 @@ async function signInMonitorCredential(
     recover: (hostId, details) =>
       hostTokens.streamRecovery(hostId).revalidateRefused(details),
     signInRejected: () => signInRejected,
+    onMintRefused: (listener) => hostTokens.onMintRefused(listener),
     // Delegated host-credential provisioning. `monitor` is the CLI command
     // that most needs it: the host it watches should keep serving after this
     // process exits. Provisioning is silent, so this works the same whether
@@ -444,6 +462,7 @@ function capabilityMonitorCredential(
     bearer: () => capability.streamBearer,
     recover: () => capability.streamRecovery(),
     signInRejected: () => false,
+    onMintRefused: () => () => undefined,
     hostCredentialMint: null,
     startUpkeep: () => undefined,
     stopUpkeep: () => undefined,
@@ -454,6 +473,11 @@ type InboxTarget = { readonly agentId: string; readonly epicId: string };
 
 /** A fresh host-only token after the host refused this one. */
 type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
+
+/** Mints for the watched host refused for good, until the returned stop. */
+type InboxMintRefusals = (
+  listener: (failure: CliHostTokenFailure) => void,
+) => () => void;
 
 /**
  * Drives the inbox subscription until a terminal failure or until stdout's
@@ -472,11 +496,16 @@ type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
  *                       out in fact.
  * Every other fatal (e.g. `INCOMPATIBLE`) is terminal, with the door's line
  * when it is a door refusal.
+ *
+ * A mint authn refuses for good, whether the stream was waiting for its first
+ * token or recovering, is terminal with the mint's line: no reconnect could
+ * be given a token. One that cannot reach authn is waited out.
  */
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   recover: InboxRecovery,
   signInRejected: () => boolean,
+  mintRefusals: InboxMintRefusals,
   presented: HostDoorCredential,
   target: InboxTarget,
   logger: ILogger,
@@ -488,6 +517,7 @@ function runInboxSubscription(
     let healthTimer: NodeJS.Timeout | null = null;
     let retryTimer: NodeJS.Timeout | null = null;
     let settled = false;
+    let stopMintRefusals: () => void = () => undefined;
     const acknowledgements = new InboxAcknowledgementQueue(target, logger);
 
     const clearHealthTimer = (): void => {
@@ -519,6 +549,7 @@ function runInboxSubscription(
       );
       clearHealthTimer();
       clearRetryTimer();
+      stopMintRefusals();
       acknowledgements.dispose();
       session?.close();
       readerClosed.removeEventListener("abort", stopForClosedReader);
@@ -537,6 +568,7 @@ function runInboxSubscription(
       });
       clearHealthTimer();
       clearRetryTimer();
+      stopMintRefusals();
       acknowledgements.dispose();
       session?.close();
       resolve();
@@ -689,6 +721,15 @@ function runInboxSubscription(
     }
     readerClosed.addEventListener("abort", stopForClosedReader, {
       once: true,
+    });
+    stopMintRefusals = mintRefusals((failure) => {
+      logger.warn("Monitor host-only token mint refused", {
+        environment: config.environment,
+        failure: failure.kind,
+        agentId: target.agentId,
+        epicId: target.epicId,
+      });
+      fail(hostTokenFailureCliError(failure));
     });
     subscribe();
   });

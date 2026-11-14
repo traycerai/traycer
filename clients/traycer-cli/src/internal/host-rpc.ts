@@ -4,7 +4,7 @@ import {
   isRefusalOfAgentSessionCapability,
   markRefusalOfAgentSessionCapability,
   PROCESS_AGENT_ENVIRONMENT,
-  readAgentSessionCapability,
+  readAgentCommandCredential,
 } from "./agent-session-capability";
 import {
   hostDoorRefusalCliError,
@@ -277,9 +277,11 @@ const FAIL_FAST_DISPATCH: HostRpcDispatch = {
  * {@link callHostRpcWithDispatch} for an agent's own commands. With an agent
  * session capability in the agent's environment the call presents it, and
  * neither the stored sign-in nor a host-only token is read; the host's
- * refusal of it ends the call, which recovers nothing. Without one the call
- * is {@link callHostRpcWithDispatch} itself. Which methods a capability may
- * call is the host's list, not this one's.
+ * refusal of it ends the call, which recovers nothing. In a session of the
+ * host's that carries none, nothing is presented in its place and the call
+ * fails as it does with no credential. Outside any such session the call is
+ * {@link callHostRpcWithDispatch} itself. Which methods a capability may call
+ * is the host's list, not this one's.
  */
 export async function callAgentHostRpcWithDispatch<
   Method extends keyof HostRpcRegistry & string,
@@ -288,9 +290,17 @@ export async function callAgentHostRpcWithDispatch<
   params: RequestOfMethod<HostRpcRegistry, Method>,
   dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-  const capability = readAgentSessionCapability(PROCESS_AGENT_ENVIRONMENT);
-  if (capability === null)
+  const credential = readAgentCommandCredential(PROCESS_AGENT_ENVIRONMENT);
+  if (credential.kind === "outside-agent-session")
     return callHostRpcWithDispatch(method, params, dispatch);
+  if (credential.kind === "none") {
+    createCliLogger(config.environment).warn(
+      "Host RPC blocked: the agent session carries no capability",
+      { environment: config.environment, method },
+    );
+    throw signedOutCliError();
+  }
+  const capability = credential.capability;
   createCliLogger(config.environment).debug(
     "Host RPC requested with the agent session capability",
     {

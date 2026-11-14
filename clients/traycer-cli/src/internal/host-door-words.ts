@@ -59,14 +59,6 @@ export const ACCESS_UNCONFIRMED_MESSAGE =
 export const SANDBOX_OUT_OF_CREDITS_MESSAGE =
   "traycer: This sandbox is out of credits.";
 
-/**
- * authn's refusals of a mint the owner has not worded yet: a computer that is
- * not this person's, and a sign-in replaced while the command ran. Nothing
- * authn sent is printed. Empty until ruled; the runner then prints `error: `
- * and the code.
- */
-export const UNWORDED_MINT_REFUSAL_MESSAGE = "";
-
 export function signedOutCliError(): CliError {
   return cliError({
     code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
@@ -205,13 +197,22 @@ export function hostTokenFailureCliError(
     case "sign-in-rejected":
     case "no-sign-in":
       return signedOutCliError();
-    // The stored sign-in was replaced while this command ran: someone may
-    // well be signed in, so no sign-in advice.
-    case "superseded":
+    // authn's bare 404: a computer that is not this person's. Row 9's line
+    // for the door's `not_admitted`, the same state the app shows it as.
     case "not-admitted":
       return cliError({
         code: CLI_ERROR_CODES.FORBIDDEN,
-        message: UNWORDED_MINT_REFUSAL_MESSAGE,
+        message: DOOR_REASON_MESSAGES.not_admitted,
+        details: null,
+        exitCode: 1,
+      });
+    // The stored sign-in was replaced while this command ran: someone may
+    // well be signed in, so no sign-in advice, and a second run spends the
+    // new one. Row 10's line.
+    case "superseded":
+      return cliError({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message: ACCESS_UNCONFIRMED_MESSAGE,
         details: null,
         exitCode: 1,
       });

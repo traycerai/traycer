@@ -69,8 +69,41 @@ export function isRefusalOfAgentSessionCapability(refusal: unknown): boolean {
   );
 }
 
+/** Set by the host on every session it starts, with or without a capability. */
+const AGENT_ID_VARIABLE = "TRAYCER_AGENT_ID";
+
+/**
+ * What an agent's own command presents:
+ * - `capability`: the session's capability, and nothing else.
+ * - `none`: a session the host started with no capability (one it started
+ *   itself, or a terminal opened by someone the host does not let act on the
+ *   agent's chat). Nothing is presented in its place, neither the stored
+ *   sign-in nor a host-only token: the command fails as it does with no
+ *   credential at all.
+ * - `outside-agent-session`: no session of the host's is around this process
+ *   (a person's own terminal); the command spends the stored sign-in.
+ */
+export type AgentCommandCredential =
+  | {
+      readonly kind: "capability";
+      readonly capability: AgentSessionCapability;
+    }
+  | { readonly kind: "none" }
+  | { readonly kind: "outside-agent-session" };
+
+export function readAgentCommandCredential(
+  environment: AgentEnvironment,
+): AgentCommandCredential {
+  const capability = readAgentSessionCapability(environment);
+  if (capability !== null) return { kind: "capability", capability };
+  const agentId = environment(AGENT_ID_VARIABLE);
+  return agentId === undefined || agentId.length === 0
+    ? { kind: "outside-agent-session" }
+    : { kind: "none" };
+}
+
 /** The capability `environment` carries, or `null` when it carries none. */
-export function readAgentSessionCapability(
+function readAgentSessionCapability(
   environment: AgentEnvironment,
 ): AgentSessionCapability | null {
   const value = environment(AGENT_SESSION_CAPABILITY_VARIABLE);
