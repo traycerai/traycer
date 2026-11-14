@@ -88,6 +88,7 @@ export const mocks = {
       else if (result.kind === "failure") options.onError(result.error);
       else options.onError({ message: result.message });
     },
+    isPending: false,
   },
   /** The bots the tab subscribed to, in order. */
   subscribed: [] as string[],

@@ -339,6 +339,32 @@ describe("<BotTabSurface /> when bot.open fails on a cloud failure", () => {
     await waitFor(() => expect(opens()).toBe(first + 2));
   });
 
+  it("keeps its one doorbell subscription when the host's support goes from unknown to supported, and closes it when unsupported", async () => {
+    failTransiently();
+    render(tree(true));
+    await waitFor(() => expect(liveDoorbells()).toHaveLength(1));
+    const client = doorbellHosts.clients.get(TAB_HOST);
+    if (client === undefined) throw new Error("no stream client for the host");
+    const held = liveDoorbells().at(0);
+    const dialed = doorbells().length;
+    const before = opens();
+
+    act(() => {
+      client.setMethodSupport("supported");
+    });
+
+    expect(liveDoorbells()).toHaveLength(1);
+    expect(liveDoorbells().at(0)).toBe(held);
+    expect(doorbells()).toHaveLength(dialed);
+    expect(opens()).toBe(before);
+
+    act(() => {
+      client.setMethodSupport("unsupported");
+    });
+
+    await waitFor(() => expect(liveDoorbells()).toHaveLength(0));
+  });
+
   it("releases the doorbell when the tab unmounts", async () => {
     failTransiently();
     const view = render(tree(true));

@@ -35,6 +35,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
@@ -54,6 +55,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
+import { botMutationKeys } from "@/lib/query-keys";
 import { CloudRecoveryDoorbellMount } from "@/providers/cloud-recovery-doorbell-mount";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import {
@@ -322,6 +324,37 @@ async function ringAsking(expected: number): Promise<void> {
   await waitFor(() => expect(opens).toHaveLength(expected));
 }
 
+async function rejectPendingOpens(error: Error): Promise<void> {
+  for (const held of opens.filter((open) => !open.settled)) {
+    await settle(held, (open) => open.reject(error));
+  }
+}
+
+/**
+ * Presses Retry twice while the open the first press started is held, then
+ * fails it. No `bot.open` is in flight afterwards: a second press that had
+ * opened would still be queued behind the first, or held at the host.
+ */
+async function pressRetryTwiceWhileHeld(): Promise<void> {
+  const user = userEvent.setup();
+  const asked = opens.length;
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(opens).toHaveLength(asked + 1));
+
+  const retry = screen.getByRole("button", { name: "Retry" });
+  const disabledWhileHeld = retry.hasAttribute("disabled");
+  await user.click(retry);
+
+  await settle(heldOpen(asked), (open) => open.reject(TRANSIENT));
+  await waitFor(() =>
+    expect(
+      queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
+    ).toBe(0),
+  );
+  expect(opens).toHaveLength(asked + 1);
+  expect(disabledWhileHeld).toBe(true);
+}
+
 function expectChannelOnly(): void {
   expect(screen.getByTestId("stub-channel")).toBeTruthy();
   expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
@@ -420,5 +453,46 @@ describe("<BotTabSurface /> bot list after an open settles", () => {
       await Promise.resolve();
     });
     expect(list.calls).toBe(2 + mounted);
+  });
+});
+
+describe("<BotTabSurface /> Retry while a re-open is in flight", () => {
+  beforeEach(() => {
+    doorbellHosts.unsupportedHosts.add(TAB_HOST);
+  });
+
+  it("is disabled and sends one bot.open for two presses when no answer is held", async () => {
+    render(tree());
+    await waitFor(() => expect(opens.length).toBeGreaterThan(0));
+    await waitFor(async () => {
+      await rejectPendingOpens(TRANSIENT);
+      expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy();
+    });
+
+    await pressRetryTwiceWhileHeld();
+  });
+
+  it("is disabled and sends one bot.open for two presses above a held channel", async () => {
+    const view = render(tree());
+    await waitFor(() => expect(opens.length).toBeGreaterThan(0));
+    await waitFor(async () => {
+      for (const held of opens.filter((open) => !open.settled)) {
+        await settle(held, (open) => open.resolve(SERVING));
+      }
+      expectChannelOnly();
+    });
+
+    mocks.state.paneVisible = false;
+    view.rerender(tree());
+    mocks.state.paneVisible = true;
+    view.rerender(tree());
+    await waitFor(() => expect(opens.some((open) => !open.settled)).toBe(true));
+    await rejectPendingOpens(TRANSIENT);
+    await waitFor(() =>
+      expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+
+    await pressRetryTwiceWhileHeld();
   });
 });

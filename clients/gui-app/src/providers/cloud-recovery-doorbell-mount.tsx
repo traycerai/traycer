@@ -59,10 +59,14 @@ function HostCloudRecoveryDoorbell(props: {
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
   const streamClient = useHostStreamClientFor(target, auth);
-  const support = useDoorbellSupport(streamClient);
+  // The subscription keys on whether the host lacks the method, not on its
+  // support: the first handshake moves that from unknown to supported, and
+  // re-running would close the subscription and dial another, which the host
+  // rings on open.
+  const unsupported = useDoorbellSupport(streamClient) === "unsupported";
 
   useEffect(() => {
-    if (streamClient === null || support === "unsupported") return;
+    if (streamClient === null || unsupported) return;
     const wsStreamClient = streamClient;
     const hostConnection = acquireHostConnection(hostId);
     let disposed = false;
@@ -102,7 +106,7 @@ function HostCloudRecoveryDoorbell(props: {
       currentClient = null;
       hostConnection.release();
     };
-  }, [hostId, queryClient, streamClient, support]);
+  }, [hostId, queryClient, streamClient, unsupported]);
 
   return null;
 }

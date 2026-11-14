@@ -759,7 +759,8 @@ function BotTabBody(props: {
   // shown above it instead. The answer feeds only the channel's paused,
   // failed and opening states: whatever it says, the surface stays on its
   // host.
-  const { mutate: openBot } = useBotOpenMutation(client);
+  const { mutate: openBot, isPending: openPending } =
+    useBotOpenMutation(client);
   const [answer, setAnswer] = useState<BotOpenResponse | undefined>(undefined);
   const [openError, setOpenError] = useState<BotTabOpenFailure | null>(null);
   const reopen = useCallback(
@@ -865,7 +866,11 @@ function BotTabBody(props: {
   }
   if (openState.kind === "reconnecting") {
     return threadsShown ? null : (
-      <OpenReconnecting onRetry={reopen} className="m-4" />
+      <OpenReconnecting
+        onRetry={reopen}
+        pending={openPending}
+        className="m-4"
+      />
     );
   }
   const snapshot = subscription.snapshot;
@@ -890,6 +895,7 @@ function BotTabBody(props: {
       pausedReason={openState.kind === "paused" ? openState.reason : null}
       reopenFailure={openError}
       onReopen={reopen}
+      reopenPending={openPending}
       streamError={subscription.error}
       snapshotFresh={subscription.snapshotFresh}
       onRetry={resubscribe}
@@ -1434,6 +1440,8 @@ function BotTabContent(props: {
    * answer and says the re-open failed, or is reconnecting. */
   readonly reopenFailure: BotTabOpenFailure | null;
   readonly onReopen: () => void;
+  /** A re-open is in flight. */
+  readonly reopenPending: boolean;
   readonly streamError: string | null;
   readonly snapshotFresh: boolean;
   readonly onRetry: () => void;
@@ -1458,6 +1466,7 @@ function BotTabContent(props: {
     pausedReason,
     reopenFailure,
     onReopen,
+    reopenPending,
     streamError,
     snapshotFresh,
     onRetry,
@@ -1684,6 +1693,7 @@ function BotTabContent(props: {
                     <ReopenFailureNotice
                       failure={reopenFailure}
                       onReopen={onReopen}
+                      pending={reopenPending}
                     />
                   )}
                   {pausedReason === null ? null : (
@@ -1810,10 +1820,17 @@ function retryFailedReads(
 function ReopenFailureNotice(props: {
   readonly failure: BotTabOpenFailure;
   readonly onReopen: () => void;
+  readonly pending: boolean;
 }): ReactNode {
-  const { failure, onReopen } = props;
+  const { failure, onReopen, pending } = props;
   if (failure.transient) {
-    return <OpenReconnecting onRetry={onReopen} className="mx-4 mt-2" />;
+    return (
+      <OpenReconnecting
+        onRetry={onReopen}
+        pending={pending}
+        className="mx-4 mt-2"
+      />
+    );
   }
   return (
     <ErrorNotice
@@ -1827,10 +1844,12 @@ function ReopenFailureNotice(props: {
 /**
  * An open that failed only because the host could not reach the cloud, which
  * that host's cloud-recovery doorbell asks again: no technical text. Retry
- * stays, since a host without the doorbell never rings.
+ * stays, since a host without the doorbell never rings, and is disabled while
+ * an open is in flight, so a second press adds no second open.
  */
 function OpenReconnecting(props: {
   readonly onRetry: () => void;
+  readonly pending: boolean;
   readonly className: string;
 }): ReactNode {
   return (
@@ -1851,7 +1870,13 @@ function OpenReconnecting(props: {
         />
         Reconnecting…
       </span>
-      <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.pending}
+        onClick={props.onRetry}
+      >
         Retry
       </Button>
     </div>
