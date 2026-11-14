@@ -148,6 +148,7 @@ describe("traycer profile rename", () => {
           type: "rename",
           profileId: "prof_work",
           label: "Work account",
+          environmentProfileId: null,
         },
       },
       PROFILE_ACTION_DISPATCH,
@@ -211,6 +212,7 @@ describe("traycer profile rename", () => {
           type: "rename",
           profileId: "ambient",
           label: "Terminal",
+          environmentProfileId: null,
         },
       }),
     );

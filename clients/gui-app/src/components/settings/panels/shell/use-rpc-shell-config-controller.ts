@@ -23,6 +23,12 @@ import type {
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import { waitForShellEnvRead } from "@/components/settings/panels/shell/wait-for-shell-env-read";
 import {
+  shellAddSelection,
+  shellRemoveSelection,
+  shellRevertSelection,
+  shellSetSelection,
+} from "@/components/settings/panels/shell/shell-save-selection";
+import {
   sendFollowedSave,
   useSettingsSave,
 } from "@/hooks/environment/use-settings-save";
@@ -99,6 +105,11 @@ export function useRpcShellConfigController(props: {
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
   const setMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.set",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "config.shell.set", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: configMutationKeys.shellSet(),
     errorMessage: "Couldn't update the shell configuration",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
@@ -116,18 +127,33 @@ export function useRpcShellConfigController(props: {
   });
   const addMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.add",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "config.shell.add", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: configMutationKeys.shellAdd(),
     errorMessage: "Couldn't add that shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const removeMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.remove",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "config.shell.remove", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: configMutationKeys.shellRemove(),
     errorMessage: "Couldn't remove that shell",
     invalidateMethods: ["config.shell.get", "config.shell.listDetected"],
   });
   const revertMutation = useHostScopedMutationForClient(client, {
     method: "config.shell.revertArgs",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "config.shell.revertArgs", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: configMutationKeys.shellRevertArgs(),
     errorMessage: "Couldn't restore the default flags",
     invalidateMethods: ["config.shell.get"],
@@ -275,15 +301,43 @@ export function useRpcShellConfigController(props: {
       envRenameMutation.isPending,
     probeSource,
     setShell: (request, callbacks) =>
-      setMutation.mutate({ ...request, executableWriteGrant: null }, callbacks),
+      setMutation.mutate(
+        {
+          ...request,
+          executableWriteGrant: null,
+          selection: shellSetSelection(request, configQuery.data),
+        },
+        callbacks,
+      ),
     resetShell: (callbacks) =>
       resetMutation.mutate({ executableWriteGrant: null }, callbacks),
     addShell: (path, callbacks) =>
-      addMutation.mutate({ path, executableWriteGrant: null }, callbacks),
+      addMutation.mutate(
+        {
+          path,
+          executableWriteGrant: null,
+          selection: shellAddSelection(path),
+        },
+        callbacks,
+      ),
     removeShell: (path, callbacks) =>
-      removeMutation.mutate({ path, executableWriteGrant: null }, callbacks),
+      removeMutation.mutate(
+        {
+          path,
+          executableWriteGrant: null,
+          selection: shellRemoveSelection(path, configQuery.data),
+        },
+        callbacks,
+      ),
     revertShellArgs: (path, callbacks) =>
-      revertMutation.mutate({ path, executableWriteGrant: null }, callbacks),
+      revertMutation.mutate(
+        {
+          path,
+          executableWriteGrant: null,
+          selection: shellRevertSelection(path, configQuery.data),
+        },
+        callbacks,
+      ),
     setEnv: (entry, callbacks) =>
       envSetMutation.mutate(
         { ...entry, executableWriteGrant: null },

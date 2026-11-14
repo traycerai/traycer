@@ -629,6 +629,8 @@ export function ProfileEditDialog(props: {
           providerId,
           profileId: props.profile.profileId,
           accentColor,
+          enabled: props.profile.enabled,
+          environmentProfileId: props.profile.environmentProfileId ?? null,
         },
         {
           onSuccess: () => {
@@ -644,6 +646,8 @@ export function ProfileEditDialog(props: {
           providerId,
           profileId: props.profile.profileId,
           label: trimmedLabel,
+          enabled: props.profile.enabled,
+          environmentProfileId: props.profile.environmentProfileId ?? null,
         },
         {
           onSuccess: () => {

@@ -257,7 +257,7 @@ describe("providers.list@10.2 carries macosRequirement", () => {
 describe("providers.usePackVersion@1.1 carries the macos-ineligible arm", () => {
   it("opens minor 1 with the value-growth gate declared on it alone", () => {
     const entry = hostRpcRegistry["providers.usePackVersion"][1];
-    expect(entry.latestMinor).toBe(1);
+    expect(entry.latestMinor).toBe(2);
     expect(entry.versions[1].contract.schemaVersion).toEqual({
       major: 1,
       minor: 1,
@@ -267,6 +267,9 @@ describe("providers.usePackVersion@1.1 carries the macos-ineligible arm", () => 
       true,
     );
     expect(entry.versions[0]).not.toHaveProperty(
+      "responseGrowthProjectionGated",
+    );
+    expect(entry.versions[2]).not.toHaveProperty(
       "responseGrowthProjectionGated",
     );
   });

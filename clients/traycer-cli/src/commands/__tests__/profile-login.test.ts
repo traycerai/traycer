@@ -654,6 +654,7 @@ describe("profile add (create)", () => {
         type: "rename",
         profileId: "prof_new",
         label: "jane.doe",
+        environmentProfileId: null,
       },
     });
     expect(renameDispatch).toEqual(RENAME_DISPATCH);

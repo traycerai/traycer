@@ -145,11 +145,6 @@ interface UseHostScopedMutationArgs<
    * serializes unrelated calls that happen to use the same hook.
    */
   readonly scope?: MutationScope | undefined;
-  /**
-   * Completes the request at dispatch: the executable-write grant
-   * (`useExecutableWriteGrant`) on a write that can reach an execution sink.
-   * See `UseHostMutationOptions.prepareRequest`.
-   */
   /** See `UseHostMutationOptions.followSettingsSave`. */
   readonly followSettingsSave?:
     | ((
@@ -157,6 +152,11 @@ interface UseHostScopedMutationArgs<
         client: HostRequester<HostRpcRegistry>,
       ) => Promise<PendingSettingsSave>)
     | undefined;
+  /**
+   * Completes the request at dispatch: the executable-write grant
+   * (`useExecutableWriteGrant`) on a write that can reach an execution sink.
+   * See `UseHostMutationOptions.prepareRequest`.
+   */
   readonly prepareRequest?:
     | ((
         request: RequestOfMethod<HostRpcRegistry, Method>,

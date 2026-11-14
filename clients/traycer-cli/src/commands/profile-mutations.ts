@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import type {
   ProviderId,
-  ProviderProfileAction,
+  ProviderProfileActionV22,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   callHostRpcWithDispatch,
@@ -39,7 +39,7 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
 
 async function applyProfileAction(
   providerId: ProviderId,
-  profileAction: ProviderProfileAction,
+  profileAction: ProviderProfileActionV22,
 ): Promise<void> {
   await toAgentCliError(
     callHostRpcWithDispatch(
@@ -62,7 +62,14 @@ export function buildProfileRenameCommand(opts: {
     const providerId = parseProviderArgument(opts.provider);
     const profileId = parseProfileArgument(opts.profile);
     const label = parseProfileLabel(opts.label);
-    await applyProfileAction(providerId, { type: "rename", profileId, label });
+    // The CLI does not follow its save, so it names no environment profile:
+    // on a computer in an environment the change waits in the review list.
+    await applyProfileAction(providerId, {
+      type: "rename",
+      profileId,
+      label,
+      environmentProfileId: null,
+    });
     return {
       data: { providerId, profileId, label },
       human: `Renamed ${describeProvider(providerId)} profile ${printable(profileId)} to "${printable(label)}".`,

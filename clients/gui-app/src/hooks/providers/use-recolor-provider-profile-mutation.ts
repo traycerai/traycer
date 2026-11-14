@@ -11,6 +11,15 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  useSettingsItemExists,
+  useSettingsSave,
+} from "@/hooks/environment/use-settings-save";
+import {
+  confirmEnvironmentProfile,
+  PROFILE_SAVE_KINDS,
+  providerProfileSaveRequest,
+} from "@/hooks/providers/provider-profile-save-request";
 
 // Recoloring a profile only changes the accent color echoed back in
 // `providers.list`. It can't flip a provider's or profile's availability, so -
@@ -29,6 +38,10 @@ export interface RecolorProviderProfileRequest {
   >["providerId"];
   readonly profileId: string;
   readonly accentColor: ProviderProfileAccentColor;
+  /** The profile's `enabled` from `providers.list`, restated unchanged. */
+  readonly enabled: boolean;
+  /** The profile's `environmentProfileId` from `providers.list`; null when it has none. */
+  readonly environmentProfileId: string | null;
 }
 
 type RecolorProviderProfileMutationResult = UseMutationResult<
@@ -47,6 +60,11 @@ export function useRecolorProviderProfileForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): RecolorProviderProfileMutationResult {
   const queryClient = useQueryClient();
+  const prepareSave = useSettingsSave(client, PROFILE_SAVE_KINDS);
+  const environmentProfileExists = useSettingsItemExists(
+    client,
+    "managed_profile",
+  );
   return useHostMutation<
     HostRpcRegistry,
     "providers.setEnabled",
@@ -56,15 +74,14 @@ export function useRecolorProviderProfileForClient(
     client,
     method: "providers.setEnabled",
     mapVariables: (variables: RecolorProviderProfileRequest) =>
-      ({
-        providerId: variables.providerId,
-        enabled: true,
-        profileAction: {
-          type: "recolor",
-          profileId: variables.profileId,
-          accentColor: variables.accentColor,
-        },
-      }) satisfies RequestOfMethod<HostRpcRegistry, "providers.setEnabled">,
+      providerProfileSaveRequest({ type: "recolor", ...variables }),
+    prepareRequest: (request) =>
+      confirmEnvironmentProfile(request, environmentProfileExists),
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "providers.setEnabled", request },
+        sentOn.getActiveHostId(),
+      ),
     options: {
       mutationKey: providersMutationKeys.recolorProfile(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),

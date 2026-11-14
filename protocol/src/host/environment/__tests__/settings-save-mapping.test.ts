@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { upgradeRequestToVersion } from "@traycer/protocol/framework/versioned-rpc";
 import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
 import {
   configShellAddRequestSchema,
@@ -28,7 +29,11 @@ import {
   type SettingsSaveBase,
   type SettingsSaveMapping,
 } from "@traycer/protocol/host/environment/settings-save-mapping";
-import { readSettingsProposalRefusalReason } from "@traycer/protocol/host/environment/settings-proposals";
+import {
+  environmentProposalsV10,
+  readSettingsProposalRefusalReason,
+} from "@traycer/protocol/host/environment/settings-proposals";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   providersSetEnabledRequestSchemaV21,
   providersSetPackPolicyRequestSchema,
@@ -1563,7 +1568,7 @@ describe("version bridges", () => {
   });
 });
 
-describe("dormant contracts", () => {
+describe("stated-item contracts", () => {
   it("parses the v1.1 shell get response entries and requires entries", () => {
     const response = {
       path: "/bin/zsh",
@@ -1672,145 +1677,74 @@ describe("dormant contracts", () => {
     });
   });
 
-  it("parses one request for each contract the registry cannot reach yet", () => {
-    const checks: readonly (() => void)[] = [
-      () => {
-        expect(configShellGetV11.method).toEqual("config.shell.get");
-        expect(configShellGetV11.schemaVersion).toEqual({
-          major: 1,
-          minor: 1,
-        });
-        expect(configShellGetV11.requestSchema.parse({})).toEqual({});
-      },
-      () => {
-        const request = {
-          path: "/bin/zsh",
-          args: ["-l"],
-          executableWriteGrant: null,
-          selection: { kind: "not_stated" as const },
-        };
-        expect(configShellSetV12.method).toEqual("config.shell.set");
-        expect(configShellSetV12.schemaVersion).toEqual({
-          major: 1,
-          minor: 2,
-        });
-        expect(configShellSetV12.requestSchema.parse(request)).toEqual(request);
-      },
-      () => {
-        const request = {
-          path: "/bin/zsh",
-          executableWriteGrant: null,
-          selection: {
-            kind: "shell" as const,
-            path: "/bin/zsh",
-            args: emptyShellArgs,
-          },
-        };
-        expect(configShellAddV12.method).toEqual("config.shell.add");
-        expect(configShellAddV12.schemaVersion).toEqual({
-          major: 1,
-          minor: 2,
-        });
-        expect(configShellAddV12.requestSchema.parse(request)).toEqual(request);
-      },
-      () => {
-        const request = {
-          path: "/bin/zsh",
-          executableWriteGrant: null,
-          selection: { kind: "system_default" as const },
-        };
-        expect(configShellRemoveV12.method).toEqual("config.shell.remove");
-        expect(configShellRemoveV12.schemaVersion).toEqual({
-          major: 1,
-          minor: 2,
-        });
-        expect(configShellRemoveV12.requestSchema.parse(request)).toEqual(
-          request,
-        );
-      },
-      () => {
-        const request = {
-          path: "/bin/zsh",
-          executableWriteGrant: null,
-          selection: { kind: "not_stated" as const },
-        };
-        expect(configShellRevertArgsV12.method).toEqual(
-          "config.shell.revertArgs",
-        );
-        expect(configShellRevertArgsV12.schemaVersion).toEqual({
-          major: 1,
-          minor: 2,
-        });
-        expect(configShellRevertArgsV12.requestSchema.parse(request)).toEqual(
-          request,
-        );
-      },
-      () => {
-        const request = {
-          packId: "traycer-cli",
-          version: "1.2.3",
-          policy: null,
-        };
-        expect(providersUsePackVersionV12.method).toEqual(
-          "providers.usePackVersion",
-        );
-        expect(providersUsePackVersionV12.schemaVersion).toEqual({
-          major: 1,
-          minor: 2,
-        });
-        expect(providersUsePackVersionV12.requestSchema.parse(request)).toEqual(
-          request,
-        );
-      },
-      () => {
-        const request = {
-          packId: "traycer-cli",
-          autoDownload: true,
-          policy: null,
-        };
-        expect(providersSetPackPolicyV11.method).toEqual(
-          "providers.setPackPolicy",
-        );
-        expect(providersSetPackPolicyV11.schemaVersion).toEqual({
-          major: 1,
-          minor: 1,
-        });
-        expect(providersSetPackPolicyV11.requestSchema.parse(request)).toEqual(
-          request,
-        );
-      },
-      () => {
-        const request = {
-          providerId: "claude-code" as const,
-          enabled: true,
-          profileAction: null,
-        };
-        expect(providersSetEnabledV22.method).toEqual("providers.setEnabled");
-        expect(providersSetEnabledV22.schemaVersion).toEqual({
-          major: 2,
-          minor: 2,
-        });
-        expect(providersSetEnabledV22.requestSchema.parse(request)).toEqual(
-          request,
-        );
-      },
-      () => {
-        expect(hostAccountSettingsRefreshV10.method).toEqual(
-          "host.accountSettings.refresh",
-        );
-        expect(hostAccountSettingsRefreshV10.schemaVersion).toEqual({
-          major: 1,
-          minor: 0,
-        });
-        expect(hostAccountSettingsRefreshV10.requestSchema.parse({})).toEqual(
-          {},
-        );
-        expect(hostAccountSettingsRefreshV10.responseSchema.parse({})).toEqual(
-          {},
-        );
-      },
-    ];
-    for (const check of checks) check();
+  it("registers each stated-item version as its method's latest", () => {
+    const shellGet = hostRpcRegistry["config.shell.get"][1];
+    expect(shellGet.latestMinor).toEqual(1);
+    expect(shellGet.versions[1].contract).toBe(configShellGetV11);
+
+    const shellSet = hostRpcRegistry["config.shell.set"][1];
+    expect(shellSet.latestMinor).toEqual(2);
+    expect(shellSet.versions[2].contract).toBe(configShellSetV12);
+    expect(shellSet.versions[2].upgradeFromPreviousVersion).toBe(
+      configShellSetUpgradeV11ToV12,
+    );
+
+    const shellAdd = hostRpcRegistry["config.shell.add"][1];
+    expect(shellAdd.latestMinor).toEqual(2);
+    expect(shellAdd.versions[2].contract).toBe(configShellAddV12);
+
+    const shellRemove = hostRpcRegistry["config.shell.remove"][1];
+    expect(shellRemove.latestMinor).toEqual(2);
+    expect(shellRemove.versions[2].contract).toBe(configShellRemoveV12);
+
+    const shellRevert = hostRpcRegistry["config.shell.revertArgs"][1];
+    expect(shellRevert.latestMinor).toEqual(2);
+    expect(shellRevert.versions[2].contract).toBe(configShellRevertArgsV12);
+
+    const usePack = hostRpcRegistry["providers.usePackVersion"][1];
+    expect(usePack.latestMinor).toEqual(2);
+    expect(usePack.versions[2].contract).toBe(providersUsePackVersionV12);
+
+    const setPolicy = hostRpcRegistry["providers.setPackPolicy"][1];
+    expect(setPolicy.latestMinor).toEqual(1);
+    expect(setPolicy.versions[1].contract).toBe(providersSetPackPolicyV11);
+
+    const setEnabled = hostRpcRegistry["providers.setEnabled"][2];
+    expect(setEnabled.latestMinor).toEqual(2);
+    expect(setEnabled.versions[2].contract).toBe(providersSetEnabledV22);
+    expect(setEnabled.downgradePathsFromLatest[1]).toBe(
+      providersSetEnabledDowngradeV22ToV10,
+    );
+
+    const proposals = hostRpcRegistry["environment.proposals"];
+    expect(proposals.degrade).toEqual({ kind: "unsupported" });
+    expect(proposals[1].latestMinor).toEqual(0);
+    expect(proposals[1].versions[0].contract).toBe(environmentProposalsV10);
+  });
+
+  it("upgrades a 1.0 shell set to the registered 1.2 with no selection stated", () => {
+    expect(
+      upgradeRequestToVersion(
+        hostRpcRegistry["config.shell.set"],
+        { major: 1, minor: 0 },
+        { major: 1, minor: 2 },
+        { path: "/bin/zsh", args: ["-l"] },
+      ),
+    ).toEqual({
+      path: "/bin/zsh",
+      args: ["-l"],
+      executableWriteGrant: null,
+      selection: { kind: "not_stated" },
+    });
+  });
+
+  it("parses the account settings refresh, which the registry cannot reach yet", () => {
+    expect(hostAccountSettingsRefreshV10.method).toEqual(
+      "host.accountSettings.refresh",
+    );
+    expect(hostAccountSettingsRefreshV10.requestSchema.parse({})).toEqual({});
+    expect(hostAccountSettingsRefreshV10.responseSchema.parse({})).toEqual({});
+    expect("host.accountSettings.refresh" in hostRpcRegistry).toBe(false);
   });
 });
 

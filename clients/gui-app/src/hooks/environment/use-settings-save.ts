@@ -220,17 +220,13 @@ async function followSave(
 }
 
 /**
- * The save preparation for the host behind `client`, the requester the
- * caller sends its saves on. `kinds` are the item kinds the caller's saves
- * write, a constant of the caller's module; their rows are read from authn
- * when the editor opens. A host in no environment, a host authn does not
- * list, or a read that fails remembers nothing: the save still goes to the
- * host, and its hold waits for one click.
+ * Where the saves on `client`'s host are remembered, with authn's rows of
+ * `kinds` read when the editor opens; null while that is not known.
  */
-export function useSettingsSave(
+function useSaveScope(
   client: HostClient<HostRpcRegistry> | null,
   kinds: readonly string[],
-): PrepareSettingsSave {
+): SaveScope | null {
   const coordinator = useSettingsSaveCoordinator();
   const hostId = useRequesterHostId(client);
   const environmentRead = useEnvironmentHostReadQuery(
@@ -277,7 +273,22 @@ export function useSettingsSave(
       enabled: scope !== null,
     })),
   });
+  return scope;
+}
 
+/**
+ * The save preparation for the host behind `client`, the requester the
+ * caller sends its saves on. `kinds` are the item kinds the caller's saves
+ * write, a constant of the caller's module; their rows are read from authn
+ * when the editor opens. A host in no environment, a host authn does not
+ * list, or a read that fails remembers nothing: the save still goes to the
+ * host, and its hold waits for one click.
+ */
+export function useSettingsSave(
+  client: HostClient<HostRpcRegistry> | null,
+  kinds: readonly string[],
+): PrepareSettingsSave {
+  const scope = useSaveScope(client, kinds);
   return useCallback(
     async (
       save: SettingsSave,
@@ -299,5 +310,40 @@ export function useSettingsSave(
       return { kind: "abandoned", method: save.method };
     },
     [scope],
+  );
+}
+
+/**
+ * Whether the environment holds exactly one `kind` item keyed `key`, as authn
+ * lists it on the person's sign-in. False when the host is in no environment,
+ * or the read fails. A host may say which item to look for, never that it
+ * exists.
+ */
+export type SettingsItemExists = (key: string) => Promise<boolean>;
+
+/** {@link SettingsItemExists} for `kind`, over the host behind `client`. */
+export function useSettingsItemExists(
+  client: HostClient<HostRpcRegistry> | null,
+  kind: string,
+): SettingsItemExists {
+  const scope = useSaveScope(client, [kind]);
+  return useCallback(
+    async (key: string): Promise<boolean> => {
+      if (scope === null) return false;
+      try {
+        const rows = await scope.queryClient.fetchQuery(
+          saveItemsQuery(
+            scope.source,
+            scope.environmentId,
+            kind,
+            scope.viewerId,
+          ),
+        );
+        return rows.filter((row) => row.key === key).length === 1;
+      } catch {
+        return false;
+      }
+    },
+    [kind, scope],
   );
 }
