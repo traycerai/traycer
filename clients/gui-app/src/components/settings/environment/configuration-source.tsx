@@ -18,8 +18,8 @@ export type ConfigurationSource =
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
-      /** `null` for a role that authorizes nothing - an older inventory's
-       *  unknown role, or a retired one. */
+      /** `null` for a role that changes nothing: a Viewer, or a role this
+       *  app does not know. */
       readonly effectiveRole: GrantedEnvironmentRole | null;
       /**
        * Personal read while the window is on a team's computer: shown, never
@@ -54,11 +54,22 @@ export function useConfigurationIsPersonal(): boolean {
   return source.kind === "pool" && source.configuration === "personal";
 }
 
+/**
+ * Whether a role may change a configuration: Personal's owner, or a team's
+ * Admin or Editor. A Viewer, and a role this app does not know, change
+ * nothing.
+ */
+export function mayChangeConfiguration(
+  role: GrantedEnvironmentRole | null,
+): boolean {
+  return role === "owner" || role === "admin" || role === "editor";
+}
+
 export function useCanEditConfiguration(): boolean {
   const source = useConfigurationSource();
   return (
     source.kind === "host" ||
-    (!source.transportReadOnly && source.effectiveRole !== null)
+    (!source.transportReadOnly && mayChangeConfiguration(source.effectiveRole))
   );
 }
 
