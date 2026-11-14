@@ -663,10 +663,15 @@ describe("<WindowHostModalHost />", () => {
       signIn: null,
       now: () => Date.now(),
     });
-    await hostTokens.adopt(USER_A, hostId, {
-      token: hostToken,
-      expiresAtMs: Date.now() + 3_600_000,
-    });
+    await hostTokens.adopt(
+      USER_A,
+      hostId,
+      {
+        token: hostToken,
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      hostTokens.era(USER_A),
+    );
     const target = { ...mockLocalHostEntry, hostId };
     const client = buildHostStreamClient({
       target,

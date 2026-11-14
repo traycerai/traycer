@@ -238,16 +238,18 @@ describe("older host floor gate", () => {
 
     const { result } = renderHook(() => useWindowNarration());
 
-    expect(tookOlderHost(result.current)).toBe(true);
+    expect(tookOlderHost(result.current.narration)).toBe(true);
     if (
-      result.current.kind !== "narrating" ||
-      result.current.variant.kind !== "update-host"
+      result.current.narration.kind !== "narrating" ||
+      result.current.narration.variant.kind !== "update-host"
     ) {
       throw new Error("expected the older-host narration");
     }
-    expect(result.current.variant.detail.hostVersion).toBe("1.5.4");
-    expect(result.current.variant.detail.minSupportedVersion).toBe("2.0.0");
-    expect(result.current.variant.detail.code).toBe("older-host");
+    expect(result.current.narration.variant.detail.hostVersion).toBe("1.5.4");
+    expect(result.current.narration.variant.detail.minSupportedVersion).toBe(
+      "2.0.0",
+    );
+    expect(result.current.narration.variant.detail.code).toBe("older-host");
   });
 
   it("does not take the older-host arm when the remote app version meets the floor", () => {
@@ -256,12 +258,12 @@ describe("older host floor gate", () => {
 
     const { result } = renderHook(() => useWindowNarration());
 
-    expect(tookOlderHost(result.current)).toBe(false);
+    expect(tookOlderHost(result.current.narration)).toBe(false);
   });
 
   it("does not throw when the narrator has no directory row and no runtime binding", () => {
     const { result } = renderHook(() => useWindowNarration());
 
-    expect(tookOlderHost(result.current)).toBe(false);
+    expect(tookOlderHost(result.current.narration)).toBe(false);
   });
 });

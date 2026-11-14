@@ -966,7 +966,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     openTransportRef.fn = tracked.openTransport;
     globalClientRef.value = buildGlobalClient();
     const remote = remoteTarget("pubkey-a");
-    const remoteAtFloor: HostDirectoryEntry = {
+    const remoteAtFloor: RemoteHostDirectoryEntry = {
       ...remote,
       websocketUrl: null,
       transportDialability: "not-dialable",
@@ -994,10 +994,11 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     });
     expect(tracked.records()).toHaveLength(1);
 
-    hostEntryRef.value = {
+    const remoteBelowFloor: RemoteHostDirectoryEntry = {
       ...remoteAtFloor,
       remoteStatus: { ...remoteAtFloor.remoteStatus, appVersion: "1.5.4" },
     };
+    hostEntryRef.value = remoteBelowFloor;
     rerender();
     await waitFor(() => {
       expect(result.current).toBeNull();
@@ -1011,12 +1012,13 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     openTransportRef.fn = tracked.openTransport;
     globalClientRef.value = buildGlobalClient();
     const remote = remoteTarget("pubkey-a");
-    hostEntryRef.value = {
+    const remoteAtFloor: RemoteHostDirectoryEntry = {
       ...remote,
       websocketUrl: null,
       transportDialability: "not-dialable",
       remoteStatus: { ...remote.remoteStatus, appVersion: "2.0.0" },
     };
+    hostEntryRef.value = remoteAtFloor;
     publishLease({
       hostId: REMOTE_HOST_ID,
       status: "restarting-expected",

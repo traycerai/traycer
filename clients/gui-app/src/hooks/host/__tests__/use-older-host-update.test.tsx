@@ -306,6 +306,7 @@ async function renderSignedIn(
   let requestSeq = 0;
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: () => undefined,
     registry: hostRpcRegistry,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
