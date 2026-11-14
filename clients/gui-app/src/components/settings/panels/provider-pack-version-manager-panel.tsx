@@ -379,9 +379,16 @@ export function ProviderPackVersionManagerPanel(
   const onToggleAutoDownload = useCallback(
     (next: boolean) => {
       clearNotice();
-      setPolicy.mutate({ packId, autoDownload: next });
+      setPolicy.mutate({
+        packId,
+        autoDownload: next,
+        policy: {
+          pinnedVersion: managedVersions.pinnedVersion,
+          autoDownload: next,
+        },
+      });
     },
-    [clearNotice, packId, setPolicy],
+    [clearNotice, managedVersions.pinnedVersion, packId, setPolicy],
   );
 
   // No `pendingVersion`: a check is about the PACK, and `check.isPending` is
@@ -479,7 +486,14 @@ export function ProviderPackVersionManagerPanel(
       clearNotice();
       setPendingVersion(version);
       useVersion.mutate(
-        { packId, version },
+        {
+          packId,
+          version,
+          policy: {
+            pinnedVersion: version,
+            autoDownload: managedVersions.autoDownload,
+          },
+        },
         {
           onSettled: () => setPendingVersion(null),
           // Refusal only. The success confirmation is owned by the hook, so it
@@ -497,14 +511,21 @@ export function ProviderPackVersionManagerPanel(
         },
       );
     },
-    [clearNotice, packId, panelToken, useVersion],
+    [clearNotice, managedVersions.autoDownload, packId, panelToken, useVersion],
   );
 
   const onClearPin = useCallback(() => {
     clearNotice();
     setPendingVersion(CLEAR_PIN_PENDING_KEY);
     useVersion.mutate(
-      { packId, version: null },
+      {
+        packId,
+        version: null,
+        policy: {
+          pinnedVersion: null,
+          autoDownload: managedVersions.autoDownload,
+        },
+      },
       {
         onSettled: () => setPendingVersion(null),
         // Refusal only; the hook owns the success confirmation.
@@ -526,7 +547,13 @@ export function ProviderPackVersionManagerPanel(
         },
       },
     );
-  }, [clearNotice, packId, panelToken, useVersion]);
+  }, [
+    clearNotice,
+    managedVersions.autoDownload,
+    packId,
+    panelToken,
+    useVersion,
+  ]);
 
   // First click on the trash: arm this row and clear whatever else was showing.
   // `clearNotice` disarms, so the set has to follow it rather than precede it.

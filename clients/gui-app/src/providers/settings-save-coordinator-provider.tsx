@@ -1,19 +1,45 @@
 import { useMemo, type ReactNode } from "react";
 import type { EnvironmentProposalsResponse } from "@traycer/protocol/host/environment/settings-proposals";
-import { useHostBinding } from "@/lib/host";
+import { tryAcquireReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { createSettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
 import { SettingsSaveCoordinatorContext } from "@/providers/settings-save-coordinator-context";
 import { SettingsSaveMemoryPersistLifecycleBridge } from "@/providers/settings-save-memory-persist-lifecycle-bridge";
 import { SettingsSaveReconcile } from "@/providers/settings-save-reconcile";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * `environment.proposals` is not served by any host this app can name yet, so
- * every host answers as not connected and each remembered save waits for the
- * next connection.
+ * `environment.proposals` on `hostId`, over a connection this window already
+ * holds: this machine's host through its own requester while it can be asked,
+ * a remote host only through a ready session another surface holds. Opens
+ * nothing; null when there is no such connection.
  */
-function readNoProposals(): Promise<EnvironmentProposalsResponse | null> {
-  return Promise.resolve(null);
+function proposalsReader(
+  binding: HostRuntimeBinding<HostRpcRegistry> | null,
+): (hostId: string) => Promise<EnvironmentProposalsResponse | null> {
+  return async (hostId) => {
+    if (binding === null) return null;
+    if (hostId === binding.directory.getLocalHostId()) {
+      const local = resolveNamedHostClient(binding, hostId);
+      if (local === null || !readHostReadiness(local).canExecute) return null;
+      return local.request("environment.proposals", {});
+    }
+    const borrowed = tryAcquireReadyRemoteSession<HostRpcRegistry>(hostId);
+    if (borrowed === null) return null;
+    try {
+      return await borrowed.sendUnary(
+        "environment.proposals",
+        {},
+        null,
+        undefined,
+      );
+    } finally {
+      borrowed.release();
+    }
+  };
 }
 
 function signedInAccount(): string | null {
@@ -32,16 +58,17 @@ function nowMs(): number {
 export function SettingsSaveCoordinatorProvider(props: {
   readonly children: ReactNode;
 }): ReactNode {
-  const auth = useHostBinding()?.auth ?? null;
+  const binding = useHostBinding();
   const coordinator = useMemo(
     () =>
       createSettingsSaveCoordinator({
         accountId: signedInAccount,
-        cloud: () => (auth === null ? null : auth.environmentCloud()),
-        readProposals: readNoProposals,
+        cloud: () =>
+          binding === null ? null : binding.auth.environmentCloud(),
+        readProposals: proposalsReader(binding),
         now: nowMs,
       }),
-    [auth],
+    [binding],
   );
   return (
     <SettingsSaveMemoryPersistLifecycleBridge>

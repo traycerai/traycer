@@ -11,10 +11,14 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
 import { toast } from "sonner";
 import { packVersionUseRefusalMessage } from "@/components/settings/panels/provider-pack-version-manager-model";
 import type { VersionManagerPanelToken } from "@/components/settings/panels/provider-pack-version-manager-presence";
 import { versionManagerPanelIsMounted } from "@/components/settings/panels/provider-pack-version-manager-presence";
+
+/** The item a pack save writes. */
+const PACK_SAVE_KINDS = ["pack_policy"] as const;
 
 type UsePackVersionMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.usePackVersion">,
@@ -62,6 +66,7 @@ export function useProvidersUsePackVersionForClient(
   panel: VersionManagerPanelToken | null,
 ): UsePackVersionMutationResult {
   const queryClient = useQueryClient();
+  const prepareSave = useSettingsSave(client, PACK_SAVE_KINDS);
   return useHostMutation<
     HostRpcRegistry,
     "providers.usePackVersion",
@@ -70,6 +75,11 @@ export function useProvidersUsePackVersionForClient(
     client,
     method: "providers.usePackVersion",
     mapVariables: (variables) => variables,
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "providers.usePackVersion", request },
+        sentOn.getActiveHostId(),
+      ),
     options: {
       mutationKey: providersMutationKeys.usePackVersion(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null, panel }),
