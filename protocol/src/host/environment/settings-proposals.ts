@@ -33,8 +33,33 @@ import {
 } from "@traycer/protocol/host/environment-schemas";
 
 /** An item value as an item route carries it. */
-export const settingValueSchema = lazySchema(() => z.json());
-export type SettingValue = z.infer<typeof settingValueSchema>;
+export type SettingValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SettingValue[]
+  | { [key: string]: SettingValue };
+
+/**
+ * `z.json()` spelled out, member for member, so it parses exactly as
+ * `z.json()` does. `z.json()` closes its cycle through a const of its own,
+ * which a `lazySchema` stand-in cannot carry (`lazy-schema.ts`); here the
+ * cycle names the module-scope stand-in instead.
+ */
+export const settingValueSchema: z.ZodType<SettingValue, SettingValue> =
+  lazySchema(() =>
+    z.lazy(() =>
+      z.union([
+        z.string(),
+        z.number(),
+        z.boolean(),
+        z.null(),
+        z.array(settingValueSchema),
+        z.record(z.string(), settingValueSchema),
+      ]),
+    ),
+  );
 
 /** What a proposal asks for: the item written, or the item removed. */
 export const SETTINGS_PROPOSAL_OPERATIONS = ["put", "delete"] as const;

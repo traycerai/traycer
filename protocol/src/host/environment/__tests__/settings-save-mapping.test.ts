@@ -22,6 +22,7 @@ import { hostOsOfPlatform } from "@traycer/protocol/host/environment/host-os";
 import {
   canonicalSettingValue,
   settingsSaveBaseAddress,
+  settingsItemEditSchema,
   settingsSaveItemEdit,
   type SettingsSave,
   type SettingsSaveBase,
@@ -542,6 +543,36 @@ function mcpRemoveSave(): SettingsSave {
     },
   };
 }
+
+describe("settingValueSchema through the item edit consumer", () => {
+  it("parses JSON values and preserves z.json object-key behavior through put edits", () => {
+    const put = (value: unknown) =>
+      settingsItemEditSchema.parse({
+        kind: "variable",
+        key: "A",
+        os: null,
+        operation: "put",
+        value,
+        canonicalValue: "",
+      });
+    const values = [
+      { nested: { enabled: true, items: [1, null, "x"] } },
+      [1, "x", null],
+      null,
+      7,
+      "value",
+    ];
+    for (const value of values) {
+      expect(put(value).value).toEqual(value);
+    }
+    expect(() => put({ a: undefined })).toThrow();
+    expect(() => put(() => "value")).toThrow();
+    expect(() => put(Number.NaN)).toThrow();
+    expect(put(JSON.parse('{"__proto__":{"x":1},"y":2}')).value).toEqual({
+      y: 2,
+    });
+  });
+});
 
 describe("settingsSaveItemEdit", () => {
   describe("shell", () => {
