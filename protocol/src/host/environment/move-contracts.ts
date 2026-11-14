@@ -251,6 +251,8 @@ export const environmentMovePlanResponseSchemaV20 = lazySchema(() =>
   z.object({
     planHash: z.string().min(1),
     planRevision: z.number().int().nonnegative(),
+    // `@1.2`'s field unchanged; the stage evidence's 1..128 is authn's bound,
+    // which this one sits inside.
     hostVersion: z.string().min(1).max(64),
     disclosureVersion: z.number().int().nonnegative(),
     rows: z.object({

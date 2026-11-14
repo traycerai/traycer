@@ -78,53 +78,102 @@ const statusV12Answer = {
 };
 
 describe("dormant move call contracts", () => {
-  it("keeps each dormant method and wire version explicit", () => {
-    expect(environmentMovePlanV20.method).toBe("environment.move.plan");
-    expect(environmentMovePlanV20.schemaVersion).toEqual({
-      major: 2,
-      minor: 0,
+  it("parses a request and answer through each dormant contract", () => {
+    expect(
+      environmentMovePlanV20.requestSchema.parse({
+        target: { kind: "personal", environmentId: "personal" },
+      }),
+    ).toEqual({ target: { kind: "personal", environmentId: "personal" } });
+    expect(
+      environmentMovePlanV20.responseSchema.parse({
+        planHash: HASH,
+        planRevision: 1,
+        hostVersion: "1.2.3",
+        disclosureVersion: 1,
+        rows: {
+          moves: [],
+          staysOnThisComputer: [],
+          alreadyInPersonal: [],
+          differsMasked: [],
+          looksLikeAKey: [],
+          sameNameInPersonal: [],
+        },
+        guideDiffers: false,
+        personalHoldsSecrets: false,
+      }),
+    ).toEqual({
+      planHash: HASH,
+      planRevision: 1,
+      hostVersion: "1.2.3",
+      disclosureVersion: 1,
+      rows: {
+        moves: [],
+        staysOnThisComputer: [],
+        alreadyInPersonal: [],
+        differsMasked: [],
+        looksLikeAKey: [],
+        sameNameInPersonal: [],
+      },
+      guideDiffers: false,
+      personalHoldsSecrets: false,
     });
-    expect(environmentMoveStageV10.method).toBe("environment.move.stage");
-    expect(environmentMoveStageV10.schemaVersion).toEqual({
-      major: 1,
-      minor: 0,
-    });
-    expect(environmentMoveStartV10.method).toBe("environment.move.start");
-    expect(environmentMoveStartV10.schemaVersion).toEqual({
-      major: 1,
-      minor: 0,
-    });
-    expect(environmentMoveOutcomeV10.method).toBe("environment.move.outcome");
-    expect(environmentMoveOutcomeV10.schemaVersion).toEqual({
-      major: 1,
-      minor: 0,
-    });
-    expect(environmentMovePlanV12.method).toBe("environment.move.plan");
-    expect(environmentMovePlanV12.schemaVersion).toEqual({
-      major: 1,
-      minor: 2,
-    });
-    expect(environmentMoveAcceptV10.method).toBe("environment.move.accept");
-    expect(environmentMoveAcceptV10.schemaVersion).toEqual({
-      major: 1,
-      minor: 0,
-    });
-    expect(environmentStatusV12.method).toBe("environment.status");
-    expect(environmentStatusV12.schemaVersion).toEqual({ major: 1, minor: 2 });
-    expect(environmentStatusV13.method).toBe("environment.status");
-    expect(environmentStatusV13.schemaVersion).toEqual({ major: 1, minor: 3 });
-    expect(environmentPreviewLocalFactsV10.method).toBe(
-      "environment.previewLocalFacts",
+
+    const stageRequest = {
+      target: { kind: "personal" as const, environmentId: "personal" },
+      keyChoices: [],
+    };
+    expect(environmentMoveStageV10.requestSchema.parse(stageRequest)).toEqual(
+      stageRequest,
     );
-    expect(environmentPreviewLocalFactsV10.schemaVersion).toEqual({
-      major: 1,
-      minor: 0,
-    });
-    expect(hostRemoteAccessSetV20.method).toBe("host.remoteAccess.set");
-    expect(hostRemoteAccessSetV20.schemaVersion).toEqual({
-      major: 2,
-      minor: 0,
-    });
+    const stageInput = stageAnswer("personal");
+    Reflect.deleteProperty(stageInput.evidence, "unexpected");
+    expect(environmentMoveStageV10.responseSchema.parse(stageInput)).toEqual(
+      stageInput,
+    );
+
+    const startRequest = {
+      attemptId: UUID,
+      planHash: HASH,
+      acceptanceId: UUID,
+    };
+    expect(environmentMoveStartV10.requestSchema.parse(startRequest)).toEqual(
+      startRequest,
+    );
+    const started = { state: "done", attemptId: UUID, acceptanceId: UUID };
+    expect(environmentMoveStartV10.responseSchema.parse(started)).toEqual(
+      started,
+    );
+
+    const outcomeRequest = { attemptId: "unknown" };
+    expect(
+      environmentMoveOutcomeV10.requestSchema.parse(outcomeRequest),
+    ).toEqual(outcomeRequest);
+    const notFound = { state: "not_found", attemptId: "unknown" };
+    expect(environmentMoveOutcomeV10.responseSchema.parse(notFound)).toEqual(
+      notFound,
+    );
+
+    expect(environmentStatusV13.requestSchema.parse({})).toEqual({});
+    expect(
+      environmentStatusV13.responseSchema.parse(statusV12Answer).move,
+    ).toBeNull();
+
+    const previewRequest = {
+      environmentId: "personal",
+      subject: { kind: "plan" as const, profileId: "profile" },
+    };
+    expect(
+      environmentPreviewLocalFactsV10.requestSchema.parse(previewRequest),
+    ).toEqual(previewRequest);
+    const previewAnswer = { activeTurns: null, terminals: null };
+    expect(
+      environmentPreviewLocalFactsV10.responseSchema.parse(previewAnswer),
+    ).toEqual(previewAnswer);
+
+    expect(hostRemoteAccessSetV20.requestSchema.parse({})).toEqual({});
+    expect(
+      hostRemoteAccessSetV20.responseSchema.parse({ state: "off" }),
+    ).toEqual({ state: "off" });
   });
 
   it("flattens each stage answer to exactly authn's acceptance request", () => {
@@ -150,8 +199,6 @@ describe("dormant move call contracts", () => {
         "sharingGeneration",
       ].sort(),
     );
-    expect(personalRequest).not.toHaveProperty("unexpected");
-
     const team = environmentMoveStageV10.responseSchema.parse(
       stageAnswer("team"),
     );
@@ -175,7 +222,6 @@ describe("dormant move call contracts", () => {
       ].sort(),
     );
     expect(teamRequest.disclosureVersion).toBe(2);
-    expect(teamRequest).not.toHaveProperty("unexpected");
   });
 
   it("upgrades a parsed status@1.2 answer without changing it except for move", () => {
@@ -191,7 +237,6 @@ describe("dormant move call contracts", () => {
 
   it("keeps stage hash and team disclosure bounds on both sides", () => {
     const answer = stageAnswer("team");
-    expect(environmentMoveStageV10.responseSchema.parse(answer)).toBeTruthy();
     expect(() =>
       environmentMoveStageV10.responseSchema.parse({
         ...answer,
@@ -223,10 +268,62 @@ describe("dormant move call contracts", () => {
         authorization: { disclosureHash: "A".repeat(64) },
       }),
     ).toThrow();
+    for (const length of [63, 65]) {
+      expect(() =>
+        environmentMoveStageV10.responseSchema.parse({
+          ...personal,
+          evidence: { ...personal.evidence, planHash: "a".repeat(length) },
+        }),
+      ).toThrow();
+      expect(() =>
+        environmentMoveStageV10.responseSchema.parse({
+          ...answer,
+          evidence: { ...answer.evidence, planHash: "a".repeat(length) },
+        }),
+      ).toThrow();
+      expect(() =>
+        environmentMoveStageV10.responseSchema.parse({
+          ...personal,
+          authorization: { manifestHash: "a".repeat(length) },
+        }),
+      ).toThrow();
+      expect(() =>
+        environmentMoveStageV10.responseSchema.parse({
+          ...answer,
+          authorization: { disclosureHash: "a".repeat(length) },
+        }),
+      ).toThrow();
+    }
     expect(() =>
       environmentMoveStageV10.responseSchema.parse({
         ...answer,
         evidence: { ...answer.evidence, teamId: "not-a-uuid" },
+      }),
+    ).toThrow();
+    for (const field of ["attemptId", "sourceHostId"] as const) {
+      expect(() =>
+        environmentMoveStageV10.responseSchema.parse({
+          ...personal,
+          evidence: { ...personal.evidence, [field]: "not-a-uuid" },
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      environmentMoveStageV10.responseSchema.parse({
+        ...personal,
+        evidence: { ...personal.evidence, hostVersion: "" },
+      }),
+    ).toThrow();
+    expect(
+      environmentMoveStageV10.responseSchema.parse({
+        ...personal,
+        evidence: { ...personal.evidence, hostVersion: "v".repeat(128) },
+      }).evidence.targetKind,
+    ).toBe("personal");
+    expect(() =>
+      environmentMoveStageV10.responseSchema.parse({
+        ...personal,
+        evidence: { ...personal.evidence, hostVersion: "v".repeat(129) },
       }),
     ).toThrow();
   });
@@ -248,16 +345,7 @@ describe("dormant move call contracts", () => {
     ).toThrow();
   });
 
-  it("allows unknown non-empty outcome ids to receive not_found", () => {
-    expect(
-      environmentMoveOutcomeV10.requestSchema.parse({ attemptId: "unknown" }),
-    ).toEqual({ attemptId: "unknown" });
-    expect(
-      environmentMoveOutcomeV10.responseSchema.parse({
-        state: "not_found",
-        attemptId: "unknown",
-      }),
-    ).toEqual({ state: "not_found", attemptId: "unknown" });
+  it("refuses an empty outcome id", () => {
     expect(() =>
       environmentMoveOutcomeV10.requestSchema.parse({ attemptId: "" }),
     ).toThrow();
@@ -278,6 +366,12 @@ describe("dormant move call contracts", () => {
       environmentMoveStageV10.requestSchema.parse({
         target: { kind: "personal", environmentId: "p" },
         keyChoices: [choice(3073)],
+      }),
+    ).toThrow();
+    expect(() =>
+      environmentMoveStageV10.requestSchema.parse({
+        target: { kind: "personal", environmentId: "p" },
+        keyChoices: [{ key: "", choice: "stays" }],
       }),
     ).toThrow();
     expect(
@@ -352,16 +446,13 @@ describe("dormant move call contracts", () => {
     ).toThrow();
   });
 
-  it("allows status move only for started outcomes and defaults it to null", () => {
+  it("allows status move only for started outcomes", () => {
     expect(
       environmentStatusV13.responseSchema.parse({
         ...statusV12Answer,
         move: { state: "done", attemptId: UUID, acceptanceId: UUID },
       }).move,
     ).toEqual({ state: "done", attemptId: UUID, acceptanceId: UUID });
-    expect(
-      environmentStatusV13.responseSchema.parse(statusV12Answer).move,
-    ).toBeNull();
     expect(() =>
       environmentStatusV13.responseSchema.parse({
         ...statusV12Answer,
@@ -371,11 +462,6 @@ describe("dormant move call contracts", () => {
   });
 
   it("requires plan@2.0 target and required response fields while stripping itemChoices", () => {
-    expect(
-      environmentMovePlanV20.requestSchema.parse({
-        target: { kind: "personal", environmentId: "p" },
-      }),
-    ).toEqual({ target: { kind: "personal", environmentId: "p" } });
     expect(
       environmentMovePlanV20.requestSchema.parse({
         target: { kind: "team", environmentId: "t", teamId: UUID },
@@ -407,68 +493,85 @@ describe("dormant move call contracts", () => {
     expect(
       environmentMovePlanV20.responseSchema.parse(response),
     ).not.toHaveProperty("itemChoices");
-    for (const key of [
+    expect(() =>
+      environmentMovePlanV20.responseSchema.parse({
+        ...response,
+        hostVersion: "",
+      }),
+    ).toThrow();
+    expect(
+      environmentMovePlanV20.responseSchema.parse({
+        ...response,
+        hostVersion: "v".repeat(64),
+      }).hostVersion,
+    ).toBe("v".repeat(64));
+    expect(() =>
+      environmentMovePlanV20.responseSchema.parse({
+        ...response,
+        hostVersion: "v".repeat(65),
+      }),
+    ).toThrow();
+    for (const field of [
+      "moves",
+      "staysOnThisComputer",
+      "alreadyInPersonal",
+      "differsMasked",
+      "looksLikeAKey",
       "sameNameInPersonal",
-      "guideDiffers",
-      "personalHoldsSecrets",
     ] as const) {
-      const malformed =
-        key === "sameNameInPersonal"
-          ? {
-              ...response,
-              rows: {
-                moves: [],
-                staysOnThisComputer: [],
-                alreadyInPersonal: [],
-                differsMasked: [],
-                looksLikeAKey: [],
-              },
-            }
-          : { ...response, [key]: undefined };
+      const missing = { ...response, rows: { ...response.rows } };
+      Reflect.deleteProperty(missing.rows, field);
       expect(() =>
-        environmentMovePlanV20.responseSchema.parse(malformed),
+        environmentMovePlanV20.responseSchema.parse(missing),
+      ).toThrow();
+    }
+    for (const field of ["guideDiffers", "personalHoldsSecrets"] as const) {
+      const missing = { ...response };
+      Reflect.deleteProperty(missing, field);
+      expect(() =>
+        environmentMovePlanV20.responseSchema.parse(missing),
       ).toThrow();
     }
   });
 
-  it("keeps remote access set@2.0 off only", () => {
-    expect(hostRemoteAccessSetV20.requestSchema.parse({})).toEqual({});
+  it("refuses an enabled key and any state but off on remote access set@2.0", () => {
     expect(() =>
       hostRemoteAccessSetV20.requestSchema.parse({ enabled: false }),
     ).toThrow();
-    expect(
-      hostRemoteAccessSetV20.responseSchema.parse({ state: "off" }),
-    ).toEqual({ state: "off" });
     expect(() =>
       hostRemoteAccessSetV20.responseSchema.parse({ state: "turning_off" }),
     ).toThrow();
   });
 
-  it("accepts both local fact subject kinds and nullable counts", () => {
-    expect(
-      environmentPreviewLocalFactsV10.requestSchema.parse({
-        environmentId: "e",
-        subject: { kind: "plan", profileId: "p" },
-      }).subject.kind,
-    ).toBe("plan");
+  it("requires each local fact subject's id and whole non-negative counts", () => {
     expect(
       environmentPreviewLocalFactsV10.requestSchema.parse({
         environmentId: "e",
         subject: { kind: "member", userId: "u" },
       }).subject.kind,
     ).toBe("member");
-    expect(
-      environmentPreviewLocalFactsV10.responseSchema.parse({
-        activeTurns: null,
-        terminals: null,
-      }),
-    ).toEqual({ activeTurns: null, terminals: null });
     expect(() =>
-      environmentPreviewLocalFactsV10.responseSchema.parse({
-        activeTurns: -1,
-        terminals: 0,
+      environmentPreviewLocalFactsV10.requestSchema.parse({
+        environmentId: "e",
+        subject: { kind: "plan" },
       }),
     ).toThrow();
+    expect(() =>
+      environmentPreviewLocalFactsV10.requestSchema.parse({
+        environmentId: "e",
+        subject: { kind: "member" },
+      }),
+    ).toThrow();
+    for (const invalid of [
+      { activeTurns: -1, terminals: null },
+      { activeTurns: 0, terminals: -1 },
+      { activeTurns: 0.5, terminals: null },
+      { activeTurns: null, terminals: 0.5 },
+    ]) {
+      expect(() =>
+        environmentPreviewLocalFactsV10.responseSchema.parse(invalid),
+      ).toThrow();
+    }
   });
 
   it("recognizes E_MOVE_NOT_AWAITING and preserves shipped plan and accept shapes", () => {
