@@ -220,6 +220,7 @@ interface HeldOpen {
 
 let queryClient: QueryClient;
 let opens: HeldOpen[];
+let openSubmissions: number;
 
 /** A real host client whose `bot.open` stays open until the case settles it. */
 function hostClientHoldingOpens(
@@ -251,7 +252,15 @@ function hostClientHoldingOpens(
     registry: hostRpcRegistry,
     // The app's own scheduling: `bot.open` is `fifo`, so a second open waits
     // for the first to settle.
-    schedulingPolicy: hostRpcSchedulingPolicy,
+    schedulingPolicy: {
+      ...hostRpcSchedulingPolicy,
+      // The coordinator reads the mode in the same synchronous step that puts
+      // the request in its lane, so this counts opens handed to the lane.
+      modeFor(method, params) {
+        if (method === "bot.open") openSubmissions += 1;
+        return hostRpcSchedulingPolicy.modeFor(method, params);
+      },
+    },
     invalidator: createHostQueryInvalidator(client),
     findHostById: (hostId) =>
       hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
@@ -364,6 +373,7 @@ function expectChannelOnly(): void {
 beforeEach(() => {
   queryClient = createAppQueryClient();
   opens = [];
+  openSubmissions = 0;
   openHost.client = hostClientHoldingOpens(queryClient);
   resetBotTabSurfaceMocks();
 });
@@ -388,10 +398,9 @@ describe("<BotTabSurface /> a ring while a re-open is in flight", () => {
       const mounted = await failMountOpens(TRANSIENT);
       await ringAsking(mounted + 1);
 
+      const submitted = openSubmissions;
       ring();
-      await act(async () => {
-        await Promise.resolve();
-      });
+      await waitFor(() => expect(openSubmissions).toBe(submitted + 1));
       expect(opens).toHaveLength(mounted + 1);
 
       await settle(heldOpen(mounted), (open) => open.reject(error));
@@ -449,8 +458,11 @@ describe("<BotTabSurface /> bot list after an open settles", () => {
     await settle(heldOpen(mounted), (open) => open.resolve(SERVING));
 
     await waitFor(() => expect(list.calls).toBe(2 + mounted));
-    await act(async () => {
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(
+        queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
+      ).toBe(0);
+      expect(queryClient.isFetching({ queryKey: list.queryKey })).toBe(0);
     });
     expect(list.calls).toBe(2 + mounted);
   });
