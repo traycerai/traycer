@@ -313,7 +313,11 @@ describe("team Notification hooks page", () => {
               "A team's hook can't read $NAME from a computer. Type the value itself.",
             )
           ).textContent ?? "")
-        : ((await within(manager).findByRole("alert")).textContent ?? "");
+        : ((
+            await within(manager).findByText(
+              "The settings request was refused.",
+            )
+          ).textContent ?? "");
     expect(errorText).not.toContain(buildHook.id);
     expect(errorText).not.toContain(buildHook.action.url);
     expect(errorText).not.toContain(code);

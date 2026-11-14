@@ -18,14 +18,7 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  hostNotificationHooksSaveDowngradeV40ToV10,
-  hostNotificationHooksSaveDowngradeV40ToV20,
-  hostNotificationHooksSaveDowngradeV40ToV30,
-  hostNotificationHooksSaveUpgradeV3ToV4,
-  hostNotificationHooksSaveV40,
-  type NotificationHooksSaveResponseV40,
-} from "@traycer/protocol/host/notifications/host-notifications";
+import type { NotificationHooksSaveResponseV40 } from "@traycer/protocol/host/notifications/host-notifications";
 import { ComputerNotificationsSettingsPanel } from "@/components/settings/panels/computer-notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -141,26 +134,7 @@ function makeHostClient(accountHooks: HostHooksSaveResponse["accountHooks"]): {
     configurationRevision: "host-rev-7",
     pendingRemovalNotices: [],
   };
-  const registry = {
-    ...hostRpcRegistry,
-    "host.notificationHooks.save": {
-      ...hostRpcRegistry["host.notificationHooks.save"],
-      4: {
-        latestMinor: 0,
-        versions: {
-          0: {
-            contract: hostNotificationHooksSaveV40,
-            upgradeFromPreviousVersion: hostNotificationHooksSaveUpgradeV3ToV4,
-          },
-        },
-        downgradePathsFromLatest: {
-          1: hostNotificationHooksSaveDowngradeV40ToV10,
-          2: hostNotificationHooksSaveDowngradeV40ToV20,
-          3: hostNotificationHooksSaveDowngradeV40ToV30,
-        },
-      },
-    },
-  } as HostRpcRegistry;
+  const registry = hostRpcRegistry;
   const spine = new HostClient<HostRpcRegistry>({
     registry,
     invalidator: { invalidateHostScope: () => undefined },
@@ -306,7 +280,7 @@ describe("computer hook saves and the host's answered account part", () => {
     );
     expect(screen.getByTestId("notification-hooks-manager")).toBeTruthy();
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Couldn't save notification hooks. Review the refreshed hooks before saving again.",
+      "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
     );
   });
 });
