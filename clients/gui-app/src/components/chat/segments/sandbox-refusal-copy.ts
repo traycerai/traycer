@@ -34,6 +34,8 @@ export interface SandboxRefusalCopy {
   readonly hostDetail: string | null;
 }
 
+const SANDBOX_FROZEN = "SANDBOX_FROZEN";
+
 interface SandboxRefusalRow {
   readonly headline: string;
   readonly description: string;
@@ -71,8 +73,6 @@ const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
     showsHostDetail: false,
   },
 };
-
-const SANDBOX_FROZEN = "SANDBOX_FROZEN";
 
 /** Whether the block is a turn a sandbox's want of credits ended. */
 export function isSandboxFrozenRefusal(
