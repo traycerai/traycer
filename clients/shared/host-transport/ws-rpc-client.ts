@@ -4,6 +4,7 @@ import {
   isLocalAdmissionFatal,
   teamMembershipUnavailable,
 } from "./local-open-auth";
+import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import type {
   MethodVersionRegistry,
   SchemaVersion,
@@ -243,6 +244,17 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    */
   readonly clientIdentity: FirstPartyClientIdentity;
   readonly localOpenAuth?: LocalOpenAuth;
+  /** Told of every refusal a host sends at its door and of every open it admits. */
+  readonly doorFor?: (hostId: string) => SessionDoorObserver;
+  /**
+   * The credential this client puts in every frame to `hostId` in place of
+   * the caller's sign-in lease: its host-only token, obtained before the
+   * request is sent. `null` when no token can be had now.
+   */
+  readonly hostBearerFor?: (
+    hostId: string,
+    signIn: OpenFrameBearerSource,
+  ) => Promise<OpenFrameBearerSource | null>;
 }
 
 /**
@@ -336,11 +348,19 @@ export class WsRpcClient<
   private readonly clientIdentity: ClientHandshakeIdentity;
   private readonly sessions = new LocalUnarySessionDirectory<Registry>();
   private readonly localOpenAuth: LocalOpenAuth | undefined;
+  private readonly doorFor:
+    | ((hostId: string) => SessionDoorObserver)
+    | undefined;
+  private readonly hostBearerFor: WsRpcClientOptions<Registry>["hostBearerFor"];
   private readonly reprobeErrors = new WeakSet<HostRpcError>();
   private readonly localRevisionByHost = new Map<string, number>();
+  /** Counts `releaseIdleLocalSessions`, so a call can tell one ran during its token lookup. */
+  private localReleases = 0;
 
   constructor(options: WsRpcClientOptions<Registry>) {
     this.localOpenAuth = options.localOpenAuth;
+    this.doorFor = options.doorFor;
+    this.hostBearerFor = options.hostBearerFor;
     this.registry = options.registry;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
@@ -360,6 +380,7 @@ export class WsRpcClient<
    * reuses.
    */
   releaseIdleLocalSessions(): void {
+    this.localReleases += 1;
     this.sessions.releaseIdle();
   }
 
@@ -384,15 +405,32 @@ export class WsRpcClient<
   ): Promise<ResponseOfMethod<Registry, Method>> {
     let challengeRetried = false;
     let grantReprobed = false;
+    const hostBearerFor = this.hostBearerFor;
+    const releasesBeforeLookup = this.localReleases;
+    // With no token to look up, the claim stays in the caller's tick.
+    const hostOptions =
+      hostBearerFor === undefined
+        ? options
+        : await this.withHostBearer(hostBearerFor, options, method);
+    let releasedDuringLookup = this.localReleases !== releasesBeforeLookup;
     for (;;) {
       try {
-        return await this.requestWithResponseTimeoutInternal(
+        const pending = this.requestWithResponseTimeoutInternal(
           method,
           params,
           responseTimeoutMs,
-          options,
+          hostOptions,
+          releasedDuringLookup,
         );
+        releasedDuringLookup = false;
+        return await pending;
       } catch (cause) {
+        // A persistent session refused this request at its token step: the
+        // door's state, exactly as a refused open raises it.
+        if (cause instanceof HostRpcError && cause.doorRefusal !== null)
+          this.doorFor?.(options.authority.endpoint.hostId).refused(
+            cause.doorRefusal,
+          );
         if (
           this.localOpenAuth === undefined ||
           !(cause instanceof HostRpcError)
@@ -415,6 +453,27 @@ export class WsRpcClient<
     }
   }
 
+  /** The caller's request with its host-only token in place of the sign-in lease. */
+  private async withHostBearer(
+    hostBearerFor: NonNullable<WsRpcClientOptions<Registry>["hostBearerFor"]>,
+    options: HostRequestOptions,
+    method: string,
+  ): Promise<HostRequestOptions> {
+    const bearer = await hostBearerFor(
+      options.authority.endpoint.hostId,
+      options.authority.bearer,
+    );
+    if (bearer === null)
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "No host-only token is held for this host",
+        requestId: this.requestIdProvider(),
+        method,
+        fatalDetails: null,
+      });
+    return { ...options, authority: { ...options.authority, bearer } };
+  }
+
   private async requestWithResponseTimeoutInternal<
     Method extends keyof Registry & string,
   >(
@@ -422,6 +481,7 @@ export class WsRpcClient<
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
     options: HostRequestOptions,
+    releasedDuringLookup: boolean,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
     const selected = options.authority.endpoint;
@@ -517,6 +577,9 @@ export class WsRpcClient<
         }
         continue;
       }
+      // The claim came after the token lookup, so a release in between found
+      // no slot to arm.
+      if (releasedDuringLookup) this.sessions.armReleaseBeforeReady(sessionKey);
       return this.requestOnFreshSocket(
         method,
         params,
@@ -708,6 +771,7 @@ export class WsRpcClient<
       const ackFrame = await session.next(this.frameTimeoutMs);
 
       if (ackFrame.kind === "fatalError") {
+        this.doorFor?.(selected.hostId).refused(ackFrame.details);
         if (
           ackFrame.details.code === SESSION_GRANT_REQUIRED &&
           !usesSessionGrant
@@ -758,6 +822,7 @@ export class WsRpcClient<
           fatalDetails: null,
         });
       }
+      this.doorFor?.(selected.hostId).admitted();
       if (usesSessionGrant)
         this.localOpenAuth?.noteAdmitted(selected.hostId, authority.bearer);
       const mergedClientManifest = mergeConnectionManifests(

@@ -892,6 +892,10 @@ export class AuthService {
   constructor(options: AuthServiceOptions) {
     this.runnerHost = options.runnerHost;
     this.tokenStore = new AuthTokenStore(options.runnerHost.tokenStore);
+    // A host-only token is minted only with a sign-in authn has confirmed.
+    options.runnerHost.hostTokens.bindSignIn((userId) =>
+      this.currentProfile?.userId === userId ? this.cloudBearer() : null,
+    );
     this.contextProvider = new DefaultRequestContextProvider({
       origin: "renderer",
     });

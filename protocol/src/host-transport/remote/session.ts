@@ -47,6 +47,7 @@ import type {
   StreamFrameEnvelope,
 } from "../stream-session";
 import { isRetryableSessionLifecycleFatal } from "../stream-session";
+import { isCredentialRefusal } from "../door-refusal";
 import type { TimerHandle } from "../timers";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -289,7 +290,9 @@ type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
  * checked by CODE rather than by any recovery flag because the two are
  * orthogonal: the same code arrives both retryable (the host's JWKS lookup
  * timed out) and terminal (our bearer is genuinely bad), and neither is host
- * evidence.
+ * evidence. A refusal that carries a `doorReason` is the host's door answering
+ * about the person, so it is credential plane too, whatever its code
+ * (`not_admitted` rides `FORBIDDEN`).
  *
  * Deliberately narrow rather than a guessed "credential family": every other
  * fatal on this path - a relay policy close, a malformed frame, a phase
@@ -331,7 +334,7 @@ function emptyReattachMarks(): ReattachMarks {
 function sessionFatalProvenance(
   details: FatalErrorDetails,
 ): ConnectionLossProvenance {
-  return details.code === "UNAUTHORIZED"
+  return details.code === "UNAUTHORIZED" || details.doorReason !== undefined
     ? "not-host-evidence"
     : "host-transport-plane";
 }
@@ -3929,6 +3932,7 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.phase = "ready";
     this.reattachMarks.openAckAt = Date.now();
+    this.options.auth.door?.admitted();
     // The host accepted the `open{bearer}`: any prior UNAUTHORIZED episode is
     // over, so a later one starts its no-progress bound from a clean slate.
     this.noProgressUnauthorizedReconnects = 0;
@@ -5754,6 +5758,7 @@ export class RemoteSession<
     // the expected-outage HOLD above the death streak the loss feeds. Two
     // honest reports beat one that tries to mean both.
     this.reportRestartIntentIfPresent(details);
+    this.options.auth.door?.refused(details);
     // Classified BEFORE the retryable arm, and that order is the whole point.
     // `retryable` says how to RECOVER; it says nothing about what the failure
     // is evidence OF, and the two are independent. A host whose own JWKS fetch
@@ -5783,7 +5788,7 @@ export class RemoteSession<
       return;
     }
     const auth = this.revalidator();
-    if (details.code === "UNAUTHORIZED" && auth !== null) {
+    if (isCredentialRefusal(details) && auth !== null) {
       this.handleUnauthorizedSessionFatal(generation, details, auth);
       return;
     }
@@ -5865,7 +5870,7 @@ export class RemoteSession<
     details: FatalErrorDetails,
     rejectedBearer: string | null,
   ): Promise<void> {
-    const outcome = await this.revalidateWithinBudget(auth);
+    const outcome = await this.revalidateWithinBudget(auth, details);
     if (generation !== this.connectGeneration) {
       // A stale completion: the generation this revalidation was recovering
       // has been superseded while it was in flight. It owns nothing now - it
@@ -6077,6 +6082,7 @@ export class RemoteSession<
    */
   private async revalidateWithinBudget(
     auth: RemoteSessionAuth | PoolSessionAuth,
+    refusal: FatalErrorDetails,
   ): Promise<RemoteSessionAuthRecoveryOutcome> {
     let timer: TimerHandle | null = null;
     const budget = new Promise<RemoteSessionAuthRecoveryOutcome>((resolve) => {
@@ -6098,7 +6104,7 @@ export class RemoteSession<
         if (reconnect === null) {
           return "rejected" as const;
         }
-        return reconnect();
+        return reconnect(refusal);
       })
       .catch((): RemoteSessionAuthRecoveryOutcome => "network-error");
     try {

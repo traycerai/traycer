@@ -35,9 +35,10 @@ import {
   type OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
-import type {
-  RevalidateOutcome,
-  StreamAuthRevalidator,
+import {
+  revalidateStream,
+  type RevalidateOutcome,
+  type StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
   clockSkewStreamReason,
@@ -56,7 +57,6 @@ import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
-  STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
@@ -97,6 +97,8 @@ import type { IntervalHandle, TimerHandle } from "./timer-handle";
 import type { ReconnectAllOptions } from "./host-stream-client";
 import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
 import { backoffFor } from "./backoff";
+import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 
 /**
  * Options for constructing the shared `/stream` transport.
@@ -142,6 +144,8 @@ export interface WsStreamClientOptions<
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth?: LocalOpenAuth;
   readonly localMemberProvision?: LocalMemberProvision;
+  /** Told of every refusal this host sends at its door and of every open it admits. */
+  readonly door?: SessionDoorObserver;
   /**
    * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
    * asserted to the host on every `open` frame and updated in place through
@@ -614,6 +618,7 @@ export class WsStreamClient<
       bearer: this.bearer,
       localOpenAuth: this.options.localOpenAuth,
       localMemberProvision: this.options.localMemberProvision,
+      door: this.options.door,
       cloudAuthorized: this.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
@@ -1644,6 +1649,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth: LocalOpenAuth | undefined;
   readonly localMemberProvision: LocalMemberProvision | undefined;
+  readonly door: SessionDoorObserver | undefined;
   /** See `WsStreamClientOptions.cloudAuthorized`. */
   readonly cloudAuthorized: (() => boolean) | undefined;
   readonly auth: StreamAuthRevalidator | null;
@@ -2378,6 +2384,7 @@ class StreamSession<
           upgradeGuidance: null,
         },
         token,
+        null,
       );
       return;
     }
@@ -2599,7 +2606,6 @@ class StreamSession<
     this.credentialSocketSequence = this.config.nextCredentialSocketSequence();
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
-      capabilities: [STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE],
       token,
       manifest,
       clientIdentity: this.config.clientIdentity,
@@ -2870,6 +2876,7 @@ class StreamSession<
       clearTimeout(this.openAckTimer);
       this.openAckTimer = null;
     }
+    this.config.door?.admitted();
     if (
       this.usesSessionGrant &&
       this.config.localMemberProvision === undefined &&
@@ -3183,6 +3190,7 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
+    this.config.door?.refused(details);
     const localAuth = this.config.localOpenAuth;
     if (localAuth !== undefined && this.openFrameHostId !== null) {
       if (this.openFrameBearer !== null) {
@@ -3270,7 +3278,7 @@ class StreamSession<
     // domain code such as `CHAT_INVALID`), and the no-revalidator case, stays
     // terminal exactly as before.
     if (
-      details.code === "UNAUTHORIZED" &&
+      isCredentialRefusal(details) &&
       !this.usesSessionGrant &&
       this.config.auth !== null
     ) {
@@ -3312,15 +3320,16 @@ class StreamSession<
     // there is a next attempt at all.
     this.resetForReconnect(null);
 
-    void this.revalidateThenReconnect(auth, details, rejectedToken);
+    void this.revalidateThenReconnect(auth, details, rejectedToken, details);
   }
 
   private async revalidateThenReconnect(
     auth: StreamAuthRevalidator,
     details: FatalErrorDetails,
     rejectedToken: string | null,
+    refusal: FatalErrorDetails | null,
   ): Promise<void> {
-    const outcome = await this.revalidateWithinBudget(auth);
+    const outcome = await this.revalidateWithinBudget(auth, refusal);
     if (this.disposed) {
       return;
     }
@@ -3427,6 +3436,7 @@ class StreamSession<
    */
   private async revalidateWithinBudget(
     auth: StreamAuthRevalidator,
+    refusal: FatalErrorDetails | null,
   ): Promise<RevalidateOutcome> {
     let timer: TimerHandle | null = null;
     const budget = new Promise<RevalidateOutcome>((resolve) => {
@@ -3438,7 +3448,7 @@ class StreamSession<
     // budget timer, and surface as an unhandled rejection instead of the
     // "network-error" this method promises for a thrown revalidation.
     const revalidation = Promise.resolve()
-      .then(() => auth.revalidateForReconnect())
+      .then(() => revalidateStream(auth, refusal))
       .catch((): RevalidateOutcome => "network-error");
     try {
       return await Promise.race([revalidation, budget]);

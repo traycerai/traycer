@@ -1,3 +1,9 @@
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  readDoorReason,
+  type HostDoorReason,
+} from "@traycer/protocol/framework/door-reason";
+
 /**
  * Why the app cannot use a host right now, as the app's own state: the eight
  * messages of the team host identity plan ("The eight messages, end to end"),
@@ -59,7 +65,7 @@ export interface HostDoorStatePolicy {
   readonly raisedBy: readonly HostDoorStateSource[];
   readonly blocks: boolean;
   readonly retry: HostDoorStateRetry;
-  /** `null` where no rule is written yet: a newer host's reason, a claimed computer. */
+  /** `null` where nothing the app can watch clears it: a newer host's reason, a claimed computer. */
   readonly clears: HostDoorStateClears | null;
 }
 
@@ -152,4 +158,38 @@ export interface HostDoorState {
     readonly code: string;
     readonly doorReason: string | null;
   } | null;
+}
+
+const DOOR_REASON_STATES: Readonly<
+  Record<HostDoorReason, HostDoorStateKind | null>
+> = {
+  keys_unavailable: "keys-unavailable",
+  clock_skew: "clock-skew",
+  enrolment_broken: "enrolment-broken",
+  membership_removed: "membership-removed",
+  host_claimed: "host-claimed",
+  // Recovered without a state: a fresh token, or the ordinary sign-out path.
+  token_expired: null,
+  not_admitted: null,
+  session_revoked: null,
+};
+
+/**
+ * The state a refusal the HOST sent raises, or `null` for one that raises
+ * none here (it is recovered by a fresh token, or is not a door refusal at
+ * all). An `UNAUTHORIZED` or `FORBIDDEN` with no reason is an older host.
+ *
+ * Only for a host's own frames: a relay's session kill is not a host's
+ * refusal and never reaches this.
+ */
+export function hostDoorStateOfRefusal(
+  details: FatalErrorDetails,
+): HostDoorStateKind | null {
+  const reason = readDoorReason(details.doorReason);
+  if (reason === "absent")
+    return details.code === "UNAUTHORIZED" || details.code === "FORBIDDEN"
+      ? "older-host"
+      : null;
+  if (reason === "unrecognised") return "unrecognised-refusal";
+  return DOOR_REASON_STATES[reason];
 }

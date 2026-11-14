@@ -329,13 +329,24 @@ interface FakeConnection {
  * The relay + host end of the wire, scripted per test via `decideOpen`. Runs a
  * REAL responder Noise-NK handshake against the session's initiator and
  * answers each in-channel `open{bearer}` with an `openAck` or a session-level
- * `fatal`, recording every bearer presented.
+ * `fatal`, recording every bearer presented and the host token beside it.
  */
+function presentedGrant(authz: unknown): string {
+  if (authz === null || typeof authz !== "object") return "";
+  const grant: unknown = Reflect.get(authz, "grant");
+  return typeof grant === "string" ? grant : "";
+}
+
 class FakeRelayHost {
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: FakeConnection[] = [];
   /** Every bearer presented across all `open` frames, in arrival order. */
   readonly openBearers: string[] = [];
+  /**
+   * The host-only token in `authz.grant` on every `open`, index-aligned with
+   * `openBearers`. A client open's bearer is empty; this is the credential.
+   */
+  readonly openGrants: string[] = [];
   /**
    * The `clientIdentity` on every `open`, index-aligned with `openBearers`.
    *
@@ -888,18 +899,21 @@ class FakeRelayHost {
       message.json !== null && typeof message.json.bearer === "string"
         ? message.json.bearer
         : "";
+    const grant = presentedGrant(message.json?.authz);
     const openIndex = this.openBearers.length;
     this.openBearers.push(bearer);
+    this.openGrants.push(grant);
     this.openIdentities.push(message.json?.clientIdentity);
     this.openAuthz.push(message.json?.authz);
     if (this.stallOpens) {
       // Freeze this attempt mid-flight (the session sits in its opening
       // phase, its own phase timer pending) until the test releases it -
       // the window the forced-intent ordering tests need to aim into.
-      this.stalledOpens.push({ connection, bearer, openIndex });
+      // The host decides on the token in `authz`, which is what it verifies.
+      this.stalledOpens.push({ connection, bearer: grant, openIndex });
       return;
     }
-    await this.respondToOpen(connection, bearer, openIndex);
+    await this.respondToOpen(connection, grant, openIndex);
   }
 
   /**
@@ -1189,9 +1203,15 @@ function buildSessionOptions(
         kind: "ok" as const,
         grant: { grant: "grant-jws", expiresInSeconds: 300 },
       }),
-    bearer: () => lease,
+    hostToken: () => {
+      try {
+        return lease.getBearerToken();
+      } catch {
+        return null;
+      }
+    },
     auth,
-    sessionGrant: null,
+    door: null,
     clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
@@ -1486,7 +1506,8 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         // The recovery presented the rejected bearer once, then the rotated
         // one - and never closed the session on the way.
-        expect(relay.openBearers).toEqual(["expired-token", "fresh-token"]);
+        expect(relay.openGrants).toEqual(["expired-token", "fresh-token"]);
+        expect(relay.openBearers).toEqual(["", ""]);
         expect(revalidateCalls).toBe(1);
         expect(session.isClosed()).toBe(false);
         expect(closedEvents).toBe(0);
@@ -1526,7 +1547,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         // exactly once and stopped, rather than never being consulted.
         expect(revalidateCalls).toBe(1);
         expect(closedEvents).toBe(1);
-        expect(relay.openBearers).toEqual(["dead-token"]);
+        expect(relay.openGrants).toEqual(["dead-token"]);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -1568,7 +1589,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         // exactly once and stopped, rather than never being consulted.
         expect(revalidateCalls).toBe(1);
         expect(closedEvents).toBe(1);
-        expect(relay.openBearers).toEqual(["demoted-token"]);
+        expect(relay.openGrants).toEqual(["demoted-token"]);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -1609,7 +1630,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+        expect(relay.openGrants).toEqual(["valid-token", "valid-token"]);
         expect(revalidate).not.toHaveBeenCalled();
         expect(relay.errors).toEqual([]);
 
@@ -1670,7 +1691,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         expect(revalidateCalls).toBe(1);
         // "network-error" leaves the bearer untouched - the redial presents the
         // same one, and this never counts toward the give-up bound.
-        expect(relay.openBearers).toEqual(["stale-token", "stale-token"]);
+        expect(relay.openGrants).toEqual(["stale-token", "stale-token"]);
         expect(session.isClosed()).toBe(false);
         await Promise.resolve();
         expect(rejections).toEqual([]);
@@ -1711,7 +1732,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
         // Degrades exactly like `auth: null`: terminal, no crash.
-        expect(relay.openBearers).toEqual(["dead-token"]);
+        expect(relay.openGrants).toEqual(["dead-token"]);
         expect(relay.errors).toEqual([]);
         await Promise.resolve();
         expect(rejections).toEqual([]);
@@ -1976,7 +1997,7 @@ describe("RemoteSession availability-recovered evidence", () => {
         // The second emission was a reconnect, not a terminal close.
         expect(session.isReady()).toBe(true);
         expect(closedEvents).toBe(0);
-        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+        expect(relay.openGrants).toEqual(["valid-token", "valid-token"]);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -3114,7 +3135,7 @@ describe("RemoteSession dial-failure logging", () => {
   }
 
   it(
-    "preserves the legacy missing-bearer cause when client auth is unavailable",
+    "names a missing host token when the client has no token to present",
     async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const relay = new FakeRelayHost();
@@ -3125,7 +3146,7 @@ describe("RemoteSession dial-failure logging", () => {
         await vi.waitFor(
           () =>
             expect(sessionLines(warnSpy.mock.calls)).toContainEqual(
-              expect.stringContaining("missing-bearer"),
+              expect.stringContaining("missing-host-token"),
             ),
           WAIT,
         );
@@ -6964,7 +6985,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
         // per-stream - if this stayed at 1 the production change had
         // regressed to the neighbour's per-stream route instead.
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
-        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+        expect(relay.openGrants).toEqual(["valid-token", "valid-token"]);
 
         // Neither logical stream was condemned - it is the SHARED CONNECTION
         // that dropped and redialled, not stream A specifically (which is
@@ -9126,7 +9147,7 @@ describe("RemoteSession clock-skew park", () => {
         // one has not re-attached even once.
         await new Promise((resolve) => setTimeout(resolve, 400));
         expect(session.isClosed()).toBe(false);
-        expect(relay.openBearers).toEqual(["clock-skewed-token"]);
+        expect(relay.openGrants).toEqual(["clock-skewed-token"]);
       } finally {
         session.close();
       }
@@ -9162,7 +9183,7 @@ describe("RemoteSession clock-skew park", () => {
         // wake, no new bearer.
         clock.recover();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(relay.openBearers).toEqual([
+        expect(relay.openGrants).toEqual([
           "clock-skewed-token",
           "clock-skewed-token",
         ]);
@@ -11027,7 +11048,7 @@ describe("RemoteSession sandbox session grant", () => {
       const lease = new MutableBearerLease("user-bearer-secret", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
-        sessionGrant: () => "session-grant-jws",
+        hostToken: () => "session-grant-jws",
       });
       try {
         session.start();
@@ -11038,24 +11059,6 @@ describe("RemoteSession sandbox session grant", () => {
           grant: "session-grant-jws",
         });
         expect(relay.openBearers).not.toContain("user-bearer-secret");
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "keeps presenting the user bearer, with no authz, to a personal host",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("user-bearer", "user-1");
-      const session = buildSession(relay, lease, null);
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(relay.openBearers[0]).toBe("user-bearer");
-        expect(relay.openAuthz[0] ?? null).toBeNull();
       } finally {
         session.close();
       }
@@ -11112,10 +11115,7 @@ describe("RemoteSession refused OPEN and browser jar payload", () => {
       try {
         session.start();
         browserSessions.sendClientFrame(cookieDelta);
-        await vi.waitFor(
-          () => expect(relay.openBearers).toEqual(["user-bearer"]),
-          WAIT,
-        );
+        await vi.waitFor(() => expect(relay.openBearers).toEqual([""]), WAIT);
 
         expect(
           relay.clientFrames.some(
@@ -11152,13 +11152,11 @@ describe("RemoteSession refused OPEN and browser jar payload", () => {
 
 /**
  * The no-progress bound counts an UNAUTHORIZED rejection whose revalidation
- * answered "rotated" as no progress when the credential the next attach will
- * present is the one just rejected. A session grant is not like a bearer: the
- * grant reader keeps returning the grant the host just refused, because the
- * fresh grant is minted only by the NEXT attach. So "unchanged" proves nothing
- * for a grant, and a sandbox session must keep reconnecting through it.
+ * answered "rotated" as no progress when the host token the next open will
+ * present is the one just rejected. The fingerprint is that token, so an
+ * unchanged one goes terminal instead of looping.
  */
-describe("RemoteSession no-progress UNAUTHORIZED bound by credential kind", () => {
+describe("RemoteSession no-progress UNAUTHORIZED bound", () => {
   const ROTATED: StreamAuthRevalidator = {
     revalidateForReconnect: () => Promise.resolve("rotated" as const),
   };
@@ -11180,36 +11178,7 @@ describe("RemoteSession no-progress UNAUTHORIZED bound by credential kind", () =
   }
 
   it(
-    "keeps reconnecting a session-grant session whose grant reader returns the rejected grant, after rotated revalidations past the bearer bound",
-    async () => {
-      const relay = new FakeRelayHost();
-      relay.decideOpen = () => ({
-        kind: "fatal",
-        details: unauthorizedDetails(),
-      });
-      const lease = new MutableBearerLease("user-bearer-secret", "user-1");
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, ROTATED),
-        // The same grant every time: the next attach has not minted a new one.
-        sessionGrant: () => "session-grant-jws",
-      });
-      try {
-        session.start();
-        await untilPastTheBoundOrClosed(relay, session);
-
-        expect(session.isClosed()).toBe(false);
-        expect(relay.openBearers.length).toBeGreaterThanOrEqual(4);
-        // Every one of those opens carried the grant, never the user bearer.
-        expect(relay.openBearers.every((bearer) => bearer === "")).toBe(true);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "control: a bearer session whose bearer is unchanged still goes terminal after three rejected opens",
+    "a host-token session whose token is unchanged goes terminal after three rejected opens",
     async () => {
       const relay = new FakeRelayHost();
       relay.decideOpen = () => ({

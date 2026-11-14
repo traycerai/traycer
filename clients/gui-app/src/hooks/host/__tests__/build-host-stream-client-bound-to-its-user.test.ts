@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
 import type { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
@@ -24,8 +29,10 @@ import {
 } from "@/stores/auth/auth-store";
 
 // The local branch of `buildHostStreamClient` builds a `WsStreamClient`
-// directly, so these pin that the client it returns stays on the user it was
-// built for, whichever account is live when it first dials.
+// directly. It opens with the host-only token of the user it was built for,
+// whichever account is live when it first dials, and never with a sign-in token.
+
+const HOST_TOKEN_A = "host-token-for-user-a";
 
 const LOCAL_ENDPOINT = {
   hostId: mockLocalHostEntry.hostId,
@@ -50,7 +57,21 @@ describe("buildHostStreamClient for a local host", () => {
     vi.unstubAllGlobals();
   });
 
-  function build(
+  async function hostTokensForUserA(): Promise<HostTokenSource> {
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    await source.adopt(USER_A, mockLocalHostEntry.hostId, {
+      token: HOST_TOKEN_A,
+      expiresAtMs: Date.now() + 60 * 60 * 1000,
+    });
+    return source;
+  }
+
+  async function build(
     provider: DefaultRequestContextProvider,
     cloudAuthorized: () => boolean,
   ) {
@@ -61,6 +82,7 @@ describe("buildHostStreamClient for a local host", () => {
       cloudAuthorized,
       authnBaseUrl: "http://localhost:5005",
       auth: null,
+      hostTokens: await hostTokensForUserA(),
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: false,
@@ -89,7 +111,7 @@ describe("buildHostStreamClient for a local host", () => {
   it("sends no token of the other user when it is built while that user is live", async () => {
     const provider = newProvider();
     signIn(provider, USER_B, "token-b");
-    const client = build(provider, cloudVerdictOf(provider));
+    const client = await build(provider, cloudVerdictOf(provider));
 
     const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
     const statuses: StreamConnectionStatus[] = [];
@@ -105,13 +127,14 @@ describe("buildHostStreamClient for a local host", () => {
     signIn(provider, USER_A, "token-a");
     const native = await untilFirstSocket(60_000);
 
-    expect(sentFramesOfKind(native, "open")[0].token).toBe("token-a");
+    expect(sentFramesOfKind(native, "open")[0].token).toBe(HOST_TOKEN_A);
+    expect(sentTokens()).not.toContain("token-a");
     session.close();
   });
 
   it("sends no token of the other user when it signs in after a signed-out first read", async () => {
     const provider = newProvider();
-    const client = build(provider, cloudVerdictOf(provider));
+    const client = await build(provider, cloudVerdictOf(provider));
 
     const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
     const statuses: StreamConnectionStatus[] = [];
@@ -131,7 +154,8 @@ describe("buildHostStreamClient for a local host", () => {
     signIn(provider, USER_A, "token-a");
     const native = await untilFirstSocket(60_000);
 
-    expect(sentFramesOfKind(native, "open")[0].token).toBe("token-a");
+    expect(sentFramesOfKind(native, "open")[0].token).toBe(HOST_TOKEN_A);
+    expect(sentTokens()).not.toContain("token-a");
     session.close();
   });
 
@@ -139,7 +163,7 @@ describe("buildHostStreamClient for a local host", () => {
     const provider = newProvider();
     signInUnverified(provider, USER_A, "token-a");
     useAuthStore.setState({ status: "unverified" });
-    const client = build(provider, () =>
+    const client = await build(provider, () =>
       authorizesCloudCapability(useAuthStore.getState().status),
     );
     const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });

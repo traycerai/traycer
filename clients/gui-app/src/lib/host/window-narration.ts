@@ -1,4 +1,7 @@
-import type { LocalTeamAdmissionState } from "@traycer-clients/shared/host-transport/local-open-auth";
+import {
+  HOST_DOOR_STATE_POLICY,
+  type HostDoorState,
+} from "@traycer-clients/shared/host-transport/host-door-state";
 import type {
   HostLeaseSnapshot,
   SelectionIncompatibility,
@@ -52,9 +55,7 @@ export type WindowNarrationCause = "no-usable-host" | "cold-start";
  */
 export type WindowNarrationVariant =
   | { readonly kind: "offline" }
-  | { readonly kind: "team-membership-checking" }
   | { readonly kind: "team-membership-required" }
-  | { readonly kind: "team-membership-unavailable" }
   | {
       readonly kind: "update-host";
       readonly hostId: string;
@@ -108,7 +109,11 @@ export type WindowNarrationState =
     };
 
 export interface WindowNarrationInput {
-  readonly localTeamAdmission?: LocalTeamAdmissionState | null;
+  /**
+   * Why this app cannot use the host that would serve this window (the
+   * effective host, else the target), or `null`.
+   */
+  readonly doorState?: HostDoorState | null;
   /**
    * Whether this window's selection kernel has published a snapshot.
    *
@@ -357,29 +362,24 @@ export function hostUpdateActionApplies(
   );
 }
 
-/** Membership only owns the window when a remote host is not serving it. */
-function localTeamAdmissionVariant(
+/**
+ * The cover a blocking door state draws. Not being a member of the computer's
+ * team owns the window outright; every other blocking state only while
+ * nothing is serving it, and draws the "no host" cover.
+ */
+function doorStateVariant(
   input: WindowNarrationInput,
 ): WindowNarrationVariant | null {
-  if (
-    input.effectiveHostId !== null &&
-    input.effectiveHostId !== input.localHostId
-  ) {
-    return null;
-  }
-  if (input.localTeamAdmission === "required") {
+  const state = input.doorState ?? null;
+  if (state === null || !HOST_DOOR_STATE_POLICY[state.kind].blocks) return null;
+  if (state.kind === "not-a-member") {
     return { kind: "team-membership-required" };
   }
   const alreadyServing =
     input.hasBeenServed &&
     isServingLease(findLease(input.leases, input.effectiveHostId));
   if (alreadyServing) return null;
-  if (input.localTeamAdmission === "unavailable") {
-    return { kind: "team-membership-unavailable" };
-  }
-  return input.localTeamAdmission === "checking"
-    ? { kind: "team-membership-checking" }
-    : null;
+  return { kind: "offline" };
 }
 
 /**
@@ -394,9 +394,9 @@ export function deriveWindowNarration(
   input: WindowNarrationInput,
 ): WindowNarrationState {
   if (!input.attached) return { kind: "silent" };
-  const admission = localTeamAdmissionVariant(input);
-  if (admission !== null) {
-    return { kind: "narrating", cause: "no-usable-host", variant: admission };
+  const doorCover = doorStateVariant(input);
+  if (doorCover !== null) {
+    return { kind: "narrating", cause: "no-usable-host", variant: doorCover };
   }
   // NOBODY HAS ASKED YET, so nothing may report a verdict. An ∅ derived from a
   // fleet no attempt has concluded for is indistinguishable from an ∅ derived

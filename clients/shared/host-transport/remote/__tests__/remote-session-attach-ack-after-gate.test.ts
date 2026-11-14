@@ -26,20 +26,21 @@ import {
   encodeMuxFrame,
   MuxFrameType,
   NOISE_PROLOGUE,
+  OPEN_AUTHZ_SESSION_GRANT_VERSION,
   QosClass,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_RESUME,
   SESSION_CONTROL_STREAM_ID,
 } from "@traycer/protocol/host-transport/mux";
+import type {
+  PoolSessionAuth,
+  RemoteSessionAuth,
+} from "@traycer/protocol/host-transport/remote/auth";
 import {
   encodeResumeFrame,
   parseResumeFrame,
   ResumeLedger,
 } from "@traycer/protocol/host-transport/resume-ledger";
-import type {
-  PoolSessionAuth,
-  RemoteSessionAuth,
-} from "@traycer/protocol/host-transport/remote/auth";
 import { ATTACH_ACK_TIMEOUT_MS } from "@traycer/protocol/host-transport/remote/config";
 import type { AttachGrantProvider } from "@traycer/protocol/host-transport/remote/grant";
 import {
@@ -48,6 +49,10 @@ import {
   type RemoteSessionTransportKind,
 } from "@traycer/protocol/host-transport/remote/session";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+} from "@traycer-clients/shared/auth/host-token-source";
 import {
   cloudVerdictOf,
   FakeNativeWebSocket,
@@ -83,6 +88,29 @@ const EMPTY_AD = new Uint8Array(0);
 /** The authn default and cap for an attach grant. */
 const GRANT_LIFETIME_SECONDS = 300;
 const GRANT_LIFETIME_MS = GRANT_LIFETIME_SECONDS * 1_000;
+
+const relayAuth: RemoteSessionAuth = {
+  missingOpenAuthCause: "missing-host-token",
+  readOpenAuth: () => ({
+    bearer: "",
+    authz: {
+      v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
+      grant: "host-token",
+    },
+    fingerprint: "host-token",
+  }),
+  readCredentialUpdateBearer: () => "host-token",
+  currentFingerprint: () => "host-token",
+  revalidateForReconnect: null,
+};
+
+const poolAuth: PoolSessionAuth = {
+  missingOpenAuthCause: "missing-bearer",
+  readOpenAuth: () => ({ bearer: "gate-bearer", fingerprint: "gate-bearer" }),
+  readCredentialUpdateBearer: () => "gate-bearer",
+  currentFingerprint: () => "gate-bearer",
+  revalidateForReconnect: null,
+};
 
 /** Moves the fake clock, then lets the real async work it started finish. */
 async function step(ms: number): Promise<void> {
@@ -184,6 +212,8 @@ class FakeRelay {
   readonly resumes: number[] = [];
   /** The bearer each session OPEN frame carried, in arrival order. */
   readonly openBearers: unknown[] = [];
+  /** The host-only authorization value each session OPEN frame carried. */
+  readonly openAuthz: unknown[] = [];
   /** The `cloudAuthorized` value of every verdict update frame, in arrival order. */
   readonly verdictUpdates: unknown[] = [];
   private nextSid = 1;
@@ -402,6 +432,7 @@ class FakeRelay {
     ) {
       const openJson = message.json ?? {};
       this.openBearers.push(openJson.bearer);
+      this.openAuthz.push(openJson.authz);
       await this.sendMux(session, this.openAckMessage());
     }
   }
@@ -457,6 +488,7 @@ class FakeRelay {
       return;
     }
     this.openBearers.push((message.json ?? {}).bearer);
+    this.openAuthz.push((message.json ?? {}).authz);
     const source = new OutboundChunkSource(
       this.openAckMessage(),
       () => {
@@ -576,26 +608,6 @@ class RecordingEvidence<
     this.refusals.push(Date.now());
   }
 }
-
-const relayAuth: RemoteSessionAuth = {
-  missingOpenAuthCause: "missing-host-credential",
-  readOpenAuth: () => ({
-    bearer: "gate-bearer",
-    authz: null,
-    fingerprint: "gate-bearer",
-  }),
-  readCredentialUpdateBearer: () => "gate-bearer",
-  currentFingerprint: () => "gate-bearer",
-  revalidateForReconnect: null,
-};
-
-const poolAuth: PoolSessionAuth = {
-  missingOpenAuthCause: "missing-bearer",
-  readOpenAuth: () => ({ bearer: "gate-bearer", fingerprint: "gate-bearer" }),
-  readCredentialUpdateBearer: () => "gate-bearer",
-  currentFingerprint: () => "gate-bearer",
-  revalidateForReconnect: null,
-};
 
 type Session = RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>;
 
@@ -743,6 +755,8 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
             grant,
             role: "client",
             expires_in: GRANT_LIFETIME_SECONDS,
+            session_grant: `host-token-${minted}`,
+            session_grant_expires_in: GRANT_LIFETIME_SECONDS,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -765,7 +779,14 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
       authnBaseUrl: "https://authn.test",
       hostPublicKey: Buffer.from(relay.publicKey).toString("hex"),
       bearer,
-      openAuth: "user-bearer",
+      hostTokens: createHostTokenSource({
+        persistence: createMemoryHostTokenPersistence(),
+        mint: () => Promise.resolve({ kind: "no-sign-in" }),
+        signIn: null,
+        now: () => Date.now(),
+      }),
+      door: null,
+      onState: () => undefined,
       cloudAuthorized,
       auth: null,
       clock: null,
@@ -774,7 +795,6 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
       webSocketFactory: createWhatwgStreamWebSocketFactory(),
       requestId: () => `gate-client-req-${(nextRequestId += 1)}`,
       proactiveWakeEligible: true,
-      mintMemberCredential: null,
       evidence: NO_TRANSPORT_EVIDENCE,
     });
     if (transport === null) {
@@ -1245,7 +1265,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(evidence.indeterminates).toEqual([]);
   });
 
-  it("sends no other-identity bearer in the OPEN frame when the account switched during the queued attach", async () => {
+  it("does not put a sign-in token in OPEN when the account switches during a queued attach", async () => {
     const provider = newProvider();
     signIn(provider, USER_A, "token-a");
     stubGrantEndpoint();
@@ -1263,9 +1283,12 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     holders[0].fireClose(1006, "released");
     await untilOpenFrameOrDroppedLeg();
 
-    expect(relay.openBearers).not.toContain("token-b");
+    expect(relay.openBearers).toEqual([""]);
+    expect(relay.openAuthz).toEqual([
+      { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant: "host-token-1" },
+    ]);
     expect(mintAuthorizations).not.toContain("Bearer token-b");
-    expect(view.isReady()).toBe(false);
+    expect(view.isReady()).toBe(true);
     expect(view.isClosed()).toBe(false);
   });
 
@@ -1287,7 +1310,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     holders[0].fireClose(1006, "released");
     await advanceUntil(() => relay.openBearers.length === 1, 5_000);
 
-    expect(relay.openBearers).toEqual(["token-a2"]);
+    expect(relay.openBearers).toEqual([""]);
+    expect(relay.openAuthz).toEqual([
+      { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant: "host-token-1" },
+    ]);
   });
 
   it("mints no grant and sends no OPEN for another identity when the account switched before the next dial", async () => {
@@ -1301,7 +1327,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     );
     view.start();
     await advanceUntil(() => relay.openBearers.length === 1, 5_000);
-    expect(relay.openBearers).toEqual(["token-a"]);
+    expect(relay.openBearers).toEqual([""]);
+    expect(relay.openAuthz).toEqual([
+      { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant: "host-token-1" },
+    ]);
     const mintsBeforeSwitch = mintAuthorizations.length;
 
     signIn(provider, USER_B, "token-b");
@@ -1312,7 +1341,10 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     expect(mintAuthorizations.slice(mintsBeforeSwitch)).not.toContain(
       "Bearer token-b",
     );
-    expect(relay.openBearers).not.toContain("token-b");
+    expect(relay.openBearers).toEqual([""]);
+    expect(relay.openAuthz).toEqual([
+      { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant: "host-token-1" },
+    ]);
   });
 
   it("sends no other-identity bearer to the pool when the account switched during the queued attach", async () => {

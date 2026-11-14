@@ -36,9 +36,12 @@ import {
 } from "@traycer/protocol/host-transport/mux";
 import type { OpenFrameBearerSource } from "../../../auth/bearer-source";
 import {
-  createRemoteHostTransport,
-  remoteOpenAuthFor,
-} from "../create-remote-transport";
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenMintOutcome,
+} from "../../../auth/host-token-source";
+import { createRemoteHostTransport } from "../create-remote-transport";
+import { remoteOpenAuthFor } from "../open-auth";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { hostListItemToDirectoryEntry } from "../../../host-client/remote-fetcher";
 import { retireAllRemoteSessions } from "../active-remote-sessions";
@@ -64,6 +67,20 @@ const emptyStreamRegistry: VersionedStreamRpcRegistry =
 // test is what decides the outcome, not key parsing.
 const VALID_PUBLIC_KEY = "ab".repeat(32);
 
+function doorOptions() {
+  return {
+    hostTokens: createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: (): Promise<HostTokenMintOutcome> =>
+        Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    }),
+    door: null,
+    onState: () => undefined,
+  };
+}
+
 function transportFor(bearerSource: OpenFrameBearerSource | null) {
   return createRemoteHostTransport<
     VersionedRpcRegistry,
@@ -76,7 +93,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     authnBaseUrl: "https://authn.invalid",
     hostPublicKey: VALID_PUBLIC_KEY,
     bearer: () => bearerSource,
-    openAuth: "user-bearer",
+    ...doorOptions(),
     // This suite is about the BUILD-TIME bearer gate, which runs before any
     // mint closure is constructed, so `cloudAuthorized` is not consulted by
     // anything here. `true` keeps it out of the way: were it `false`, a later
@@ -94,7 +111,6 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     },
     requestId: () => "req-1",
     proactiveWakeEligible: true,
-    mintMemberCredential: null,
     evidence: NO_TRANSPORT_EVIDENCE,
   });
 }
@@ -244,7 +260,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         authnBaseUrl: "https://authn.invalid",
         hostPublicKey: VALID_PUBLIC_KEY,
         bearer: () => bearerSource,
-        openAuth: "user-bearer",
+        ...doorOptions(),
         cloudAuthorized,
         auth: null,
         clock: null,
@@ -253,7 +269,6 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         webSocketFactory,
         requestId: () => "req-1",
         proactiveWakeEligible: true,
-        mintMemberCredential: null,
         evidence: NO_TRANSPORT_EVIDENCE,
       });
       expect(built).not.toBeNull();
@@ -323,6 +338,8 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
               grant: "jws-flip-test",
               role: "client",
               expires_in: 120,
+              session_grant: "host-token-flip-test",
+              session_grant_expires_in: 120,
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),
@@ -358,7 +375,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         authnBaseUrl: "https://authn.invalid",
         hostPublicKey: VALID_PUBLIC_KEY,
         bearer: () => bearerSource,
-        openAuth: "user-bearer",
+        ...doorOptions(),
         cloudAuthorized,
         auth: null,
         clock: null,
@@ -367,7 +384,6 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         webSocketFactory,
         requestId: () => "req-1",
         proactiveWakeEligible: true,
-        mintMemberCredential: null,
         evidence: NO_TRANSPORT_EVIDENCE,
       });
       expect(built).not.toBeNull();
@@ -409,6 +425,10 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         expect(new Headers(init?.headers).get("Authorization")).toBe(
           "Bearer user-bearer-token",
         );
+        expect(JSON.parse(String(init?.body))).toEqual({
+          role: "client",
+          session_grant_version: 2,
+        });
       } finally {
         closeAndRetire(session);
         warnSpy.mockRestore();
@@ -653,6 +673,8 @@ describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close"
               grant: "jws-e17-removal",
               role: "client",
               expires_in: 120,
+              session_grant: "host-token-e17-removal",
+              session_grant_expires_in: 120,
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),
@@ -687,7 +709,7 @@ describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close"
       authnBaseUrl: "https://authn.invalid",
       hostPublicKey: relay.hostPublicKeyHex,
       bearer: () => bearerSource,
-      openAuth: "user-bearer",
+      ...doorOptions(),
       cloudAuthorized: () => true,
       auth: null,
       clock: null,
@@ -696,7 +718,6 @@ describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close"
       webSocketFactory: relay.factory,
       requestId: () => "req-e17",
       proactiveWakeEligible: true,
-      mintMemberCredential: null,
       evidence: NO_TRANSPORT_EVIDENCE,
     });
   }

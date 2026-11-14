@@ -1,4 +1,7 @@
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
+import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
+import type { HostTokenRenewal } from "@traycer-clients/shared/auth/host-token-source";
+import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-token-sign-out";
 import {
   listTeamComputersViaHttp,
   setEnvironmentBotHostViaHttp,
@@ -111,6 +114,124 @@ function assertBoolean(
   if (typeof value !== "boolean") {
     throw new Error(`${context} requires a boolean argument`);
   }
+}
+
+function hostIdsOf(value: unknown): readonly string[] {
+  if (!Array.isArray(value))
+    throw new Error("hostTokensRenew.hostIds requires an array argument");
+  return value.map((hostId: unknown) => {
+    assertString(hostId, "hostTokensRenew.hostIds[]");
+    return hostId;
+  });
+}
+
+function hostTokenOf(value: unknown): HostToken {
+  if (typeof value !== "object" || value === null)
+    throw new Error("hostTokensAdopt.token requires an object argument");
+  const token: unknown = Reflect.get(value, "token");
+  const expiresAtMs: unknown = Reflect.get(value, "expiresAtMs");
+  assertString(token, "hostTokensAdopt.token.token");
+  assertNumber(expiresAtMs, "hostTokensAdopt.token.expiresAtMs");
+  return { token, expiresAtMs };
+}
+
+/**
+ * Main's host-only tokens, reached by every window. Main mints with its own
+ * verified copy of the sign-in, coalesced per person, host and refresh, so no
+ * channel here carries a sign-in token; each change goes to every window with
+ * the host token, and a sign-out removes that person's tokens.
+ */
+function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
+  const tokens = bridge.hostTokens;
+  // A window asks for renewal as its sign-in refreshes, and can ask before
+  // the refreshed sign-in reaches this process. Then nothing is minted now and
+  // the ask is answered on this process's next sign-in change: one waiting
+  // ask per person, replaced by a newer one, which answers the older ask
+  // `already-current`.
+  const waitingRenewals = new Map<string, () => void>();
+  const renewOnNextSignIn = (
+    userId: string,
+    hostIds: readonly string[],
+  ): Promise<HostTokenRenewal> =>
+    new Promise((resolve) => {
+      waitingRenewals.get(userId)?.();
+      const onChange = (): void => {
+        bridge.authSession.off("change", onChange);
+        if (waitingRenewals.get(userId) === stop)
+          waitingRenewals.delete(userId);
+        tokens.renew(userId, hostIds).then(resolve, () => {
+          resolve({ kind: "already-current" });
+        });
+      };
+      const stop = (): void => {
+        bridge.authSession.off("change", onChange);
+        if (waitingRenewals.get(userId) === stop)
+          waitingRenewals.delete(userId);
+        resolve({ kind: "already-current" });
+      };
+      bridge.authSession.on("change", onChange);
+      waitingRenewals.set(userId, stop);
+    });
+  bridge.disposeFns.push(() => {
+    for (const stop of Array.from(waitingRenewals.values())) stop();
+  });
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensObtain,
+    async (_event, userId: unknown, hostId: unknown, fresh: unknown) => {
+      assertString(userId, "hostTokensObtain.userId");
+      assertString(hostId, "hostTokensObtain.hostId");
+      assertBoolean(fresh, "hostTokensObtain.fresh");
+      return tokens.obtain(userId, hostId, fresh, null);
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensRenew,
+    async (_event, userId: unknown, hostIds: unknown) => {
+      assertString(userId, "hostTokensRenew.userId");
+      const wanted = hostIdsOf(hostIds);
+      const renewal = await tokens.renew(userId, wanted);
+      return renewal.kind === "already-current"
+        ? renewOnNextSignIn(userId, wanted)
+        : renewal;
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensAdopt,
+    async (_event, userId: unknown, hostId: unknown, token: unknown) => {
+      assertString(userId, "hostTokensAdopt.userId");
+      assertString(hostId, "hostTokensAdopt.hostId");
+      await tokens.adopt(userId, hostId, hostTokenOf(token));
+    },
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensForgetUser,
+    async (_event, userId: unknown) => {
+      assertString(userId, "hostTokensForgetUser.userId");
+      await tokens.forgetUser(userId);
+    },
+  );
+  bridge.disposeFns.push(
+    tokens.subscribe(({ userId, hostId }) => {
+      bridge.fanOut(RunnerHostEvent.hostTokensChange, {
+        userId,
+        hostId,
+        token: tokens.current(userId, hostId),
+      });
+    }),
+  );
+  bridge.disposeFns.push(
+    forgetHostTokensOnSignOut(
+      {
+        current: async () =>
+          (await bridge.authTokenStore.get())?.user.id ?? null,
+        onChange: (listener) =>
+          bridge.authTokenStore.subscribe((change) => {
+            listener(change.present ? change.userId : null);
+          }),
+      },
+      tokens,
+    ),
+  );
 }
 
 /** The renderer's mint request, checked field by field before it is sent. */
@@ -776,6 +897,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   registerSandboxControlPlaneIpc(bridge);
+  registerHostTokensIpc(bridge);
 
   // Fan the owned-watcher change events out to every window (source lands in §4;
   // a live registration that never fires until then). Torn down on dispose,

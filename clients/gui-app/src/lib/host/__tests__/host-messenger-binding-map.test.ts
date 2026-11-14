@@ -8,12 +8,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
-import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import {
+  type CreateRemoteTransportOptions,
+  type IRemoteSession,
+} from "@traycer-clients/shared/host-transport/remote/index";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import { buildRuntimeHostMessenger } from "../host-messenger";
 
 const mocks = vi.hoisted(() => ({
@@ -130,7 +134,9 @@ const bearer = {
 
 function harness() {
   const sessions: CountingSession[] = [];
-  const openAuths: string[] = [];
+  const opened: Array<
+    CreateRemoteTransportOptions<HostRpcRegistry, HostStreamRpcRegistry>
+  > = [];
   const build = (label: string) => {
     const session = countingSession(label);
     sessions.push(session);
@@ -144,12 +150,13 @@ function harness() {
     };
   };
   mocks.createRemoteHostTransport.mockImplementation(
-    (params: {
-      readonly hostId: string;
-      readonly hostPublicKey: string;
-      readonly openAuth: string;
-    }) => {
-      openAuths.push(params.openAuth);
+    (
+      params: CreateRemoteTransportOptions<
+        HostRpcRegistry,
+        HostStreamRpcRegistry
+      >,
+    ) => {
+      opened.push(params);
       return build(`${params.hostId}/${params.hostPublicKey}`);
     },
   );
@@ -170,12 +177,14 @@ function harness() {
     otherHost,
     poolEntry,
   ];
+  const hostTokens = inertHostTokenSource();
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     resolveTarget: (hostId) =>
       entries().find((entry) => entry.hostId === hostId) ?? null,
     auth: null,
     authnBaseUrl: "https://authn.invalid",
+    hostTokens,
     requestId: () => "req-1",
     onRemoteAvailabilityRecovered: () => undefined,
     onRemoteSessionTerminal: () => undefined,
@@ -216,7 +225,8 @@ function harness() {
       });
       return physicalHost;
     },
-    openAuths,
+    opened,
+    hostTokens,
     sandbox: () => sandbox,
     otherHost: () => otherHost,
     dispose: () => binding.dispose(),
@@ -267,16 +277,18 @@ describe("RuntimeHostMessenger binding map", () => {
     h.dispose();
   });
 
-  it("rebuilds the unary binding when an unchanged physical host transfers to a team", async () => {
+  it("keeps the unary binding when an unchanged physical host transfers to a team", async () => {
     const h = harness();
     await h.request(h.physicalHost());
     h.transferPhysicalHostToTeam();
     await h.request(h.physicalHost());
 
-    expect(h.sessions).toHaveLength(2);
-    expect(h.sessions[0].closeCalls).toBe(1);
-    expect(h.sessions[1].closeCalls).toBe(0);
-    expect(h.openAuths).toEqual(["user-bearer", "session-grant"]);
+    // Owner is not part of the transport key. Both owners open with the
+    // host-only token, so the transfer does not mint a second session.
+    expect(h.sessions).toHaveLength(1);
+    expect(h.sessions[0]?.closeCalls).toBe(0);
+    expect(h.opened).toHaveLength(1);
+    expect(h.opened[0]?.hostTokens).toBe(h.hostTokens);
     h.dispose();
   });
 

@@ -191,6 +191,7 @@ function buildRuntime(options: {
   });
   const runtime = new HostRuntime({
     runnerHost,
+    onHostTokenRenewal: () => undefined,
     registry,
     messenger,
     requestContextProvider: provider,
@@ -203,7 +204,13 @@ function buildRuntime(options: {
     // directory lifecycle in isolation, and none of them resolves a client.
     connectionRegistry: null,
   });
-  return { runtime, provider, directory, invalidator, runnerHost };
+  return {
+    runtime,
+    provider,
+    directory,
+    invalidator,
+    runnerHost,
+  };
 }
 
 function signInProvider(

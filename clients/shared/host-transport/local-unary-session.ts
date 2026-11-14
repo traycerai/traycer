@@ -1107,6 +1107,18 @@ export class LocalUnarySessionDirectory<Registry extends VersionedRpcRegistry> {
   }
 
   /**
+   * Arms the dial a caller now owns with a release that ran before that
+   * caller could claim: it was still looking up its host-only token. The
+   * release then applies at publish, as it would had the claim come first.
+   */
+  armReleaseBeforeReady(key: string): void {
+    const slot = this.slots.get(key);
+    if (slot !== undefined && slot.session === null) {
+      slot.releaseBeforeReady = true;
+    }
+  }
+
+  /**
    * Takes the dial-time release for `session`, once, at publish. False
    * when this slot was not released, or when `session` is no longer the
    * one it published.

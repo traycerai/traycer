@@ -16,6 +16,13 @@ import type {
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import type { RefusalAwareAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import { hostTokenUnaryRevalidator } from "@traycer-clients/shared/auth/host-token-lease";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  noteHostTokenRefusal,
+  noteHostTokenRenewal,
+} from "@/lib/host/host-door-observer";
 import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   createRetryingMessenger,
@@ -306,6 +313,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
               // wire via `useStreamAuthRevalidator`).
               auth: createStreamAuthRevalidator(auth),
               authnBaseUrl: runnerHost.authnBaseUrl,
+              hostTokens: runnerHost.hostTokens,
               requestId,
               // Un-strands queries that errored while this binding's remote
               // session was still dialing (a Settings host-picker selection
@@ -362,13 +370,40 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // retry the same RPC once against the fresh lease; some usage-limit
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.
+      // Every host but the server pool is reached with its host-only token,
+      // and a refusal there recovers that token; the pool still opens with the
+      // sign-in, so its refusal recovers the sign-in as before.
+      const hostTokenRecovery = hostTokenUnaryRevalidator({
+        tokens: runnerHost.hostTokens,
+        currentUserId: () =>
+          auth.getRequestContextProvider().current()?.identity.userId ?? null,
+        signInRecovery: createStreamAuthRevalidator(auth),
+        onState: noteHostTokenRefusal,
+        now: Date.now,
+      });
+      const unaryRecovery: RefusalAwareAuthRevalidator = {
+        revalidateExpectedBearer: (expected) =>
+          auth.revalidateExpectedBearer(expected),
+        revalidateRefusedBearer: (expected, hostId, refusal) => {
+          if (hostId !== POOL_HOST_ID)
+            return hostTokenRecovery.revalidateRefusedBearer(
+              expected,
+              hostId,
+              refusal,
+            );
+          if (refusal !== null && refusal.code !== "UNAUTHORIZED")
+            return Promise.resolve("rejected");
+          return auth.revalidateExpectedBearer(expected);
+        },
+      };
       const messenger: IHostMessenger<Registry> = createRetryingMessenger(
-        createAuthAwareMessenger(rawMessenger, auth, "always"),
+        createAuthAwareMessenger(rawMessenger, unaryRecovery, "always"),
         DEFAULT_TRANSPORT_RETRY_POLICY,
       );
 
       runtime = new HostRuntime<Registry>({
         runnerHost,
+        onHostTokenRenewal: noteHostTokenRenewal,
         registry,
         messenger,
         requestContextProvider: auth.getRequestContextProvider(),
