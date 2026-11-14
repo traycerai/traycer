@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useTeamEnvironmentIds } from "@/hooks/sandboxes/use-team-environment-query";
@@ -27,21 +28,36 @@ export function useTeamBillingAdminOf(
     : environments.data?.environments;
   const admins = useMemo(() => {
     const found = new Set<string>();
-    if (descriptors === undefined) return found;
     for (const [teamId, environmentId] of byTeamId) {
-      const descriptor = descriptors.find(
-        (environment) => environment.environmentId === environmentId,
-      );
-      if (
-        descriptor !== undefined &&
-        configurationRoleOf(descriptor) === "admin"
-      ) {
-        found.add(teamId);
-      }
+      if (adminOf(descriptors, environmentId)) found.add(teamId);
     }
     return found;
   }, [byTeamId, descriptors]);
   return useCallback((teamId: string) => admins.has(teamId), [admins]);
+}
+
+/**
+ * Whether the person is the Admin of the team whose environment is
+ * `environmentId`, read as {@link useTeamBillingAdminOf} reads it.
+ */
+export function useEnvironmentBillingAdmin(environmentId: string): boolean {
+  const environments = useEnvironmentListQuery(useHostClient(), true);
+  return adminOf(
+    environments.isError ? undefined : environments.data?.environments,
+    environmentId,
+  );
+}
+
+function adminOf(
+  descriptors: EnvironmentListResponseV11["environments"] | undefined,
+  environmentId: string,
+): boolean {
+  const descriptor = descriptors?.find(
+    (environment) => environment.environmentId === environmentId,
+  );
+  return (
+    descriptor !== undefined && configurationRoleOf(descriptor) === "admin"
+  );
 }
 
 /** Whether the person is `teamId`'s Admin; false for no team. */

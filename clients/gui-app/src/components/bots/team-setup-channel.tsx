@@ -39,6 +39,7 @@ import {
   type SandboxDefaultsRead,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useEnvironmentBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
 import { usePickedTeamHandle } from "@/components/settings/environment/team-pick-label";
 import { AddComputerDialog } from "@/components/settings/team/add-computer-dialog";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
@@ -383,7 +384,10 @@ function EnableTeamCloudAction(props: {
   const catalogue = useSandboxCatalogue(true);
   const defaults = useSandboxDefaults([environmentId]).get(environmentId);
   const sandboxes = useSandboxList();
-  const create = useSandboxCreate({ kind: "inline" });
+  const create = useSandboxCreate(
+    "inline",
+    useEnvironmentBillingAdmin(environmentId),
+  );
   // Held outside the card: a create outlives the card that sent it, and the
   // list's refresh answers after the create settles, so a card mounted in
   // between must still know the team's sandbox is coming.

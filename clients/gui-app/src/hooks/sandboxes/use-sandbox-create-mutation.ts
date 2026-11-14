@@ -69,13 +69,10 @@ interface SandboxCreateContext {
 }
 
 /**
- * Where a failed create says why: a `toast`, worded for whether the person
- * can buy the team's credits, or `inline`, where the caller draws the
- * error's message beside the control that sent it.
+ * Where a failed create says why: a `toast`, or `inline`, where the caller
+ * draws the error's message beside the control that sent it.
  */
-export type SandboxCreateRefusals =
-  | { readonly kind: "toast"; readonly buysTeamCredits: boolean }
-  | { readonly kind: "inline" };
+export type SandboxCreateRefusals = "toast" | "inline";
 
 /**
  * `POST /api/sandboxes` for a failed row's Retry and a team's Enable cloud.
@@ -87,6 +84,7 @@ export type SandboxCreateRefusals =
  */
 export function useSandboxCreate(
   refusals: SandboxCreateRefusals,
+  buysTeamCredits: boolean,
 ): UseMutationResult<
   SandboxCreateAccepted,
   Error,
@@ -119,8 +117,14 @@ export function useSandboxCreate(
       if (result.kind === "ok") {
         return result.accepted;
       }
+      // Worded for whoever sent it: a refusal for want of the team's
+      // credits tells only someone who can buy them how much to add.
       throw new SandboxCreateError(
-        sandboxCreateFailureMessage(result, teamName),
+        sandboxFailureMessageFor(
+          result,
+          sandboxCreateFailureMessage(result, teamName),
+          buysTeamCredits,
+        ),
         result.kind === "refused" ? result.code : null,
         result.kind === "refused" ? result.reason : null,
         result,
@@ -151,18 +155,9 @@ export function useSandboxCreate(
       }
     },
     onError: (error, _variables, context) => {
-      if (refusals.kind === "inline" || !settledForStartingAccount(context))
-        return;
+      if (refusals === "inline" || !settledForStartingAccount(context)) return;
       if (error instanceof SandboxCreateError) {
-        toast.error(
-          error.failure === null
-            ? error.message
-            : sandboxFailureMessageFor(
-                error.failure,
-                error.message,
-                refusals.buysTeamCredits,
-              ),
-        );
+        toast.error(error.message);
         return;
       }
       toastFromAuthError(error, "Couldn't create the sandbox.");

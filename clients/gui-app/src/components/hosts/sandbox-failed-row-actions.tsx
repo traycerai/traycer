@@ -58,7 +58,7 @@ export function SandboxFailedRowActions(props: {
   const buysTeamCredits = useOffersAddCredits(
     configuration ?? { kind: "personal" },
   );
-  const create = useSandboxCreate({ kind: "toast", buysTeamCredits });
+  const create = useSandboxCreate("toast", buysTeamCredits);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
   const [destroyOpen, setDestroyOpen] = useState(false);
