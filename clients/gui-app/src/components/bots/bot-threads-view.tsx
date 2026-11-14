@@ -362,11 +362,7 @@ function ThreadCard(props: {
           onShowPost={showPost}
         />
       ) : (
-        <ThreadSummary
-          hostId={hostId}
-          entry={entry}
-          onOpenThread={openThread}
-        />
+        <ThreadSummary hostId={hostId} entry={entry} />
       )}
     </li>
   );
@@ -677,27 +673,20 @@ function threadWriters(
 
 /**
  * A card before it has come near the view: its post's first line (with a
- * phone in the channel line for a thread a call opened) and its replies, as
- * the list's row was. The post is read from what the bot's channel has
- * loaded; an older one is named "Thread". The replies open the thread beside
- * its channel.
+ * phone in the channel line for a thread a call opened) and when its latest
+ * reply landed. The post is read from what the bot's channel has loaded; an
+ * older one is named "Thread". How many replies it has is told to assistive
+ * technology alone, as on the card in full.
  */
 function ThreadSummary(props: {
   readonly hostId: string;
   readonly entry: BotFollowedThread;
-  readonly onOpenThread: (() => void) | null;
 }): ReactNode {
-  const { hostId, entry, onOpenThread } = props;
+  const { hostId, entry } = props;
   const { bot, thread } = entry;
   const anchor = thread.anchor;
   if (anchor === null) {
-    return (
-      <ThreadSummaryBody
-        thread={thread}
-        title="Thread"
-        onOpenThread={onOpenThread}
-      />
-    );
+    return <ThreadSummaryBody thread={thread} title="Thread" />;
   }
   return (
     <ChannelPost
@@ -713,7 +702,6 @@ function ThreadSummary(props: {
           title={
             row === null ? "Thread" : (firstLineOf(postTextOf(row)) ?? "Thread")
           }
-          onOpenThread={onOpenThread}
         />
       )}
     </ChannelPost>
@@ -723,9 +711,8 @@ function ThreadSummary(props: {
 function ThreadSummaryBody(props: {
   readonly thread: BotThreadSummary;
   readonly title: string;
-  readonly onOpenThread: (() => void) | null;
 }): ReactNode {
-  const { thread, title, onOpenThread } = props;
+  const { thread, title } = props;
   const replies =
     thread.replyCount === 1 ? "1 reply" : `${thread.replyCount} replies`;
   return (
@@ -736,24 +723,14 @@ function ThreadSummaryBody(props: {
       <span className="min-w-0 truncate text-ui-sm text-foreground">
         {title}
       </span>
-      <span className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-        {onOpenThread === null ? (
-          <span>{replies}</span>
-        ) : (
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            data-testid="bot-thread-card-summary-replies"
-            onClick={onOpenThread}
-          >
-            {replies}
-          </Button>
-        )}
-        {thread.lastReplyAt === null ? null : (
-          <ReplyTime at={thread.lastReplyAt} />
-        )}
-      </span>
+      {thread.replyCount === 0 ? null : (
+        <span className="sr-only" data-testid="bot-thread-reply-count-sr">
+          {replies}
+        </span>
+      )}
+      {thread.lastReplyAt === null ? null : (
+        <ReplyTime at={thread.lastReplyAt} />
+      )}
     </div>
   );
 }
@@ -761,7 +738,11 @@ function ThreadSummaryBody(props: {
 /** When the thread's latest reply landed, on the shared minute clock. */
 function ReplyTime(props: { readonly at: number }): ReactNode {
   const label = useRelativeTimestamp(props.at);
-  return <span className="shrink-0">{`· ${label}`}</span>;
+  return (
+    <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+      {label}
+    </span>
+  );
 }
 
 /**

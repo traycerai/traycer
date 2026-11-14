@@ -557,6 +557,20 @@ function screenReaderCount(threadId: string): HTMLElement | null {
   return within(card(threadId)).queryByTestId("bot-thread-reply-count-sr");
 }
 
+/** What a summary card shows a sighted reader: its text without the screen-reader count. */
+function summaryVisibleText(threadId: string): string {
+  const summary = within(card(threadId)).getByTestId("bot-thread-card-summary");
+  const clone = summary.cloneNode(true);
+  if (!(clone instanceof HTMLElement))
+    throw new Error("summary is not an element");
+  for (const hidden of clone.querySelectorAll(
+    '[data-testid="bot-thread-reply-count-sr"]',
+  )) {
+    hidden.remove();
+  }
+  return clone.textContent;
+}
+
 /**
  * The thread's session as a windowed transcript of `total` replies, none of
  * them hydrated: every reply is a placeholder.
@@ -731,9 +745,12 @@ describe("<BotThreadsView />", () => {
     expect(
       team.getByTestId("bot-thread-card-summary").textContent,
     ).not.toContain("The Windows leg.");
-    expect(
-      team.getByTestId("bot-thread-card-summary-replies").textContent,
-    ).toBe("2 replies");
+    expect(team.queryByTestId("bot-thread-card-summary-replies")).toBeNull();
+    const count = team.getByTestId("bot-thread-reply-count-sr");
+    expect(count.textContent).toBe("2 replies");
+    expect(count.classList.contains("sr-only")).toBe(true);
+    expect(count.tagName).not.toBe("BUTTON");
+    expect(summaryVisibleText("team-new")).not.toMatch(/repl(y|ies)|·/);
     expect(team.getByTestId("bot-thread-row-new-replies")).toBeTruthy();
     expect(team.getByTestId("bot-thread-row-unread-count").textContent).toBe(
       "2 unread",
@@ -749,6 +766,23 @@ describe("<BotThreadsView />", () => {
     expect(tracy.queryByTestId("bot-thread-row-new-replies")).toBeNull();
     expect(tracy.queryByTestId("bot-thread-row-unread-count")).toBeNull();
     expect(card("team-new").getAttribute("data-full")).toBe("false");
+  });
+
+  it("keeps a thread whose post is gone as a summary with no visible reply count, only the screen-reader one", async () => {
+    mocks.hosted[TEAM].threads = mocks.hosted[TEAM].threads.map((summary) =>
+      summary.threadId === "team-new" ? { ...summary, anchor: null } : summary,
+    );
+    mount();
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    const gone = within(card("team-new"));
+
+    expect(gone.queryByTestId("bot-thread-card-summary-replies")).toBeNull();
+    expect(gone.getByTestId("bot-thread-reply-count-sr").textContent).toBe(
+      "2 replies",
+    );
+    expect(summaryVisibleText("team-new")).toMatch(/^Thread/);
+    expect(summaryVisibleText("team-new")).not.toMatch(/repl(y|ies)|·/);
+    expect(gone.queryByTestId("bot-thread-card-summary")).toBeTruthy();
   });
 
   it("marks a thread a call opened with a phone, and draws none on a plain thread", async () => {
