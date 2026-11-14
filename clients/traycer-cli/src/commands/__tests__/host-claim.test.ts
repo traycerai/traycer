@@ -83,19 +83,14 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
-function fakeCtx(
-  overrides: {
-    readonly json?: boolean;
-    readonly nonInteractive?: boolean;
-  } = {},
-): CommandContext {
+function fakeCtx(nonInteractive: boolean): CommandContext {
   return {
     runtime: {
-      json: overrides.json ?? false,
+      json: false,
       quiet: false,
       noProgress: false,
       noBootstrap: false,
-      nonInteractive: overrides.nonInteractive ?? false,
+      nonInteractive,
       environment: "production",
       logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     },
@@ -110,7 +105,7 @@ function fakeCtx(
   };
 }
 
-function makeClaimCommand(yes = false) {
+function makeClaimCommand(yes: boolean) {
   const args: HostClaimArgs = { yes };
   return buildHostClaimCommand(args);
 }
@@ -189,11 +184,11 @@ function setStdinIsTTY(value: boolean): void {
 }
 
 describe("buildHostClaimCommand", () => {
-  it("uses the C17 claim words, releases the team's computer, then provisions its credential", async () => {
+  it("with the running count unknown, uses the C17 claim words, releases the team's computer, then provisions its credential", async () => {
     setStdinIsTTY(true);
-    const ctx = fakeCtx();
+    const ctx = fakeCtx(false);
 
-    const result = await makeClaimCommand()(ctx);
+    const result = await makeClaimCommand(false)(ctx);
 
     expect(ctx.output.humanRequired).toHaveBeenCalledWith(
       "This computer belongs to acme.",
@@ -232,7 +227,7 @@ describe("buildHostClaimCommand", () => {
   });
 
   it("skips the question with --yes", async () => {
-    const result = await makeClaimCommand(true)(fakeCtx());
+    const result = await makeClaimCommand(true)(fakeCtx(false));
 
     expect(mocks.questionMock).not.toHaveBeenCalled();
     expect(result.human).toBe("This computer is yours.");
@@ -243,7 +238,7 @@ describe("buildHostClaimCommand", () => {
     setStdinIsTTY(true);
     questionAnswer = "n";
 
-    const result = await makeClaimCommand()(fakeCtx());
+    const result = await makeClaimCommand(false)(fakeCtx(false));
 
     expect(result).toMatchObject({ human: "Nothing changed.", exitCode: 0 });
     expect(requests.map(({ url }) => new URL(url).pathname)).toEqual([
@@ -254,7 +249,7 @@ describe("buildHostClaimCommand", () => {
 
   it("requires --yes when the question cannot be shown", async () => {
     await expect(
-      makeClaimCommand()(fakeCtx({ nonInteractive: true })),
+      makeClaimCommand(false)(fakeCtx(true)),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: "Pass --yes to claim this computer without the question.",
@@ -267,7 +262,7 @@ describe("buildHostClaimCommand", () => {
   it("requires sign-in before reading ownership", async () => {
     mocks.resolveHostAuthMock.mockResolvedValue(null);
 
-    await expect(makeClaimCommand()(fakeCtx())).rejects.toMatchObject({
+    await expect(makeClaimCommand(false)(fakeCtx(false))).rejects.toMatchObject({
       code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
       message: "Sign in with `traycer login`, then run the command again.",
     });
@@ -306,7 +301,7 @@ describe("buildHostClaimCommand", () => {
         kind: scenario.kind,
         remoteAccess: true,
       };
-      await expect(makeClaimCommand(true)(fakeCtx())).rejects.toMatchObject({
+      await expect(makeClaimCommand(true)(fakeCtx(false))).rejects.toMatchObject({
         message: scenario.message,
       });
       expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
@@ -324,7 +319,7 @@ describe("buildHostClaimCommand", () => {
     async (status, message) => {
       releaseStatus = status;
 
-      await expect(makeClaimCommand(true)(fakeCtx())).rejects.toMatchObject({
+      await expect(makeClaimCommand(true)(fakeCtx(false))).rejects.toMatchObject({
         message,
       });
       expect(mocks.provisionRunningHostCredentialMock).not.toHaveBeenCalled();

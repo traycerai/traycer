@@ -24,10 +24,12 @@ import type {
 // `failed`, `notTeamComputer`, `cannotAsk` and the help text are built to the
 // Proposal of board C30.
 const CLAIM_WORDS = {
-  belongsTo: (slug: string, runningChats: number | null) =>
-    runningChats === null || runningChats === 0
-      ? `This computer belongs to ${slug}.`
-      : `This computer belongs to ${slug}. ${String(runningChats)} chats are running and will stop.`,
+  belongsTo: (slug: string) => `This computer belongs to ${slug}.`,
+  chatsWillStop: (count: number) =>
+    `${String(count)} chats are running and will stop.`,
+  // What the confirm says when the running count could not be read is not
+  // ruled; the slot stays empty until it is.
+  runningChatsUnknown: "",
   question: "Claim it as your own? [y/N] ",
   claimed: "This computer is yours.",
   declined: "Nothing changed.",
@@ -96,7 +98,7 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       ),
     );
     ctx.output.humanRequired(
-      CLAIM_WORDS.belongsTo(owner.name, await readRunningChatCount()),
+      confirmLine(owner.name, await readRunningChats()),
     );
     if (!args.yes && !(await confirmClaim(ctx))) {
       return {
@@ -156,12 +158,31 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
 }
 
 /**
- * How many chats the claim stops, as the app's claim confirm shows it (board
- * C13). `null` is "not known", which prints the confirm line without a count;
- * no host method in this repository answers it yet.
+ * The team work the claim stops, as the app's claim confirm shows it (board
+ * C13). `unknown` is a failed read, a null answer or a host that does not
+ * answer; it is never read as `none`.
  */
-function readRunningChatCount(): Promise<number | null> {
-  return Promise.resolve(null);
+type RunningChats =
+  | { readonly kind: "none" }
+  | { readonly kind: "count"; readonly count: number }
+  | { readonly kind: "unknown" };
+
+// No host method in this repository answers the count yet.
+function readRunningChats(): Promise<RunningChats> {
+  return Promise.resolve({ kind: "unknown" });
+}
+
+function confirmLine(slug: string, running: RunningChats): string {
+  switch (running.kind) {
+    case "none":
+      return CLAIM_WORDS.belongsTo(slug);
+    case "count":
+      return `${CLAIM_WORDS.belongsTo(slug)} ${CLAIM_WORDS.chatsWillStop(running.count)}`;
+    case "unknown":
+      return [CLAIM_WORDS.belongsTo(slug), CLAIM_WORDS.runningChatsUnknown]
+        .filter((part) => part !== "")
+        .join(" ");
+  }
 }
 
 async function confirmClaim(ctx: CommandContext): Promise<boolean> {
