@@ -671,6 +671,7 @@ import {
   managedCommandStopUpgradeV10ToV11,
   managedCommandStopV10,
   managedCommandStopV11,
+  managedCommandSubscribeBotOutputV10,
   managedCommandSubscribeOutputV10,
   managedCommandSubscribeOutputV11,
   managedCommandViewV10,
@@ -1433,6 +1434,7 @@ import {
   providersChangedV11,
   providersChangedV12,
 } from "@traycer/protocol/host/providers-changed-stream";
+import { cloudRecoveredV10 } from "@traycer/protocol/host/cloud-recovered-stream";
 import {
   epicCommunicationGraphSubscribeV10,
   epicCommunicationGraphSubscribeV11,
@@ -16085,6 +16087,12 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // the open as an unknown method. The SET of a chat's commands is not a method
   // here: it rides `chat.subscribe@1.6` (see the re-entry note in
   // `host/managed-command/subscribe.ts` for what a global panel would re-add).
+  "managedCommand.subscribeBotOutput": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: managedCommandSubscribeBotOutputV10 } },
+    },
+  },
   "managedCommand.subscribeOutput": {
     1: {
       // `1.1` adds `relaunchOnHostRestart` to the snapshot/status headers;
@@ -16668,6 +16676,16 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         2: {
           contract: providersChangedV12,
+        },
+      },
+    },
+  },
+  "cloud.recovered.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: cloudRecoveredV10,
         },
       },
     },

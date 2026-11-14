@@ -118,6 +118,9 @@ export function useBotBoxImageIngest(
         if (paths.length > 0) refuseAsNoImage();
         return true;
       },
+      // Every resolved file is refused above, so where it would land never
+      // matters here.
+      pathsReachTarget: true,
     }),
     [runnerHost.fileDrops],
   );

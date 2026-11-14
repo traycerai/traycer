@@ -56,7 +56,7 @@ function agentMemoriesOf(
     !("enabled" in value) ||
     typeof value.enabled !== "boolean"
   ) {
-    throw new Error("Couldn't read the agent memories setting.");
+    throw new Error("Couldn't read the memories setting.");
   }
   return { enabled: value.enabled, revision: item.revision };
 }

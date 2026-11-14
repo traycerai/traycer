@@ -19,7 +19,6 @@ import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { isReadCursorReadOf } from "@/hooks/bots/use-bot-read-cursor";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -131,9 +130,9 @@ interface ActiveSubscriptionArgs {
 
 /**
  * Module-level ref-counted sessions, keyed by the owning client instance +
- * host + bot: Home's row and an open bot tab on the same host share one
- * session, while the same bot subscribed through two hosts (a tab moved to
- * its bound host, Home on the app-wide one) keeps two.
+ * host + bot. Readers of one bot through one host's cached client share one
+ * session; the same bot read through two hosts keeps two, since each host
+ * answers for itself.
  */
 const subscriptions: SharedStreamSubscriptionRegistry<BotStreamEvent> =
   new Map();
@@ -151,27 +150,14 @@ export function __resetBotSubscriptionsForTesting(): void {
 }
 
 /**
- * Subscribes on the APP-WIDE stream client - the Home section's reading,
- * where the hosts of many bots are a detail and the serving host's
- * `boundHost.isThisHost` says which ones are bound here.
- */
-export function useBotSubscription(args: {
-  readonly hostId: string | null;
-  readonly botId: string;
-  readonly enabled: boolean;
-}): BotSubscriptionResult {
-  const client = useWsStreamClient();
-  return useBotSubscriptionForClient({ ...args, client });
-}
-
-/**
- * Subscribes through an explicit host's own stream client - the bot tab's
- * reading, bound to its host for life. The client is dialed for `hostId` the
- * way every per-tab stream is (`useHostStreamClientFor` with auth
- * revalidation), never read off the app-wide context.
+ * Subscribes through a host's own stream client, dialed for `hostId` the way
+ * every per-tab stream is (`useHostStreamClientFor` with auth revalidation).
+ * Every reader of a bot goes through here, Home's row included: the app-wide
+ * context's client is another object, and a reader on it would open a second
+ * stream for the same bot and host. A `null` host subscribes to nothing.
  */
 export function useBotSubscriptionForHost(args: {
-  readonly hostId: string;
+  readonly hostId: string | null;
   readonly botId: string;
   readonly enabled: boolean;
 }): BotSubscriptionResult {
