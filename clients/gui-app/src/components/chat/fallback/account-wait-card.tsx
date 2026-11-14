@@ -1,6 +1,7 @@
 import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/schemas";
 import { useChatAccountWaitAnchor } from "./use-chat-account-wait";
 import { useFocusActions } from "@/hooks/home-focus/use-focus-actions";
+import { armTerminalAgentContinueProfile } from "@/stores/terminals/terminal-agent-continue-profile";
 import { useStore } from "zustand";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import type { ProvidersListResponse } from "@traycer/protocol/host/provider-schemas";
@@ -315,6 +316,11 @@ function WaitingProfileMoveDialog({
   const openTerminalControl = (
     terminal: ProvidersPreviewProfileMoveResponse["terminals"][number],
   ): void => {
+    armTerminalAgentContinueProfile(
+      terminal.hostId,
+      terminal.epicId,
+      terminal.agentId,
+    );
     onClose();
     openAgent(terminal.epicId, terminal.agentId, terminal.hostId);
   };

@@ -17,6 +17,7 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRpcError,
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -34,9 +35,22 @@ import {
   providersPreviewProfileMoveResponseSchema,
 } from "@traycer/protocol/host/profile-move-schemas";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import { MOVE_ERROR_FALLBACKS } from "../profile-move-copy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { ProfileMoveDialog } from "../profile-move-dialog";
+
+const sonnerErrors = vi.hoisted(() => ({
+  error: vi.fn<(message: ReactNode) => string>(() => "toast-id"),
+}));
+
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return {
+    ...actual,
+    toast: Object.assign(vi.fn(), actual.toast, { error: sonnerErrors.error }),
+  };
+});
 
 vi.mock("@/hooks/providers/use-profile-move-computer-names", () => ({
   useProfileMoveComputerNames:
@@ -46,6 +60,7 @@ vi.mock("@/hooks/providers/use-profile-move-computer-names", () => ({
 }));
 
 const HOST_ID = mockLocalHostEntry.hostId;
+const OLDER_COMPUTER_NOTICE = `Computer ${HOST_ID} is running an older version. Update it to move its agents.`;
 const SOURCE: ProvidersPreviewProfileMoveRequest["source"] =
   providersPreviewProfileMoveRequestSchema.parse({
     extent: "fleet",
@@ -257,12 +272,26 @@ function renderDialog(harness: MoveDialogHarness) {
   return render(dialogElement(harness, vi.fn()), { wrapper: harness.Wrapper });
 }
 
+function moveFloorFailure(
+  method: "providers.previewProfileMove" | "providers.commitProfileMove",
+): HostMethodVersionUnsatisfiedError {
+  return new HostMethodVersionUnsatisfiedError({
+    requirement: { method, version: { major: 1, minor: 0 } },
+    negotiated: undefined,
+    requestId: "move-dialog-request",
+    method,
+    hostId: HOST_ID,
+  });
+}
+
 afterEach(() => {
   cleanup();
+  sonnerErrors.error.mockClear();
 });
 
 afterAll(() => {
   vi.doUnmock("@/hooks/providers/use-profile-move-computer-names");
+  vi.doUnmock("sonner");
 });
 
 describe("ProfileMoveDialog", () => {
@@ -448,12 +477,106 @@ describe("ProfileMoveDialog", () => {
     });
     renderDialog(harness);
 
-    expect(
-      await screen.findByText(
-        `Computer ${HOST_ID} is running an older version. Update it to move its agents.`,
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText(OLDER_COMPUTER_NOTICE)).toBeTruthy();
     expect(screen.queryByText(/waiting on Source profile/)).toBeNull();
+  });
+
+  it("shows the preview fallback toast for an ordinary RPC failure", async () => {
+    const harness = createHarness({
+      preview: () => {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "synthetic preview failure",
+          requestId: "move-dialog-request",
+          method: "providers.previewProfileMove",
+          fatalDetails: null,
+        });
+      },
+      commit: skippedBotResult,
+    });
+    renderDialog(harness);
+
+    await waitFor(() => expect(sonnerErrors.error.mock.calls).toHaveLength(1));
+    expect(sonnerErrors.error.mock.calls[0]?.[0]).toBe(
+      MOVE_ERROR_FALLBACKS.preview,
+    );
+    expect(
+      screen.queryByText(/synthetic preview failure|RPC_ERROR/),
+    ).toBeNull();
+  });
+
+  it("shows the older-computer notice when preview is below the dispatch floor", async () => {
+    const harness = createHarness({
+      preview: () => {
+        throw moveFloorFailure("providers.previewProfileMove");
+      },
+      commit: skippedBotResult,
+    });
+    renderDialog(harness);
+
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toBe(OLDER_COMPUTER_NOTICE);
+    expect(
+      screen.queryByText(
+        /DOWNGRADE_UNSUPPORTED|negotiated|not advertised|below the/,
+      ),
+    ).toBeNull();
+    expect(sonnerErrors.error.mock.calls).toHaveLength(0);
+  });
+
+  it("shows the older-computer notice when commit is below the dispatch floor", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness({
+      preview: () => PREVIEW,
+      commit: () => {
+        throw moveFloorFailure("providers.commitProfileMove");
+      },
+    });
+    renderDialog(harness);
+    await screen.findByText("2 agents and bots are waiting on Source profile.");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 2" }));
+
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toBe(OLDER_COMPUTER_NOTICE);
+    expect(
+      screen.queryByText(
+        /DOWNGRADE_UNSUPPORTED|negotiated|not advertised|below the/,
+      ),
+    ).toBeNull();
+    expect(sonnerErrors.error.mock.calls).toHaveLength(0);
+  });
+
+  it("shows the commit fallback toast for an ordinary RPC failure", async () => {
+    const user = userEvent.setup();
+    const harness = createHarness({
+      preview: () => PREVIEW,
+      commit: () => {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "synthetic commit failure",
+          requestId: "move-dialog-request",
+          method: "providers.commitProfileMove",
+          fatalDetails: null,
+        });
+      },
+    });
+    renderDialog(harness);
+    await screen.findByText("2 agents and bots are waiting on Source profile.");
+    await user.click(screen.getByRole("combobox"));
+    await user.click(
+      await screen.findByRole("option", { name: "Destination profile" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Move 2" }));
+
+    await waitFor(() => expect(sonnerErrors.error.mock.calls).toHaveLength(1));
+    expect(sonnerErrors.error.mock.calls[0]?.[0]).toBe(
+      MOVE_ERROR_FALLBACKS.commit,
+    );
+    expect(screen.queryByText(/synthetic commit failure|RPC_ERROR/)).toBeNull();
   });
 
   it("keeps the operation id and request body when a commit answer is lost", async () => {

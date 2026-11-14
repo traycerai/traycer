@@ -383,6 +383,7 @@ export function publishedChatSessionState(
     accumulatedSummaryGenerationSeated: true,
     accumulatedSummaryAssemblyStarted: false,
     backgroundItems: undefined,
+    accountWait: null,
     // A published copy is frozen and has no stream: there is no traversal to
     // hold its dispatch and no offer to answer, so both surfaces are absent
     // for the life of the surface rather than merely not-yet-arrived. That is
