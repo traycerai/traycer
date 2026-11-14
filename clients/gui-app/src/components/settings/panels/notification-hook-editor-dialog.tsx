@@ -42,14 +42,16 @@ interface HookEditorProps {
   readonly onSave: (hook: NotificationHookConfig) => void;
 }
 
-export function NotificationHookEditorDialog(props: HookEditorProps) {
+export function NotificationHookEditorDialog(
+  props: HookEditorProps & { readonly serverProblem?: string | null },
+) {
   const credentialRefusal = useHostCredentialRefusal(null);
   return (
     <HookEditor
       {...props}
       scope="computer"
       credentialRefusal={credentialRefusal}
-      serverProblem={null}
+      serverProblem={props.serverProblem ?? null}
       onChange={() => undefined}
     />
   );
@@ -90,10 +92,9 @@ function HookEditor(
         ? TEAM_NOTIFICATION_HOOKS_COPY.localOnly(variable)
         : ACCOUNT_NOTIFICATIONS_COPY.localOnly(variable);
   }
-  const problem =
-    localProblem ??
-    draftProblem(draft, props.credentialRefusal) ??
-    props.serverProblem;
+  const validationProblem =
+    localProblem ?? draftProblem(draft, props.credentialRefusal);
+  const problem = validationProblem ?? props.serverProblem;
   return (
     <Dialog
       open
@@ -283,7 +284,11 @@ function HookEditor(
             </Button>
             <Button
               type="button"
-              disabled={problem !== null || props.saving}
+              disabled={
+                validationProblem !== null ||
+                (props.scope !== "computer" && props.serverProblem !== null) ||
+                props.saving
+              }
               onClick={() => {
                 props.onSave(draftToHook(draft));
               }}

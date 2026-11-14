@@ -4,7 +4,6 @@ import {
   notificationHookRefusalSchema,
   accountNotificationSettingsConflictSchema,
   accountNotificationMatrixPutRequestSchema,
-  accountNotificationHooksPutRequestSchema,
   type AccountNotificationMatrixPutRequest,
   type AccountNotificationHooksPutRequest,
   type AccountNotificationSettingsResponse,
@@ -59,13 +58,9 @@ export function saveAccountNotificationHooks(
   cloud: EnvironmentCloud,
   request: AccountNotificationHooksPutRequest,
 ): Promise<AccountNotificationSettingsResponse> {
-  const parsed = accountNotificationHooksPutRequestSchema.safeParse(request);
-  if (!parsed.success)
-    throw new EnvironmentCloudError(
-      "invalid",
-      "The settings request was refused.",
-    );
-  return writeAccountNotificationSettings(cloud, parsed.data);
+  // The host's contribution is sent as answered. Authn, not this client,
+  // judges its bounds; a 400 fails the same save without altering the list.
+  return writeAccountNotificationSettings(cloud, request);
 }
 
 /** Each arm replaces only its own column. A stale row gets one fresh read and one retry. */

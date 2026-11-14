@@ -1,3 +1,4 @@
+import { NotificationHooksAccountSaveError } from "@/lib/notifications/notification-hooks-account-save-error";
 import { HOST_OVERVIEW } from "./host-overview.definitions";
 import { notificationHooksRemovedMessage } from "@traycer/protocol/host/notifications/presentation";
 import { useState, type ReactNode } from "react";
@@ -319,8 +320,34 @@ function HooksEditor(props: {
           toast.success(done);
         },
         onError: (error) => {
-          setEditor({ kind: "closed" });
-          setPendingDelete(null);
+          if (error instanceof NotificationHooksAccountSaveError) {
+            // This app wrote these exact hooks locally. A retry may quote
+            // that answered revision, but never a revision from a later read.
+            const saved: HookSnapshot = {
+              hooks,
+              configurationRevision: error.savedConfigurationRevision,
+            };
+            setEditor((current) =>
+              current.kind === "closed"
+                ? current
+                : {
+                    ...current,
+                    snapshot:
+                      current.kind === "add"
+                        ? {
+                            ...current.snapshot,
+                            configurationRevision: saved.configurationRevision,
+                          }
+                        : saved,
+                  },
+            );
+            setPendingDelete((current) =>
+              current === null ? null : { ...current, snapshot: saved },
+            );
+          } else {
+            setEditor({ kind: "closed" });
+            setPendingDelete(null);
+          }
           setSaveError(
             `${error.message} Review the refreshed hooks before saving again.`,
           );
@@ -413,6 +440,7 @@ function HooksEditor(props: {
           }
           title={editor.kind === "add" ? "Add hook" : "Edit hook"}
           saving={props.saveHooks.isPending}
+          serverProblem={saveError}
           onCancel={() => {
             setEditor({ kind: "closed" });
           }}
