@@ -13,7 +13,9 @@ import {
 } from "@/lib/sandboxes/sandbox-strings";
 import { SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT } from "@traycer/protocol/host/sandbox-control";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
+import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useOpenLink } from "@/lib/links/open-link";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
@@ -30,6 +32,19 @@ export interface SandboxOperationFailureProps {
   readonly onRetry: ((verb: SandboxRowVerb) => void) | null;
 }
 
+/** The refusal for want of credits a failed operation carries, else null. */
+function creditRefusalOf(
+  error: unknown,
+): Extract<SandboxControlFailure, { kind: "refused" }> | null {
+  const failure = error instanceof SandboxOperationError ? error.failure : null;
+  return failure?.kind === "refused" &&
+    failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&
+    failure.reason !== "unverified" &&
+    failure.reason !== "unsupported-subscription"
+    ? failure
+    : null;
+}
+
 /** Capture runtime-dependent remedies before a receipt renders outside its provider. */
 export function useSandboxOperationFailure(
   props: SandboxOperationFailureProps,
@@ -40,18 +55,9 @@ export function useSandboxOperationFailure(
     hostConfiguration ?? { kind: "personal" };
   const billingUrl = useConfigurationBillingUrl(configuration);
   const openLink = useOpenLink();
+  const offersAddCredits = useOffersAddCredits(configuration);
   if (operation?.kind !== "failed") return null;
-  const failure =
-    operation.error instanceof SandboxOperationError
-      ? operation.error.failure
-      : null;
-  const creditFailure =
-    failure?.kind === "refused" &&
-    failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&
-    failure.reason !== "unverified" &&
-    failure.reason !== "unsupported-subscription"
-      ? failure
-      : null;
+  const creditFailure = creditRefusalOf(operation.error);
   const message =
     creditFailure === null
       ? `${sandboxVerbFailureLine(operation.verb, props.name)}${safeFailureClause(operation.error)}`
@@ -65,7 +71,7 @@ export function useSandboxOperationFailure(
       <span className="text-muted-foreground">
         {`Support reference: ${operation.reference}`}
       </span>
-      {creditFailure === null ? null : (
+      {creditFailure === null || !offersAddCredits ? null : (
         <Button
           type="button"
           variant="link"

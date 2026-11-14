@@ -103,6 +103,7 @@ import {
   type SandboxVerbOutcome,
 } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import {
   sandboxConfigurationOf,
   useSandboxConfigurations,
@@ -2524,6 +2525,10 @@ function PendingDispatchRemedy(props: {
     configuration ?? { kind: "personal" },
   );
   const openLink = useOpenLink();
+  // A team's credits are offered to its Admin only; anyone else gets Details.
+  const addCredits =
+    useOffersAddCredits(configuration ?? { kind: "personal" }) &&
+    props.failure === "credits";
   if (props.failure === "settings" && props.row !== null)
     return (
       <SandboxRetryApplyingButton
@@ -2539,12 +2544,12 @@ function PendingDispatchRemedy(props: {
       onClick={() => {
         if ((useAuthStore.getState().profile?.userId ?? null) !== props.userId)
           return;
-        if (props.failure === "credits" && configuration !== null)
+        if (addCredits && configuration !== null)
           void openLink(billingUrl, "account", null);
         else openSandboxDetails(props.id);
       }}
     >
-      {props.failure === "credits" ? "Add credits" : "Details"}
+      {addCredits ? "Add credits" : "Details"}
     </Button>
   );
 }

@@ -99,6 +99,8 @@ import {
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { sandboxWithdrawalLine } from "@/components/hosts/sandbox-card-model";
 import {
+  ONLY_TEAM_ADMINS_CAN_ADD_CREDITS,
+  ONLY_TEAM_ADMINS_LINE,
   SANDBOX_LIST_FAILED,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -940,12 +942,18 @@ function useFrozenRowFacts(
   const teamBillingAdmin = useTeamBillingAdmin(
     configuration.kind === "team" ? configuration.teamId : null,
   );
+  const offersAddCredits = sandboxFrozenOffersAddCredits(
+    configuration,
+    teamBillingAdmin,
+  );
+  if (!summary.frozen) return { cause: null, offersAddCredits };
+  const cause = sandboxFrozenCause(configuration);
   return {
-    cause: summary.frozen ? sandboxFrozenCause(configuration) : null,
-    offersAddCredits: sandboxFrozenOffersAddCredits(
-      configuration,
-      teamBillingAdmin,
-    ),
+    cause:
+      offersAddCredits || !ONLY_TEAM_ADMINS_LINE.shown
+        ? cause
+        : `${cause} ${ONLY_TEAM_ADMINS_CAN_ADD_CREDITS}`,
+    offersAddCredits,
   };
 }
 

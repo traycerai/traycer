@@ -158,19 +158,10 @@ export const NO_MATCH_ELSEWHERE_LINE =
 /**
  * `Acme's`: whose credits a team's sandbox uses. A team's sandbox is paid
  * from the team's credits, whoever woke it, so every sentence about its
- * credits names the team. With no name known, `the team's`.
+ * credits names the team.
  */
-export function teamPossessive(teamName: string | null): string {
-  return teamName === null || teamName.length === 0
-    ? "the team's"
-    : `${teamName}'s`;
-}
-
-/** {@link teamPossessive} at the start of a sentence: `Acme's`, `The team's`. */
-export function teamPossessiveSentence(teamName: string | null): string {
-  return teamName === null || teamName.length === 0
-    ? "The team's"
-    : `${teamName}'s`;
+export function teamPossessive(teamName: string): string {
+  return `${teamName}'s`;
 }
 
 /** `uses your credits` / `uses Acme's credits`. */
@@ -247,6 +238,17 @@ export function needsCreditsRow(priceMcPerHour: number): string {
 }
 
 export const ADD_CREDITS_LINK = "Add credits ↗";
+
+/**
+ * Board C25's Alternative, waiting for the owner's ruling: said after a
+ * team's frozen cause on its row, to a member who is not the team's Admin.
+ * Not shown until it is ruled in; showing it is the one change of `shown`.
+ */
+export const ONLY_TEAM_ADMINS_CAN_ADD_CREDITS =
+  "Only team admins can add credits.";
+export const ONLY_TEAM_ADMINS_LINE: { readonly shown: boolean } = {
+  shown: false,
+};
 
 // ── The consequences block ────────────────────────────────────────────────
 
@@ -442,7 +444,7 @@ export function teamCreditsShortLine(
   teamName: string,
   shortfallMc: number | null,
 ): string {
-  const whose = teamPossessiveSentence(teamName);
+  const whose = teamPossessive(teamName);
   if (shortfallMc === null) {
     return `${whose} credits don't cover an hour of this sandbox.`;
   }
@@ -479,9 +481,10 @@ export function sandboxCreditShortLine(
         ? `${whose} ${configuration.teamName} allowance`
         : `${whose} team allowance`;
   } else if (creditSource === "team") {
-    const teamName =
-      configuration.kind === "team" ? configuration.teamName : null;
-    pot = `${sentence ? teamPossessiveSentence(teamName) : teamPossessive(teamName)} credits`;
+    pot =
+      configuration.kind === "team"
+        ? `${teamPossessive(configuration.teamName)} credits`
+        : `${whose} team's credits`;
   }
   if (shortfallMc === null) {
     if (!waking && allowance)

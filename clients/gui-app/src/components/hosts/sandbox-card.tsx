@@ -1,5 +1,9 @@
 import { SandboxSessionNotice } from "@/components/hosts/sandbox-session-notice";
 import { useState, type ReactNode } from "react";
+import {
+  sandboxConfigurationOf,
+  useSandboxConfigurations,
+} from "@/hooks/sandboxes/use-sandbox-configurations";
 import { toast } from "sonner";
 import type { SandboxGrantsSummary } from "@traycer/protocol/host/sandbox-secrets";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
@@ -279,11 +283,21 @@ export function SandboxHeaderNotices(props: {
   readonly teamName: string | null;
 }): ReactNode {
   const { summary, state, frozen, teamOwned } = props.sandbox;
-  const credits = sandboxHeaderCreditsLine(summary, teamOwned, props.teamName);
+  const configurations = useSandboxConfigurations();
+  // A row known only from the sandbox list has no host owner to name its
+  // team; its environment names it once the person's teams have answered.
+  const listed =
+    summary === null
+      ? null
+      : sandboxConfigurationOf(summary, configurations.configurations);
+  const teamName =
+    props.teamName ?? (listed?.kind === "team" ? listed.teamName : null);
+  const nameUnread = teamOwned && teamName === null && !configurations.complete;
+  const credits = sandboxHeaderCreditsLine(summary, teamOwned, teamName);
   const failure = sandboxHeaderFailureLine(props.sandbox);
   return (
     <div className="flex shrink-0 flex-col gap-2 px-5 text-ui-xs">
-      {frozen ? (
+      {frozen && !nameUnread ? (
         <p
           className="pb-3 text-warning-foreground"
           data-testid="sandbox-card-state-line"

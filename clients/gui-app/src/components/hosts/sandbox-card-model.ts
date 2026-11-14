@@ -19,10 +19,7 @@ import {
   sandboxFailedToStart,
   sandboxFrozenClock,
 } from "@/lib/sandboxes/sandbox-row-lines";
-import {
-  teamPossessive,
-  teamPossessiveSentence,
-} from "@/lib/sandboxes/sandbox-strings";
+import { teamPossessive } from "@/lib/sandboxes/sandbox-strings";
 
 /**
  * The sandbox card's per-state copy and actions, kept free of React so the
@@ -220,7 +217,7 @@ export function sandboxCreatorName(
 }
 
 /** A frozen team sandbox: the team's bundle ran out, whoever woke it last. */
-export function sandboxTeamFrozenLine(teamName: string | null): string {
+export function sandboxTeamFrozenLine(teamName: string): string {
   return `${HOST_FROZEN_WORD}: ${teamPossessive(teamName)} bundle is out.`;
 }
 
@@ -602,15 +599,25 @@ export function sandboxHeaderNeedsRepair(
   );
 }
 
+/**
+ * A team's frozen sandbox whose team has no name to give: today's words,
+ * kept while the owner rules this case.
+ */
+const TEAM_CREDITS_RAN_OUT_UNNAMED = "Its payer's team credits ran out";
+
 /** The host page offers only Destroy when credits run out, so names no wake remedy. */
 export function sandboxHeaderCreditsLine(
   summary: SandboxSummary | null,
   teamOwned: boolean,
   teamName: string | null,
 ): string {
-  const credits = teamOwned
-    ? `${teamPossessiveSentence(teamName)} credits ran out`
-    : "Your credits ran out";
+  let credits = "Your credits ran out";
+  if (teamOwned) {
+    credits =
+      teamName === null
+        ? TEAM_CREDITS_RAN_OUT_UNNAMED
+        : `${teamPossessive(teamName)} credits ran out`;
+  }
   const frozenAt = summary?.frozenAt ?? null;
   const destroyAt =
     summary?.destroyAt ??

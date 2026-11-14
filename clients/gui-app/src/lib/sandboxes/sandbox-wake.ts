@@ -23,7 +23,7 @@ import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
   sandboxCreditShortLine,
-  teamPossessiveSentence,
+  teamPossessive,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -237,7 +237,7 @@ function toastWakeOutcome(
       toast.warning("This sandbox is out of credits.", {
         description:
           configuration.kind === "team"
-            ? `${teamPossessiveSentence(configuration.teamName)} bundle is out.`
+            ? `${teamPossessive(configuration.teamName)} bundle is out.`
             : outcome.message,
       });
       return;

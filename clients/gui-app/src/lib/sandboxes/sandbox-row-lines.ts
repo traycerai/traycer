@@ -22,7 +22,6 @@ import {
   keptByLine,
   startedByLine,
   teamPossessive,
-  teamPossessiveSentence,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
   burstIdleLine,
@@ -580,7 +579,7 @@ export function sandboxFrozenCause(
   if (configuration.kind === "personal") {
     return "Your credits ran out.";
   }
-  return `${teamPossessiveSentence(configuration.teamName)} credits ran out.`;
+  return `${teamPossessive(configuration.teamName)} credits ran out.`;
 }
 
 /**
