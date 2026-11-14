@@ -10,6 +10,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
@@ -28,12 +29,32 @@ import { environmentStatusFixture } from "@/lib/environment/__tests__/environmen
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-const hostMock = vi.hoisted(
-  (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
-);
+const hostMock = vi.hoisted(() => {
+  let directoryEntry: HostDirectoryEntry | null = null;
+  return {
+    binding: null as { readonly auth: unknown } | null,
+    setDirectoryEntry: (entry: HostDirectoryEntry | null): void => {
+      directoryEntry = entry;
+    },
+    entryFor: (hostId: string | null): HostDirectoryEntry | null =>
+      hostId !== null && directoryEntry?.hostId === hostId
+        ? directoryEntry
+        : null,
+  };
+});
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostMock.binding };
+});
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: (hostId: string | null) => hostMock.entryFor(hostId),
+  };
 });
 
 const OTHER_HOST_ID = "host-b";
@@ -70,6 +91,18 @@ function renderQuestion(options: {
   readonly enabled: boolean;
   readonly methods: readonly string[];
 }): { readonly unmount: () => void } {
+  hostMock.setDirectoryEntry(
+    options.hostId === null
+      ? null
+      : {
+          hostId: options.hostId,
+          label: options.hostId,
+          kind: "local",
+          websocketUrl: "ws://127.0.0.1:0",
+          version: "1.5.0",
+          transportDialability: "dialable",
+        },
+  );
   for (const hostId of [ACCESS_HOST_ID, OTHER_HOST_ID]) {
     recordNegotiatedHostMethods(hostId, options.methods);
   }

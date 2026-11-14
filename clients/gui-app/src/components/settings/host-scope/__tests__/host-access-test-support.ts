@@ -8,9 +8,9 @@ import type {
 import type {
   EnvironmentNotice,
   EnvironmentReviewEntry,
-  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
   EnvironmentWriteOutcome,
-  HostRemoteAccessSetResponse,
+  HostRemoteAccessSetResponseV20,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import type { ConfigEnvEntry } from "@traycer/protocol/host/config/schemas";
@@ -21,11 +21,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
-  EnvironmentDescriptorV11,
-  EnvironmentHostBinding,
-  EnvironmentListResponseV11,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 
 /**
  * A fake host for the Access and setup tab and the Personal page notices. The
@@ -52,13 +48,12 @@ export const ACCESS_METHODS: readonly string[] = [
   "host.remoteAccess.set",
   "host.status.refresh",
   "environment.host.read",
-  "environment.list",
   "providers.list",
   "providers.setProfileEnabled",
 ];
 
 export interface AccessHostState {
-  status: EnvironmentStatusResponseV12;
+  status: EnvironmentStatusResponseV13;
   /** The host cannot answer `environment.status` (it is down). */
   failStatus: boolean;
   notices: EnvironmentNotice[];
@@ -67,14 +62,11 @@ export interface AccessHostState {
   providers: ProviderCliState[];
   envEntries: ConfigEnvEntry[];
   /** What `host.remoteAccess.set` answers. */
-  remoteAccessAnswer: HostRemoteAccessSetResponse;
+  remoteAccessAnswer: HostRemoteAccessSetResponseV20;
   remoteAccessError: HostRpcError | null;
   /** What `host.status.refresh` answers. */
   statusRefreshError: Error | null;
   binding: EnvironmentHostBinding | null;
-  environments: EnvironmentDescriptorV11[];
-  failEnvironmentList: boolean;
-  environmentListRead: Promise<EnvironmentListResponseV11> | null;
   /** What `environment.undo` answers. */
   undoAnswer: EnvironmentWriteOutcome;
   /** `config.env.localOverride.set` answers `needs_grant` instead of saving. */
@@ -90,7 +82,6 @@ export interface AccessHostReads {
   status: number;
   notices: number;
   review: number;
-  environments: number;
 }
 
 export interface AccessHost {
@@ -115,13 +106,10 @@ export function accessHostState(
     overrides: [],
     providers: [],
     envEntries: [],
-    remoteAccessAnswer: { state: "on" },
+    remoteAccessAnswer: { state: "off" },
     remoteAccessError: null,
     statusRefreshError: null,
     binding: null,
-    environments: [],
-    failEnvironmentList: false,
-    environmentListRead: null,
     undoAnswer: { outcome: "saved", revision: 2 },
     localOverrideNeedsGrant: false,
     ...overrides,
@@ -145,7 +133,6 @@ export function buildAccessHostOn(
     status: 0,
     notices: 0,
     review: 0,
-    environments: 0,
   };
   const { client } = buildEnvironmentClient({
     hostId,
@@ -153,14 +140,6 @@ export function buildAccessHostOn(
       "environment.host.read": () => {
         if (state.binding === null) throw new Error("Binding unavailable");
         return { ...state.binding, sharingGeneration: null };
-      },
-      "environment.list": () => {
-        reads.environments += 1;
-        if (state.failEnvironmentList)
-          throw new Error("Environment list unavailable");
-        if (state.environmentListRead !== null)
-          return state.environmentListRead;
-        return { environments: state.environments };
       },
       "environment.status": () => {
         reads.status += 1;
@@ -285,28 +264,38 @@ export const DASHBOARD_ORIGIN = "https://example.invalid";
 export interface FakeEnvironmentCloud {
   readonly cloud: EnvironmentCloud;
   readonly requests: EnvironmentTransportRequest[];
+  readonly origin: { current: boolean };
 }
 
-/** An authn transport fake that records the request without changing its path. */
-export function fakeEnvironmentCloud(answer: {
+export interface FakeEnvironmentCloudAnswer {
   readonly status: number;
   readonly body: unknown;
-}): FakeEnvironmentCloud {
+}
+
+export type FakeEnvironmentCloudResponder = (
+  request: EnvironmentTransportRequest,
+) => FakeEnvironmentCloudAnswer | Promise<FakeEnvironmentCloudAnswer>;
+
+/** An authn transport fake that records the request without changing its path. */
+export function fakeEnvironmentCloud(
+  answer: FakeEnvironmentCloudAnswer | FakeEnvironmentCloudResponder,
+): FakeEnvironmentCloud {
   const requests: EnvironmentTransportRequest[] = [];
+  const origin = { current: true };
   return {
     cloud: {
       authnBaseUrl: "https://authn.test",
       bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
-      onOriginSignIn: () => true,
-      transport: (request) => {
+      onOriginSignIn: () => origin.current,
+      transport: async (request) => {
         requests.push(request);
-        return Promise.resolve({
-          status: answer.status,
-          text: JSON.stringify(answer.body),
-        });
+        const response =
+          typeof answer === "function" ? await answer(request) : answer;
+        return { status: response.status, text: JSON.stringify(response.body) };
       },
     },
     requests,
+    origin,
   };
 }
 
