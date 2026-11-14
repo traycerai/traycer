@@ -8,7 +8,10 @@ import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostSandboxFacts,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   sandboxFrozenLine,
@@ -28,6 +31,9 @@ import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
+import { TileDoorCoverLayer } from "@/components/hosts/tile-door-cover";
+import { useTileDoorCover } from "@/hooks/host/use-tile-door-cover";
+import type { DoorStateCoverVariant } from "@/lib/host/window-narration";
 
 /**
  * Wraps a tile's body and carries its team-host disclosure. On a sandbox host
@@ -46,7 +52,9 @@ import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
  *
  * Reads the tile's own host (`useTabHostId`). Live chats own their lifecycle
  * surfaces and stay interactive; their team disclosure still mounts here.
- * A computer host's tile is never hidden. With no host runtime above the tile
+ * Any tile, chat or not, on a computer that is not the window's own is hidden
+ * the same way under its door cover (`TileDoorCoverLayer`) while that computer
+ * refuses this account with a state of its own. With no host runtime above the tile
  * at all the children come back unwrapped: there is no directory to read.
  */
 export function SandboxTileStateFrame(props: {
@@ -84,15 +92,18 @@ function SandboxTileStateFrameInRuntime(props: {
       ? null
       : sandboxTileOverlay(facts.state, facts.frozen);
   const overlay = wakingOverlay(stateOverlay, waking);
+  // A sandbox's own state comes first: asleep or frozen, it is not answering.
+  const doorCover = useTileDoorCover(hostId);
+  const hidden = overlay !== null || doorCover !== null;
   return (
     <div
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
       data-sandbox-tile-state={overlay === null ? "live" : overlay.kind}
     >
       <div
-        className={cn("contents", overlay !== null && "invisible")}
-        inert={overlay !== null}
-        aria-hidden={overlay !== null ? true : undefined}
+        className={cn("contents", hidden && "invisible")}
+        inert={hidden}
+        aria-hidden={hidden ? true : undefined}
       >
         {props.children}
       </div>
@@ -105,15 +116,36 @@ function SandboxTileStateFrameInRuntime(props: {
           teamName={facts.ownerTeamName}
         />
       )}
-      {overlay === null ? null : (
-        <SandboxTileOverlayLayer
-          hostId={hostId}
-          overlay={overlay}
-          state={facts?.state ?? null}
-          teamOwned={facts !== null && facts.ownerTeamName !== null}
-        />
-      )}
+      <TileOverlay
+        hostId={hostId}
+        overlay={overlay}
+        doorCover={doorCover}
+        facts={facts}
+      />
     </div>
+  );
+}
+
+/** The one overlay a tile shows: its sandbox's state first, then its door cover. */
+function TileOverlay(props: {
+  readonly hostId: string;
+  readonly overlay: SandboxTileOverlay | null;
+  readonly doorCover: DoorStateCoverVariant | null;
+  readonly facts: RemoteHostSandboxFacts | null;
+}): ReactNode {
+  const { overlay, facts } = props;
+  if (overlay === null) {
+    return props.doorCover === null ? null : (
+      <TileDoorCoverLayer cover={props.doorCover} />
+    );
+  }
+  return (
+    <SandboxTileOverlayLayer
+      hostId={props.hostId}
+      overlay={overlay}
+      state={facts?.state ?? null}
+      teamOwned={facts !== null && facts.ownerTeamName !== null}
+    />
   );
 }
 

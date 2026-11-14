@@ -35,8 +35,7 @@ import { appLogger } from "@/lib/logger";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   hostUpdateActionApplies,
-  isDoorCoverVariant,
-  type DoorCoverKind,
+  offersDoorRetry,
   type WindowNarrationCause,
   type WindowNarrationState,
   type WindowNarrationVariant,
@@ -440,15 +439,13 @@ function resolveRetry(args: {
   readonly settled: SettledFailure;
 }): ResolvedRetry {
   const { variant, hostTokens, presentation, localLifecycle, settled } = args;
-  if (isDoorCoverVariant(variant)) {
-    return DOOR_COVERS_WITH_RETRY.has(variant.kind)
-      ? {
-          onRetry: () => {
-            void retryHostDoor(variant.hostId, hostTokens);
-          },
-          pending: false,
-        }
-      : { onRetry: null, pending: false };
+  if (offersDoorRetry(variant)) {
+    return {
+      onRetry: () => {
+        void retryHostDoor(variant.hostId, hostTokens);
+      },
+      pending: false,
+    };
   }
   // An unrecognised refusal is the `offline` cover with its code shown, and
   // keeps that cover's recovery.
@@ -488,10 +485,6 @@ function showsReportIssue(
 ): boolean {
   return settled.failed && REPORTED_VARIANTS.has(variant.kind);
 }
-
-/** The door covers board C1 draws with a Retry: each says "then retry". */
-const DOOR_COVERS_WITH_RETRY: ReadonlySet<DoorCoverKind> =
-  new Set<DoorCoverKind>(["keys-unavailable", "clock-skew", "token-expired"]);
 
 function resolveUpdateHost(
   variant: WindowNarrationVariant,
