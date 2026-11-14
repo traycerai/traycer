@@ -181,9 +181,10 @@ export async function openLocalStreamClient(): Promise<{
   readonly client: BotStreamClient;
   readonly endpoint: HostTransportEndpoint;
 }> {
+  // The floor ahead of the sign-in: an older host is never told as a sign-in.
+  const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
-  const endpoint = await resolveEndpoint();
   // The token is all these short reads need: nothing here refreshes the
   // sign-in once the client is built, so the session is released at once.
   const session = await requireCliHostSession(

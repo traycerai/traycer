@@ -345,11 +345,13 @@ describe("task create: refusals that create nothing", () => {
     );
   });
 
-  it("stops at the missing sign-in before resolving the host or writing a record", async () => {
+  it("reads the host's floor ahead of the sign-in, and stops at the missing sign-in before writing a record", async () => {
     authMock.mockResolvedValue(null);
     const error = await rejection(run({ idempotencyKey: "slot-1" }));
     expect(error.code).toBe(CLI_ERROR_CODES.AUTH_NO_CREDENTIALS);
-    expect(endpointMock).not.toHaveBeenCalled();
+    expect(endpointMock.mock.invocationCallOrder[0]).toBeLessThan(
+      authMock.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(rpcMock).not.toHaveBeenCalled();
     expect(await recordFiles()).toEqual([]);
   });

@@ -10,8 +10,10 @@ import {
   callHostRpcAtEndpoint,
   callHostRpcAtResolvedEndpoint,
   callHostRpcFastFail,
+  callHostRpcWithDispatch,
   canonicalResponseSchemaFor,
   parseCanonicalHostResponse,
+  PLAIN_DISPATCH,
   toAgentCliError,
 } from "../host-rpc";
 import { buildAgentSendCommand } from "../../commands/agent-send";
@@ -652,6 +654,49 @@ describe("callHostRpc", () => {
     expect(rpcClientConstructorMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
+
+  const listParams = { epicId: "e", senderAgentId: "agent-1", scope: "user" };
+  it.each([
+    ["callHostRpc", () => callHostRpc(METHOD, listParams), null],
+    [
+      "callHostRpcFastFail",
+      () => callHostRpcFastFail(METHOD, listParams),
+      null,
+    ],
+    [
+      "callHostRpcWithDispatch",
+      () => callHostRpcWithDispatch(METHOD, listParams, PLAIN_DISPATCH),
+      null,
+    ],
+    ["a capabilityless agent command", agentSendCommand, "agent-session"],
+  ] as const)(
+    "%s with no sign-in tells a below-floor host as out of date, never a sign-in",
+    async (_name, call, agentId) => {
+      resolveAuthMock.mockResolvedValue(null);
+      agentEnvironment.agentId = agentId ?? undefined;
+      pidMock.mockResolvedValueOnce({
+        pid: 1,
+        hostId: "d1",
+        version: "1.9.9",
+        websocketUrl: "ws://127.0.0.1:9/rpc",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        processStartIdentity: null,
+        processStartIdentityRead: "absent",
+        layer0: null,
+        layer0Slot: null,
+      });
+
+      const error = await call().catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+        message:
+          "The host is out of date. Reinstall the latest host with 'traycer host update'.",
+      });
+      expect(resolveAuthMock).not.toHaveBeenCalled();
+      expect(rpcClientConstructorMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects invalid host metadata endpoints before constructing the WS client", async () => {
     pidMock.mockResolvedValue({

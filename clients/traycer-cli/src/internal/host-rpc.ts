@@ -108,6 +108,13 @@ export async function callHostRpc<
     method,
     retryPolicy: "default",
   });
+  // Resolve the endpoint once (throws when the host isn't running). Endpoint
+  // discovery belongs to the endpoint provider, not the auth revalidator; a
+  // unary call is short-lived, so a same-call host-restart simply fails and
+  // the caller re-runs. (The long-running monitor owns its own endpoint poller.)
+  // Ahead of the sign-in: a host below the floor is told as one, never as a
+  // sign-in.
+  const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) {
     logger.warn("Host RPC blocked by missing credentials", {
@@ -116,12 +123,6 @@ export async function callHostRpc<
     });
     throw signedOutCliError();
   }
-
-  // Resolve the endpoint once (throws when the host isn't running). Endpoint
-  // discovery belongs to the endpoint provider, not the auth revalidator; a
-  // unary call is short-lived, so a same-call host-restart simply fails and
-  // the caller re-runs. (The long-running monitor owns its own endpoint poller.)
-  const endpoint = await resolveEndpoint();
   return requestAtEndpoint(
     method,
     params,
@@ -155,6 +156,7 @@ export async function callHostRpcFastFail<
     method,
     retryPolicy: "fast-fail",
   });
+  const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) {
     logger.warn("Host RPC fast-fail call blocked by missing credentials", {
@@ -163,8 +165,6 @@ export async function callHostRpcFastFail<
     });
     throw signedOutCliError();
   }
-
-  const endpoint = await resolveEndpoint();
   return requestAtEndpoint(
     method,
     params,
@@ -250,6 +250,7 @@ export async function callHostRpcWithDispatch<
     method,
     retryPolicy: dispatch.failFast ? "fast-fail" : "default",
   });
+  const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) {
     logger.warn("Host RPC blocked by missing credentials", {
@@ -258,7 +259,6 @@ export async function callHostRpcWithDispatch<
     });
     throw signedOutCliError();
   }
-  const endpoint = await resolveEndpoint();
   return callHostRpcAtResolvedEndpoint(
     method,
     params,
@@ -293,6 +293,7 @@ export async function callAgentHostRpcWithDispatch<
   const credential = readAgentCommandCredential(PROCESS_AGENT_ENVIRONMENT);
   if (credential.kind === "outside-agent-session")
     return callHostRpcWithDispatch(method, params, dispatch);
+  const endpoint = await resolveEndpoint();
   if (credential.kind === "none") {
     createCliLogger(config.environment).warn(
       "Host RPC blocked: the agent session carries no capability",
@@ -309,7 +310,6 @@ export async function callAgentHostRpcWithDispatch<
       retryPolicy: dispatch.failFast ? "fast-fail" : "default",
     },
   );
-  const endpoint = await resolveEndpoint();
   try {
     return await requestWithHostToken(
       method,

@@ -139,9 +139,10 @@ async function runWorktreeDelete(
   worktreePath: string,
   ctx: CommandContext,
 ): Promise<WorktreeDeleteOutcome> {
+  // The floor ahead of the sign-in: an older host is never told as a sign-in.
+  const endpoint = await resolveEndpoint();
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
-  const endpoint = await resolveEndpoint();
   const session = await requireCliHostSession(
     auth,
     endpoint.hostId,

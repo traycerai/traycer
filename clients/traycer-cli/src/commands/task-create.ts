@@ -122,6 +122,11 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
   return async () => {
     refuseInAgentSession();
     const input = parseTaskCreateInput(opts);
+    // Resolved once, before any record and ahead of the sign-in: a host that
+    // is not running, or is below the floor, stops the command here with
+    // nothing written, and the send below goes to exactly this endpoint
+    // rather than a fresh read of it.
+    const endpoint = await resolveEndpoint();
     const auth = await resolveHostAuth();
     if (auth === null) {
       throw cliError({
@@ -132,10 +137,6 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
         exitCode: 1,
       });
     }
-    // Resolved once, before any record: a host that is not running stops the
-    // command here with nothing written, and the send below goes to exactly
-    // this endpoint rather than a fresh read of it.
-    const endpoint = await resolveEndpoint();
 
     if (opts.idempotencyKey === null) {
       const ids = mintIds();
