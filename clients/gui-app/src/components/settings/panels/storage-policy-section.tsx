@@ -3,6 +3,7 @@
  * Update that file whenever this settings surface changes.
  */
 import { useState, type ReactNode } from "react";
+import type { z } from "zod";
 import { STORAGE } from "@/components/settings/environment/storage-page.definitions";
 import {
   configurationWriteIssue,
@@ -25,11 +26,16 @@ import { Switch } from "@/components/ui/switch";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import {
+  SNAPSHOT_POLICY_DEFAULTS,
+  SNAPSHOT_POLICY_KEY,
+  SNAPSHOT_POLICY_KIND,
   STORAGE_POLICY_DEFAULTS,
   STORAGE_POLICY_KEY,
   STORAGE_POLICY_KIND,
+  snapshotPolicyValueSchema,
   storagePolicyValueSchema,
   useConfigurationStoragePolicy,
+  type SnapshotPolicyValue,
   type StoragePolicyValue,
 } from "@/hooks/environment/use-storage-policy";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
@@ -42,12 +48,15 @@ const APPLIES_EVERYWHERE = "Applies on every host in this environment.";
 const CHAT_COMES_BACK = "A chat comes back when an agent continues it.";
 
 type StorageField = keyof StoragePolicyValue;
+/** A control on the page: a field of either item. */
+type StorageControl = StorageField | keyof SnapshotPolicyValue;
 
 const ANALYTICS_SETTING = {
   chats: "storageChats",
   idleTaskDays: "storageIdleTasks",
   archivedChatHours: "storageArchivedChats",
-} as const satisfies Record<StorageField, AnalyticsSetting>;
+  quietChatDays: "storageFileEditSnapshots",
+} as const satisfies Record<StorageControl, AnalyticsSetting>;
 
 /** The select's value for a window that is not set. */
 const NO_WINDOW = "none";
@@ -55,6 +64,8 @@ const NO_WINDOW = "none";
 const IDLE_TASK_PRESETS = [7, 14, 30, 90] as const;
 /** In hours: 4 hours, 1, 7 and 30 days. */
 const ARCHIVED_CHAT_PRESETS = [4, 24, 168, 720] as const;
+/** In days, from the chat's last activity. */
+const SNAPSHOT_PRESETS = [7, 30, 90] as const;
 
 function afterDays(days: number): string {
   return days === 1 ? "After 1 day" : `After ${String(days)} days`;
@@ -69,7 +80,9 @@ function afterHours(hours: number): string {
 /**
  * Environment ▸ Storage: the picked configuration's `storage_policy` item, as
  * two groups: tasks nobody has used (the chats switch and its window) and
- * archived chats (their own window). Every control writes the whole value.
+ * archived chats (their own window), and its `snapshot_policy` item, as a
+ * third: file edit snapshots (their window). Every control writes its item's
+ * whole value.
  *
  * Rendered only when the surface's host advertises the item write
  * (`environment.configuration.items.put`, answered by the pool in a pool
@@ -97,13 +110,22 @@ function StoragePolicySectionBody(props: {
   const { environment, read } = useConfigurationStoragePolicy(props.pick);
   const { put } = useConfigurationItemMutations();
   // The control whose save is in flight, for its spinner.
-  const [saving, setSaving] = useState<StorageField | null>(null);
+  const [saving, setSaving] = useState<StorageControl | null>(null);
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
   const policy = read.data;
-  const shown = shownPolicy(
-    put.isPending ? put.variables.value : undefined,
-    policy?.value,
+  const pending = put.isPending ? put.variables : null;
+  const shown = shownValue(
+    storagePolicyValueSchema,
+    pending?.kind === STORAGE_POLICY_KIND ? pending.value : undefined,
+    policy?.storage.value,
+    STORAGE_POLICY_DEFAULTS,
+  );
+  const shownSnapshots = shownValue(
+    snapshotPolicyValueSchema,
+    pending?.kind === SNAPSHOT_POLICY_KIND ? pending.value : undefined,
+    policy?.snapshots.value,
+    SNAPSHOT_POLICY_DEFAULTS,
   );
   const disabled =
     environment === null ||
@@ -123,10 +145,23 @@ function StoragePolicySectionBody(props: {
       key: STORAGE_POLICY_KEY,
       os: null,
       value: { ...shown, [field]: value },
-      revision: policy.revision,
+      revision: policy.storage.revision,
     });
   };
-  const spinner = (field: StorageField): ReactNode =>
+  const writeSnapshots = (value: SnapshotPolicyValue): void => {
+    if (environment === null || policy === undefined) return;
+    trackSettingChanged("storage", ANALYTICS_SETTING.quietChatDays);
+    setSaving("quietChatDays");
+    put.mutate({
+      environmentId: environment.environmentId,
+      kind: SNAPSHOT_POLICY_KIND,
+      key: SNAPSHOT_POLICY_KEY,
+      os: null,
+      value,
+      revision: policy.snapshots.revision,
+    });
+  };
+  const spinner = (field: StorageControl): ReactNode =>
     put.isPending && saving === field ? (
       <AgentSpinningDots
         className={undefined}
@@ -183,6 +218,7 @@ function StoragePolicySectionBody(props: {
                   STORAGE.definitions.idleTaskWindow.label,
                 )}
                 noWindowLabel="When the disk is getting full"
+                noWindowLast={false}
                 presets={IDLE_TASK_PRESETS}
                 format={afterDays}
                 value={shown.idleTaskDays}
@@ -196,65 +232,107 @@ function StoragePolicySectionBody(props: {
           }
         />
       </SettingsGroup>
+      <div className="flex flex-col gap-2">
+        <SettingsGroup
+          group={STORAGE.definitions.archivedChats}
+          showTitle
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <SettingsRow
+            row={STORAGE.definitions.archivedChatWindow}
+            control={
+              <div className="flex items-center gap-2">
+                {spinner("archivedChatHours")}
+                <AgeWindowSelect
+                  label={windowLabel(
+                    STORAGE.definitions.archivedChats.label,
+                    STORAGE.definitions.archivedChatWindow.label,
+                  )}
+                  noWindowLabel="Never"
+                  noWindowLast={false}
+                  presets={ARCHIVED_CHAT_PRESETS}
+                  format={afterHours}
+                  value={shown.archivedChatHours}
+                  disabled={disabled}
+                  onWindowChange={(hours) => {
+                    write("archivedChatHours", hours);
+                  }}
+                />
+              </div>
+            }
+          />
+        </SettingsGroup>
+        {shown.chats ? (
+          <p className="px-1 text-ui-xs text-muted-foreground">
+            {CHAT_COMES_BACK}
+          </p>
+        ) : null}
+      </div>
       <SettingsGroup
-        group={STORAGE.definitions.archivedChats}
+        group={STORAGE.definitions.fileEditSnapshots}
         showTitle
         tone="default"
         dataTestId={undefined}
         fill={false}
       >
         <SettingsRow
-          row={STORAGE.definitions.archivedChatWindow}
+          row={STORAGE.definitions.fileEditSnapshotWindow}
           control={
             <div className="flex items-center gap-2">
-              {spinner("archivedChatHours")}
+              {spinner("quietChatDays")}
               <AgeWindowSelect
                 label={windowLabel(
-                  STORAGE.definitions.archivedChats.label,
-                  STORAGE.definitions.archivedChatWindow.label,
+                  STORAGE.definitions.fileEditSnapshots.label,
+                  STORAGE.definitions.fileEditSnapshotWindow.label,
                 )}
                 noWindowLabel="Never"
-                presets={ARCHIVED_CHAT_PRESETS}
-                format={afterHours}
-                value={shown.archivedChatHours}
+                noWindowLast
+                presets={SNAPSHOT_PRESETS}
+                format={afterDays}
+                value={shownSnapshots.quietChatDays}
                 disabled={disabled}
-                onWindowChange={(hours) => {
-                  write("archivedChatHours", hours);
+                onWindowChange={(days) => {
+                  const next = snapshotPolicyValueSchema.safeParse({
+                    quietChatDays: days,
+                  });
+                  if (next.success) writeSnapshots(next.data);
                 }}
               />
             </div>
           }
         />
       </SettingsGroup>
-      <StoragePolicyFooter note={storageFootnote(shown)} issue={issue} />
+      <StoragePolicyFooter
+        note={shown.chats ? APPLIES_EVERYWHERE : null}
+        issue={issue}
+      />
     </section>
   );
 }
 
-/** Two rows read "When", so a select is named with its group as well. */
+/** Every window row reads "When", so a select is named with its group as well. */
 function windowLabel(group: string, row: string): string {
   return `${group}: ${row}`;
 }
 
-/** The line under the groups, or `null` while Chats is off. */
-function storageFootnote(policy: StoragePolicyValue): string | null {
-  return policy.chats ? `${APPLIES_EVERYWHERE} ${CHAT_COMES_BACK}` : null;
-}
-
 /**
- * What the page shows: the save in flight while there is one, else what was
- * read, else the defaults while the read is out. A refused save drops back to
- * the value read, and the mutation's toast says why.
+ * What an item's controls show: its save in flight while there is one, else
+ * what was read, else the defaults while the read is out. A refused save drops
+ * back to the value read, and the mutation's toast says why.
  */
-function shownPolicy(
+function shownValue<V>(
+  schema: z.ZodType<V>,
   pendingValue: unknown,
-  readValue: StoragePolicyValue | undefined,
-): StoragePolicyValue {
+  readValue: V | undefined,
+  defaults: V,
+): V {
   if (pendingValue !== undefined) {
-    const pending = storagePolicyValueSchema.safeParse(pendingValue);
+    const pending = schema.safeParse(pendingValue);
     if (pending.success) return pending.data;
   }
-  return readValue ?? STORAGE_POLICY_DEFAULTS;
+  return readValue ?? defaults;
 }
 
 /** The Chats row's description when the read failed, with a retry. */
@@ -277,7 +355,7 @@ function ReadErrorStatus(props: { readonly onRetry: () => void }): ReactNode {
   );
 }
 
-/** The line under the groups, and a write's outcome. */
+/** The line under the groups, while Chats is on, and a write's outcome. */
 function StoragePolicyFooter(props: {
   readonly note: string | null;
   readonly issue: ConfigurationWriteIssue | null;
@@ -301,20 +379,29 @@ function StoragePolicyFooter(props: {
 
 /**
  * An age window: no window, or one of the presets, in the unit `format`
- * reads. A stored window that is not a preset is listed too, so the select
- * shows what is in force.
+ * reads, with no window listed first or, with `noWindowLast`, last. A stored
+ * window that is not a preset is listed too, so the select shows what is in
+ * force.
  */
 function AgeWindowSelect(props: {
   readonly label: string;
   readonly noWindowLabel: string;
+  readonly noWindowLast: boolean;
   readonly presets: readonly number[];
   readonly format: (value: number) => string;
   readonly value: number | null;
   readonly disabled: boolean;
   readonly onWindowChange: (value: number | null) => void;
 }): ReactNode {
-  const { label, noWindowLabel, presets, format, disabled, onWindowChange } =
-    props;
+  const {
+    label,
+    noWindowLabel,
+    noWindowLast,
+    presets,
+    format,
+    disabled,
+    onWindowChange,
+  } = props;
   const current = props.value;
   const describedById = useSettingsRowDescriptionId();
   const choices =
@@ -339,12 +426,17 @@ function AgeWindowSelect(props: {
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value={NO_WINDOW}>{noWindowLabel}</SelectItem>
+        {noWindowLast ? null : (
+          <SelectItem value={NO_WINDOW}>{noWindowLabel}</SelectItem>
+        )}
         {choices.map((choice) => (
           <SelectItem key={choice} value={String(choice)}>
             {format(choice)}
           </SelectItem>
         ))}
+        {noWindowLast ? (
+          <SelectItem value={NO_WINDOW}>{noWindowLabel}</SelectItem>
+        ) : null}
       </SelectContent>
     </Select>
   );
