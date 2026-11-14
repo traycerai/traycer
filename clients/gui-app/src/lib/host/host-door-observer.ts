@@ -1,19 +1,22 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import {
+  HOST_DOOR_STATE_POLICY,
   hostDoorStateOfRefusal,
   type HostDoorStateKind,
 } from "@traycer-clients/shared/host-transport/host-door-state";
 import {
   clearHostDoorState,
   clearHostDoorStateOfKind,
+  hostDoorStateFor,
   noteHostDoorState,
 } from "@/stores/host/host-door-state-store";
 
 /**
  * The one place a host's refusal at any of its three doors becomes this app's
- * state of that host, and an admitted open clears it. A relay's own session
- * kill never comes through here.
+ * state of that host, and an admitted open clears it, unless only a
+ * successful renewal clears that state. A relay's own session kill never
+ * comes through here.
  */
 export function appHostDoorObserver(hostId: string): SessionDoorObserver {
   return {
@@ -30,6 +33,14 @@ export function appHostDoorObserver(hostId: string): SessionDoorObserver {
       });
     },
     admitted: () => {
+      // An open admitted on the token already held says nothing about authn:
+      // a state only a successful renewal clears stays until one does.
+      const state = hostDoorStateFor(hostId);
+      if (
+        state !== null &&
+        HOST_DOOR_STATE_POLICY[state.kind].clears === "renewal-succeeded"
+      )
+        return;
       clearHostDoorState(hostId);
     },
   };
