@@ -31,14 +31,14 @@ function stubFetch(
   return requests;
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
 }
 
-function readPerson(signal: AbortSignal | null = null) {
+function readPerson(signal: AbortSignal | null) {
   return fetchEnvironmentPerson(
     AUTHN_BASE_URL,
     BEARER,
@@ -60,9 +60,9 @@ describe("authn environment person read", () => {
       handle: "riya-handle",
       avatarUrl: "https://images.example.test/riya.png",
     };
-    const requests = stubFetch(() => jsonResponse(person));
+    const requests = stubFetch(() => jsonResponse(person, 200));
 
-    const result = await readPerson();
+    const result = await readPerson(null);
 
     expect(result).toEqual({ kind: "found", person });
     expect(requests).toHaveLength(1);
@@ -82,15 +82,15 @@ describe("authn environment person read", () => {
       handle: "riya-handle",
       avatarUrl: null,
     };
-    stubFetch(() => jsonResponse(person));
+    stubFetch(() => jsonResponse(person, 200));
 
-    await expect(readPerson()).resolves.toEqual({ kind: "found", person });
+    await expect(readPerson(null)).resolves.toEqual({ kind: "found", person });
   });
 
   it("maps authn's 404 to not-found", async () => {
     stubFetch(() => new Response(null, { status: 404 }));
 
-    await expect(readPerson()).resolves.toEqual({ kind: "not-found" });
+    await expect(readPerson(null)).resolves.toEqual({ kind: "not-found" });
   });
 
   it.each([302, 401, 403, 500])(
@@ -98,7 +98,7 @@ describe("authn environment person read", () => {
     async (status) => {
       const requests = stubFetch(() => new Response(null, { status }));
 
-      await expect(readPerson()).rejects.toThrow();
+      await expect(readPerson(null)).rejects.toThrow();
 
       expect(requests).toHaveLength(1);
       expect(requests[0]?.init?.redirect).toBe("manual");
@@ -135,14 +135,14 @@ describe("authn environment person read", () => {
       },
     },
   ])("refuses $label", async ({ person }) => {
-    stubFetch(() => jsonResponse(person));
+    stubFetch(() => jsonResponse(person, 200));
 
-    await expect(readPerson()).rejects.toThrow();
+    await expect(readPerson(null)).rejects.toThrow();
   });
 
   it("refuses a response that is not JSON", async () => {
     stubFetch(() => new Response("not-json", { status: 200 }));
 
-    await expect(readPerson()).rejects.toThrow();
+    await expect(readPerson(null)).rejects.toThrow();
   });
 });

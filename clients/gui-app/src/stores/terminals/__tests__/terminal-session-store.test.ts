@@ -102,7 +102,7 @@ function exit(exitCode: number): TerminalExitFrame {
 
 function viewers(
   userIds: ReadonlyArray<string>,
-  sessionId = "terminal-1",
+  sessionId: string,
 ): TerminalViewersFrame {
   return {
     kind: "viewers",
@@ -1473,13 +1473,15 @@ describe("createTerminalSessionStore", () => {
 
       expect(state.viewers).toBeNull();
 
-      harness.callbacks().onViewers(viewers(["member-a", "member-b"]));
+      harness
+        .callbacks()
+        .onViewers(viewers(["member-a", "member-b"], "terminal-1"));
       expect(harness.handle.store.getState().viewers).toEqual([
         "member-a",
         "member-b",
       ]);
 
-      harness.callbacks().onViewers(viewers(["member-c"]));
+      harness.callbacks().onViewers(viewers(["member-c"], "terminal-1"));
       expect(harness.handle.store.getState().viewers).toEqual(["member-c"]);
 
       harness
@@ -1487,7 +1489,7 @@ describe("createTerminalSessionStore", () => {
         .onViewers(viewers(["other-session-member"], "terminal-2"));
       expect(harness.handle.store.getState().viewers).toEqual(["member-c"]);
 
-      harness.callbacks().onViewers(viewers([]));
+      harness.callbacks().onViewers(viewers([], "terminal-1"));
       expect(harness.handle.store.getState().viewers).toEqual([]);
       harness.handle.dispose();
     });
@@ -1495,7 +1497,7 @@ describe("createTerminalSessionStore", () => {
     it("retains the set through a held reconnect and clears it after a non-held drop", () => {
       const harness = createHarness();
       const callbacks = harness.callbacks();
-      callbacks.onViewers(viewers(["member-a", "member-b"]));
+      callbacks.onViewers(viewers(["member-a", "member-b"], "terminal-1"));
 
       callbacks.onConnectionStatus("reconnecting", null, null, "held");
       expect(harness.handle.store.getState().viewers).toEqual([
