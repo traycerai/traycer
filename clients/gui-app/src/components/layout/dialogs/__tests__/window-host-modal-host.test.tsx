@@ -753,6 +753,32 @@ describe("<WindowHostModalHost />", () => {
     expect(openSettings.textContent).toContain("Open settings");
   });
 
+  it("cold-start with no effective host and no leases, on a shell that boots a local host: the idle startup card, not the settled ∅ verdict", async () => {
+    applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
+
+    renderHostWithGate(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+      },
+      false,
+      undefined,
+      GATE_BLOCKING,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("window-host-startup-card").getAttribute("data-cause"),
+    ).toBe("cold-start");
+    expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
+      "Starting Traycer…",
+    );
+    expect(screen.queryByTestId("window-host-modal")).toBeNull();
+  });
+
   it("cold-start, slow (stage: slow): Retry present, Report issue absent, Open settings present as a button", async () => {
     // The row most likely to get this wrong later: Retry and Report issue sit
     // adjacent in the same row and share the same underlying state, so it is

@@ -15,8 +15,19 @@ export interface VerifiedDesktopAuthSessionSnapshot extends DesktopAuthSessionSn
   readonly verified: boolean;
 }
 
+/**
+ * Why the session changed. `local-hold-withdrawn` is main dropping an
+ * unverified hold it took on its own (`withdrawLocal`): windows never ingested
+ * the hold, so the window fan-out skips it, while main's own consumers - host
+ * selection above all - must see it.
+ */
+export type DesktopAuthSessionChangeKind =
+  | "transition"
+  | "local-hold-withdrawn";
+
 type DesktopAuthSessionListener = (
   snapshot: VerifiedDesktopAuthSessionSnapshot,
+  kind: DesktopAuthSessionChangeKind,
 ) => void;
 
 /**
@@ -114,7 +125,7 @@ export class DesktopAuthSession {
   set(snapshot: DesktopAuthSessionSnapshot): void {
     const generation = this.beginSet();
     this.latestTransitionGeneration = generation;
-    this.commit(snapshot, false, generation);
+    this.commit(snapshot, false, generation, "transition");
   }
 
   /**
@@ -135,7 +146,7 @@ export class DesktopAuthSession {
     ) {
       return false;
     }
-    this.commit(snapshot, false, generation);
+    this.commit(snapshot, false, generation, "transition");
     return true;
   }
 
@@ -167,7 +178,7 @@ export class DesktopAuthSession {
     const revoked =
       snapshot.token !== null && this.isRevoked(snapshot.token, Date.now());
     this.latestTransitionGeneration = generation;
-    this.commit(snapshot, !revoked, generation);
+    this.commit(snapshot, !revoked, generation, "transition");
     return true;
   }
 
@@ -207,7 +218,45 @@ export class DesktopAuthSession {
     // verification the renderer has already withdrawn.
     this.retainRevocation(rejectedToken, Date.now());
     if (this.snapshotValue.token !== rejectedToken) return;
-    this.commit(this.snapshotValue, false, this.latestCommittedGeneration);
+    this.commit(
+      this.snapshotValue,
+      false,
+      this.latestCommittedGeneration,
+      "transition",
+    );
+  }
+
+  /**
+   * Drops an unverified hold of exactly this bearer, back to signed out - the
+   * state main was in before the hold. Used when main's own check of a bearer
+   * it held locally reaches a verdict against it, so this machine's host stops
+   * being selectable on it. Fenced to the bearer: a hold of any other session,
+   * or a session main has since verified, is left alone. Not a transition, so
+   * it fences no set in flight.
+   */
+  withdrawLocal(token: string): boolean {
+    if (
+      this.snapshotValue.status !== "unverified" ||
+      this.snapshotValue.token !== token
+    ) {
+      return false;
+    }
+    this.commit(
+      { status: "signed-out", token: null, profile: null },
+      false,
+      this.latestCommittedGeneration,
+      "local-hold-withdrawn",
+    );
+    return true;
+  }
+
+  /**
+   * Whether a renderer revoked this bearer and the revocation still matters
+   * (`revokedBearers`). Main holds such a bearer for local use only: its
+   * window was demoted on purpose, so main does not check it.
+   */
+  isBearerRevoked(token: string): boolean {
+    return this.isRevoked(token, Date.now());
   }
 
   private retainRevocation(rejectedToken: string, now: number): void {
@@ -237,6 +286,7 @@ export class DesktopAuthSession {
     snapshot: DesktopAuthSessionSnapshot,
     verified: boolean,
     generation: number,
+    kind: DesktopAuthSessionChangeKind,
   ): void {
     this.latestCommittedGeneration = Math.max(
       this.latestCommittedGeneration,
@@ -251,7 +301,7 @@ export class DesktopAuthSession {
       return;
     }
     this.snapshotValue = normalized;
-    this.events.emit("change", normalized);
+    this.events.emit("change", normalized, kind);
   }
 
   on(event: "change", listener: DesktopAuthSessionListener): void {

@@ -146,6 +146,7 @@ export type DesktopAuthSessionRefusalReason =
   | "malformed-token"
   | "unsupported-algorithm"
   | "unknown-signing-key"
+  | "signing-key-unconfirmed"
   | "key-source-unavailable"
   | "bad-signature"
   | "expired"
@@ -153,8 +154,26 @@ export type DesktopAuthSessionRefusalReason =
   | "audience-mismatch"
   | "subject-mismatch";
 
+/**
+ * The reasons main cannot decide on yet; it keeps checking the token itself.
+ * See `DesktopAuthSessionSetResult` in the desktop's `window-types.ts`.
+ */
+export type DesktopAuthSessionPendingReason =
+  | "key-source-unavailable"
+  | "signing-key-unconfirmed";
+
+/**
+ * Mirrors the desktop's `DesktopAuthSessionSetResult`. A shell built before
+ * `pending` existed answers `refused` for the same cases.
+ */
 export type DesktopAuthSessionSetResult =
   | { readonly outcome: "accepted" }
+  | {
+      readonly outcome: "pending";
+      readonly reason: DesktopAuthSessionPendingReason;
+      readonly heldLocally: boolean;
+    }
+  | { readonly outcome: "superseded" }
   | {
       readonly outcome: "refused";
       readonly reason: DesktopAuthSessionRefusalReason;
@@ -985,6 +1004,19 @@ export interface DesktopWindowsBridge {
      */
     onVerificationRevoked?(
       handler: (rejectedToken: string, revocation: "user-epoch" | null) => void,
+    ): {
+      dispose(): void;
+    };
+    /**
+     * A bearer main was holding or checking after a `pending` answer reached a
+     * verdict, on main's re-check or on a later set of the same pair, fanned to
+     * every window. Main has stopped checking it and no longer holds it
+     * locally; a window that wrote it shows
+     * the verdict as it would a refused set. Optional: a shell built before
+     * `pending` existed never answers `pending`, so it has nothing to send.
+     */
+    onPendingRefused?(
+      handler: (token: string, reason: DesktopAuthSessionRefusalReason) => void,
     ): {
       dispose(): void;
     };
