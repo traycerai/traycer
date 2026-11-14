@@ -1,4 +1,5 @@
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { ChatStartedByLine } from "@/components/chat/chat-started-by-line";
 import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
 import {
   resolveChatSandbox,
@@ -796,6 +797,7 @@ function ChatTileForChat(props: ChatTileProps) {
         data-node-id={node.id}
         className="flex h-full min-h-0 flex-col"
       >
+        <ChatStartedByLine epicId={epicId} chatId={node.id} />
         {deadTileBanner}
         <ChatTileCatchingUpBanner
           chat={servingKey}
@@ -815,6 +817,7 @@ function ChatTileForChat(props: ChatTileProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+      <ChatStartedByLine epicId={epicId} chatId={node.id} />
       {deadTileBanner}
       <ChatTileCatchingUpBanner
         chat={servingKey}
