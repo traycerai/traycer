@@ -28,6 +28,10 @@ import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contr
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  createFakeEnvironmentAuthn,
+  type FakeEnvironmentAuthn,
+} from "./environment-authn-test-support";
 
 /**
  * The shared host client a page under test reads through `useHostClient()`.
@@ -53,6 +57,34 @@ export const viewingHostBoundary: {
  * `windowHostScopeMock`; `null` is a window with no host of its own.
  */
 export const windowHostBoundary: { hostId: string | null } = { hostId: null };
+
+let activeEnvironmentAuthn: FakeEnvironmentAuthn | null = null;
+
+const AUTHN_METHODS = new Set([
+  "environment.configuration.items",
+  "environment.configuration.items.put",
+  "environment.configuration.items.delete",
+  "environment.configuration.mcpServers.list",
+  "environment.plans.list",
+]);
+
+export function requireTeamEnvironmentAuthnBinding(): {
+  readonly hostClient: HostClient<HostRpcRegistry>;
+  readonly hostId: null;
+  readonly auth: {
+    readonly environmentCloud: () => FakeEnvironmentAuthn["cloud"];
+  };
+} {
+  if (activeEnvironmentAuthn === null) {
+    throw new Error("no fake authn mounted");
+  }
+  const authn = activeEnvironmentAuthn;
+  return {
+    hostClient: requireTeamHostClient(),
+    hostId: null,
+    auth: { environmentCloud: () => authn.cloud },
+  };
+}
 
 export function windowHostScopeMock(): { hostId: string | null } {
   return { hostId: windowHostBoundary.hostId };
@@ -211,6 +243,8 @@ function buildTeamPage(
   negotiated: Readonly<Record<string, { major: number; minor: number }>> | null,
   withPool: boolean,
 ): TeamPageHarness {
+  activeEnvironmentAuthn?.restore();
+  activeEnvironmentAuthn = createFakeEnvironmentAuthn(handlers);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -257,10 +291,14 @@ function buildTeamPage(
   return {
     messenger,
     queryClient,
-    paramsOf: (method) =>
-      messenger.calls
+    paramsOf: (method) => {
+      if (AUTHN_METHODS.has(method)) {
+        return activeEnvironmentAuthn?.paramsOf(method) ?? [];
+      }
+      return messenger.calls
         .filter((call) => call.method === method)
-        .map((call) => call.params),
+        .map((call) => call.params);
+    },
     Wrapper: (props) => (
       <QueryClientProvider client={queryClient}>
         <ConfigurationSourceContext.Provider value={source}>
@@ -272,6 +310,8 @@ function buildTeamPage(
 }
 
 export function resetTeamPageHarness(): void {
+  activeEnvironmentAuthn?.restore();
+  activeEnvironmentAuthn = null;
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;

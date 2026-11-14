@@ -23,6 +23,7 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -31,6 +32,7 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -417,7 +419,7 @@ describe("TeamTextItems accepted writes", () => {
     const row = nodeRegion();
     expect(await within(row).findByRole("alert")).toHaveProperty(
       "textContent",
-      "the cloud could not be reached",
+      "Cloud service is temporarily unavailable. Please try again shortly.",
     );
     expect(
       within(
