@@ -581,8 +581,24 @@ describe("served artifact page links", () => {
     it("refuses a link outside the artifact's folder, prefixed or not", () => {
       expect(click("/other/page.html").followed).toBe(false);
       expect(click("../other/page.html").followed).toBe(false);
-      // Another mount's path is not this page's folder under its own mount.
-      expect(click("/m/m2/site/page.html").followed).toBe(false);
+    });
+
+    it("leaves a link that names another mount as written, even from a page whose folder is the whole mount", () => {
+      const clicked = clickLinkAt(
+        "traycer-sandbox://artifact-a1/m/m1/index.html",
+        {
+          artifactPage: "found",
+          href: "/m/m2/docs/page.html",
+          artifactRootPath: "/",
+          anchorTarget: null,
+          baseTarget: null,
+          activation: "dispatch",
+        },
+      );
+      expect(clicked.followed).toBe(false);
+      expect(clicked.href).toBe(
+        "traycer-sandbox://artifact-a1/m/m2/docs/page.html",
+      );
     });
   });
 

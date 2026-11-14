@@ -713,9 +713,10 @@ function bootstrapMain(config: BootstrapConfig): void {
   // A site shared by an artifact's mounts (the desktop's) names the mount
   // ahead of the tree path as `/m/<mountId>`; a host that names the mount
   // itself has no such prefix.
+  const mountInPath = /^\/m\/[a-z0-9]+(?=\/)/;
   const mountPrefix = location.host.includes("--")
     ? ""
-    : (/^\/m\/[a-z0-9]+(?=\/)/.exec(location.pathname)?.[0] ?? "");
+    : (mountInPath.exec(location.pathname)?.[0] ?? "");
 
   // Links the frame follows itself: an anchor within this page, and on a
   // served artifact page another `.html` page of the same folder, which loads
@@ -741,13 +742,15 @@ function bootstrapMain(config: BootstrapConfig): void {
   };
 
   // A root-absolute link resolves against the site and drops the mount. This
-  // puts it back, so the link names a place under this frame's own mount.
+  // puts it back, so the link names a place under this frame's own mount. A
+  // path that already names a mount, this one or another, is left as written:
+  // prefixed again it would name a place under this mount the link never did.
   const throughOwnMount = (url: URL): URL => {
     if (
       mountPrefix === "" ||
       url.protocol !== location.protocol ||
       url.host !== location.host ||
-      url.pathname.startsWith(`${mountPrefix}/`)
+      mountInPath.test(url.pathname)
     )
       return url;
     const mounted = new URL(url.href);
