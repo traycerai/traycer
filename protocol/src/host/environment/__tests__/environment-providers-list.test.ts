@@ -9,6 +9,10 @@ import { checkSurfaceCompatibility } from "@traycer/protocol/framework/surface-c
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  providerIdSchema,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-ids";
+import {
   buildUnreadableProviderProfile,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
@@ -17,8 +21,9 @@ import { resolveUnavailableMethodDegrade } from "@traycer/protocol/host-transpor
 /**
  * Row contract for `environment.providers.list@1.0`. Registration, the
  * released floor and unsupported degrade are the redesign wire table.
- * Here: the shared profile rows, a provider entry with no accounts, and
- * the handshake when a peer does not advertise the method.
+ * Here: the shared profile rows, an open provider id, a provider entry
+ * with no accounts, and the handshake when a peer does not advertise
+ * the method.
  */
 const METHOD = "environment.providers.list";
 const line = hostRpcRegistry[METHOD];
@@ -120,6 +125,53 @@ describe("environment.providers.list rows", () => {
       { supported: false, configured: true },
       undefined,
     ]);
+  });
+
+  it("keeps a known provider group and an unknown nonempty provider id", () => {
+    const parsed = responseSchema.parse({
+      profileSyncEnabled: true,
+      providers: [
+        {
+          providerId: "claude-code",
+          profiles: [neutralRow("profile-known", "Known")],
+        },
+        {
+          providerId: "future-provider",
+          profiles: [neutralRow("profile-future-provider", "Future provider")],
+        },
+      ],
+    });
+    expect(parsed.providers).toHaveLength(2);
+    const known = parsed.providers[0];
+    const unknown = parsed.providers[1];
+    assert.isDefined(known);
+    assert.isDefined(unknown);
+    expect(known.providerId).toBe("claude-code");
+    expect(unknown.providerId).toBe("future-provider");
+    const knownProfile = known.profiles[0];
+    const unknownProfile = unknown.profiles[0];
+    assert.isDefined(knownProfile);
+    assert.isDefined(unknownProfile);
+    expect(knownProfile).toMatchObject({
+      profileId: "profile-known",
+      label: "Known",
+      kind: "managed",
+      enabled: true,
+    });
+    expect(unknownProfile).toMatchObject({
+      profileId: "profile-future-provider",
+      label: "Future provider",
+      kind: "managed",
+      enabled: true,
+    });
+
+    const knownParsed = providerIdSchema.safeParse(known.providerId);
+    const knownId: ProviderId | null = knownParsed.success
+      ? knownParsed.data
+      : null;
+    assert.isNotNull(knownId);
+    expect(knownId).toBe("claude-code");
+    expect(providerIdSchema.safeParse(unknown.providerId).success).toBe(false);
   });
 
   it("rejects a provider entry whose profiles list is empty", () => {

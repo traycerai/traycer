@@ -34,7 +34,6 @@ import {
   environmentItemKindSchema,
   environmentOsSchema,
 } from "@traycer/protocol/host/environment-schemas";
-import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import { providerSkillInspectCandidateSchema } from "@traycer/protocol/host/provider-native-schemas";
 import { providerProfileProjectionSchema } from "@traycer/protocol/host/provider-schemas";
 
@@ -1206,7 +1205,10 @@ export const environmentProvidersListResponseSchema = lazySchema(() =>
     profileSyncEnabled: z.boolean(),
     providers: z.array(
       z.object({
-        providerId: providerIdSchema,
+        // Preserve providers added after this reader's build. A reader skips
+        // a group whose provider it does not know and narrows a known id
+        // where it needs one.
+        providerId: z.string().min(1),
         profiles: z.array(providerProfileProjectionSchema).min(1),
       }),
     ),
