@@ -888,6 +888,13 @@ export interface FailedSendRestorationState {
    */
   readonly stated: boolean;
   /**
+   * Whether `reason` and `displacedReason` came from the removed-account code.
+   * Decides, by the code alone, that the app's words after the bare pin's
+   * words go on the next line, and that the notices told from this slot keep
+   * that line break on screen.
+   */
+  readonly reasonIsRemovedProfile: boolean;
+  /**
    * The same account, told for a prompt that could NOT reach the composer.
    *
    * Baked here rather than derived at displacement, on the same rule the rest
@@ -2482,6 +2489,17 @@ export interface ChatSessionStoreHandle {
   readonly store: UseBoundStore<StoreApi<ChatSessionState>>;
   readonly deliveredNotices: DeliveredNoticeTracker;
   /**
+   * The notices built from the removed-account code, whose text puts the
+   * app's words on the line after "Was removed". The toast keeps their line
+   * breaks; every other notice renders as a plain string.
+   *
+   * Beside the ring rather than on the notice, because `ChatErrorNotice` is a
+   * protocol type. Keyed by identity: the ring never copies a notice, so the
+   * object added here is the one the toast layer is handed. A notice missing
+   * from it renders as it always has.
+   */
+  readonly lineBreakNotices: WeakSet<ChatErrorNotice>;
+  /**
    * Completed restores already surfaced as toasts. Completion state remains in
    * the store for the dialog, so delivery lives on the handle to survive task-
    * tab focus changes and component remounts without replaying the result.
@@ -2915,6 +2933,7 @@ function rejectionNotice(input: {
       input.account === null || input.displaced
         ? ""
         : deadSendAccountClauses(input.account, true),
+      isRemovedProfileRefusalCode(input.frame.code),
     ),
     severity: "warning",
     clientActionId: input.frame.clientActionId,
@@ -2975,6 +2994,7 @@ function rejectionRestoration(input: {
     frame.reason,
     "Message was not accepted.",
   );
+  const reasonIsRemovedProfile = isRemovedProfileRefusalCode(frame.code);
   return {
     clientActionId: frame.clientActionId,
     messageId: pending.messageId,
@@ -2983,15 +3003,18 @@ function rejectionRestoration(input: {
     reason: withAppWordsAfterReason(
       reason,
       input.account === null ? "" : deadSendAccountClauses(input.account, true),
+      reasonIsRemovedProfile,
     ),
     displacedReason: withAppWordsAfterReason(
       reason,
       input.account === null
         ? ""
         : deadSendAccountClauses(input.account, false),
+      reasonIsRemovedProfile,
     ),
     // This path owns a notice and says it there, so the ack stays quiet.
     stated: true,
+    reasonIsRemovedProfile,
   };
 }
 
@@ -3024,6 +3047,8 @@ function deliveryMessageIdOf(
  * once the opening is withdrawn, with the reason the view already carries.
  */
 function rejectionSurfaces(input: {
+  /** See {@link ChatSessionStoreHandle.lineBreakNotices}. */
+  readonly lineBreakNotices: WeakSet<ChatErrorNotice>;
   readonly state: ChatSessionState;
   readonly pending: PendingChatAction | null;
   readonly frame: {
@@ -3071,6 +3096,10 @@ function rejectionSurfaces(input: {
     displaced: state.failedSendRestoration !== null,
     account,
   };
+  const notice = rejectionNotice(noticeInput);
+  if (isRemovedProfileRefusalCode(frame.code)) {
+    input.lineBreakNotices.add(notice);
+  }
   return {
     // Single slot, first writer wins until `ackFailedSendRestoration` clears
     // it - the same rule `reconcileSnapshotChange` and the settled-turn pass
@@ -3082,7 +3111,7 @@ function rejectionSurfaces(input: {
       state.failedSendRestoration,
     errorNotices: appendErrorNotice(
       state.errorNotices,
-      rejectionNotice(noticeInput),
+      notice,
       state.deliveredNoticeActionIds,
     ),
     lastCopyPrompts: recordLastCopyPrompt(
@@ -3665,6 +3694,7 @@ export function createChatSessionStoreWithNotificationDependencies(
   const memory = ensureProcessMemoryRuntime(options.environment);
   const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
   const ownedStateAccount = createChatOwnedStateAccount();
+  const lineBreakNotices = new WeakSet<ChatErrorNotice>();
   let settleOwnedStateBudget = (): void => undefined;
   let unsubscribeOwnedState = (): void => undefined;
   let recencyStamp = 0;
@@ -4956,6 +4986,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         const handBacksForSnapshot = foldQueueEditSettlementsForSnapshot(
           cancelRestorationsForSnapshot,
           queueEditSettlement,
+          lineBreakNotices,
         );
         const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
           pending.pendingActions,
@@ -6705,6 +6736,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           },
           fold.settlements,
           current.deliveredNoticeActionIds,
+          lineBreakNotices,
         ),
       }));
     };
@@ -7373,6 +7405,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           content: source.content,
           browserAnnotations: source.browserAnnotations,
           reason: source.reason,
+          reasonIsRemovedProfile: source.reasonIsRemovedProfile,
           stillCurrent,
           // The SAME resolver the composer's own draft images use. Passing an
           // empty image map instead - which this did - made every hash-only
@@ -7404,6 +7437,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               // than looking like a complete capture.
               browserAnnotations: source.browserAnnotations,
               reason: source.reason,
+              reasonIsRemovedProfile: source.reasonIsRemovedProfile,
               cause: "capacity",
               stillCurrent,
               returnedSandbox: null,
@@ -7748,6 +7782,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 // branch is that the first refusal made no noise, so the
                 // hand-back is the first and only statement.
                 stated: false,
+                reasonIsRemovedProfile: false,
                 displacedReason,
               }
             : state.failedSendRestoration,
@@ -9187,6 +9222,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               frame.clientActionId,
               cancelRestoration,
             ),
+            lineBreakNotices,
           );
           const nextQueueEditRecords = queueEditRecordsAfterCancelAck(
             ackedQueueEditRecords,
@@ -9305,11 +9341,13 @@ export function createChatSessionStoreWithNotificationDependencies(
               state,
               frame,
               rejectionSurfaces({
+                lineBreakNotices,
                 state,
                 pending,
                 frame,
                 account: rejectionAccountForFrame,
               }),
+              lineBreakNotices,
             ),
           };
         });
@@ -12245,6 +12283,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 // clauses read `handedBack: false`, because the binding is not
                 // going back with the prompt and has just been released.
                 restoration.displacedReason,
+                restoration.reasonIsRemovedProfile,
               ),
               state.deliveredNoticeActionIds,
             ),
@@ -12336,16 +12375,20 @@ export function createChatSessionStoreWithNotificationDependencies(
           // the handoff to `failed`, which sends the very next transition
           // down `restoreAndAckFailed`; so every restored prompt passes
           // through here exactly once.
+          const restored: ChatErrorNotice = {
+            code: SEND_RESTORED_NOTICE_CODE,
+            message: restoration.reason,
+            severity: "warning",
+            clientActionId,
+          };
+          if (restoration.reasonIsRemovedProfile) {
+            lineBreakNotices.add(restored);
+          }
           return {
             failedSendRestoration: null,
             errorNotices: appendErrorNotice(
               state.errorNotices,
-              {
-                code: SEND_RESTORED_NOTICE_CODE,
-                message: restoration.reason,
-                severity: "warning",
-                clientActionId,
-              },
+              restored,
               state.deliveredNoticeActionIds,
             ),
           };
@@ -12688,6 +12731,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     userId: options.userId,
     sessionGeneration: chatSessionsBuilt,
     store,
+    lineBreakNotices,
     deliveredNotices: {
       notices: new WeakSet<ChatErrorNotice>(),
       retainedClientActionIds: ownedStateAccount.createPrivateStringSet(
@@ -12776,6 +12820,8 @@ interface HandBackCopy {
   readonly displacedReason: string;
   /** Opens the last-copy statement - no trailing period. */
   readonly circumstance: string;
+  /** Whether the copy leads with the removed-account code's pin words. */
+  readonly reasonIsRemovedProfile: boolean;
 }
 
 interface HandBackSlotAward {
@@ -12788,6 +12834,7 @@ const CANCELLED_AFTER_SETUP_FAILED_COPY: HandBackCopy = {
   reason: CANCELLED_AFTER_SETUP_FAILED_REASON,
   displacedReason: CANCELLED_AFTER_SETUP_FAILED_DISPLACED_REASON,
   circumstance: CANCELLED_AFTER_SETUP_FAILED_CIRCUMSTANCE,
+  reasonIsRemovedProfile: false,
 };
 
 /**
@@ -12852,6 +12899,7 @@ function awardHandBackSlot(
       // Cancel, so `ackFailedSendRestoration` speaks once when the draft lands
       // rather than narrating a failure they just acted on.
       stated: false,
+      reasonIsRemovedProfile: copy.reasonIsRemovedProfile,
     },
     notice: null,
   };
@@ -12972,6 +13020,7 @@ function queueEditHandBackCopy(
     reason: `${lead}Your edit to a queued message ${what}. The edited text is back in the composer as an unsent draft. Nothing was sent again.`,
     displacedReason: `${lead}Your edit to a queued message ${what}.`,
     circumstance: `${lead}An edit to a queued message ${what}`,
+    reasonIsRemovedProfile: isRemovedProfileRefusalCode(hostCode),
   };
 }
 
@@ -13090,10 +13139,16 @@ function queueEditStatedNotice(
     QueueEditSettlement,
     { readonly kind: "saved_after_return" | "follow_up_alone" }
   >,
+  lineBreakNotices: WeakSet<ChatErrorNotice>,
 ): ChatErrorNotice {
-  return settlement.kind === "saved_after_return"
-    ? queueEditSavedAfterReturnNotice(settlement)
-    : queueEditFollowUpAloneNotice(settlement);
+  if (settlement.kind === "follow_up_alone") {
+    return queueEditFollowUpAloneNotice(settlement);
+  }
+  const notice = queueEditSavedAfterReturnNotice(settlement);
+  if (isRemovedProfileRefusalCode(settlement.hostCode)) {
+    lineBreakNotices.add(notice);
+  }
+  return notice;
 }
 
 interface SnapshotHandBacks {
@@ -13111,6 +13166,7 @@ interface SnapshotHandBacks {
 function foldQueueEditSettlementsForSnapshot(
   carried: SnapshotHandBacks,
   fold: QueueEditFold,
+  lineBreakNotices: WeakSet<ChatErrorNotice>,
 ): SnapshotHandBacks {
   return fold.settlements.reduce<SnapshotHandBacks>((next, settlement) => {
     if (
@@ -13119,7 +13175,10 @@ function foldQueueEditSettlementsForSnapshot(
     ) {
       return {
         ...next,
-        notices: [...next.notices, queueEditStatedNotice(settlement)],
+        notices: [
+          ...next.notices,
+          queueEditStatedNotice(settlement, lineBreakNotices),
+        ],
       };
     }
     if (settlement.kind === "partial") {
@@ -13183,6 +13242,7 @@ function withQueueEditSettlements(
   surfaces: HandBackSurfaces,
   settlements: ReadonlyArray<QueueEditSettlement>,
   delivered: ReadonlySet<string>,
+  lineBreakNotices: WeakSet<ChatErrorNotice>,
 ): HandBackSurfaces {
   return settlements.reduce<HandBackSurfaces>((carried, settlement) => {
     if (
@@ -13193,7 +13253,7 @@ function withQueueEditSettlements(
         ...carried,
         errorNotices: appendErrorNotice(
           carried.errorNotices,
-          queueEditStatedNotice(settlement),
+          queueEditStatedNotice(settlement, lineBreakNotices),
           delivered,
         ),
       };
@@ -13242,6 +13302,7 @@ function queueEditSurfacesForAck(
   state: ChatSessionState,
   frame: ChatActionAckFrame,
   surfaces: HandBackSurfaces,
+  lineBreakNotices: WeakSet<ChatErrorNotice>,
 ): HandBackSurfaces & Pick<ChatSessionState, "queueEditRecords"> {
   // A steer refused for want of confirmation is not a failed submission: the
   // confirm dialog takes it over and sends it again, so the edit says nothing
@@ -13265,6 +13326,7 @@ function queueEditSurfacesForAck(
       surfaces,
       fold.settlements,
       state.deliveredNoticeActionIds,
+      lineBreakNotices,
     ),
   };
 }
@@ -14081,6 +14143,8 @@ interface UnrecordedPrompt {
    * composer, so each needs its worktree named and a re-pick asked for.
    */
   readonly reason: string;
+  /** As {@link FailedSendRestorationState.reasonIsRemovedProfile}. */
+  readonly reasonIsRemovedProfile: boolean;
 }
 
 /**
@@ -14126,6 +14190,7 @@ function unrecordedPromptSources(sources: {
       // workspace was never stated while `displacedReason`, which said it,
       // sat unused on the same record.
       reason: restoration.displacedReason,
+      reasonIsRemovedProfile: restoration.reasonIsRemovedProfile,
     });
   }
   for (const action of actions) {
@@ -14139,11 +14204,17 @@ function unrecordedPromptSources(sources: {
       // here from the action's own frozen values - every staged entry, its
       // branch and its worktree ref, not just a primary workspace path.
       reason: `The chat closed before the host confirmed this message.${accountForRetry(action)}`,
+      reasonIsRemovedProfile: false,
     });
   }
   for (const prompt of lastCopies) {
     if (byAction.has(prompt.clientActionId)) continue;
-    byAction.set(prompt.clientActionId, prompt);
+    // A last copy's reason is always a composed sentence, never the bare
+    // pin's words, so it joins the draft's clauses with a space.
+    byAction.set(prompt.clientActionId, {
+      ...prompt,
+      reasonIsRemovedProfile: false,
+    });
   }
   for (const record of queueEdits) {
     if (byAction.has(record.editActionId)) continue;
@@ -14152,6 +14223,7 @@ function unrecordedPromptSources(sources: {
       content: record.restore.content,
       browserAnnotations: record.restore.browserAnnotations,
       reason: queueEditHandoffReason(record),
+      reasonIsRemovedProfile: false,
     });
   }
   return [...byAction.values()];

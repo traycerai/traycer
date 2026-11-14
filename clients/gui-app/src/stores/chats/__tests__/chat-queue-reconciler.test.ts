@@ -642,6 +642,7 @@ describe("chat-queue-reconciler", () => {
         browserAnnotations: [],
         reason: "Prior failure",
         displacedReason: "Prior failure",
+        reasonIsRemovedProfile: false,
         stated: false,
       };
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
@@ -1371,6 +1372,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        reasonIsRemovedProfile: false,
         stated: false,
       });
     });
@@ -1479,6 +1481,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        reasonIsRemovedProfile: false,
         stated: false,
       });
     });
@@ -1574,6 +1577,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        reasonIsRemovedProfile: false,
         stated: false,
       });
     });
@@ -1595,6 +1599,7 @@ describe("chat-queue-reconciler", () => {
         browserAnnotations: [],
         reason: "Message was not accepted.",
         displacedReason: "Message was not accepted.",
+        reasonIsRemovedProfile: false,
         stated: false,
       };
       const result = reconcileTurnSettled(
@@ -1639,6 +1644,7 @@ describe("chat-queue-reconciler", () => {
             browserAnnotations: [],
             reason: "Message was not accepted.",
             displacedReason: "Message was not accepted.",
+            reasonIsRemovedProfile: false,
             stated: false,
           },
         }),

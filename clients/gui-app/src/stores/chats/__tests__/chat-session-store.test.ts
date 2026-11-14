@@ -5408,6 +5408,7 @@ describe("createChatSessionStore", () => {
       browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
       displacedReason: "Message was not confirmed after reconnect.",
+      reasonIsRemovedProfile: false,
       stated: false,
     });
   });
@@ -5460,6 +5461,7 @@ describe("createChatSessionStore", () => {
       browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
       displacedReason: "Message was not confirmed after reconnect.",
+      reasonIsRemovedProfile: false,
       stated: false,
     });
     // The displaced send is stated, and the statement carries its text - the
@@ -5986,7 +5988,7 @@ describe("createChatSessionStore", () => {
     { reason: "" },
     { reason: null },
   ])(
-    "says Was removed and keeps the swept worktree clause when the reason is $reason",
+    "records Was removed with the swept worktree clause when the reason is $reason",
     ({ reason }) => {
       const harness = createHarness();
       const callbacks = harness.callbacks();
@@ -6019,7 +6021,7 @@ describe("createChatSessionStore", () => {
     );
   });
 
-  it("shows Was removed for the rejected send and its separate error notice once per action id", () => {
+  it("stores both rejection notices under one delivered action id", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
@@ -13644,6 +13646,7 @@ describe("turn-settled stranded-send reconciliation", () => {
       browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
       displacedReason: "The message was not recorded before the turn stopped.",
+      reasonIsRemovedProfile: false,
       stated: false,
     });
   });
@@ -13746,6 +13749,7 @@ describe("turn-settled stranded-send reconciliation", () => {
       browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
       displacedReason: "The message was not recorded before the turn stopped.",
+      reasonIsRemovedProfile: false,
       stated: false,
     });
   });

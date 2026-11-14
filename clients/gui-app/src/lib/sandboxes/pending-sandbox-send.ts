@@ -799,6 +799,7 @@ async function returnBoundMessage(
       content: send.content,
       browserAnnotations: request.browserAnnotations ?? [],
       reason,
+      reasonIsRemovedProfile: false,
       readHashImage: (hash) => resolveDraftImageBytes(hash, target),
       stillCurrent: () => boundReturnCurrent(send),
       returnedSandbox: destination,

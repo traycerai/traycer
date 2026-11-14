@@ -27,20 +27,23 @@ export function rejectionReasonText(
 }
 
 /**
- * `reason` followed by the app's own words, which begin with a space. After
- * the pin's words they start on the next line instead, so "Was removed"
- * stands on a line of its own; anything else is joined as before.
+ * `reason` followed by the app's own words, which begin with a space.
  *
- * Decided by the reason's text, because the notices that append here receive
- * only that text. A computer reason that is literally the pin's words under
- * another code would take the line break too; no computer sends it.
+ * When the reason came from the removed-account code and is still the bare
+ * pin's words, the app's words start on the next line, so "Was removed"
+ * stands on a line of its own. A flagged reason already composed with clauses
+ * takes further words after a space, as clauses join each other. An
+ * unflagged reason is joined with a space whatever its text.
  */
 export function withAppWordsAfterReason(
   reason: string,
   appWords: string,
+  reasonIsRemovedProfile: boolean,
 ): string {
   if (appWords.length === 0) return reason;
-  if (reason !== REMOVED_PROFILE_PIN_TEXT) return `${reason}${appWords}`;
+  if (!reasonIsRemovedProfile || reason !== REMOVED_PROFILE_PIN_TEXT) {
+    return `${reason}${appWords}`;
+  }
   return `${reason}\n${appWords.trimStart()}`;
 }
 

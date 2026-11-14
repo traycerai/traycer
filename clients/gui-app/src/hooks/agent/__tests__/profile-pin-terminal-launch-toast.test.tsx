@@ -105,7 +105,7 @@ describe("useAgentStartTerminalSession removed-by-person", () => {
     });
   });
 
-  it("exposes the removed-by-person hook error before showing the toast", async () => {
+  it("keeps the removed-by-person code on the hook error and shows Was removed", async () => {
     const result = start(
       new HostRpcError({
         code: "removed-by-person",

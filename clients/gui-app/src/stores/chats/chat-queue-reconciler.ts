@@ -52,12 +52,9 @@ export const SEND_NOT_RECORDED_NOTICE_CODE = "SEND_NOT_RECORDED";
  * back in the composer, and this carries the account of why it came back and
  * what changed underneath it.
  *
- * The qualifications were being written to `failedSendRestoration.reason` and
- * read by nobody. `nextHandoffTransition` is that field's only consumer, and
- * both of its branches are dead ends for it - `markFailedByAction` routes it
- * to `InitialChatHandoff.failureReason`, which no component renders, and
- * `restoreAndAckFailed` drops it. So the composer surface those statements
- * were written for did not exist; this is it.
+ * Its message is `failedSendRestoration.reason`. `ackFailedSendRestoration`
+ * appends it when the draft lands in the composer, unless the path that built
+ * the slot already stated it in a notice that reached the screen.
  *
  * NOT a last-copy notice. {@link noticeCarriesOnlyCopy} means "the message
  * body IS the draft", which buys never-evict and never-expire; here the draft
@@ -532,6 +529,7 @@ export function displacedRestorationNotice(
   clientActionId: string,
   content: JsonContent,
   reason: string,
+  reasonIsRemovedProfile: boolean,
 ): ChatErrorNotice {
   return {
     code: SEND_NOT_RECORDED_NOTICE_CODE,
@@ -544,6 +542,7 @@ export function displacedRestorationNotice(
         withAppWordsAfterReason(
           reason,
           " It was not put back in the composer, because you have started another message there.",
+          reasonIsRemovedProfile,
         ),
       ),
       quotedDraftOf(content),
@@ -1329,6 +1328,7 @@ export function reconcileSnapshotChange(
           )}`,
           // This pass has no surface of its own; the ack speaks for it.
           stated: false,
+          reasonIsRemovedProfile: false,
         },
         // The prompt goes back to the composer, so its worktree goes back to
         // the staging slot with it.
@@ -1483,6 +1483,7 @@ function reconcileAcceptedSends(
             false,
           )}`,
           stated: false,
+          reasonIsRemovedProfile: false,
         },
         restoredWorktreeIntent: accepted,
       };
@@ -1730,6 +1731,7 @@ export function reconcileTurnSettled(
               false,
             )}`,
             stated: false,
+            reasonIsRemovedProfile: false,
           },
     // Only when THIS pass handed the prompt back - an already-occupied slot
     // restored nothing here, so there is no binding to re-stage with it.
