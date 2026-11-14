@@ -33,7 +33,7 @@ export function StopSharingSession(props: {
       cacheKeyIdentity: undefined,
       client: props.client,
       method: "environment.move.stopPreview",
-      params: {},
+      params: { profileMode: null },
       options: {
         enabled: props.open && props.hostId !== null && supported === true,
       },
@@ -69,6 +69,8 @@ export function StopSharingSession(props: {
     const answered = new Set(needsChoice.map(stopRowAddress));
     stop.mutate(
       {
+        profileMode: null,
+        profileSignIns: [],
         choices: choices.map((entry) => ({
           kind: entry.kind,
           key: entry.key,
