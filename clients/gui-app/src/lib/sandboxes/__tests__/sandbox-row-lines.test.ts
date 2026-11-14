@@ -1190,11 +1190,6 @@ describe("team credits in the resource line", () => {
       sandboxShapeAndCostLine({ ...summary, state: "stopped" }, team),
     ).toBe(CREDITS);
   });
-  it("keeps the team credit line when that row rests", () => {
-    expect(
-      sandboxShapeAndCostLine({ ...summary, state: "suspended" }, team),
-    ).toBe(CREDITS);
-  });
   it("uses the team's name when the wake payer has no display name", () => {
     const unnamed = {
       ...summary,
@@ -1240,13 +1235,13 @@ describe("team credits in the resource line", () => {
       }),
     ).toContain("storage uses Acme's credits");
   });
-  it("leaves team credits off frozen rows and preserves personal credits", () => {
+  it("keeps team credits on frozen rows and preserves personal credits", () => {
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended", frozen: true },
         team,
       ),
-    ).toBe(HOURLY);
+    ).toBe(`${HOURLY} · uses Acme's credits`);
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended" },
@@ -1268,20 +1263,17 @@ describe("team credits in the resource line", () => {
     });
 
     it.each(["suspended", "stopped"] as const)(
-      "puts the creator and team credit line on a %s row",
+      "puts the creator on a %s burst row",
       (state) => {
         expect(sandboxShapeAndCostLine(agentRow({ state }), team)).toBe(
-          `${HOURLY} · uses Acme's credits · ${CREATOR}`,
+          `${HOURLY} · ${CREATOR}`,
         );
       },
     );
 
-    it("puts the creator on awake and personal rows, naming team credits only for the team", () => {
-      expect(
-        sandboxShapeAndCostLine(agentRow({ state: "suspended" }), team),
-      ).toBe(`${HOURLY} · uses Acme's credits · ${CREATOR}`);
+    it("keeps the creator on awake and personal rows", () => {
       expect(sandboxShapeAndCostLine(agentRow({ state: "awake" }), team)).toBe(
-        `${HOURLY} · uses Acme's credits · ${CREATOR}`,
+        `${HOURLY} · ${CREATOR}`,
       );
       expect(
         sandboxShapeAndCostLine(agentRow({ state: "suspended" }), {
@@ -1298,7 +1290,7 @@ describe("team credits in the resource line", () => {
       ...overrides,
     });
 
-    it("names team credits and the creator without inventing a rate", () => {
+    it("names the creator without inventing a rate", () => {
       expect(
         sandboxShapeAndCostLine(
           unpriced({
@@ -1310,15 +1302,13 @@ describe("team credits in the resource line", () => {
           }),
           team,
         ),
-      ).toBe(
-        `${SHAPE} · uses Acme's credits · created by Planner for Sandbox setup`,
-      );
+      ).toBe(`${SHAPE} · created by Planner for Sandbox setup`);
     });
 
-    it("names team credits on an unpriced stopped row", () => {
+    it("leaves an unpriced stopped row at its shape", () => {
       expect(
         sandboxShapeAndCostLine(unpriced({ state: "stopped" }), team),
-      ).toBe(`${SHAPE} · uses Acme's credits`);
+      ).toBe(SHAPE);
     });
 
     it("leaves a personal resting row as the shape alone when no rate is available", () => {

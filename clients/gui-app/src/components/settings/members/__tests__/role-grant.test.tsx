@@ -72,7 +72,9 @@ describe("InviteAcceptGrant", () => {
   it("shows the spending line on a free plan", () => {
     renderAccept(false, () => undefined);
     const seats = screen.getByTestId("invite-accept-seats").textContent;
-    expect(seats).toBe("Uses the team's credits.");
+    expect(seats).toBe(
+      "An admin sets how much of the team's credits you can spend.",
+    );
   });
 
   it("shows the grant before Accept and calls onAccept", async () => {

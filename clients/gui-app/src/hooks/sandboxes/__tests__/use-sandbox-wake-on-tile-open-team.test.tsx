@@ -242,7 +242,7 @@ describe("useSandboxWakeForOpenedTile on a frozen sandbox", () => {
     expect(mocks.toastWarning).toHaveBeenCalledWith(
       "This sandbox is out of credits.",
       {
-        description: "Acme's bundle is out.",
+        description: "Alpha's bundle is out.",
       },
     );
   });
