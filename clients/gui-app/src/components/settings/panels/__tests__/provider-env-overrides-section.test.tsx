@@ -541,9 +541,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   it("masks a saved key-shaped own key variable, points it at the key tab, and leaves it saved", async () => {
     const open = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", [
-      { key: "KIRO_API_KEY", value: HELD_VALUE },
-    ]);
+    renderProviderEnvTab("kiro", [{ key: "KIRO_API_KEY", value: HELD_VALUE }]);
 
     const row = await screen.findByTestId("env-masked-row");
     expect(within(row).getByTestId("env-masked-value").textContent).toBe(
@@ -605,9 +603,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("removes a masked row by its key", async () => {
-    renderProviderEnvTab("kiro", [
-      { key: "KIRO_API_KEY", value: HELD_VALUE },
-    ]);
+    renderProviderEnvTab("kiro", [{ key: "KIRO_API_KEY", value: HELD_VALUE }]);
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Remove KIRO_API_KEY" }),

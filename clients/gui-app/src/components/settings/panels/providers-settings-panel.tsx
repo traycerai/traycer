@@ -1823,7 +1823,9 @@ function AccountManagedCredentialsLine(): ReactNode {
 }
 
 /** The Env tab: the provider's variables. */
-function ProviderEnvTab(props: { readonly state: ProviderCliState }): ReactNode {
+function ProviderEnvTab(props: {
+  readonly state: ProviderCliState;
+}): ReactNode {
   const { state } = props;
   const configurationKey = useConfigurationKey();
   return (
@@ -1918,9 +1920,7 @@ function ProviderTabBody({
       // that echo belongs to one provider. Switching providers must discard it.
       return <ProviderAutoJudgeSection key={state.providerId} state={state} />;
     case "env":
-      return (
-        <ProviderEnvTab state={state} />
-      );
+      return <ProviderEnvTab state={state} />;
     // Account is the key's place. The draft is threaded in because this
     // body unmounts with the tab (Radix `TabsContent`).
     case "account":
