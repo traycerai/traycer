@@ -291,7 +291,6 @@ function buildComposition(): Composition {
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
     registry: hostRpcRegistry,
-    singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `auth-era-${++requestSeq}`,

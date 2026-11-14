@@ -186,7 +186,6 @@ function buildFanOutFixture(): FanOutFixture {
       traycerCli: undefined,
     }),
     registry,
-    singleAttemptMessenger: null,
     messenger,
     requestContextProvider: provider,
     directory,

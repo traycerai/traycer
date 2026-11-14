@@ -192,7 +192,6 @@ function buildRuntime(options: {
   const runtime = new HostRuntime({
     runnerHost,
     registry,
-    singleAttemptMessenger: null,
     messenger,
     requestContextProvider: provider,
     directory,
