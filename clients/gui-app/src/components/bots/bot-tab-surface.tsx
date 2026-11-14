@@ -1477,14 +1477,10 @@ function BotTabContent(props: {
         : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
-  // Who wrote each channel row. A host without the method shows the other
-  // members by id.
-  const membersSupported =
-    useHostMethodSupport(hostId, "environment.members") === true;
+  // Who wrote each channel row.
   const directory = useEnvironmentMemberDirectory(
-    client,
     snapshot.bot.environmentId,
-    membersSupported,
+    true,
   );
   const resolveMember = directory.resolve;
   const {

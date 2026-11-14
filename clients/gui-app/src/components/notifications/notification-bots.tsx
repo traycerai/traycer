@@ -109,12 +109,10 @@ export function NotificationRowAuthorAvatar(props: {
   const botId = props.payload?.kind === "chat" ? props.payload.epicId : null;
   const environmentId =
     botId === null ? null : (bots.get(botId)?.environmentId ?? null);
-  const { client } = useNotificationResolveHost();
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
   const resolveMember = useLoadedEnvironmentMembers(
-    client,
     environmentId,
     cloudAuthorized,
   );

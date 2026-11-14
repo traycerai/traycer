@@ -201,8 +201,6 @@ export function HomeBotsSection(): ReactNode {
             }
             connectableHostIds={connectable.hostIds}
             environmentBindings={bindings}
-            client={client}
-            hostId={hostId}
             setup={
               teamSetups.setups.find(
                 (setup) => setup.environmentId === group.environmentId,

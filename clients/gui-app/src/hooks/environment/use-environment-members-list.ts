@@ -4,6 +4,7 @@ import {
   useQueries,
   useQueryClient,
   type QueryKey,
+  type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { readConfigurationMembers } from "@traycer-clients/shared/environment/configuration-members";
@@ -104,20 +105,38 @@ function membersPageKey(
 }
 
 /**
- * Every page of `environment.members` for `environmentId`, the app's own
- * read of authn on the viewer's sign-in. The id is never rewritten to
- * Personal: Personal's page lists the reader alone, as the host answered it,
- * so the read waits for the account's environment list to say whose
- * environment this is. A page that fails surfaces as `isError` with an empty
- * list, so a truncated admin list is never shown as complete.
- * Pages are partitioned by viewer so an account switch cannot serve the
- * previous viewer's invitedAddress rows from the same cache.
+ * How every surface reads pages of `environment.members`, so they all ask
+ * for and cache the same pages: the app's own read of authn on the viewer's
+ * sign-in, keyed by viewer so an account switch cannot serve the previous
+ * viewer's invitedAddress rows. The id is never rewritten to Personal:
+ * Personal's page lists the reader alone, as the host answered it, so a page
+ * is asked for only once the account's environment list says whose
+ * environment this is.
  */
-export function useEnvironmentMembersList(
+export interface EnvironmentMembersPages {
+  readonly viewerUserId: string;
+  readonly environments: UseQueryResult<
+    EnvironmentListResponseV11,
+    HostRpcError
+  >;
+  /** Whose environment it is; undefined until the list names it. */
+  readonly ownerKind: EnvironmentDescriptorV11["ownerKind"] | undefined;
+  readonly pageKey: (environmentId: string, cursor: string | null) => QueryKey;
+  readonly pageOptions: (
+    environmentId: string,
+    cursor: string | null,
+  ) => UseQueryOptions<EnvironmentMembersResponseV12, HostRpcError>;
+}
+
+/**
+ * The page reads for `environmentId`. With `fetchPages` false nothing is
+ * asked, the environment list included: the pages are only observed as
+ * another surface loaded them.
+ */
+export function useEnvironmentMembersPages(
   environmentId: string | null,
-  enabled: boolean,
-): EnvironmentMembersListResult {
-  const queryClient = useQueryClient();
+  fetchPages: boolean,
+): EnvironmentMembersPages {
   const cloud = useEnvironmentCloud();
   const viewerUserId = useCloudChatViewerId();
   const readerName = useAuthStore((state) => state.profile?.userName ?? "");
@@ -125,7 +144,7 @@ export function useEnvironmentMembersList(
     authorizesCloudCapability(state.status),
   );
   const environments = useEnvironmentListQuery(
-    enabled && environmentId !== null,
+    fetchPages && environmentId !== null,
   );
   const ownerKind =
     environmentId === null
@@ -133,6 +152,64 @@ export function useEnvironmentMembersList(
       : environments.data?.environments.find(
           (environment) => environment.environmentId === environmentId,
         )?.ownerKind;
+  const reader =
+    ownerKind === "user"
+      ? { userId: viewerUserId, displayName: readerName }
+      : null;
+  return {
+    viewerUserId,
+    environments,
+    ownerKind,
+    pageKey: (pageEnvironmentId, cursor) =>
+      membersPageKey(pageEnvironmentId, cursor, viewerUserId),
+    pageOptions: (pageEnvironmentId, cursor) =>
+      // `cloud` is the sign-in of the viewer the key already names, and
+      // `reader` follows from the key's environment and viewer; adding them
+      // would refetch on their identity alone.
+      // eslint-disable-next-line @tanstack/query/exhaustive-deps
+      queryOptions<EnvironmentMembersResponseV12, HostRpcError>({
+        queryKey: membersPageKey(pageEnvironmentId, cursor, viewerUserId),
+        meta: stampHostRpcMethod(undefined, METHOD),
+        queryFn: () =>
+          withHostQueryErrorBoundary(METHOD, async () => {
+            cloudVerdictPreflight(METHOD)();
+            if (cloud === null) throw hostClientUnavailableError(METHOD);
+            try {
+              return await readConfigurationMembers(
+                cloud(),
+                pageEnvironmentId,
+                cursor,
+                reader,
+              );
+            } catch (error) {
+              throw environmentCloudHostError(METHOD, error);
+            }
+          }),
+        enabled:
+          fetchPages &&
+          ownerKind !== undefined &&
+          cloud !== null &&
+          viewerUserId.length > 0 &&
+          authorized,
+        refetchOnWindowFocus: false,
+      }),
+  };
+}
+
+/**
+ * Every page of `environment.members` for `environmentId`
+ * ({@link useEnvironmentMembersPages}). A page that fails surfaces as
+ * `isError` with an empty list, so a truncated admin list is never shown as
+ * complete, and so does a failed environment list while it has not said
+ * whose environment this is.
+ */
+export function useEnvironmentMembersList(
+  environmentId: string | null,
+  enabled: boolean,
+): EnvironmentMembersListResult {
+  const queryClient = useQueryClient();
+  const { viewerUserId, environments, ownerKind, pageKey, pageOptions } =
+    useEnvironmentMembersPages(environmentId, enabled);
   const [requested, setRequested] = useState<Requested>({
     environmentId,
     viewerUserId,
@@ -168,46 +245,11 @@ export function useEnvironmentMembersList(
     },
     [],
   );
-  const reader =
-    ownerKind === "user"
-      ? { userId: viewerUserId, displayName: readerName }
-      : null;
   const combined = useQueries({
     queries:
       environmentId === null
         ? []
-        : cursors.map((cursor) =>
-            // `cloud` is the sign-in of the viewer the key already names, and
-            // `reader` follows from the key's environment and viewer; adding
-            // them would refetch on their identity alone.
-            // eslint-disable-next-line @tanstack/query/exhaustive-deps
-            queryOptions<EnvironmentMembersResponseV12, HostRpcError>({
-              queryKey: membersPageKey(environmentId, cursor, viewerUserId),
-              meta: stampHostRpcMethod(undefined, METHOD),
-              queryFn: () =>
-                withHostQueryErrorBoundary(METHOD, async () => {
-                  cloudVerdictPreflight(METHOD)();
-                  if (cloud === null) throw hostClientUnavailableError(METHOD);
-                  try {
-                    return await readConfigurationMembers(
-                      cloud(),
-                      environmentId,
-                      cursor,
-                      reader,
-                    );
-                  } catch (error) {
-                    throw environmentCloudHostError(METHOD, error);
-                  }
-                }),
-              enabled:
-                enabled &&
-                ownerKind !== undefined &&
-                cloud !== null &&
-                viewerUserId.length > 0 &&
-                authorized,
-              refetchOnWindowFocus: false,
-            }),
-          ),
+        : cursors.map((cursor) => pageOptions(environmentId, cursor)),
     combine,
   });
   if (
@@ -218,7 +260,7 @@ export function useEnvironmentMembersList(
   ) {
     const walked = cursorsNamedByPages(cursors, combined.pages, (cursor) =>
       queryClient.getQueryData<EnvironmentMembersResponseV12>(
-        membersPageKey(environmentId, cursor, viewerUserId),
+        pageKey(environmentId, cursor),
       ),
     );
     if (!sameCursors(walked, cursors)) {
