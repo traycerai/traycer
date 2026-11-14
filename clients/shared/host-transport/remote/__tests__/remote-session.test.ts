@@ -2342,14 +2342,18 @@ describe("RemoteSession pending unary dispatch provenance", () => {
   );
 
   it.each([
-    { code: "FORBIDDEN", state: null },
-    { code: "TEAM_MEMBERSHIP_REQUIRED", state: "older-host" },
-    { code: "INCOMPATIBLE", state: null },
-    { code: "REMOTE_ACCESS_OFF", state: null },
-    { code: "HOST_RESTARTING", state: null },
+    { code: "FORBIDDEN", state: null, retryable: false },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", state: "older-host", retryable: false },
+    { code: "TEAM_MEMBERSHIP_UNAVAILABLE", state: null, retryable: false },
+    { code: "INCOMPATIBLE", state: null, retryable: false },
+    { code: "REMOTE_ACCESS_OFF", state: null, retryable: false },
+    { code: "HOST_RESTARTING", state: null, retryable: false },
+    { code: "UNAUTHORIZED", state: null, retryable: true },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", state: null, retryable: true },
+    { code: "TEAM_MEMBERSHIP_UNAVAILABLE", state: null, retryable: true },
   ])(
-    "records the expected state for a reasonless relay fatal $code",
-    async ({ code, state }) => {
+    "records the expected state for a reasonless relay fatal $code (retryable=$retryable)",
+    async ({ code, state, retryable }) => {
       const relay = new FakeRelayHost();
       const states: HostDoorStateKind[] = [];
       const door: SessionDoorObserver = {
@@ -2364,10 +2368,20 @@ describe("RemoteSession pending unary dispatch provenance", () => {
         await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, {
           code,
           reason: "host refusal without a door reason",
+          ...(retryable ? { retryable: true } : {}),
           incompatibleMethods: null,
           upgradeGuidance: null,
         });
-        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        if (retryable) {
+          await vi.waitFor(
+            () => expect(relay.openBearers.length).toBeGreaterThan(1),
+            WAIT,
+          );
+          expect(session.isClosed()).toBe(false);
+          expect(session.terminalFatal()).toBeNull();
+        } else {
+          await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        }
         expect(states).toEqual(state === null ? [] : [state]);
       } finally {
         session.close();

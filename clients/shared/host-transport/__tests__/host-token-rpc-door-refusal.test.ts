@@ -38,6 +38,7 @@ import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-sto
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { createAuthAwareMessenger } from "../auth-aware-messenger";
+import { createRetryingMessenger } from "../retrying-messenger";
 import type { DialPriority } from "../dial-priority";
 import { hostDoorStateOfRefusal, type HostDoorState } from "../host-door-state";
 import type { HostRequestOptions } from "../host-messenger";
@@ -223,6 +224,9 @@ function captureRejection(pending: Promise<unknown>): Promise<unknown> {
 
 interface DoorHarness {
   readonly call: (message: string) => Promise<{ readonly echoed: string }>;
+  readonly retryingCall: (
+    message: string,
+  ) => Promise<{ readonly echoed: string }>;
   readonly rawCall: (message: string) => Promise<{ readonly echoed: string }>;
   readonly nextSocket: () => Promise<StubWebSocket>;
   readonly socketAt: (index: number) => StubWebSocket | undefined;
@@ -322,6 +326,13 @@ function doorHarness(): DoorHarness {
     auth,
     "always",
   );
+  const retrying = createRetryingMessenger(wrapped, {
+    maxRetries: 1,
+    initialDelayMs: 0,
+    maxDelayMs: 0,
+    sleep: async () => undefined,
+    random: () => 0,
+  });
   return {
     states,
     refusals,
@@ -330,6 +341,12 @@ function doorHarness(): DoorHarness {
     refusedBearer,
     call: (message) =>
       wrapped.request(
+        "host.echo",
+        { message },
+        optionsFor(new MutableBearerLease(SIGN_IN, USER_ID)),
+      ),
+    retryingCall: (message) =>
+      retrying.request(
         "host.echo",
         { message },
         optionsFor(new MutableBearerLease(SIGN_IN, USER_ID)),
@@ -552,6 +569,38 @@ describe("persistent /rpc door refusals through the host-only token", () => {
   });
 
   it.each([
+    "UNAUTHORIZED",
+    "TEAM_MEMBERSHIP_REQUIRED",
+    "TEAM_MEMBERSHIP_UNAVAILABLE",
+  ])(
+    "retries a reasonless retryable /rpc OPEN refusal for %s without door state",
+    async (code) => {
+      const harness = doorHarness();
+      await harness.ready;
+      const pending = harness.retryingCall("retry the open");
+      const firstSocket = await harness.nextSocket();
+      await firstOpen(firstSocket);
+      firstSocket.fireMessage({
+        kind: "fatalError",
+        details: fatalDetails(code, undefined, true),
+      });
+
+      await vi.waitFor(() => expect(harness.socketCount()).toBe(2));
+      const secondSocket = harness.socketAt(1);
+      if (secondSocket === undefined)
+        throw new Error("expected the retry socket");
+      const request = await firstRequest(secondSocket);
+      secondSocket.fireMessage(echoFrame(request, "retry the open"));
+
+      await expect(pending).resolves.toEqual({ echoed: "retry the open" });
+      expect(harness.states).toEqual([]);
+      expect(harness.refusals).toHaveLength(1);
+      expect(harness.refusals[0]).toMatchObject({ code, retryable: true });
+      expect(harness.refusals[0]?.doorReason).toBeUndefined();
+    },
+  );
+
+  it.each([
     {
       name: "host-wide enrolment_broken",
       code: "UNAUTHORIZED",
@@ -594,6 +643,7 @@ describe("persistent /rpc door refusals through the host-only token", () => {
   it.each([
     { code: "FORBIDDEN", expected: [] },
     { code: "TEAM_MEMBERSHIP_REQUIRED", expected: ["older-host"] },
+    { code: "TEAM_MEMBERSHIP_UNAVAILABLE", expected: [] },
     { code: "INCOMPATIBLE", expected: [] },
     { code: "REMOTE_ACCESS_OFF", expected: [] },
     { code: "HOST_RESTARTING", expected: [] },

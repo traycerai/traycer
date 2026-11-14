@@ -486,14 +486,18 @@ describe("local stream host-token open frame", () => {
   );
 
   it.each([
-    { code: "FORBIDDEN", state: null },
-    { code: "TEAM_MEMBERSHIP_REQUIRED", state: "older-host" },
-    { code: "INCOMPATIBLE", state: null },
-    { code: "REMOTE_ACCESS_OFF", state: null },
-    { code: "HOST_RESTARTING", state: null },
+    { code: "FORBIDDEN", state: null, retryable: false },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", state: "older-host", retryable: false },
+    { code: "TEAM_MEMBERSHIP_UNAVAILABLE", state: null, retryable: false },
+    { code: "INCOMPATIBLE", state: null, retryable: false },
+    { code: "REMOTE_ACCESS_OFF", state: null, retryable: false },
+    { code: "HOST_RESTARTING", state: null, retryable: false },
+    { code: "UNAUTHORIZED", state: null, retryable: true },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", state: null, retryable: true },
+    { code: "TEAM_MEMBERSHIP_UNAVAILABLE", state: null, retryable: true },
   ])(
-    "records the expected state for a reasonless local fatal $code",
-    async ({ code, state }) => {
+    "records the expected state for a reasonless local fatal $code (retryable=$retryable)",
+    async ({ code, state, retryable }) => {
       const hostId = `local-no-reason-${code}`;
       clearHostDoorState(hostId);
       const provider = newProvider();
@@ -503,6 +507,8 @@ describe("local stream host-token open frame", () => {
         provider,
         await tokensWithLocalCredential(hostId, `${hostId}-token`),
       );
+      const statuses: string[] = [];
+      session.onStatusChange((status) => statuses.push(status));
       await vi.waitFor(() =>
         expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
       );
@@ -514,6 +520,7 @@ describe("local stream host-token open frame", () => {
           details: {
             code,
             reason: "host refusal without a door reason",
+            ...(retryable ? { retryable: true } : {}),
             incompatibleMethods: null,
             upgradeGuidance: null,
           },
@@ -522,6 +529,16 @@ describe("local stream host-token open frame", () => {
       await settle();
 
       expect(hostDoorStateFor(hostId)?.kind ?? null).toBe(state);
+      if (retryable) {
+        await vi.waitFor(() => expect(statuses).toContain("reconnecting"));
+        expect(statuses).not.toContain("closed");
+        await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS);
+        await vi.waitFor(() =>
+          expect(FakeNativeWebSocket.instances).toHaveLength(2),
+        );
+      } else {
+        expect(statuses).toContain("closed");
+      }
       session.close();
       client.close("test complete");
       clearHostDoorState(hostId);

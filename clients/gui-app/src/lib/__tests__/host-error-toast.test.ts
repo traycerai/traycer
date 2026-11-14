@@ -18,6 +18,8 @@ vi.mock("sonner", () => {
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
+  batchRefusalAdvice,
+  isSilentHostError,
   toastFromHostError,
   classifySendRefusal,
   toastFromHostErrorOnFork,
@@ -62,6 +64,26 @@ function unauthorizedFatal(
       incompatibleMethods: null,
       upgradeGuidance: null,
       ...(retryable ? { retryable: true } : {}),
+    },
+  });
+}
+
+function doorReasonUnauthorized(
+  doorReason: NonNullable<HostRpcError["doorRefusal"]>["doorReason"],
+): HostRpcError {
+  return new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: "host refusal",
+    requestId: `req-${doorReason}`,
+    method: "epic.revokeCollaborator",
+    fatalDetails: null,
+    doorRefusal: {
+      code: "UNAUTHORIZED",
+      reason: "host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: false,
+      doorReason,
     },
   });
 }
@@ -772,6 +794,48 @@ describe("transport-class causes never reach a reportable toast", () => {
 
     expect(toast).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("recognized non-credential door reasons in batch advice", () => {
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+    vi.mocked(toast.error).mockClear();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  function signIn(): void {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+  }
+
+  it.each(["clock_skew", "enrolment_broken"] as const)(
+    "uses the caller fallback and no advice for %s",
+    (doorReason) => {
+      signIn();
+      const refusal = doorReasonUnauthorized(doorReason);
+      const fallback = "Couldn't revoke collaborator.";
+
+      expect(isSilentHostError(refusal)).toBe(false);
+      expect(batchRefusalAdvice([refusal], fallback)).toEqual([]);
+      toastFromHostError(refusal, fallback);
+      expect(toast.error).toHaveBeenCalledWith(fallback);
+      expect(toast.error).not.toHaveBeenCalledWith("Please sign in again.");
+    },
+  );
+
+  it("keeps sign-in advice for token_expired", () => {
+    signIn();
+    const refusal = doorReasonUnauthorized("token_expired");
+
+    expect(batchRefusalAdvice([refusal], "fallback")).toEqual([
+      "Please sign in again.",
+    ]);
   });
 });
 

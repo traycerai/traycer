@@ -515,7 +515,9 @@ function useChatSessionHandleInContainer(input: {
       };
     };
 
-    const onAuthError = signInRecoveryForStream(hostId, () => {
+    // Decided on the host the stream is opened on, never the chat's own: a
+    // chat at rest is served by the pool, which presents the sign-in.
+    const onAuthError = signInRecoveryForStream(servingHostId, () => {
       void authServiceRef.current.revalidateCurrentContext();
     });
 

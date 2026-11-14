@@ -30,7 +30,12 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
-import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import {
+  poolEntry,
+  teamSandboxEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type {
   ChatSessionState,
@@ -47,11 +52,30 @@ vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
 }));
 
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () => actual.createHostRpcTierPlan(poolEntry),
+    };
+  },
+);
+
+vi.mock("@/hooks/environment/use-environment-arms", () => ({
+  useEnvironmentArmChats: () => [],
+}));
+
 const hostEntryRef = vi.hoisted((): { value: HostDirectoryEntry | null } => ({
   value: null,
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => hostEntryRef.value,
+  useHostDirectoryEntry: (hostId: string) =>
+    hostId === POOL_HOST_ID ? poolEntry : hostEntryRef.value,
 }));
 
 // `hostTransportKey` (reached through `hostStreamTransportKeyFor`, exercised
@@ -106,6 +130,7 @@ const openTransportRef = vi.hoisted(
     fn: null,
   }),
 );
+let servingWitness: PoolChatServingWitness | null = null;
 const stableOpenTransport = vi.hoisted(() => {
   return (hostId: string) => {
     if (openTransportRef.fn === null) {
@@ -265,7 +290,9 @@ function wrapper(props: { readonly children: ReactNode }): ReactNode {
   });
   return (
     <QueryClientProvider client={queryClient}>
-      {props.children}
+      <ChatServingWitnessContext.Provider value={servingWitness}>
+        {props.children}
+      </ChatServingWitnessContext.Provider>
     </QueryClientProvider>
   );
 }
@@ -342,6 +369,8 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
   afterEach(() => {
     cleanup();
     disposeAllChatSessions();
+    servingWitness?.dispose();
+    servingWitness = null;
     hostEntryRef.value = null;
     globalClientRef.value = null;
     openTransportRef.fn = null;
@@ -1016,6 +1045,8 @@ describe("the production chat stream client factory forwards every probe", () =>
     vi.restoreAllMocks();
     cleanup();
     disposeAllChatSessions();
+    servingWitness?.dispose();
+    servingWitness = null;
     hostEntryRef.value = null;
     globalClientRef.value = null;
     openTransportRef.fn = null;
@@ -1089,6 +1120,62 @@ describe("the production chat stream client factory forwards every probe", () =>
 
     act(() => {
       fake.sessions[0]?.emitClosed(unauthorizedClose(null));
+    });
+
+    expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates sign-in when a team sandbox at rest is served by the pool", async () => {
+    const ownerHostId = teamSandboxEntry.hostId;
+    const servingClient = new FakeStreamClient(true);
+    const chatClient = new FakeStreamClient(true);
+    const openedHostIds: string[] = [];
+    servingWitness = new PoolChatServingWitness();
+    servingWitness.setStreamClient(servingClient);
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    authServiceStub.revalidateCurrentContext.mockClear();
+    openTransportRef.fn = (servingHostId) => {
+      openedHostIds.push(servingHostId);
+      return {
+        wsStreamClient: chatClient,
+        close: () => chatClient.close(),
+      };
+    };
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = teamSandboxEntry;
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-at-rest-on-pool", ownerHostId, true),
+      { wrapper },
+    );
+    await waitFor(() => expect(servingClient.subscribes).toHaveLength(1));
+    act(() => {
+      servingClient.sessions[0]?.emit(
+        {
+          kind: "serving",
+          hasBinaryPayload: false,
+          serving: {
+            ownerHostId,
+            state: "at-rest",
+            catchingUp: null,
+          },
+        },
+        null,
+      );
+    });
+    await waitFor(() => expect(openedHostIds).toEqual([POOL_HOST_ID]));
+    await waitFor(() => expect(result.current).not.toBeNull());
+    await waitFor(() => expect(chatClient.sessions).toHaveLength(1));
+
+    act(() => {
+      chatClient.sessions[0]?.emitClosed(unauthorizedClose(null));
     });
 
     expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);

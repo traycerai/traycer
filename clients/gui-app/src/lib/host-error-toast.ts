@@ -6,6 +6,8 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import { staleWriteOfHostError } from "@/lib/environment/stale-write";
 import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
@@ -612,7 +614,25 @@ export function toastFromHostErrorWithDetail(
 function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
   if (error.code !== "UNAUTHORIZED") return false;
   if (hostRefusalOf(error)?.retryable === true) return false;
+  if (refusedForAnotherReason(error)) return false;
   return useAuthStore.getState().status !== "signed-out";
+}
+
+/**
+ * A host's refusal whose recognised reason is not about the person's
+ * credential (`clock_skew`, `enrolment_broken`, …): no sign-in advice fits
+ * it, whatever its code. With no reason, or one this app does not know, the
+ * code decides as it always has. The door's own notice says what is wrong.
+ */
+function refusedForAnotherReason(error: HostRpcError): boolean {
+  const refusal = hostRefusalOf(error);
+  if (refusal === null) return false;
+  const reason = readDoorReason(refusal.doorReason);
+  return (
+    reason !== "absent" &&
+    reason !== "unrecognised" &&
+    !isCredentialRefusal(refusal)
+  );
 }
 
 /**
@@ -776,6 +796,7 @@ function codeKeyedMessage(error: HostRpcError, fallback: string): string {
     if (hostRefusalOf(error)?.retryable === true) {
       return "The host couldn't verify your session. Try again in a moment.";
     }
+    if (refusedForAnotherReason(error)) return fallback;
     return "Please sign in again.";
   }
   if (error.code === "WORKTREE_BUSY") {
