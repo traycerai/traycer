@@ -18,6 +18,7 @@ import {
 } from "@/components/settings/panels/add-provider-profile-dialog";
 import {
   providerProfileLoginProgress,
+  providerLoginDestinationSupported,
   useProviderDestinationLoginFlow,
   type ProviderTargetLoginResult,
 } from "@/components/settings/panels/use-provider-profile-login-flow";
@@ -29,6 +30,7 @@ import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
+import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -62,8 +64,21 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
   const client = useHostClientForHostId(loginHostId);
   const localHostId = useReactiveLocalHostId();
   const isLocalHost = loginHostId !== null && loginHostId === localHostId;
+  const startVersion = useHostNegotiatedMethodVersion(
+    client,
+    "providers.startLogin",
+  );
+  const awaitVersion = useHostNegotiatedMethodVersion(
+    client,
+    "providers.awaitLogin",
+  );
+  const belowFloor =
+    client === null ||
+    (startVersion !== null &&
+      awaitVersion !== null &&
+      !providerLoginDestinationSupported(client));
   const catalog = useProvidersListForClient(client, {
-    enabled: client !== null,
+    enabled: client !== null && !belowFloor,
     subscribed: true,
   });
   const state = catalog.data?.providers.find(
@@ -71,7 +86,7 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
   );
   const teamName = usePickedTeamLabel(props.environmentId);
   if (teamName === null) return null;
-  if (state === undefined)
+  if (state === undefined || belowFloor)
     return (
       <Dialog
         open
@@ -85,7 +100,7 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
               {props.profile === null ? "Add a profile" : "Sign in again"}
             </DialogTitle>
           </DialogHeader>
-          {catalog.isPending && client !== null ? (
+          {catalog.isPending && client !== null && !belowFloor ? (
             <MutedAgentSpinner />
           ) : (
             <>
