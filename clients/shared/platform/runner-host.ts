@@ -1,5 +1,7 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
 import type { HostTokenSource } from "../auth/host-token-source";
+import type { EnvironmentTransport } from "../environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type { TeamComputersResult } from "../host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
@@ -258,6 +260,14 @@ export interface IRunnerHost {
   readonly authnBaseUrl: string;
 
   /**
+   * How the app's own calls to authn's environment routes are sent: each once,
+   * never following a redirect (`EnvironmentTransport`). The shell owns it
+   * because only the shell knows which request honours that: a phone's patched
+   * `fetch` ignores `redirect`.
+   */
+  readonly environmentTransport: EnvironmentTransport;
+
+  /**
    * Browser-safe WebSocket attach endpoint for the Remote Host Support relay
    * (Architecture §3/§4b, S2/T14), e.g. `wss://relay.traycer.ai/attach`.
    * Shell-owned, read-only, parity with `authnBaseUrl`. Populated onto a
@@ -498,6 +508,14 @@ export interface IRunnerHost {
    * failures collapse into the discriminated results.
    */
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  /**
+   * Every environment the signed-in person belongs to, read from traycer-server
+   * (`GET /api/environments`) with the user bearer, as
+   * `host-client/environment-directory.ts` reads it: the renderer joins it
+   * with authn's reads, so the list needs no computer awake. Run where the
+   * shell's other traycer-server calls run, for the same reason. Never throws.
+   */
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,

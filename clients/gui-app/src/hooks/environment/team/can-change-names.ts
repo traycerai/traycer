@@ -2,7 +2,6 @@ import {
   useEnvironmentMembersList,
   type EnvironmentMembersListResult,
 } from "@/hooks/environment/use-environment-members-list";
-import { useHostClient } from "@/lib/host";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 
 /**
@@ -37,7 +36,6 @@ export function useConfigurationCanChangeNames(): readonly string[] {
   const source = useConfigurationSource();
   return canChangeNames(
     useEnvironmentMembersList(
-      useHostClient(),
       source.kind === "pool" ? source.environmentId : null,
       source.kind === "pool",
     ),

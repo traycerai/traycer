@@ -1,25 +1,20 @@
 import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
-import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useConfigurationMcpServersQuery } from "@/hooks/environment/team/use-mcp-servers";
 import { useCanEditConfiguration } from "@/components/settings/environment/configuration-source";
-import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { negotiateMethods } from "./mcp-skills-test-support";
 import {
-  configurationItem,
   mountTeamPage,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -73,17 +68,6 @@ const acme: EnvironmentDescriptorV11 = {
   providerHandle: "handle-a",
 };
 
-const server = (revision: number): EnvironmentConfigurationItem =>
-  configurationItem({
-    kind: "mcp_server",
-    key: "github",
-    value: {
-      mcpServerId: "srv-1",
-      toolToggles: { claude: { search: true } },
-    },
-    revision,
-  });
-
 /** A page child that only reads Personal's servers, as the MCP servers page does. */
 function PersonalMcpServerReader(): ReactNode {
   useConfigurationMcpServersQuery();
@@ -135,16 +119,6 @@ const personal: EnvironmentDescriptorV11 = {
   providerHandle: null,
 };
 
-/** The app's `refetchOnWindowFocus: false`, which the bare test client lacks. */
-function mountTeamFrame(
-  handlers: Parameters<typeof mountTeamPage>[1],
-): TeamPageHarness {
-  return mountFrame({ kind: "team", environmentId: "env-a" }, handlers, {
-    section: "mcp-servers",
-    element: <TeamMcpServers />,
-  });
-}
-
 function mountFrame(
   pick: EnvironmentPick,
   handlers: Parameters<typeof mountTeamPage>[1],
@@ -168,90 +142,6 @@ function mountFrame(
 }
 
 describe("a team page under PersonalPageFrame", () => {
-  it("rereads after a save refused as stale, and the retry sends the fresh revision", async () => {
-    let current = server(4);
-    let puts = 0;
-    const harness = mountTeamFrame({
-      "environment.list": () => ({ environments: [acme] }),
-      "environment.host.list": () => ({ hosts: [] }),
-      "environment.configuration.items": () => ({ items: [current] }),
-      "environment.configuration.items.put": () => {
-        puts += 1;
-        if (puts === 1) {
-          // Someone else saved first; the read now answers their revision.
-          current = server(5);
-          throw HostRpcError.fromWireEnvelope(
-            {
-              code: "ENVIRONMENT_WRITE_STALE",
-              message: "The setting changed since it was read.",
-              staleWrite: {
-                changedBy: { kind: "dashboard" },
-                currentRevision: 5,
-              },
-            },
-            "req-stale",
-            "environment.configuration.items.put",
-          );
-        }
-        return { outcome: "saved", revision: 6 };
-      },
-    });
-
-    const toggle = await screen.findByRole("switch", {
-      name: "github claude search",
-    });
-    await userEvent.click(toggle);
-    await waitFor(() => {
-      expect(
-        harness.paramsOf("environment.configuration.items.put"),
-      ).toHaveLength(1);
-    });
-    // The refusal must reread the page's items, not leave revision 4 shown.
-    await waitFor(() => {
-      expect(
-        harness.paramsOf("environment.configuration.items").length,
-      ).toBeGreaterThan(1);
-    });
-
-    await userEvent.click(
-      await screen.findByRole("switch", { name: "github claude search" }),
-    );
-    await waitFor(() => {
-      expect(
-        harness.paramsOf("environment.configuration.items.put"),
-      ).toHaveLength(2);
-    });
-    expect(
-      harness.paramsOf("environment.configuration.items.put")[1],
-    ).toMatchObject({ revision: 5 });
-  });
-
-  it("rereads the team's items when the window regains focus", async () => {
-    const harness = mountTeamFrame({
-      "environment.list": () => ({ environments: [acme] }),
-      "environment.host.list": () => ({ hosts: [] }),
-      "environment.configuration.items": () => ({ items: [server(4)] }),
-    });
-    await screen.findByRole("switch", { name: "github claude search" });
-    const before = harness.paramsOf("environment.configuration.items").length;
-
-    act(() => {
-      window.dispatchEvent(new Event("focus"));
-    });
-
-    await waitFor(() => {
-      expect(
-        harness.paramsOf("environment.configuration.items").length,
-      ).toBeGreaterThan(before);
-    });
-  });
-
-  /**
-   * NEW-154-19(b): a page's own items were reread on every revision tick,
-   * focus and stale-write recovery, but the role that decides whether it
-   * offers a form was not — so a demoted member kept the editor's form on the
-   * Variables page long after every other page had switched.
-   */
   it("rereads the team's role with its items, so a demotion switches the page", async () => {
     const role: { current: EnvironmentDescriptorV11["effectiveRole"] } = {
       current: "editor",

@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { AuthService } from "@/lib/auth/auth-service";
-import { useHostBinding, useHostClient } from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -36,8 +36,7 @@ export function useClaimedComputerNotice(): void {
   const signedIn = useAuthStore((state) => state.status === "signed-in");
   const teams = useAuthStore((state) => state.shareableTeams);
   const registry = useRegisteredHosts().data ?? null;
-  const environments =
-    useEnvironmentListQuery(useHostClient(), signedIn).data ?? null;
+  const environments = useEnvironmentListQuery(signedIn).data ?? null;
 
   useEffect(() => {
     if (!signedIn || viewerUserId === null || registry === null) return;

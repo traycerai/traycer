@@ -18,10 +18,13 @@ export type ConfigurationSource =
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
-      /** `null` for a role that authorizes nothing - an older inventory's
-       *  unknown role, or a retired one. */
+      /** `null` for a role that changes nothing: a Viewer, or a role this
+       *  app does not know. */
       readonly effectiveRole: GrantedEnvironmentRole | null;
-      /** The serving computer can read configuration without changing it. */
+      /**
+       * Personal read while the window is on a team's computer: shown, never
+       * changed through that computer. A team's own pages never set it.
+       */
       readonly transportReadOnly?: boolean;
     };
 
@@ -52,16 +55,31 @@ export function useConfigurationIsPersonal(): boolean {
 }
 
 /**
- * Names the roles that change a configuration: Admin and Editor on a team,
- * the owner on Personal. Every other role, a Viewer or one not known, may
- * not; a role added later stays read-only until it is named here.
+ * Whether a role may change a configuration: Personal's owner, or a team's
+ * Admin or Editor. A Viewer, and a role this app does not know, change
+ * nothing.
  */
+export function mayChangeConfiguration(
+  role: GrantedEnvironmentRole | null,
+): boolean {
+  return role === "owner" || role === "admin" || role === "editor";
+}
+
 export function useCanEditConfiguration(): boolean {
   const source = useConfigurationSource();
-  if (source.kind === "host") return true;
-  if (source.transportReadOnly) return false;
-  const role = source.effectiveRole;
-  return role === "owner" || role === "admin" || role === "editor";
+  return (
+    source.kind === "host" ||
+    (!source.transportReadOnly && mayChangeConfiguration(source.effectiveRole))
+  );
+}
+
+export function useCanAdministerConfiguration(): boolean {
+  const source = useConfigurationSource();
+  return (
+    source.kind === "host" ||
+    (!source.transportReadOnly &&
+      (source.effectiveRole === "owner" || source.effectiveRole === "admin"))
+  );
 }
 
 /** An older inventory cannot authorize edits to a team, and answers `null`. */

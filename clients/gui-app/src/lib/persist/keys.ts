@@ -86,6 +86,12 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const githubMentionFiltersKey = (identity: string | null): string =>
   scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(identity));
 
+// Identity-scoped: the saves this account made in a host's settings that it
+// expects authn to hold, so this account applies only its own holds. Wiped
+// on sign-out like the stores above.
+export const settingsSaveMemoryKey = (identity: string | null): string =>
+  scopedPersistKey(STORE_KEYS.settingsSaveMemory, scopeBucket(identity));
+
 // The hostId this machine's OWN local host last published. Unscoped and
 // identity-free like the picker memory: it is a fact about this machine, not
 // about who is signed in. The directory uses it to keep the machine's own
@@ -257,6 +263,11 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
+  {
+    camelName: "settingsSaveMemory",
+    leaf: "settings-save-memory",
+    kind: "scoped",
+  },
 
   // ── Scoped non-zustand key families ──────────────────────────────────────
   {

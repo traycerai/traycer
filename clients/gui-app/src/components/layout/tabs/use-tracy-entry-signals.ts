@@ -70,7 +70,7 @@ function useTracyEntryChannel(
   listed: boolean,
 ): string | null {
   const botList = useBotListQuery(client, listed).data;
-  const environments = useEnvironmentListQuery(client, listed).data;
+  const environments = useEnvironmentListQuery(listed).data;
   const selected = useTracySurfaceStore((state) => state.botId);
   // In the column's arranged order, as the surface picks it.
   const model = useArrangedBotsModel(

@@ -29,6 +29,7 @@ function renderPlans(overrides: {
       teamName="Acme"
       plans={overrides.plans ?? [plan]}
       canEdit={overrides.canEdit}
+      linkReachable
       isPending={false}
       onLink={overrides.onLink ?? vi.fn()}
       onPreviewUnlink={overrides.onPreviewUnlink ?? vi.fn()}
@@ -82,6 +83,7 @@ describe("PlansCard", () => {
           },
         ]}
         canEdit
+        linkReachable
         isPending={false}
         onLink={() => undefined}
         onPreviewUnlink={() => undefined}
@@ -116,6 +118,7 @@ describe("PlansCard", () => {
           },
         ]}
         canEdit={false}
+        linkReachable
         isPending={false}
         onLink={() => undefined}
         onPreviewUnlink={() => undefined}
@@ -138,6 +141,7 @@ describe("PlansCard", () => {
           },
         ]}
         canEdit
+        linkReachable
         isPending={false}
         onLink={() => undefined}
         onPreviewUnlink={() => undefined}

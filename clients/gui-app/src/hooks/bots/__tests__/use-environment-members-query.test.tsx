@@ -84,7 +84,6 @@ function fortyPages(): Map<string | null, EnvironmentMembersResponseV12> {
 const LAST_FORTY_USER_ID = FORTY_USER_IDS[FORTY_USER_IDS.length - 1];
 
 type ObserveMembers = (
-  client: HostClient<HostRpcRegistry>,
   environmentId: string,
   gate: boolean,
 ) => BotMemberResolver;
@@ -176,7 +175,6 @@ function mountObservedMembers(
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  const client = spine.createRequester(mockLocalHostEntry);
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
@@ -186,7 +184,7 @@ function mountObservedMembers(
   );
   const { result, rerender } = renderHook(
     (props: { readonly enabled: boolean }) =>
-      observe(client, ENVIRONMENT, props.enabled),
+      observe(ENVIRONMENT, props.enabled),
     { wrapper, initialProps: { enabled } },
   );
   const pageQueries = () =>

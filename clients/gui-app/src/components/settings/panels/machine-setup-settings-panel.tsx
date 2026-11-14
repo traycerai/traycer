@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   EnvironmentOs,
   SetupAttempt,
@@ -10,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { MACHINE_SETUP } from "@/components/settings/panels/machine-setup.definitions";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -128,11 +129,9 @@ function SetupScriptEditor(props: {
 }): ReactNode {
   const saved = props.script?.text ?? "";
   const [text, setText] = useState(saved);
-  // The script runs on every computer of that OS, so a save carries the grant.
-  const grant = useExecutableWriteGrant();
+  const queryClient = useQueryClient();
   const put = useHostScopedMutationForClient(useHostClient(), {
     method: "environment.setup.put",
-    prepareRequest: grant,
     mutationKey: environmentMutationKeys.setupPut(),
     errorMessage: "Couldn't save the setup script.",
     invalidateMethods: [
@@ -142,6 +141,9 @@ function SetupScriptEditor(props: {
       "environment.review",
     ],
     onSuccess: noticeWriteOutcome,
+    // A script authn holds shows in the review the app reads from authn.
+    onSettled: () =>
+      void invalidateEnvironmentReads(queryClient, ["environment.review"]),
   });
   return (
     <div className="flex flex-col gap-2 pt-2">

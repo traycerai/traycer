@@ -18,7 +18,6 @@ import {
   canChangeNames,
   canChangeSentence,
 } from "@/hooks/environment/team/can-change-names";
-import { useHostClient } from "@/lib/host";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
@@ -239,11 +238,7 @@ export function SandboxDefaultsSection(props: {
 }
 
 function DefaultsEditors(props: { readonly environmentId: string }): ReactNode {
-  const members = useEnvironmentMembersList(
-    useHostClient(),
-    props.environmentId,
-    true,
-  );
+  const members = useEnvironmentMembersList(props.environmentId, true);
   const names = canChangeNames(members);
   let description: string;
   if (members.isPending) description = "Loading editors and admins…";
