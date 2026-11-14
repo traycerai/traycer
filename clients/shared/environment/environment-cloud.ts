@@ -141,6 +141,10 @@ export async function sendEnvironmentRequest(
           ...(body === null ? {} : { "Content-Type": "application/json" }),
         },
         body: body === null ? undefined : JSON.stringify(body),
+        // Never followed: a 3xx would resend the bearer, and a body that may
+        // hold a credential, to wherever it points. A 3xx (or a browser's
+        // opaque redirect, status 0) is an answered non-success.
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
