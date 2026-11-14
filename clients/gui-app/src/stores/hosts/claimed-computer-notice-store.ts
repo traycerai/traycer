@@ -1,7 +1,5 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
-import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import { installCrossWindowRehydrate } from "@/lib/persist/cross-window-rehydrate";
+import { persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   createKeyedSeenStore,
   keyedSeen,
@@ -34,98 +32,46 @@ export function takeClaimNotice(
   return true;
 }
 
-/** A team computer this device has seen in the person's list. */
-export interface SeenTeamComputer {
-  readonly teamId: string;
-  readonly teamName: string;
+/** A claim this person made in this window, of `hostId` on `environmentId`. */
+export interface OwnClaim {
+  readonly environmentId: string;
+  readonly hostId: string;
 }
 
-type SeenComputers = Readonly<Record<string, SeenTeamComputer>>;
-
-interface TeamComputersSeenState {
-  /** Per viewer: the team computers this device last saw in their list. */
-  readonly byViewer: Readonly<Record<string, SeenComputers>>;
-  readonly setSeen: (viewerUserId: string, computers: SeenComputers) => void;
-  /** The person claimed this computer here: it leaves the list untold. */
-  readonly forgetComputer: (viewerUserId: string, hostId: string) => void;
-}
-
-const TEAM_COMPUTERS_SEEN_PERSIST_KEY = persistKey(
-  STORE_KEYS.teamComputersSeen,
-);
-
-function isSeenComputer(value: unknown): value is SeenTeamComputer {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "teamId" in value &&
-    typeof value.teamId === "string" &&
-    "teamName" in value &&
-    typeof value.teamName === "string"
-  );
-}
-
-/** A corrupt entry is dropped: one notice missed, never a wrong one. */
-function persistedByViewer(
-  persistedState: unknown,
-): Readonly<Record<string, SeenComputers>> {
-  if (typeof persistedState !== "object" || persistedState === null) return {};
-  if (!("byViewer" in persistedState)) return {};
-  const byViewer = persistedState.byViewer;
-  if (typeof byViewer !== "object" || byViewer === null) return {};
-  const next: Record<string, SeenComputers> = {};
-  const viewers: ReadonlyArray<readonly [string, unknown]> =
-    Object.entries(byViewer);
-  for (const [viewer, computers] of viewers) {
-    if (typeof computers !== "object" || computers === null) continue;
-    const entries: ReadonlyArray<readonly [string, unknown]> =
-      Object.entries(computers);
-    const kept: Record<string, SeenTeamComputer> = {};
-    for (const [hostId, computer] of entries) {
-      if (isSeenComputer(computer)) kept[hostId] = computer;
-    }
-    next[viewer] = kept;
-  }
-  return next;
+interface OwnClaimsState {
+  /** Per viewer: their claims whose record authn has not yet been read. */
+  readonly byViewer: Readonly<Record<string, readonly OwnClaim[]>>;
 }
 
 /**
- * The team computers each person's list carried when this device last
- * looked, so a computer that leaves the list while the app was closed is
- * still noticed at the next open.
+ * The claims this person just made here. The next read of that team takes
+ * the newest claim of each such computer as told without telling it: it is
+ * this person's own claim, not a teammate's.
  */
-export const useTeamComputersSeenStore = create<TeamComputersSeenState>()(
-  persist(
-    (set) => ({
-      byViewer: {},
-      setSeen: (viewerUserId, computers) => {
-        set((state) => ({
-          byViewer: { ...state.byViewer, [viewerUserId]: computers },
-        }));
-      },
-      forgetComputer: (viewerUserId, hostId) => {
-        set((state) => {
-          if (!Object.hasOwn(state.byViewer, viewerUserId)) return state;
-          const computers = state.byViewer[viewerUserId];
-          if (!Object.hasOwn(computers, hostId)) return state;
-          const { [hostId]: _claimed, ...rest } = computers;
-          return { byViewer: { ...state.byViewer, [viewerUserId]: rest } };
-        });
-      },
-    }),
-    {
-      ...basePersistOptions(TEAM_COMPUTERS_SEEN_PERSIST_KEY),
-      storage: createJSONStorage(() => localStorage),
-      merge: (persistedState, currentState) => ({
-        ...currentState,
-        byViewer: persistedByViewer(persistedState),
-      }),
-      partialize: (state) => ({ byViewer: state.byViewer }),
-    },
-  ),
-);
+export const useOwnClaimsStore = create<OwnClaimsState>()(() => ({
+  byViewer: {},
+}));
 
-installCrossWindowRehydrate(
-  useTeamComputersSeenStore,
-  TEAM_COMPUTERS_SEEN_PERSIST_KEY,
-);
+export function noteOwnClaim(viewerUserId: string, claim: OwnClaim): void {
+  useOwnClaimsStore.setState((state) => ({
+    byViewer: {
+      ...state.byViewer,
+      [viewerUserId]: [...(state.byViewer[viewerUserId] ?? []), claim],
+    },
+  }));
+}
+
+/** The read of `environmentId` answered: its own claims are settled. */
+export function settleOwnClaims(
+  viewerUserId: string,
+  environmentId: string,
+): void {
+  useOwnClaimsStore.setState((state) => {
+    const claims = state.byViewer[viewerUserId] ?? [];
+    const kept = claims.filter(
+      (claim) => claim.environmentId !== environmentId,
+    );
+    if (kept.length === claims.length) return state;
+    return { byViewer: { ...state.byViewer, [viewerUserId]: kept } };
+  });
+}

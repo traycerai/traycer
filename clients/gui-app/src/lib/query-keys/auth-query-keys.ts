@@ -19,6 +19,21 @@ export const authQueryKeys = {
     userId,
     environmentId,
   ],
+  // One read per trigger: `read` is never reused, so a trigger always
+  // fetches and never answers from an earlier read's cache.
+  claimedComputers: (
+    auth: object | null,
+    userId: string | null,
+    environmentId: string,
+    read: number,
+  ): readonly unknown[] => [
+    "auth",
+    "claimed-computers",
+    auth,
+    userId,
+    environmentId,
+    read,
+  ],
   environmentInvitations: (
     authService: object | null,
     userId: string,

@@ -3521,6 +3521,7 @@ export class AuthService {
   /** The team computers a member claimed away from this team, kept 30 days. */
   async listClaimedComputers(
     environmentId: string,
+    signal: AbortSignal | null,
   ): Promise<ClaimedComputersResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
@@ -3528,7 +3529,7 @@ export class AuthService {
       this.runnerHost.authnBaseUrl,
       bearer,
       environmentId,
-      null,
+      signal,
     );
   }
 
