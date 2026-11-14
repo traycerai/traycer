@@ -10,7 +10,6 @@ import {
   memberRemovedToastBody,
   memberRowTitle,
   removePreviewTitle,
-  roleLabelOf,
   seeButNotChangeLine,
 } from "@/components/settings/members/copy";
 import type { MembersListMember } from "@/components/settings/members/types";
@@ -19,6 +18,7 @@ describe("inviteSentBody", () => {
   it.each([
     ["admin", "an admin"],
     ["editor", "an editor"],
+    ["viewer", "a viewer"],
   ] as const)("names a %s with its article", (role, phrase) => {
     expect(inviteSentBody("sam@acme.test", "Acme", role)).toBe(
       `We emailed sam@acme.test. They join Acme as ${phrase} when they accept.`,
@@ -117,6 +117,8 @@ describe("role changes that need a confirm", () => {
   it.each([
     ["editor", "admin"],
     ["editor", "editor"],
+    ["viewer", "editor"],
+    ["viewer", "admin"],
   ] as const)("treats %s to %s as no demotion", (from, to) => {
     expect(isRoleDemotion(from, to)).toBe(false);
   });
@@ -125,25 +127,32 @@ describe("role changes that need a confirm", () => {
     expect(demotionConfirmTitle("Priya", "Acme", "editor")).toBe(
       "Change Priya's role in Acme to editor?",
     );
+    expect(demotionConfirmTitle("Priya", "Acme", "viewer")).toBe(
+      "Change Priya's role in Acme to viewer?",
+    );
+  });
+
+  it("says what an editor loses on the way to viewer", () => {
+    expect(demotionConfirmBody("Priya", "Acme", "editor", "viewer")).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+  });
+
+  it("says both losses when an admin goes straight to viewer", () => {
+    expect(demotionConfirmBody("Priya", "Acme", "admin", "viewer")).toBe(
+      "Priya can no longer invite people or change roles. Priya can no longer change Acme's settings. They can still see them.",
+    );
   });
 
   it("says what an admin loses on the way to editor", () => {
-    expect(demotionConfirmBody("Priya", "admin", "editor")).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
+    expect(demotionConfirmBody("Priya", "Acme", "admin", "editor")).toBe(
+      "Priya can no longer invite people or change roles.",
     );
   });
 
   it("names the role on the button", () => {
     expect(demotionConfirmLabel("editor")).toBe("Change to editor");
-  });
-});
-
-/** A seat that holds no role is labelled for what it gives, never promoted. */
-describe("roleLabelOf", () => {
-  it("labels a seat with no role as no access", () => {
-    expect(roleLabelOf(null)).toBe("No access");
-    expect(roleLabelOf("editor")).toBe("Editor");
-    expect(roleLabelOf("admin")).toBe("Admin");
+    expect(demotionConfirmLabel("viewer")).toBe("Change to viewer");
   });
 });
 

@@ -69,7 +69,7 @@ afterEach(() => {
 function member(
   userId: string,
   displayName: string,
-  role: TeamRole | null,
+  role: TeamRole,
   overrides: Partial<MembersListMember>,
 ): MembersListMember {
   return {
@@ -88,7 +88,7 @@ function member(
 const ADMIN = member("u-admin", "Ada", "admin", {});
 const SECOND_ADMIN = member("u-admin2", "Grace", "admin", {});
 const EDITOR = member("u-editor", "Priya", "editor", { linkedPlan: true });
-const PENDING = member("u-pending", "", null, {
+const PENDING = member("u-pending", "", "viewer", {
   inviteState: "pending",
   invitedAddress: "new@acme.test",
   email: null,
@@ -132,7 +132,7 @@ function DetailsEntry(props: { readonly subjectKey: string }): ReactNode {
 }
 
 function renderView(options: {
-  readonly viewerRole: TeamRole | null;
+  readonly viewerRole: TeamRole;
   readonly members: readonly MembersListMember[];
   readonly currentUserId: string;
   readonly legacyRoleNoticeSeenAt: number | null;
@@ -325,17 +325,28 @@ describe("MembersView", () => {
     expect(screen.getByRole("button", { name: "Revoke" })).toBeTruthy();
   });
 
-  it("shows a seat holding no role as No access, with Remove and no role picker", () => {
-    const noRole = member("u-norole", "Sam", null, { email: "sam@acme.test" });
+  it("shows a Viewer row and offers Viewer in the role picker", async () => {
+    const user = userEvent.setup();
+    const viewer = member("u-viewer", "Sam", "viewer", {
+      email: "sam@acme.test",
+    });
     renderView({
       ...BASE,
       viewerRole: "admin",
-      members: [ADMIN, EDITOR, noRole],
+      members: [ADMIN, EDITOR, viewer],
     });
-    const row = rowOf("u-norole");
-    expect(within(row).getByText("No access")).toBeTruthy();
-    expect(within(row).queryByRole("combobox")).toBeNull();
-    expect(within(row).getByRole("button", { name: "Remove" })).toBeTruthy();
+    const row = rowOf("u-viewer");
+    expect(
+      within(row).getByRole("combobox", { name: "Role for Sam" }),
+    ).toBeTruthy();
+    expect(within(row).getByText("Viewer")).toBeTruthy();
+    await user.click(
+      within(rowOf("u-editor")).getByRole("combobox", {
+        name: "Role for Priya",
+      }),
+    );
+    expect(await screen.findByRole("option", { name: "Viewer" })).toBeTruthy();
+    await user.keyboard("{Escape}");
     expect(
       within(rowOf("u-editor")).getByRole("combobox", {
         name: "Role for Priya",
@@ -346,7 +357,7 @@ describe("MembersView", () => {
   it("shows a non-admin the list without controls and a pending summary, not the address", () => {
     renderView({
       ...BASE,
-      viewerRole: null,
+      viewerRole: "viewer",
       currentUserId: "u-editor",
       members: [ADMIN, EDITOR, PENDING],
     });
@@ -455,11 +466,11 @@ describe("MembersView", () => {
 
   it("tags the member the notice names by name, else by email, and asks a nameless row to retry", async () => {
     const user = userEvent.setup();
-    const emailOnly = member("u-mail", "", null, {
+    const emailOnly = member("u-mail", "", "viewer", {
       displayName: null,
       email: "mail@acme.test",
     });
-    const unloaded = member("u-ghost", "", null, {
+    const unloaded = member("u-ghost", "", "viewer", {
       displayName: null,
       email: null,
     });
@@ -508,7 +519,7 @@ describe("MembersView demotion", () => {
       await screen.findByText("Change Grace's role in Acme to editor?"),
     ).toBeTruthy();
     expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Grace can no longer invite people, change roles or edit the approval policy.",
+      "Grace can no longer invite people or change roles.",
     );
     expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
       "Change to editor",
@@ -525,6 +536,36 @@ describe("MembersView demotion", () => {
       expect(onSetRole).toHaveBeenCalledWith({
         userId: "u-admin2",
         role: "editor",
+      }),
+    );
+  });
+
+  it("confirms an editor's demotion to Viewer with the read-only copy", async () => {
+    const user = userEvent.setup();
+    const { onSetRole } = renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, EDITOR],
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+
+    expect(
+      await screen.findByText("Change Priya's role in Acme to viewer?"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+    expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
+      "Change to viewer",
+    );
+    expect(onSetRole).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("members-demotion-confirm"));
+    await waitFor(() =>
+      expect(onSetRole).toHaveBeenCalledWith({
+        userId: "u-editor",
+        role: "viewer",
       }),
     );
   });
@@ -628,7 +669,7 @@ describe("MembersView demotion announcement", () => {
     }
     expect(described).not.toBeNull();
     expect(described).toContain(
-      "Grace can no longer invite people, change roles or edit the approval policy.",
+      "Grace can no longer invite people or change roles.",
     );
     expect(described).toContain("Acme's agents stop using this plan.");
   });

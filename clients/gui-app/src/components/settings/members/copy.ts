@@ -32,15 +32,8 @@ export const LINKED_CLAUDE_PLAN = "linked a Claude plan";
 export const ROLE_LABELS: Readonly<Record<TeamRole, string>> = {
   admin: "Admin",
   editor: "Editor",
+  viewer: "Viewer",
 };
-
-/** The label for a seat with no authority: the role is retired or unknown. */
-const NO_ROLE_LABEL = "No access";
-
-/** One row's role label, `null` included. */
-export function roleLabelOf(role: TeamRole | null): string {
-  return role === null ? NO_ROLE_LABEL : ROLE_LABELS[role];
-}
 
 export const HOW_TRAYCER_HANDLES_THIS = "How Traycer handles this";
 
@@ -136,12 +129,7 @@ export function legacyRoleNotice(
   return `${lead}. ${joinNames(names)} can now edit. ${tail}`;
 }
 
-/**
- * The standing line on a team's settings this reader may read and not change:
- * a configuration read through the pool whose role authorizes nothing. There
- * is no read-only ROLE any more - this is what an older inventory's unknown
- * role reads as.
- */
+/** The standing line on a configuration a viewer may read and not change. */
 export function seeButNotChangeLine(teamName: string): string {
   return `You can see ${teamName}'s settings but not change them.`;
 }
@@ -150,6 +138,8 @@ export function roleGrantPrefix(role: TeamRole): string {
   const editor =
     "You can change the team's settings; every change reaches every team sandbox.";
   switch (role) {
+    case "viewer":
+      return "You can see the team's settings but not change them.";
     case "editor":
       return editor;
     case "admin":
@@ -168,6 +158,8 @@ export function invitePendingSeatsSentence(): string {
 /** The line under the invite's Role picker, for the role picked. */
 export function inviteRoleLine(role: TeamRole): string {
   switch (role) {
+    case "viewer":
+      return "Can see the team's settings but not change them.";
     case "editor":
       return "Can change the team's settings; every change reaches every team sandbox.";
     case "admin":
@@ -404,14 +396,16 @@ export function memberRemovedToastBody(
 
 /** How much a role may change: a lower one is a demotion, and confirms. */
 const ROLE_RANK: Readonly<Record<TeamRole, number>> = {
-  editor: 0,
-  admin: 1,
+  viewer: 0,
+  editor: 1,
+  admin: 2,
 };
 
 /** The role's own word, as the confirm's question and button say it. */
 const ROLE_WORDS: Readonly<Record<TeamRole, string>> = {
   admin: "admin",
   editor: "editor",
+  viewer: "viewer",
 };
 
 /**
@@ -423,7 +417,14 @@ export function isRoleDemotion(from: TeamRole, to: TeamRole): boolean {
 }
 
 export function demotionLossLine(memberName: string): string {
-  return `${memberName} can no longer invite people, change roles or edit the approval policy.`;
+  return `${memberName} can no longer invite people or change roles.`;
+}
+
+export function demotionViewerLossLine(
+  memberName: string,
+  teamName: string,
+): string {
+  return `${memberName} can no longer change ${teamName}'s settings. They can still see them.`;
 }
 
 export function demotionConfirmTitle(
@@ -435,18 +436,23 @@ export function demotionConfirmTitle(
 }
 
 /**
- * What the demotion takes away. Admin to editor is the only demotion a team
- * has left - every other role change gives - so this names the admin powers.
+ * What the demotion takes away: the admin powers, the editing, or both when
+ * an admin goes straight to viewer.
  */
 export function demotionConfirmBody(
   memberName: string,
+  teamName: string,
   currentRole: TeamRole,
   nextRole: TeamRole,
 ): string {
+  const lines: string[] = [];
   if (currentRole === "admin" && nextRole !== "admin") {
-    return demotionLossLine(memberName);
+    lines.push(demotionLossLine(memberName));
   }
-  return "";
+  if (ROLE_RANK[nextRole] < ROLE_RANK.editor) {
+    lines.push(demotionViewerLossLine(memberName, teamName));
+  }
+  return lines.join(" ");
 }
 
 export function demotionConfirmLabel(nextRole: TeamRole): string {

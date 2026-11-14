@@ -755,42 +755,45 @@ describe("<SandboxesSettingsPanel />", () => {
       ).toContain(shapeLine);
     });
 
-    it("shows a team's default form without repeating the environment", async () => {
-      viewTeamAs("editor", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
-      renderPanel([]);
+    it.each(["editor", "admin"] as const)(
+      "shows a team's default form for %s without repeating the environment",
+      async (role) => {
+        viewTeamAs(role, { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
+        renderPanel([]);
 
-      expect(
-        await screen.findByRole("heading", { name: "Defaults" }),
-      ).toBeTruthy();
-      expect(
-        await screen.findByTestId("sandboxes-defaults-idle-input"),
-      ).toHaveProperty("value", "45");
-      expect(
-        screen.getByTestId("sandboxes-defaults-form").textContent,
-      ).not.toContain("Acme");
-      expect(
-        screen.getByText(
-          "New Acme sandboxes use these defaults. Shared by Acme, not a spending limit. Existing sandboxes keep their Idle settings.",
-        ),
-      ).toBeTruthy();
-      expect(
-        screen.queryByText("Each new sandbox starts with these"),
-      ).toBeNull();
-      expect(screen.queryByText("aren't destroyed when idle")).toBeNull();
-      const shape = screen.getByRole("combobox", { name: "Shape" });
-      expect(shape.textContent).toContain(
-        "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
-      );
-      fireEvent.click(shape);
-      expect(
-        screen.getByRole("option", { name: /2 vCPU · 4 GB/ }).textContent,
-      ).toContain("Linux · 2 vCPU · 4 GB · $0.12/h · Suspend keeps memory");
-      expect(
-        screen.getByRole("option", { name: /4 vCPU · 8 GB/ }).textContent,
-      ).toContain(
-        "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
-      );
-    });
+        expect(
+          await screen.findByRole("heading", { name: "Defaults" }),
+        ).toBeTruthy();
+        expect(
+          await screen.findByTestId("sandboxes-defaults-idle-input"),
+        ).toHaveProperty("value", "45");
+        expect(
+          screen.getByTestId("sandboxes-defaults-form").textContent,
+        ).not.toContain("Acme");
+        expect(
+          screen.getByText(
+            "New Acme sandboxes use these defaults. Shared by Acme, not a spending limit. Existing sandboxes keep their Idle settings.",
+          ),
+        ).toBeTruthy();
+        expect(
+          screen.queryByText("Each new sandbox starts with these"),
+        ).toBeNull();
+        expect(screen.queryByText("aren't destroyed when idle")).toBeNull();
+        const shape = screen.getByRole("combobox", { name: "Shape" });
+        expect(shape.textContent).toContain(
+          "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
+        );
+        fireEvent.click(shape);
+        expect(
+          screen.getByRole("option", { name: /2 vCPU · 4 GB/ }).textContent,
+        ).toContain("Linux · 2 vCPU · 4 GB · $0.12/h · Suspend keeps memory");
+        expect(
+          screen.getByRole("option", { name: /4 vCPU · 8 GB/ }).textContent,
+        ).toContain(
+          "Linux · 4 vCPU · 8 GB · from $0.12/h · Suspend keeps memory",
+        );
+      },
+    );
 
     it("gives a viewer the item read-only, naming who can change it", async () => {
       viewTeamAs("viewer", { cpus: 8, memoryMb: 16_384, idleMinutes: 90 });
@@ -831,6 +834,9 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(
         screen.queryByRole("button", { name: "Save defaults" }),
       ).toBeNull();
+      expect(harness?.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
     });
 
     it("gives an editor the form on the item's values, saving it at the read revision", async () => {

@@ -107,7 +107,11 @@ function StoragePolicySectionBody(props: {
   );
   const disabled =
     environment === null ||
-    environment.role === null ||
+    !(
+      environment.role === "owner" ||
+      environment.role === "admin" ||
+      environment.role === "editor"
+    ) ||
     policy === undefined ||
     put.isPending;
   const write = <F extends StorageField>(
