@@ -697,11 +697,11 @@ export function ProfileEditDialog(props: {
     (state) => state.openForSwitch,
   );
   const startSwitch = (): void => {
-    const hostId = hostClient.getActiveHostId();
     if (signInOutcomes === null) {
       setSwitchingAccount(true);
       return;
     }
+    const hostId = hostClient.getActiveHostId();
     if (hostId === null) return;
     props.onOpenChange(false);
     openSwitchFlow(
