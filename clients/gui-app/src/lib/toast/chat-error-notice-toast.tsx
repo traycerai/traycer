@@ -21,7 +21,15 @@ export const CHAT_ACTION_REPORT_CONTEXT = createReportIssueContext({
   source: "Chat",
 });
 
-export function showErrorNoticeToast(notice: ChatErrorNotice): void {
+/**
+ * `keepsLineBreaks` is the store's word that this notice was built from the
+ * removed-account code (`ChatSessionStoreHandle.lineBreakNotices`), whose
+ * text puts the app's words on the line after "Was removed".
+ */
+export function showErrorNoticeToast(
+  notice: ChatErrorNotice,
+  keepsLineBreaks: boolean,
+): void {
   const text = notice.message.length > 0 ? notice.message : "Action failed.";
   // A send or a queued message over the per-message file cap. The person's
   // message is over a limit, not something broken, so it is said plainly and
@@ -34,12 +42,14 @@ export function showErrorNoticeToast(notice: ChatErrorNotice): void {
   // store went to some trouble to keep the bytes verbatim, and default HTML
   // whitespace collapsing undoes all of it on screen and on copy. Rendering
   // it pre-wrap is what makes the byte promise reach the user. Ordinary
-  // notices stay plain strings; nothing about them needs preserving.
-  const message: ReactNode = noticeCarriesOnlyCopy(notice) ? (
-    <span className="whitespace-pre-wrap break-words">{text}</span>
-  ) : (
-    text
-  );
+  // notices stay plain strings; nothing about them needs preserving, except
+  // the line break a removed-account notice puts after "Was removed".
+  const message: ReactNode =
+    noticeCarriesOnlyCopy(notice) || keepsLineBreaks ? (
+      <span className="whitespace-pre-wrap break-words">{text}</span>
+    ) : (
+      text
+    );
   // A `SEND_NOT_RECORDED` notice INLINES the user's message body because the
   // client was its last holder (see `unrecoverableSendNotice`). Letting that
   // expire on the default timer would put the only remaining copy of someone's

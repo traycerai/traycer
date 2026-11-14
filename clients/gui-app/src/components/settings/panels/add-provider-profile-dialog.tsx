@@ -755,7 +755,11 @@ function AddProfileAccountSection({
     return (
       <AddProfileFailureStep
         providerId={providerId}
-        message="The account was linked, but the profile color could not be saved."
+        message={
+          offersSignIns
+            ? "The account was signed in, but the profile color could not be saved."
+            : "The account was linked, but the profile color could not be saved."
+        }
         refusal={null}
         onCancel={onCancel}
         onRetry={onRetryFinalize}
