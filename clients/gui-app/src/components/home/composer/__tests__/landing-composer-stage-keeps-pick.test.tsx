@@ -57,6 +57,9 @@ const host = vi.hoisted(() => ({
   clearEditor: vi.fn(),
   /** `undefined` leaves `providers.list` unread, as the other cases here do. */
   providers: undefined as ReadonlyArray<ProviderCliState> | undefined,
+  /** The query decides only while `status === "success"` and it is not stale. */
+  providersStatus: "success" as "pending" | "error" | "success",
+  providersStale: false,
 }));
 
 const PLACEMENT_CLIENT = vi.hoisted(() => ({ hostId: "host-test" }));
@@ -84,7 +87,12 @@ function modelOption(harnessId: GuiHarnessId, slug: string): ModelOption {
 
 // Stable references: a fresh list per render would push a new catalog on
 // every render.
-const CLAUDE_MODELS = { models: [modelOption("claude", "sonnet-5.5")] };
+const CLAUDE_MODELS = {
+  models: [
+    modelOption("claude", "sonnet-5.5"),
+    modelOption("claude", "opus-4.8"),
+  ],
+};
 const CODEX_MODELS = { models: [modelOption("codex", "gpt-6-astra")] };
 // Stable per answer: a fresh array per render would push a new catalog on
 // every render.
@@ -409,14 +417,31 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/hooks/providers/use-providers-list-query")
     >()),
-    useProvidersListForClient: () =>
-      host.providers === undefined
-        ? { data: undefined, isError: false }
-        : {
-            data: { providers: host.providers },
-            isError: false,
-            isPending: false,
-          },
+    useProvidersListForClient: () => {
+      if (host.providers === undefined) {
+        return {
+          status: "pending" as const,
+          isStale: false,
+          data: undefined,
+          isError: false,
+          isPending: true,
+          isSuccess: false,
+          isFetching: false,
+          fetchStatus: "idle" as const,
+        };
+      }
+      const status = host.providersStatus;
+      return {
+        status,
+        isStale: host.providersStale,
+        data: { providers: host.providers },
+        isError: status === "error",
+        isPending: status === "pending",
+        isSuccess: status === "success",
+        isFetching: false,
+        fetchStatus: "idle" as const,
+      };
+    },
   }),
 );
 
@@ -425,7 +450,10 @@ import { queryClient } from "@/lib/query-client";
 import { queryKeys } from "@/lib/query-keys";
 import { providerRow } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
-import { commitProfileSelection } from "@/stores/composer/commit-selection";
+import {
+  commitProfileSelection,
+  commitSelection,
+} from "@/stores/composer/commit-selection";
 import { CHECKING_SANDBOX_AGENTS } from "@/lib/sandboxes/sandbox-strings";
 import { chipModelName } from "@/stores/composer/composer-toolbar-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
@@ -548,11 +576,12 @@ function editorHandle(): ComposerPromptEditorHandle {
   };
 }
 
+function draftById(draftId: string) {
+  return useLandingDraftStore.getState().drafts.find((d) => d.id === draftId);
+}
+
 function draftSettings(draftId: string): ChatRunSettings | null {
-  return (
-    useLandingDraftStore.getState().drafts.find((d) => d.id === draftId)
-      ?.settings ?? null
-  );
+  return draftById(draftId)?.settings ?? null;
 }
 
 function toolbar(): ComposerToolbarStore {
@@ -577,6 +606,8 @@ beforeEach(() => {
     { slug: "traycer-default", label: "traycer-default" },
   ];
   host.providers = undefined;
+  host.providersStatus = "success";
+  host.providersStale = false;
   queryClient.removeQueries({ queryKey: PROVIDERS_LIST_KEY, exact: true });
   host.startTask.mockReset();
   host.startTask.mockImplementation(
@@ -1129,54 +1160,75 @@ function publishProviders(providers: readonly ProviderCliState[]): void {
   queryClient.setQueryData(PROVIDERS_LIST_KEY, { providers });
 }
 
-async function mintEmptyTerminalDraft(): Promise<{
-  readonly mintedId: string;
-  readonly stored: ChatRunSettings | null;
-}> {
+function publishSignedOutTerminal(
+  signedInProfileIds: readonly string[],
+  terminalSignedIn: boolean,
+): void {
+  publishProviders([claudeListing({ terminalSignedIn, signedInProfileIds })]);
+}
+
+/** Last-run captured after it is seeded, before the composer mounts. */
+function seedSignedOutTerminal(): ChatRunSettings | null {
   useComposerRunSettingsStore
     .getState()
     .setGlobalRunSettings(HOST_ID, EMPTY_TERMINAL, 2);
-  const stored = lastRunSettings();
-  mount(null, null);
-  await waitFor(() =>
-    expect(toolbar().getState().selection.harnessId).toBe("claude"),
-  );
-  act(() => {
-    host.editContent?.(TYPED, { from: 1, to: 1 });
-  });
-  const minted = useLandingDraftStore.getState().drafts;
-  expect(minted).toHaveLength(1);
-  const mintedId = minted[0].id;
-  return { mintedId, stored };
+  return lastRunSettings();
 }
 
-describe("an empty Terminal login on the landing composer", () => {
-  it("mints the one signed-in profile and leaves the stored last-run settings on Terminal", async () => {
-    publishProviders([
-      claudeListing({
-        terminalSignedIn: false,
-        signedInProfileIds: [WORK_PROFILE],
-      }),
-    ]);
-    const { mintedId, stored } = await mintEmptyTerminalDraft();
+function typeFirstKeystroke(): void {
+  const editContent = host.editContent;
+  if (editContent === null) throw new Error("the composer did not mount");
+  act(() => {
+    editContent(TYPED, { from: 1, to: 1 });
+  });
+}
 
-    expect(draftSettings(mintedId)?.profileId).toBe(WORK_PROFILE);
+function mintedDraft() {
+  const minted = useLandingDraftStore.getState().drafts;
+  expect(minted).toHaveLength(1);
+  return minted[0];
+}
+
+/** A local draft whose Terminal login shows the one signed-in profile. */
+async function showDefaultOnDraft(): Promise<string> {
+  publishSignedOutTerminal([WORK_PROFILE], false);
+  seedSignedOutTerminal();
+  const draftId = "follows-default";
+  useLandingDraftStore.getState().createDraftWithId(draftId, EMPTY_TERMINAL);
+  useLandingDraftStore.getState().setDraftAccountFollowsDefault(draftId, true);
+  mount(draftId, EMPTY_TERMINAL);
+  await waitFor(() => {
+    const state = toolbar().getState();
+    expect(state.selection.profileId).toBe(WORK_PROFILE);
+    expect(state.accountChosen).toBe(false);
+    expect(state.catalog.modelsLoaded).toBe(true);
+    expect(state.catalog.modelsProfileId).toBe(WORK_PROFILE);
+  });
+  return draftId;
+}
+
+describe("a signed-out Terminal login on the landing composer", () => {
+  it("shows the one signed-in profile, and the first keystroke mints Terminal with the default bit", async () => {
+    publishSignedOutTerminal([WORK_PROFILE], false);
+    const stored = seedSignedOutTerminal();
+    mount(null, null);
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe(WORK_PROFILE),
+    );
+    expect(toolbar().getState().values.selection.profileId).toBeNull();
+
+    typeFirstKeystroke();
+
+    const draft = mintedDraft();
+    expect(draft.settings?.profileId).toBeNull();
+    expect(draft.accountFollowsDefault).toBe(true);
     expect(lastRunSettings()).toBe(stored);
-    expect(lastRunSettings()?.profileId).toBeNull();
   });
 
-  it("keeps a Terminal pick on that draft", async () => {
-    publishProviders([
-      claudeListing({
-        terminalSignedIn: false,
-        signedInProfileIds: [WORK_PROFILE],
-      }),
-    ]);
-    const { mintedId } = await mintEmptyTerminalDraft();
-    expect(draftSettings(mintedId)?.profileId).toBe(WORK_PROFILE);
-
-    cleanup();
-    mount(mintedId, draftSettings(mintedId));
+  it("keeps a Terminal pick made before the first keystroke", async () => {
+    publishSignedOutTerminal([WORK_PROFILE], false);
+    seedSignedOutTerminal();
+    const view = mount(null, null);
     await waitFor(() =>
       expect(toolbar().getState().selection.profileId).toBe(WORK_PROFILE),
     );
@@ -1184,37 +1236,145 @@ describe("an empty Terminal login on the landing composer", () => {
     act(() => {
       commitProfileSelection(toolbar(), null);
     });
+    expect(toolbar().getState().selection.profileId).toBeNull();
 
-    expect(draftSettings(mintedId)?.profileId).toBeNull();
+    typeFirstKeystroke();
+
+    const draft = mintedDraft();
+    expect(draft.settings?.profileId).toBeNull();
+    expect(draft.accountFollowsDefault).toBe(false);
+    view.rerender(composer(null, null));
+    expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("shows the signed-in profile again when a local draft follows the default account", async () => {
+    publishSignedOutTerminal([WORK_PROFILE], false);
+    const draftId = "reopened-default";
+    useLandingDraftStore.getState().createDraftWithId(draftId, EMPTY_TERMINAL);
+    useLandingDraftStore
+      .getState()
+      .setDraftAccountFollowsDefault(draftId, true);
+    mount(draftId, EMPTY_TERMINAL);
+
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe(WORK_PROFILE),
+    );
+  });
+
+  it("stays on Terminal when a local draft does not follow the default account", async () => {
+    publishSignedOutTerminal([WORK_PROFILE], false);
+    const draftId = "reopened-terminal";
+    useLandingDraftStore.getState().createDraftWithId(draftId, EMPTY_TERMINAL);
+    mount(draftId, EMPTY_TERMINAL);
+
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
     await act(async () => {
       await Promise.resolve();
     });
-    expect(draftSettings(mintedId)?.profileId).toBeNull();
+    expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("stays on Terminal when the provider read failed and kept its previous data", async () => {
+    host.providersStatus = "error";
+    publishSignedOutTerminal([WORK_PROFILE], false);
+    seedSignedOutTerminal();
+    mount(null, null);
+
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("stays on Terminal when the provider read is stale", async () => {
+    host.providersStale = true;
+    publishSignedOutTerminal([WORK_PROFILE], false);
+    seedSignedOutTerminal();
+    mount(null, null);
+
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(toolbar().getState().selection.profileId).toBeNull();
   });
 
   it("mints Terminal when two profiles are signed in", async () => {
-    publishProviders([
-      claudeListing({
-        terminalSignedIn: false,
-        signedInProfileIds: [WORK_PROFILE, HOME_PROFILE],
-      }),
-    ]);
-    const { mintedId, stored } = await mintEmptyTerminalDraft();
+    publishSignedOutTerminal([WORK_PROFILE, HOME_PROFILE], false);
+    const stored = seedSignedOutTerminal();
+    mount(null, null);
 
-    expect(draftSettings(mintedId)?.profileId).toBeNull();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+
+    typeFirstKeystroke();
+
+    expect(mintedDraft().settings?.profileId).toBeNull();
     expect(lastRunSettings()).toBe(stored);
+    expect(toolbar().getState().selection.profileId).toBeNull();
   });
 
   it("mints Terminal when the Terminal login is signed in", async () => {
-    publishProviders([
-      claudeListing({
-        terminalSignedIn: true,
-        signedInProfileIds: [WORK_PROFILE],
-      }),
-    ]);
-    const { mintedId, stored } = await mintEmptyTerminalDraft();
+    publishSignedOutTerminal([WORK_PROFILE], true);
+    const stored = seedSignedOutTerminal();
+    mount(null, null);
 
-    expect(draftSettings(mintedId)?.profileId).toBeNull();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+
+    typeFirstKeystroke();
+
+    expect(mintedDraft().settings?.profileId).toBeNull();
     expect(lastRunSettings()).toBe(stored);
+    expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("stores the Terminal login when an edit lands while the default account is shown", async () => {
+    const draftId = await showDefaultOnDraft();
+
+    act(() => {
+      toolbar().getState().setReasoning("high");
+    });
+
+    const draft = draftById(draftId);
+    if (draft === undefined) throw new Error("the draft is gone");
+    const settings = draft.settings;
+    if (settings === null) throw new Error("the edit stored no settings");
+    expect(settings.profileId).toBeNull();
+    expect(settings.reasoningEffort).toBe("high");
+    expect(draft.accountFollowsDefault).toBe(true);
+    const stored = lastRunSettings();
+    if (stored === null) throw new Error("the edit cleared last-run");
+    expect(stored.profileId).toBeNull();
+    expect(stored.reasoningEffort).toBe("high");
+    expect(toolbar().getState().selection.profileId).toBe(WORK_PROFILE);
+  });
+
+  it("chooses no account when a model is picked on the account already shown", async () => {
+    const draftId = await showDefaultOnDraft();
+
+    act(() => {
+      commitSelection(toolbar(), "claude", "opus-4.8", WORK_PROFILE);
+    });
+
+    expect(toolbar().getState().accountChosen).toBe(false);
+    const draft = draftById(draftId);
+    if (draft === undefined) throw new Error("the draft is gone");
+    expect(draft.accountFollowsDefault).toBe(true);
+    expect(toolbar().getState().selection.profileId).toBe(WORK_PROFILE);
   });
 });

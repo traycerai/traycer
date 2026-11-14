@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DraftDocument } from "@traycer/protocol/host";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import {
   applyLandingHostDocument,
   collectLandingDirtyWrites,
@@ -21,6 +23,7 @@ import {
   setDraftLocalFlushListener,
   setLandingPlacementHostReader,
 } from "@/lib/drafts/draft-local-edits";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 
 const NON_EMPTY_CONTENT = {
   type: "doc" as const,
@@ -673,6 +676,164 @@ describe("landing draft store: applyLandingHostDocument closed on the clean path
     // Contrast: with the placement back on host-a, the row is no longer
     // foreign, so the portable value is taken.
     expect(afterPlacementMatches?.closed).toBe(true);
+  });
+});
+
+const TERMINAL_SETTINGS: ChatRunSettings = {
+  ultracode: false,
+  harnessId: "claude",
+  model: "sonnet-5.5",
+  permissionMode: "supervised",
+  reasoningEffort: "low",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+};
+
+function frozenRunSettings(profileId: string | null) {
+  return chatRunSettingsSchemaPreUltracode.parse({
+    harnessId: "claude",
+    model: "sonnet-5.5",
+    permissionMode: "supervised",
+    reasoningEffort: "low",
+    serviceTier: null,
+    agentMode: "regular",
+    profileId,
+  });
+}
+
+function ownEcho(draftId: string, profileId: string | null): DraftDocument {
+  return {
+    draftId,
+    kind: "landing",
+    target: { epicId: null, chatId: null, blockId: null },
+    revision: 2,
+    lastTouchedAt: 100,
+    workspace: null,
+    supersedes: null,
+    ownerHostId: "host-a",
+    origin: "own",
+    adoption: { state: "adopted", hostId: "host-a" },
+    publication: {
+      status: "current",
+      lastPublishedAt: 100,
+      publishedRevision: 2,
+      halted: null,
+    },
+    portable: {
+      content: EMPTY_LANDING_DRAFT_CONTENT,
+      selection: null,
+      runSettings: frozenRunSettings(profileId),
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+    },
+  };
+}
+
+function accountFollowsDefaultBits(state: unknown): boolean[] {
+  if (!isRecord(state) || !Array.isArray(state.drafts)) {
+    throw new Error("persisted landing drafts are missing");
+  }
+  return state.drafts.map((draft) => {
+    if (!isRecord(draft) || !("accountFollowsDefault" in draft)) {
+      throw new Error(
+        "a persisted landing draft is missing accountFollowsDefault",
+      );
+    }
+    return draft.accountFollowsDefault === true;
+  });
+}
+
+describe("landing draft store: accountFollowsDefault across an own echo and a persist round trip", () => {
+  beforeEach(() => {
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    resetLandingDraftRetirementsForTests();
+  });
+
+  afterEach(() => {
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    resetLandingDraftRetirementsForTests();
+  });
+
+  it("keeps the bit when this device's own echo names the same harness and profile", () => {
+    useLandingDraftStore.setState({
+      drafts: [
+        baseDraft("echo-same", {
+          origin: "own",
+          adoption: { state: "adopted", hostId: "host-a" },
+          ownerHostId: "host-a",
+          hostRevision: 1,
+          generation: 2,
+          syncedGeneration: 2,
+          settings: TERMINAL_SETTINGS,
+          accountFollowsDefault: true,
+        }),
+      ],
+      activeDraftId: null,
+    });
+
+    applyLandingHostDocument(
+      ownEcho("echo-same", null),
+      EMPTY_LANDING_DRAFT_CONTENT,
+    );
+
+    const after = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-same");
+    if (after === undefined) throw new Error("the echo did not land");
+    expect(after.accountFollowsDefault).toBe(true);
+  });
+
+  it("drops the bit when this device's own echo names a different profile", () => {
+    useLandingDraftStore.setState({
+      drafts: [
+        baseDraft("echo-other", {
+          origin: "own",
+          adoption: { state: "adopted", hostId: "host-a" },
+          ownerHostId: "host-a",
+          hostRevision: 1,
+          generation: 2,
+          syncedGeneration: 2,
+          settings: TERMINAL_SETTINGS,
+          accountFollowsDefault: true,
+        }),
+      ],
+      activeDraftId: null,
+    });
+
+    applyLandingHostDocument(
+      ownEcho("echo-other", "work-profile"),
+      EMPTY_LANDING_DRAFT_CONTENT,
+    );
+
+    const after = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-other");
+    if (after === undefined) throw new Error("the echo did not land");
+    expect(after.accountFollowsDefault).toBe(false);
+  });
+
+  it("keeps the bit through partialize and merge", () => {
+    useLandingDraftStore.setState({
+      drafts: [
+        baseDraft("persist-follows", {
+          settings: TERMINAL_SETTINGS,
+          accountFollowsDefault: true,
+        }),
+      ],
+      activeDraftId: "persist-follows",
+    });
+    const options = useLandingDraftStore.persist.getOptions();
+    const partialize = options.partialize;
+    const merge = options.merge;
+    if (partialize === undefined || merge === undefined) {
+      throw new Error("landing draft persist is missing partialize or merge");
+    }
+    const partial = partialize(useLandingDraftStore.getState());
+    const merged = merge(partial, useLandingDraftStore.getState());
+    expect(accountFollowsDefaultBits(partial)).toEqual([true]);
+    expect(accountFollowsDefaultBits(merged)).toEqual([true]);
   });
 });
 

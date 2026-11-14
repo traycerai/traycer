@@ -165,6 +165,41 @@ describe("parseLandingDraft", () => {
     expect(parsed?.content).toEqual(content);
   });
 
+  it("keeps accountFollowsDefault only when it is true", () => {
+    const content = { type: "doc" };
+    const base = {
+      content,
+      selection: null,
+      lastTouchedAt: 1,
+      settings: null,
+      composerMode: null,
+      workspace: null,
+    };
+    const kept = parseLandingDraft({
+      ...base,
+      id: "draft-follows",
+      accountFollowsDefault: true,
+    });
+    if (kept === null) {
+      throw new Error(
+        "parser dropped a draft that follows the default account",
+      );
+    }
+    expect(kept.accountFollowsDefault).toBe(true);
+
+    const absent = parseLandingDraft({ ...base, id: "draft-absent" });
+    if (absent === null) throw new Error("parser dropped a draft");
+    expect(Object.hasOwn(absent, "accountFollowsDefault")).toBe(false);
+
+    const explicitFalse = parseLandingDraft({
+      ...base,
+      id: "draft-chosen",
+      accountFollowsDefault: false,
+    });
+    if (explicitFalse === null) throw new Error("parser dropped a draft");
+    expect(Object.hasOwn(explicitFalse, "accountFollowsDefault")).toBe(false);
+  });
+
   it("defaults a missing/non-finite `lastTouchedAt` to 0 and a missing `selection` to null", () => {
     expect(
       parseLandingDraft({

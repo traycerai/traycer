@@ -38,7 +38,7 @@ const host = vi.hoisted(() => ({
   cloudModels: undefined as ReadonlyArray<string> | undefined,
   /** The host's Traycer list, by slug and chip label. */
   traycerHostModels: [{ slug: "traycer-default", label: "traycer-default" }],
-  createChat: vi.fn(),
+  createChat: vi.fn((_input: unknown): Promise<unknown> => Promise.resolve({})),
   providers: [] as {
     readonly providerId: string;
     readonly auth: { readonly status: string };
@@ -155,14 +155,24 @@ vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
 }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({
+    status: "success" as const,
+    isStale: false,
     data: { providers: host.providers },
     isError: false,
     isPending: false,
+    isSuccess: true,
+    isFetching: false,
+    fetchStatus: "idle" as const,
   }),
   useProvidersListForClient: () => ({
+    status: "success" as const,
+    isStale: false,
     data: { providers: host.providers },
     isError: false,
     isPending: false,
+    isSuccess: true,
+    isFetching: false,
+    fetchStatus: "idle" as const,
   }),
 }));
 
@@ -533,7 +543,11 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  useAuthStore.setState({
+    status: "signed-out",
+    contextMetadata: null,
+    profile: null,
+  });
   useNewConversationModalStore.getState().resetForTests();
 });
 
@@ -665,7 +679,33 @@ function claudeListing(profileIds: readonly string[]) {
   ];
 }
 
-describe("a new conversation seeded on an empty Terminal login", () => {
+function payloadAt(root: unknown, path: readonly string[]): unknown {
+  let current = root;
+  for (const key of path) {
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      Array.isArray(current)
+    ) {
+      throw new Error(`createChat payload is missing ${path.join(".")}`);
+    }
+    if (!Object.hasOwn(current, key)) {
+      throw new Error(`createChat payload is missing ${path.join(".")}`);
+    }
+    current = Object.getOwnPropertyDescriptor(current, key)?.value;
+  }
+  return current;
+}
+
+function payloadProfileId(root: unknown, path: readonly string[]): string {
+  const value = payloadAt(root, path);
+  if (typeof value !== "string") {
+    throw new Error(`createChat payload ${path.join(".")} is not a profile id`);
+  }
+  return value;
+}
+
+describe("a new conversation seeded on a signed-out Terminal login", () => {
   beforeEach(() => {
     useNewConversationModalStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
@@ -705,5 +745,65 @@ describe("a new conversation seeded on an empty Terminal login", () => {
       expect(toolbar().getState().selection.harnessId).toBe("claude"),
     );
     expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("shows the signed-in profile when the patch follows the default account", async () => {
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, EMPTY_TERMINAL_SEED);
+    useNewConversationModalStore
+      .getState()
+      .setAccountFollowsDefault(EPIC_ID, true);
+    renderModal();
+
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe("profile-work"),
+    );
+  });
+
+  it("creates the chat on the signed-in profile and leaves last-run on Terminal", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "user-a" },
+      profile: {
+        userId: "user-a",
+        userName: "user-a",
+        email: "user-a@example.com",
+      },
+    });
+    useNewConversationModalStore.getState().setContent(EPIC_ID, DIRTY_CONTENT);
+    host.createChat.mockResolvedValue({});
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe("profile-work"),
+    );
+    const installEditor = host.installEditor;
+    const submit = host.bodySubmit;
+    if (installEditor === null || submit === null) {
+      throw new Error("the modal did not mount");
+    }
+    act(() => {
+      installEditor();
+    });
+    act(() => {
+      submit();
+    });
+
+    await waitFor(() => expect(host.createChat).toHaveBeenCalledTimes(1));
+    const request = host.createChat.mock.calls[0]?.[0];
+    expect(payloadProfileId(request, ["settings", "profileId"])).toBe(
+      "profile-work",
+    );
+    expect(
+      payloadProfileId(request, ["initialMessage", "settings", "profileId"]),
+    ).toBe("profile-work");
+    const recorded = useComposerRunSettingsStore.getState();
+    const globalLastRun = recorded.getGlobalRunSettings("host-a");
+    const epicLastRun = recorded.getEpicRunSettings(EPIC_ID, "host-a");
+    if (globalLastRun === null || epicLastRun === null) {
+      throw new Error("submit did not record last-run settings");
+    }
+    expect(globalLastRun.profileId).toBeNull();
+    expect(epicLastRun.profileId).toBeNull();
   });
 });
