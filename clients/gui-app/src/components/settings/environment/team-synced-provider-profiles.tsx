@@ -11,6 +11,7 @@ import {
   profilePersonNoticeText,
   resolveProfilePin,
 } from "@/components/providers/provider-profile-model";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
@@ -93,6 +94,7 @@ export function TeamSyncedProviderProfiles(props: {
       },
     );
   };
+  if (records.readPending) return <MutedAgentSpinner />;
   if (records.readFailed)
     return (
       <TeamReadFailed

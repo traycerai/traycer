@@ -1,49 +1,64 @@
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
-import { useHostClient } from "@/lib/host";
+import { useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { useAuthService } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+
+interface TeamProfileActionRequest {
+  readonly environmentId: string;
+  readonly providerId: string;
+  readonly profileId: string;
+}
 
 export function useTeamProfileActions(reread: () => Promise<unknown>) {
-  const client = usePoolTierHostClient(useHostClient());
-  const signOut = useHostScopedMutationForClient(client, {
-    method: "environment.providers.signOutProfile",
+  const auth = useAuthService();
+  const signOut = useMutation({
     mutationKey: environmentMutationKeys.providersSignOut(),
-    errorMessage: "Couldn't sign out.",
-    invalidateMethods: ["environment.list"],
-    prepareRequest: (request) => {
-      cloudVerdictPreflight("environment.providers.signOutProfile")();
-      return Promise.resolve(request);
+    retry: false,
+    mutationFn: async (request: TeamProfileActionRequest) => {
+      const result = await auth.signOutProfileRecord(
+        request.environmentId,
+        request.providerId,
+        request.profileId,
+        null,
+      );
+      if (result.kind !== "ok") throw new Error(result.message);
     },
-    onSettled: () => {
-      void reread();
-    },
+    onError: (error: Error) => toast.error(error.message),
+    onSettled: () => reread(),
   });
-  const remove = useHostScopedMutationForClient(client, {
-    method: "environment.providers.removeProfile",
+  const remove = useMutation({
     mutationKey: environmentMutationKeys.providersRemove(),
-    errorMessage: "Couldn't remove profile.",
-    invalidateMethods: ["environment.list"],
-    prepareRequest: (request) => {
-      cloudVerdictPreflight("environment.providers.removeProfile")();
-      return Promise.resolve(request);
+    retry: false,
+    mutationFn: async (request: TeamProfileActionRequest) => {
+      const result = await auth.removeProfileRecord(
+        request.environmentId,
+        request.providerId,
+        request.profileId,
+        null,
+      );
+      if (result.kind !== "ok") throw new Error(result.message);
     },
-    onSettled: () => {
-      void reread();
-    },
+    onError: (error: Error) => toast.error(error.message),
+    onSettled: () => reread(),
   });
-  const rename = useHostScopedMutationForClient(client, {
-    method: "environment.providers.renameProfile",
+  const rename = useMutation({
     mutationKey: environmentMutationKeys.providersRename(),
-    errorMessage: "Couldn't rename profile.",
-    invalidateMethods: ["environment.list"],
-    prepareRequest: (request) => {
-      cloudVerdictPreflight("environment.providers.renameProfile")();
-      return Promise.resolve(request);
+    retry: false,
+    mutationFn: async (
+      request: TeamProfileActionRequest & { readonly label: string },
+    ) => {
+      const result = await auth.nameProfileRecord(
+        request.environmentId,
+        request.providerId,
+        request.profileId,
+        request.label,
+        null,
+      );
+      if (result.kind !== "ok") throw new Error(result.message);
+      return result.name;
     },
-    onSettled: () => {
-      void reread();
-    },
+    onError: (error: Error) => toast.error(error.message),
+    onSettled: () => reread(),
   });
   return { signOut, remove, rename };
 }

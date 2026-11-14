@@ -1,16 +1,20 @@
-import { createContext, useContext, useCallback } from "react";
-import type { EnvironmentProvidersListResponse } from "@traycer/protocol/host/environment/configuration-contracts";
-import { listOffersSignIns } from "@/components/providers/provider-profile-model";
+import {
+  createContext,
+  useContext,
+  useCallback,
+  useSyncExternalStore,
+} from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { environmentReadData } from "@/hooks/environment/environment-read-data";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
-import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import type { TeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
-import { useHostClient } from "@/lib/host";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { useRereadConfigurationOnFocus } from "@/hooks/environment/use-reread-configuration-on-focus";
+import { useAuthService } from "@/lib/host";
+import { authQueryKeys } from "@/lib/query-keys";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
+import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -18,11 +22,10 @@ import {
 import { useConfigurationSource } from "./configuration-source";
 
 export interface TeamProviderRecords {
-  readonly providers: EnvironmentProvidersListResponse["providers"];
+  readonly providers: EnvironmentProfileRecords["providers"];
+  readonly readPending: boolean;
   readonly readFailed: boolean;
-  readonly reread: () => Promise<
-    EnvironmentProvidersListResponse["providers"] | null
-  >;
+  readonly reread: () => Promise<EnvironmentProfileRecords["providers"] | null>;
 }
 
 export const TeamProviderRecordsContext =
@@ -32,97 +35,65 @@ export function useTeamProviderRecords(): TeamProviderRecords | null {
   return useContext(TeamProviderRecordsContext);
 }
 
-/** Only membership of this environment's host inventory permits using a
- * computer's own list. An unrelated computer's Personal rows never enter it. */
-export function useTeamProviderRecordsRead(
-  scope: TeamViewingHost,
-): TeamProviderRecords | null {
+/** Every team row comes from the app's session, including on a team's own computer. */
+export function useTeamProviderRecordsRead(): TeamProviderRecords | null {
   const source = useConfigurationSource();
-  const teamPage = source.kind === "pool" && source.configuration === "team";
-  const client = useHostClient();
-  const hostId = useRequesterHostId(client);
-  const ownEnvironment =
-    teamPage &&
-    hostId !== null &&
-    environmentReadData(scope.hosts)?.hosts.some(
-      (host) => host.hostId === hostId,
-    ) === true;
-  const ownList = useProvidersListForClient(client, {
-    enabled: ownEnvironment,
-    subscribed: ownEnvironment,
-  });
-  const cloud = usePoolTierHostClient(client);
-  const supported = useHostSupportsMethod(
-    useRequesterHostId(cloud),
-    "environment.providers.list",
-  );
+  const environmentId =
+    source.kind === "pool" && source.configuration === "team"
+      ? source.environmentId
+      : null;
+  const auth = useAuthService();
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const list = useHostQuery({
-    cacheKeyIdentity: [viewerId],
-    client: cloud,
-    method: "environment.providers.list",
-    params: {
-      environmentId: source.kind === "pool" ? source.environmentId : "",
+  const attended = useSyncExternalStore(
+    subscribeAttention,
+    windowAttended,
+    windowAttended,
+  );
+  useRereadConfigurationOnFocus(environmentId);
+  const list = useQuery({
+    queryKey: authQueryKeys.environmentProfileRecords(environmentId, viewerId),
+    enabled: environmentId !== null && viewerId.length > 0 && authorized,
+    queryFn: async ({ signal }): Promise<EnvironmentProfileRecords> => {
+      if (environmentId === null)
+        throw new Error(PROVIDER_STATE_UNREADABLE_COPY);
+      const result = await auth.readProfileRecords(environmentId, signal);
+      if (result.kind !== "ok") throw new Error(PROVIDER_STATE_UNREADABLE_COPY);
+      return result.list;
     },
-    preflight: cloudVerdictPreflight("environment.providers.list"),
-    options: {
-      poll: true,
-      enabled:
-        teamPage &&
-        !ownEnvironment &&
-        supported &&
-        authorized &&
-        viewerId.length > 0,
-    },
+    retry: false,
+    refetchInterval: attended ? 5_000 : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
   });
-  const refetchOwn = ownList.refetch;
-  const refetchTeam = list.refetch;
-  const rereadOwn = useCallback(async () => {
-    const answer = await refetchOwn();
-    return answer.isError
-      ? null
-      : (answer.data?.providers.flatMap((provider) =>
-          provider.profiles.length === 0
-            ? []
-            : [
-                {
-                  providerId: provider.providerId,
-                  profiles: provider.profiles,
-                },
-              ],
-        ) ?? []);
-  }, [refetchOwn]);
-  const rereadTeam = useCallback(async () => {
-    const answer = await refetchTeam();
-    return answer.isError ? null : (answer.data?.providers ?? []);
-  }, [refetchTeam]);
-  if (!teamPage) return null;
-  if (ownEnvironment) {
-    if (!listOffersSignIns(ownList.data)) return null;
-    return {
-      providers:
-        ownList.data?.providers.flatMap((provider) =>
-          provider.profiles.length === 0
-            ? []
-            : [
-                {
-                  providerId: provider.providerId,
-                  profiles: provider.profiles,
-                },
-              ],
-        ) ?? [],
-      readFailed: ownList.isError,
-      reread: rereadOwn,
-    };
-  }
-  const teamList = environmentReadData(list);
-  if (teamList?.profileSyncEnabled !== true) return null;
+  const refetch = list.refetch;
+  const reread = useCallback(async () => {
+    const answer = await refetch();
+    return answer.isError ? null : (answer.data?.providers ?? null);
+  }, [refetch]);
+  if (environmentId === null || list.data?.profileSyncEnabled === false)
+    return null;
   return {
-    providers: teamList.providers,
+    providers: list.data?.providers ?? [],
+    readPending: list.isPending,
     readFailed: list.isError,
-    reread: rereadTeam,
+    reread,
+  };
+}
+
+function windowAttended(): boolean {
+  return isDocumentVisible() && document.hasFocus();
+}
+
+function subscribeAttention(listener: () => void): () => void {
+  const unsubscribe = subscribeDocumentVisibility(listener);
+  window.addEventListener("focus", listener);
+  window.addEventListener("blur", listener);
+  return () => {
+    unsubscribe();
+    window.removeEventListener("focus", listener);
+    window.removeEventListener("blur", listener);
   };
 }

@@ -142,13 +142,13 @@ export function TeamProfileEditor(props: {
             isPending={actions.remove.isPending}
             blockedReason={null}
             onConfirm={() =>
-              actions.remove.mutate(request, { onSettled: props.onClose })
+              actions.remove.mutate(request, { onSuccess: props.onClose })
             }
           />
         }
         removeDescription=""
         onConfirmRemove={() =>
-          actions.remove.mutate(request, { onSettled: props.onClose })
+          actions.remove.mutate(request, { onSuccess: props.onClose })
         }
       >
         {profileOtherNames(props.profile).length > 0 ? (
@@ -197,7 +197,7 @@ export function TeamProfileEditor(props: {
         isPending={actions.signOut.isPending}
         blockedReason={null}
         onConfirm={() =>
-          actions.signOut.mutate(request, { onSettled: props.onClose })
+          actions.signOut.mutate(request, { onSuccess: props.onClose })
         }
       />
     </>

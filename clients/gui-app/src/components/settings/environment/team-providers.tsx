@@ -81,7 +81,7 @@ export function TeamProviders(): ReactNode {
   const read = useBoundedRead(query);
   const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
-  const records = useTeamProviderRecordsRead(scope);
+  const records = useTeamProviderRecordsRead();
   const catalog = useProvidersListForClient(scope.client, {
     enabled: scope.client !== null,
     subscribed: true,
