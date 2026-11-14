@@ -10,7 +10,6 @@ const olderHostUpdate = vi.hoisted(() => ({
   update: vi.fn(),
   pending: false,
   remotePending: false,
-  available: true,
   failure: null as {
     readonly message: string;
     readonly code: string | null;
@@ -31,8 +30,8 @@ import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-
 /**
  * The action renders "Update now" from the shared skew copy when updating the
  * host can fix the skew. The component owns the update hook: a presentation
- * test supplies that hook, and a disabled control is the remote no-target
- * state (the resolver returns null, so `available` is false).
+ * test supplies that hook. The control locks only while an update is running
+ * or a remote update is already pending.
  */
 
 afterEach(() => {
@@ -44,7 +43,6 @@ beforeEach(() => {
   olderHostUpdate.update = vi.fn();
   olderHostUpdate.pending = false;
   olderHostUpdate.remotePending = false;
-  olderHostUpdate.available = true;
   olderHostUpdate.failure = null;
 });
 
@@ -59,11 +57,9 @@ function incompatibility(hostVersion: string | null): SelectionIncompatibility {
 
 function renderAction(props: {
   readonly hostVersion: string | null;
-  readonly available?: boolean;
   readonly pending?: boolean;
   readonly remotePending?: boolean;
 }): void {
-  olderHostUpdate.available = props.available ?? true;
   olderHostUpdate.pending = props.pending ?? false;
   olderHostUpdate.remotePending = props.remotePending ?? false;
   render(
@@ -97,17 +93,6 @@ describe("<HostUpdateRequiredAction />", () => {
     renderAction({ hostVersion: "9.9.9" });
 
     expect(screen.queryByTestId("host-scope-update-host")).toBeNull();
-  });
-
-  it("keeps Update now present and disabled when no remote target is resolved", () => {
-    appVersion.current = "1.5.0";
-    renderAction({ hostVersion: "1.1.4", available: false });
-
-    const button = updateButton();
-    expect(button.textContent).toBe("Update now");
-    expect(button.disabled).toBe(true);
-    button.click();
-    expect(olderHostUpdate.update).not.toHaveBeenCalled();
   });
 
   it("runs the update hook on click", () => {

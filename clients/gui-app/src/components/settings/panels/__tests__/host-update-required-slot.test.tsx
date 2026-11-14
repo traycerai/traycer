@@ -6,11 +6,21 @@ vi.mock("@/lib/app-version", () => ({
   getClientAppVersionLabel: () => "v1.5.0",
 }));
 
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 const olderHostUpdate = vi.hoisted(() => ({
   update: vi.fn(),
   pending: false,
   remotePending: false,
-  available: true,
   failure: null as {
     readonly message: string;
     readonly code: string | null;
@@ -22,6 +32,16 @@ vi.mock("@/hooks/host/use-older-host-update", () => ({
 vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
   useHostProvisioningProgress: () => null,
 }));
+
+const directoryRow = vi.hoisted(
+  (): {
+    current:
+      | import("@traycer-clients/shared/host-client/host-directory").HostDirectoryEntry
+      | null;
+  } => ({
+    current: null,
+  }),
+);
 vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -29,12 +49,13 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
     >();
   return {
     ...actual,
-    useHostDirectoryEntry: () => null,
+    useHostDirectoryEntry: () => directoryRow.current,
   };
 });
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { HostUpdateRequiredSlot } from "@/components/settings/panels/host-overview-panel";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -42,10 +63,9 @@ import type { HostHealthState } from "@/components/settings/host-scope/host-heal
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * The slot offers Update now from the lease's incompatibility. Card health is
- * not an input: a stopped card still shows the action when the lease says
- * incompatible. The directory read is nulled here so the floor arm stays out
- * of this lease-only presentation.
+ * A generic incompatible lease still follows the card's health word: stopped
+ * withholds the action. A directory row below this test's floor ("2.0.0")
+ * shows Update now even when the card is stopped and the lease is fine.
  */
 
 const INCOMPATIBLE: HostLeaseSnapshot = {
@@ -61,6 +81,17 @@ const INCOMPATIBLE: HostLeaseSnapshot = {
     },
   },
 };
+
+function localEntry(version: string): HostDirectoryEntry {
+  return {
+    hostId: "host-a",
+    label: "Studio Mac",
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:1/rpc",
+    version,
+    transportDialability: "dialable",
+  };
+}
 
 function seedLeases(leases: readonly HostLeaseSnapshot[]): void {
   useSelectionAuthorityStore.getState().applyKernelSnapshot({
@@ -104,9 +135,9 @@ beforeEach(() => {
   olderHostUpdate.update = vi.fn();
   olderHostUpdate.pending = false;
   olderHostUpdate.remotePending = false;
-  olderHostUpdate.available = true;
   olderHostUpdate.failure = null;
   appVersion.current = "1.5.0";
+  directoryRow.current = null;
 });
 
 afterEach(() => {
@@ -115,18 +146,34 @@ afterEach(() => {
 });
 
 describe("<HostUpdateRequiredSlot />", () => {
-  it("offers the update when the lease says incompatible", () => {
+  it("offers the update when the lease says incompatible and the card is update-required", () => {
     seedLeases([INCOMPATIBLE]);
     renderSlot("update-required");
 
     expect(updateButton().textContent).toBe("Update now");
   });
 
-  it("still offers the update when the card's health word is stopped", () => {
+  it("withholds a generic incompatible lease when the card's health word is stopped", () => {
     seedLeases([INCOMPATIBLE]);
     renderSlot("stopped");
 
-    expect(screen.queryByTestId("host-scope-update-host")).not.toBeNull();
+    expect(screen.queryByTestId("host-scope-update-host")).toBeNull();
+  });
+
+  it("offers Update now for a below-floor directory row even when the card is stopped", () => {
+    directoryRow.current = localEntry("1.5.4");
+    seedLeases([{ hostId: "host-a", status: "ready", dead: null }]);
+    renderSlot("stopped");
+
+    expect(updateButton().textContent).toBe("Update now");
+  });
+
+  it("withholds a stopped card when the directory row meets this test's floor", () => {
+    directoryRow.current = localEntry("2.0.0");
+    seedLeases([INCOMPATIBLE]);
+    renderSlot("stopped");
+
+    expect(screen.queryByTestId("host-scope-update-host")).toBeNull();
   });
 
   it("withholds the update when no lease carries an incompatibility", () => {
@@ -149,16 +196,5 @@ describe("<HostUpdateRequiredSlot />", () => {
 
     updateButton().click();
     expect(olderHostUpdate.update).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps Update now present and disabled when the hook has no target", () => {
-    olderHostUpdate.available = false;
-    seedLeases([INCOMPATIBLE]);
-    renderSlot("update-required");
-
-    const button = updateButton();
-    expect(button.disabled).toBe(true);
-    button.click();
-    expect(olderHostUpdate.update).not.toHaveBeenCalled();
   });
 });

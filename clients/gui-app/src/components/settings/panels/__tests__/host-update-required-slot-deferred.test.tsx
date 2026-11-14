@@ -58,7 +58,10 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import type { IHostManagement } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostControllerStatus,
+  IHostManagement,
+} from "@traycer-clients/shared/platform/runner-host";
 import { HostUpdateRequiredSlot } from "@/components/settings/panels/host-overview-panel";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -93,6 +96,24 @@ function seedLeases(leases: readonly HostLeaseSnapshot[]): void {
   });
 }
 
+const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: null,
+  latestVersion: null,
+  stagedVersion: null,
+  installedRuntimeVersion: null,
+  runningRuntimeVersion: null,
+  updateReady: false,
+  activation: "unavailable",
+  reachable: false,
+  localAttempt: null,
+  removedByUser: false,
+  checkedAt: "2026-08-12T00:00:00Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
+};
+
 function buildManagement(
   applyStaged: IHostManagement["applyStaged"],
   convergeReady: IHostManagement["convergeReady"],
@@ -100,7 +121,7 @@ function buildManagement(
   const notImplemented = (name: string) => () =>
     Promise.reject(new Error(`${name} must not run in this test`));
   return {
-    getHostControllerStatus: notImplemented("getHostControllerStatus"),
+    getHostControllerStatus: () => Promise.resolve(IDLE_CONTROLLER_STATUS),
     convergeReady,
     getRemovalState: () => Promise.resolve({ removedByUser: false }),
     applyStaged,

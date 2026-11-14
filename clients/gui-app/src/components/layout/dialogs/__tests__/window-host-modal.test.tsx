@@ -6,11 +6,21 @@ vi.mock("@/lib/app-version", () => ({
   getClientAppVersionLabel: () => "v0.0.0",
 }));
 
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 const olderHostUpdate = vi.hoisted(() => ({
   update: vi.fn(),
   pending: false,
   remotePending: false,
-  available: true,
   failure: null as {
     readonly message: string;
     readonly code: string | null;
@@ -36,6 +46,7 @@ import {
 } from "@/components/layout/dialogs/window-host-modal";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 
 afterEach(() => {
   cleanup();
@@ -47,7 +58,6 @@ beforeEach(() => {
   olderHostUpdate.update = vi.fn();
   olderHostUpdate.pending = false;
   olderHostUpdate.remotePending = false;
-  olderHostUpdate.available = true;
   olderHostUpdate.failure = null;
 });
 
@@ -239,6 +249,43 @@ describe("<WindowHostModal />", () => {
       }),
     );
     expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+  });
+
+  it("older-host cover: an unknown host version is Host update needed, with Update now and no host-version line", () => {
+    appVersion.current = "1.0.0";
+    renderModal(
+      baseProps({
+        variant: olderHostUpdateVariant("host-a", true, null),
+      }),
+    );
+
+    expect(screen.getByTestId("window-host-modal-title").textContent).toBe(
+      "Host update needed",
+    );
+    expect(
+      screen.getByTestId("window-host-modal-update-host").textContent,
+    ).toBe("Update now");
+    const detail = screen.getByTestId("window-host-modal-incompatible-detail");
+    expect(detail.textContent).toContain("Reason: older-host");
+    expect(detail.textContent).toContain("Minimum supported: 2.0.0");
+    expect(detail.textContent).not.toContain("Host version:");
+  });
+
+  it("older-host cover: a newer host version still offers Update now", () => {
+    appVersion.current = "1.0.0";
+    renderModal(
+      baseProps({
+        variant: olderHostUpdateVariant("host-a", true, "9.9.9"),
+      }),
+    );
+
+    expect(screen.getByTestId("window-host-modal-title").textContent).toBe(
+      "Host update needed",
+    );
+    expect(
+      screen.getByTestId("window-host-modal-update-host").textContent,
+    ).toBe("Update now");
+    expect(screen.queryByText("Your app is too old")).toBeNull();
   });
 
   it("renders heading and percent - never the byte count or the lane's message - in window-host-modal-progress when progress is set and bootBody is null", () => {
