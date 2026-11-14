@@ -43,8 +43,19 @@ interface ItemWriteState {
   readonly changedAgain: ConfigurationItemWrite | null;
   readonly failure: ConfigurationItemWriteFailure | null;
   readonly drafts: readonly ConfigurationItemWrite[];
-  /** Addresses whose draft was refused as out of date, which the person was told. */
-  readonly answered: readonly Pick<ConfigurationItem, "kind" | "key" | "os">[];
+  /**
+   * Out-of-date refusals the person was told about, each with the revision
+   * its "Changed by" line named, until a write at that address is saved or
+   * its draft is discarded.
+   */
+  readonly answered: readonly AnsweredConflict[];
+}
+
+interface AnsweredConflict extends Pick<
+  ConfigurationItem,
+  "kind" | "key" | "os"
+> {
+  readonly revision: number | null;
 }
 
 export interface ConfigurationItemWrites {
@@ -140,6 +151,34 @@ function retainDraft(
     ...drafts.filter((draft) => !sameConfigurationItemAddress(draft, write)),
     write,
   ];
+}
+
+/**
+ * A held draft's save names the revision the person was last told about,
+ * never one a newer read put in the row unseen: the revision its draft was
+ * typed over, or, once an out-of-date refusal has been shown, the revision
+ * that refusal's line named. A change since then is refused again.
+ */
+function writeBasis(
+  asked: ConfigurationItemWrite,
+  state: Pick<ItemWriteState, "drafts" | "answered">,
+): {
+  readonly write: ConfigurationItemWrite;
+  readonly revision: number | null;
+} {
+  const held = state.drafts.find((draft) =>
+    sameConfigurationItemAddress(draft, asked),
+  );
+  if (held === undefined)
+    return { write: asked, revision: asked.original?.revision ?? null };
+  const told = state.answered.find((conflict) =>
+    sameConfigurationItemAddress(conflict, asked),
+  );
+  if (told !== undefined) return { write: asked, revision: told.revision };
+  return {
+    write: { ...asked, original: held.original },
+    revision: held.original?.revision ?? null,
+  };
 }
 
 function acceptedValueMatches(
@@ -318,40 +357,24 @@ export function useConfigurationItemWrites(
   };
   const write = async (asked: ConfigurationItemWrite): Promise<void> => {
     if (source.kind !== "pool" || active.current !== null) return;
-    // A held draft was typed over its own `original`, which a newer read may
-    // since have replaced in the row: the write names that revision, so the
-    // first save after a change the person was not shown is refused as out of
-    // date. Once that refusal has been shown, the draft is over the row's
-    // current item, and the deliberate save names its revision.
-    const held = state.drafts.find((draft) =>
-      sameConfigurationItemAddress(draft, asked),
-    );
-    const told = state.answered.some((address) =>
-      sameConfigurationItemAddress(address, asked),
-    );
-    const write =
-      held === undefined || told
-        ? asked
-        : { ...asked, original: held.original };
+    const { write, revision } = writeBasis(asked, state);
     active.current = write;
     // Submitted drafts survive a failed or refused write and any read that
     // remounts its editor.
     setState((current) => ({
+      ...current,
       scope,
       pending: { write, accepted: null },
       changedAgain: null,
       failure: null,
       drafts: retainDraft(current.drafts, write),
-      answered: current.answered.filter(
-        (address) => !sameConfigurationItemAddress(address, write),
-      ),
     }));
     const request = {
       environmentId: source.environmentId,
       kind: write.kind,
       key: write.key,
       os: write.os,
-      revision: write.original?.revision ?? null,
+      revision,
     };
     let result: EnvironmentConfigurationItemWriteResponse;
     try {
@@ -378,19 +401,30 @@ export function useConfigurationItemWrites(
     onOutcome(result);
     if (result.outcome !== "saved") {
       active.current = null;
-      const stale = result.outcome === "conflict";
+      const conflict =
+        result.outcome === "conflict"
+          ? {
+              kind: write.kind,
+              key: write.key,
+              os: write.os,
+              revision: result.current?.revision ?? null,
+            }
+          : null;
       setState((current) =>
         current.scope !== scope
           ? current
           : {
               ...current,
               pending: null,
-              answered: stale
-                ? [
-                    ...current.answered,
-                    { kind: write.kind, key: write.key, os: write.os },
-                  ]
-                : current.answered,
+              answered:
+                conflict === null
+                  ? current.answered
+                  : [
+                      ...current.answered.filter(
+                        (told) => !sameConfigurationItemAddress(told, write),
+                      ),
+                      conflict,
+                    ],
             },
       );
       return;
@@ -410,6 +444,9 @@ export function useConfigurationItemWrites(
       failure: null,
       drafts: current.drafts.filter(
         (draft) => !sameConfigurationItemAddress(draft, write),
+      ),
+      answered: current.answered.filter(
+        (told) => !sameConfigurationItemAddress(told, write),
       ),
     }));
     void readLatest(write, false);
