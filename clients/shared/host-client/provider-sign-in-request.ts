@@ -61,7 +61,7 @@ export interface SignInRequestClient {
  * shows the existing sentence for the reason: `forbidden` is a team's 3a,
  * `unavailable` a team's 3b; every other reason on a team's dialog, and
  * every reason on a person's own, is "Sign-in did not finish. Retry when you
- * are ready.". `unconfirmed`: the read after a duplicate id failed.
+ * are ready.".
  */
 export type SignInRecording =
   | { readonly kind: "recorded"; readonly recordedOperationId: string }
@@ -70,7 +70,6 @@ export type SignInRecording =
       readonly reason:
         | "forbidden"
         | "unavailable"
-        | "unconfirmed"
         | "session-ended"
         | "already-recorded";
     };
@@ -79,9 +78,11 @@ export type SignInRecording =
  * Records `request` once. `recorded` holds every operation id this caller
  * has already recorded and sent back: a computer that answers the same id
  * again has ignored it, so the step ends instead of recording again. A
- * duplicate-id refusal is followed by one read of the request, never more:
- * `pending` goes on, and so does `consumed`, for which the computer answers
- * its kept final outcome.
+ * duplicate-id refusal is followed by one read of the request, never more.
+ * A duplicate id proves a request under it exists, so every answer but
+ * `ended` goes on to the next await: `consumed` is answered with the
+ * computer's kept final outcome, and a failed read with whatever authn tells
+ * the computer's upload.
  */
 export async function recordSignInRequestOnce(
   client: SignInRequestClient,
@@ -99,15 +100,9 @@ export async function recordSignInRequestOnce(
       return { kind: "recorded", recordedOperationId: request.operationId };
     case "duplicate": {
       const state = await client.readSignInRequest(request, signal);
-      switch (state.kind) {
-        case "pending":
-        case "consumed":
-          return { kind: "recorded", recordedOperationId: request.operationId };
-        case "ended":
-          return { kind: "ended", reason: "unavailable" };
-        case "failed":
-          return { kind: "ended", reason: "unconfirmed" };
-      }
+      return state.kind === "ended"
+        ? { kind: "ended", reason: "unavailable" }
+        : { kind: "recorded", recordedOperationId: request.operationId };
     }
     case "unauthorized":
       return { kind: "ended", reason: "session-ended" };
