@@ -29,7 +29,6 @@ import {
 } from "@traycer/protocol/host/environment/settings-save-mapping";
 import { readSettingsProposalRefusalReason } from "@traycer/protocol/host/environment/settings-proposals";
 import {
-  providersSetEnabledRequestSchemaV22,
   providersSetEnabledRequestSchemaV21,
   providersSetPackPolicyRequestSchema,
   providersUsePackVersionRequestSchema,
@@ -708,7 +707,9 @@ describe("settingsSaveItemEdit", () => {
             hostOs: "linux",
           },
         ),
-      ).toEqual(shellPut("linux", hostShell, canonicalSettingValue(hostShell)));
+      ).toEqual(
+        shellPut("linux", hostShell, '{"args":["-l"],"path":"/bin/zsh"}'),
+      );
     });
 
     it("proposes the stated shell selection when it differs from the base", () => {
@@ -1563,10 +1564,12 @@ describe("dormant contracts", () => {
         environmentProfileId: "env-profile-2",
       },
     };
-    expect(providersSetEnabledRequestSchemaV22.parse(rename)).toEqual(rename);
-    expect(providersSetEnabledRequestSchemaV22.parse(recolor)).toEqual(recolor);
+    expect(providersSetEnabledV22.requestSchema.parse(rename)).toEqual(rename);
+    expect(providersSetEnabledV22.requestSchema.parse(recolor)).toEqual(
+      recolor,
+    );
     expect(() =>
-      providersSetEnabledRequestSchemaV22.parse({
+      providersSetEnabledV22.requestSchema.parse({
         ...rename,
         profileAction: {
           type: "rename",
@@ -1759,6 +1762,9 @@ describe("dormant contracts", () => {
           minor: 0,
         });
         expect(hostAccountSettingsRefreshV10.requestSchema.parse({})).toEqual(
+          {},
+        );
+        expect(hostAccountSettingsRefreshV10.responseSchema.parse({})).toEqual(
           {},
         );
       },
