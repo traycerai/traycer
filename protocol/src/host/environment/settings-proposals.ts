@@ -51,7 +51,9 @@ export type SettingsProposalOperation = z.infer<
  * - `queued`: kept on this host, durably, and not yet answered by authn
  *   (offline, or behind earlier proposals for the same environment).
  * - `proposed`: authn answered that it holds the change.
- * - `refused`: the host cannot propose it; `reason` says why.
+ * - `refused`: authn will not hold it; `reason` says why. The save still
+ *   stands on this host. The app remembers nothing for it: no hold will
+ *   ever match.
  */
 export const SETTINGS_PROPOSAL_STATES = [
   "queued",
@@ -59,9 +61,20 @@ export const SETTINGS_PROPOSAL_STATES = [
   "refused",
 ] as const;
 
-/** Why a host could not propose a save. */
+/**
+ * Why authn would not hold a proposal.
+ *
+ * - `not_shared`: this computer no longer shares that environment (it was
+ *   moved, removed, or stopped sharing).
+ * - `invalid`: the environment does not take this value for this setting.
+ * - `too_large`: the value is over the size an environment takes.
+ * - `forbidden`: this computer may not propose changes to that environment.
+ */
 export const SETTINGS_PROPOSAL_REFUSAL_REASONS = [
-  "no_configuration_read",
+  "not_shared",
+  "invalid",
+  "too_large",
+  "forbidden",
 ] as const;
 export const settingsProposalRefusalReasonSchema = lazySchema(() =>
   z.enum(SETTINGS_PROPOSAL_REFUSAL_REASONS),
@@ -132,9 +145,13 @@ export type SettingsSaveAnswer = z.infer<typeof settingsSaveAnswerSchema>;
  * One item this host has proposed a change to, with its latest proposal.
  *
  * `localOverride` is whether this host's own edit still stands over what the
- * environment delivered. `deliveredRevision` is the revision of the
- * delivered item that edit was made over, null when the item did not exist
- * on this host then.
+ * environment delivered.
+ *
+ * `deliveredRevision` is the revision of the delivered item this host's edit
+ * sits on, fixed when the edit was made: not the latest revision delivered
+ * since. Null when the item did not exist on this host then. The app passes
+ * it as the expected live revision when it applies the hold, so an item
+ * changed by someone else since the edit is a conflict, never overwritten.
  */
 export const environmentProposalSchema = lazySchema(() =>
   z.object({

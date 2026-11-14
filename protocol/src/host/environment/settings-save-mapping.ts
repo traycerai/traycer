@@ -1,13 +1,13 @@
 /**
- * Which environment item a save made in a host's settings becomes, computed
- * from the request alone.
+ * Which environment item a save made in a host's settings becomes.
  *
  * The host builds its proposal from this, and the app remembers its edit
  * from this, so the value the app remembers and the value authn holds
  * compare byte for byte through {@link canonicalSettingValue}. The function
- * reads nothing but its argument: no host state, no clock, no environment.
+ * reads its two arguments and nothing else: the request, and the rows of the
+ * item the save is built over ({@link SettingsSaveBase}).
  *
- * A save whose item a host can only build from what it already holds is
+ * A save whose item a host can only build from what it alone holds is
  * `unmapped`, with the reason, and nothing may fill it from host state: the
  * app cannot say "this is what I sent" for it.
  */
@@ -29,6 +29,7 @@ import {
   environmentOsSchema,
   type EnvironmentAgentDefinitionsDeleteRequest,
   type EnvironmentAgentDefinitionsPutRequest,
+  type EnvironmentOs,
   type EnvironmentSetupPutRequest,
 } from "@traycer/protocol/host/environment-schemas";
 import type { ProvidersFallbackPolicySetRequest } from "@traycer/protocol/host/fallback-policy";
@@ -41,8 +42,11 @@ import type {
   ProvidersUsePackVersionRequest,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  harnessIdOfProvider,
+  type HostOs,
+} from "@traycer/protocol/host/environment/item-identity";
+import {
   settingValueSchema,
-  settingsProposalOperationSchema,
   type SettingValue,
 } from "@traycer/protocol/host/environment/settings-proposals";
 
@@ -127,47 +131,98 @@ export type SettingsSave =
 
 export type SettingsSaveMethod = SettingsSave["method"];
 
+const editAddressFields = {
+  kind: environmentItemKindSchema,
+  key: lazySchema(() => z.string().min(1).max(3072)),
+  /** Null for a kind with no per-OS rows. */
+  os: lazySchema(() => environmentOsSchema.nullable()),
+} as const;
+
 /**
- * The item a save becomes. `os` is null for a kind with no per-OS rows.
- * `value` is null for a delete. `canonicalValue` is
- * {@link canonicalSettingValue} of `value`, null for a delete: the form the
- * app remembers and compares a held value against.
+ * The item a save becomes. A put carries its value and
+ * {@link canonicalSettingValue} of it, the form the app remembers and
+ * compares a held value against; a delete carries neither.
  */
 export const settingsItemEditSchema = lazySchema(() =>
-  z.object({
-    kind: environmentItemKindSchema,
-    key: z.string().min(1).max(3072),
-    os: environmentOsSchema.nullable(),
-    operation: settingsProposalOperationSchema,
-    value: settingValueSchema.nullable(),
-    canonicalValue: z.string().nullable(),
-  }),
+  z.discriminatedUnion("operation", [
+    z.object({
+      ...editAddressFields,
+      operation: z.literal("put"),
+      value: settingValueSchema,
+      canonicalValue: z.string(),
+    }),
+    z.object({
+      ...editAddressFields,
+      operation: z.literal("delete"),
+      value: z.null(),
+      canonicalValue: z.null(),
+    }),
+  ]),
 );
 export type SettingsItemEdit = z.infer<typeof settingsItemEditSchema>;
 
 /**
- * Why a save has no mapping from its request alone.
+ * Why a save has no mapping. Closed: every method maps to a proposal, to
+ * nothing, or to one of these.
  *
  * - `merges_host_state`: the item's value is the request merged into what
- *   the host holds (a received row, its own config or policy file).
- * - `key_from_host_state`: the item's key is found in the host's own
+ *   only the host holds (its own config or policy file).
+ * - `key_from_host_state`: the item's key is found only in the host's own
  *   records (its managed entries, its profile store).
- * - `os_from_host_row`: the item has per-OS rows and the request names no
- *   OS; the host proposes against the OS row it received.
+ * - `host_os_unknown`: the item has per-OS rows and the OS of the host the
+ *   save is made on is not known.
  */
 export const SETTINGS_SAVE_UNMAPPED_REASONS = [
   "merges_host_state",
   "key_from_host_state",
-  "os_from_host_row",
+  "host_os_unknown",
 ] as const;
 export type SettingsSaveUnmappedReason =
   (typeof SETTINGS_SAVE_UNMAPPED_REASONS)[number];
 
 export type SettingsSaveMapping =
   | { readonly kind: "proposal"; readonly edit: SettingsItemEdit }
-  /** The save changes this host only and proposes nothing. */
+  /** The save proposes nothing (it changes this host only, or is refused). */
   | { readonly kind: "local_only" }
+  /**
+   * The host deletes a leftover item of a retired kind on its own token, as
+   * it does today: no proposal and no hold, so the app remembers nothing.
+   */
+  | { readonly kind: "retired_item_delete" }
+  /**
+   * Promoting an MCP server to the environment: neither a proposal nor a
+   * save on this host alone. Its form is not settled; nothing is built on it.
+   */
+  | { readonly kind: "mcp_promotion" }
   | { readonly kind: "unmapped"; readonly reason: SettingsSaveUnmappedReason };
+
+/** The environment item whose rows a save is built over. */
+export interface SettingsItemAddress {
+  readonly kind: string;
+  readonly key: string;
+}
+
+/** One row the environment holds for a save's item. */
+export interface SettingsBaseRow {
+  /** Null for a kind with no per-OS rows. */
+  readonly os: EnvironmentOs | null;
+  readonly value: SettingValue;
+}
+
+/**
+ * What a save is built over besides its request.
+ *
+ * `rows` is every row of the item {@link settingsSaveBaseAddress} names,
+ * every OS's, and is empty when the environment holds none or the save
+ * names no item. The app passes the rows it read from authn on the person's
+ * sign-in, never rows a host returned; the host passes the rows it received.
+ * When the two differ, the edits differ and nothing is applied silently.
+ */
+export interface SettingsSaveBase {
+  readonly rows: readonly SettingsBaseRow[];
+  /** The OS of the host the save is made on; null when it is not known. */
+  readonly hostOs: HostOs | null;
+}
 
 const LOCAL_ONLY: SettingsSaveMapping = { kind: "local_only" };
 
@@ -176,16 +231,14 @@ function unmapped(reason: SettingsSaveUnmappedReason): SettingsSaveMapping {
 }
 
 function put(
-  kind: string,
-  key: string,
-  os: SettingsItemEdit["os"],
+  address: SettingsItemAddress,
+  os: EnvironmentOs | null,
   value: SettingValue,
 ): SettingsSaveMapping {
   return {
     kind: "proposal",
     edit: {
-      kind,
-      key,
+      ...address,
       os,
       operation: "put",
       value,
@@ -195,15 +248,13 @@ function put(
 }
 
 function remove(
-  kind: string,
-  key: string,
-  os: SettingsItemEdit["os"],
+  address: SettingsItemAddress,
+  os: EnvironmentOs | null,
 ): SettingsSaveMapping {
   return {
     kind: "proposal",
     edit: {
-      kind,
-      key,
+      ...address,
       os,
       operation: "delete",
       value: null,
@@ -236,8 +287,144 @@ function sortedKeys(value: SettingValue): SettingValue {
   return sorted;
 }
 
-/** The item a save becomes, from its request alone. */
-export function settingsSaveItemEdit(save: SettingsSave): SettingsSaveMapping {
+function objectOf(value: SettingValue): Record<string, SettingValue> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
+}
+
+/**
+ * The OS row a per-OS edit is written as: this host's own OS's row when the
+ * environment holds one, else the `any` row, as a host reads its item.
+ */
+function perOsRow(base: SettingsSaveBase): EnvironmentOs | null {
+  const hostOs = base.hostOs;
+  if (hostOs === null) return null;
+  return base.rows.some((row) => row.os === hostOs) ? hostOs : "any";
+}
+
+/** The row of a kind with no per-OS rows. */
+function singleRow(base: SettingsSaveBase): SettingsBaseRow | null {
+  return base.rows.find((row) => row.os === null || row.os === "any") ?? null;
+}
+
+function perOsPut(
+  address: SettingsItemAddress,
+  base: SettingsSaveBase,
+  value: SettingValue,
+): SettingsSaveMapping {
+  const os = perOsRow(base);
+  return os === null ? unmapped("host_os_unknown") : put(address, os, value);
+}
+
+function perOsRemove(
+  address: SettingsItemAddress,
+  base: SettingsSaveBase,
+): SettingsSaveMapping {
+  const os = perOsRow(base);
+  return os === null ? unmapped("host_os_unknown") : remove(address, os);
+}
+
+/**
+ * The item whose rows a save is built over, which the caller reads and
+ * passes as {@link SettingsSaveBase.rows}; null when the save needs none.
+ */
+export function settingsSaveBaseAddress(
+  save: SettingsSave,
+): SettingsItemAddress | null {
+  switch (save.method) {
+    case "config.shell.reset":
+      return { kind: "shell", key: "shell" };
+    case "config.env.set":
+    case "config.env.delete":
+      return { kind: "variable", key: save.request.key };
+    case "providers.setEnvOverride":
+    case "providers.deleteEnvOverride":
+      return {
+        kind: "env_override",
+        key: `${save.request.providerId}:${save.request.key}`,
+      };
+    case "providers.nativeMutate": {
+      const mutation = save.request.mutation;
+      if (mutation.kind !== "mcp" || mutation.scope !== "global") return null;
+      const action = mutation.mutation;
+      if (action.action === "toggleTool")
+        return { kind: "mcp_server", key: action.serverName };
+      if (action.action === "remove")
+        return { kind: "mcp_server", key: action.name };
+      return null;
+    }
+    case "config.shell.set":
+    case "config.shell.add":
+    case "config.shell.remove":
+    case "config.shell.revertArgs":
+    case "config.browser.set":
+    case "config.agentMemories.set":
+    case "providers.usePackVersion":
+    case "providers.setPackPolicy":
+    case "providers.setEnabled":
+    case "providers.fallbackPolicy.set":
+    case "environment.setup.put":
+    case "environment.agentDefinitions.put":
+    case "environment.agentDefinitions.delete":
+      return null;
+  }
+}
+
+function nativeMutateEdit(
+  request: ProvidersNativeMutateRequestV14,
+  base: SettingsSaveBase,
+): SettingsSaveMapping {
+  const mutation = request.mutation;
+  if (mutation.kind === "promoteToPersonal") {
+    return mutation.entryKind === "mcp"
+      ? { kind: "mcp_promotion" }
+      : LOCAL_ONLY;
+  }
+  if (mutation.scope !== "global") return LOCAL_ONLY;
+  if (mutation.kind === "skills") {
+    return mutation.mutation.action === "remove"
+      ? { kind: "retired_item_delete" }
+      : LOCAL_ONLY;
+  }
+  if (mutation.kind !== "mcp") return LOCAL_ONLY;
+  const action = mutation.mutation;
+  const row = singleRow(base);
+  // With no item of that name the server is this host's own.
+  if (row === null) return LOCAL_ONLY;
+  if (action.action === "remove") {
+    return remove({ kind: "mcp_server", key: action.name }, null);
+  }
+  if (action.action !== "toggleTool") return LOCAL_ONLY;
+  const item = objectOf(row.value);
+  if (item === null) return LOCAL_ONLY;
+  const toggles = objectOf(item["toolToggles"] ?? {});
+  if (toggles === null) return LOCAL_ONLY;
+  const harnessId = harnessIdOfProvider(request.providerId);
+  const harnessToggles = objectOf(toggles[harnessId] ?? {});
+  if (harnessToggles === null) return LOCAL_ONLY;
+  return put({ kind: "mcp_server", key: action.serverName }, null, {
+    ...item,
+    toolToggles: {
+      ...toggles,
+      [harnessId]: { ...harnessToggles, [action.toolName]: action.enabled },
+    },
+  });
+}
+
+/**
+ * The item a save becomes, from its request and the rows it is built over.
+ *
+ * A proposal here is what the app expects to find held; it is never a
+ * promise that the host proposes it. A host may propose nothing for a save
+ * that maps to a proposal (the entry it changed was this host's own), and
+ * then its save answer's `proposal` is null: the app may take that absence
+ * as its cue to forget the edit, and never takes a value from a receipt.
+ */
+export function settingsSaveItemEdit(
+  save: SettingsSave,
+  base: SettingsSaveBase,
+): SettingsSaveMapping {
   switch (save.method) {
     case "config.shell.set":
     case "config.shell.add":
@@ -247,21 +434,41 @@ export function settingsSaveItemEdit(save: SettingsSave): SettingsSaveMapping {
     case "providers.setPackPolicy":
       return unmapped("merges_host_state");
     case "config.shell.reset":
-    case "config.env.delete":
-    case "providers.deleteEnvOverride":
-      return unmapped("os_from_host_row");
+      return perOsRemove({ kind: "shell", key: "shell" }, base);
     case "config.env.set":
-    case "providers.setEnvOverride":
       // A null value masks an inherited variable on this host only.
       return save.request.value === null
         ? LOCAL_ONLY
-        : unmapped("os_from_host_row");
+        : perOsPut({ kind: "variable", key: save.request.key }, base, {
+            value: save.request.value,
+          });
+    case "config.env.delete":
+      return perOsRemove({ kind: "variable", key: save.request.key }, base);
+    case "providers.setEnvOverride":
+      return save.request.value === null
+        ? LOCAL_ONLY
+        : perOsPut(
+            {
+              kind: "env_override",
+              key: `${save.request.providerId}:${save.request.key}`,
+            },
+            base,
+            { value: save.request.value },
+          );
+    case "providers.deleteEnvOverride":
+      return perOsRemove(
+        {
+          kind: "env_override",
+          key: `${save.request.providerId}:${save.request.key}`,
+        },
+        base,
+      );
     case "config.browser.set":
-      return put("browser_agent_access", "browser", null, {
+      return put({ kind: "browser_agent_access", key: "browser" }, null, {
         enabled: save.request.agentAccess,
       });
     case "config.agentMemories.set":
-      return put("agent_memory", "memory", null, {
+      return put({ kind: "agent_memory", key: "memory" }, null, {
         enabled: save.request.enabled,
       });
     case "providers.setEnabled": {
@@ -274,24 +481,23 @@ export function settingsSaveItemEdit(save: SettingsSave): SettingsSaveMapping {
     }
     case "providers.fallbackPolicy.set":
       return put(
-        "fallback_policy",
-        "fallback",
+        { kind: "fallback_policy", key: "fallback" },
         null,
         settingValueSchema.parse(
           JSON.parse(JSON.stringify({ document: save.request.policy })),
         ),
       );
     case "providers.nativeMutate":
-      return unmapped("key_from_host_state");
+      return nativeMutateEdit(save.request, base);
     case "environment.setup.put":
-      return put("setup_script", "setup", save.request.os, {
+      return put({ kind: "setup_script", key: "setup" }, save.request.os, {
         text: save.request.text,
       });
     case "environment.agentDefinitions.put":
-      return put("agent_definition", save.request.name, null, {
+      return put({ kind: "agent_definition", key: save.request.name }, null, {
         text: save.request.text,
       });
     case "environment.agentDefinitions.delete":
-      return remove("agent_definition", save.request.name, null);
+      return remove({ kind: "agent_definition", key: save.request.name }, null);
   }
 }
