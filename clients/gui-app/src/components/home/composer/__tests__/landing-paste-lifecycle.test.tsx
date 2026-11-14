@@ -22,6 +22,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
+import type { ModelOption } from "@/components/home/data/landing-options";
 import { useState, type ComponentProps, type ReactElement } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -264,8 +265,122 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
-  const toolbarStore = createStore(() => ({
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => ({
+    accountChosen: false,
+    defaultAccount: emptyDefaultAccount,
+    setAccountChosen: (chosen: boolean) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultAccount = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        defaultAccount !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === defaultAccount.harnessId &&
+        state.selection.harnessId === defaultAccount.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies && defaultAccount !== null) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: defaultAccount.profileId,
+        };
+      } else if (
+        defaultAccount !== null &&
+        state.selection.profileId === defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        accountChosen: chosen,
+        selection: presentedSelection,
+      });
+    },
+    setDefaultAccount: (
+      account: {
+        readonly harnessId: string;
+        readonly profileId: string;
+      } | null,
+    ) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies && account !== null) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        state.defaultAccount !== null &&
+        state.selection.profileId === state.defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        defaultAccount: account,
+        selection: presentedSelection,
+      });
+    },
     ultracode: false,
     selection: {
       harnessId: "claude",

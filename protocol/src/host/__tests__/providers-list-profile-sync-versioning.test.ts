@@ -30,7 +30,9 @@ const listRegistry = hostRpcRegistry["providers.list"];
 const listLine = listRegistry[10];
 const peer1010 = listLine.versions[10].contract.responseSchema;
 const peer1011 = listLine.versions[11].contract.responseSchema;
-const headResponse = listLine.versions[12].contract.responseSchema;
+const response1012 = listLine.versions[12].contract.responseSchema;
+const headResponse =
+  listLine.versions[listLine.latestMinor].contract.responseSchema;
 const answerLine = hostRpcRegistry[METHOD];
 const answerRequest = answerLine[1].versions[0].contract.requestSchema;
 const answerResponse = answerLine[1].versions[0].contract.responseSchema;
@@ -255,17 +257,17 @@ describe("providers.list@10.11 projected to an older minor", () => {
 
 describe("providers.list@10.12 offersSignIns", () => {
   it("keeps an explicit boolean and does not invent one when the key is absent", () => {
-    const present = headResponse.parse(host1012Answer);
+    const present = response1012.parse(host1012Answer);
     expect(present.offersSignIns).toBe(true);
     expect(present.removedProfiles).toEqual(host1011Answer.removedProfiles);
     expect(present.providers[0]?.profiles[0]).toMatchObject({
       aliases: ["former-ambient"],
     });
     expect(
-      headResponse.parse({ ...host1011Answer, offersSignIns: false })
+      response1012.parse({ ...host1011Answer, offersSignIns: false })
         .offersSignIns,
     ).toBe(false);
-    expect(headResponse.parse(host1011Answer)).not.toHaveProperty(
+    expect(response1012.parse(host1011Answer)).not.toHaveProperty(
       "offersSignIns",
     );
   });

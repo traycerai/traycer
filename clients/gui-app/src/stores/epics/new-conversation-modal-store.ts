@@ -94,6 +94,13 @@ export interface NewConversationModalDraftPatch {
    * this device, like the stage it restores; absent on any other draft.
    */
   readonly returnedSandbox?: StoredReturnedSandbox;
+  /**
+   * Nobody chose this draft's account: its settings are edits made while the
+   * composer showed a default account in place of an unchosen Terminal login
+   * (`useSignedOutTerminalDefaultAccount`). Local to this device; a draft
+   * without it whose settings are set counts as chosen and never moves.
+   */
+  readonly accountFollowsDefault?: true;
 }
 
 /**
@@ -156,6 +163,12 @@ interface NewConversationModalStore {
    * re-dirty the row the collector is about to mark clean and loop it forever.
    */
   readonly setNewChatOwnerHostId: (epicId: string, hostId: string) => void;
+  /**
+   * Record whether nobody chose the draft's account
+   * (`accountFollowsDefault`). Local and non-dirtying, like the title
+   * setter: nothing is published. No-op when the epic has no patch.
+   */
+  readonly setAccountFollowsDefault: (epicId: string, follows: boolean) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
   readonly addResolvedFolders: (
@@ -311,6 +324,26 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             draftPatchesByEpicId: {
               ...state.draftPatchesByEpicId,
               [epicId]: { ...current, epicTitle },
+            },
+          };
+        });
+      },
+      setAccountFollowsDefault: (epicId, follows) => {
+        set((state) => {
+          const current = state.draftPatchesByEpicId[epicId];
+          if (
+            current === undefined ||
+            (current.accountFollowsDefault === true) === follows
+          ) {
+            return state;
+          }
+          const { accountFollowsDefault: _previous, ...rest } = current;
+          return {
+            draftPatchesByEpicId: {
+              ...state.draftPatchesByEpicId,
+              [epicId]: follows
+                ? { ...rest, accountFollowsDefault: true }
+                : rest,
             },
           };
         });
@@ -503,8 +536,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             ownerHostId: parseNullableId(raw.ownerHostId),
           };
           const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
-          draftPatchesByEpicId[epicId] =
+          const withSandbox =
             returnedSandbox === null ? patch : { ...patch, returnedSandbox };
+          draftPatchesByEpicId[epicId] =
+            raw.accountFollowsDefault === true
+              ? { ...withSandbox, accountFollowsDefault: true }
+              : withSandbox;
         }
         return { ...currentState, draftPatchesByEpicId };
       },
@@ -606,7 +643,7 @@ export function newChatDraftRememberSynced(
       draftPatchesByEpicId: {
         ...state.draftPatchesByEpicId,
         [found.epicId]: {
-          ...current,
+          ...withoutOwnEchoProofWhenClamped(current, hostRevision),
           // Never backward. This field IS the frontier
           // `applyNewChatHostDocument` fences on, and the store cannot check
           // the ordering of what reaches it: the session's held revision is
@@ -678,7 +715,10 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
       draftPatchesByEpicId: {
         ...state.draftPatchesByEpicId,
         [epicId]: {
-          ...dropReturnedSandboxOnNewLine(current, document.draftId),
+          ...keptAccountProvenance(
+            dropReturnedSandboxOnNewLine(current, document.draftId),
+            document,
+          ),
           content: document.portable.content,
           selection: document.portable.selection,
           settings: runSettingsFromDraftEcho(
@@ -699,6 +739,52 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
     };
   });
   return contentLands;
+}
+
+/**
+ * An acknowledgement older than the revision the patch already holds means a
+ * newer write (another window's or device's) was observed first, so the held
+ * revision is no longer this window's own: the account provenance loses its
+ * proof and the draft counts as chosen.
+ */
+function withoutOwnEchoProofWhenClamped(
+  current: NewConversationModalDraftPatch,
+  hostRevision: number,
+): NewConversationModalDraftPatch {
+  if (
+    current.accountFollowsDefault !== true ||
+    hostRevision >= current.hostRevision
+  ) {
+    return current;
+  }
+  const { accountFollowsDefault: _dropped, ...rest } = current;
+  return rest;
+}
+
+/**
+ * Only this window's own write coming back keeps the draft's account
+ * provenance: a document on the same draft line at the revision the patch
+ * already holds. On a clean row with the bit set, that revision is this
+ * window's own acknowledged write: a dirty row only becomes clean through an
+ * acknowledgement, and `newChatDraftRememberSynced` clears the bit when one
+ * lands behind a newer observed write. A newer revision is another window's or
+ * device's write, and a cloud head (revision 0) proves nothing, so those count
+ * as chosen whatever account they name: equal values are not an own echo.
+ */
+function keptAccountProvenance(
+  current: NewConversationModalDraftPatch,
+  document: DraftDocument,
+): NewConversationModalDraftPatch {
+  if (current.accountFollowsDefault !== true) return current;
+  if (
+    current.draftId === document.draftId &&
+    document.revision > 0 &&
+    current.hostRevision === document.revision
+  ) {
+    return current;
+  }
+  const { accountFollowsDefault: _dropped, ...rest } = current;
+  return rest;
 }
 
 /** Another draft line's text does not inherit this line's destination. */
