@@ -4,6 +4,7 @@ import {
   type CliHostSession,
 } from "../internal/cli-host-tokens";
 import {
+  hostDoorRefusalCliError,
   hostTokenFailureCliError,
   signedOutCliError,
 } from "../internal/host-door-words";
@@ -49,7 +50,7 @@ import { clientCompatibilityRecoveryHint } from "../host/compat-recovery";
 // worktree, so the ping/pong keepalive must outlast a quiet teardown. A fatal
 // close ends the command - unlike the monitor there is no forever-reconnect
 // loop and no auth-refresh recovery (`auth: null`); a short-lived delete runs
-// on the freshly-read login bearer.
+// on the host-only token read when it starts.
 const OPEN_ACK_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 60_000;
@@ -580,27 +581,34 @@ function streamDroppedCliError(): CliError {
 }
 
 /**
- * Map a fatal stream close to a stable CliError. `UNAUTHORIZED` means the host
- * rejected the bearer (no auth recovery is wired for this one-shot); a protocol
- * skew maps to `HOST_INCOMPATIBLE`; anything else is unexpected.
+ * Map a fatal stream close to a stable CliError. A refusal by the host's door
+ * decides first, by its reason (`hostDoorRefusalCliError`). No sign-in is
+ * refreshed while this one-shot runs (`auth: null`), so nothing here knows the
+ * machine to be signed out, and no arm gives sign-in advice. Then, by code: a
+ * credential rejected, a protocol skew (`HOST_INCOMPATIBLE`), and anything
+ * else unexpected.
  *
  * A host that simply lacks the newer method never reaches here - that is an
  * `onUnsupported` hand-off to the released stream, not a failure.
- */
-/**
+ *
  * Exported for its own suite: the message this builds is the ONLY thing a CLI
  * user sees when a worktree-delete stream is fatally closed, and its epoch arm
  * is a sentence that has to not contradict the host's own reason. Driving that
  * through the whole stream harness would test the harness.
  */
 export function fatalCloseToCliError(details: FatalErrorDetails): CliError {
-  const admissionError = localTeamAdmissionCliError(details);
-  if (admissionError !== null) return admissionError;
+  return (
+    hostDoorRefusalCliError(details, false, () => fatalCloseByCode(details)) ??
+    localTeamAdmissionCliError(details) ??
+    fatalCloseByCode(details)
+  );
+}
+
+function fatalCloseByCode(details: FatalErrorDetails): CliError {
   if (details.code === "UNAUTHORIZED") {
     return cliError({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
-      message:
-        "traycer: host rejected the credential for worktree delete - run `traycer login` and retry.",
+      message: "traycer: host rejected the credential for worktree delete.",
       details: null,
       exitCode: 1,
     });

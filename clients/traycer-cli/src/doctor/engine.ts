@@ -49,6 +49,12 @@ import {
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
+import {
+  hostDoorRefusalKind,
+  OLDER_HOST_MESSAGE,
+} from "../internal/host-door-words";
+import { isRefusalAfterRejectedSignIn } from "../internal/sign-in-rejection";
+import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import type { HostStatusCrossHostMessaging } from "@traycer/protocol/host/status/contracts";
 import { resolveHostAuth } from "../internal/host-auth";
 import {
@@ -1714,15 +1720,35 @@ async function probeHostRpc(
     // Classified by the refusal that ended a retry episode, if one did.
     const err = finalRefusalOf(caught);
     if (err instanceof HostRpcError) {
-      if (err.code === "UNAUTHORIZED") {
+      // A refusal by the host's door decides by its reason, ahead of the
+      // code: sign-in advice only for a machine signed out in fact.
+      const doorRefusal = hostRefusalOf(err);
+      const door =
+        doorRefusal === null
+          ? null
+          : hostDoorRefusalKind(doorRefusal, isRefusalAfterRejectedSignIn(err));
+      if (door === "older-host") {
         return {
           code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
           severity: "error",
           title: "Host rejected the stored credentials",
-          message:
-            "The host is listening but rejected the authenticated RPC connection (UNAUTHORIZED) even after a bearer refresh. Sign in again.",
+          message: OLDER_HOST_MESSAGE,
           fixAction: null,
-          terminalCommand: "traycer login",
+          terminalCommand: "traycer host update",
+          details: { websocketUrl, rpcCode: err.code },
+        };
+      }
+      if (door !== null || err.code === "UNAUTHORIZED") {
+        const signedOut = door === "signed-out";
+        return {
+          code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
+          severity: "error",
+          title: "Host rejected the stored credentials",
+          message: signedOut
+            ? `The host is listening but rejected the authenticated RPC connection (${err.code}) even after a bearer refresh. Sign in again.`
+            : `The host is listening but rejected the authenticated RPC connection (${err.code}).`,
+          fixAction: null,
+          terminalCommand: signedOut ? "traycer login" : null,
           details: { websocketUrl, rpcCode: err.code },
         };
       }

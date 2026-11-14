@@ -1,5 +1,6 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
+import { hostDoorRefusalCliError } from "../internal/host-door-words";
 import {
   createCliHostTokens,
   type SignInRevalidator,
@@ -192,10 +193,16 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     lease,
     signal: null,
   });
-  const hostTokens = createCliHostTokens({
-    lease,
-    refresh: () => revalidator.revalidateCurrentContext(),
-  });
+  // Whether authn refused the stored sign-in at its last answered refresh:
+  // the only case in which this machine is signed out in fact.
+  let signInRejected = false;
+  const refreshSignIn = async (): Promise<RevalidateOutcome> => {
+    const outcome = await revalidator.revalidateCurrentContext();
+    if (outcome === "rejected") signInRejected = true;
+    else if (outcome === "rotated") signInRejected = false;
+    return outcome;
+  };
+  const hostTokens = createCliHostTokens({ lease, refresh: refreshSignIn });
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
   // refreshes the cached endpoint is the CLI's equivalent of the renderer's
@@ -297,7 +304,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   const refreshScheduler = createProactiveRefreshScheduler<NodeJS.Timeout>({
     getToken: () => readLeaseBearer(lease),
     revalidate: async () => {
-      const outcome = await revalidator.revalidateCurrentContext();
+      const outcome = await refreshSignIn();
       if (outcome === "rotated" && endpoint !== null) {
         await hostTokens.renewAfterSignInRefresh(endpoint.hostId);
         // Push the fresh token onto the open inbox stream so the host updates
@@ -331,6 +338,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           : hostTokens
               .streamRecovery(endpoint.hostId)
               .revalidateRefused(details),
+      () => signInRejected,
       { agentId, epicId },
       logger,
       stdoutReaderClosed(),
@@ -364,16 +372,21 @@ type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
  * non-recoverable close so `traycer monitor` exits non-zero. A healthy stream
  * with a live reader runs forever.
  *
- * Recovery on a host `UNAUTHORIZED` fatal switches on the refresh OUTCOME:
+ * Recovery on a host's credential refusal switches on the fresh token's
+ * OUTCOME:
  *   - `rotated`       → re-subscribe immediately (bounded by the spin guard);
  *   - `network-error` → transient; keep the bearer and re-subscribe after a
  *                       delay (don't kill a long-running monitor on a flaky link);
- *   - `rejected`      → terminal (the host re-spawns monitor after re-auth).
- * Any non-`UNAUTHORIZED` fatal (e.g. `INCOMPATIBLE`) is terminal.
+ *   - `rejected`      → terminal, with the door's line: sign-in advice only
+ *                       when `signInRejected()` says this machine is signed
+ *                       out in fact.
+ * Every other fatal (e.g. `INCOMPATIBLE`) is terminal, with the door's line
+ * when it is a door refusal.
  */
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   recover: InboxRecovery,
+  signInRejected: () => boolean,
   target: InboxTarget,
   logger: ILogger,
   readerClosed: AbortSignal,
@@ -500,31 +513,26 @@ function runInboxSubscription(
       ) {
         return;
       }
-      const terminalAdmissionError = localTeamAdmissionCliError(reason.details);
-      if (terminalAdmissionError !== null) {
-        fail(terminalAdmissionError);
-        return;
-      }
-      if (
-        reason.details.retryable === true ||
-        !isCredentialRefusal(reason.details)
-      ) {
+      const details = reason.details;
+      const hostClosed = (): Error =>
+        new Error(`traycer monitor: host closed the stream: ${details.reason}`);
+      if (details.retryable === true || !isCredentialRefusal(details)) {
         logger.warn("Monitor stream closed with non-auth fatal error", {
           environment: config.environment,
-          code: reason.details.code,
+          code: details.code,
           agentId: target.agentId,
           epicId: target.epicId,
         });
         fail(
-          new Error(
-            `traycer monitor: host closed the stream: ${reason.details.reason}`,
-          ),
+          hostDoorRefusalCliError(details, false, hostClosed) ??
+            localTeamAdmissionCliError(details) ??
+            hostClosed(),
         );
         return;
       }
       // The recovery never throws (it maps failures to an outcome), so this
       // await can't reject the swallowed handler promise into a hang.
-      const outcome = await recover(reason.details);
+      const outcome = await recover(details);
       if (settled) {
         return;
       }
@@ -574,7 +582,10 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
-      fail(new Error("traycer monitor: session expired — re-authenticate."));
+      fail(
+        hostDoorRefusalCliError(details, signInRejected(), hostClosed) ??
+          hostClosed(),
+      );
     };
 
     if (readerClosed.aborted) {
