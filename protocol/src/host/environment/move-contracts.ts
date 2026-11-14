@@ -293,7 +293,11 @@ export const environmentMovePlanUpgradeV12ToV20 = defineUpgradePath<
       "environment.move.plan v1.2 requests cannot be upgraded to v2.0: v1.2 names no target",
     );
   },
-  upgradeResponse: ({ itemChoices: _itemChoices, ...response }) => response,
+  upgradeResponse: () => {
+    throw new Error(
+      "environment.move.plan v1.2 responses cannot be upgraded to v2.0: no v1.2 request reaches a v2.0 host",
+    );
+  },
 });
 
 /** What every `environmentMoveItemChoiceKey` starts with. */
