@@ -57,7 +57,6 @@ export function useTeamNotificationHooks() {
   const canEdit =
     source.kind === "pool" &&
     source.configuration === "team" &&
-    !source.transportReadOnly &&
     mayChangeConfiguration(source.effectiveRole);
   const read = useConfigurationItemsQuery(
     NOTIFICATION_HOOKS_ITEM.kind,
