@@ -178,9 +178,18 @@ export function useLandingComposerPaste(params: {
   readonly mentionRoots: ReadonlyArray<string>;
   /** Files go to the placement host, the one the epic is created on. */
   readonly fileRoute: ComposerFileRoute;
+  /** Whether that host is this machine, so a typed path names a file there. */
+  readonly pathsReachTarget: boolean;
 }): UseComposerPasteResult {
-  const { editorRef, draftId, disabled, fileDrops, mentionRoots, fileRoute } =
-    params;
+  const {
+    editorRef,
+    draftId,
+    disabled,
+    fileDrops,
+    mentionRoots,
+    fileRoute,
+    pathsReachTarget,
+  } = params;
   // THIS HOOK's session, one per mount, so the file-paste path serializes its
   // own decodes: a multi-file drop holds one bitmap at a time however many
   // files it carries.
@@ -204,8 +213,8 @@ export function useLandingComposerPaste(params: {
     return handle.beginPathInsertion();
   }, [editorRef]);
   const filePaths = useMemo(
-    () => ({ fileDrops, mentionRoots, beginPathInsertion }),
-    [fileDrops, mentionRoots, beginPathInsertion],
+    () => ({ fileDrops, mentionRoots, beginPathInsertion, pathsReachTarget }),
+    [fileDrops, mentionRoots, beginPathInsertion, pathsReachTarget],
   );
   const insertAttrs = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {

@@ -82,6 +82,9 @@ import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 beforeEach(() => {
   installFreshIndexedDb();
   resetLandingImageBudgetReservationsForTesting();
+  localHost.id = null;
+  fileDropMocks.resolveDroppedFilePaths.mockReset();
+  fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([]);
 });
 
 const attachmentMocks = vi.hoisted(() => {
@@ -106,6 +109,12 @@ const composerPickerMocks = vi.hoisted(() => ({
   useComposerPickerItems: vi.fn(),
 }));
 const reportableErrorToastMock = vi.hoisted(() => vi.fn());
+const fileDropMocks = vi.hoisted(() => ({
+  resolveDroppedFilePaths:
+    vi.fn<(files: ReadonlyArray<File>) => Promise<string[]>>(),
+}));
+/** This renderer's own host id: `null` is the real answer with no host runtime. */
+const localHost = vi.hoisted(() => ({ id: null as string | null }));
 const openEpicHandleMocks = vi.hoisted(() => {
   const hasAttachmentBytes = vi.fn((_hash: string) => false);
   const readAttachmentBytes = vi.fn(
@@ -136,12 +145,16 @@ vi.mock("@/lib/reportable-error-toast", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     fileDrops: {
-      resolveDroppedFilePaths: () => Promise.resolve([]),
+      resolveDroppedFilePaths: fileDropMocks.resolveDroppedFilePaths,
       copyDroppedFilePaths: (paths: readonly string[]) =>
         Promise.resolve(paths),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
   }),
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => localHost.id,
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -2613,5 +2626,58 @@ describe("<ChatMessage /> sender overline timestamp", () => {
 
     expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
     expect(screen.getByText("You").parentElement?.textContent).toBe("You");
+  });
+});
+
+describe("<UserMessageBody /> inline edit, a file dropped from the desktop", () => {
+  const REPORT_PATH = "/Users/me/report.pdf";
+
+  afterEach(() => {
+    cleanup();
+    reportableErrorToastMock.mockClear();
+  });
+
+  function pdfFile(): File {
+    return new File(["report"], "report.pdf", { type: "application/pdf" });
+  }
+
+  it("on another machine shows the inline-edit toast and types no path", async () => {
+    localHost.id = "host-elsewhere";
+    fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.drop(editor, {
+      dataTransfer: dataTransferWithFiles([pdfFile()]),
+    });
+
+    await waitFor(() => {
+      expect(reportableErrorToastMock).toHaveBeenCalledTimes(1);
+    });
+    expect(reportableErrorToastMock).toHaveBeenCalledWith(
+      "Couldn't attach report.pdf.",
+      {
+        description:
+          "Files can't be added while editing. Send them in a new message.",
+      },
+      expect.objectContaining({ source: "Chat composer" }),
+    );
+    expect(editor.textContent).not.toContain(REPORT_PATH);
+  });
+
+  it("on this machine types the path and shows no toast", async () => {
+    localHost.id = TAB_HOST_ID;
+    fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.drop(editor, {
+      dataTransfer: dataTransferWithFiles([pdfFile()]),
+    });
+
+    await waitFor(() => {
+      expect(editor.textContent).toContain(REPORT_PATH);
+    });
+    expect(reportableErrorToastMock).not.toHaveBeenCalled();
   });
 });
