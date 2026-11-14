@@ -32,6 +32,7 @@ import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -44,6 +45,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
   useHostBinding: () => ({
+    ...requireTeamEnvironmentAuthnBinding(),
     hostId: "host-local",
     hostClient: requireTeamHostClient(),
   }),

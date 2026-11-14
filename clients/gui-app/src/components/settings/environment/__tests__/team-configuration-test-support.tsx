@@ -65,7 +65,14 @@ const AUTHN_METHODS = new Set([
   "environment.configuration.items.put",
   "environment.configuration.items.delete",
   "environment.configuration.mcpServers.list",
+  "environment.configuration.mcpServers.put",
+  "environment.configuration.mcpServers.delete",
+  "environment.configuration.mcpServers.setEnabled",
   "environment.plans.list",
+  "environment.plans.unlink",
+  "environment.secrets.list",
+  "environment.secrets.versions",
+  "environment.secrets.rotation",
 ]);
 
 export function requireTeamEnvironmentAuthnBinding(): {
@@ -293,7 +300,16 @@ function buildTeamPage(
     queryClient,
     paramsOf: (method) => {
       if (AUTHN_METHODS.has(method)) {
-        return activeEnvironmentAuthn?.paramsOf(method) ?? [];
+        const authnParams = activeEnvironmentAuthn?.paramsOf(method) ?? [];
+        if (method.startsWith("environment.secrets.")) {
+          return [
+            ...authnParams,
+            ...messenger.calls
+              .filter((call) => call.method === method)
+              .map((call) => call.params),
+          ];
+        }
+        return authnParams;
       }
       return messenger.calls
         .filter((call) => call.method === method)

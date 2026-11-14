@@ -22,6 +22,7 @@ import {
   hostIdsOf,
   mountTeamPageOnPoolBuild,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -31,6 +32,7 @@ import { SandboxDefaultsSection } from "@/components/settings/panels/sandbox-def
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -171,7 +173,7 @@ function everyRequestWentToThePool(
 }
 
 describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
-  it("shows the item's values, read through the server pool", async () => {
+  it("shows the item's values from authn without asking a host", async () => {
     const harness = mountViewer(
       () => ({ items: [SANDBOX_DEFAULTS_ITEM] }),
       () => MEMBERS_RESPONSE,
@@ -188,7 +190,12 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
         "Destruction · kept until you destroy it",
       );
     });
-    everyRequestWentToThePool(harness, "environment.configuration.items");
+    expect(harness.paramsOf("environment.configuration.items")).toEqual([
+      { environmentId: "env-acme" },
+    ]);
+    expect(hostIdsOf(harness, "environment.configuration.items")).toHaveLength(
+      0,
+    );
   });
 
   it("shows the editor roster read through the pool and the Members link", async () => {
