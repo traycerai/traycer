@@ -84,11 +84,8 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 vi.mock("@/hooks/providers/use-providers-promote-to-personal-mutation", () => ({
   useProvidersPromoteToPersonal: () => ({
     isPending: false,
-    mutate: (request: { mutation: { scope: string; name: string } }) => {
-      shared.promotions.push({
-        scope: request.mutation.scope,
-        name: request.mutation.name,
-      });
+    mutate: (request: { scope: string; name: string }) => {
+      shared.promotions.push({ scope: request.scope, name: request.name });
     },
   }),
 }));

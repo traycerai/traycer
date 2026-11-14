@@ -1268,7 +1268,8 @@ function SkillRow({
 /**
  * What sits beside a row: the promote for a shared folder's skill, which the
  * host only reads (at global scope, the one a promote takes), else the Personal
- * mark.
+ * mark. The promote is offered only to someone who may change the page's
+ * configuration.
  */
 function SkillRowAction({
   skill,
@@ -1286,6 +1287,7 @@ function SkillRowAction({
     skill.name,
     markTarget.scope,
   );
+  const canEdit = useCanEditConfiguration();
   if (skill.source === "managed") return null;
   if (
     personal ||
@@ -1294,7 +1296,8 @@ function SkillRowAction({
   ) {
     return <PersonalEntryMark target={markTarget} name={skill.name} />;
   }
-  if (environmentName === null || markTarget.scope !== "global") return null;
+  if (!canEdit || environmentName === null || markTarget.scope !== "global")
+    return null;
   return (
     <AddToPersonalButton
       entryKind="skills"

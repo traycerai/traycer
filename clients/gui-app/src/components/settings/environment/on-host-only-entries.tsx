@@ -28,6 +28,7 @@ import {
 } from "@/lib/provider-ordering";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { AddToConfigurationButton } from "./add-to-configuration-button";
+import { useCanEditConfiguration } from "./configuration-source";
 import {
   onHostOnlyHeading,
   onHostOnlyServersLine,
@@ -86,7 +87,8 @@ function placeKey(place: HostPlace): string {
 /**
  * The card under a provider's MCP or Skills tab: what the provider holds on
  * the viewing host by itself, each with where it is and "Add to <name>".
- * Drawn only when there is something.
+ * Drawn only when there is something. "Add to <name>" is offered only to
+ * someone who may change the configuration.
  */
 function OnHostOnlyCard(props: {
   readonly entryKind: "mcp" | "skills";
@@ -95,6 +97,7 @@ function OnHostOnlyCard(props: {
 }): ReactNode {
   const scope = useTeamViewingHost();
   const name = useConfigurationName();
+  const canEdit = useCanEditConfiguration();
   const host = scope.viewingHost;
   if (host === null || props.entries.length === 0) return null;
   const heading = onHostOnlyHeading(
@@ -123,14 +126,16 @@ function OnHostOnlyCard(props: {
                   : null}
               </div>
             </div>
-            <AddToConfigurationButton
-              entryKind={props.entryKind}
-              providerId={props.providerId}
-              scope={entry.place.scope}
-              workspaceRoot={entry.place.target?.path ?? null}
-              name={entry.name}
-              configurationName={name}
-            />
+            {canEdit ? (
+              <AddToConfigurationButton
+                entryKind={props.entryKind}
+                providerId={props.providerId}
+                scope={entry.place.scope}
+                workspaceRoot={entry.place.target?.path ?? null}
+                name={entry.name}
+                configurationName={name}
+              />
+            ) : null}
           </li>
         ))}
       </ul>

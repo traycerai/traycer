@@ -5,6 +5,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useCanEditConfiguration } from "@/components/settings/environment/configuration-source";
 import { addToConfigurationLabel } from "@/components/settings/environment/mcp-skills-copy";
 import {
   usePersonalEntryApplied,
@@ -40,6 +41,8 @@ function servedEnvironmentName(status: EnvironmentStatusResponse): string {
  *   item key, so the host's word is the only mark), badged with its name.
  * - Otherwise, at global scope: "On <host> only" with "Add to <name>",
  *   which a CLI- or agent-added entry needs before it goes anywhere else.
+ *   "Add to <name>" is offered only to someone who may change the page's
+ *   configuration; anyone else sees the line alone.
  * - Project scope: nothing. A project's entries stay with the project.
  *
  * Nothing on a host that is not set up for an environment's settings.
@@ -55,6 +58,7 @@ export function PersonalEntryMark(props: {
     props.name,
     props.target.scope,
   );
+  const canEdit = useCanEditConfiguration();
   if (props.target.scope !== "global" || state?.kind !== "ready") return null;
   const environmentName = servedEnvironmentName(state.status);
   if (applied) {
@@ -70,12 +74,14 @@ export function PersonalEntryMark(props: {
       data-testid="local-entry-mark"
     >
       On {hostName ?? "this host"} only
-      <AddToPersonalButton
-        entryKind={props.target.entryKind}
-        providerId={props.target.providerId}
-        name={props.name}
-        environmentName={environmentName}
-      />
+      {canEdit ? (
+        <AddToPersonalButton
+          entryKind={props.target.entryKind}
+          providerId={props.target.providerId}
+          name={props.name}
+          environmentName={environmentName}
+        />
+      ) : null}
     </span>
   );
 }
