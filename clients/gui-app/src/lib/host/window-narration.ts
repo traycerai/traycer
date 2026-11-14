@@ -42,8 +42,12 @@ import {
  *   host it is booting FOR the user. So during a first launch the authority
  *   names a host, ∅ is false, and a strictly-∅ modal would be invisible for
  *   exactly the state this surface is supposed to own.
+ * - `access-refused` - the host answered and would not admit this account.
+ *   Nothing failed and nothing will retry, so the cover offers no Retry and no
+ *   issue report: only switching accounts clears it.
  */
-export type WindowNarrationCause = "no-usable-host" | "cold-start";
+export type WindowNarrationCause =
+  "no-usable-host" | "cold-start" | "access-refused";
 
 /**
  * The three variants, and the actions each may offer.
@@ -408,7 +412,12 @@ export function deriveWindowNarration(
   if (!input.attached) return { kind: "silent" };
   const doorCover = doorStateVariant(input);
   if (doorCover !== null) {
-    return { kind: "narrating", cause: "no-usable-host", variant: doorCover };
+    return {
+      kind: "narrating",
+      cause:
+        doorCover.kind === "not-admitted" ? "access-refused" : "no-usable-host",
+      variant: doorCover,
+    };
   }
   // NOBODY HAS ASKED YET, so nothing may report a verdict. An ∅ derived from a
   // fleet no attempt has concluded for is indistinguishable from an ∅ derived
