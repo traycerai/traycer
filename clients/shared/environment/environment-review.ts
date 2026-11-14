@@ -30,13 +30,14 @@ import {
   authnOperationReviewResponseSchema,
   authnUndoConflictSchema,
   authnUndoResponseSchema,
-  type AuthnItemRow,
   type AuthnNoticeRow,
 } from "./authn-environment-schemas";
 import {
   CLOUD_UNAVAILABLE_MESSAGE,
   EnvironmentCloudError,
+  NEEDS_PERMISSION_MESSAGE,
   environmentPath,
+  errorBodyCode,
   isRedirect,
   isSuccess,
   sendSettings,
@@ -167,15 +168,13 @@ export async function readReviewHolds(
  * The review sheet's choice on one hold:
  * - `applied`: written (approve) or dropped (discard);
  * - `conflict`: approve only: the live item moved since the list read it;
- *   `current` is it now, null when it is gone. Its value is shown only
- *   through the masker;
  * - `gone`: the hold moved or is no longer there; the reread draws the row
  *   as it is now;
  * - `forbidden`: not the person's to make.
  */
-export type ReviewChoiceOutcome =
-  | { readonly outcome: "applied" | "gone" | "forbidden" }
-  | { readonly outcome: "conflict"; readonly current: AuthnItemRow | null };
+export interface ReviewChoiceOutcome {
+  readonly outcome: "applied" | "conflict" | "gone" | "forbidden";
+}
 
 /**
  * Apply sends the hold's revision and the live revision the person saw, and
@@ -211,7 +210,7 @@ export async function applyReviewChoice(
   if (answer.status === 409 && choice === "approve") {
     const conflict = authnHeldApplyConflictSchema.safeParse(answer.body);
     if (conflict.success && conflict.data.code === "revision_conflict") {
-      return { outcome: "conflict", current: conflict.data.current };
+      return { outcome: "conflict" };
     }
   }
   if (answer.status === 404 || answer.status === 409)
@@ -280,8 +279,10 @@ export async function readNotices(
 
 /**
  * Undo of one notice (`POST …/changes/:revision/undo`), answered as the
- * host's `environment.undo` was: a 403 is `needs_grant`, a later change on
- * the key is `stale`, and a change Undo cannot restore is refused.
+ * host's `environment.undo` was: a later change on the key is `stale`, and a
+ * change Undo cannot restore is refused. A 403 is read by its code: authn
+ * asks a grant of the host alone, so `executable_write_needs_grant` is
+ * `needs_grant`, and any other is the person's role.
  */
 export async function undoNotice(
   cloud: EnvironmentCloud,
@@ -306,7 +307,11 @@ export async function undoNotice(
     { kind, key, os },
     OFFLINE_MESSAGE,
   );
-  if (answer.status === 403) return { outcome: "needs_grant" };
+  if (answer.status === 403) {
+    if (errorBodyCode(answer.body) === "executable_write_needs_grant")
+      return { outcome: "needs_grant" };
+    throw new EnvironmentCloudError("forbidden", NEEDS_PERMISSION_MESSAGE);
+  }
   if (answer.status === 409) {
     const refused = authnUndoConflictSchema.safeParse(answer.body);
     if (refused.success && refused.data.code === "superseded") {

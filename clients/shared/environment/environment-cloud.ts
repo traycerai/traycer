@@ -69,7 +69,7 @@ export const SIGN_IN_AGAIN_MESSAGE: Readonly<
 };
 
 /** The words of a `forbidden` failure: the person's role does not allow it. */
-const NEEDS_PERMISSION_MESSAGE = "This change needs permission.";
+export const NEEDS_PERMISSION_MESSAGE = "This change needs permission.";
 
 /** The words of an `unavailable` failure, as the host's cloud errors say them. */
 export const CLOUD_UNAVAILABLE_MESSAGE =

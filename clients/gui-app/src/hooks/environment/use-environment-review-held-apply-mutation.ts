@@ -26,7 +26,7 @@ const METHOD = "environment.review.heldApply";
  * Applies one retrospective held-row choice, the app's own call to authn on
  * the person's sign-in. Approve names the hold's revision and the live item's
  * revision the list read and showed. A live item that moved since answers
- * `conflict` with it as it is now; a hold that moved or went answers `gone`.
+ * `conflict`; a hold that moved or went answers `gone`.
  * Either leaves the row in the review, and the reread draws it.
  */
 export function useEnvironmentReviewHeldApplyMutation(
