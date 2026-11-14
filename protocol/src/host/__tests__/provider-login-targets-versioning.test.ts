@@ -13,10 +13,12 @@ import {
   providerMutationCliStateSchemaV21,
   providersAwaitLoginRequestSchema,
   providersAwaitLoginResponseSchema,
+  providersAwaitLoginResponseSchemaV24,
   providersStartLoginRequestSchemaV15,
   providersStartLoginResponseSchemaV15,
   type ProvidersAwaitLoginRequest,
   type ProvidersAwaitLoginResponse,
+  type ProviderLoginSignInRequest,
   type ProvidersStartLoginRequestV15,
   type ProvidersStartLoginResponseV15,
 } from "@traycer/protocol/host/provider-schemas";
@@ -29,10 +31,11 @@ const startRegistry = hostRpcRegistry["providers.startLogin"];
 const awaitRegistry = hostRpcRegistry["providers.awaitLogin"];
 const startV15 = { major: 1, minor: 5 } as const;
 const awaitV24 = { major: 2, minor: 4 } as const;
+const awaitV25 = { major: 2, minor: 5 } as const;
 const awaitV10 = { major: 1, minor: 0 } as const;
 
 type StartMinor = 0 | 1 | 2 | 3 | 4;
-type AwaitMinor = 0 | 1 | 2 | 3;
+type AwaitMinor = 0 | 1 | 2 | 3 | 4;
 type AwaitVersion = { major: 1; minor: 0 } | { major: 2; minor: AwaitMinor };
 
 const codexMutationFixture =
@@ -71,6 +74,14 @@ const startV15Projection = {
 
 // Projection fixture only: the old schemas retain or strip fields, and this
 // does not claim the host emits these mutually exclusive outcomes together.
+const signInRequestFixture: ProviderLoginSignInRequest = {
+  operationId: "8c6f4f97-8a2c-4b7e-9875-223456789abc",
+  environmentId: "environment-fixture",
+  sourceHostId: "source-host-fixture",
+  sourceSharingGeneration: 3,
+  harnessId: "claude-code",
+};
+
 const awaitV24Projection = {
   state: codexSuccessMutationV21,
   existingProfileId: "existing-profile",
@@ -86,6 +97,31 @@ const awaitV24Projection = {
   },
   profileOutcome: { kind: "signed-in", profileId: "destination-profile" },
 } as const;
+
+const awaitV25Projection = {
+  ...awaitV24Projection,
+  signInRequest: signInRequestFixture,
+};
+
+const malformedSignInRequestCases = [
+  {
+    name: "a non-UUID operation id",
+    value: { ...signInRequestFixture, operationId: "not-a-uuid" },
+  },
+  {
+    name: "a negative source sharing generation",
+    value: { ...signInRequestFixture, sourceSharingGeneration: -1 },
+  },
+  {
+    name: "a fractional source sharing generation",
+    value: { ...signInRequestFixture, sourceSharingGeneration: 1.5 },
+  },
+  {
+    name: "an invalid harness id",
+    value: { ...signInRequestFixture, harnessId: "Claude Code" },
+  },
+  { name: "a value of the wrong type", value: "not-a-sign-in-request" },
+] satisfies ReadonlyArray<{ name: string; value: unknown }>;
 
 function upgradeStartRequest(
   minor: StartMinor,
@@ -138,7 +174,7 @@ function upgradeAwaitRequest(
     return upgradeRequestToVersion(
       awaitRegistry,
       awaitV10,
-      awaitV24,
+      awaitV25,
       awaitRegistry[1].versions[0].contract.requestSchema.parse(input),
     );
   }
@@ -147,29 +183,36 @@ function upgradeAwaitRequest(
       return upgradeRequestToVersion(
         awaitRegistry,
         { major: 2, minor: 0 },
-        awaitV24,
+        awaitV25,
         awaitRegistry[2].versions[0].contract.requestSchema.parse(input),
       );
     case 1:
       return upgradeRequestToVersion(
         awaitRegistry,
         { major: 2, minor: 1 },
-        awaitV24,
+        awaitV25,
         awaitRegistry[2].versions[1].contract.requestSchema.parse(input),
       );
     case 2:
       return upgradeRequestToVersion(
         awaitRegistry,
         { major: 2, minor: 2 },
-        awaitV24,
+        awaitV25,
         awaitRegistry[2].versions[2].contract.requestSchema.parse(input),
       );
     case 3:
       return upgradeRequestToVersion(
         awaitRegistry,
         { major: 2, minor: 3 },
-        awaitV24,
+        awaitV25,
         awaitRegistry[2].versions[3].contract.requestSchema.parse(input),
+      );
+    case 4:
+      return upgradeRequestToVersion(
+        awaitRegistry,
+        awaitV24,
+        awaitV25,
+        awaitRegistry[2].versions[4].contract.requestSchema.parse(input),
       );
   }
 }
@@ -492,9 +535,19 @@ const awaitRequestInput = {
   providerId: "codex",
   profileId: "selected-profile",
   lastSeenReaderCount: 4,
+  recordedOperationId: signInRequestFixture.operationId,
 };
 
 const awaitRequestDownCases = [
+  {
+    name: "providers.awaitLogin@2.4 request new client -> older host",
+    version: { major: 2, minor: 4 },
+    expected: {
+      providerId: "codex",
+      profileId: "selected-profile",
+      lastSeenReaderCount: 4,
+    },
+  },
   {
     name: "providers.awaitLogin@2.3 request new client -> older host",
     version: { major: 2, minor: 3 },
@@ -532,6 +585,21 @@ const awaitRequestDownCases = [
 
 const awaitRequestUpCases = [
   {
+    name: "providers.awaitLogin@2.4 request older client -> new host",
+    version: { major: 2, minor: 4 },
+    input: {
+      providerId: "codex",
+      profileId: "selected-profile",
+      lastSeenReaderCount: 4,
+    },
+    expected: {
+      providerId: "codex",
+      profileId: "selected-profile",
+      lastSeenReaderCount: 4,
+      recordedOperationId: null,
+    },
+  },
+  {
     name: "providers.awaitLogin@2.3 request older client -> new host",
     version: { major: 2, minor: 3 },
     input: awaitRequestInput,
@@ -539,6 +607,7 @@ const awaitRequestUpCases = [
       providerId: "codex",
       profileId: "selected-profile",
       lastSeenReaderCount: 4,
+      recordedOperationId: null,
     },
   },
   {
@@ -549,6 +618,7 @@ const awaitRequestUpCases = [
       providerId: "codex",
       profileId: "selected-profile",
       lastSeenReaderCount: null,
+      recordedOperationId: null,
     },
   },
   {
@@ -559,6 +629,7 @@ const awaitRequestUpCases = [
       providerId: "codex",
       profileId: "selected-profile",
       lastSeenReaderCount: null,
+      recordedOperationId: null,
     },
   },
   {
@@ -569,6 +640,7 @@ const awaitRequestUpCases = [
       providerId: "codex",
       profileId: null,
       lastSeenReaderCount: null,
+      recordedOperationId: null,
     },
   },
   {
@@ -579,6 +651,7 @@ const awaitRequestUpCases = [
       providerId: "codex",
       profileId: null,
       lastSeenReaderCount: null,
+      recordedOperationId: null,
     },
   },
 ] satisfies ReadonlyArray<{
@@ -589,6 +662,12 @@ const awaitRequestUpCases = [
 }>;
 
 const awaitResponseUpCases = [
+  {
+    name: "providers.awaitLogin@2.4 response older host -> new client",
+    version: { major: 2, minor: 4 },
+    input: awaitV24Projection,
+    expected: { ...awaitV24Projection, signInRequest: null },
+  },
   {
     name: "providers.awaitLogin@2.3 response older host -> new client",
     version: { major: 2, minor: 3 },
@@ -620,6 +699,7 @@ const awaitResponseUpCases = [
         count: 2,
       },
       profileOutcome: null,
+      signInRequest: null,
     },
   },
   {
@@ -644,6 +724,7 @@ const awaitResponseUpCases = [
       },
       installation: null,
       profileOutcome: null,
+      signInRequest: null,
     },
   },
   {
@@ -661,6 +742,7 @@ const awaitResponseUpCases = [
       refusal: null,
       installation: null,
       profileOutcome: null,
+      signInRequest: null,
     },
   },
   {
@@ -674,6 +756,7 @@ const awaitResponseUpCases = [
       refusal: null,
       installation: null,
       profileOutcome: null,
+      signInRequest: null,
     },
   },
   {
@@ -687,6 +770,7 @@ const awaitResponseUpCases = [
       refusal: null,
       installation: null,
       profileOutcome: null,
+      signInRequest: null,
     },
   },
 ] satisfies ReadonlyArray<{
@@ -697,6 +781,11 @@ const awaitResponseUpCases = [
 }>;
 
 const awaitResponseDownCases = [
+  {
+    name: "providers.awaitLogin@2.4 response new host -> older client",
+    minor: 4,
+    expected: awaitV24Projection,
+  },
   {
     name: "providers.awaitLogin@2.3 response new host -> older client",
     minor: 3,
@@ -751,7 +840,7 @@ const awaitResponseDownCases = [
 const awaitResponseV10DownCases = [
   {
     name: "providers.awaitLogin@1.0 response new host -> older client",
-    input: awaitV24Projection,
+    input: awaitV25Projection,
     expected: { ok: true, value: { state: codexSuccessV10 } },
   },
 ] satisfies ReadonlyArray<{
@@ -966,7 +1055,7 @@ describe("provider login targets and outcomes", () => {
     expect(
       prepareRequestPayload(
         awaitRegistry,
-        awaitV24,
+        awaitV25,
         testCase.version,
         providersAwaitLoginRequestSchema.parse(awaitRequestInput),
         "request-fixture",
@@ -988,7 +1077,7 @@ describe("provider login targets and outcomes", () => {
     expect(
       decodeResponsePayload<ProvidersAwaitLoginResponse>(
         awaitRegistry,
-        awaitV24,
+        awaitV25,
         testCase.version,
         testCase.input,
         "response-fixture",
@@ -999,9 +1088,10 @@ describe("provider login targets and outcomes", () => {
 
   it.each(awaitResponseDownCases)("$name", (testCase) => {
     expect(
-      awaitRegistry[2].versions[testCase.minor].contract.responseSchema.parse(
-        awaitV24Projection,
-      ),
+      (testCase.minor === 4
+        ? providersAwaitLoginResponseSchemaV24
+        : awaitRegistry[2].versions[testCase.minor].contract.responseSchema
+      ).parse(awaitV25Projection),
     ).toEqual(testCase.expected);
   });
 
@@ -1015,6 +1105,43 @@ describe("provider login targets and outcomes", () => {
       ),
     ).toEqual(testCase.expected);
   });
+
+  it("parses a valid providers.awaitLogin@2.5 sign-in request unchanged", () => {
+    expect(
+      awaitRegistry[2].versions[5].contract.responseSchema.parse({
+        state: null,
+        signInRequest: signInRequestFixture,
+      }).signInRequest,
+    ).toEqual(signInRequestFixture);
+  });
+
+  it("leaves absent providers.awaitLogin@2.5 recording fields undefined", () => {
+    const request = awaitRegistry[2].versions[5].contract.requestSchema.parse({
+      providerId: "codex",
+      profileId: null,
+      lastSeenReaderCount: 4,
+    });
+    const response = awaitRegistry[2].versions[5].contract.responseSchema.parse(
+      {
+        state: null,
+      },
+    );
+
+    expect(request.recordedOperationId).toBeUndefined();
+    expect(response.signInRequest).toBeUndefined();
+  });
+
+  it.each(malformedSignInRequestCases)(
+    "reads $name as null for providers.awaitLogin@2.5 sign-in request",
+    (testCase) => {
+      expect(
+        awaitRegistry[2].versions[5].contract.responseSchema.parse({
+          state: null,
+          signInRequest: testCase.value,
+        }).signInRequest,
+      ).toBeNull();
+    },
+  );
 
   it("preserves null downgrade and rejects the ineligible provider state", () => {
     expect(
