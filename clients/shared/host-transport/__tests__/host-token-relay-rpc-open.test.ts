@@ -184,6 +184,180 @@ async function expiryRelayHarness(refusals: readonly FatalErrorDetails[]) {
   return { entry, hostTokens, mintCalls, peer, sockets, states, transport };
 }
 
+const RELAY_GRANT_BODY = JSON.stringify({
+  grant: "relay-pass",
+  role: "client",
+  expires_in: 300,
+  session_grant: "relay-session-grant",
+  session_grant_expires_in: 300,
+});
+
+/**
+ * A relay dial whose attach-grant mint authn answers by `answer` (the 1-based
+ * call number), with a sign-in refresh that rotates the lease and answers
+ * `rotated`. Records the sign-in each mint carried.
+ */
+function signInRelayHarness(answer: (call: number) => Response) {
+  const peer = new RemoteMuxTestPeer();
+  const entry = directoryEntryFor(
+    {
+      name: "personal computer",
+      hostId: "relay-sign-in-refresh-host",
+      kind: "personal",
+      owner: { kind: "user", id: USER_ID },
+    },
+    peer,
+  );
+  const lease = new MutableBearerLease(SIGN_IN_TOKEN, USER_ID);
+  const sentSignIns: Array<string | null> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (_url, init) => {
+      sentSignIns.push(new Headers(init?.headers).get("Authorization"));
+      return answer(sentSignIns.length);
+    }),
+  );
+  let refreshes = 0;
+  const states: Array<{ readonly hostId: string; readonly kind: string }> = [];
+  const hostTokens = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => Promise.resolve({ kind: "no-sign-in" }),
+    signIn: null,
+    now: () => Date.now(),
+  });
+  const transport = createRemoteHostTransport({
+    hostId: entry.hostId,
+    userId: USER_ID,
+    relayAttachUrl: entry.websocketUrl ?? "",
+    authnBaseUrl: "https://authn.test",
+    hostPublicKey: entry.publicKey,
+    bearer: () => lease,
+    hostTokens,
+    door: null,
+    onState: (hostId, kind) => states.push({ hostId, kind }),
+    cloudAuthorized: () => true,
+    auth: {
+      revalidateForReconnect: () => {
+        refreshes += 1;
+        lease.rotate(`sign-in-refreshed-${refreshes}`);
+        return Promise.resolve("rotated");
+      },
+    },
+    clock: null,
+    rpcRegistry: hostRpcRegistry,
+    streamRegistry: hostStreamRpcRegistry,
+    webSocketFactory: peer.factory,
+    requestId: () => "request-relay-sign-in-refresh",
+    evidence: NO_TRANSPORT_EVIDENCE,
+    clientIdentity: TEST_CLIENT_IDENTITY,
+    proactiveWakeEligible: false,
+  });
+  if (transport === null) throw new Error("remote transport did not build");
+
+  return {
+    peer,
+    sentSignIns,
+    states,
+    transport,
+    refreshes: () => refreshes,
+  };
+}
+
+describe("relay door sign-in refusal", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    retireAllRemoteSessions();
+  });
+
+  it("refreshes the sign-in once after a 401 and opens on the next mint", async () => {
+    const test = signInRelayHarness((call) =>
+      call === 1
+        ? new Response("", { status: 401 })
+        : new Response(RELAY_GRANT_BODY, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+    );
+
+    try {
+      test.transport.session.start();
+      await vi.waitFor(
+        () => expect(test.transport.session.isReady()).toBe(true),
+        WAIT,
+      );
+
+      expect(test.sentSignIns).toEqual([
+        `Bearer ${SIGN_IN_TOKEN}`,
+        "Bearer sign-in-refreshed-1",
+      ]);
+      expect(test.refreshes()).toBe(1);
+      expect(test.peer.opens[0]?.authz).toEqual({
+        v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
+        grant: "relay-session-grant",
+      });
+      expect(test.states).toEqual([]);
+      expect(test.peer.errors).toEqual([]);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
+  });
+
+  it("backs off after a second 401, refreshing once on each dial, with no state and no end", async () => {
+    const test = signInRelayHarness(() => new Response("", { status: 401 }));
+
+    try {
+      test.transport.session.start();
+      // The second dial is the backoff's: it comes only if the first dial's
+      // second 401 left the session retrying.
+      await vi.waitFor(() => expect(test.sentSignIns).toHaveLength(4), WAIT);
+
+      expect(test.sentSignIns).toEqual([
+        `Bearer ${SIGN_IN_TOKEN}`,
+        "Bearer sign-in-refreshed-1",
+        "Bearer sign-in-refreshed-1",
+        "Bearer sign-in-refreshed-2",
+      ]);
+      expect(test.refreshes()).toBe(2);
+      expect(test.transport.session.terminalFatal()).toBeNull();
+      expect(test.transport.session.isClosed()).toBe(false);
+      expect(test.states).toEqual([]);
+      expect(test.peer.openCount).toBe(0);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
+  });
+
+  it("keeps an unreachable authn as today: no refresh, token-unavailable, backoff", async () => {
+    const test = signInRelayHarness(() => new Response("", { status: 503 }));
+
+    try {
+      test.transport.session.start();
+      await vi.waitFor(
+        () =>
+          expect(test.states).toEqual([
+            { hostId: "relay-sign-in-refresh-host", kind: "token-unavailable" },
+            { hostId: "relay-sign-in-refresh-host", kind: "token-unavailable" },
+          ]),
+        WAIT,
+      );
+
+      expect(test.refreshes()).toBe(0);
+      expect(test.sentSignIns.slice(0, 2)).toEqual([
+        `Bearer ${SIGN_IN_TOKEN}`,
+        `Bearer ${SIGN_IN_TOKEN}`,
+      ]);
+      expect(test.transport.session.terminalFatal()).toBeNull();
+      expect(test.peer.openCount).toBe(0);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
+  });
+});
+
 describe("remote RPC relay OPEN host-token frame", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

@@ -767,6 +767,14 @@ export type RelayPassMintOutcome =
   | { readonly kind: "not-admitted"; readonly provision: AttachGrantProvision }
   /** authn could not be reached (a transport failure or a 5xx). */
   | { readonly kind: "unreachable"; readonly provision: AttachGrantProvision }
+  /**
+   * authn refused the sign-in (401). The caller refreshes it once and mints
+   * again, as the local door does; `provision` is today's answer otherwise.
+   */
+  | {
+      readonly kind: "sign-in-rejected";
+      readonly provision: AttachGrantProvision;
+    }
   /** Every other refusal, handled exactly as a relay pass mint is today. */
   | { readonly kind: "as-today"; readonly provision: AttachGrantProvision };
 
@@ -803,6 +811,11 @@ export async function mintRelayPassWithHostTokenViaHttp(
         }),
       };
     const refusal = classifyOtherRefusal(answer.status, answer.bodyText);
+    if (answer.status === 401)
+      return {
+        kind: "sign-in-rejected",
+        provision: provisionOfFailedMint(refusal),
+      };
     return {
       kind: answer.status >= 500 ? "unreachable" : "as-today",
       provision: provisionOfFailedMint(refusal),
