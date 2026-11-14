@@ -2325,6 +2325,15 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A preview is a read of who may move. Identical in-flight calls coalesce.
+  "providers.previewProfileMove": { ...LATEST_SCHEDULING, poll: null },
+  // A commit records an operation. An identical repeat must not coalesce,
+  // so a retry still receives the recorded results.
+  "providers.commitProfileMove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Profile eligibility is persisted provider configuration.
   "providers.setProfileEnabled": {
     mode: "fifo",
