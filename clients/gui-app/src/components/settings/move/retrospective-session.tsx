@@ -40,6 +40,21 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 
+/**
+ * One opening of the sheet, and the held rows whose Approve authn refused in
+ * it because the live value moved (`conflict`). Such a row offers no Approve
+ * again until it shows the value it would replace, which no row draws yet
+ * (board C22), so for now it keeps Discard only. A `gone` answer is not kept
+ * here.
+ */
+interface SheetOpening {
+  readonly open: boolean;
+  readonly id: number;
+  readonly conflicted: ReadonlySet<string>;
+}
+
+const NO_CONFLICTS: ReadonlySet<string> = new Set();
+
 export function RetrospectiveSession(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly reviewHostId: string | null;
@@ -75,6 +90,11 @@ export function RetrospectiveSession(props: {
   };
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
+  const [opening, setOpening] = useState<SheetOpening>({
+    open: props.open,
+    id: 0,
+    conflicted: NO_CONFLICTS,
+  });
 
   const onShown = useCallback((): void => {
     recordMutate({ event: "shown" });
@@ -93,8 +113,32 @@ export function RetrospectiveSession(props: {
     review.data === null ? { version: null, at: null } : review.data.evidence;
   const heldPendingId = heldApply.isPending ? heldApply.variables.heldId : null;
 
+  // A closed sheet starts its next opening with no row refused.
+  if (opening.open !== props.open) {
+    setOpening({
+      open: props.open,
+      id: opening.id + 1,
+      conflicted: NO_CONFLICTS,
+    });
+  }
   const onHeldApply = (heldId: string, choice: HeldApplyChoice): void => {
-    heldApply.mutate({ heldId, choice });
+    const openingId = opening.id;
+    heldApply.mutate(
+      { heldId, choice },
+      {
+        onSuccess: (answer) => {
+          if (answer.outcome !== "conflict") return;
+          setOpening((current) =>
+            current.id === openingId
+              ? {
+                  ...current,
+                  conflicted: new Set(current.conflicted).add(heldId),
+                }
+              : current,
+          );
+        },
+      },
+    );
   };
 
   return (
@@ -110,6 +154,7 @@ export function RetrospectiveSession(props: {
         held={held}
         stillLocal={stillLocal}
         heldPendingId={heldPendingId}
+        heldApproveRefused={opening.conflicted}
         heldIssue={heldApplyIssue(heldApply.data)}
         inventoryRead={inventoryReadLine(review, props.hostName, retryReview)}
         onOpenChange={props.onOpenChange}
