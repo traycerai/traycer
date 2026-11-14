@@ -7,7 +7,6 @@ import type {
 /** What a held executable entry does, as `environment.review@1.2` names it. */
 export interface ReviewEntryFacts {
   readonly command: string | null;
-  readonly event: string | null;
   readonly description: string | null;
   readonly harness: string | null;
   readonly value: string | null;
@@ -15,7 +14,6 @@ export interface ReviewEntryFacts {
 
 const NO_FACTS: ReviewEntryFacts = {
   command: null,
-  event: null,
   description: null,
   harness: null,
   value: null,
@@ -32,7 +30,6 @@ export function reviewEntryFacts(
   if (!isReviewEntryV12(entry)) return NO_FACTS;
   return {
     command: entry.command,
-    event: entry.event,
     description: entry.description,
     harness: entry.harness,
     value: entry.value,

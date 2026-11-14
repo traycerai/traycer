@@ -113,7 +113,6 @@ export type ReviewHeldEntry = EnvironmentReviewEntryV12 & {
 
 const NO_HELD_FACTS = {
   command: null,
-  event: null,
   description: null,
   harness: null,
   value: null,
@@ -156,6 +155,8 @@ export async function readReviewHolds(
       ...(entry.op === "put"
         ? heldFactsOf({ kind: entry.kind, key: entry.key, value: entry.value })
         : NO_HELD_FACTS),
+      // authn's held change names no trigger for any kind it holds.
+      event: null,
       op: entry.op,
       heldRevision: entry.revision,
       liveRevision: entry.live?.revision ?? null,
