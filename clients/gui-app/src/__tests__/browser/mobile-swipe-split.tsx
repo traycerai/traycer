@@ -166,7 +166,7 @@ const router = createRouter({
 export function SwipeSplit() {
   const transition = useMobileHistorySwipes();
   return (
-    <div style={{ height: "100dvh" }}>
+    <div className="h-safe-dvh">
       <MobileEpicTileView epicId={EPIC_ID} tabId={TAB_ID} />
       {transition}
     </div>
