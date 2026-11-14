@@ -293,6 +293,7 @@ async function renderSignedIn(args: {
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
     registry: hostRpcRegistry,
+    singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `older-host-${++requestSeq}`,
