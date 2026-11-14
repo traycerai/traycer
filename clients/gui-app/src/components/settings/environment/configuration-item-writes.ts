@@ -309,10 +309,19 @@ export function useConfigurationItemWrites(
           },
     );
   };
-  const write = async (write: ConfigurationItemWrite): Promise<void> => {
+  const write = async (asked: ConfigurationItemWrite): Promise<void> => {
     if (source.kind !== "pool" || active.current !== null) return;
+    // A held draft was typed over its own `original`, which a newer read may
+    // since have replaced in the row: the write names that revision, so it is
+    // refused as out of date rather than written over a value never shown.
+    const held = state.drafts.find((draft) =>
+      sameConfigurationItemAddress(draft, asked),
+    );
+    const write =
+      held === undefined ? asked : { ...asked, original: held.original };
     active.current = write;
-    // Submitted drafts survive a refused write and any read that remounts its editor.
+    // Submitted drafts survive a failed write, a refusal other than out of
+    // date, and any read that remounts its editor.
     setState((current) => ({
       scope,
       pending: { write, accepted: null },
@@ -352,8 +361,21 @@ export function useConfigurationItemWrites(
     onOutcome(result);
     if (result.outcome !== "saved") {
       active.current = null;
+      // Out of date: the draft goes, so the row shows the current value and
+      // the next write starts from it.
+      const stale = result.outcome === "conflict";
       setState((current) =>
-        current.scope !== scope ? current : { ...current, pending: null },
+        current.scope !== scope
+          ? current
+          : {
+              ...current,
+              pending: null,
+              drafts: stale
+                ? current.drafts.filter(
+                    (draft) => !sameConfigurationItemAddress(draft, write),
+                  )
+                : current.drafts,
+            },
       );
       return;
     }

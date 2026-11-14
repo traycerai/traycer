@@ -64,9 +64,6 @@ export function ConfigurationProfiles(props: {
   const selected =
     props.profiles.find((item) => item.key === pickedKey) ?? props.profiles[0];
   const profiles = props.profiles.map(pickerProfile);
-  const selectedProfile =
-    profiles.find((profile) => profile.profileId === selected.key) ??
-    profiles[0];
   const value = configurationProfileValueSchema.parse(selected.value);
   const setEnabled = (profileId: string | null, enabled: boolean): void => {
     if (!canEdit || source.kind !== "pool" || put.isPending) return;
@@ -132,7 +129,6 @@ export function ConfigurationProfiles(props: {
         <ConfigurationProfileEditor
           key={`${selected.key}:${editSession}`}
           item={selected}
-          profile={selectedProfile}
           profiles={profiles}
           open={editOpen}
           onOpenChange={setEditOpen}
@@ -145,7 +141,6 @@ export function ConfigurationProfiles(props: {
 
 function ConfigurationProfileEditor(props: {
   readonly item: ConfigurationItem;
-  readonly profile: ProviderProfile;
   readonly profiles: readonly ProviderProfile[];
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -155,27 +150,41 @@ function ConfigurationProfileEditor(props: {
 }): ReactNode {
   const source = useConfigurationSource();
   const { put, remove } = useConfigurationItemMutations();
-  // Only this person's edits are held. A field they did not touch follows the
-  // stored profile, so a save after a conflict re-read never writes back a
-  // value a teammate has since changed. A picked color is never null, so null
-  // means untouched.
+  // The stored profile the fields show (`baseline`) and this person's edits
+  // over it are one snapshot: a save or remove names the baseline's revision,
+  // so an edit typed over a profile a teammate has since changed is refused,
+  // never written over a value the fields did not show. A newer read becomes
+  // the baseline while nothing is edited, or once a save is refused as out of
+  // date; an edit survives it only where the newer read left that field as it
+  // was. A picked color is never null, so null means untouched.
+  const [baseline, setBaseline] = useState(props.item);
+  const [adoptNext, setAdoptNext] = useState(false);
   const [labelOverride, setLabel] = useState<string | null>(null);
   const [accentColorOverride, setAccentColor] =
     useState<ProviderProfileAccentColor | null>(null);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
-  const label = labelOverride ?? props.profile.label;
-  const accentColor = accentColorOverride ?? props.profile.accentColor;
+  const profile = pickerProfile(baseline);
+  const label = labelOverride ?? profile.label;
+  const accentColor = accentColorOverride ?? profile.accentColor;
   const trimmedLabel = label.trim();
   const invalid = trimmedLabel.length === 0 || trimmedLabel.length > 64;
   const changed =
-    (labelOverride !== null && trimmedLabel !== props.profile.label) ||
+    (labelOverride !== null && trimmedLabel !== profile.label) ||
     (accentColorOverride !== null &&
-      accentColorOverride !== props.profile.accentColor);
+      accentColorOverride !== profile.accentColor);
+  if (props.item.revision !== baseline.revision && (adoptNext || !changed)) {
+    const next = pickerProfile(props.item);
+    setBaseline(props.item);
+    if (next.label !== profile.label) setLabel(null);
+    if (next.accentColor !== profile.accentColor) setAccentColor(null);
+    setAdoptNext(false);
+  }
   const busy = put.isPending || remove.isPending;
   const onSuccess = (
     result: EnvironmentConfigurationItemWriteResponse,
   ): void => {
     props.onOutcome(result);
+    if (result.outcome === "conflict") setAdoptNext(true);
     if (result.outcome !== "saved") return;
     props.onOpenChange(false);
     setConfirmRemoveOpen(false);
@@ -186,16 +195,16 @@ function ConfigurationProfileEditor(props: {
       {
         environmentId: source.environmentId,
         kind: "managed_profile",
-        key: props.item.key,
+        key: baseline.key,
         os: null,
         value: {
-          ...z.record(z.string(), z.json()).parse(props.item.value),
+          ...z.record(z.string(), z.json()).parse(baseline.value),
           ...(labelOverride === null ? {} : { name: trimmedLabel }),
           ...(accentColorOverride === null
             ? {}
             : { color: accentColorOverride }),
         },
-        revision: props.item.revision,
+        revision: baseline.revision,
       },
       { onSuccess },
     );
@@ -206,9 +215,9 @@ function ConfigurationProfileEditor(props: {
       {
         environmentId: source.environmentId,
         kind: "managed_profile",
-        key: props.item.key,
+        key: baseline.key,
         os: null,
-        revision: props.item.revision,
+        revision: baseline.revision,
       },
       { onSuccess },
     );
@@ -216,10 +225,10 @@ function ConfigurationProfileEditor(props: {
   const error = put.error ?? remove.error;
   return (
     <ProfileEditDialogPresentation
-      profile={props.profile}
+      profile={profile}
       profiles={props.profiles}
       title="Edit profile"
-      description={`Update how ${profileDisplayLabel(props.profile)} appears.`}
+      description={`Update how ${profileDisplayLabel(profile)} appears.`}
       open={props.open}
       onOpenChange={props.onOpenChange}
       switchingAccount={false}
