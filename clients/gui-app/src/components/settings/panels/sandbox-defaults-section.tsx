@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import { mayChangeConfiguration } from "@/components/settings/environment/configuration-source";
 import { configurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -144,7 +145,7 @@ function defaultsCardBody(
   const shape = configurationStageShape(catalogue, ready?.defaults ?? null);
   if (
     environment === null ||
-    environment.role === null ||
+    !mayChangeConfiguration(environment.role) ||
     ready === null ||
     shape === null
   ) {
@@ -191,7 +192,7 @@ export function SandboxDefaultsSection(props: {
       {body.kind === "list" ? (
         <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
       ) : null}
-      {environment !== null && environment.role === null ? (
+      {environment !== null && !mayChangeConfiguration(environment.role) ? (
         <DefaultsEditors environmentId={environment.environmentId} />
       ) : null}
       {read !== null && read.kind === "failed" ? (

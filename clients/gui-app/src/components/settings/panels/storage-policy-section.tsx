@@ -9,6 +9,7 @@ import {
   type ConfigurationWriteIssue,
 } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
+import { mayChangeConfiguration } from "@/components/settings/environment/configuration-source";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
@@ -97,7 +98,7 @@ function StoragePolicySectionBody(props: {
   );
   const disabled =
     environment === null ||
-    environment.role === null ||
+    !mayChangeConfiguration(environment.role) ||
     policy === undefined ||
     put.isPending;
   const write = <F extends StorageField>(
