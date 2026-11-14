@@ -458,12 +458,12 @@ describe("<PersonalPageFrame /> for a Local Secrets page below the minimum", () 
     };
     const { rerender } = render(pageAt("1.5.4"));
 
+    expect(reads.list).toBe(0);
     expect(scopeOverrides.current.client).toBe(client);
     expect(
       screen.getByTestId("host-scope-update-needed").textContent,
     ).toContain("Host update needed");
     expect(screen.queryByRole("button", { name: "Open secrets" })).toBeNull();
-    expect(reads.list).toBe(0);
 
     rerender(pageAt("2.0.0"));
 
