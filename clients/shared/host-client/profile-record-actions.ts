@@ -7,17 +7,11 @@ import {
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { PATH_ID_PATTERN } from "./path-id";
 
-export type ProfileRecordFailureKind =
-  | "unauthorized"
-  | "forbidden"
-  | "not-found"
-  | "ambiguous"
-  | "invalid"
-  | "failed";
-
-export interface ProfileRecordFailure {
-  readonly kind: ProfileRecordFailureKind;
-}
+export type ProfileRecordFailure =
+  | { readonly kind: "unauthorized" }
+  | (typeof PROFILE_RECORD_ACTION_REFUSALS)[keyof typeof PROFILE_RECORD_ACTION_REFUSALS]["failure"]
+  | { readonly kind: "failed" };
+export type ProfileRecordFailureKind = ProfileRecordFailure["kind"];
 
 export type ProfileRecordAction = "sign-out" | "remove" | "name";
 
@@ -32,23 +26,60 @@ export const PROFILE_RECORD_FAILURE_COPY = {
   },
 } as const;
 
-export interface ProfileRecordActionFailure extends ProfileRecordFailure {
+export type ProfileRecordActionFailure = ProfileRecordFailure & {
   readonly message:
     | typeof PROFILE_RECORD_FAILURE_COPY.unauthorized
     | typeof PROFILE_RECORD_FAILURE_COPY.forbidden
     | (typeof PROFILE_RECORD_FAILURE_COPY.action)[ProfileRecordAction];
-}
+};
+
+export const PROFILE_RECORD_ACTION_REFUSALS = {
+  profile_record_not_found: {
+    status: 404,
+    failure: { kind: "not-found", code: "profile_record_not_found" },
+    messages: PROFILE_RECORD_FAILURE_COPY.action,
+  },
+  profile_record_alias_ambiguous: {
+    status: 409,
+    failure: { kind: "ambiguous", code: "profile_record_alias_ambiguous" },
+    messages: PROFILE_RECORD_FAILURE_COPY.action,
+  },
+  environment_action_forbidden: {
+    status: 403,
+    failure: { kind: "forbidden", code: "environment_action_forbidden" },
+    messages: {
+      "sign-out": PROFILE_RECORD_FAILURE_COPY.forbidden,
+      remove: PROFILE_RECORD_FAILURE_COPY.forbidden,
+      name: PROFILE_RECORD_FAILURE_COPY.forbidden,
+    },
+  },
+  environment_not_found: {
+    status: 404,
+    failure: { kind: "not-found", code: "environment_not_found" },
+    messages: PROFILE_RECORD_FAILURE_COPY.action,
+  },
+  profile_record_action_invalid: {
+    status: 400,
+    failure: { kind: "invalid", code: "profile_record_action_invalid" },
+    messages: PROFILE_RECORD_FAILURE_COPY.action,
+  },
+} as const;
 
 export function profileRecordActionFailure(
   action: ProfileRecordAction,
-  kind: ProfileRecordFailureKind,
+  failure: ProfileRecordFailure,
 ): ProfileRecordActionFailure {
+  let message: ProfileRecordActionFailure["message"];
+  if (failure.kind === "unauthorized") {
+    message = PROFILE_RECORD_FAILURE_COPY.unauthorized;
+  } else if (failure.kind === "failed") {
+    message = PROFILE_RECORD_FAILURE_COPY.action[action];
+  } else {
+    message = PROFILE_RECORD_ACTION_REFUSALS[failure.code].messages[action];
+  }
   return {
-    kind,
-    message:
-      kind === "unauthorized" || kind === "forbidden"
-        ? PROFILE_RECORD_FAILURE_COPY[kind]
-        : PROFILE_RECORD_FAILURE_COPY.action[action],
+    ...failure,
+    message,
   };
 }
 
@@ -63,12 +94,23 @@ export interface EnvironmentProfileRecords {
 export type ProfileRecordListResult =
   | { readonly kind: "ok"; readonly list: EnvironmentProfileRecords }
   | ProfileRecordFailure;
+export interface ProfileRecordActionSuccess {
+  readonly kind: "ok";
+  readonly profileId: string;
+  readonly harnessId: string;
+  readonly recordRevision: string;
+}
 export type ProfileRecordActionResult =
-  | { readonly kind: "ok" }
+  | ProfileRecordActionSuccess
   | ProfileRecordActionFailure;
 export type ProfileRecordNameResult =
-  | { readonly kind: "ok"; readonly name: string }
+  | (ProfileRecordActionSuccess & { readonly name: string })
   | ProfileRecordActionFailure;
+
+export interface ProfileRecordNameChange {
+  readonly profileId: string;
+  readonly name: string;
+}
 
 /** Implemented by AuthService; a caller never supplies or receives a bearer. */
 export interface ProfileRecordClient {
@@ -91,35 +133,109 @@ export interface ProfileRecordClient {
   nameProfileRecord(
     environmentId: string,
     providerId: string,
-    profileId: string,
-    name: string,
+    change: ProfileRecordNameChange,
     callerSignal: AbortSignal | null,
   ): Promise<ProfileRecordNameResult>;
 }
 
 const profileIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+const harnessIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+const profileNameSchema = z.string().min(1).max(64);
 const revisionSchema = z.string().regex(/^(0|[1-9][0-9]{0,18})$/);
-const recordSchema = z.object({
+// The session wire shape excludes the computer's account key and joining fence.
+const recordSchema = z.strictObject({
   profileId: profileIdSchema,
-  harnessId: z.string().min(1),
-  name: z.string().min(1).max(64),
-  color: z.string().nullable(),
+  harnessId: harnessIdSchema,
+  name: profileNameSchema,
+  color: z.string().max(32).nullable(),
   enabled: z.boolean(),
-  kind: z.string().nullable(),
+  kind: z
+    .enum([
+      "oauth_code",
+      "setup_token",
+      "device_auth",
+      "api_key",
+      "grok-oidc",
+      "antigravity-google",
+    ])
+    .nullable(),
+  state: z.enum(["live", "signed-out-by-person", "refused-by-provider"]),
+  custodyMode: z.enum(["legacy", "owned"]),
+  signInNumber: revisionSchema,
+  renewalNumber: revisionSchema,
+  recordRevision: revisionSchema,
+  personIntentNumber: revisionSchema,
+  expiresAt: z.number().int().positive().nullable(),
+  renewal: z
+    .strictObject({
+      unsettledSince: z.number().int().positive(),
+      standing: z.enum(["settling", "lost"]),
+    })
+    .nullable(),
   readerLabel: z.enum(["live", "waiting", "needs-sign-in"]),
-  otherNames: z.array(z.string()),
+  otherNames: z.array(profileNameSchema),
 });
-const listSchema = z.discriminatedUnion("enabled", [
-  z.object({ enabled: z.literal(false) }),
-  z.object({ enabled: z.literal(true), records: z.array(recordSchema) }),
-]);
-const actionSchema = z.object({
+const removedRecordSchema = z.strictObject({
   profileId: profileIdSchema,
-  harnessId: z.string().min(1),
+  harnessId: harnessIdSchema,
+  removedAt: z.number().int().positive(),
+  personIntentNumber: revisionSchema,
+});
+const recordAliasSchema = z.strictObject({
+  harnessId: harnessIdSchema,
+  sourceScope: z.union([z.uuid(), z.literal("environment")]),
+  oldProfileId: profileIdSchema,
+  profileId: profileIdSchema,
+});
+const providerKeyListRowSchema = z
+  .strictObject({
+    profileId: profileIdSchema,
+    providerId: z.enum([
+      "cursor",
+      "kiro",
+      "droid",
+      "openrouter",
+      "huggingface",
+      "amp",
+    ]),
+    state: z.enum(["live", "removed"]),
+    signInNumber: revisionSchema,
+    recordRevision: revisionSchema,
+    personIntentNumber: revisionSchema,
+    removedAt: z.number().int().positive().nullable(),
+  })
+  .refine(
+    (row) => (row.state === "removed") === (row.removedAt !== null),
+    "removedAt is set exactly when removed",
+  );
+const listSchema = z.discriminatedUnion("enabled", [
+  z.strictObject({ enabled: z.literal(false) }),
+  z.strictObject({
+    enabled: z.literal(true),
+    environmentRevision: revisionSchema,
+    records: z.array(recordSchema),
+    removed: z.array(removedRecordSchema),
+    aliases: z.array(recordAliasSchema),
+    providerKeys: z.array(providerKeyListRowSchema),
+  }),
+]);
+const actionSchema = z.strictObject({
+  profileId: profileIdSchema,
+  harnessId: harnessIdSchema,
   recordRevision: revisionSchema,
 });
-const namedSchema = actionSchema.extend({ name: z.string().min(1).max(64) });
-const codedBodySchema = z.object({ code: z.string() });
+const namedSchema = actionSchema.extend({ name: profileNameSchema });
+const codedBodySchema = z.strictObject({
+  statusCode: z.number().int(),
+  error: z.string(),
+  code: z.enum([
+    "profile_record_not_found",
+    "profile_record_alias_ambiguous",
+    "environment_action_forbidden",
+    "environment_not_found",
+    "profile_record_action_invalid",
+  ]),
+});
 
 interface RecordAnswer {
   readonly status: number;
@@ -160,14 +276,13 @@ async function callRecord(
       }),
       abort.signal,
     );
-    if (response.status === 401 || response.status === 403)
-      return { status: response.status, body: null };
+    if (response.status === 401) return { status: response.status, body: null };
     const text = await untilAborted(response.text(), abort.signal);
     let parsed: unknown = null;
     try {
       parsed = JSON.parse(text);
     } catch {
-      // Status-only refusals remain meaningful without a JSON body.
+      return { status: response.status, body: null };
     }
     return { status: response.status, body: parsed };
   } catch {
@@ -177,29 +292,18 @@ async function callRecord(
   }
 }
 
-function failureKind(answer: RecordAnswer | null): ProfileRecordFailureKind {
-  if (answer === null) return "failed";
-  if (answer.status === 401) return "unauthorized";
-  if (answer.status === 403) return "forbidden";
+function failureResult(answer: RecordAnswer | null): ProfileRecordFailure {
+  if (answer === null) return { kind: "failed" };
+  if (answer.status === 401) return { kind: "unauthorized" };
   const coded = codedBodySchema.safeParse(answer.body);
-  if (!coded.success) return "failed";
+  if (!coded.success) return { kind: "failed" };
+  const refusal = PROFILE_RECORD_ACTION_REFUSALS[coded.data.code];
   if (
-    answer.status === 404 &&
-    (coded.data.code === "profile_record_not_found" ||
-      coded.data.code === "environment_not_found")
+    answer.status !== refusal.status ||
+    coded.data.statusCode !== refusal.status
   )
-    return "not-found";
-  if (
-    answer.status === 409 &&
-    coded.data.code === "profile_record_alias_ambiguous"
-  )
-    return "ambiguous";
-  if (
-    answer.status === 400 &&
-    coded.data.code === "profile_record_action_invalid"
-  )
-    return "invalid";
-  return "failed";
+    return { kind: "failed" };
+  return refusal.failure;
 }
 
 function harnessOf(providerId: string): string {
@@ -225,7 +329,7 @@ export async function readProfileRecordsViaHttp(
     null,
     callerSignal,
   );
-  if (answer?.status !== 200) return { kind: failureKind(answer) };
+  if (answer?.status !== 200) return failureResult(answer);
   const parsed = listSchema.safeParse(answer.body);
   if (!parsed.success) return { kind: "failed" };
   if (!parsed.data.enabled)
@@ -298,7 +402,7 @@ export async function signOutProfileRecordViaHttp(
     null,
     callerSignal,
   );
-  return actionResult("sign-out", answer, providerId, profileId);
+  return actionResult("sign-out", answer, providerId);
 }
 
 export async function removeProfileRecordViaHttp(
@@ -319,7 +423,7 @@ export async function removeProfileRecordViaHttp(
     null,
     callerSignal,
   );
-  return actionResult("remove", answer, providerId, profileId);
+  return actionResult("remove", answer, providerId);
 }
 
 export async function nameProfileRecordViaHttp(
@@ -342,33 +446,24 @@ export async function nameProfileRecordViaHttp(
     callerSignal,
   );
   if (answer?.status !== 200)
-    return profileRecordActionFailure("name", failureKind(answer));
+    return profileRecordActionFailure("name", failureResult(answer));
   const parsed = namedSchema.safeParse(answer.body);
-  if (
-    !parsed.success ||
-    parsed.data.profileId !== profileId ||
-    parsed.data.harnessId !== harnessOf(providerId)
-  )
-    return profileRecordActionFailure("name", "failed");
-  return { kind: "ok", name: parsed.data.name };
+  if (!parsed.success || parsed.data.harnessId !== harnessOf(providerId))
+    return profileRecordActionFailure("name", { kind: "failed" });
+  return { kind: "ok", ...parsed.data };
 }
 
 function actionResult(
   action: "sign-out" | "remove",
   answer: RecordAnswer | null,
   providerId: string,
-  profileId: string,
 ): ProfileRecordActionResult {
   if (answer?.status !== 200)
-    return profileRecordActionFailure(action, failureKind(answer));
+    return profileRecordActionFailure(action, failureResult(answer));
   const parsed = actionSchema.safeParse(answer.body);
-  if (
-    !parsed.success ||
-    parsed.data.profileId !== profileId ||
-    parsed.data.harnessId !== harnessOf(providerId)
-  )
-    return profileRecordActionFailure(action, "failed");
-  return { kind: "ok" };
+  if (!parsed.success || parsed.data.harnessId !== harnessOf(providerId))
+    return profileRecordActionFailure(action, { kind: "failed" });
+  return { kind: "ok", ...parsed.data };
 }
 
 async function writeRecord(

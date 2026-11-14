@@ -9,6 +9,7 @@ import {
   type ProfileRecordListResult,
   type ProfileRecordActionResult,
   type ProfileRecordNameResult,
+  type ProfileRecordNameChange,
 } from "@traycer-clients/shared/host-client/profile-record-actions";
 import {
   AUTH_ERROR_DISK_FULL,
@@ -3618,7 +3619,7 @@ export class AuthService implements ProfileRecordClient {
   ): Promise<ProfileRecordActionResult> {
     const bearer = this.cloudBearer();
     if (bearer === null)
-      return profileRecordActionFailure("sign-out", "unauthorized");
+      return profileRecordActionFailure("sign-out", { kind: "unauthorized" });
     return signOutProfileRecordViaHttp(
       this.runnerHost.authnBaseUrl,
       bearer,
@@ -3637,7 +3638,7 @@ export class AuthService implements ProfileRecordClient {
   ): Promise<ProfileRecordActionResult> {
     const bearer = this.cloudBearer();
     if (bearer === null)
-      return profileRecordActionFailure("remove", "unauthorized");
+      return profileRecordActionFailure("remove", { kind: "unauthorized" });
     return removeProfileRecordViaHttp(
       this.runnerHost.authnBaseUrl,
       bearer,
@@ -3651,20 +3652,19 @@ export class AuthService implements ProfileRecordClient {
   async nameProfileRecord(
     environmentId: string,
     providerId: string,
-    profileId: string,
-    name: string,
+    change: ProfileRecordNameChange,
     callerSignal: AbortSignal | null,
   ): Promise<ProfileRecordNameResult> {
     const bearer = this.cloudBearer();
     if (bearer === null)
-      return profileRecordActionFailure("name", "unauthorized");
+      return profileRecordActionFailure("name", { kind: "unauthorized" });
     return nameProfileRecordViaHttp(
       this.runnerHost.authnBaseUrl,
       bearer,
       environmentId,
       providerId,
-      profileId,
-      name,
+      change.profileId,
+      change.name,
       callerSignal,
     );
   }
