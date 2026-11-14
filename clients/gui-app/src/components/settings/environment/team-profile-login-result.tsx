@@ -17,6 +17,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { DialogFooter } from "@/components/ui/dialog";
 import { useTeamProfileColor } from "@/hooks/environment/team/use-team-profile-color";
 import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
+import type { SignInRecordingEnd } from "@/hooks/providers/use-providers-await-login-mutation";
 import type { ProviderTargetLoginControls } from "@/components/settings/panels/add-provider-profile-dialog";
 import { DuplicateAccountNotice } from "@/components/settings/panels/add-provider-profile-dialog";
 import {
@@ -55,6 +56,17 @@ export function TeamProfileLoginResult(
         action={null}
       />
     );
+  if (result.signInRecordingEnded !== null)
+    return (
+      <ResultFooter
+        message={teamRecordingEndedText(
+          result.signInRecordingEnded,
+          props.teamName,
+        )}
+        onDone={props.onClose}
+        action={null}
+      />
+    );
   const outcome = result.profileOutcome;
   switch (outcome?.kind) {
     case "target-refused":
@@ -83,7 +95,6 @@ export function TeamProfileLoginResult(
           profileId={outcome.profileId}
           already={outcome.kind === "already-signed-in"}
           legacy={false}
-          echoedProfile={null}
         />
       );
     case "account-mismatch":
@@ -145,7 +156,6 @@ function TeamLegacyLoginResult(
           legacy.payload.existingProfileId !== null
         }
         legacy
-        echoedProfile={legacy.payload.profile}
       />
     );
   return (
@@ -191,7 +201,6 @@ function TeamNamedLoginResult(props: {
   readonly profileId: string;
   readonly already: boolean;
   readonly legacy: boolean;
-  readonly echoedProfile: ProviderProfile | null;
   readonly switchSourceProfileId: string | null;
   readonly onSignedIn: (profile: ProviderProfile) => void;
   readonly controls: ProviderTargetLoginControls | null;
@@ -217,15 +226,9 @@ function TeamNamedLoginResult(props: {
   const reread = records?.reread;
   const providerId = props.providerId;
   const profileId = props.profileId;
-  const echoedProfile = props.echoedProfile;
   useEffect(() => {
     if (initialRead.current === null) {
-      if (echoedProfile !== null)
-        initialRead.current = Promise.resolve({
-          profile: echoedProfile,
-          failed: false,
-        });
-      else if (reread === undefined)
+      if (reread === undefined)
         initialRead.current = Promise.resolve({ profile: null, failed: true });
       else
         initialRead.current = reread().then((providers) => ({
@@ -243,7 +246,7 @@ function TeamNamedLoginResult(props: {
     return () => {
       active = false;
     };
-  }, [echoedProfile, reread, providerId, profileId]);
+  }, [reread, providerId, profileId]);
   const liveProfile = findTeamLoginProfile(
     records?.providers,
     providerId,
@@ -429,6 +432,17 @@ function TeamNamedSuccessFooter(props: {
       {props.saving ? <MutedAgentSpinner /> : null}
     </DialogFooter>
   );
+}
+
+function teamRecordingEndedText(
+  reason: SignInRecordingEnd,
+  teamName: string,
+): string {
+  if (reason === "forbidden")
+    return teamSignInRefusalText("not-authorized", teamName);
+  if (reason === "unavailable")
+    return teamSignInRefusalText("target-unavailable", teamName);
+  return "Sign-in did not finish. Retry when you are ready.";
 }
 
 function teamSignInRefusalText(

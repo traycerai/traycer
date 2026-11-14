@@ -9,7 +9,10 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import type {
+  AwaitLoginVariables,
+  AwaitLoginAnswer,
+} from "@/hooks/providers/use-providers-await-login-mutation";
 import {
   providerProfileSchema,
   type ProviderCliState,
@@ -67,7 +70,7 @@ export type StartLoginMutation = UseMutationResult<
   LoginMutationContext
 >;
 export type AwaitLoginMutation = UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.awaitLogin">,
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   LoginMutationContext
@@ -102,7 +105,7 @@ export type ProviderTargetLoginResult =
       readonly kind: "target-refused";
       readonly targetRefusal: ProviderLoginTargetRefusal;
     }
-  | (AwaitLoginResult & {
+  | (AwaitLoginAnswer & {
       readonly kind: "target-outcome";
       readonly profileOutcome: ProviderLoginProfileOutcome | null;
       readonly admissionId: string | null;
@@ -1348,7 +1351,7 @@ export function useProviderDestinationLoginFlow(
             }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
             return true;
           };
-          const handleAwaitSuccess = (result: AwaitLoginResult): void => {
+          const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
             if (attemptAbandoned()) return;
             if (target !== null) {
               setState({
