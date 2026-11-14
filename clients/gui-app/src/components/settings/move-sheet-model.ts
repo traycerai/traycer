@@ -1,17 +1,16 @@
 import {
   environmentMoveItemChoiceKey,
-  type EnvironmentMoveAcceptRequest,
-  type EnvironmentMovePlanResponseV12,
+  type EnvironmentMovePlanResponseV20,
+  type EnvironmentMoveStaysChoice,
 } from "@traycer/protocol/host/environment/move-contracts";
 import {
   envOverrideProviderName,
   itemPageName,
 } from "@/components/settings/personal/personal-page-status";
 
-export type MovePlan = EnvironmentMovePlanResponseV12;
+export type MovePlan = EnvironmentMovePlanResponseV20;
 export type MoveRow = MovePlan["rows"]["moves"][number];
-export type MoveKeyChoice =
-  EnvironmentMoveAcceptRequest["keyChoices"][number]["choice"];
+export type MoveKeyChoice = EnvironmentMoveStaysChoice["choice"];
 
 export const MOVE_DISCLOSURE =
   "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
@@ -124,17 +123,17 @@ export function moveItemChoiceKey(row: MoveRow): string {
 }
 
 /**
- * The choices a Moves row offers, on a host that honours them
- * (`plan.itemChoices`): `Leave on this computer only` on a variable, a
- * provider override and a provider key. Any other row moves as planned.
+ * The choices a Moves row offers: `Leave on this computer only` on a
+ * variable, a provider override and a provider key. Any other row moves as
+ * planned.
  */
-export function moveRowChoices(
-  plan: MovePlan,
-  row: MoveRow,
-): { readonly stays: boolean } {
-  if (!plan.itemChoices) return { stays: false };
-  const plain = row.kind === "variable" || row.kind === "env_override";
-  return { stays: plain || row.kind === "secret" };
+export function moveRowChoices(row: MoveRow): { readonly stays: boolean } {
+  return {
+    stays:
+      row.kind === "variable" ||
+      row.kind === "env_override" ||
+      row.kind === "secret",
+  };
 }
 
 export interface MovesSectionRow {
@@ -154,8 +153,7 @@ export function movesSectionRows(
 ): readonly MovesSectionRow[] {
   return plan.rows.moves.flatMap((row): MovesSectionRow[] => {
     const choiceKey = moveItemChoiceKey(row);
-    const choice = plan.itemChoices ? choices.get(choiceKey) : undefined;
-    if (choice === "stays") return [];
+    if (choices.get(choiceKey) === "stays") return [];
     return [{ row, choiceKey }];
   });
 }
@@ -169,11 +167,9 @@ export function rowsLeftHere(
   plan: MovePlan,
   choices: MoveChoices,
 ): readonly MoveRow[] {
-  return plan.itemChoices
-    ? plan.rows.moves.filter(
-        (row) => choices.get(moveItemChoiceKey(row)) === "stays",
-      )
-    : [];
+  return plan.rows.moves.filter(
+    (row) => choices.get(moveItemChoiceKey(row)) === "stays",
+  );
 }
 
 const SUMMARY_WORDS: Readonly<
@@ -277,21 +273,16 @@ export const MOVE_SECTIONS = [
 }>;
 
 /**
- * The accept request for `plan` as the person left it: the plan's hash and,
- * on a host that honours them, each Moves row's choice.
+ * The person's choices as the computer stages them: one per key, in the
+ * order the Moves rows come, so the staged list comes back exactly as sent.
  */
-export function moveAcceptRequest(
+export function moveKeyChoices(
   plan: MovePlan,
   choices: MoveChoices,
-): EnvironmentMoveAcceptRequest {
-  return {
-    planHash: plan.planHash,
-    keyChoices: plan.itemChoices
-      ? plan.rows.moves.flatMap((row) => {
-          const key = moveItemChoiceKey(row);
-          const choice = choices.get(key);
-          return choice === undefined ? [] : [{ key, choice }];
-        })
-      : [],
-  };
+): readonly EnvironmentMoveStaysChoice[] {
+  const keys = new Set(plan.rows.moves.map(moveItemChoiceKey));
+  return [...keys].flatMap((key) => {
+    const choice = choices.get(key);
+    return choice === undefined ? [] : [{ key, choice }];
+  });
 }
