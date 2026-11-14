@@ -357,6 +357,7 @@ async function runLogin(
   // The profile a login on the host is held under: the caller's own for an
   // existing row, the host-minted one for a create once an answer names it.
   let heldProfileId = target.profileId;
+  let signInSettled = false;
   // Best effort and bounded: the person is waiting to leave, and a release
   // that does not land in time leaves the login to the host's own deadline.
   const release = async (): Promise<void> => {
@@ -440,6 +441,7 @@ async function runLogin(
         io,
         providerId,
         heldProfileId,
+        target.create !== null,
         abort.signal,
       ).finally(() => {
         stopKeepalive();
@@ -449,11 +451,13 @@ async function runLogin(
         await release();
         return resultOf(providerId, { status: "cancelled" });
       }
+      signInSettled = true;
       // The sign-in has ended; what is left is reading the row back and
       // naming a new profile. A Ctrl+C from here ends the process at once
       // rather than being taken as cancelling a sign-in that already happened.
       stopListening();
       const profileResult = await profileResultOf(
+        ctx,
         providerId,
         target,
         state,
@@ -468,18 +472,15 @@ async function runLogin(
       stopKeepalive();
     }
   } catch (error) {
-    // A call failed partway: the start timed out after the host had begun
-    // it, the host went away mid-wait, or Ctrl+C aborted a start that was
-    // still in flight - whose answer, and any login it reports, this command
-    // will now never see. Nobody is waiting for this login any more, so give
-    // up the claim on it rather than leave it for the host's own deadline.
-    // The host remembers a released holder, so a start still on its way in
-    // finds the claim gone and spawns nothing.
+    // A failed start or wait can leave a sign-in running without its caller.
+    // Releasing the holder also catches a start still in flight: it finds
+    // the claim gone and spawns nothing.
     //
     // Read before the release, which is itself a call that can take a while:
     // a Ctrl+C pressed during it must not turn a real error into "cancelled".
     const interrupted = abort.signal.aborted;
-    await release();
+    // A failed list read after completion must not cancel the completed sign-in.
+    if (!signInSettled) await release();
     if (interrupted) return resultOf(providerId, { status: "cancelled" });
     throw error;
   } finally {
@@ -699,6 +700,7 @@ async function awaitUntilSettled(
   io: ProfileLoginIo,
   providerId: ProviderId,
   profileId: string | null,
+  creatingProfile: boolean,
   signal: AbortSignal,
 ): Promise<AwaitLoginResult | null> {
   for (let repolls = 0; ; repolls += 1) {
@@ -716,7 +718,7 @@ async function awaitUntilSettled(
       throw error;
     }
     if (signal.aborted) return null;
-    if (readUntargetedProfileOutcome(result.profileOutcome) !== null)
+    if (readProfileOutcome(result.profileOutcome, creatingProfile) !== null)
       return result;
     // Not settled only while neither ambient source has answered: a verdict
     // on the ambient row counts even while the provider's summary lags.
@@ -733,23 +735,18 @@ async function awaitUntilSettled(
   }
 }
 
-type UntargetedProfileOutcome = Exclude<
-  ProviderLoginProfileOutcome,
-  { kind: "target-refused" | "staged-for-leave" }
->;
-
-function readUntargetedProfileOutcome(
+function readProfileOutcome(
   value: unknown,
-): UntargetedProfileOutcome | null {
+  creatingProfile: boolean,
+): ProviderLoginProfileOutcome | null {
   const parsed = providerLoginProfileOutcomeSchema.safeParse(value);
   if (!parsed.success) return null;
-  switch (parsed.data.kind) {
-    case "target-refused":
-    case "staged-for-leave":
-      return null;
-    default:
-      return parsed.data;
-  }
+  if (parsed.data.kind === "already-signed-in" && !creatingProfile) return null;
+  return parsed.data;
+}
+
+function unusableProfileOutcomeResult(providerId: ProviderId): CommandResult {
+  return resultOf(providerId, { status: "not-completed" });
 }
 
 function waitingForProfileResult(providerId: ProviderId): CommandResult {
@@ -761,20 +758,41 @@ function waitingForProfileResult(providerId: ProviderId): CommandResult {
 }
 
 async function profileResultOf(
+  ctx: CommandContext,
   providerId: ProviderId,
   target: ResolvedTarget,
   state: ProviderListState,
   result: AwaitLoginResult,
 ): Promise<CommandResult | null> {
-  const outcome = readUntargetedProfileOutcome(result.profileOutcome);
+  const outcome = readProfileOutcome(
+    result.profileOutcome,
+    target.create !== null,
+  );
   if (outcome === null) return null;
   switch (outcome.kind) {
+    case "target-refused":
+    case "staged-for-leave":
+      return unusableProfileOutcomeResult(providerId);
     case "waiting-for-profile":
       return waitingForProfileResult(providerId);
     case "signed-in":
     case "already-signed-in": {
       const echoed = (result.state?.profiles ?? []).map(summarizeProfile);
-      let profile = await findProfileRow(providerId, echoed, outcome.profileId);
+      let profile =
+        echoed.find((row) => row.profileId === outcome.profileId) ?? null;
+      if (profile === null) {
+        let providers: readonly ProviderListState[];
+        try {
+          providers = await readProviderStates();
+        } catch (error) {
+          ctx.output.humanRequired(signedInProviderLine(providerId));
+          throw error;
+        }
+        const listed = providers
+          .find((provider) => provider.providerId === providerId)
+          ?.profiles.find((row) => row.profileId === outcome.profileId);
+        profile = listed === undefined ? null : summarizeProfile(listed);
+      }
       if (profile === null) return waitingForProfileResult(providerId);
       const created = outcome.kind === "signed-in" && target.create !== null;
       if (created) {
@@ -803,7 +821,7 @@ async function profileResultOf(
               (row) => row.terminalOnThisComputer === true,
             ) ?? findProfileByIdOrAlias(state.profiles, "ambient"))
           : findProfileByIdOrAlias(state.profiles, target.profileId);
-      if (profile === null) return null;
+      if (profile === null) return unusableProfileOutcomeResult(providerId);
       return {
         data: { providerId, status: outcome.kind },
         human:
@@ -931,6 +949,10 @@ function describeRow(row: ProfileListRow): string {
   return `${printable(row.profileId)} "${printable(row.label)}"`;
 }
 
+function signedInProviderLine(providerId: ProviderId): string {
+  return `Signed in to ${describeProvider(providerId)}.`;
+}
+
 function resultOf(
   providerId: ProviderId,
   outcome: LoginOutcome,
@@ -943,7 +965,7 @@ function resultOf(
         data,
         human:
           outcome.profile === null
-            ? `Signed in to ${provider}.`
+            ? signedInProviderLine(providerId)
             : `${outcome.created ? "Added" : "Signed in"} ${provider} profile ${describeRow(outcome.profile)}${outcome.profile.email === null ? "" : ` (${printable(outcome.profile.email)})`}.`,
         exitCode: 0,
       };
