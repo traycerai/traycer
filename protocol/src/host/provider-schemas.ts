@@ -2769,11 +2769,10 @@ export const providersListResponseSchemaV1010Preimage = lazySchema(() =>
 );
 
 /**
- * Canonical `providers.list` response. Classic callers receive `native: null`;
- * a native query carries its list/discover result or typed error there.
- * Home facts are additive keys; earlier lines retain their frozen decoders.
+ * Frozen `providers.list@10.11` response, before 10.12 added `offersSignIns`
+ * to the envelope. It keeps the profile-sync projection and removed ids.
  */
-export const providersListResponseSchema = lazySchema(() =>
+export const providersListResponseSchemaV1011Preimage = lazySchema(() =>
   providersListResponseSchemaV108Preimage.extend({
     providers: z.array(
       providerCliStateSchema.extend({
@@ -2798,6 +2797,22 @@ export const providersListResponseSchema = lazySchema(() =>
         }),
       )
       .optional(),
+  }),
+);
+
+/**
+ * Canonical `providers.list` response. Classic callers receive `native: null`;
+ * a native query carries its list/discover result or typed error there.
+ * Home facts are additive keys; earlier lines retain their frozen decoders.
+ */
+export const providersListResponseSchema = lazySchema(() =>
+  providersListResponseSchemaV1011Preimage.extend({
+    // True only when the computer that answered is in an environment whose
+    // profile-sync switch is on and it offers sign-ins by itself. A reader
+    // treats an absent key as false. First published by `providers.list@10.12`;
+    // optional, like `onHostOnly` and `removedProfiles`, so construction sites
+    // need not emit it and parsing does not insert a default.
+    offersSignIns: z.boolean().optional(),
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
