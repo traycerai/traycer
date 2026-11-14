@@ -6014,7 +6014,25 @@ wrap`). Each row names the account its first usable match runs on, the
         Options "When the disk is getting full" (no window), "After 7 days",
         "After 14 days", "After 30 days", "After 90 days". Disabled while
         Chats is off, since the window cleans only chats.
-    - **Archived chats**, a card of one row:
+    - **Archived chats**, a card of one row, two on a team:
+      - On a team only, first: **Archive idle agents automatically**
+        (`environment/team-chat-auto-archive-row.tsx`, definition
+        `STORAGE.chatAutoArchive`, board C24's Proposal): "Tidy up chats
+        agents started once they go quiet. Applies on every host in this
+        environment." The team's own setting, read and saved by the app on
+        the person's sign-in (`GET` / `PUT
+/api/traycer/chat-auto-archive/teams/:teamId` on traycer-server,
+        through the runner host's `getTeamChatAutoArchive` /
+        `setTeamChatAutoArchive` and `hooks/chat-auto-archive/
+use-team-chat-auto-archive.ts`). The same controls as the account
+        row under General ▸ Agents (`ChatAutoArchiveRowView`), with the
+        include line reading "Include chats members started" / "Terminal
+        agent chats count as started by a member", and the threshold bounded
+        to 1 second to 365 days, so no value outside the route is sent. A
+        team that never saved one shows it off. Anyone the configuration
+        gate does not let change it (`mayChangeConfiguration`) sees the value
+        with the controls greyed out. A failed read says the account row's
+        read line; a failed save, its save toast.
       - **When**, a select: "Counted from the chat's last activity." Options
         "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
         days". It is independent of Chats, so the switch never disables it.

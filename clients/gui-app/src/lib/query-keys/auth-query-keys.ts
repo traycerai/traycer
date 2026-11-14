@@ -19,6 +19,17 @@ export const authQueryKeys = {
     userId,
     environmentId,
   ],
+  teamChatAutoArchive: (
+    auth: object | null,
+    userId: string | null,
+    teamId: string,
+  ): readonly unknown[] => [
+    "auth",
+    "team-chat-auto-archive",
+    auth,
+    userId,
+    teamId,
+  ],
   // One read per trigger: `read` is never reused, so a trigger always
   // fetches and never answers from an earlier read's cache.
   claimedComputers: (

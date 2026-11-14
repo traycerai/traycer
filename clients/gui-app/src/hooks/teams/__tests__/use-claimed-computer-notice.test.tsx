@@ -15,9 +15,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { keyedSeen } from "@/lib/persist/keyed-seen-store";
 
 const mocks = vi.hoisted(() => {
-  const read = vi.fn<
-    (environmentId: string, signal: AbortSignal | null) => Promise<unknown>
-  >();
+  const read =
+    vi.fn<
+      (environmentId: string, signal: AbortSignal | null) => Promise<unknown>
+    >();
   return {
     toastInfo: vi.fn(),
     auth: { current: { listClaimedComputers: read } },
@@ -91,7 +92,7 @@ function teamHost(hostId: string): HostListItem {
     hostId,
     displayName: hostId,
     platform: "linux",
-    kind: "computer",
+    kind: "machine",
     publicKey: `pk-${hostId}`,
     createdAt: "2026-10-01T00:00:00.000Z",
     status: {

@@ -10,6 +10,7 @@ import {
 } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { TeamChatAutoArchiveRow } from "@/components/settings/environment/team-chat-auto-archive-row";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -192,6 +193,12 @@ function StoragePolicySectionBody(props: {
         dataTestId={undefined}
         fill={false}
       >
+        {props.pick.kind === "team" ? (
+          <TeamChatAutoArchiveRow
+            environmentId={props.pick.environmentId}
+            role={environment?.role ?? null}
+          />
+        ) : null}
         <SettingsRow
           row={STORAGE.definitions.archivedChatWindow}
           control={

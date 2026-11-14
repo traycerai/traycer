@@ -3,6 +3,11 @@ import type { TeamComputersResult } from "@traycer-clients/shared/host-client/te
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import { ipcRenderer } from "electron";
 import {
@@ -175,6 +180,15 @@ export interface AuthBridgeSurface {
   readSoundtrackSet(): Promise<SoundtrackSetReadResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
   listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -390,6 +404,21 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.listEnvironments,
         bearerToken,
       ) as Promise<EnvironmentDirectoryResult>,
+
+    getTeamChatAutoArchive: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamChatAutoArchiveReadResult>,
+
+    setTeamChatAutoArchive: (bearerToken, teamId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+        request,
+      ) as Promise<TeamChatAutoArchiveWriteResult>,
 
     getSandboxCosts: (bearerToken) =>
       ipcRenderer.invoke(

@@ -70,6 +70,11 @@ import {
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
 import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
@@ -3288,6 +3293,31 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getSandboxCatalogue(bearer, context);
+  }
+
+  /**
+   * A team's chat auto-archive setting on traycer-server, on the person's
+   * sign-in. A build that cannot reach traycer-server reads it as a failure.
+   */
+  async getTeamChatAutoArchive(
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    if (this.sandboxControlUnavailableReason() !== null)
+      return { kind: "failed" };
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.getTeamChatAutoArchive(bearer, teamId);
+  }
+
+  async setTeamChatAutoArchive(
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    if (this.sandboxControlUnavailableReason() !== null)
+      return { kind: "failed" };
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setTeamChatAutoArchive(bearer, teamId, request);
   }
 
   async getTraycerModels(): Promise<TraycerModelsFetchResult> {

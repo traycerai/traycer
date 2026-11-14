@@ -136,6 +136,10 @@ export function createFakeRunnerHost(
     listSandboxes: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    setTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxCatalogue: () =>
