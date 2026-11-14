@@ -11,10 +11,7 @@ import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-memb
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
-import type {
-  BotMember,
-  BotMemberResolver,
-} from "@/lib/bots/bot-member-names";
+import type { BotMember, BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { useHostBinding, useOptionalHostClient } from "@/lib/host";
 import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
 import { authQueryKeys } from "@/lib/query-keys";
@@ -117,9 +114,15 @@ function useFormerMembers(
   readable: boolean,
 ): BotMemberResolver {
   const auth = useHostBinding()?.auth ?? null;
-  const viewerId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const viewerId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
   const [missed] = useState(() => new MissedPeople());
-  const asked = useSyncExternalStore(missed.subscribe, missed.read, missed.read);
+  const asked = useSyncExternalStore(
+    missed.subscribe,
+    missed.read,
+    missed.read,
+  );
   const named = useQueries({
     queries: asked.map((userId) =>
       queryOptions({
@@ -162,7 +165,9 @@ function useFormerMembers(
  * observer keeps one result while the answers do not change.
  */
 function namedPeople(
-  answers: ReadonlyArray<{ readonly data: EnvironmentPersonResult | undefined }>,
+  answers: ReadonlyArray<{
+    readonly data: EnvironmentPersonResult | undefined;
+  }>,
 ): ReadonlyMap<string, BotMember> {
   const byUserId = new Map<string, BotMember>();
   for (const answer of answers) {
