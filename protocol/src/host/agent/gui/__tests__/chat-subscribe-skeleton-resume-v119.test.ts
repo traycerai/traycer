@@ -51,7 +51,7 @@ function skeletonChunkFrame(extra: Record<string, number>) {
   };
 }
 
-describe("chat.subscribe registry: 1.19 installed below the 1.20 head, 1.18 still installed", () => {
+describe("chat.subscribe registry: 1.19 installed, 1.18 still installed", () => {
   it("binds 1.19 and the lines around it - the head has since moved to 1.45", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
     expect(line.latestMinor).toBe(45);
