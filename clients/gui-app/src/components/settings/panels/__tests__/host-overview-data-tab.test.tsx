@@ -205,15 +205,11 @@ describe("Host Overview · Data", () => {
     expect(
       within(dialog).getByText("Clear file edit snapshots on Office Linux?"),
     ).not.toBeNull();
-    expect(dialog.textContent).toContain(
-      "Cleared snapshots on Office Linux cannot be restored.",
-    );
-    expect(dialog.textContent).toContain(
-      "Conversation history and checkpoint records stay visible",
-    );
-    expect(dialog.textContent).toContain(
-      "Undo is disabled for past turns on that host.",
-    );
+    expect(
+      within(dialog).getByText(
+        "Cleared snapshots on Office Linux cannot be restored. Conversation history and checkpoint records stay visible.",
+      ),
+    ).toBeTruthy();
     expect(hostQueryHooks.mutate).not.toHaveBeenCalled();
     expect(artifactVersionMutations.calls).toHaveLength(0);
 

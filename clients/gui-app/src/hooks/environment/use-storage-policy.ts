@@ -54,16 +54,44 @@ export const STORAGE_POLICY_DEFAULTS: StoragePolicyValue = {
   archivedChatHours: 4,
 };
 
-/** A configuration's storage policy as last read, with the revision a save quotes. */
-export interface ConfigurationStoragePolicy {
+/** The item the File edit snapshots row writes. */
+export const SNAPSHOT_POLICY_KIND = "snapshot_policy";
+export const SNAPSHOT_POLICY_KEY = "snapshots";
+
+/**
+ * The item's value as authn validates it (`items.ts`): a snapshot is removed
+ * once every chat naming it has been quiet for `quietChatDays`; `null` never
+ * removes one.
+ */
+export const snapshotPolicyValueSchema = z.strictObject({
+  quietChatDays: z
+    .union([z.literal(7), z.literal(30), z.literal(90)])
+    .nullable(),
+});
+
+export type SnapshotPolicyValue = z.infer<typeof snapshotPolicyValueSchema>;
+
+/** What the hosts apply while no item is set. */
+export const SNAPSHOT_POLICY_DEFAULTS: SnapshotPolicyValue = {
+  quietChatDays: 7,
+};
+
+/** One item as last read, with the revision a save quotes. */
+export interface ConfigurationPolicyItem<V> {
   /**
-   * What the configuration's hosts keep: the defaults when no item is set,
-   * and everything off for a value the hosts cannot read, since they then
+   * What the configuration's hosts apply: the defaults when no item is set,
+   * and nothing removed for a value the hosts cannot read, since they then
    * clean up nothing.
    */
-  readonly value: StoragePolicyValue;
+  readonly value: V;
   /** `null` when there is no item yet: a save creates it. */
   readonly revision: number | null;
+}
+
+/** A configuration's storage items as last read. */
+export interface ConfigurationStoragePolicy {
+  readonly storage: ConfigurationPolicyItem<StoragePolicyValue>;
+  readonly snapshots: ConfigurationPolicyItem<SnapshotPolicyValue>;
 }
 
 /** An unparsable item: a host reads it as nothing to clean. */
@@ -73,19 +101,52 @@ const NOTHING_CLEANABLE: StoragePolicyValue = {
   archivedChatHours: null,
 };
 
+/** An unparsable item: a host removes no snapshot. */
+const NO_SNAPSHOT_REMOVED: SnapshotPolicyValue = { quietChatDays: null };
+
+/** Where an item is, how its value parses, and what it reads as without one. */
+interface PolicyItemSpec<V> {
+  readonly kind: string;
+  readonly key: string;
+  readonly schema: z.ZodType<V>;
+  readonly defaults: V;
+  /** What a value that does not parse reads as. */
+  readonly unreadable: V;
+}
+
+function policyItemOf<V>(
+  items: readonly ConfigurationItem[],
+  spec: PolicyItemSpec<V>,
+): ConfigurationPolicyItem<V> {
+  const item = items.find(
+    (row) => row.kind === spec.kind && row.key === spec.key,
+  );
+  if (item === undefined) return { value: spec.defaults, revision: null };
+  const parsed = spec.schema.safeParse(item.value);
+  return {
+    value: parsed.success ? parsed.data : spec.unreadable,
+    revision: item.revision,
+  };
+}
+
 function storagePolicyOf(
   items: readonly ConfigurationItem[],
 ): ConfigurationStoragePolicy {
-  const item = items.find(
-    (row) => row.kind === STORAGE_POLICY_KIND && row.key === STORAGE_POLICY_KEY,
-  );
-  if (item === undefined) {
-    return { value: STORAGE_POLICY_DEFAULTS, revision: null };
-  }
-  const parsed = storagePolicyValueSchema.safeParse(item.value);
   return {
-    value: parsed.success ? parsed.data : NOTHING_CLEANABLE,
-    revision: item.revision,
+    storage: policyItemOf(items, {
+      kind: STORAGE_POLICY_KIND,
+      key: STORAGE_POLICY_KEY,
+      schema: storagePolicyValueSchema,
+      defaults: STORAGE_POLICY_DEFAULTS,
+      unreadable: NOTHING_CLEANABLE,
+    }),
+    snapshots: policyItemOf(items, {
+      kind: SNAPSHOT_POLICY_KIND,
+      key: SNAPSHOT_POLICY_KEY,
+      schema: snapshotPolicyValueSchema,
+      defaults: SNAPSHOT_POLICY_DEFAULTS,
+      unreadable: NO_SNAPSHOT_REMOVED,
+    }),
   };
 }
 
@@ -108,7 +169,7 @@ function environmentOfPick(
 /**
  * The picked configuration's storage policy: its environment (`null` when
  * there is none, so there is nothing to set) and the read of its
- * `storage_policy` item, with the sandbox defaults' road
+ * `storage_policy` and `snapshot_policy` items, with the sandbox defaults' road
  * (`useConfigurationSandboxDefaults`): the environment from the account's
  * list, its items on the viewer's session.
  */
