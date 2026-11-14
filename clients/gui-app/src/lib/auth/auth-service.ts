@@ -1,5 +1,9 @@
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
+  setProfileRecordEnabledViaHttp,
+  type ProfileRecordEnablementResult,
+} from "@traycer-clients/shared/host-client/provider-profile-enablement";
+import {
   AUTH_ERROR_DISK_FULL,
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
@@ -3583,6 +3587,26 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  async setProfileRecordEnabled(
+    environmentId: string,
+    harnessId: string,
+    profileId: string,
+    enabled: boolean,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return setProfileRecordEnabledViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      harnessId,
+      profileId,
+      enabled,
+      callerSignal,
+    );
   }
 
   /** The user's answer to an agent's grant request. */
