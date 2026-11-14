@@ -159,7 +159,13 @@ export interface ComposerToolbarCatalogScope {
 export function useComposerToolbarStore(
   registerAs: FocusedComposerKind | null,
   seedSource: ComposerSeedSource,
-  onSettingsChange: ((settings: ChatRunSettings) => void) | null,
+  /**
+   * Gets the settings to store, never carrying a default account, and whether
+   * a person chose the account (`accountChosen`), so a draft can keep both.
+   */
+  onSettingsChange:
+    | ((settings: ChatRunSettings, accountChosen: boolean) => void)
+    | null,
   catalog: ComposerToolbarCatalogScope,
 ): ComposerToolbarStore {
   const {
@@ -252,7 +258,7 @@ export function useComposerToolbarStore(
           .getState()
           .record(state.catalog.hostId, settings);
       }
-      onSettingsChange?.(settings);
+      onSettingsChange?.(settings, state.accountChosen);
     },
     [store, onSettingsChange],
   );
