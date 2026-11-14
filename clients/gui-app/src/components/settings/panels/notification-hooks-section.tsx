@@ -1,3 +1,4 @@
+import { HOST_OVERVIEW } from "./host-overview.definitions";
 import { notificationHooksRemovedMessage } from "@traycer/protocol/host/notifications/presentation";
 import { useState, type ReactNode } from "react";
 import type { NotificationHookConfig } from "@traycer/protocol/host/notifications/host-notifications";
@@ -9,7 +10,6 @@ import {
   HOOK_SEVERITIES,
 } from "@/components/settings/panels/notification-hook-draft";
 import { NotificationHookEditorDialog } from "@/components/settings/panels/notification-hook-editor-dialog";
-import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +37,7 @@ export function NotificationHooksSection(props: {
   const { data, error, isLoading, refetch } = props.statusQuery;
   return (
     <SettingsGroup
-      group={HOST_NOTIFICATIONS.definitions.notificationHooks}
+      group={HOST_OVERVIEW.definitions.notificationHooks}
       showTitle
       tone="default"
       dataTestId="notification-hooks-manager"
@@ -295,6 +295,7 @@ function HooksEditor(props: {
   } | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const visibleHooks = props.hooks.filter((hook) => hook.localOnly === true);
   const snapshot: HookSnapshot = {
     hooks: props.hooks.map(toConfig),
     configurationRevision: props.configurationRevision,
@@ -331,7 +332,7 @@ function HooksEditor(props: {
 
   return (
     <ManagerShell
-      count={props.hooks.length}
+      count={visibleHooks.length}
       configPath={props.configPath}
       addDisabled={props.saveHooks.isPending}
       onRefresh={props.onRefresh}
@@ -348,7 +349,7 @@ function HooksEditor(props: {
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-auto">
-        {props.hooks.length === 0 ? (
+        {visibleHooks.length === 0 ? (
           <div
             className="flex h-full flex-col items-center justify-center gap-3 px-4 py-6 text-center"
             data-testid="notification-hooks-empty-state"
@@ -376,7 +377,7 @@ function HooksEditor(props: {
           </div>
         ) : (
           <div className="divide-y divide-border/40">
-            {props.hooks.map((hook) => (
+            {visibleHooks.map((hook) => (
               <HookRow
                 key={hook.id}
                 hook={hook}

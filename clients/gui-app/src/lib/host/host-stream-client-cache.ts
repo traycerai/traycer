@@ -183,6 +183,8 @@ export interface HostStreamClientLease {
 }
 
 interface CacheEntry {
+  readonly hostId: string;
+  readonly userId: string;
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   refCount: number;
 }
@@ -229,7 +231,12 @@ export function acquireHostStreamClient(
     if (client === null) {
       return null;
     }
-    entry = { client, refCount: 0 };
+    entry = {
+      client,
+      refCount: 0,
+      hostId: identity.hostId,
+      userId: identity.userId,
+    };
     entriesByKey.set(key, entry);
   }
   // Captured, never re-looked-up by key. A late `release` from a holder of an
@@ -278,4 +285,18 @@ export function hostStreamClientRefCountForTest(
  */
 export function resetHostStreamClientCacheForTest(): void {
   entriesByKey.clear();
+}
+
+/** The already-connected scoped streams of this viewer, without acquiring or dialing. */
+export function readyHostStreamHostIds(userId: string): readonly string[] {
+  const ready = new Set<string>();
+  for (const entry of entriesByKey.values()) {
+    if (
+      entry.userId === userId &&
+      !entry.client.isClosed() &&
+      entry.client.isReady()
+    )
+      ready.add(entry.hostId);
+  }
+  return [...ready];
 }

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
+import { HOST_OVERVIEW } from "./host-overview.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,7 +47,7 @@ export function NotificationLongTurnAlertRow(props: {
   if (error !== null) {
     return (
       <SettingsRow
-        row={HOST_NOTIFICATIONS.definitions.longTurnAlert}
+        row={HOST_OVERVIEW.definitions.notificationLongTurnAlert}
         status="Couldn't load the turn alert."
         control={
           <Button
@@ -68,12 +68,12 @@ export function NotificationLongTurnAlertRow(props: {
   const { thresholdMs } = data;
   return (
     <SettingsRow
-      row={HOST_NOTIFICATIONS.definitions.longTurnAlert}
+      row={HOST_OVERVIEW.definitions.notificationLongTurnAlert}
       control={
         <Switch
           checked={thresholdMs !== null}
           disabled={props.setAlert.isPending}
-          aria-label={HOST_NOTIFICATIONS.definitions.longTurnAlert.label}
+          aria-label={HOST_OVERVIEW.definitions.notificationLongTurnAlert.label}
           data-testid="notifications-long-turn-alert"
           onCheckedChange={(checked) => {
             props.setAlert.mutate({

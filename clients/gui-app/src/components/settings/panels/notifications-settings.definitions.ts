@@ -1,9 +1,8 @@
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
-// Host-scoped: the page's scope gate conceals both cards while the host
-// connects or is unreachable and drops them for a host that vanished, so
-// every card and row here folds into the page.
+// Account notifications read and save through authn without a computer.
+// The long-turn alert is drawn on the picked computer's Overview tab.
 export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
   page: {
     availableWhen: alwaysAvailable,
@@ -15,17 +14,13 @@ export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
       "inbox",
       "filter",
       "automation",
-      "host",
       "in-app notifications",
       "toast",
       "severity",
       "notification hooks",
       "hooks",
       "webhook",
-      "script",
-      "command",
       "trigger",
-      "run on",
     ],
   },
   inAppNotifications: {
@@ -72,16 +67,6 @@ export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
     description: "Updates that need nothing from you.",
     availableWhen: alwaysAvailable,
     keywords: [],
-  },
-  longTurnAlert: {
-    kind: "row",
-    group: "inAppNotifications",
-    search: { contributesTo: "page" },
-    label: "Alert when a turn runs longer than",
-    description:
-      "Notifies you once per turn. Time waiting on your approval or answer doesn't count.",
-    availableWhen: alwaysAvailable,
-    keywords: ["long", "running", "stuck", "duration", "turn"],
   },
   notificationHooks: {
     kind: "group",
