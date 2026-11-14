@@ -14,6 +14,13 @@ export interface PersonIdentity {
   readonly avatarUrl: string | null;
 }
 
+/**
+ * What a team host writes in a person column (who started a chat, who
+ * granted access) when neither an actor nor a starter is known. It names no
+ * one: never a member, never shown as an id.
+ */
+export const SYSTEM_ACTOR_ID = "system";
+
 export interface PersonIdentitySources {
   readonly viewer: AuthProfile | null;
   readonly collaborators: ReadonlyArray<EpicCollaboratorView>;
@@ -29,6 +36,7 @@ export function resolvePersonIdentity(
   sources: PersonIdentitySources,
   userId: string,
 ): PersonIdentity | null {
+  if (userId === SYSTEM_ACTOR_ID) return null;
   if (sources.viewer?.userId === userId) {
     return identity(
       userId,

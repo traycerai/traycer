@@ -19,6 +19,19 @@ export const authQueryKeys = {
     userId,
     environmentId,
   ],
+  environmentPerson: (
+    auth: object | null,
+    viewerId: string | null,
+    environmentId: string | null,
+    userId: string,
+  ): readonly unknown[] => [
+    "auth",
+    "environment-person",
+    auth,
+    viewerId,
+    environmentId,
+    userId,
+  ],
   environmentInvitations: (
     authService: object | null,
     userId: string,
