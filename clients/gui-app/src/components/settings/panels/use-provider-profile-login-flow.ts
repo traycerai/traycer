@@ -7,7 +7,6 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
-import type { SignInRequestRecorder } from "@/hooks/providers/use-provider-sign-in-recording";
 import {
   providerProfileSchema,
   type ProviderCliState,
@@ -595,7 +594,7 @@ export interface ProviderProfileLoginFlow {
 export function useProviderProfileLoginFlow(
   input: UseProviderProfileLoginFlowInput,
 ): ProviderProfileLoginFlow {
-  return useProviderProfileOutcomeLoginFlow(input, null, null);
+  return useProviderProfileOutcomeLoginFlow(input, null);
 }
 
 /**
@@ -603,16 +602,10 @@ export function useProviderProfileLoginFlow(
  * `profileOutcomes` first (null reads every answer as
  * `useProviderProfileLoginFlow` does): the add-profile dialog and the Settings
  * reauth panel, on a computer that offers sign-ins by itself.
- *
- * `recordSignInRequest` is that caller's recording step: an unfinished answer
- * that carries `signInRequest` is recorded at authn and awaited again with
- * `recordedOperationId`; a recording that ends settles as "did not finish".
- * Only read with `profileOutcomes`.
  */
 export function useProviderProfileOutcomeLoginFlow(
   input: UseProviderProfileLoginFlowInput,
   profileOutcomes: CachedProviderProfilesReader | null,
-  recordSignInRequest: SignInRequestRecorder | null,
 ): ProviderProfileLoginFlow {
   const {
     hostBlock,
@@ -1287,7 +1280,6 @@ export function useProviderProfileOutcomeLoginFlow(
           // an auto-restart mints a fresh attempt with a fresh budget.
           let authPendingRepolls = 0;
           let lastSeenReaderCount: number | null = null;
-          let recordedOperationId: string | null = null;
           let awaitProfileId = nextProfileId;
           // A resolution this attempt must no longer act on: a later attempt
           // (auto-restart, or the child finishing while a restart was
@@ -1316,29 +1308,6 @@ export function useProviderProfileOutcomeLoginFlow(
             }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
             return true;
           };
-          // An unfinished answer that asks for the sign-in request to be
-          // recorded: record it, then ask again with its id, or settle as
-          // "did not finish" when the recording ends.
-          const recordsSignInRequest = (result: AwaitLoginResult): boolean => {
-            const signInRequest =
-              profileOutcomes === null ? null : (result.signInRequest ?? null);
-            if (signInRequest === null || recordSignInRequest === null) {
-              return false;
-            }
-            void recordSignInRequest(signInRequest, awaitAbort.signal).then(
-              (recording) => {
-                if (attemptAbandoned()) return;
-                if (recording.kind === "recorded") {
-                  recordedOperationId = recording.recordedOperationId;
-                  awaitOnce();
-                  return;
-                }
-                awaitOutcomeRef.current = "notAuthenticated";
-                settleAttempt(thisAttemptId);
-              },
-            );
-            return true;
-          };
           const handleAwaitSuccess = (result: AwaitLoginResult): void => {
             if (attemptAbandoned()) return;
             const outcome =
@@ -1357,7 +1326,6 @@ export function useProviderProfileOutcomeLoginFlow(
               settleProfileOutcome(thisAttemptId, outcome);
               return;
             }
-            if (recordsSignInRequest(result)) return;
             const installation = result.installation ?? null;
             if (installation !== null) {
               lastSeenReaderCount = installation.count;
@@ -1424,19 +1392,11 @@ export function useProviderProfileOutcomeLoginFlow(
           const awaitOnce = (): void => {
             awaitLogin.mutate(
               {
-                request:
-                  recordedOperationId === null
-                    ? {
-                        providerId,
-                        profileId: awaitProfileId,
-                        lastSeenReaderCount,
-                      }
-                    : {
-                        providerId,
-                        profileId: awaitProfileId,
-                        lastSeenReaderCount,
-                        recordedOperationId,
-                      },
+                request: {
+                  providerId,
+                  profileId: awaitProfileId,
+                  lastSeenReaderCount,
+                },
                 signal: awaitAbort.signal,
                 readsProfileOutcome: profileOutcomes !== null,
               },
@@ -1478,7 +1438,6 @@ export function useProviderProfileOutcomeLoginFlow(
       mode,
       providerId,
       profileOutcomes,
-      recordSignInRequest,
       reportCancellation,
       restart,
       settleAttempt,

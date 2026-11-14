@@ -13,10 +13,11 @@ export type SignInRequestRecorder = (
 ) => Promise<SignInRecording>;
 
 /**
- * The recording step of every dialog that awaits a sign-in and reads its
- * outcome: the request goes to authn on the person's own session, through
- * the app's auth service, each operation id at most once for the dialog's
- * life. The dialog stays in its pending state while it runs.
+ * The recording step of the shared sign-in await (`useProvidersAwaitLogin`
+ * and its variants), so every caller records: the request goes to authn on
+ * the person's own session, through the app's auth service, each operation
+ * id at most once for the caller's life. The caller stays in its pending
+ * state while it runs.
  */
 export function useProviderSignInRecording(): SignInRequestRecorder {
   const auth = useAuthService();

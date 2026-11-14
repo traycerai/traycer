@@ -1,5 +1,4 @@
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
-import { useProviderSignInRecording } from "@/hooks/providers/use-provider-sign-in-recording";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
@@ -225,7 +224,6 @@ export function AddProviderProfileDialog({
     client,
     state.providerId,
   );
-  const recordSignInRequest = useProviderSignInRecording();
   const flow = useProviderProfileOutcomeLoginFlow(
     {
       hostBlock,
@@ -249,7 +247,6 @@ export function AddProviderProfileDialog({
         onFailedAttempt({ providerId: state.providerId, message }),
     },
     profileOutcomes,
-    recordSignInRequest,
   );
   const trimmedLabel = label.trim();
   const linking = flow.state.kind !== "start";

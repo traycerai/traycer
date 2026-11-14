@@ -1,4 +1,4 @@
-import type { UseMutationResult } from "@tanstack/react-query";
+import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -6,6 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useQueryClient } from "@tanstack/react-query";
+import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
 import {
   providerProfileSchema,
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
@@ -13,7 +14,15 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host";
-import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
+import {
+  hostClientUnavailableError,
+  withHostMutationLifecycleBoundary,
+} from "@/hooks/host/use-host-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import {
+  useProviderSignInRecording,
+  type SignInRequestRecorder,
+} from "@/hooks/providers/use-provider-sign-in-recording";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
@@ -92,6 +101,57 @@ function withoutLoginCapability(
   };
 }
 
+/**
+ * The sign-in request an answer asks the caller to record, or null. A final
+ * `profileOutcome` is the answer whatever else it carries.
+ */
+function signInRequestToRecord(
+  data: AwaitLoginResponse,
+): ProviderLoginSignInRequest | null {
+  if ((data.profileOutcome ?? null) !== null) return null;
+  return data.signInRequest ?? null;
+}
+
+/**
+ * One wait, with the recording step every caller shares: an unfinished answer
+ * that carries `signInRequest` is recorded at authn on the person's own
+ * session, and the same handle is asked once more with `recordedOperationId`.
+ * A recording that ends returns that unfinished answer, which every caller
+ * already reads as "the sign-in did not complete". A computer that never asks
+ * for a recording is asked exactly as before.
+ */
+async function awaitWithRecording(
+  client: HostClient<HostRpcRegistry>,
+  variables: AwaitLoginVariables,
+  recordSignInRequest: SignInRequestRecorder,
+): Promise<AwaitLoginResponse> {
+  const ask = (request: AwaitLoginRequest): Promise<AwaitLoginResponse> =>
+    variables.signal === undefined
+      ? client.requestWithResponseTimeout(
+          "providers.awaitLogin",
+          request,
+          PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+        )
+      : client.requestWithOptions("providers.awaitLogin", request, {
+          responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+          idempotencyKey: null,
+          requiredHostMethodVersion: null,
+          signal: variables.signal,
+        });
+  const answer = await ask(variables.request);
+  const signInRequest = signInRequestToRecord(answer);
+  if (signInRequest === null) return answer;
+  const recording = await recordSignInRequest(
+    signInRequest,
+    variables.signal ?? new AbortController().signal,
+  );
+  if (recording.kind !== "recorded") return answer;
+  return ask({
+    ...variables.request,
+    recordedOperationId: recording.recordedOperationId,
+  });
+}
+
 function awaitAnswerNamesProfile(data: AwaitLoginResponse): boolean {
   const kind = data.profileOutcome?.kind;
   return kind === "signed-in" || kind === "already-signed-in";
@@ -160,22 +220,32 @@ export function useProvidersAwaitLoginForClient(args: {
   AwaitLoginContext
 > {
   const queryClient = useQueryClient();
-  return useHostMutationWithResponseTimeout<
-    HostRpcRegistry,
-    "providers.awaitLogin",
-    AwaitLoginContext,
-    AwaitLoginVariables
+  const recordSignInRequest = useProviderSignInRecording();
+  const client = args.client;
+  return useMutation<
+    AwaitLoginResponse,
+    HostRpcError,
+    AwaitLoginVariables,
+    AwaitLoginContext
   >({
-    client: args.client,
-    method: "providers.awaitLogin",
-    mapVariables: (variables) => variables.request,
-    signalFor: (variables) => variables.signal,
     // Long-poll: the host holds the response until the OAuth child
     // terminates (bounded by its own 3-minute login timeout). The default
     // ~30 s frame timeout would abandon a healthy sign-in as soon as the
     // user takes longer than that in the browser.
-    responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
-    options: {
+    mutationFn: (variables) =>
+      withHostQueryErrorBoundary("providers.awaitLogin", async () => {
+        if (client === null) {
+          return Promise.reject<AwaitLoginResponse>(
+            hostClientUnavailableError("providers.awaitLogin"),
+          );
+        }
+        return awaitWithRecording(client, variables, recordSignInRequest);
+      }),
+    ...withHostMutationLifecycleBoundary<
+      AwaitLoginResponse,
+      AwaitLoginVariables,
+      AwaitLoginContext
+    >("providers.awaitLogin", {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
       onSuccess: async (data: AwaitLoginResponse, variables, context) => {
@@ -269,6 +339,6 @@ export function useProvidersAwaitLoginForClient(args: {
         if (variables.signal?.aborted === true) return;
         toastFromHostError(error, "Couldn't confirm sign-in.");
       },
-    },
+    }),
   });
 }
