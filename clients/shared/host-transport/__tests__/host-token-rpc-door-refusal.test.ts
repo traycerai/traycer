@@ -374,10 +374,15 @@ function doorHarness(): DoorHarness {
           resolve(created);
         });
       }),
-    ready: tokens.adopt(USER_ID, HOST_ID, {
-      token: HELD_TOKEN,
-      expiresAtMs: Date.now() + 3_600_000,
-    }),
+    ready: tokens.adopt(
+      USER_ID,
+      HOST_ID,
+      {
+        token: HELD_TOKEN,
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      tokens.era(USER_ID),
+    ),
   };
 }
 
