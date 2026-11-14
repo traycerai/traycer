@@ -21,7 +21,6 @@ import {
 } from "@/components/settings/__tests__/phone-viewport";
 
 const NO_NOTES: ReadonlyMap<string, ReactNode> = new Map();
-const NOT_CLAIMED: ReadonlyMap<string, string> = new Map();
 const SIGN_IN_URL = "https://ghp_x@github.com/o/r";
 // Key-shaped for the credential rule (`sk-` and 20+ token characters), and
 // plainly not an issued key.
@@ -74,7 +73,6 @@ function editorElement(input: EditorInput): ReactNode {
         overrides={input.overrides}
         disabled={false}
         rowNotes={input.rowNotes}
-        claimedBy={NOT_CLAIMED}
         staleRefusal={input.staleRefusal}
         namePlaceholder="OPENAI_API_KEY"
         emptyLabel="No environment variables."

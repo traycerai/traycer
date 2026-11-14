@@ -20,7 +20,6 @@ import {
   usePersonalRowNotes,
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
-import { useSecretClaimedNames } from "@/components/settings/personal/use-secret-claimed-names";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
@@ -1009,7 +1008,6 @@ function HostEnvironmentGroup(props: {
     );
   }
   const personal = useEnvironmentPick().kind === "personal";
-  const claimedBy = useSecretClaimedNames();
   return (
     <SettingsGroup
       group={SHELL.definitions.hostEnvironment}
@@ -1046,7 +1044,6 @@ function HostEnvironmentGroup(props: {
           <EnvOverrideEditor
             key={JSON.stringify([viewerId, configurationKey])}
             rowNotes={rowNotes}
-            claimedBy={claimedBy}
             overrides={props.overrides}
             disabled={props.pending}
             namePlaceholder="OPENAI_API_KEY"

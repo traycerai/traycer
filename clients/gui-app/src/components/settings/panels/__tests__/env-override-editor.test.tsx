@@ -10,7 +10,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnvOverrideEditor } from "../env-override-editor";
 
 const NO_ROW_NOTES: ReadonlyMap<string, string> = new Map();
-const NOT_CLAIMED: ReadonlyMap<string, string> = new Map();
 
 type EnvCommit = (
   oldKey: string,
@@ -39,7 +38,6 @@ function editorElement(input: EditorInput) {
       overrides={input.overrides}
       disabled={false}
       rowNotes={NO_ROW_NOTES}
-      claimedBy={NOT_CLAIMED}
       staleRefusal={null}
       namePlaceholder="OPENAI_API_KEY"
       emptyLabel="No environment variables."
@@ -360,7 +358,6 @@ describe("EnvOverrideEditor", () => {
           overrides={[{ key: "REPO_URL", value: "https://github.com/o/r" }]}
           disabled={false}
           rowNotes={NO_ROW_NOTES}
-          claimedBy={NOT_CLAIMED}
           staleRefusal={null}
           namePlaceholder="OPENAI_API_KEY"
           emptyLabel="No environment variables."
@@ -437,7 +434,6 @@ describe("EnvOverrideEditor credential-shaped names", () => {
         overrides={input.overrides}
         disabled={false}
         rowNotes={NO_ROW_NOTES}
-        claimedBy={NOT_CLAIMED}
         staleRefusal={null}
         namePlaceholder="OPENAI_API_KEY"
         emptyLabel="No environment variables."
@@ -534,7 +530,6 @@ describe("EnvOverrideEditor saved values that look like a key", () => {
         ]}
         disabled={false}
         rowNotes={new Map([[NAME, "Only on this computer."]])}
-        claimedBy={NOT_CLAIMED}
         staleRefusal={null}
         namePlaceholder="OPENAI_API_KEY"
         emptyLabel="No environment variables."
@@ -603,30 +598,5 @@ describe("EnvOverrideEditor saved values that look like a key", () => {
     const field = screen.getByLabelText<HTMLInputElement>("Value for NODE_ENV");
     expect(field.value).toBe("production");
     expect(screen.getAllByTestId("env-masked-row")).toHaveLength(1);
-  });
-});
-
-describe("EnvOverrideEditor rows a secret sets", () => {
-  it("shows the name as the secret's, with no value and nothing to edit", () => {
-    render(
-      <EnvOverrideEditor
-        overrides={[{ key: "STRIPE_TOKEN", value: "sk_live_9f3a7c1d2e4b5a60" }]}
-        disabled={false}
-        rowNotes={NO_ROW_NOTES}
-        claimedBy={new Map([["STRIPE_TOKEN", "STRIPE_KEY"]])}
-        staleRefusal={null}
-        namePlaceholder="OPENAI_API_KEY"
-        emptyLabel="No environment variables."
-        onCommit={vi.fn<EnvCommit>()}
-        onDelete={vi.fn<EnvDelete>()}
-      />,
-    );
-
-    expect(screen.getByTestId("env-claimed-row").textContent).toBe(
-      "STRIPE_TOKEN · from the secret STRIPE_KEY · Secrets",
-    );
-    expect(screen.queryByLabelText("Value for STRIPE_TOKEN")).toBeNull();
-    expect(screen.queryByTestId("env-masked-row")).toBeNull();
-    expect(document.body.textContent).not.toContain("sk_live_9f3a7c1d2e4b5a60");
   });
 });

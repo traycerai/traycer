@@ -847,12 +847,8 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   }),
 }));
 
-// A provider's Env tab reads the secrets that set its variables and writes
-// through a host-scoped mutation; neither is about these cases, and both open
-// with `useQueryClient()`.
-vi.mock("@/components/settings/personal/use-secret-claimed-names", () => ({
-  useSecretClaimedNames: () => new Map<string, string>(),
-}));
+// Provider Env writes through a host-scoped mutation; neither is about these
+// cases, and it opens with `useQueryClient()`.
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
     mutate: () => {},

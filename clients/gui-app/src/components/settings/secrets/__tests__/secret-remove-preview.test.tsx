@@ -76,7 +76,6 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 const ADDED = Date.UTC(2026, 9, 24, 9, 30);
-const RESTART = "Tools already running keep it until they restart.";
 
 function dayMonth(at: number): string {
   return new Intl.DateTimeFormat("en-GB", {
@@ -86,14 +85,6 @@ function dayMonth(at: number): string {
 }
 
 const PERSONAL = environmentStatusFixture({ principal: { kind: "personal" } });
-const TEAM = environmentStatusFixture({
-  principal: { kind: "team", teamName: "Acme" },
-});
-const AWAITING_MOVE = environmentStatusFixture({
-  principal: { kind: "personal" },
-  planes: { records: "local", broker: "local", room: "local" },
-  setup: { stage: "moving_settings", state: "awaiting_consent" },
-});
 
 const secret: EnvironmentSecretV12 = {
   ...RETIRED_SECRET_ROW_FIELDS,
@@ -262,138 +253,29 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out" });
 });
 
-describe("Remove's preview on Personal names the computers that hold a copy", () => {
-  const added = `Added by you on ${dayMonth(ADDED)}. Version 1.`;
-
-  it.each([
-    { names: ["dev-box"], on: "dev-box" },
-    { names: ["dev-box", "laptop"], on: "dev-box and laptop" },
-    {
-      names: ["dev-box", "laptop", "studio"],
-      on: "dev-box, laptop and 1 more",
-    },
-    { names: ["a", "b", "c", "d"], on: "4 computers" },
-    { names: ["a", "b", "c", "d", "e"], on: "5 computers" },
-  ])(
-    "with $names.length running Personal it reads $on",
-    async ({ names, on }) => {
-      setComputers(
-        Object.fromEntries(names.map((name) => [name, PERSONAL])),
-        [],
-      );
-      mountRow("host", null);
-
-      expect(await previewText()).toContain(`${added} On ${on}. ${RESTART}`);
-    },
-  );
-
-  it("names every computer's copy but leaves out sandboxes, Local rows and other owners", async () => {
-    setComputers(
-      { "dev-box": PERSONAL, "old-laptop": AWAITING_MOVE, "work-pc": TEAM },
-      [
-        hostScopeOptionFixture({
-          hostId: "sandbox-1",
-          name: "sandbox-1",
-          isLocalMachine: false,
-          registered: true,
-          sandbox: {
-            state: null,
-            frozen: false,
-            summary: null,
-            ownerKind: "unknown",
-            teamOwned: false,
-          },
-        }),
-      ],
-    );
-    reads.statuses.set("sandbox-1", PERSONAL);
-    reads.versions.set("sandbox-1", { major: 1, minor: 1 });
-    mountRow("host", null);
-
-    const text = await previewText();
-    expect(text).toContain(`${added} On dev-box. ${RESTART}`);
-    expect(text).not.toMatch(/old-laptop|work-pc|sandbox-1/);
-  });
-
-  it("names the computers in Personal's host list, though this window cannot dial them, and not its sandboxes", async () => {
-    // Each names itself; the ids are not what the preview prints.
-    const listed = (
-      hostLabel: string,
-      kind: EnvironmentHostRecordV12["kind"],
-    ): EnvironmentHostRecordV12 => ({
-      hostId: `id-${hostLabel}`,
-      hostLabel,
-      hostPlatform: "darwin",
-      enrolledByUserId: "user-me",
-      kind,
-      boundAt: 1,
-      reachable: false,
-      lastReportedAt: 1,
-      hasLocalRow: false,
-      applied: [],
-    });
+describe("Remove's preview", () => {
+  it("shows the version origin without recipient or restart details", async () => {
     reads.hostList = [
-      listed("cloud-box", "personal"),
-      listed("studio", "personal"),
-      listed("sandbox-9", "sandbox"),
+      {
+        hostId: "id-dev-box",
+        hostLabel: "dev-box",
+        hostPlatform: "darwin",
+        enrolledByUserId: "user-me",
+        kind: "personal",
+        boundAt: 1,
+        reachable: false,
+        lastReportedAt: 1,
+        hasLocalRow: false,
+        applied: [],
+      },
     ];
-    setComputers({}, []);
+    setComputers({ "dev-box": PERSONAL }, []);
     mountRow("host", null);
 
     const text = await previewText();
-    expect(text).toContain(`${added} On cloud-box and studio. ${RESTART}`);
-    expect(text).not.toContain("sandbox-9");
-  });
-
-  it("leaves out the On clause when no computer runs Personal, keeping the restart sentence", async () => {
-    setComputers({ "work-pc": TEAM }, []);
-    mountRow("host", null);
-
-    expect(await previewText()).toContain(`${added} ${RESTART}`);
-    expect(
-      screen.getByTestId("confirm-destructive-dialog").textContent,
-    ).not.toContain(" On ");
-  });
-});
-
-describe("Remove's preview on a team page", () => {
-  it("has no On clause, whatever computers run Personal, and says it was added without 'by you'", async () => {
-    setComputers({ "dev-box": PERSONAL, laptop: PERSONAL }, []);
-    mountRow("pool", { kind: "team", environmentId: "env-team" });
-
-    const text = await previewText();
-    expect(text).toContain(
-      `Added on ${dayMonth(ADDED)}. Version 1. ${RESTART}`,
-    );
-    expect(text).not.toMatch(/ On |dev-box|laptop/);
-  });
-});
-
-describe("Remove's preview on a Local pick", () => {
-  it("names no computers, whoever runs Personal", async () => {
-    setComputers({ "dev-box": PERSONAL, laptop: PERSONAL }, []);
-    mountRow("host", {
-      kind: "local",
-      hostId: "host-secrets",
-      hostName: "Studio",
-    });
-
-    const text = await previewText();
-    expect(text).toContain(
-      `Added by you on ${dayMonth(ADDED)}. Version 1. ${RESTART}`,
-    );
-    expect(text).not.toMatch(/dev-box|laptop/);
-  });
-});
-
-describe("Remove's preview on a Personal page read from the cloud", () => {
-  it("says the person added it and names the computers running Personal", async () => {
-    setComputers({ "dev-box": PERSONAL, laptop: PERSONAL }, []);
-    mountRow("pool-personal", null);
-
-    expect(await previewText()).toContain(
-      `Added by you on ${dayMonth(ADDED)}. Version 1. On dev-box and laptop. ${RESTART}`,
-    );
+    expect(text).toContain(`Added by you on ${dayMonth(ADDED)}. Version 1.`);
+    expect(text).not.toContain("dev-box");
+    expect(text).not.toMatch(/restart|old running value/i);
   });
 });
 
@@ -422,7 +304,7 @@ describe("Remove's preview names the MCP servers that use the secret", () => {
     expect(text.indexOf("Used by github.")).toBeLessThan(
       text.indexOf("Added by you"),
     );
-    expect(text).toContain(`MCP servers.${added} ${RESTART}`);
+    expect(text).toContain(`MCP servers.${added}`);
     expect(reads.listed).toEqual([{ environmentId: "env-personal" }]);
   });
 

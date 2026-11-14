@@ -89,7 +89,7 @@ export function SecretsPage(props: {
   readonly hostId: string | null;
   /** In place of the list when there is no secret: the configuration's text. */
   readonly emptyText: string;
-  /** A host's name by its id, for the rotation's per-host lines. */
+  /** A host's name by its id, for a removal's per-host lines. */
   readonly hostName: (hostId: string) => string;
 }): ReactNode {
   const queryClient = useQueryClient();

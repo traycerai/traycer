@@ -81,7 +81,11 @@ vi.mock(
 );
 
 import { act, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+} from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
@@ -96,6 +100,10 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type {
   ConfigEnvLocalOverrideClearRequest,
   ConfigEnvLocalOverrideResponse,
@@ -113,6 +121,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { queryKeys } from "@/lib/query-keys";
 import type { EnvOverrideValue } from "../env-override-editor";
 import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
 import {
@@ -371,6 +380,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     review: readonly EnvironmentReviewEntry[],
     facts: HostFacts,
     section: ReactNode,
+    suppliedQueryClient: QueryClient | undefined,
   ): RenderResult {
     const { client } = buildEnvironmentClient({
       hostId: HOST_ID,
@@ -432,14 +442,13 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       client,
     };
     hostBindingMock.current = { hostClient: client };
+    const queryClient =
+      suppliedQueryClient ??
+      new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
     return render(
-      <QueryClientProvider
-        client={
-          new QueryClient({
-            defaultOptions: { queries: { retry: false, gcTime: 0 } },
-          })
-        }
-      >
+      <QueryClientProvider client={queryClient}>
         <HeldValueHostRuntime>
           <PersonalPageFrame section="providers">{section}</PersonalPageFrame>
         </HeldValueHostRuntime>
@@ -460,6 +469,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         overrides={overrides}
         envOverrideScope="harness-and-native-config"
       />,
+      undefined,
     );
   }
 
@@ -646,6 +656,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         overrides={overrides}
         envOverrideScope="harness-and-native-config"
       />,
+      undefined,
     );
   }
 
@@ -828,16 +839,12 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           "••••••••",
         );
         expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
-        expect(screen.queryByTestId("env-claimed-row")).toBeNull();
         expect(document.body.textContent).not.toContain(HELD_VALUE);
       },
     );
 
-    describe("a saved variable that shadows a Personal secret's own binding without being claimed", () => {
+    describe("a provider variable whose name is declared by a Personal secret", () => {
       const SHADOW_KEY = "ENV_R2_S3_CLAIM";
-      // `name` is deliberately NOT `SHADOW_KEY`: the note must read the
-      // secret's actual name from its binding (`variables`), never assume
-      // the key and the secret's display name coincide.
       const secretBoundGlobally: EnvironmentSecretV12 = {
         ...RETIRED_SECRET_ROW_FIELDS,
         providerVariables: [...RETIRED_PROVIDER_VARIABLES],
@@ -852,46 +859,47 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         variables: [SHADOW_KEY],
       };
 
-      it("notes that the provider gets this value instead of the secret, with a link to Secrets", async () => {
-        renderClaudeEnvTab(
+      it("does not show a note about the secret", async () => {
+        const queryClient = new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        });
+        const servingHostId = hostRpcServingTierHostId(
+          "environment.secrets.list",
+          HOST_ID,
+          readProcessHostRpcTierPlan(),
+          null,
+        );
+        const secretsListOptions = queryOptions({
+          queryKey: [
+            ...queryKeys.hostMethod(servingHostId, "environment.secrets.list", {
+              environmentId: "env-personal",
+            }),
+            "user-me",
+          ],
+          queryFn: () =>
+            Promise.resolve({
+              secrets: [] as EnvironmentSecretV12[],
+              removed: [],
+            }),
+        });
+        queryClient.setQueryData(secretsListOptions.queryKey, {
+          secrets: [secretBoundGlobally],
+          removed: [],
+        });
+        mountOnPersonalPage(
+          [],
           { localOverrides: [], secrets: [secretBoundGlobally] },
-          [{ key: SHADOW_KEY, value: "r2-override" }],
+          <ProviderEnvOverridesSection
+            providerId="claude-code"
+            overrides={[{ key: SHADOW_KEY, value: "r2-override" }]}
+            envOverrideScope="harness-and-native-config"
+          />,
+          queryClient,
         );
 
-        const note = await screen.findByTestId("env-row-note");
-        expect(note.textContent).toBe(
-          `Claude Code gets this value instead of the secret R2 access · Secrets`,
-        );
-        expect(screen.queryByTestId("env-claimed-row")).toBeNull();
-        expect(screen.getByLabelText(`Value for ${SHADOW_KEY}`)).toBeTruthy();
-
-        fireEvent.click(within(note).getByRole("button", { name: "Secrets" }));
-        expect(navigation.toSection).toHaveBeenCalledWith("secrets");
-      });
-
-      it("control: an explicit Unset of the same name gets no shadow note - it receives no value from anything", async () => {
-        renderClaudeEnvTab(
-          { localOverrides: [], secrets: [secretBoundGlobally] },
-          [{ key: SHADOW_KEY, value: null }],
-        );
-
-        await screen.findByLabelText(`Value for ${SHADOW_KEY}`);
-        expect(screen.queryByTestId("env-row-note")).toBeNull();
-      });
-
-      it("control: a secret merely named the same, bound to nothing, is not a shadow - its display name is not a binding", async () => {
-        const unboundSecretNamedTheSame: EnvironmentSecretV12 = {
-          ...secretBoundGlobally,
-          secretId: "sec-unbound",
-          name: SHADOW_KEY,
-          variables: [],
-        };
-        renderClaudeEnvTab(
-          { localOverrides: [], secrets: [unboundSecretNamedTheSame] },
-          [{ key: SHADOW_KEY, value: "r2-override" }],
-        );
-
-        await screen.findByLabelText(`Value for ${SHADOW_KEY}`);
+        expect(
+          await screen.findByLabelText(`Value for ${SHADOW_KEY}`),
+        ).toBeTruthy();
         expect(screen.queryByTestId("env-row-note")).toBeNull();
       });
     });

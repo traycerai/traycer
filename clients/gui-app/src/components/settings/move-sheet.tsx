@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
-  existingSecretsArriveSentence,
   MOVE_ACCEPTS_AS_SHOWN,
   MOVE_DISCLOSURE,
   MOVE_SECTIONS,
@@ -342,14 +341,6 @@ function MovePlanRows(props: {
           />
         );
       })}
-      {movesNothing && plan.personalHoldsSecrets ? (
-        <p
-          className="text-ui-sm text-muted-foreground"
-          data-testid="move-sheet-disclosure"
-        >
-          {existingSecretsArriveSentence(props.hostName)}
-        </p>
-      ) : null}
       {movesNothing ? null : (
         <>
           <p className="text-ui-sm" data-testid="move-sheet-nothing-deleted">
@@ -360,12 +351,7 @@ function MovePlanRows(props: {
               className="text-ui-sm text-muted-foreground"
               data-testid="move-sheet-disclosure"
             >
-              {disclosureText(
-                storesASecret,
-                plan.personalHoldsSecrets,
-                props.reachedHostNames,
-                props.hostName,
-              )}
+              {disclosureText(storesASecret, props.reachedHostNames)}
             </p>
             <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
           </div>
@@ -377,21 +363,14 @@ function MovePlanRows(props: {
 
 /**
  * Who receives what: the custody sentence and its recipient boundary when
- * this move stores a secret; that Personal's existing keys and secrets
- * arrive when it stores none but Personal holds some; then that Move accepts
- * the list as shown.
+ * this move stores a provider key; then that Move accepts the list as shown.
  */
 function disclosureText(
   storesASecret: boolean,
-  personalHoldsSecrets: boolean,
   reachedHostNames: readonly string[],
-  hostName: string,
 ): string {
   if (storesASecret) {
     return `${MOVE_DISCLOSURE} ${moveRecipientSentence(reachedHostNames)} ${MOVE_ACCEPTS_AS_SHOWN}`;
-  }
-  if (personalHoldsSecrets) {
-    return `${existingSecretsArriveSentence(hostName)} ${MOVE_ACCEPTS_AS_SHOWN}`;
   }
   return MOVE_ACCEPTS_AS_SHOWN;
 }

@@ -21,12 +21,12 @@ import {
 import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
+  PROVIDER_KEY_CUSTODY_SENTENCE,
   providerKeyIsPersonalSecret,
   type ProviderKeyPrincipal,
 } from "@/lib/providers/provider-key-custody";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
-import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -275,7 +275,7 @@ function ApiKeySourceLines(props: {
       {personalSecret ? (
         <>
           <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-            {SECRET_CUSTODY_SENTENCE}
+            {PROVIDER_KEY_CUSTODY_SENTENCE}
           </p>
           <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
         </>
