@@ -74,7 +74,10 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import type { BotSetupWriteResult } from "@traycer-clients/shared/host-client/bot-setup";
-import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -3523,6 +3526,14 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "no_response" };
     return this.runnerHost.updateBotRunSettings(bearer, request);
+  }
+
+  async updateBotReplyMode(
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotReplyMode(bearer, request);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

@@ -188,7 +188,10 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import type { BotSetupWriteResult } from "@traycer-clients/shared/host-client/bot-setup";
-import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
@@ -358,6 +361,10 @@ export interface DesktopPreloadBridge {
   updateBotRunSettings(
     bearerToken: string,
     request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
   ): Promise<BotSetupWriteResult>;
   getSandboxGrants(
     bearerToken: string,
@@ -1506,6 +1513,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     request: BotUpdateRunSettingsRequest,
   ): Promise<BotSetupWriteResult> {
     return this.bridge.updateBotRunSettings(bearerToken, request);
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return this.bridge.updateBotReplyMode(bearerToken, request);
   }
 
   getSandboxGrants(

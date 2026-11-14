@@ -66,7 +66,10 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import type { BotSetupWriteResult } from "../host-client/bot-setup";
-import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -630,6 +633,10 @@ export interface IRunnerHost {
   updateBotRunSettings(
     bearerToken: string,
     request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
   ): Promise<BotSetupWriteResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one

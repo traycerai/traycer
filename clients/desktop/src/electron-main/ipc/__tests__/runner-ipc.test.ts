@@ -854,6 +854,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.setSlackAppDms,
           // A bot's settings, on traycer-server too.
           RunnerHostInvoke.updateBotRunSettings,
+          RunnerHostInvoke.updateBotReplyMode,
           RunnerHostInvoke.readHostOwnership,
           RunnerHostInvoke.listTeamComputers,
           RunnerHostInvoke.releaseTeamComputer,

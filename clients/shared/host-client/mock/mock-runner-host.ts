@@ -56,10 +56,14 @@ import {
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import {
+  updateBotReplyModeViaHttp,
   updateBotRunSettingsViaHttp,
   type BotSetupWriteResult,
 } from "../bot-setup";
-import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import {
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
@@ -1043,6 +1047,19 @@ export class MockRunnerHost implements IRunnerHost {
     request: BotUpdateRunSettingsRequest,
   ): Promise<BotSetupWriteResult> {
     return updateBotRunSettingsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotReplyModeViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,

@@ -54,9 +54,10 @@ import { botSetupError } from "@/hooks/bots/bot-setup-error";
  * The bot tab's Settings writes (rename, model, delete) carry no toast: the
  * panel states a refusal inline, under the control that made the call.
  *
- * The run settings are the exception to the client argument: they are the
- * app's own call to the server on the person's sign-in, with no host in the
- * path, so they need no host, the bot's included.
+ * The run settings and the reply mode are the exceptions to the client
+ * argument: they are the app's own calls to the server on the person's
+ * sign-in, with no host in the path, so they need no host, the bot's
+ * included.
  *
  * Each write invalidates `bot.list` on EVERY host scope rather than on one:
  * the list is cloud-backed and identical everywhere, so a create on host B
@@ -148,23 +149,24 @@ export function useBotUpdateRunSettingsMutation(): UseMutationResult<
   });
 }
 
-export function useBotUpdateReplyModeMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotUpdateResponse,
-  HostRpcError,
+export function useBotUpdateReplyModeMutation(): UseMutationResult<
+  BotSetupRow,
+  Error,
   BotUpdateReplyModeRequest
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.updateReplyMode">({
-    client,
-    method: "bot.updateReplyMode",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.updateReplyMode(),
-      onSuccess: () => {
-        invalidateBotLists(queryClient);
-      },
+  const binding = useHostBinding();
+  return useMutation({
+    mutationKey: botMutationKeys.updateReplyMode(),
+    mutationFn: async (request) => {
+      if (binding === null) throw botSetupError({ kind: "no_response" });
+      const result = await binding.auth.updateBotReplyMode(request);
+      if (result.kind !== "ok") throw botSetupError(result);
+      return result.bot;
+    },
+    onSuccess: (bot) => {
+      applyBotSettingsToViews(queryClient, bot);
+      invalidateBotLists(queryClient);
     },
   });
 }

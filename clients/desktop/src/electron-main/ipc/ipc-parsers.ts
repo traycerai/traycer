@@ -56,7 +56,9 @@ import {
   type SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import {
+  botUpdateReplyModeRequestSchema,
   botUpdateRunSettingsRequestSchema,
+  type BotUpdateReplyModeRequest,
   type BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
 import {
@@ -730,6 +732,20 @@ export function parseBotUpdateRunSettingsRequest(
     const issue = checked.error.issues[0];
     throw new Error(
       `updateBotRunSettings.request.${issue.path.join(".")}: ${issue.message}`,
+    );
+  }
+  return checked.data;
+}
+
+/** The renderer-supplied reply mode, against the protocol's own schema. */
+export function parseBotUpdateReplyModeRequest(
+  value: unknown,
+): BotUpdateReplyModeRequest {
+  const checked = botUpdateReplyModeRequestSchema.safeParse(value);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `updateBotReplyMode.request.${issue.path.join(".")}: ${issue.message}`,
     );
   }
   return checked.data;

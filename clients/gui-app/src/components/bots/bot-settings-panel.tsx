@@ -665,18 +665,17 @@ const REPLY_MODE_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * How the bot answers a post: drawn for a personal environment's bot
- * only, where the tab's host can write it. A pick applies to the next post.
+ * How the bot answers a post: drawn for a personal environment's bot only,
+ * and only to a person whose role may change the bot's environment. The
+ * pick is the app's own call to the server, so it needs no host; it applies
+ * to the next post.
  */
 function BotReplyModeSection(props: { readonly bot: BotRecord }): ReactNode {
   const { bot } = props;
-  const client = useTabHostClient();
-  const hostId = useTabHostId();
-  const supported =
-    useHostMethodSupport(hostId, "bot.updateReplyMode") === true;
-  const update = useBotUpdateReplyModeMutation(client);
+  const update = useBotUpdateReplyModeMutation();
+  const mayChange = useBotMayChange(bot.environmentId);
   const groupId = useId();
-  if (!supported) return null;
+  if (!mayChange) return null;
   return (
     <section
       className="flex flex-col gap-2"

@@ -224,6 +224,7 @@ function buildFakeBridge(
       detail: "test",
     }),
     updateBotRunSettings: async () => ({ kind: "no_response" as const }),
+    updateBotReplyMode: async () => ({ kind: "no_response" as const }),
     getSandboxGrants: async () => ({
       kind: "network-error" as const,
       detail: "test",

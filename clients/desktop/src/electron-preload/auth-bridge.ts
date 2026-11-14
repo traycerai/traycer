@@ -4,7 +4,10 @@ import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/hos
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { BotSetupWriteResult } from "@traycer-clients/shared/host-client/bot-setup";
-import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import { ipcRenderer } from "electron";
 import {
@@ -245,6 +248,10 @@ export interface AuthBridgeSurface {
   updateBotRunSettings(
     bearerToken: string,
     request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
   ): Promise<BotSetupWriteResult>;
   getSandboxGrants(
     bearerToken: string,
@@ -539,6 +546,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
     updateBotRunSettings: (bearerToken, request) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.updateBotRunSettings,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    updateBotReplyMode: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotReplyMode,
         bearerToken,
         request,
       ) as Promise<BotSetupWriteResult>,

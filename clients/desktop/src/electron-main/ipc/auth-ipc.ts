@@ -57,7 +57,10 @@ import {
   registerSlackAppViaHttp,
   setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
-import { updateBotRunSettingsViaHttp } from "@traycer-clients/shared/host-client/bot-setup";
+import {
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+} from "@traycer-clients/shared/host-client/bot-setup";
 import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { config } from "../../config";
 import type {
@@ -75,6 +78,7 @@ import {
   assertNumber,
   assertNullableString,
   assertString,
+  parseBotUpdateReplyModeRequest,
   parseBotUpdateRunSettingsRequest,
   parseDesktopAuthSession,
   parseMintHostCredentialRequest,
@@ -493,6 +497,21 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
       assertString(bearerToken, "updateBotRunSettings.bearerToken");
       const parsedRequest = parseBotUpdateRunSettingsRequest(request);
       return updateBotRunSettingsViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.updateBotReplyMode,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "updateBotReplyMode.bearerToken");
+      const parsedRequest = parseBotUpdateReplyModeRequest(request);
+      return updateBotReplyModeViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),

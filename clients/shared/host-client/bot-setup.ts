@@ -16,6 +16,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   botReplyModeSchema,
   botUpdateRunSettingsRequestSchema,
+  type BotUpdateReplyModeRequest,
   type BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
@@ -69,7 +70,7 @@ const botSetupRowAnswerSchema = lazySchema(() =>
   }),
 );
 
-type BotSetupRoute = "update-run-settings";
+type BotSetupRoute = "update-run-settings" | "update-reply-mode";
 
 type PostResult =
   | { readonly kind: "ok"; readonly body: unknown }
@@ -172,6 +173,29 @@ export async function updateBotRunSettingsViaHttp(
         effort: request.effort,
         profile: request.profile,
       },
+    ),
+  );
+}
+
+/**
+ * `POST /api/bots/update-reply-mode`: how the bot answers a post, from the
+ * next post on. `direct` on a team's bot is refused (422).
+ */
+export async function updateBotReplyModeViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  transport: EnvironmentTransport,
+  request: BotUpdateReplyModeRequest,
+): Promise<BotSetupWriteResult> {
+  return rowOf(
+    await post(
+      serverBaseUrl,
+      bearerToken,
+      proxyToken,
+      transport,
+      "update-reply-mode",
+      { botId: request.botId, replyMode: request.replyMode },
     ),
   );
 }
