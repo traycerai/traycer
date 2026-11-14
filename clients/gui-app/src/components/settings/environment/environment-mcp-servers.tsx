@@ -15,14 +15,14 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import {
   useConfigurationMcpServerMutations,
+  useConfigurationMcpServerSave,
   useConfigurationMcpServersQuery,
   type EnvironmentMcpServer,
+  type McpServerSave,
 } from "@/hooks/environment/team/use-mcp-servers";
-import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -44,8 +44,7 @@ import { McpIntroduction } from "./configuration-introduction";
 import { McpServerDialog } from "./mcp-server-dialog";
 import {
   initialMcpServerForm,
-  mcpServerCredential,
-  mcpServerPutRequest,
+  mcpServerSave,
   mcpServerReady,
   type McpServerForm,
 } from "./mcp-server-form";
@@ -69,9 +68,11 @@ import {
   serverSwitchRefusal,
   toolCountPhrase,
 } from "./mcp-skills-copy";
-import { TeamMcpItems } from "./team-mcp-servers";
 import { TeamReadFailed } from "./team-read-failed";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
+
+/** An endpoint edit leaves the server's sign-in as it is. */
+const UNCHANGED_CREDENTIAL = { kind: "unchanged" } as const;
 
 export function EnvironmentMcpServersPage(): ReactNode {
   const configurationKey = useConfigurationKey();
@@ -91,26 +92,6 @@ function McpPage(props: { readonly children: ReactNode }): ReactNode {
 }
 
 function EnvironmentMcpServers(): ReactNode {
-  const version = useHostNegotiatedMethodVersion(
-    useHostClient(),
-    "environment.configuration.mcpServers.list",
-  );
-  if (version === null)
-    return (
-      <McpPage>
-        <MutedAgentSpinner />
-      </McpPage>
-    );
-  if (version === false)
-    return (
-      <McpPage>
-        <TeamMcpItems providerId={null} />
-      </McpPage>
-    );
-  return <McpServerList />;
-}
-
-function McpServerList(): ReactNode {
   const query = useConfigurationMcpServersQuery();
   const providers = useMcpProviders();
   const canEdit = useCanEditConfiguration();
@@ -216,17 +197,6 @@ function McpServerRow(props: {
   const source = useConfigurationSource();
   const name = useConfigurationName();
   const { remove, setEnabled } = useConfigurationMcpServerMutations();
-  const client = useHostClient();
-  const removable =
-    useHostNegotiatedMethodVersion(
-      client,
-      "environment.configuration.mcpServers.delete",
-    ) !== false;
-  const switchable =
-    useHostNegotiatedMethodVersion(
-      client,
-      "environment.configuration.mcpServers.setEnabled",
-    ) !== false;
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -258,7 +228,7 @@ function McpServerRow(props: {
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-2">
-          {props.canEdit && switchable ? (
+          {props.canEdit ? (
             <Switch
               aria-label={server.name}
               checked={enabled}
@@ -288,7 +258,7 @@ function McpServerRow(props: {
               }}
             />
           ) : null}
-          {props.canEdit && removable ? (
+          {props.canEdit ? (
             <Button
               type="button"
               size="icon-sm"
@@ -614,20 +584,37 @@ function McpOpenEditor(props: {
   readonly onDetail: (line: string | null) => void;
 }): ReactNode {
   const source = useConfigurationSource();
-  const { put, putItem } = useConfigurationMcpServerMutations();
-  const initial = endpointInitial(props.server);
+  const { putItem } = useConfigurationMcpServerMutations();
+  const put = useConfigurationMcpServerSave(() => UNCHANGED_CREDENTIAL);
+  // The server the draft was made against: what the draft is compared with,
+  // and the revision a save names. The draft and it are one snapshot: a
+  // refreshed server replaces both or neither.
+  const [baseline, setBaseline] = useState(props.server);
+  // Set once a save settles saved or refused as a revision conflict: the
+  // next server the list brings replaces the draft, edited or not.
+  const [adoptNext, setAdoptNext] = useState(false);
+  const initial = endpointInitial(baseline);
   const [endpoint, setEndpoint] = useState(initial);
-  const groups = groupServerTools(props.server, props.using, props.lists);
+  const groups = groupServerTools(baseline, props.using, props.lists);
   const draft = useToolDraft(groups);
   const endpointDirty = endpoint !== initial;
   const toolsDirty = toolDraftDirty(groups, draft.value, draft.edited);
+  if (
+    props.server !== baseline &&
+    (adoptNext || !(endpointDirty || toolsDirty))
+  ) {
+    setBaseline(props.server);
+    setEndpoint(endpointInitial(props.server));
+    draft.reset();
+    setAdoptNext(false);
+  }
   const canDisableAll = groups.some(
     (group) =>
       draft.value[group.name] ||
       (!draft.edited.has(group.name) &&
         group.listed.some((entry) => entry.enabled)),
   );
-  const ready = endpointReady(props.server, endpoint);
+  const ready = endpointReady(baseline, endpoint);
   const pending = put.isPending || putItem.isPending;
   const canSave =
     !pending && (toolsDirty || endpointDirty) && (!endpointDirty || ready);
@@ -640,12 +627,12 @@ function McpOpenEditor(props: {
   }, [onDetail, line]);
   const save = (): void => {
     if (source.kind !== "pool" || !canSave) return;
-    const item = props.server.item;
+    const item = baseline.item;
     // mcpServers.put writes the item's toggles itself. Sending the stored
     // toggles beside a parallel items.put loses whichever lands last.
     if (endpointDirty) {
       const request = endpointPutRequest(
-        props.server,
+        baseline,
         endpoint,
         source.environmentId,
       );
@@ -654,19 +641,28 @@ function McpOpenEditor(props: {
           ? request
           : {
               ...request,
-              toolToggles: togglesFromDraft(
-                item.toolToggles,
-                groups,
-                draft.value,
-                draft.edited,
-              ),
+              request: {
+                ...request.request,
+                toolToggles: togglesFromDraft(
+                  item.toolToggles,
+                  groups,
+                  draft.value,
+                  draft.edited,
+                ),
+              },
             };
       if (saved !== null)
         put.mutate(saved, {
-          onSuccess: (result) =>
+          onSuccess: (result) => {
+            if (
+              result.outcome === "saved" ||
+              result.reason === "revision_conflict"
+            )
+              setAdoptNext(true);
             props.onIssue(
               typedWriteIssue(result, "Couldn't save this server."),
-            ),
+            );
+          },
         });
     }
     if (toolsDirty && item !== null && !endpointDirty)
@@ -677,7 +673,7 @@ function McpOpenEditor(props: {
           key: item.key,
           os: null,
           value: mcpItemValue(
-            props.server,
+            baseline,
             togglesFromDraft(
               item.toolToggles,
               groups,
@@ -689,14 +685,18 @@ function McpOpenEditor(props: {
           revision: item.revision,
         },
         {
-          onSuccess: (result) => props.onIssue(configurationWriteIssue(result)),
+          onSuccess: (result) => {
+            if (result.outcome === "saved" || result.outcome === "conflict")
+              setAdoptNext(true);
+            props.onIssue(configurationWriteIssue(result));
+          },
         },
       );
   };
   return (
     <div className="flex flex-col gap-4 border-t border-border/60 px-3 py-4">
       <McpServerDetails
-        server={props.server}
+        server={baseline}
         endpoint={endpoint}
         using={props.using}
         total={props.total}
@@ -706,12 +706,12 @@ function McpOpenEditor(props: {
         onEndpoint={setEndpoint}
       />
       <ToolReadNotices
-        serverKey={props.server.item?.key ?? props.server.name}
+        serverKey={baseline.item?.key ?? baseline.name}
         providers={props.using}
         lists={props.lists}
       />
       <McpToolGrid
-        serverName={props.server.name}
+        serverName={baseline.name}
         groups={groups}
         draft={draft.value}
         canEdit={props.canEdit}
@@ -808,18 +808,17 @@ function endpointReady(
   endpoint: string,
 ): boolean {
   const form = formForEndpoint(server, endpoint);
-  return mcpServerReady(form, mcpServerCredential(form, true, false));
+  return mcpServerReady(form, UNCHANGED_CREDENTIAL);
 }
 
 function endpointPutRequest(
   server: EnvironmentMcpServer,
   endpoint: string,
   environmentId: string,
-) {
+): McpServerSave | null {
   const form = formForEndpoint(server, endpoint);
-  const credential = mcpServerCredential(form, true, false);
-  if (credential === null || !mcpServerReady(form, credential)) return null;
-  return mcpServerPutRequest(form, server, environmentId, credential);
+  if (!mcpServerReady(form, UNCHANGED_CREDENTIAL)) return null;
+  return mcpServerSave(form, server, environmentId);
 }
 
 function ToolReadNotices(props: {
@@ -986,6 +985,8 @@ function useToolDraft(groups: readonly McpToolGroup[]): {
   readonly edited: ReadonlySet<string>;
   readonly setTool: (name: string, next: boolean) => void;
   readonly setAll: (next: boolean) => void;
+  /** Drops every edit: each tool reads as its group does now. */
+  readonly reset: () => void;
 } {
   const signature = groups
     .map(
@@ -1014,6 +1015,10 @@ function useToolDraft(groups: readonly McpToolGroup[]): {
     setAll: (next) => {
       setEdited(new Set(groups.map((group) => group.name)));
       setValue(draftAll(groups, next));
+    },
+    reset: () => {
+      setEdited(new Set());
+      setValue(initialToolDraft(groups));
     },
   };
 }

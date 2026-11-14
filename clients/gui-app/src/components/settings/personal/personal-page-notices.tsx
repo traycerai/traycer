@@ -3,10 +3,10 @@
  * Update that file whenever this settings surface changes.
  */
 import { useContext, useState, type ReactNode } from "react";
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   LocalOverrideTarget,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -21,6 +21,7 @@ import { PersonalPageContext } from "@/components/settings/personal/personal-pag
 import { itemLabel } from "@/components/settings/personal/personal-page-status";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { useEnvironmentUndoMutation } from "@/hooks/environment/use-environment-undo-mutation";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
@@ -72,14 +73,6 @@ export function PersonalPageNotices(): ReactNode {
 const ROW_CLASS =
   "flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-md border border-border/60 bg-foreground/3 px-3 py-1.5 text-ui-sm";
 
-/** What an Undo or a Keep changes: the notices, the host's status, the values. */
-const UNDO_READS = [
-  "environment.notices",
-  "environment.status",
-  "config.env.list",
-  "providers.list",
-] as const;
-
 function NoticeRow(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
@@ -89,15 +82,7 @@ function NoticeRow(props: {
   const { notice } = props;
   const label = itemLabel(notice);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const grant = useExecutableWriteGrant();
-  const undo = useHostScopedMutationForClient(props.client, {
-    method: "environment.undo",
-    // The displaced value can run on every host, so the undo carries the grant.
-    prepareRequest: grant,
-    mutationKey: environmentMutationKeys.undo(),
-    errorMessage: "Couldn't undo.",
-    invalidateMethods: UNDO_READS,
-  });
+  const undo = useEnvironmentUndoMutation(props.client);
   const keepTarget = keepLocalTarget(notice, props.hostId);
   return (
     <li className={ROW_CLASS} data-testid="personal-notice">
@@ -124,7 +109,6 @@ function NoticeRow(props: {
                 try {
                   const outcome = await undo.mutateAsync({
                     noticeId: notice.noticeId,
-                    executableWriteGrant: null,
                   });
                   setRefusal(
                     undoRefusalText(outcome, label, {
@@ -145,7 +129,7 @@ function NoticeRow(props: {
             disabled={undo.isPending}
             onClick={() =>
               undo.mutate(
-                { noticeId: notice.noticeId, executableWriteGrant: null },
+                { noticeId: notice.noticeId },
                 {
                   onSuccess: (outcome) =>
                     setRefusal(undoRefusalText(outcome, label, null)),
@@ -272,7 +256,7 @@ function useCurrentValue(
  * row's opens Secrets.
  */
 function ReviewRow(props: {
-  readonly entry: EnvironmentReviewEntry;
+  readonly entry: ReviewHeldEntry;
   readonly hostId: string | null;
   readonly hostName: string;
 }): ReactNode {

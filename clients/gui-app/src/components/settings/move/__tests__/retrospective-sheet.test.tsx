@@ -87,6 +87,7 @@ function sheetElement(overrides: SheetOverrides): ReactNode {
       held={[HELD_HOOK]}
       stillLocal={STILL_LOCAL}
       heldPendingId={overrides.heldPendingId}
+      heldApproveRefused={new Set()}
       heldIssue={null}
       inventoryRead={null}
       onOpenChange={overrides.onOpenChange}
@@ -334,6 +335,7 @@ describe("RetrospectiveSheet", () => {
         held={[]}
         stillLocal={STILL_LOCAL}
         heldPendingId={null}
+        heldApproveRefused={new Set()}
         heldIssue={null}
         inventoryRead={null}
         onOpenChange={vi.fn()}

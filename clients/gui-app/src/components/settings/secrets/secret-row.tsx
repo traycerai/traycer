@@ -511,7 +511,7 @@ function SecretRowRemoval(props: {
   readonly hostName: (hostId: string) => string;
   readonly pending: boolean;
 }): ReactNode {
-  const retry = useSecretRemovalRetry(props.client, props.hostId);
+  const retry = useSecretRemovalRetry();
   return (
     <>
       <SecretRemovalStatus

@@ -1,8 +1,4 @@
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,10 +6,10 @@ import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
 import { AddSecretDialog } from "@/components/settings/secrets/add-secret-dialog";
 import { Button } from "@/components/ui/button";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useCanEditConfiguration } from "./configuration-source";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { TeamSecretNames } from "./team-secret-names";
@@ -55,17 +51,7 @@ export function TeamProviderKeys(props: {
     />
   ) : null;
   const reread = (): void => {
-    void queries.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(
-        hostRpcServingTierHostId(
-          "environment.secrets.list",
-          client.getActiveHostId(),
-          readProcessHostRpcTierPlan(),
-          null,
-        ),
-        "environment.secrets.list",
-      ),
-    });
+    void invalidateEnvironmentReads(queries, ["environment.secrets.list"]);
   };
   return (
     <section

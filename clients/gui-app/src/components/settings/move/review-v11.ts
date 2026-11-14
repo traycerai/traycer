@@ -1,28 +1,8 @@
-/**
- * `environment.review@1.1` and `@1.2` fields the sheet reads. The hook is
- * typed as the 1.0 answer (`entries` only); a 1.1 host adds `shownAt`,
- * `acknowledgedAt` and `evidence`, and a 1.2 host each entry's facts.
- */
+/** The `environment.review@1.2` facts a held entry's line reads. */
 import type {
   EnvironmentReviewEntry,
   EnvironmentReviewEntryV12,
-  EnvironmentReviewResponse,
-  EnvironmentReviewResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
-import type { ReviewEvidence } from "@/components/settings/move/retrospective-copy";
-
-export function isReviewV11(
-  review: EnvironmentReviewResponse,
-): review is EnvironmentReviewResponseV11 {
-  return "shownAt" in review && "evidence" in review;
-}
-
-export function reviewEvidence(
-  review: EnvironmentReviewResponse,
-): ReviewEvidence {
-  if (!isReviewV11(review)) return { version: null, at: null };
-  return review.evidence;
-}
 
 /** What a held executable entry does, as `environment.review@1.2` names it. */
 export interface ReviewEntryFacts {
