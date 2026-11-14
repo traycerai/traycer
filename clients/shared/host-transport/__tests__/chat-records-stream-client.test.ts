@@ -793,7 +793,7 @@ describe("ChatRecordsStreamClient", () => {
   });
 
   describe("the @1.5 chat row - who started the chat", () => {
-    function upsertWithStarter(): Record<string, unknown> {
+    function upsertWithStarter(): Parameters<ServerFrameHandler>[0] {
       return {
         kind: "upsert",
         hasBinaryPayload: false,
