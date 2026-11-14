@@ -407,6 +407,9 @@ function WindowHostModalBody(props: {
   if (props.variant.kind === "update-client") {
     return <ClientCompatibilityDetail variant={props.variant} />;
   }
+  if (props.variant.kind === "unrecognised-refusal") {
+    return <RefusalDetail code={props.variant.code} />;
+  }
   if (props.bootBody !== null) return props.bootBody;
   if (props.progress === null) return null;
   return <LaneProgressLine progress={props.progress} />;
@@ -488,6 +491,19 @@ function IncompatibleDetail(props: {
         <span>Minimum supported: {detail.minSupportedVersion}</span>
       )}
       <span className="break-words">Reason: {detail.code}</span>
+    </div>
+  );
+}
+
+/** A refusal whose reason this app does not know: its code, for a report. */
+function RefusalDetail(props: { readonly code: string }): ReactNode {
+  return (
+    <div
+      // align-ok: the same block as `IncompatibleDetail` above.
+      className="flex w-full flex-col gap-1 rounded-md bg-foreground/8 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+      data-testid="window-host-modal-refusal-detail"
+    >
+      <span className="break-words">Reason: {props.code}</span>
     </div>
   );
 }

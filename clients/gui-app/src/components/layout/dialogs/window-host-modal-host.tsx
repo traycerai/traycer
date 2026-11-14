@@ -400,7 +400,11 @@ function resolveRetry(
   localLifecycle: boolean,
   settled: SettledFailure,
 ): ResolvedRetry {
-  if (variant.kind !== "offline") return { onRetry: null, pending: false };
+  // An unrecognised refusal is the `offline` cover with its code shown, and
+  // keeps that cover's recovery.
+  if (variant.kind !== "offline" && variant.kind !== "unrecognised-refusal") {
+    return { onRetry: null, pending: false };
+  }
   // A healthy start in progress has nothing to retry. `cause === "cold-start"`
   // always resolves to `offline` by design, so before this gate every local
   // boot rendered Retry from its first frame, with no failure of any kind - the
