@@ -1,9 +1,6 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
-import type {
-  TeamComputersResult,
-  SetEnvironmentBotHostResult,
-} from "../host-client/team-computers";
+import type { TeamComputersResult } from "../host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxArtifactBridge } from "./sandbox-artifacts";
@@ -457,12 +454,6 @@ export interface IRunnerHost {
     bearer: string,
     environmentId: string,
   ): Promise<TeamComputersResult>;
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult>;
   mintTeamComputerInstallToken(
     bearerToken: string,
     environmentId: string,

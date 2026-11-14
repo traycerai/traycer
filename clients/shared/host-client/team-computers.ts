@@ -9,7 +9,6 @@ const teamComputerSchema = z.object({
   hostName: z.string().nullable(),
   hostKind: hostRegistryKindSchemaV11,
   sharingGeneration: z.number().int().nonnegative(),
-  holdsBotSlot: z.boolean().optional().default(false),
   purgePending: z.boolean(),
 });
 const computersSchema = z.object({ hosts: z.array(teamComputerSchema) });
@@ -23,35 +22,30 @@ export type TeamComputerFailure =
 export type TeamComputersResult =
   | { readonly kind: "ok"; readonly hosts: readonly TeamComputer[] }
   | TeamComputerFailure;
-export type SetEnvironmentBotHostResult =
-  | { readonly kind: "ok"; readonly host: TeamComputer }
-  | TeamComputerFailure;
 
 async function teamComputersRequest(
   authnBaseUrl: string,
   bearer: string,
   environmentId: string,
-  input: { readonly hostId: string; readonly sharingGeneration: number } | null,
 ): Promise<
   { readonly kind: "body"; readonly body: unknown } | TeamComputerFailure
 > {
   const base = authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`;
   const url = new URL(
-    `api/v3/environments/${encodeURIComponent(environmentId)}/${input === null ? "hosts" : "bot-host"}`,
+    `api/v3/environments/${encodeURIComponent(environmentId)}/hosts`,
     base,
   );
-  if (input === null) url.searchParams.set("include", "binding");
+  url.searchParams.set("include", "binding");
   const abort = composeRequestAbort(null, 10_000);
   try {
     const response = await untilAborted(
       fetch(url.toString(), {
-        method: input === null ? "GET" : "PUT",
+        method: "GET",
         headers: {
           Authorization: `Bearer ${bearer}`,
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: input === null ? undefined : JSON.stringify(input),
         signal: abort.signal,
       }),
       abort.signal,
@@ -81,7 +75,6 @@ export async function listTeamComputersViaHttp(
     authnBaseUrl,
     bearer,
     environmentId,
-    null,
   );
   if (result.kind !== "body") return result;
   const parsed = computersSchema.safeParse(result.body);
@@ -91,29 +84,4 @@ export async function listTeamComputersViaHttp(
   )
     return { kind: "network-error" };
   return { kind: "ok", hosts: parsed.data.hosts };
-}
-
-export async function setEnvironmentBotHostViaHttp(
-  authnBaseUrl: string,
-  bearer: string,
-  environmentId: string,
-  hostId: string,
-  sharingGeneration: number,
-): Promise<SetEnvironmentBotHostResult> {
-  const result = await teamComputersRequest(
-    authnBaseUrl,
-    bearer,
-    environmentId,
-    { hostId, sharingGeneration },
-  );
-  if (result.kind !== "body") return result;
-  const parsed = teamComputerSchema.safeParse(result.body);
-  if (
-    !parsed.success ||
-    parsed.data.hostId !== hostId ||
-    parsed.data.environmentId !== environmentId ||
-    !parsed.data.holdsBotSlot
-  )
-    return { kind: "network-error" };
-  return { kind: "ok", host: parsed.data };
 }
