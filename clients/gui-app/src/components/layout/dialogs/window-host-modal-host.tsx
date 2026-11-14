@@ -31,6 +31,8 @@ import { appLogger } from "@/lib/logger";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   hostUpdateActionApplies,
+  isDoorCoverVariant,
+  type DoorCoverKind,
   type WindowNarrationCause,
   type WindowNarrationState,
   type WindowNarrationVariant,
@@ -344,8 +346,8 @@ function NarratingWindowHostModal(props: {
  * Only the cold-start cause gets the healthy grace period. `no-usable-host`
  * means nothing can serve this window right now, which IS the settled failure -
  * there is no in-progress start to protect there, and withholding recovery on
- * that arm would be the mirror defect. `access-refused` is no failure at all:
- * the host answered, so there is nothing to retry and nothing to report.
+ * that arm would be the mirror defect. `door-state` is no failure of this app:
+ * the host or the sign-in answered, so there is nothing to report.
  */
 interface SettledFailure {
   readonly failed: boolean;
@@ -357,7 +359,7 @@ function hasSettledFailure(
   presentation: DefaultHostReadinessPresentation,
 ): SettledFailure {
   if (cause === "no-usable-host") return { failed: true, slow: false };
-  if (cause === "access-refused") return { failed: false, slow: false };
+  if (cause === "door-state") return { failed: false, slow: false };
   return {
     // `provisioningError` is read ONLY under this cause. Its own contract warns
     // it outlives the attempt that produced it - a host that failed to install
@@ -402,6 +404,14 @@ function resolveRetry(
   localLifecycle: boolean,
   settled: SettledFailure,
 ): ResolvedRetry {
+  if (isDoorCoverVariant(variant)) {
+    return DOOR_COVERS_WITH_RETRY.has(variant.kind)
+      ? {
+          onRetry: () => retryDoorCover(variant.hostId, presentation),
+          pending: false,
+        }
+      : { onRetry: null, pending: false };
+  }
   // An unrecognised refusal is the `offline` cover with its code shown, and
   // keeps that cover's recovery.
   if (variant.kind !== "offline" && variant.kind !== "unrecognised-refusal") {
@@ -422,6 +432,24 @@ function resolveRetry(
     };
   }
   return { onRetry: presentation.refreshDirectory, pending: false };
+}
+
+/** The door covers board C1 draws with a Retry: each says "then retry". */
+const DOOR_COVERS_WITH_RETRY: ReadonlySet<DoorCoverKind> =
+  new Set<DoorCoverKind>(["keys-unavailable", "clock-skew", "token-expired"]);
+
+/**
+ * Retry on a door cover: open the refused computer again now.
+ *
+ * The one call site for the door's per-host re-open (`retryHostDoor`, not yet
+ * on this branch); until it arrives this re-reads the host registry. `hostId`
+ * is the computer the re-open is aimed at.
+ */
+function retryDoorCover(
+  _hostId: string,
+  presentation: DefaultHostReadinessPresentation,
+): void {
+  presentation.refreshDirectory();
 }
 
 function resolveUpdateHost(

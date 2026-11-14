@@ -42,12 +42,45 @@ import {
  *   host it is booting FOR the user. So during a first launch the authority
  *   names a host, ∅ is false, and a strictly-∅ modal would be invisible for
  *   exactly the state this surface is supposed to own.
- * - `access-refused` - the host answered and would not admit this account.
- *   Nothing failed and nothing will retry, so the cover offers no Retry and no
- *   issue report: only switching accounts clears it.
+ * - `door-state` - the host this window would use is in a door state the
+ *   boards draw a cover for. The cover is exactly that state's: its words and
+ *   its buttons. It is not a failure of this app, so it offers no issue report
+ *   and no diagnostics of this machine's host.
  */
 export type WindowNarrationCause =
-  "no-usable-host" | "cold-start" | "access-refused";
+  | "no-usable-host"
+  | "cold-start"
+  | "door-state";
+
+/** The door states drawn as their own cover, each with the computer it is about. */
+export type DoorCoverKind =
+  | "token-unavailable"
+  | "keys-unavailable"
+  | "clock-skew"
+  | "token-expired"
+  | "enrolment-broken"
+  | "membership-removed";
+
+type DoorCoverVariant = {
+  readonly kind: DoorCoverKind;
+  /** The computer the state is about: the one Retry re-opens. */
+  readonly hostId: string;
+};
+
+const DOOR_COVER_KINDS: ReadonlySet<string> = new Set<DoorCoverKind>([
+  "token-unavailable",
+  "keys-unavailable",
+  "clock-skew",
+  "token-expired",
+  "enrolment-broken",
+  "membership-removed",
+]);
+
+export function isDoorCoverVariant(
+  variant: WindowNarrationVariant,
+): variant is DoorCoverVariant {
+  return DOOR_COVER_KINDS.has(variant.kind);
+}
 
 /**
  * The three variants, and the actions each may offer.
@@ -61,6 +94,7 @@ export type WindowNarrationVariant =
   | { readonly kind: "offline" }
   | { readonly kind: "team-membership-required" }
   | { readonly kind: "not-admitted" }
+  | DoorCoverVariant
   /**
    * The `offline` cover for a host whose refusal carries a reason this app
    * does not know: a newer host, never an older one. Its own kind only so the
@@ -374,28 +408,63 @@ export function hostUpdateActionApplies(
 }
 
 /**
- * The cover a blocking door state draws. Not being a member of the computer's
- * team, or not being admitted to it, owns the window outright: only switching
- * accounts clears either. Every other blocking state covers only while
- * nothing is serving it, and draws the "no host" cover.
+ * The cover a blocking door state draws, and its cause.
+ *
+ * A state the app does not get out of by itself (the policy's `retry` is
+ * `none`) owns the window outright: only a person or an Admin clears it. A
+ * state it retries on its own covers only while nothing is serving.
+ *
+ * A claimed computer, an older host and an unrecognised reason have no cover
+ * of their own here: they draw the "no host" cover, the unrecognised reason
+ * with its code beneath it.
  */
-function doorStateVariant(
-  input: WindowNarrationInput,
-): WindowNarrationVariant | null {
+function doorStateCover(input: WindowNarrationInput): {
+  readonly cause: WindowNarrationCause;
+  readonly variant: WindowNarrationVariant;
+} | null {
   const state = input.doorState ?? null;
   if (state === null || !HOST_DOOR_STATE_POLICY[state.kind].blocks) return null;
-  if (state.kind === "not-a-member") {
-    return { kind: "team-membership-required" };
+  switch (state.kind) {
+    case "not-a-member":
+      return {
+        cause: "door-state",
+        variant: { kind: "team-membership-required" },
+      };
+    case "not-admitted":
+      return { cause: "door-state", variant: { kind: "not-admitted" } };
+    case "membership-removed":
+      return {
+        cause: "door-state",
+        variant: { kind: state.kind, hostId: state.hostId },
+      };
+    default:
+      break;
   }
-  if (state.kind === "not-admitted") return { kind: "not-admitted" };
   const alreadyServing =
     input.hasBeenServed &&
     isServingLease(findLease(input.leases, input.effectiveHostId));
   if (alreadyServing) return null;
-  if (state.kind === "unrecognised-refusal" && state.detail !== null) {
-    return { kind: "unrecognised-refusal", code: state.detail.code };
+  switch (state.kind) {
+    case "token-unavailable":
+    case "keys-unavailable":
+    case "clock-skew":
+    case "token-expired":
+    case "enrolment-broken":
+      return {
+        cause: "door-state",
+        variant: { kind: state.kind, hostId: state.hostId },
+      };
+    case "unrecognised-refusal":
+      return {
+        cause: "no-usable-host",
+        variant:
+          state.detail === null
+            ? { kind: "offline" }
+            : { kind: "unrecognised-refusal", code: state.detail.code },
+      };
+    default:
+      return { cause: "no-usable-host", variant: { kind: "offline" } };
   }
-  return { kind: "offline" };
 }
 
 /**
@@ -410,15 +479,8 @@ export function deriveWindowNarration(
   input: WindowNarrationInput,
 ): WindowNarrationState {
   if (!input.attached) return { kind: "silent" };
-  const doorCover = doorStateVariant(input);
-  if (doorCover !== null) {
-    return {
-      kind: "narrating",
-      cause:
-        doorCover.kind === "not-admitted" ? "access-refused" : "no-usable-host",
-      variant: doorCover,
-    };
-  }
+  const doorCover = doorStateCover(input);
+  if (doorCover !== null) return { kind: "narrating", ...doorCover };
   // NOBODY HAS ASKED YET, so nothing may report a verdict. An ∅ derived from a
   // fleet no attempt has concluded for is indistinguishable from an ∅ derived
   // from an account that owns no hosts - both are an empty lease list - and on
