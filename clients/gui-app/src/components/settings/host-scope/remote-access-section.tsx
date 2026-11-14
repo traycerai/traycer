@@ -19,6 +19,7 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useRemoteAccessSetMutation } from "@/hooks/environment/use-remote-access-set-mutation";
+import { useRemoteAccessTurnOnMutation } from "@/hooks/environment/use-remote-access-turn-on-mutation";
 import { useCanSetRemoteAccess } from "@/hooks/environment/use-can-set-remote-access";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -50,6 +51,8 @@ export function RemoteAccessSection(props: {
     setLastAnswer(null);
   }
   const set = useRemoteAccessSetMutation(props.client, setLastAnswer);
+  const turnOn = useRemoteAccessTurnOnMutation(props.client, props.hostId);
+  const failure = turnOn.error ?? set.error;
   const shown = shownRemoteAccess(props.status, lastAnswer);
   return (
     <SettingsGroup
@@ -71,15 +74,18 @@ export function RemoteAccessSection(props: {
           {!writable ? null : (
             <RemoteAccessControl
               shown={shown}
-              pending={set.isPending}
-              onSet={(enabled) => set.mutate({ enabled })}
+              pending={set.isPending || turnOn.isPending}
+              onSet={(enabled) => {
+                if (enabled) turnOn.mutate();
+                else set.mutate({ enabled: false });
+              }}
             />
           )}
         </div>
       </RemoteAccessQuestion>
-      {set.error !== null ? (
+      {failure !== null ? (
         <p role="alert" className="px-5 py-3 text-ui-sm text-destructive">
-          {remoteAccessFailureText(set.error.code)}
+          {remoteAccessFailureText(failure.code)}
         </p>
       ) : null}
     </SettingsGroup>

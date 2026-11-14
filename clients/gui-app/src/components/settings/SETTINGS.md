@@ -6737,7 +6737,11 @@ set-state-in-effect` forbids the effect form, and an effect would also
        devices and agents signed in to your account can reach this
        computer."), Off ("Other devices and agents can't reach this computer.
        Your settings still reach it."), and Turning off ("Other devices and
-       agents are being disconnected.") with a spinner. `host.remoteAccess.set
+       agents are being disconnected.") with a spinner. Turn on (and the
+       question's On) is the app's own call to authn on the person's sign-in
+       (`PUT /api/v3/hosts/:hostId/remote-access`), then one
+       `host.status.refresh` to that computer, whose failure is silent; the
+       section then reads `environment.status`. `host.remoteAccess.set
 {enabled: false}` answers `turning_off` until the host has closed its
        sessions, and the section keeps saying so until the host's status
        reports `off` (`shownRemoteAccess`), even when a status read still says

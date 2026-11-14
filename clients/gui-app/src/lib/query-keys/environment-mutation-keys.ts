@@ -24,6 +24,7 @@ export const environmentMutationKeys = {
   localOverrideSet: () => ["config.env.localOverride.set"] as const,
   localOverrideClear: () => ["config.env.localOverride.clear"] as const,
   remoteAccessSet: () => ["host.remoteAccess.set"] as const,
+  remoteAccessTurnOn: () => ["hosts.remoteAccess.put"] as const,
   setMainBot: () => ["environment.setMainBot"] as const,
   moveAccept: () => ["environment.move.accept"] as const,
   moveStop: () => ["environment.move.stop"] as const,

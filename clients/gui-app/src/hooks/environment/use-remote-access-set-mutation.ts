@@ -12,7 +12,8 @@ import { environmentMutationKeys } from "@/lib/query-keys";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 
 /**
- * Turns remote access on or off on the host `client` reaches. A successful
+ * Turns remote access off on the host `client` reaches (On is the app's call
+ * to authn, `useRemoteAccessTurnOnMutation`). A successful
  * change also answers the one-time question for that host, so it is not
  * asked again on this desktop. `onAnswer` receives the host's answer: Off
  * answers `turning_off` until its sessions are closed.
