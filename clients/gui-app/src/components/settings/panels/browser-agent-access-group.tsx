@@ -14,7 +14,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import { configurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import {
-  useCanAdministerConfiguration,
+  useCanEditConfiguration,
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentBrowserAccessQuery } from "@/hooks/environment/team/use-browser-access-query";
@@ -136,7 +136,7 @@ function AgentBrowserAccessRow(): ReactNode {
 
 function TeamBrowserAccessRow(): ReactNode {
   const source = useConfigurationSource();
-  const canEdit = useCanAdministerConfiguration();
+  const canEdit = useCanEditConfiguration();
   const query = useEnvironmentBrowserAccessQuery(false);
   const read = useBoundedRead(query);
   const { put } = useConfigurationItemMutations();

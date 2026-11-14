@@ -11,7 +11,7 @@ import {
 } from "@/hooks/environment/team/use-policy-query";
 import {
   useConfigurationSource,
-  useCanAdministerConfiguration,
+  useCanEditConfiguration,
   useConfigurationIsPersonal,
 } from "./configuration-source";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
@@ -64,7 +64,7 @@ function TeamPolicyEditor(props: {
   const personal = useConfigurationIsPersonal();
   const teamName = useConfigurationName();
   const source = useConfigurationSource();
-  const canAdminister = useCanAdministerConfiguration();
+  const canEdit = useCanEditConfiguration();
   const members = useConfigurationAdminNames();
   const mutation = useConfigurationPolicyMutation();
   const [body, setBody] = useState(props.body);
@@ -95,13 +95,13 @@ function TeamPolicyEditor(props: {
       <MarkdownEditPreview
         value={body}
         onChange={setBody}
-        readOnly={!canAdminister || mutation.isPending}
+        readOnly={!canEdit || mutation.isPending}
         placeholder={undefined}
         ariaLabel="Approval policy"
         testId="team-approval-policy"
-        showPreview={canAdminister}
+        showPreview={canEdit}
       />
-      {canAdminister ? (
+      {canEdit ? (
         <div className="flex justify-end gap-2">
           <Button
             type="button"

@@ -114,7 +114,7 @@ function removeSurfaceHost(): void {
 
 describe("team pages on a build with a server pool", () => {
   it("reads the team's records and members from the pool, whichever host the window is on", async () => {
-    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+    const harness = mountTeamPageOnPoolBuild(poolSource("viewer"), {
       "environment.configuration.items": () => ({
         items: [
           configurationItem({
@@ -189,7 +189,7 @@ describe("team pages on a build with a server pool", () => {
       "environment.plans.unlink": () => ({ outcome: "unlinked" }),
     });
     removeSurfaceHost();
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 

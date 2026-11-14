@@ -183,8 +183,8 @@ describe("BrowserAgentAccessGroup on a team", () => {
     expect(harness.paramsOf("config.browser.get")).toHaveLength(0);
   });
 
-  it("shows an editor the setting without a switch", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
+  it("shows a viewer the setting without a switch", async () => {
+    const harness = mountTeamPage(poolSource("viewer"), {
       "environment.configuration.items": () => ({ items: [access(true, 4)] }),
     });
     render(<BrowserAgentAccessGroup />, { wrapper: harness.Wrapper });

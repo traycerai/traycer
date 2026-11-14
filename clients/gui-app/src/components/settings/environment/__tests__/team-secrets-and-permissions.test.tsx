@@ -583,8 +583,8 @@ describe("TeamPermissions", () => {
     legacyMembers: [],
   };
 
-  it("shows an editor the policy read-only and names the admins who change it", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
+  it("shows a viewer the policy read-only and names the admins who change it", async () => {
+    const harness = mountTeamPage(poolSource("viewer"), {
       "environment.configuration.items": () => ({
         items: [policy(3, "Allow reads")],
       }),
@@ -794,7 +794,7 @@ describe("TeamPermissions", () => {
   });
 
   it("still shows the policy when the member roster fails to load", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountTeamPage(poolSource("viewer"), {
       "environment.configuration.items": () => ({
         items: [policy(3, "Allow reads")],
       }),

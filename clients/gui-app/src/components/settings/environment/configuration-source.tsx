@@ -59,15 +59,6 @@ export function useCanEditConfiguration(): boolean {
   );
 }
 
-export function useCanAdministerConfiguration(): boolean {
-  const source = useConfigurationSource();
-  return (
-    source.kind === "host" ||
-    (!source.transportReadOnly &&
-      (source.effectiveRole === "owner" || source.effectiveRole === "admin"))
-  );
-}
-
 /** An older inventory cannot authorize edits to a team, and answers `null`. */
 export function configurationRoleOf(
   descriptor: EnvironmentDescriptorV11,

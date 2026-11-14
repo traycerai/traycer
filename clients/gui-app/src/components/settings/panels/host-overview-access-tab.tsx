@@ -185,7 +185,7 @@ function AccessSections(props: {
         client={props.client}
         sentence={
           props.status.principal?.kind === "team"
-            ? teamTerminalAccountSentence(props.status.principal.teamName)
+            ? teamTerminalAccountSentence()
             : terminalAccountSentence(
                 props.hostId !== null && props.hostId === localHostId
                   ? null

@@ -34,7 +34,6 @@ import {
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
 import {
-  useCanAdministerConfiguration,
   useCanEditConfiguration,
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
@@ -305,7 +304,6 @@ function Probe(): ReactNode {
 function ConfigurationPermissionProbe(): ReactNode {
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
-  const canAdminister = useCanAdministerConfiguration();
   return (
     <p
       data-testid="configuration-permission-probe"
@@ -316,7 +314,6 @@ function ConfigurationPermissionProbe(): ReactNode {
         source.kind === "pool" ? (source.providerHandle ?? "none") : "host"
       }
       data-can-edit={String(canEdit)}
-      data-can-administer={String(canAdminister)}
     />
   );
 }
@@ -1419,7 +1416,6 @@ describe("transport-scoped configuration access", () => {
     expect(probe.getAttribute("data-effective-role")).toBe("admin");
     expect(probe.getAttribute("data-provider-handle")).toBe("handle-a");
     expect(probe.getAttribute("data-can-edit")).toBe("false");
-    expect(probe.getAttribute("data-can-administer")).toBe("false");
     expect(
       await screen.findByText(
         "You can see Acme's settings but not change them.",
@@ -1449,7 +1445,6 @@ describe("transport-scoped configuration access", () => {
     const probe = await screen.findByTestId("configuration-permission-probe");
     expect(probe.getAttribute("data-effective-role")).toBe("owner");
     expect(probe.getAttribute("data-can-edit")).toBe("true");
-    expect(probe.getAttribute("data-can-administer")).toBe("true");
     expect(screen.queryByText(/but not change them/)).toBeNull();
   });
 
@@ -1464,7 +1459,6 @@ describe("transport-scoped configuration access", () => {
     const probe = await screen.findByTestId("configuration-permission-probe");
     expect(probe.getAttribute("data-effective-role")).toBe("admin");
     expect(probe.getAttribute("data-can-edit")).toBe("true");
-    expect(probe.getAttribute("data-can-administer")).toBe("true");
     expect(screen.queryByText(/but not change them/)).toBeNull();
   });
 
@@ -1501,7 +1495,6 @@ describe("transport-scoped configuration access", () => {
     const probe = await screen.findByTestId("configuration-permission-probe");
     expect(probe.getAttribute("data-effective-role")).toBe("admin");
     expect(probe.getAttribute("data-can-edit")).toBe("true");
-    expect(probe.getAttribute("data-can-administer")).toBe("true");
     expect(screen.queryByText(/but not change them/)).toBeNull();
   });
 });

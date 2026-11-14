@@ -519,7 +519,7 @@ describe("<HostOverviewAccessTab /> terminal accounts", () => {
     await screen.findByTestId("terminal-account-row");
     expect(
       screen.getByText(
-        "This host's own sign-in, which stays on this host. An admin can link a plan on Acme's Providers to use one everywhere.",
+        "This host's own sign-in, which stays on this host.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/This computer's own sign-in/)).toBeNull();

@@ -14,8 +14,7 @@ export interface ConfigurationPlan {
 export function PlansCard(props: {
   readonly teamName: string;
   readonly plans: readonly ConfigurationPlan[];
-  readonly canAdminister: boolean;
-  readonly adminNames: readonly string[];
+  readonly canEdit: boolean;
   readonly isPending: boolean;
   readonly onLink: () => void;
   readonly onPreviewUnlink: (plan: ConfigurationPlan) => void;
@@ -40,7 +39,7 @@ export function PlansCard(props: {
         />
       )}
       <PlanActionRow
-        canAdminister={props.canAdminister}
+        canEdit={props.canEdit}
         isPending={props.isPending}
         selected={selected}
         onLink={props.onLink}
@@ -49,11 +48,6 @@ export function PlansCard(props: {
       {quota === null ? null : (
         <p className="text-ui-xs text-muted-foreground">{quota}</p>
       )}
-      {!props.canAdminister ? (
-        <p className="text-ui-xs text-muted-foreground">
-          {askAnAdminLine(props.adminNames)}
-        </p>
-      ) : null}
     </section>
   );
 }
@@ -84,13 +78,13 @@ function LinkedPlanPicker(props: {
 }
 
 function PlanActionRow(props: {
-  readonly canAdminister: boolean;
+  readonly canEdit: boolean;
   readonly isPending: boolean;
   readonly selected: ConfigurationPlan | null;
   readonly onLink: () => void;
   readonly onPreviewUnlink: (plan: ConfigurationPlan) => void;
 }): ReactNode {
-  if (!props.canAdminister) return null;
+  if (!props.canEdit) return null;
   const selected = props.selected;
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -135,18 +129,4 @@ function planQuotaSentence(
 ): string | null {
   if (plan.status === "pending" || plan.status === "expired") return null;
   return `Shared ${plan.providerLabel} quota. Sandbox charges use ${teamName} credits.`;
-}
-
-/**
- * What a reader who cannot link a plan is told: who to ask, two admins by
- * name and the rest by count, so a long list stays one line.
- */
-function askAnAdminLine(adminNames: readonly string[]): string {
-  const opening = "Only an admin can link a plan";
-  const [first, second] = adminNames;
-  if (adminNames.length === 0) return `${opening}.`;
-  if (adminNames.length === 1) return `${opening}: ask ${first}.`;
-  if (adminNames.length === 2) return `${opening}: ask ${first} or ${second}.`;
-  const others = adminNames.length - 2;
-  return `${opening}: ask ${first}, ${second} or ${others === 1 ? "1 other" : `${others} others`}.`;
 }
