@@ -8,24 +8,23 @@
  * the read, however fresh the client calls it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   mountTeamPage,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { loadSecretDetails } from "@/components/settings/details/secret-details-status";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { DetailsStatus } from "@/lib/settings-details-entry";
-import { beginEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
+import {
+  beginEnvironmentCloudOperation,
+  environmentCloudQueryKey,
+} from "@/hooks/environment/use-environment-cloud";
 
 type SecretsList = ResponseOfMethod<
   HostRpcRegistry,
@@ -67,27 +66,26 @@ const STATUS: DetailsStatus = {
 };
 
 /** The scope the page's own read of the list files its answer under. */
-const listScope = (hostId: string | null): readonly unknown[] =>
-  hostQueryKeys.methodScope(
-    hostRpcServingTierHostId(
-      "environment.secrets.list",
-      hostId,
-      readProcessHostRpcTierPlan(),
-      null,
-    ),
+const listScope = (): readonly unknown[] =>
+  environmentCloudQueryKey(
     "environment.secrets.list",
-  );
+    { environmentId: ENVIRONMENT },
+    VIEWER,
+    [],
+  ).slice(0, 3);
 
 /**
  * The whole key the page's own read files its answer under: the viewer is
  * part of it (`useEnvironmentSecretsQuery`'s `cacheKeyIdentity`), because a
  * configuration-scoped list is one viewer's answer.
  */
-const listKey = (hostId: string | null): readonly unknown[] => [
-  ...listScope(hostId),
-  { environmentId: ENVIRONMENT },
-  VIEWER,
-];
+const listKey = (): readonly unknown[] =>
+  environmentCloudQueryKey(
+    "environment.secrets.list",
+    { environmentId: ENVIRONMENT },
+    VIEWER,
+    [],
+  );
 
 const mountDetails = (): TeamPageHarness =>
   mountTeamPage(poolSource("editor"), {
@@ -136,7 +134,9 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       {
         hostId,
         client,
-        environmentCloud: beginEnvironmentCloudOperation(null),
+        environmentCloud: beginEnvironmentCloudOperation(
+          requireTeamEnvironmentAuthnBinding().auth.environmentCloud,
+        ),
         queryClient: harness.queryClient,
       },
       STATUS,
@@ -144,12 +144,12 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
 
     expect(loaded.status.summary).toContain("dev-box couldn't delete its copy");
     const cached = harness.queryClient.getQueriesData<SecretsList>({
-      queryKey: listScope(hostId),
+      queryKey: listScope(),
     });
     // Under the page's own whole key, and ONLY there: a second entry of our
     // own would be one no observer ever refetches, which a sweep over this
     // scope would go on reading after the page's answer had moved on.
-    expect(cached.map(([key]) => key)).toEqual([listKey(hostId)]);
+    expect(cached.map(([key]) => key)).toEqual([listKey()]);
     expect(cached.flatMap(([, list]) => list?.removed ?? [])).toEqual([
       REMOVED,
     ]);
@@ -159,7 +159,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     expect(harness.paramsOf("environment.secrets.versions")).toHaveLength(1);
   });
 
-  it("asks the host for the list even when the cache holds one the client calls fresh", async () => {
+  it("asks authn for the list even when the cache holds one the client calls fresh", async () => {
     const harness = mountDetails();
     // The app's own client holds a read fresh for a minute
     // (`createAppQueryClient`). Details authorizes its read on every open, so
@@ -169,7 +169,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     });
     const client = requireTeamHostClient();
     const hostId = client.getActiveHostId();
-    harness.queryClient.setQueryData<SecretsList>(listKey(hostId), {
+    harness.queryClient.setQueryData<SecretsList>(listKey(), {
       secrets: [],
       removed: [],
     });
@@ -179,7 +179,9 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       {
         hostId,
         client,
-        environmentCloud: beginEnvironmentCloudOperation(null),
+        environmentCloud: beginEnvironmentCloudOperation(
+          requireTeamEnvironmentAuthnBinding().auth.environmentCloud,
+        ),
         queryClient: harness.queryClient,
       },
       STATUS,
