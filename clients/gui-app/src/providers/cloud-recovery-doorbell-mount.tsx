@@ -16,6 +16,10 @@ import { CloudRecoveredStreamClient } from "@traycer-clients/shared/host-transpo
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import {
+  ringCloudRecoveryHolds,
+  useHostsHoldingCloudRecoveryRing,
+} from "@/hooks/host/use-cloud-recovery-ring";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import {
@@ -27,19 +31,22 @@ import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 /**
  * Holds one host's cloud-recovery doorbell (`cloud.recovered.subscribe`) for
  * as long as that host has a read it answered with a transient cloud failure,
- * and re-asks those reads whenever it rings.
+ * or a call outside the query cache holds it (`useCloudRecoveryRing`), and
+ * whenever it rings re-asks those reads and calls those holders.
  *
  * The doorbell is THAT host's: a read's key names the host that answered it
- * (`["host", hostId, ...]`), the subscription is dialed through that host's
- * own stream client, and a ring sweeps only that host's key scope. A host
- * with no stranded read has no subscription. A host whose manifest does not
- * carry the method is never dialed for it, and its reads keep Retry as
- * before.
+ * (`["host", hostId, ...]`), a holder names its host, the subscription is
+ * dialed through that host's own stream client, and a ring sweeps only that
+ * host's key scope and calls only that host's holders. A host with neither
+ * has no subscription. A host whose manifest does not carry the method is
+ * never dialed for it, and its reads keep Retry as before.
  */
 export function CloudRecoveryDoorbellMount(): ReactNode {
   const queryClient = useQueryClient();
-  const hostIds = useHostsWithStrandedReads(queryClient);
-  return hostIds.map((hostId) => (
+  const readHosts = useHostsWithStrandedReads(queryClient);
+  const heldHosts = useHostsHoldingCloudRecoveryRing(queryClient);
+  const hostIds = new Set([...readHosts, ...heldHosts]);
+  return [...hostIds].map((hostId) => (
     <HostCloudRecoveryDoorbell key={hostId} hostId={hostId} />
   ));
 }
@@ -72,11 +79,12 @@ function HostCloudRecoveryDoorbell(props: {
       client = new CloudRecoveredStreamClient({
         wsStreamClient,
         // The host rings once on open, so this also covers an edge that fell
-        // between the failed read and this subscription.
+        // between the failed read or held call and this subscription.
         onRecovered: () => {
           if (currentClient !== client) return;
           reopenLane.resetBackoff();
           void sweepTransientCloudFailures(queryClient, hostId);
+          ringCloudRecoveryHolds(queryClient, hostId);
         },
         onConnectionStatus: (status, reason) => {
           if (currentClient !== client || status !== "closed") return;
