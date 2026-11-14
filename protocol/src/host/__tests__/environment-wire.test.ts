@@ -64,7 +64,7 @@ import { supportMatrix } from "./__fixtures__/support-matrix";
 import { RETIRED_SECRET_CREATE_FIELDS } from "@traycer/protocol/host/released-wire-rows";
 
 /**
- * The wire of the environment family: the 26 environment methods, the
+ * The wire of the environment family: the 28 environment methods, the
  * executable-write grant on every method that reaches an execution sink, the
  * `providers.list@10.5` envelope keys, `providers.nativeMutate@1.3`'s
  * `promoteToPersonal`, and the five secret shapes, field for field.
@@ -207,9 +207,9 @@ function expectDowngradeUnsupported(thrown: unknown): void {
 // ── (a) ─────────────────────────────────────────────────────────────────────
 
 describe("new methods are off every released floor", () => {
-  it("registers exactly 27 environment methods", () => {
-    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(27);
-    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(27);
+  it("registers exactly 28 environment methods", () => {
+    expect(ENVIRONMENT_METHOD_NAMES).toHaveLength(28);
+    expect(Object.keys(ENVIRONMENT_RPC_METHODS)).toHaveLength(28);
   });
 
   it("keeps all of them out of RELEASED_FLOOR_METHOD_NAMES", () => {
