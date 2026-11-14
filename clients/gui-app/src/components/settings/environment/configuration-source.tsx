@@ -18,15 +18,24 @@ export type ConfigurationSource =
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
-      /** `null` for a role that changes nothing: a Viewer, or a role this
-       *  app does not know. */
+      /** Read through `mayChangeConfiguration`, never by comparing with
+       *  `null`: a role that changes nothing is not always absent. */
       readonly effectiveRole: GrantedEnvironmentRole | null;
-      /**
-       * Personal read while the window is on a team's computer: shown, never
-       * changed through that computer. A team's own pages never set it.
-       */
+      /** `personalReadOnlyOnTeamComputer`'s answer for this page. */
       readonly transportReadOnly?: boolean;
     };
+
+/**
+ * Personal is shown but never changed while the window's host is a team's
+ * computer: Personal talks only to Personal. A team's own settings follow the
+ * role authn answers, whichever computer the window is on.
+ */
+export function personalReadOnlyOnTeamComputer(
+  configuration: "personal" | "team",
+  windowHostIsTeamComputer: boolean,
+): boolean {
+  return configuration === "personal" && windowHostIsTeamComputer;
+}
 
 const HOST_SOURCE: ConfigurationSource = { kind: "host" };
 
