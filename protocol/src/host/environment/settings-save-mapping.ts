@@ -4,14 +4,27 @@
  * The app remembers its edit from this and compares what it remembers with
  * the value authn holds through {@link canonicalSettingValue}. The function
  * reads its two arguments and nothing else: the request, and the rows of the
- * item the save is built over ({@link SettingsSaveBase}).
+ * item the save is built over ({@link SettingsSaveBase}). The app pairs its
+ * remembered edit with the live revision it read from authn itself, and
+ * applies with the hold's revision and that remembered live revision as the
+ * expected one; never a revision a host reported.
  *
- * The host proposes what it computes itself, never a value read from the
- * request. For the shell, pack policy and profile name or colour, the request
- * states the item the app expects (`selection`, `policy`,
- * `environmentProfileId`); the host never writes that statement over what it
- * computes. When the two differ, the app's remembered value matches no hold
- * and the change waits in the review list. No error is raised for it.
+ * A save that leaves its item as the base already holds it (a put equal to
+ * the row it would write, a delete where there is no row) maps to
+ * `local_only`: there is nothing to propose and nothing for the app to
+ * remember. The host proposes nothing in that case either.
+ *
+ * For the shell methods and the two pack methods the request carries the
+ * app's statement of the item it expects (`selection` for a shell save,
+ * `policy` for a pack save). The host computes the item from its own config
+ * exactly as today and proposes that; it never writes the stated value over
+ * what it computes. When the two agree, which is whenever the app's read of
+ * the computer is current, the app's remembered value matches the hold and
+ * the save is confirmed without a click. When they differ, the computer keeps
+ * its own value, the change is saved here and proposed, and it waits in the
+ * review list for one click; no error is raised. An older caller that states
+ * nothing keeps today's behaviour and the app expects nothing. Rename and
+ * recolour keep the base-taking form.
  *
  * A save whose item a host can only build from what it alone holds is
  * `unmapped`, with the reason, and nothing may fill it from host state: the
@@ -55,10 +68,8 @@ import type {
   ProvidersSetPackPolicyRequestV11,
   ProvidersUsePackVersionRequestV12,
 } from "@traycer/protocol/host/provider-schemas";
-import {
-  harnessIdOfProvider,
-  type HostOs,
-} from "@traycer/protocol/host/environment/item-identity";
+import { harnessIdOfProvider } from "@traycer/protocol/host/environment/item-identity";
+import type { HostOs } from "@traycer/protocol/host/environment/host-os";
 import {
   settingValueSchema,
   type SettingValue,
@@ -195,7 +206,8 @@ export type SettingsSaveMapping =
   | { readonly kind: "proposal"; readonly edit: SettingsItemEdit }
   /**
    * The app expects no proposal: the save changes this host only, or is
-   * refused, or its request states no item (a caller older than the field).
+   * refused, or its request states no item (a caller older than the field),
+   * or it leaves the item as the base already holds it.
    */
   | { readonly kind: "local_only" }
   /**
@@ -459,10 +471,11 @@ export function settingsSaveBaseAddress(
       const action = save.request.profileAction;
       return action === null ? null : profileAddress(save.request, action);
     }
-    case "config.browser.set":
-    case "config.agentMemories.set":
     case "providers.usePackVersion":
     case "providers.setPackPolicy":
+      return { kind: "pack_policy", key: save.request.packId };
+    case "config.browser.set":
+    case "config.agentMemories.set":
     case "providers.fallbackPolicy.set":
     case "environment.setup.put":
     case "environment.agentDefinitions.put":
@@ -512,6 +525,31 @@ function nativeMutateEdit(
   });
 }
 
+/** The base row at `os`; for a kind with no per-OS rows, its one row. */
+function rowAt(
+  base: SettingsSaveBase,
+  os: EnvironmentOs | null,
+): SettingsBaseRow | null {
+  return os === null
+    ? singleRow(base)
+    : (base.rows.find((row) => row.os === os) ?? null);
+}
+
+/** A proposal that leaves its item as the base holds it, as `local_only`. */
+function unlessUnchanged(
+  mapping: SettingsSaveMapping,
+  base: SettingsSaveBase,
+): SettingsSaveMapping {
+  if (mapping.kind !== "proposal") return mapping;
+  const edit = mapping.edit;
+  const row = rowAt(base, edit.os);
+  if (edit.operation === "delete") return row === null ? LOCAL_ONLY : mapping;
+  return row !== null &&
+    canonicalSettingValue(row.value) === edit.canonicalValue
+    ? LOCAL_ONLY
+    : mapping;
+}
+
 /**
  * The item a save becomes, from its request and the rows it is built over.
  *
@@ -522,6 +560,17 @@ function nativeMutateEdit(
  * as its cue to forget the edit, and never takes a value from a receipt.
  */
 export function settingsSaveItemEdit(
+  save: SettingsSave,
+  base: SettingsSaveBase,
+): SettingsSaveMapping {
+  const mapping = itemEditOf(save, base);
+  // Only a save built over an item's rows can be compared with them.
+  return settingsSaveBaseAddress(save) === null
+    ? mapping
+    : unlessUnchanged(mapping, base);
+}
+
+function itemEditOf(
   save: SettingsSave,
   base: SettingsSaveBase,
 ): SettingsSaveMapping {

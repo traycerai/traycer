@@ -61,10 +61,15 @@ export type ConfigShellGetResponseV11 = z.infer<
  * - `not_stated`: the caller predates this field (the upgrade from 1.1 fills
  *   it); the app expects no proposal.
  *
- * The host never writes it over what it computes from its own config. That
- * computation is the truth and is what the host proposes; when the two
- * differ, the app's remembered value matches no hold and the change waits in
- * the review list. No error is raised for it.
+ * It is the app's statement of the item it expects. The host computes the
+ * item from its own config exactly as today and proposes that; it never
+ * writes the stated value over what it computes. When the two agree, which is
+ * whenever the app's read of the computer is current, the app's remembered
+ * value matches the hold and the save is confirmed without a click. When they
+ * differ, the computer keeps its own value, the change is saved here and
+ * proposed, and it waits in the review list for one click; no error is
+ * raised. An older caller that states nothing keeps today's behaviour and the
+ * app expects nothing.
  */
 export const configShellSelectionSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -239,8 +244,9 @@ export type ConfigShellRemoveRequest = z.infer<
 /**
  * v1.2 adds `selection`: `system_default` when `path` is the current shell
  * (`config.shell.get`), else the current selection unchanged. Removing a
- * shell that is not the current one changes no item: the host answers
- * `proposal: null`, and the app remembers nothing.
+ * shell that is not the current one changes no item: the stated selection
+ * equals the base the app read, so the mapping answers `local_only` and the
+ * app remembers nothing.
  */
 export const configShellRemoveRequestSchemaV12 = lazySchema(() =>
   configShellRemoveRequestSchema.extend({
@@ -282,8 +288,9 @@ export type ConfigShellRevertArgsRequest = z.infer<
 /**
  * v1.2 adds `selection`: `{ path, args: defaultShellArgs(path) }` when `path`
  * is the current shell, else the current selection unchanged. Reverting a
- * shell that is not the current one changes no item: the host answers
- * `proposal: null`, and the app remembers nothing.
+ * shell that is not the current one changes no item: the stated selection
+ * equals the base the app read, so the mapping answers `local_only` and the
+ * app remembers nothing.
  */
 export const configShellRevertArgsRequestSchemaV12 = lazySchema(() =>
   configShellRevertArgsRequestSchema.extend({

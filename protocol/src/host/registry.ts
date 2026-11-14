@@ -5333,13 +5333,12 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   responseSchema: providersSetPackPolicyResponseSchema,
 });
 
-// ── The pack policy a pack save leaves (T11c) ──────────────────────────────
+// ── The pack policy a pack save leaves ─────────────────────────────────────
 //
 // A save made in a host's settings is proposed to the host's environment, and
 // the app recognises its own hold by the `pack_policy` item it states it
-// expects (`policy`, read by `settingsSaveItemEdit`). Defined here and
-// registered with the host that serves them and the app that sends them. A
-// caller older than these minors states no policy: the upgrade fills null.
+// expects (`policy`, read by `settingsSaveItemEdit`). A caller older than
+// these minors states no policy: the upgrade fills null.
 // A newer request to an older host is re-parsed onto the older request,
 // whose non-strict object strips the key.
 
@@ -5731,9 +5730,7 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
 
 // v2.2 names the environment profile a rename or recolor is for
 // (`environmentProfileId`), so the app can state the `managed_profile` item
-// it expects and recognise its own hold (T11c). Defined here and registered
-// with the host that serves it and the app that sends it. A 2.1 caller names
-// none: the upgrade fills null, and the app expects no proposal. A 2.2
+// it expects and recognise its own hold. A 2.1 caller names none: the upgrade fills null, and the app expects no proposal. A 2.2
 // request to a 2.1 host is re-parsed onto the 2.1 request, whose non-strict
 // action objects strip the key. The response is unchanged.
 export const providersSetEnabledV22 = defineRpcContract({
@@ -5876,11 +5873,12 @@ export const providersSetEnabledDowngradeV22ToV10 = defineDowngradePath<
   },
 });
 
-// THERE IS NO `providers.setEnabled@2.2`. It was opened to carry an optional
-// tri-state `mode` for a three-way Auto/On/Off settings control; `mode` was
-// its entire delta over 2.1, and both went away with that control. 2.1 is the
-// head minor again, and `providersSetEnabledDowngradeV21ToV10` above is once
-// more the registered bridge down to the frozen v1.0.
+// The only `providers.setEnabled@2.2` any build carries is the one above. An
+// earlier 2.2 that carried an optional tri-state `mode` was withdrawn before
+// any release, so no released peer negotiates a different 2.2. The bridge down
+// to the frozen v1.0 starts at whichever minor is major 2's latest:
+// `providersSetEnabledDowngradeV21ToV10` from 2.1,
+// `providersSetEnabledDowngradeV22ToV10` from 2.2.
 
 export const providersSetApiKeyV10 = defineRpcContract({
   method: "providers.setApiKey",

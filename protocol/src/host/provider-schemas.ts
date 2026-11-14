@@ -1859,18 +1859,16 @@ export const providerProfileActionSchema = lazySchema(() =>
 export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
 
 /**
- * The environment profile a rename or recolor is for, as `providers.list`
- * names it (`environmentProfileId`), so the app can state the
- * `managed_profile` item it expects: the environment's copy with the new name
+ * The environment profile a rename or recolor is for: the key of the
+ * environment's `managed_profile` item after `<harnessId>:`, which the app
+ * reads from authn's own `managed_profile` items and states only when exactly
+ * one of them carries that key. A host's `providers.list` may say which
+ * profile to look for, never what the key is. Rename and recolour take the
+ * base: the item is the environment's copy of that profile with the new name
  * or colour laid over it, every other field, `enabled` included, kept. Null
- * when `providers.list` names none (the profile is this computer's own) and
- * from a caller older than 2.2, whose request the upgrade fills with null;
- * either way the app expects no proposal.
- *
- * The host never writes it over the profile it finds in its own store. That
- * is the truth and is what the host proposes; when the two differ, the app's
- * remembered value matches no hold and the change waits in the review list.
- * No error is raised for it.
+ * when the profile has no entry in the environment (it is this computer's
+ * own) and from a caller older than 2.2, whose request the upgrade fills with
+ * null; either way the app expects no proposal.
  */
 const environmentProfileIdStatementSchema = lazySchema(() =>
   z.string().min(1).nullable(),
@@ -1883,6 +1881,11 @@ export const providerProfileActionSchemaV22 = lazySchema(() =>
       type: z.literal("rename"),
       profileId: z.string(),
       label: z.string().min(1).max(64),
+      /**
+       * Null means either an older caller or a profile with no entry in the
+       * environment; both map to `local_only`, so the app sends null for a
+       * profile that is only on this computer and expects nothing.
+       */
       environmentProfileId: environmentProfileIdStatementSchema,
     }),
     z.object({
@@ -1893,6 +1896,11 @@ export const providerProfileActionSchemaV22 = lazySchema(() =>
       type: z.literal("recolor"),
       profileId: z.string(),
       accentColor: providerProfileAccentColorSchema,
+      /**
+       * Null means either an older caller or a profile with no entry in the
+       * environment; both map to `local_only`, so the app sends null for a
+       * profile that is only on this computer and expects nothing.
+       */
       environmentProfileId: environmentProfileIdStatementSchema,
     }),
     z.object({
@@ -5190,7 +5198,7 @@ export type ProvidersUsePackVersionRequest = z.infer<
 >;
 
 /**
- * The whole pack policy a pack save leaves, as the app states it (T11c): the
+ * The whole pack policy a pack save leaves, as the app states it: the
  * `pack_policy` item the app expects the host to propose, so it can remember
  * its edit and recognise its hold among the environment's held changes. The
  * app reads the other half from the pack's managed versions
@@ -5198,10 +5206,15 @@ export type ProvidersUsePackVersionRequest = z.infer<
  * the upgrade from the previous minor fills null, and the app expects no
  * proposal.
  *
- * The host never writes it over the policy it keeps itself. That policy is
- * the truth and is what the host proposes; when the two differ, the app's
- * remembered value matches no hold and the change waits in the review list.
- * No error is raised for it.
+ * It is the app's statement of the item it expects. The host computes the
+ * item from its own config exactly as today and proposes that; it never
+ * writes the stated value over what it computes. When the two agree, which is
+ * whenever the app's read of the computer is current, the app's remembered
+ * value matches the hold and the save is confirmed without a click. When they
+ * differ, the computer keeps its own value, the change is saved here and
+ * proposed, and it waits in the review list for one click; no error is
+ * raised. An older caller that states nothing keeps today's behaviour and the
+ * app expects nothing.
  */
 export const providersPackPolicyStatementSchema = lazySchema(() =>
   z

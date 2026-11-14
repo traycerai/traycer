@@ -457,8 +457,7 @@ export const configEnvSetUpgradeV10ToV11 = defineUpgradePath<
 // A save made in a host's settings is proposed to the host's environment, and
 // the app recognises its own hold by the item it states it expects
 // (`selection`, read by `settingsSaveItemEdit`). `config.shell.get@1.1` gives
-// the app the remembered arguments it needs to state it. Defined here and
-// registered with the host that serves them and the app that sends them.
+// the app the remembered arguments it needs to state it.
 //
 // A 1.1 caller states no selection, so its request is upgraded with
 // `not_stated`; a 1.2 request to a 1.1 host is re-parsed onto the 1.1

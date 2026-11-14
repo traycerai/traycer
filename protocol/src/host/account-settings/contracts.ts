@@ -25,10 +25,6 @@ export type HostAccountSettingsRefreshResponse = z.infer<
  * it. Served on every host kind; on a computer owned by a team it does only
  * the auto-approve part. An app calls it once per connected host after its own
  * save, never on a timer. Not an agent capability.
- *
- * Defined here and registered with the host that serves it and the app that
- * sends it. A new method name is outside the released floor, so it registers
- * with `degrade: { kind: "unsupported" }`.
  */
 export const hostAccountSettingsRefreshV10 = defineRpcContract({
   method: "host.accountSettings.refresh",
