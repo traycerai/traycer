@@ -1,6 +1,7 @@
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   setProfileRecordEnabledViaHttp,
+  type ProfileRecordEnablementClient,
   type ProfileRecordEnablementResult,
 } from "@traycer-clients/shared/host-client/provider-profile-enablement";
 import {
@@ -632,7 +633,7 @@ export interface RevokedCloudAuthorization {
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") without clearing persisted credentials.
  */
-export class AuthService {
+export class AuthService implements ProfileRecordEnablementClient {
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;

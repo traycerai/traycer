@@ -713,6 +713,7 @@ export function ProfileEditDialog(props: {
     PROVIDER_DISPLAY_NAMES[providerId],
     props.profile,
     props.profiles,
+    signInOutcomes !== null,
   );
   const enablementPending = props.profileEnablementPending(
     profileCommitId(props.profile),
