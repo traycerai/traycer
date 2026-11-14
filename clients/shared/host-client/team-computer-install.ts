@@ -38,6 +38,37 @@ export async function mintTeamComputerInstallTokenViaHttp(
   bearerToken: string,
   environmentId: string,
 ): Promise<TeamComputerInstallTokenResult> {
+  return requestTeamComputerInstallToken(
+    authnBaseUrl,
+    bearerToken,
+    environmentId,
+    (answeredEnvironmentId) => answeredEnvironmentId === environmentId,
+  );
+}
+
+/**
+ * Mints for the team named by its slug. authn answers with the environment id
+ * the slug resolves to, which is what a staged install must be bound to.
+ */
+export async function mintTeamComputerInstallTokenBySlugViaHttp(
+  authnBaseUrl: string,
+  bearerToken: string,
+  teamSlug: string,
+): Promise<TeamComputerInstallTokenResult> {
+  return requestTeamComputerInstallToken(
+    authnBaseUrl,
+    bearerToken,
+    teamSlug,
+    () => true,
+  );
+}
+
+async function requestTeamComputerInstallToken(
+  authnBaseUrl: string,
+  bearerToken: string,
+  selector: string,
+  acceptsAnswer: (answeredEnvironmentId: string) => boolean,
+): Promise<TeamComputerInstallTokenResult> {
   const base = authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`;
   const url = new URL("api/v3/hosts/team-install-tokens", base).toString();
   const abort = composeRequestAbort(null, 15_000);
@@ -52,7 +83,9 @@ export async function mintTeamComputerInstallTokenViaHttp(
           "content-type": "application/json",
           accept: "application/json",
         },
-        body: JSON.stringify({ environmentId }),
+        body: JSON.stringify({ environmentId: selector }),
+        // The answer carries a credential: a redirect is a non-success, never followed.
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
@@ -84,7 +117,7 @@ export async function mintTeamComputerInstallTokenViaHttp(
         };
   }
   const result = mintResponseSchema.safeParse(body);
-  if (!result.success || result.data.environmentId !== environmentId) {
+  if (!result.success || !acceptsAnswer(result.data.environmentId)) {
     return {
       kind: "network-error",
       detail: "the install-token answer did not match the request",
