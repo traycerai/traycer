@@ -1025,10 +1025,13 @@ export class MobileRunnerHost implements IRunnerHost {
     bearerToken: string,
     request: SlackAppRegisterRequest,
   ): Promise<SlackAppWriteResult> {
+    // The app's secrets ride in the body: through the native request that
+    // follows no redirect, not the patched `fetch`.
     return registerSlackAppViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,
+      nativeEnvironmentTransport,
       request,
     );
   }

@@ -466,10 +466,12 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     async (_event, bearerToken: unknown, request: unknown) => {
       assertString(bearerToken, "registerSlackApp.bearerToken");
       const parsedRequest = parseSlackAppRegisterRequest(request);
+      // The app's secrets ride in the body: sent once, following no redirect.
       return registerSlackAppViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+        fetchEnvironmentTransport,
         parsedRequest,
       );
     },

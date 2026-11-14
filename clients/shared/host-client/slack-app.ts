@@ -10,6 +10,7 @@ import {
 } from "@traycer/protocol/host/slack-app";
 import type { z } from "zod";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
+import type { EnvironmentTransport } from "../environment/environment-cloud";
 
 /**
  * The raw calls to traycer-server's Slack app routes (`/api/slack/apps/*`)
@@ -24,7 +25,9 @@ import { composeRequestAbort, untilAborted } from "../auth/request-abort";
  * malformed bodies collapse into a discriminated, structured-clone-safe result
  * so it crosses the Electron IPC boundary unchanged. Nothing here logs, and a
  * failure never echoes a body: the register request carries the app's
- * secrets.
+ * secrets, so it alone goes through the shell's `EnvironmentTransport`, sent
+ * once and following no redirect (a 3xx is an answered non-success), with a
+ * failure's body capped. The other calls carry no credential in a body.
  */
 
 /**
@@ -100,6 +103,25 @@ type PostResult<T> =
   | SlackAppFailure;
 
 /**
+ * The platform `fetch` as the calls with no credential in their body send:
+ * a redirect followed, the answer read whole.
+ */
+const followingFetchTransport: EnvironmentTransport = async (request) => {
+  const response = await fetch(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body === null ? undefined : JSON.stringify(request.body),
+    signal: request.signal,
+  });
+  // A late answer to a request already given up (a `fetch` that ignores its
+  // signal, as the phone's patched one does) is never read.
+  if (request.signal.aborted) {
+    throw new Error("The request was given up before it answered.");
+  }
+  return { status: response.status, text: await response.text() };
+};
+
+/**
  * `proxyToken` is the Google IAP id-token a staging desktop's main process
  * mints, sent as `Proxy-Authorization` ahead of the person's `Authorization`;
  * every other caller passes `null`.
@@ -112,6 +134,7 @@ async function post<T>(
   proxyToken: string | null,
   timeoutMs: number,
   schema: z.ZodType<T>,
+  transport: EnvironmentTransport,
 ): Promise<PostResult<T>> {
   const headers: Record<string, string> =
     proxyToken === null
@@ -127,19 +150,18 @@ async function post<T>(
   let status: number;
   let parsedBody: unknown;
   try {
-    const response = await untilAborted(
-      fetch(slackAppsUrl(serverBaseUrl, route), {
+    const answer = await untilAborted(
+      transport({
+        url: slackAppsUrl(serverBaseUrl, route),
         method: "POST",
         headers,
-        body: JSON.stringify(body),
+        body,
         signal: abort.signal,
       }),
       abort.signal,
     );
-    status = response.status;
-    parsedBody = parseJsonOrNull(
-      await untilAborted(response.text(), abort.signal),
-    );
+    status = answer.status;
+    parsedBody = parseJsonOrNull(answer.text);
   } catch (error: unknown) {
     return {
       kind: "network-error",
@@ -171,9 +193,12 @@ async function post<T>(
   return { kind: "ok", value: parsed.data };
 }
 
-/** An empty or non-JSON body (a proxy's HTML page) reads as `null`. */
-function parseJsonOrNull(text: string): unknown {
-  if (text.length === 0) return null;
+/**
+ * An empty or non-JSON body (a proxy's HTML page) reads as `null`, as does a
+ * failure's body over the transport's cap.
+ */
+function parseJsonOrNull(text: string | null): unknown {
+  if (text === null || text.length === 0) return null;
   try {
     const parsed: unknown = JSON.parse(text);
     return parsed;
@@ -182,11 +207,16 @@ function parseJsonOrNull(text: string): unknown {
   }
 }
 
-/** `POST /api/slack/apps/register`: stores the app's credentials; a new registration replaces the old one. */
+/**
+ * `POST /api/slack/apps/register`: stores the app's credentials; a new
+ * registration replaces the old one. `transport` is the shell's, which never
+ * follows a redirect: the body carries two secrets.
+ */
 export async function registerSlackAppViaHttp(
   serverBaseUrl: string,
   bearerToken: string,
   proxyToken: string | null,
+  transport: EnvironmentTransport,
   request: SlackAppRegisterRequest,
 ): Promise<SlackAppWriteResult> {
   const result = await post(
@@ -197,6 +227,7 @@ export async function registerSlackAppViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppResponseSchema,
+    transport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }
@@ -216,6 +247,7 @@ export async function readSlackAppViaHttp(
     proxyToken,
     SLACK_APP_READ_TIMEOUT_MS,
     slackAppReadResponseSchema,
+    followingFetchTransport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }
@@ -235,6 +267,7 @@ export async function fetchSlackAppManifestViaHttp(
     proxyToken,
     SLACK_APP_READ_TIMEOUT_MS,
     slackAppManifestResponseSchema,
+    followingFetchTransport,
   );
   return result.kind === "ok"
     ? { kind: "ok", manifest: result.value.manifest }
@@ -256,6 +289,7 @@ export async function mintSlackAppInstallUrlViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppInstallUrlResponseSchema,
+    followingFetchTransport,
   );
   return result.kind === "ok"
     ? { kind: "ok", url: result.value.url, expiresAt: result.value.expiresAt }
@@ -277,6 +311,7 @@ export async function disconnectSlackAppViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppResponseSchema,
+    followingFetchTransport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }
@@ -296,6 +331,7 @@ export async function setSlackAppDmsViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppResponseSchema,
+    followingFetchTransport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }
