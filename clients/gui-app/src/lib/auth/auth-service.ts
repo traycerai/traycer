@@ -1,5 +1,16 @@
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
+  readProfileRecordsViaHttp,
+  signOutProfileRecordViaHttp,
+  removeProfileRecordViaHttp,
+  nameProfileRecordViaHttp,
+  profileRecordActionFailure,
+  type ProfileRecordClient,
+  type ProfileRecordListResult,
+  type ProfileRecordActionResult,
+  type ProfileRecordNameResult,
+} from "@traycer-clients/shared/host-client/profile-record-actions";
+import {
   AUTH_ERROR_DISK_FULL,
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
@@ -628,7 +639,7 @@ export interface RevokedCloudAuthorization {
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") without clearing persisted credentials.
  */
-export class AuthService {
+export class AuthService implements ProfileRecordClient {
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;
@@ -3583,6 +3594,79 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  async readProfileRecords(
+    environmentId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordListResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return readProfileRecordsViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      callerSignal,
+    );
+  }
+
+  async signOutProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordActionResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("sign-out", "unauthorized");
+    return signOutProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      callerSignal,
+    );
+  }
+
+  async removeProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordActionResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("remove", "unauthorized");
+    return removeProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      callerSignal,
+    );
+  }
+
+  async nameProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    name: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordNameResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("name", "unauthorized");
+    return nameProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      name,
+      callerSignal,
+    );
   }
 
   /** The user's answer to an agent's grant request. */
