@@ -2700,6 +2700,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "host.status.refresh": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The environments redesign: the move, a configuration through the server
   // pool, members and the retrospective sheet. Reads take the latest answer;
   // every write is ordered and never joined.
