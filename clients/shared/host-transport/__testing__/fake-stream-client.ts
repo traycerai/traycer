@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "../host-stream-client";
 import type {
@@ -88,13 +89,44 @@ export class FakeStreamSession implements IStreamSession {
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
   emitFatal(reason: string): void {
+    this.emitFatalWithCode("UNAUTHORIZED", reason);
+  }
+
+  /** The close a host sends when it cannot serve `method` at all. */
+  emitIncompatible(method: string, reason: string): void {
     this.status = "closed";
     this.statusHandler?.(
       "closed",
       {
         kind: "fatalError",
         details: {
-          code: "UNAUTHORIZED",
+          code: "INCOMPATIBLE",
+          reason,
+          incompatibleMethods: [
+            {
+              method,
+              clientCanonical: null,
+              hostCanonical: null,
+              blocking: "host-missing-method",
+            },
+          ],
+          upgradeGuidance: null,
+        },
+      },
+      null,
+      null,
+    );
+  }
+
+  /** The terminal close a host sends with a specific code. */
+  emitFatalWithCode(code: string, reason: string): void {
+    this.status = "closed";
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code,
           reason,
           incompatibleMethods: null,
           upgradeGuidance: null,
@@ -260,8 +292,11 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     return this.silentFor;
   }
 
-  getMethodSupport(): "unknown" {
-    return "unknown";
+  /** What {@link getMethodSupport} answers; `"unknown"` until a suite says otherwise. */
+  methodSupport: StreamMethodSupport = "unknown";
+
+  getMethodSupport(): StreamMethodSupport {
+    return this.methodSupport;
   }
 
   subscribeMethodSupport(): () => void {

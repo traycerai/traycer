@@ -144,7 +144,7 @@ import {
 } from "@/components/bots/bot-memory-context";
 import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
 import { ExpressiveBotAvatar } from "@/components/bots/bot-avatars";
-import { botExpressionOf, useBotActivity } from "@/hooks/bots/use-bot-activity";
+import { botExpressionOn, useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
@@ -1615,6 +1615,7 @@ function BotTabContent(props: {
                   value={{
                     tasks: snapshot.tasks,
                     subscriptions: snapshot.notificationSubscriptions,
+                    boundHostId: snapshot.boundHost.hostId,
                   }}
                 >
                   <BotSessionView
@@ -1839,7 +1840,7 @@ function BotChannelHeader(props: {
 }): ReactNode {
   const { settingsOpen } = props;
   const background = useChannelBackground(props.botId);
-  const expression = botExpressionOf(useBotActivity(props.botId));
+  const expression = botExpressionOn("title", useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header

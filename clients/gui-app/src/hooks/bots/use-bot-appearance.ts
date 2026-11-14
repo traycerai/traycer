@@ -117,7 +117,7 @@ const CHANNEL_TINT_CLASS = "bg-(--channel-tint)/10";
  * index), its class and its colour (as `--channel-tint`), each `undefined`
  * while the channel keeps the page's own.
  */
-export interface ChannelBackground {
+interface ChannelBackground {
   readonly index: number | undefined;
   readonly className: string | undefined;
   readonly color: string | undefined;

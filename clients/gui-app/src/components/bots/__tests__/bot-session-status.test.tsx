@@ -20,6 +20,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type {
   BotNotificationSubscription,
@@ -225,7 +226,11 @@ function mountSession(input: {
         <TooltipProvider>
           <BotIdentityContext value={IDENTITY}>
             <BotSessionStatusDataContext
-              value={{ tasks: input.tasks, subscriptions: input.subscriptions }}
+              value={{
+                tasks: input.tasks,
+                subscriptions: input.subscriptions,
+                boundHostId: HOST_ID,
+              }}
             >
               <BotSessionView
                 botId={BOT_ID}
@@ -500,7 +505,7 @@ describe("the trunk session's status surfaces", () => {
     });
   });
 
-  it("simplifies a running shell row to a plain status line with no Stop control", async () => {
+  it("simplifies a running shell row to a status line whose one control opens its read-only output, with no Stop or other lifecycle control", async () => {
     const command = managedCommandSchema.parse({
       id: "shell-deploy",
       monitoring: true,
@@ -519,6 +524,12 @@ describe("the trunk session's status surfaces", () => {
       chatId: TRUNK_ID,
       hostId: HOST_ID,
     });
+    // A shell row opens its output only for an admitted account.
+    const authAtStart = useAuthStore.getState();
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "ada" },
+    });
     try {
       session.setCommands([command]);
       session.setConnectionStatus("open");
@@ -535,13 +546,22 @@ describe("the trunk session's status surfaces", () => {
         "managed-command-background-row-shell-deploy",
       );
       expect(within(row).getByText(/deploy watcher/)).toBeTruthy();
-      expect(within(row).queryByRole("button")).toBeNull();
+      // The one control the row carries opens the read-only output window.
+      const controls = within(row).getAllByRole("button");
+      expect(controls).toHaveLength(1);
+      expect(controls[0].textContent).toMatch(/deploy watcher/);
       expect(
-        within(view()).queryByRole("button", { name: /stop/i }),
+        within(view()).queryByRole("button", {
+          name: /^(stop|restart|delete|start|send|deliver)\b|stop all/i,
+        }),
       ).toBeNull();
     } finally {
       cleanup();
       session.dispose();
+      useAuthStore.setState({
+        status: authAtStart.status,
+        contextMetadata: authAtStart.contextMetadata,
+      });
     }
   });
 
