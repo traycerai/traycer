@@ -77,6 +77,21 @@ const WORKTREE_CASES: ReadonlyArray<ToastCase> = [
   },
 ];
 
+const DISPLACED_SEND_CASES: ReadonlyArray<ToastCase> = [
+  {
+    code: "removed-by-person",
+    expected:
+      "Was removed\nA message was not accepted, and another unsent message is already waiting in the composer.\n\nCopy the message below to resend it:\nedited prompt",
+    wrapped: true,
+  },
+  {
+    code: "RPC_ERROR",
+    expected:
+      "A message was not accepted (That profile no longer exists. Choose a profile), and another unsent message is already waiting in the composer.\n\nCopy the message below to resend it:\nedited prompt",
+    wrapped: true,
+  },
+];
+
 const RESTORATION_CASES: ReadonlyArray<ToastCase> = [
   {
     code: "removed-by-person",
@@ -136,6 +151,45 @@ afterEach(() => {
 });
 
 describe("removed-profile notice line breaks in the real toaster", () => {
+  it.each(DISPLACED_SEND_CASES)(
+    "renders a displaced-send notice for $code",
+    async ({ code, expected, wrapped }) => {
+      harness = createHarness();
+      emitSnapshot(harness.callbacks(), [], []);
+      renderToastLayer(harness);
+
+      sendTestMessage(harness, CONTENT, SETTINGS);
+      const firstPending = harness.handle.store
+        .getState()
+        .pendingUserMessages.at(0);
+      if (firstPending === undefined)
+        throw new Error("expected the first pending send");
+      rejectAction({
+        target: harness,
+        clientActionId: firstPending.clientActionId,
+        action: "send",
+        code: "RPC_ERROR",
+        reason: REASON,
+      });
+
+      sendTestMessage(harness, EDITED, SETTINGS);
+      const displaced = harness.handle.store
+        .getState()
+        .pendingUserMessages.at(0);
+      if (displaced === undefined)
+        throw new Error("expected the displaced send");
+      rejectAction({
+        target: harness,
+        clientActionId: displaced.clientActionId,
+        action: "send",
+        code,
+        reason: REASON,
+      });
+
+      await expectRenderedToast(expected, wrapped);
+    },
+  );
+
   it.each(WORKTREE_CASES)(
     "renders a swept-worktree rejection notice for $code",
     async ({ code, expected, wrapped }) => {

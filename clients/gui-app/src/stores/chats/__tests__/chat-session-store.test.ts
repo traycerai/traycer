@@ -6152,7 +6152,7 @@ describe("createChatSessionStore", () => {
 
       const notice = noticeFor(harness, displaced);
       expect(notice.message).toBe(
-        "A message was not accepted (Was removed), and another unsent message is already waiting in the composer.\n\nCopy the message below to resend it:\nWorld",
+        "Was removed\nA message was not accepted, and another unsent message is already waiting in the composer.\n\nCopy the message below to resend it:\nWorld",
       );
       expect(
         harness.handle.store.getState().lastCopyPrompts[displaced]?.reason,
