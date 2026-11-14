@@ -1220,7 +1220,7 @@ describe("optimistic activity history projection", () => {
     expect(refetch).toHaveBeenCalledTimes(1);
     first.rerender({ page: caughtUp });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(refetch).toHaveBeenCalledTimes(1);
     first.unmount();
@@ -1237,41 +1237,6 @@ describe("optimistic activity history projection", () => {
     });
     expect(refetch).toHaveBeenCalledTimes(2);
     second.unmount();
-  });
-
-  it("reads once when the first read's rows settle the stamp", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(22_000);
-    const userId = `one-read-${crypto.randomUUID()}`;
-    const refetch = vi.fn(() => Promise.resolve(DELIVERED));
-    const { rerender } = renderHook(
-      ({ items }) =>
-        useOptimisticActivityHistoryItems({
-          items,
-          userId,
-          hostId: "host-one-read",
-          enabled: true,
-          refetch,
-        }),
-      { initialProps: { items: [historyItem("epic-a", 1, 21_000)] } },
-    );
-
-    settleHistoryActivity(userId, [historyItem("epic-a", 1, 21_000)]);
-    act(() => observeOwnHistoryRecordChange(userId, "epic-a", 22_000));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(750);
-    });
-    expect(refetch).toHaveBeenCalledTimes(1);
-
-    rerender({ items: [historyItem("epic-a", 1, 22_000)] });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
-    expect(refetch).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
-    expect(refetch).toHaveBeenCalledTimes(1);
   });
 
   it("reads nothing when the mounted page already shows the accepted record time", async () => {
@@ -1601,11 +1566,9 @@ describe("optimistic activity history projection", () => {
     vi.setSystemTime(50_000);
     const userId = `failed-removal-reads-${crypto.randomUUID()}`;
     let requests = 0;
-    let delivered = 0;
     const refetch = vi.fn(() => {
       requests += 1;
       if (requests <= 2) return Promise.resolve({ status: "error" } as const);
-      delivered += 1;
       return Promise.resolve(DELIVERED);
     });
     renderHook(() =>
@@ -1623,7 +1586,6 @@ describe("optimistic activity history projection", () => {
       await vi.advanceTimersByTimeAsync(750 + 2_000 + 5_000 + 1);
     });
     expect(refetch).toHaveBeenCalledTimes(3);
-    expect(delivered).toBe(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000);
@@ -1634,7 +1596,6 @@ describe("optimistic activity history projection", () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(refetch).toHaveBeenCalledTimes(5);
-    expect(delivered).toBe(3);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(600_000);

@@ -104,6 +104,36 @@ function downloadOptions(destPath: string, expected: string) {
 }
 
 async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
+  return settleReportedBackoffs(promise, () =>
+    vi.advanceTimersToNextTimerAsync(),
+  );
+}
+
+// undici finishes a real response through setImmediate, so these cases leave
+// it native. Its own setTimeouts stay frozen beside the backoff, so the next
+// timer is not necessarily the backoff; running everything pending includes it.
+function useFakeTimersForRealSockets(): void {
+  vi.useFakeTimers({
+    toFake: [
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      "Date",
+    ],
+  });
+}
+
+async function settleRetryTimersOverRealSockets<T>(
+  promise: Promise<T>,
+): Promise<T> {
+  return settleReportedBackoffs(promise, () => vi.runOnlyPendingTimersAsync());
+}
+
+async function settleReportedBackoffs<T>(
+  promise: Promise<T>,
+  advance: () => Promise<unknown>,
+): Promise<T> {
   let settled = false;
   const outcome = promise.then(
     (value) => {
@@ -120,7 +150,7 @@ async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
     await Promise.race([settlement, retryBackoffSignal.promise]);
     if (settled) break;
     retryBackoffSignal = createRetryBackoffSignal();
-    await vi.advanceTimersToNextTimerAsync();
+    await advance();
   }
   const result = await outcome;
   if (result.kind === "rejected") throw result.error;
@@ -189,7 +219,7 @@ describe("downloadToFile resume and integrity policy", () => {
   it(
     "resumes a partial archive on a mirror without carrying the first origin validator",
     async () => {
-      vi.useRealTimers();
+      useFakeTimersForRealSockets();
       const expected = "abcdef";
       const destPath = join(workDir, "mirrored-archive.tar.gz");
       const firstOriginRequests: Array<{
@@ -212,7 +242,7 @@ describe("downloadToFile resume and integrity policy", () => {
             etag: '"cdn-version"',
             "content-length": "6",
           });
-          response.end("abc");
+          response.write("abc", () => response.destroy());
           return;
         }
         response.writeHead(503);
@@ -232,7 +262,7 @@ describe("downloadToFile resume and integrity policy", () => {
         url: `${firstOrigin}/host.tar.gz`,
         mirrorUrls: [`${mirrorOrigin}/host.tar.gz`],
       });
-      const result = await pending;
+      const result = await settleRetryTimersOverRealSockets(pending);
 
       expect(result).toEqual({ downloadedBytes: 6, sha256: sha256(expected) });
       expect(readFileSync(destPath, "utf8")).toBe(expected);
@@ -762,7 +792,7 @@ describe("downloadToFile resume and integrity policy", () => {
   );
 
   it("preserves Range and If-Range across a real redirect before the 200 fallback", async () => {
-    vi.useRealTimers();
+    useFakeTimersForRealSockets();
     const requests: Array<{
       path: string;
       range: string | undefined;
@@ -799,10 +829,12 @@ describe("downloadToFile resume and integrity policy", () => {
     }, faultServers);
     const destPath = join(workDir, "real-redirect.tar.gz");
 
-    const result = await downloadToFile({
-      ...downloadOptions(destPath, "abcdef"),
-      url: `${baseUrl}/archive`,
-    });
+    const result = await settleRetryTimersOverRealSockets(
+      downloadToFile({
+        ...downloadOptions(destPath, "abcdef"),
+        url: `${baseUrl}/archive`,
+      }),
+    );
 
     expect(result.sha256).toBe(sha256("abcdef"));
     expect(requests).toEqual([
