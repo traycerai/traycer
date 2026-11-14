@@ -27,8 +27,9 @@ import {
  * directory a surface above already offers, and for an id no directory names
  * once the team's is complete, authn's person read, which still names someone
  * who has left the team. Both are read in the team's environment, which the
- * viewer's `environment.list` names; until it answers, no member is read or
- * named (the viewer and the task's collaborators still are). A
+ * viewer's `environment.list` names; until it answers, and while its last
+ * read failed, no member is read or named (the viewer and the task's
+ * collaborators still are). A
  * host no team owns, or one whose owner cannot be read yet, passes the
  * surface above's directory through unchanged, so a personal computer asks
  * for nothing.
@@ -61,7 +62,11 @@ function useHostTeamMembers(hostId: string): BotMemberResolver {
   // A team's environment is not the team: both reads below are addressed by
   // the environment, which the viewer's environment list names for the team.
   const environments = useEnvironmentListQuery(client, readsTeam);
-  const listed = environments.data?.environments;
+  // A failed refetch keeps the last answer's data; it names no environment,
+  // so neither read below is sent with the id that answer gave.
+  const listed = environments.isError
+    ? undefined
+    : environments.data?.environments;
   const environmentId =
     listed?.find(
       (environment) =>
@@ -83,8 +88,9 @@ function useHostTeamMembers(hostId: string): BotMemberResolver {
     [team, outer, former],
   );
   if (!readsTeam) return outer;
-  // Until the list names the team's environment, no member of this host is
-  // known: the surface's own directory is not the team's people.
+  // Until the list names the team's environment, or while its last read
+  // failed, no member of this host is known: the surface's own directory is
+  // not the team's people.
   if (listed === undefined) return nobodyKnown;
   // The list answered without the team: its directory is not the viewer's
   // to read, so the surface's own directory stands, as on a personal host.
