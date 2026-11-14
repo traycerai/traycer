@@ -4511,6 +4511,8 @@ function defaultToolbar() {
     reasoning: "high" as const,
     serviceTier: "" as const,
     permission: "supervised" as const,
+    accountChosen: false,
+    showsDefaultAccount: false,
   };
 }
 

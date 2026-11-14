@@ -48,7 +48,10 @@ import {
   botLooksOf,
   useChannelBackground,
 } from "@/hooks/bots/use-bot-appearance";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotDirectoryRecord,
+  BotRecord,
+} from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
@@ -1729,7 +1732,7 @@ function BotTabContent(props: {
               ))}
             {settingsOpen ? (
               <BotChannelSettingsPanel
-                bot={snapshot.bot}
+                bot={botWithProfileChoice(snapshot.bot, botList.data)}
                 personal={personal}
                 channelId={snapshot.bot.appConversationChatId}
                 environmentBots={environmentBots}
@@ -1983,4 +1986,13 @@ function PausedBanner(props: {
       ) : null}
     </div>
   );
+}
+
+/** The channel snapshot owns the tuple; the directory carries the host's choice. */
+function botWithProfileChoice(
+  bot: BotRecord,
+  listed: BotListResponse | undefined,
+): BotDirectoryRecord {
+  const row = listed?.bots.find((candidate) => candidate.botId === bot.botId);
+  return { ...bot, profileChoice: row?.profileChoice ?? null };
 }

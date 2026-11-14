@@ -62,6 +62,15 @@ interface GateCreateChatRequest {
 
 /** The toolbar slices the modal reads; the catalog is the new host's answer. */
 interface ToolbarMockState {
+  readonly accountChosen: boolean;
+  readonly defaultAccount: {
+    readonly harnessId: string;
+    readonly profileId: string;
+  } | null;
+  readonly setAccountChosen: (chosen: boolean) => void;
+  readonly setDefaultAccount: (
+    account: { readonly harnessId: string; readonly profileId: string } | null,
+  ) => void;
   readonly ultracode: boolean;
   readonly selectedModel: null;
   readonly values: {
@@ -229,28 +238,32 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
   };
 });
 
-const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
-  ultracode: false,
-  selectedModel: null,
-  values: {
+const TOOLBAR_DEFAULTS = vi.hoisted(
+  (): Omit<ToolbarMockState, "setAccountChosen" | "setDefaultAccount"> => ({
+    accountChosen: false,
+    defaultAccount: null,
+    ultracode: false,
+    selectedModel: null,
+    values: {
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet",
+        profileId: null,
+      },
+    },
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",
       profileId: null,
     },
-  },
-  selection: {
-    harnessId: "claude",
-    modelSlug: "claude-sonnet",
-    profileId: null,
-  },
-  // No catalog answered yet.
-  catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
-  permission: "supervised",
-  reasoning: "medium",
-  serviceTier: "",
-  agentMode: "regular",
-}));
+    // No catalog answered yet.
+    catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
+    permission: "supervised",
+    reasoning: "medium",
+    serviceTier: "",
+    agentMode: "regular",
+  }),
+);
 
 // The agent gates read the placement host's own lists; nothing here stages a
 // sandbox or sits on one, so none of them holds or refuses a send.
@@ -264,8 +277,78 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
-  const toolbarStore = createStore<ToolbarMockState>(() => TOOLBAR_DEFAULTS);
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => ({
+    ...TOOLBAR_DEFAULTS,
+    setAccountChosen: (chosen) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const account = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies && account !== null) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        account !== null &&
+        state.selection.profileId === account.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        accountChosen: chosen,
+        selection: presentedSelection,
+      });
+    },
+    setDefaultAccount: (account) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies && account !== null) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        state.defaultAccount !== null &&
+        state.selection.profileId === state.defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        defaultAccount: account,
+        selection: presentedSelection,
+      });
+    },
+  }));
   testState.toolbarStore = toolbarStore;
   return { useComposerToolbarStore: () => toolbarStore };
 });
@@ -540,7 +623,18 @@ afterEach(() => {
   testState.editorDoc = null;
   testState.stagedSendInput = null;
   testState.stagedHandoffInput = null;
-  testState.toolbarStore?.setState(TOOLBAR_DEFAULTS, true);
+  const toolbarStore = testState.toolbarStore;
+  if (toolbarStore !== null) {
+    const state = toolbarStore.getState();
+    toolbarStore.setState(
+      {
+        ...TOOLBAR_DEFAULTS,
+        setAccountChosen: state.setAccountChosen,
+        setDefaultAccount: state.setDefaultAccount,
+      },
+      true,
+    );
+  }
   useAuthStore.setState({ profile: null });
   imageStoreMocks.sessionImageBytes.mockReset();
   imageStoreMocks.getImageBytes.mockReset();

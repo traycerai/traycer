@@ -142,6 +142,14 @@ export interface LandingDraftTab {
    * pick of its own, so the draft's Send goes there even after a reload.
    */
   readonly returnedSandbox: StoredReturnedSandbox | null;
+  /**
+   * Nobody chose this draft's account: its settings came from the host's
+   * last-run settings, and its Terminal login starts on the default account
+   * (`useSignedOutTerminalDefaultAccount`) each time it is shown. Local to
+   * this device: a row that arrives without it, from the host or another
+   * window, counts as chosen and never moves.
+   */
+  readonly accountFollowsDefault: boolean;
 }
 
 export type LandingDraftAdoption =
@@ -297,6 +305,11 @@ interface LandingDraftStoreState {
   setDraftSelection: (id: string, selection: DraftSelection | null) => void;
   /** Update the run settings of a specific draft. No-op when id not found. */
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
+  /**
+   * Record whether nobody chose the draft's account
+   * (`LandingDraftTab.accountFollowsDefault`). Local: nothing is published.
+   */
+  setDraftAccountFollowsDefault: (id: string, follows: boolean) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
   /**
@@ -457,6 +470,7 @@ function readProjectedDrafts(
         ...mirrorFieldsFromExisting(draft.id),
         closed: draft.closed === true,
         returnedSandbox: parseReturnedSandbox(draft.returnedSandbox),
+        accountFollowsDefault: draft.accountFollowsDefault === true,
       },
     ];
   });
@@ -548,6 +562,7 @@ function parsePersistedLandingDrafts(
           ...parseLandingMirrorFields(raw),
           closed: raw.closed === true,
           returnedSandbox: parseReturnedSandbox(raw.returnedSandbox),
+          accountFollowsDefault: raw.accountFollowsDefault === true,
         },
       ];
     }),
@@ -727,6 +742,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           composerMode: useSettingsStore.getState().composerMode,
           workspace: readLandingDraftWorkspaceSnapshotForHost(hostId),
           ...freshLandingMirrorState(),
+          accountFollowsDefault: settings === null,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -750,7 +766,12 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           drafts: updateDraftWorkspace(state, id, () => workspace).drafts.map(
             (d) =>
               d.id === id
-                ? { ...d, settings, generation: draft.generation + 1 }
+                ? {
+                    ...d,
+                    settings,
+                    accountFollowsDefault: true,
+                    generation: draft.generation + 1,
+                  }
                 : d,
           ),
         }));
@@ -783,6 +804,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // (or re-mints) its local row from there.
           supersedes: sourceId,
           returnedSandbox: source.returnedSandbox,
+          accountFollowsDefault: source.accountFollowsDefault,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -1050,6 +1072,18 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         notifyDraftLocalEdit(id);
       },
 
+      setDraftAccountFollowsDefault: (id, follows) => {
+        const draft = get().drafts.find((d) => d.id === id);
+        if (draft === undefined || draft.accountFollowsDefault === follows) {
+          return;
+        }
+        set((state) => ({
+          drafts: state.drafts.map((d) =>
+            d.id === id ? { ...d, accountFollowsDefault: follows } : d,
+          ),
+        }));
+      },
+
       setDraftReturnedSandbox: (id, given) => {
         const draft = get().drafts.find((d) => d.id === id);
         const returned = given === null ? null : storeReturnedSandbox(given);
@@ -1256,6 +1290,13 @@ function areLandingDraftsEqual(
       return false;
     }
     if (left[index].closed !== right[index].closed) return false;
+    // Local provenance moves without a content edit: another window choosing
+    // the Terminal login on purpose changes only this.
+    if (
+      left[index].accountFollowsDefault !== right[index].accountFollowsDefault
+    ) {
+      return false;
+    }
     if (
       !sameStoredReturnedSandbox(
         left[index].returnedSandbox,
@@ -1332,6 +1373,7 @@ function projectLandingDraftForDesktop(
     ...(draft.returnedSandbox === null
       ? {}
       : { returnedSandbox: returnedSandboxToJson(draft.returnedSandbox) }),
+    ...(draft.accountFollowsDefault ? { accountFollowsDefault: true } : {}),
   };
 }
 
@@ -1787,6 +1829,7 @@ export function freshLandingMirrorState(): Pick<
   | "confirmedHostBlobHashes"
   | "closed"
   | "returnedSandbox"
+  | "accountFollowsDefault"
 > {
   return {
     adoption: UNADOPTED_LANDING_DRAFT,
@@ -1800,6 +1843,7 @@ export function freshLandingMirrorState(): Pick<
     confirmedHostBlobHashes: [],
     closed: false,
     returnedSandbox: null,
+    accountFollowsDefault: false,
   };
 }
 
@@ -1968,6 +2012,12 @@ export function landingDraftRememberSynced(
         hostRevision: sameLine
           ? Math.max(draft.hostRevision, hostRevision)
           : hostRevision,
+        // Clamped behind a newer observed revision: the held revision is
+        // another writer's, not this acknowledgement, so the account
+        // provenance loses its proof and the row counts as chosen.
+        accountFollowsDefault:
+          draft.accountFollowsDefault &&
+          !(sameLine && hostRevision < draft.hostRevision),
         // Record WHOSE revision this is. Nothing else on the ACK path does,
         // so without it a draft that was only ever published - never sent a
         // host document - keeps a null owner forever, and the frontier check
@@ -2076,6 +2126,29 @@ function keptReturnedSandbox(
 }
 
 /**
+ * Only this window's own write coming back keeps the row's account provenance:
+ * a document on the same host line at the revision the row already holds. On a
+ * clean row with the bit set, that revision is this window's own acknowledged
+ * write: a dirty row only becomes clean through an acknowledgement, and
+ * `landingDraftRememberSynced` clears the bit when one lands behind a newer
+ * observed write. A newer revision is another window's or device's write, and a
+ * cloud head (revision 0) proves nothing, so those count as chosen whatever
+ * account they name: equal values are not an own echo.
+ */
+function keptAccountFollowsDefault(
+  existing: LandingDraftTab | undefined,
+  document: DraftDocument,
+): boolean {
+  return (
+    existing !== undefined &&
+    existing.accountFollowsDefault &&
+    document.revision > 0 &&
+    existing.ownerHostId === document.ownerHostId &&
+    existing.hostRevision === document.revision
+  );
+}
+
+/**
  * A host document's frozen settings carry no Ultracode request; the row's own
  * same-draft Claude request survives the echo.
  */
@@ -2156,6 +2229,7 @@ export function applyLandingHostDocument(
       existing,
     ),
     returnedSandbox: keptReturnedSandbox(existing),
+    accountFollowsDefault: keptAccountFollowsDefault(existing, document),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);

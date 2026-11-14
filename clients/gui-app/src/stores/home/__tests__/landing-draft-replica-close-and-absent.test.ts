@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DraftDocument } from "@traycer/protocol/host";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import {
   applyLandingHostDocument,
   collectLandingDirtyWrites,
@@ -7,6 +9,7 @@ import {
   dropForeignLandingMirrorsAbsent,
   emptyLandingDraftWorkspaceSnapshot,
   EMPTY_LANDING_DRAFT_CONTENT,
+  landingDraftRememberSynced,
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
@@ -21,6 +24,7 @@ import {
   setDraftLocalFlushListener,
   setLandingPlacementHostReader,
 } from "@/lib/drafts/draft-local-edits";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 
 const NON_EMPTY_CONTENT = {
   type: "doc" as const,
@@ -50,6 +54,7 @@ function baseDraft(
     confirmedHostBlobHashes: [],
     closed: false,
     returnedSandbox: null,
+    accountFollowsDefault: false,
     ...overrides,
   };
 }
@@ -672,6 +677,272 @@ describe("landing draft store: applyLandingHostDocument closed on the clean path
     // Contrast: with the placement back on host-a, the row is no longer
     // foreign, so the portable value is taken.
     expect(afterPlacementMatches?.closed).toBe(true);
+  });
+});
+
+const TERMINAL_SETTINGS: ChatRunSettings = {
+  ultracode: false,
+  harnessId: "claude",
+  model: "sonnet-5.5",
+  permissionMode: "supervised",
+  reasoningEffort: "low",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+};
+
+function frozenRunSettings(profileId: string | null) {
+  return chatRunSettingsSchemaPreUltracode.parse({
+    harnessId: "claude",
+    model: "sonnet-5.5",
+    permissionMode: "supervised",
+    reasoningEffort: "low",
+    serviceTier: null,
+    agentMode: "regular",
+    profileId,
+  });
+}
+
+function ownEcho(
+  draftId: string,
+  profileId: string | null,
+  revision: number,
+): DraftDocument {
+  return {
+    draftId,
+    kind: "landing",
+    target: { epicId: null, chatId: null, blockId: null },
+    revision,
+    lastTouchedAt: 100,
+    workspace: null,
+    supersedes: null,
+    ownerHostId: "host-a",
+    origin: "own",
+    adoption: { state: "adopted", hostId: "host-a" },
+    publication: {
+      status: "current",
+      lastPublishedAt: 100,
+      publishedRevision: 2,
+      halted: null,
+    },
+    portable: {
+      content: EMPTY_LANDING_DRAFT_CONTENT,
+      selection: null,
+      runSettings: frozenRunSettings(profileId),
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+    },
+  };
+}
+
+function accountFollowsDefaultBits(state: unknown): boolean[] {
+  if (!isRecord(state) || !Array.isArray(state.drafts)) {
+    throw new Error("persisted landing drafts are missing");
+  }
+  return state.drafts.map((draft) => {
+    if (!isRecord(draft) || !("accountFollowsDefault" in draft)) {
+      throw new Error(
+        "a persisted landing draft is missing accountFollowsDefault",
+      );
+    }
+    return draft.accountFollowsDefault === true;
+  });
+}
+
+describe("landing draft store: accountFollowsDefault across an own echo and a persist round trip", () => {
+  beforeEach(() => {
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    resetLandingDraftRetirementsForTests();
+  });
+
+  afterEach(() => {
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    resetLandingDraftRetirementsForTests();
+  });
+
+  function seedFollowing(id: string): void {
+    useLandingDraftStore.setState({
+      drafts: [
+        baseDraft(id, {
+          origin: "own",
+          adoption: { state: "adopted", hostId: "host-a" },
+          ownerHostId: "host-a",
+          hostRevision: 0,
+          generation: 2,
+          syncedGeneration: 2,
+          settings: TERMINAL_SETTINGS,
+          accountFollowsDefault: true,
+        }),
+      ],
+      activeDraftId: null,
+    });
+  }
+
+  function acknowledge(id: string, revision: number): void {
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    if (draft === undefined) throw new Error("expected a draft to acknowledge");
+    landingDraftRememberSynced(id, revision, draft.generation, "host-a");
+    const acked = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    if (acked === undefined)
+      throw new Error("the acknowledgement dropped the draft");
+    expect(acked.hostRevision).toBe(revision);
+    expect(acked.ownerHostId).toBe("host-a");
+    expect(acked.accountFollowsDefault).toBe(true);
+  }
+
+  it("keeps the bit when the echo is this window's acknowledged revision", () => {
+    seedFollowing("echo-ack");
+    acknowledge("echo-ack", 2);
+
+    expect(
+      applyLandingHostDocument(
+        ownEcho("echo-ack", null, 2),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+
+    const after = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-ack");
+    if (after === undefined) throw new Error("the echo did not land");
+    expect(after.accountFollowsDefault).toBe(true);
+    expect(after.hostRevision).toBe(2);
+    expect(after.ownerHostId).toBe("host-a");
+    expect(after.content).toEqual(EMPTY_LANDING_DRAFT_CONTENT);
+    expect(after.settings?.profileId).toBeNull();
+  });
+
+  it("drops the bit when a later write from the same owner keeps Terminal", () => {
+    seedFollowing("echo-later");
+    acknowledge("echo-later", 2);
+
+    expect(
+      applyLandingHostDocument(
+        ownEcho("echo-later", null, 3),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+
+    const after = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-later");
+    if (after === undefined) throw new Error("the echo did not land");
+    expect(after.accountFollowsDefault).toBe(false);
+    expect(after.hostRevision).toBe(3);
+    expect(after.ownerHostId).toBe("host-a");
+    expect(after.content).toEqual(EMPTY_LANDING_DRAFT_CONTENT);
+    expect(after.settings?.profileId).toBeNull();
+  });
+
+  it("drops the bit when a foreign write is observed before this window's acknowledgement", () => {
+    const ownRevision = 4;
+    const foreignContent = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "from the other window" }],
+        },
+      ],
+    };
+    useLandingDraftStore.setState({
+      drafts: [
+        baseDraft("echo-clamped", {
+          origin: "own",
+          adoption: { state: "adopted", hostId: "host-a" },
+          ownerHostId: "host-a",
+          hostRevision: 0,
+          generation: 3,
+          syncedGeneration: 1,
+          settings: TERMINAL_SETTINGS,
+          accountFollowsDefault: true,
+        }),
+      ],
+      activeDraftId: null,
+    });
+
+    const foreign = ownEcho("echo-clamped", null, ownRevision + 1);
+    expect(applyLandingHostDocument(foreign, foreignContent)).toBe(true);
+    const held = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-clamped");
+    if (held === undefined)
+      throw new Error("the foreign document dropped the draft");
+    expect(held.content).toEqual(NON_EMPTY_CONTENT);
+    expect(held.accountFollowsDefault).toBe(true);
+    expect(held.generation).toBeGreaterThan(held.syncedGeneration);
+    expect(held.hostRevision).toBe(ownRevision + 1);
+    expect(held.ownerHostId).toBe("host-a");
+
+    landingDraftRememberSynced(
+      "echo-clamped",
+      ownRevision,
+      held.generation,
+      "host-a",
+    );
+    const acked = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-clamped");
+    if (acked === undefined)
+      throw new Error("the acknowledgement dropped the draft");
+    expect(acked.generation).toBe(acked.syncedGeneration);
+    expect(acked.hostRevision).toBe(ownRevision + 1);
+
+    expect(applyLandingHostDocument(foreign, foreignContent)).toBe(true);
+    const after = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-clamped");
+    if (after === undefined) throw new Error("the replay dropped the draft");
+    expect(after.accountFollowsDefault).toBe(false);
+    expect(after.content).toEqual(foreignContent);
+    expect(after.settings?.profileId).toBeNull();
+  });
+
+  it("drops the bit when the document is a cloud head at revision 0", () => {
+    seedFollowing("echo-cloud");
+    acknowledge("echo-cloud", 2);
+
+    expect(
+      applyLandingHostDocument(
+        ownEcho("echo-cloud", null, 0),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+
+    const after = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-cloud");
+    if (after === undefined) throw new Error("the cloud head did not land");
+    expect(after.accountFollowsDefault).toBe(false);
+    expect(after.content).toEqual(EMPTY_LANDING_DRAFT_CONTENT);
+    expect(after.settings?.profileId).toBeNull();
+  });
+
+  it("keeps the bit through partialize and merge", () => {
+    useLandingDraftStore.setState({
+      drafts: [
+        baseDraft("persist-follows", {
+          settings: TERMINAL_SETTINGS,
+          accountFollowsDefault: true,
+        }),
+      ],
+      activeDraftId: "persist-follows",
+    });
+    const options = useLandingDraftStore.persist.getOptions();
+    const partialize = options.partialize;
+    const merge = options.merge;
+    if (partialize === undefined || merge === undefined) {
+      throw new Error("landing draft persist is missing partialize or merge");
+    }
+    const partial = partialize(useLandingDraftStore.getState());
+    const merged = merge(partial, useLandingDraftStore.getState());
+    expect(accountFollowsDefaultBits(partial)).toEqual([true]);
+    expect(accountFollowsDefaultBits(merged)).toEqual([true]);
   });
 });
 
