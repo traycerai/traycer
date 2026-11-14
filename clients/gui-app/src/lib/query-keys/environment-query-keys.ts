@@ -10,4 +10,7 @@ export const environmentQueryKeys = {
       userId,
       viewerId,
     ] as const,
+  /** The read of Personal one move sheet is drawn against, by the viewer. */
+  personalForMove: (viewerId: string) =>
+    ["environment", "move", "personal", viewerId] as const,
 };

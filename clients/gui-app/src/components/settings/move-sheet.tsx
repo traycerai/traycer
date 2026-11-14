@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/sheet";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useEnvironmentMoveStartMutation } from "@/hooks/environment/use-environment-move-start-mutation";
+import { usePersonalForMoveQuery } from "@/hooks/environment/use-personal-for-move-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -113,15 +114,23 @@ function MoveSheetBody(props: {
     target.hostId,
     "environment.move.plan",
   );
+  // The computer draws the sheet against what this app read of Personal, on
+  // the person's own sign-in; the plan waits for that read.
+  const personalRead = usePersonalForMoveQuery(supported === true);
+  const personalItems = personalRead.data ?? null;
   const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
     cacheKeyIdentity: undefined,
     client,
     method: "environment.move.plan",
     params: {
       target: { kind: "personal", environmentId: personal.environmentId ?? "" },
+      personal: personalItems,
     },
     options: {
-      enabled: supported === true && personal.environmentId !== null,
+      enabled:
+        supported === true &&
+        personal.environmentId !== null &&
+        personalRead.data !== undefined,
       refetchOnWindowFocus: false,
     },
   });
@@ -148,13 +157,14 @@ function MoveSheetBody(props: {
         target: { kind: "personal", environmentId },
         planHash: data.planHash,
         keyChoices: moveKeyChoices(data, choices),
+        personal: personalItems,
       },
       {
         onSuccess: (result) => {
           if (result.kind === "plan_changed" || result.kind === "refused") {
-            // The settle invalidates `environment.move.plan`, which re-reads
-            // the plan the sheet shows; authn refusing the acceptance is the
-            // same ask: read the list again.
+            // Personal is read again, and the plan with it; authn refusing the
+            // acceptance is the same ask: read the list again.
+            void personalRead.refetch().catch(ignoreError);
             setPlanChanged(true);
             setChoices(new Map());
             return;

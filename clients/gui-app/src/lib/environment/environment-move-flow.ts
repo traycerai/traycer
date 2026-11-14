@@ -3,6 +3,7 @@ import type { EnvironmentCloud } from "@traycer-clients/shared/environment/envir
 import { recordMoveAcceptance } from "@traycer-clients/shared/environment/move-acceptance";
 import type {
   EnvironmentMoveOutcomeAnswer,
+  EnvironmentMovePersonal,
   EnvironmentMoveStageRequest,
   EnvironmentMoveStageResponse,
   EnvironmentMoveStartRequest,
@@ -24,12 +25,17 @@ export interface EnvironmentMoveHost {
   ) => Promise<EnvironmentMoveOutcomeAnswer>;
 }
 
-/** What the person accepted: the computer, where it goes, and the drawn plan. */
+/**
+ * What the person accepted: the computer, where it goes, and the drawn plan.
+ * `personal` is the read of Personal the plan was drawn against, the same one
+ * and never a newer or older copy; `null` for a give.
+ */
 export interface EnvironmentMoveAcceptance {
   readonly hostId: string;
   readonly target: EnvironmentOperationTarget;
   readonly planHash: string;
   readonly keyChoices: readonly EnvironmentMoveStaysChoice[];
+  readonly personal: EnvironmentMovePersonal;
 }
 
 /**
@@ -99,6 +105,7 @@ export async function runEnvironmentMove(
     const staged = await host.stage({
       target: accepted.target,
       keyChoices: [...accepted.keyChoices],
+      personal: accepted.personal,
     });
     if (!stagedAsAccepted(staged, accepted)) return { kind: "plan_changed" };
     const acceptance = await recordMoveAcceptance(
