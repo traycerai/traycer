@@ -855,6 +855,118 @@ export type ProvidersLinkCompleteRequestV11 = z.infer<
   typeof providersLinkCompleteRequestSchemaV11
 >;
 
+// ── providers.link@2.0 / linkComplete@2.0 ───────────────────────────────────
+//
+// A new major because `@2.0` serves the intent arm only: it drops the server
+// arm's prompts, the pasted code and `mismatch`, and never carries an account
+// identifier back, which a minor would keep on the wire. Every object is
+// strict, and every refusal is a closed code: there is no `detail` and no
+// `message`, so no host sentence and no account reaches the app. A code no
+// consumer reads apart is not on the wire; one that later needs its own line
+// is a minor.
+
+/**
+ * `providers.link@2.0` request. `profileId` is the local profile whose
+ * sign-in is handed off, and must exist on this computer. `intentOperationId`
+ * is the app's `provider_link` intent, recorded on the person's sign-in for
+ * this host, the environment, and the profile's environment id (the host
+ * computes `environmentProfileId ?? profileId`). `expectedEnvironmentId` is
+ * the environment the intent names.
+ */
+export const providersLinkRequestSchemaV20 = lazySchema(() =>
+  z
+    .object({
+      providerId: providerIdSchema,
+      profileId: z.string().min(1),
+      intentOperationId: z.uuid(),
+      expectedEnvironmentId: z.string().min(1),
+    })
+    .strict(),
+);
+export type ProvidersLinkRequestV20 = z.infer<
+  typeof providersLinkRequestSchemaV20
+>;
+
+/**
+ * Why `providers.link@2.0` did not start a link:
+ * - `not_offered`: the harness has no local handoff, the profile is detached,
+ *   or this host runs no handoffs;
+ * - `profile_not_found`: no active local profile of that id;
+ * - `environment_mismatch`: this host does not serve `expectedEnvironmentId`
+ *   now, including when it serves none.
+ */
+const PROVIDERS_LINK_REFUSALS_V20 = [
+  "not_offered",
+  "profile_not_found",
+  "environment_mismatch",
+] as const;
+
+export const providersLinkResponseSchemaV20 = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    z.object({ ok: z.literal(true), linkId: z.string().min(1) }).strict(),
+    z
+      .object({
+        ok: z.literal(false),
+        code: z.enum(PROVIDERS_LINK_REFUSALS_V20),
+      })
+      .strict(),
+  ]),
+);
+export type ProvidersLinkResponseV20 = z.infer<
+  typeof providersLinkResponseSchemaV20
+>;
+
+export const providersLinkCompleteRequestSchemaV20 = lazySchema(() =>
+  z.object({ linkId: z.string().min(1) }).strict(),
+);
+export type ProvidersLinkCompleteRequestV20 = z.infer<
+  typeof providersLinkCompleteRequestSchemaV20
+>;
+
+/**
+ * Why a `providers.linkComplete@2.0` link failed. A closed enum: the host maps
+ * every cause it knows (authn's intent reasons and link codes, and its own)
+ * onto these three and logs the cause itself, and an authn code it does not
+ * know answers `link_refused`. A raw code is never passed through.
+ * - `no_sign_in`: the profile holds no sign-in on this computer;
+ * - `account_mismatch`: authn opened the family and it is another account
+ *   than the intent names;
+ * - `link_refused`: every other refusal, the host's own or authn's.
+ */
+const PROVIDERS_LINK_FAILURES_V20 = [
+  "no_sign_in",
+  "account_mismatch",
+  "link_refused",
+] as const;
+
+/**
+ * - `pending`: in flight, or retrying after a lost answer, a 5xx, a 401 on the
+ *   host's own token, or a locked keychain (the host reads the source again
+ *   on the next poll);
+ * - `unavailable`: authn unreachable, the intake key unreadable, or the host's
+ *   credential not live;
+ * - `linked`: the sealed receipt opened and the local store was rewritten;
+ * - `expired`: an unknown `linkId`, or one past its 15 minutes;
+ * - `failed`: with one of {@link PROVIDERS_LINK_FAILURES_V20}.
+ */
+export const providersLinkCompleteResponseSchemaV20 = lazySchema(() =>
+  z.discriminatedUnion("state", [
+    z.object({ state: z.literal("pending") }).strict(),
+    z.object({ state: z.literal("unavailable") }).strict(),
+    z.object({ state: z.literal("linked") }).strict(),
+    z.object({ state: z.literal("expired") }).strict(),
+    z
+      .object({
+        state: z.literal("failed"),
+        code: z.enum(PROVIDERS_LINK_FAILURES_V20),
+      })
+      .strict(),
+  ]),
+);
+export type ProvidersLinkCompleteResponseV20 = z.infer<
+  typeof providersLinkCompleteResponseSchemaV20
+>;
+
 // ── environment.agentDefinitions.* ──────────────────────────────────────────
 
 /** An `agent_definition` item: file name and text. */
