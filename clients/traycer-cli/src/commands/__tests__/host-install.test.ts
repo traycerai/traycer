@@ -686,8 +686,9 @@ describe("buildHostInstallCommand", () => {
     const actual = await vi.importActual<
       typeof import("../../host/install-auth")
     >("../../host/install-auth");
-    mocks.attendedTeamInstallMock.mockImplementation((...callArgs) =>
-      actual.beginAttendedTeamInstall(...callArgs),
+    mocks.attendedTeamInstallMock.mockImplementation(
+      (ctx: CommandContext, team: string) =>
+        actual.beginAttendedTeamInstall(ctx, team),
     );
     const urls: string[] = [];
     vi.stubGlobal(

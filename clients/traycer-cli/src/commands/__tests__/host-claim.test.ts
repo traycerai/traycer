@@ -248,9 +248,7 @@ describe("buildHostClaimCommand", () => {
   });
 
   it("requires --yes when the question cannot be shown", async () => {
-    await expect(
-      makeClaimCommand(false)(fakeCtx(true)),
-    ).rejects.toMatchObject({
+    await expect(makeClaimCommand(false)(fakeCtx(true))).rejects.toMatchObject({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: "Pass --yes to claim this computer without the question.",
     });
@@ -262,10 +260,12 @@ describe("buildHostClaimCommand", () => {
   it("requires sign-in before reading ownership", async () => {
     mocks.resolveHostAuthMock.mockResolvedValue(null);
 
-    await expect(makeClaimCommand(false)(fakeCtx(false))).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "Sign in with `traycer login`, then run the command again.",
-    });
+    await expect(makeClaimCommand(false)(fakeCtx(false))).rejects.toMatchObject(
+      {
+        code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+        message: "Sign in with `traycer login`, then run the command again.",
+      },
+    );
     expect(requests).toEqual([]);
   });
 
@@ -301,7 +301,9 @@ describe("buildHostClaimCommand", () => {
         kind: scenario.kind,
         remoteAccess: true,
       };
-      await expect(makeClaimCommand(true)(fakeCtx(false))).rejects.toMatchObject({
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
         message: scenario.message,
       });
       expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
@@ -319,7 +321,9 @@ describe("buildHostClaimCommand", () => {
     async (status, message) => {
       releaseStatus = status;
 
-      await expect(makeClaimCommand(true)(fakeCtx(false))).rejects.toMatchObject({
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
         message,
       });
       expect(mocks.provisionRunningHostCredentialMock).not.toHaveBeenCalled();

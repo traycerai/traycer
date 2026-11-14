@@ -97,9 +97,7 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         PLAIN_DISPATCH,
       ),
     );
-    ctx.output.humanRequired(
-      confirmLine(owner.name, await readRunningChats()),
-    );
+    ctx.output.humanRequired(confirmLine(owner.name, await readRunningChats()));
     if (!args.yes && !(await confirmClaim(ctx))) {
       return {
         data: { claimed: false, hostId: endpoint.hostId, team: owner.name },
