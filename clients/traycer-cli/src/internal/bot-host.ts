@@ -1,7 +1,6 @@
-import {
-  createCliLocalOpenAuth,
-  localTeamAdmissionCliError,
-} from "./local-open-auth";
+import { localTeamAdmissionCliError } from "./local-open-auth";
+import { requireCliHostSession } from "./cli-host-tokens";
+import { hostTokenFailureCliError, signedOutCliError } from "./host-door-words";
 /**
  * What the `traycer bot` commands share: finding a bot by id or title,
  * reading the environments the bots are grouped under, one `bot.subscribe`
@@ -28,7 +27,6 @@ import {
 } from "@traycer/protocol/host/environment/contracts";
 import { isIncompatibleCloseForMethod } from "@traycer/protocol/host-transport/stream-session";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/host-messenger";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
@@ -180,23 +178,23 @@ export async function openLocalStreamClient(): Promise<{
   readonly endpoint: HostTransportEndpoint;
 }> {
   const auth = await resolveHostAuth();
-  if (auth === null) {
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
-  }
+  if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
-  const lease = new MutableBearerLease(auth.token, auth.userId);
+  // The token is all these short reads need: nothing here refreshes the
+  // sign-in once the client is built, so the session is released at once.
+  const session = await requireCliHostSession(
+    auth,
+    endpoint.hostId,
+    hostTokenFailureCliError,
+  );
+  session.dispose();
+  const bearer = session.bearer;
   const client = new WsStreamClient<HostStreamRpcRegistry>({
-    localOpenAuth: createCliLocalOpenAuth(auth.authnBaseUrl),
     registry: hostStreamRpcRegistry,
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
-    bearer: () => lease,
-    userId: lease.identity.userId,
+    bearer: () => bearer,
+    userId: bearer.identity.userId,
     auth: null,
     clock: null,
     hostCredentialMint: null,

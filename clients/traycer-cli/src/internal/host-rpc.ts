@@ -1,7 +1,6 @@
-import {
-  createCliLocalOpenAuth,
-  localTeamAdmissionCliError,
-} from "./local-open-auth";
+import { localTeamAdmissionCliError } from "./local-open-auth";
+import { openCliHostSession } from "./cli-host-tokens";
+import { hostTokenFailureCliError, signedOutCliError } from "./host-door-words";
 import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
@@ -11,8 +10,8 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
-import type { AuthorityBoundAuthRevalidator } from "../../../shared/auth/bearer-revalidator";
+import type { OpenFrameBearerSource } from "../../../shared/auth/bearer-source";
+import type { RefusalAwareAuthRevalidator } from "../../../shared/auth/bearer-revalidator";
 import { markRefusalAfterRejectedSignIn } from "./sign-in-rejection";
 import {
   createAuthAwareMessenger,
@@ -52,10 +51,6 @@ import {
   publishedHostProcessGone,
   readHostPidMetadata,
 } from "../host/pid-metadata";
-import {
-  createCliCredentialsStore,
-  createStoreBackedRevalidator,
-} from "../store/credentials-store";
 import { resolveHostAuth, type HostAuth } from "./host-auth";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import {
@@ -76,12 +71,11 @@ export const FRAME_TIMEOUT_MS = 15_000;
  *
  * The protocol (open → openAck → request → response, manifest negotiation,
  * frame parsing, timeouts) is the shared `WsRpcClient` that the Desktop renderer
- * also uses - the CLI no longer hand-rolls it. The bearer comes from the stored
- * credentials (`resolveHostAuth`), seeded by `traycer login`; on a host
- * `UNAUTHORIZED` the shared auth-aware wrapper refreshes the bearer via the
- * store-backed revalidator - the refresh spend runs inside the shared credentials
- * file lock (`store.rotate`, §7) - rotates the lease, and retries once before the
- * error surfaces.
+ * also uses - the CLI no longer hand-rolls it. The host receives only this
+ * CLI's host-only token for it (`cli-host-tokens.ts`), read from disk; the
+ * stored sign-in (`resolveHostAuth`) is spent at authn alone. A host refusal
+ * the shared auth-aware wrapper reads by its reason: a credential reason gets
+ * one fresh token and one more send, never a third.
  */
 export async function callHostRpc<
   Method extends keyof HostRpcRegistry & string,
@@ -101,12 +95,7 @@ export async function callHostRpc<
       environment: config.environment,
       method,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
+    throw signedOutCliError();
   }
 
   // Resolve the endpoint once (throws when the host isn't running). Endpoint
@@ -153,12 +142,7 @@ export async function callHostRpcFastFail<
       environment: config.environment,
       method,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
+    throw signedOutCliError();
   }
 
   const endpoint = await resolveEndpoint();
@@ -253,12 +237,7 @@ export async function callHostRpcWithDispatch<
       environment: config.environment,
       method,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
+    throw signedOutCliError();
   }
   const endpoint = await resolveEndpoint();
   return callHostRpcAtResolvedEndpoint(
@@ -329,12 +308,7 @@ export async function callHostRpcAtEndpoint<
         hostId: endpoint.hostId,
       },
     );
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
+    throw signedOutCliError();
   }
   return requestAtEndpoint(
     method,
@@ -354,35 +328,50 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  const opened = await openCliHostSession(auth, endpoint.hostId, false);
+  if (opened.kind === "failed") {
+    createCliLogger(config.environment).warn(
+      "Host RPC blocked: no host-only token",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+        mintOutcome: opened.failure.kind,
+      },
+    );
+    throw hostTokenFailureCliError(opened.failure);
+  }
+  const session = opened.session;
+  try {
+    return await requestWithHostToken(
+      method,
+      params,
+      endpoint,
+      session.bearer,
+      session.tokens.unaryRecovery(endpoint.hostId),
+      retryPolicy,
+      dispatch,
+      session.signInRejected,
+    );
+  } finally {
+    session.dispose();
+  }
+}
+
+async function requestWithHostToken<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  endpoint: HostTransportEndpoint,
+  bearer: OpenFrameBearerSource,
+  recovery: RefusalAwareAuthRevalidator,
+  retryPolicy: TransportRetryPolicy,
+  dispatch: HostRpcDispatch,
+  signInRejected: () => boolean,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
-  const lease = new MutableBearerLease(auth.token, auth.userId);
-  // On a host UNAUTHORIZED the auth-aware messenger drives the refresh through
-  // the locked `rotate` (§7): a short-lived store for this one call, disposed
-  // once the request settles so a `commit-failed` continuation timer never
-  // outlives the command.
-  const store = createCliCredentialsStore();
-  // `signal: null`: this revalidator lives for exactly one unary call, whose
-  // own transport timeout already bounds it.
-  const revalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-    signal: null,
-  });
-
-  // The messenger rethrows the host's own refusal when the refresh is
-  // rejected, so the rejection is recorded here and put back on that refusal.
-  let signInRejected = false;
-  const trackedRevalidator: AuthorityBoundAuthRevalidator = {
-    revalidateExpectedBearer: async (expected) => {
-      const outcome = await revalidator.revalidateExpectedBearer(expected);
-      if (outcome === "rejected") signInRejected = true;
-      return outcome;
-    },
-  };
-
-  const localOpenAuth = createCliLocalOpenAuth(auth.authnBaseUrl);
   const client = new WsRpcClient<HostRpcRegistry>({
-    localOpenAuth,
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),
     webSocketFactory: createWhatwgWebSocketFactory(),
@@ -397,7 +386,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(
       client,
-      trackedRevalidator,
+      recovery,
       dispatch.reauthenticate,
     ),
     retryPolicy,
@@ -411,7 +400,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   }
   const authority: HostRequestAuthority = {
     endpoint,
-    bearer: lease,
+    bearer,
     abortSignal: callLifetime.signal,
   };
   const options: HostRequestOptions = {
@@ -443,11 +432,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     return response;
   } catch (err) {
     const refusal = finalRefusalOf(err);
-    if (
-      signInRejected &&
-      refusal instanceof HostRpcError &&
-      refusal.code === "UNAUTHORIZED"
-    ) {
+    if (signInRejected() && refusal instanceof HostRpcError) {
       markRefusalAfterRejectedSignIn(refusal);
     }
     const error = errorFromUnknown(err);
@@ -463,7 +448,6 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     dispatch.signal?.removeEventListener("abort", abortWithCaller);
     callLifetime.abort("cli-call-settled");
     client.releaseIdleLocalSessions();
-    store.dispose();
   }
 }
 
