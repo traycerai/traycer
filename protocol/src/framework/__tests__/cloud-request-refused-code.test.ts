@@ -44,14 +44,4 @@ describe("E_CLOUD_REQUEST_REFUSED on the wire", () => {
     );
     expect(error.code).toBe(CODE);
   });
-
-  it("does not collapse into E_CLOUD_UNREACHABLE", () => {
-    const error = HostRpcError.fromWireEnvelope(
-      { code: CODE, message: "refused" },
-      "req-3",
-      "bot.list",
-    );
-    expect(error.code).not.toBe("E_CLOUD_UNREACHABLE");
-    expect(error.code).not.toBe("RPC_ERROR");
-  });
 });

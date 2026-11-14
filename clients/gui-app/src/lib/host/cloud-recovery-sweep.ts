@@ -122,6 +122,9 @@ export async function sweepTransientCloudFailures(
   for (const query of client
     .getQueryCache()
     .findAll({ queryKey: queryKeys.hostScope(hostId) })) {
+    // A cache-only carve-out is never re-asked, so a ring neither chooses it
+    // nor is owed to an attempt of its own.
+    if (isActiveRefetchExempt(query)) continue;
     const claim = state.claimed.get(query);
     if (claim === undefined || supersedes(query, claim)) {
       // Not held, or held by a re-ask a newer attempt has replaced, which

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
 import { sweepTransientCloudFailures } from "@/lib/host/cloud-recovery-sweep";
 import {
@@ -26,7 +26,13 @@ import {
   waitUntil,
 } from "@/lib/host/test-support/cloud-recovery-sweep-support";
 
-afterEach(clearClients);
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+  clearClients();
+});
 
 describe("sweepTransientCloudFailures over a read's lifecycle", () => {
   describe.each(STRANDED_READS)(

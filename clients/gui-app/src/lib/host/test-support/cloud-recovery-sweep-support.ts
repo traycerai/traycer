@@ -36,9 +36,12 @@ export async function settled(client: QueryClient): Promise<void> {
   await waitUntil(() => expect(client.isFetching()).toBe(0));
 }
 
-/** One macrotask turn: what a settled attempt sets going has run. */
-export function turn(): Promise<void> {
-  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+/**
+ * One macrotask turn on the fake clock: what a settled attempt sets going has
+ * run. The calling file has `vi.useFakeTimers()` installed.
+ */
+export async function turn(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(0);
 }
 
 /** Lets what a settled attempt sets going run, and the cache go quiet. */

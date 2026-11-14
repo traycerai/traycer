@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MutationObserver, type QueryClient } from "@tanstack/react-query";
 import { cloudQueryKeys } from "@/lib/query-keys/cloud-query-keys";
 import { sweepTransientCloudFailures } from "@/lib/host/cloud-recovery-sweep";
@@ -26,7 +26,13 @@ import {
   waitUntil,
 } from "@/lib/host/test-support/cloud-recovery-sweep-support";
 
-afterEach(clearClients);
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+  clearClients();
+});
 
 describe("sweepTransientCloudFailures", () => {
   it.each(["E_CLOUD_REQUEST_REFUSED", "E_CLOUD_UNREACHABLE"] as const)(
@@ -209,6 +215,44 @@ describe("sweepTransientCloudFailures", () => {
     expect(commands.calls).toBe(1);
     expect(epicTasks.calls).toBe(1);
   });
+
+  it.each([
+    {
+      label: "agent.gui.listModels",
+      method: "agent.gui.listModels",
+      queryKey: hostReadKey(HOST, "agent.gui.listModels", "m"),
+    },
+    {
+      label: "agent.gui.listCommands",
+      method: "agent.gui.listCommands",
+      queryKey: hostReadKey(HOST, "agent.gui.listCommands", "c"),
+    },
+    {
+      label: "cloud epic-task history",
+      method: "epic.listTasks",
+      queryKey: cloudQueryKeys.epicTasks(HOST, "fp", {
+        limit: 10,
+        filters: null,
+        extensionPhaseVersion: "p",
+        extensionEpicVersion: "e",
+      }),
+    },
+  ])(
+    "never re-asks the cache-only carve-out $label when a ring met its attempt and it then fails transiently",
+    async ({ method, queryKey }) => {
+      const client = freshClient();
+      const attempt = heldFailure(hostFailure("E_CLOUD_UNREACHABLE", method));
+      const read = new ScriptedRead(client, queryKey, attempt.answer);
+      await waitUntil(() => expect(read.calls).toBe(1));
+
+      await sweepTransientCloudFailures(client, HOST);
+      attempt.release();
+      await quiet(client);
+
+      expect(read.state.status).toBe("error");
+      expect(read.calls).toBe(1);
+    },
+  );
 
   it("only marks an inactive failed read stale", async () => {
     const client = freshClient();
