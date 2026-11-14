@@ -301,8 +301,8 @@ export function judgeSeedSelection(input: {
 
 /**
  * The account a pick names, when its provider has more than one on this
- * machine - the composer's chip names it under the same rule. `null` for one
- * account or none, or an account that is gone (the warning line says so).
+ * machine. `null` for one account or none, or an account that is gone (the
+ * warning line says so).
  */
 export function judgePickAccount(
   providers: ReadonlyArray<ProviderCliState> | undefined,

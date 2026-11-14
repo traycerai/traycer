@@ -265,8 +265,8 @@ export function useFallbackProfileLabels(
 /**
  * An alias (`aliases`, `providers.list@10.11`) names the account of the row it
  * resolves to, so a chat pinned to a folded id shows that account's name and
- * not a prefix of its old id. An alias two rows list resolves to no row and
- * keeps the prefix.
+ * not a prefix of its old id. An id two rows list, as aliases or as one row's
+ * own id and another's alias, resolves to no row and keeps the prefix.
  */
 function withAliasLabels(
   list: ResponseOfMethod<HostRpcRegistry, "providers.list">,
@@ -275,17 +275,20 @@ function withAliasLabels(
   const named = new Map(labels);
   for (const provider of list.providers) {
     const removed = removedProfilesForProvider(list, provider.providerId);
-    for (const alias of provider.profiles.flatMap(
-      (profile) => profile.aliases ?? [],
-    )) {
-      const row = resolvedProfileRow(provider.profiles, removed, alias);
-      if (row === null) continue;
-      named.set(
-        alias,
-        row.kind === "ambient"
-          ? TERMINAL_ACCOUNT_LABEL
-          : resolveFallbackProfileLabel(labels, row.profileId),
-      );
+    const ids = provider.profiles.flatMap((profile) =>
+      profile.kind === "ambient"
+        ? (profile.aliases ?? [])
+        : [profile.profileId, ...(profile.aliases ?? [])],
+    );
+    for (const id of ids) {
+      const row = resolvedProfileRow(provider.profiles, removed, id);
+      if (row === null) {
+        named.delete(id);
+      } else if (row.kind === "ambient") {
+        named.set(id, TERMINAL_ACCOUNT_LABEL);
+      } else if (row.profileId !== id) {
+        named.set(id, resolveFallbackProfileLabel(labels, row.profileId));
+      }
     }
   }
   return named;

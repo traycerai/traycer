@@ -19,8 +19,10 @@ import {
 import { providerProfile } from "./fallback-fixtures";
 import { accounts, kit, resetKit } from "./routing-picker-kit";
 import {
+  FAILED,
   FAILED_PROFILE,
   WORK_PROFILE,
+  failedAttempt,
   failedTurn,
   footerConfirm,
   listing,
@@ -211,5 +213,33 @@ describe("failed-turn picker alias pin", () => {
       await screen.findByRole("menuitem", { name: "Side" }),
     );
     expect(footerConfirm().disabled).toBe(false);
+  });
+
+  it("a pin that is one row's id and another's alias shows the id prefix", async () => {
+    const pinned = { ...FAILED, profileId: "pin-x" };
+    kit.providers = [
+      accounts(
+        [
+          aliased("pin-x", "First", []),
+          aliased("second-row", "Second", ["pin-x"]),
+        ],
+        "claude-code",
+      ),
+    ];
+    kit.listData = {
+      ...listing({ recommendedWork: false }),
+      failedTuple: pinned,
+    };
+    mount({
+      kind: "failed-turn",
+      attempt: { ...failedAttempt(["switch"]), failedTuple: pinned },
+      seedTuple: pinned,
+    });
+    await open();
+
+    const replay = screen.getByText(/^Replays on /).textContent;
+    expect(replay).toBe("Replays on Claude Sonnet 4 · pin-x in a new session");
+    expect(replay).not.toContain("First");
+    expect(replay).not.toContain("Second");
   });
 });

@@ -13,7 +13,9 @@ import {
   type ProfileListAnswer,
   type ProfileListHost,
 } from "@/components/providers/__tests__/profile-pin-host-fixture";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useResolvedSeededProfileId } from "@/hooks/providers/use-resolved-seeded-profile-id";
+import type { HostRpcRegistry } from "@/lib/host";
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: object | null) => readinessFor(client),
@@ -206,21 +208,55 @@ describe("useResolvedSeededProfileId pin", () => {
   });
 
   it("keeps a removed id when the list has no row", async () => {
-    const { host, current } = mount(
-      [],
-      [
-        removedEntry({
-          providerId: "codex",
-          profileId: "gone-row",
-          aliases: [],
-        }),
-      ],
-      "gone-row",
+    const host = createProfileListHost({
+      answer: answerOf(
+        [],
+        [
+          removedEntry({
+            providerId: "codex",
+            profileId: "gone-row",
+            aliases: [],
+          }),
+        ],
+      ),
+      answerProfileName: (request) => ({ label: request.label }),
+      failSetEnabled: false,
+    });
+    const view = renderHook(
+      () => {
+        const providersQuery = useHostQuery<HostRpcRegistry, "providers.list">({
+          cacheKeyIdentity: undefined,
+          client: host.client,
+          method: "providers.list",
+          params: { native: null },
+          options: {
+            enabled: true,
+            subscribed: true,
+            staleTime: 15 * 60 * 1000,
+          },
+        });
+        return {
+          seeded: useResolvedSeededProfileId(
+            "codex",
+            "gone-row",
+            true,
+            host.client,
+          ),
+          // The same list read the resolver treats as settled. The request
+          // arriving is earlier than that read having data.
+          settled: providersQuery.data !== undefined,
+        };
+      },
+      {
+        wrapper: (props: { readonly children: ReactNode }) => (
+          <host.Wrapper>{props.children}</host.Wrapper>
+        ),
+      },
     );
     await waitFor(() => {
-      expect(host.listCalls.length).toBeGreaterThan(0);
-      expect(current()).toBe("gone-row");
+      expect(view.result.current.settled).toBe(true);
     });
+    expect(view.result.current.seeded).toBe("gone-row");
   });
 
   it("clears an unknown id when the list has no row", async () => {

@@ -2870,7 +2870,8 @@ function isRevealTargetFor(
   providerProfiles: readonly ProviderProfile[],
 ): boolean {
   if (target === null || target.providerId !== providerId) return false;
-  if (target.profileId === profileId) return true;
+  // The provider card of a provider with no profiles has no row to resolve.
+  if (providerProfiles.length === 0) return target.profileId === profileId;
   const row = resolvedProfileRow(
     providerProfiles,
     NO_REMOVED_PROFILES,

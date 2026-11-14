@@ -5,7 +5,10 @@ import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
 import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-model-picker-search";
 import { HarnessModelPickerList } from "@/components/home/pickers/harness-model-picker-list";
 import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
-import { PickerProviderAuthLine } from "@/components/home/pickers/harness-model-picker-auth-line";
+import {
+  PickerProviderAuthLine,
+  PickerTerminalSetupGuidance,
+} from "@/components/home/pickers/harness-model-picker-auth-line";
 import { PickerSandboxCredentialLine } from "@/components/home/pickers/harness-sandbox-credential-line";
 import { useOnTeamSandbox } from "@/hooks/sandboxes/use-on-team-sandbox";
 import {
@@ -28,6 +31,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   profileDropdownShown,
+  resolvedProfileRow,
   type ProfileRowAdmission,
   type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
@@ -345,6 +349,10 @@ export function HarnessModelPickerPanelBody(
     },
     [],
   );
+  const activeRemovedProfiles = removedProfilesForHarness(
+    removedProfilesByHarnessId,
+    resolvedActiveProviderId,
+  );
 
   return (
     <>
@@ -392,47 +400,58 @@ export function HarnessModelPickerPanelBody(
           {profileDropdownShown(
             guiHarnessIdToProviderId(resolvedActiveProviderId),
             activeProviderProfiles,
-            removedProfilesForHarness(
-              removedProfilesByHarnessId,
-              resolvedActiveProviderId,
-            ),
+            activeRemovedProfiles,
             activeProfileId,
           ) ? (
-            <div className="shrink-0 border-b p-2">
-              <PickerProfileDropdown
-                providerId={resolvedActiveProviderId}
-                providerLabel={activeProviderLabel}
-                profiles={activeProviderProfiles}
-                activeProfileId={activeProfileId}
-                onSelectProfile={(profileId) =>
-                  onProfileChange(resolvedActiveProviderId, profileId)
-                }
-                onCreateProfile={() => {
-                  onClosePicker();
-                  openAddProfile(
-                    resolvedActiveProviderId,
-                    createProfileHostId,
-                    (profileId) =>
-                      onProfileChange(resolvedActiveProviderId, profileId),
-                  );
-                }}
-                createProfileDisabled={createProfileDisabled}
-                createProfileDisabledReason={createProfileDisabledReason}
-                shortcutHintForIndex={pickerProfileShortcutHintForIndex}
-                profileEnablementPending={profileEnablementPending}
-                contentContainer={profileDropdownContainer}
-                inputRef={inputRef}
-                runTargetHostId={runTargetHostId}
-                admissionByProfileId={profileAdmission}
-              />
-              {/* The Personal sign-in hint. */}
-              <TerminalAccountFirstMention
-                named={activeProviderProfiles.some(
-                  (profile) => profile.kind === "ambient",
+            <>
+              <div className="shrink-0 border-b p-2">
+                <PickerProfileDropdown
+                  providerId={resolvedActiveProviderId}
+                  providerLabel={activeProviderLabel}
+                  profiles={activeProviderProfiles}
+                  activeProfileId={activeProfileId}
+                  onSelectProfile={(profileId) =>
+                    onProfileChange(resolvedActiveProviderId, profileId)
+                  }
+                  onCreateProfile={() => {
+                    onClosePicker();
+                    openAddProfile(
+                      resolvedActiveProviderId,
+                      createProfileHostId,
+                      (profileId) =>
+                        onProfileChange(resolvedActiveProviderId, profileId),
+                    );
+                  }}
+                  createProfileDisabled={createProfileDisabled}
+                  createProfileDisabledReason={createProfileDisabledReason}
+                  shortcutHintForIndex={pickerProfileShortcutHintForIndex}
+                  profileEnablementPending={profileEnablementPending}
+                  contentContainer={profileDropdownContainer}
+                  inputRef={inputRef}
+                  runTargetHostId={runTargetHostId}
+                  admissionByProfileId={profileAdmission}
+                />
+                {/* The Personal sign-in hint. */}
+                <TerminalAccountFirstMention
+                  named={activeProviderProfiles.some(
+                    (profile) => profile.kind === "ambient",
+                  )}
+                  runTargetHostId={runTargetHostId}
+                />
+              </div>
+              <PickerTerminalSetupGuidance
+                selectedProfile={resolvedProfileRow(
+                  activeProviderProfiles,
+                  activeRemovedProfiles,
+                  activeProfileId,
                 )}
+                state={activeProviderState}
+                harness={activeProvider}
+                terminalLoginSurface={terminalLoginSurface}
                 runTargetHostId={runTargetHostId}
+                onClosePicker={onClosePicker}
               />
-            </div>
+            </>
           ) : (
             <PickerProviderAuthLine
               state={activeProviderState}
