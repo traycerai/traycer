@@ -459,7 +459,7 @@ describe("runMonitor recovery", () => {
     const options = streamClientOptions[0];
     if (options === undefined)
       throw new Error("stream options were not captured");
-    options.bearer();
+    expect(options.bearer()).toBeNull();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     const error = await result;
@@ -468,6 +468,35 @@ describe("runMonitor recovery", () => {
         "traycer: This account cannot access this computer. Switch accounts to use it.",
     });
     expect(subscribeMock).toHaveBeenCalledTimes(1);
+    expect(sessions).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends with the team-membership line when authn refuses its first host-token mint", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ code: "team_membership_required" }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+      (error: unknown) => error,
+    );
+    await waitForSessions(1);
+    const options = streamClientOptions[0];
+    if (options === undefined)
+      throw new Error("stream options were not captured");
+    expect(options.bearer()).toBeNull();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const error = await result;
+    expect(error).toMatchObject({
+      message:
+        "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.",
+    });
+    expect(subscribeMock).toHaveBeenCalledTimes(1);
+    expect(sessions).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the stream alive when authn cannot be reached for a host-token mint", async () => {
