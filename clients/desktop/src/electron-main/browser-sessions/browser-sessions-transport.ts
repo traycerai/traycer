@@ -15,6 +15,7 @@ import {
   hostTokenRevalidator,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import { allowsBrowserLoginSync } from "@traycer-clients/shared/host-client/browser-login-ownership";
 import type {
   HostDirectoryEntry,
   LocalHostDirectoryEntry,
@@ -416,7 +417,7 @@ function jarTransportLane(target: HostDirectoryEntry):
       readonly entry: RemoteHostDirectoryEntry;
     }
   | null {
-  if (target.owner?.kind === "team") return null;
+  if (!allowsBrowserLoginSync(target)) return null;
   if (target.kind === "local") {
     return { kind: "local" };
   }
