@@ -51,3 +51,12 @@ export function quotedHostReference(
   }
   return `${atSentenceStart ? "Host" : "host"} "${hostLabel}"`;
 }
+
+/** The computer-list label when the directory has no recognizable name. */
+export function computerNameFromLabel(
+  label: string | null,
+  hostId: string,
+): string {
+  const name = hostNameFromLabel(label, hostId);
+  return name === UNNAMED_HOST_LABEL ? "Unnamed computer" : name;
+}

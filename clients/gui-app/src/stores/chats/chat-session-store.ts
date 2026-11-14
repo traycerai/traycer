@@ -1,3 +1,7 @@
+import {
+  readChatAccountWait,
+  type ChatAccountWait,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import { profileBindingsEqual } from "@traycer/protocol/host/provider-profile-inheritance";
 import { SendTimings } from "@traycer/protocol/host/agent/gui/send-timing";
 import {
@@ -506,11 +510,14 @@ export interface UnattendedFallbackOutcome {
 // The legacy callback delivers the closed full snapshot; the store also BUILDS
 // one from its windowed transcript, whose rows are open on `1.22`, so the one
 // snapshot type the store applies is the open one (the closed frame is
-// assignable to it).
+// assignable to it). An adapted windowed snapshot also carries its account wait.
 type ChatSnapshotFrame = Omit<
   Parameters<ChatStreamCallbacks["onSnapshot"]>[0],
   "snapshot"
-> & { readonly snapshot: OpenChatSnapshot };
+> & {
+  readonly snapshot: OpenChatSnapshot &
+    Pick<ChatWindowedSnapshotFrame["snapshot"], "accountWait">;
+};
 type ChatWindowedSnapshotFrame = Parameters<
   ChatStreamCallbacks["onWindowedSnapshot"]
 >[0];
@@ -544,12 +551,13 @@ type DeferredWindowedSnapshotAux = Pick<
   | "managedCommands"
   | "heldUpdates"
   | "portForwards"
-  // All four fallback DTOs qualify under this type's own rule: they are on the
+  // The account wait and fallback DTOs qualify under this type's own rule: they are on the
   // windowed snapshot AND `turnStateChanged` supersedes them. Omitting them
   // here would not merely replay a stale value - it would replay it
   // PERMANENTLY, because nothing re-sends a card that has already cleared, so
   // a deferred snapshot landing after a settle would put a dead grace
   // countdown back on screen for the rest of the session.
+  | "accountWait"
   | "pendingFallback"
   | "pendingReturn"
   | "lastFailedAttempt"
@@ -586,6 +594,7 @@ function deferredWindowedSnapshotAuxOf(
     managedCommands: snapshot.managedCommands,
     heldUpdates: snapshot.heldUpdates,
     portForwards: snapshot.portForwards,
+    accountWait: readChatAccountWait(snapshot),
     pendingFallback: snapshot.pendingFallback,
     pendingReturn: snapshot.pendingReturn,
     lastFailedAttempt: snapshot.lastFailedAttempt,
@@ -1567,6 +1576,8 @@ export interface ChatSessionState {
    */
   readonly accumulatedSummaryAssemblyStarted: boolean;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
+  /** Replaced by every windowed snapshot and turn-state frame, including absence. */
+  readonly accountWait: ChatAccountWait | null;
   /**
    * The live fallback traversal on this chat (`chat.subscribe@1.10`), or
    * `undefined` when there is none.
@@ -5146,6 +5157,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // traversal", "no offer") rather than an omission, and it is the one
           // that clears the card. See `ChatSessionState.pendingFallback`.
           messageDelivery: snapshotDelivery,
+          accountWait: readChatAccountWait(frame.snapshot),
           pendingFallback: frame.snapshot.pendingFallback,
           pendingReturn: frame.snapshot.pendingReturn,
           lastFailedAttempt: frame.snapshot.lastFailedAttempt,
@@ -6997,6 +7009,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           portForwards: current.portForwards,
           turnInProgress: current.turnInProgress,
           sendWouldQueue: current.sendWouldQueue,
+          accountWait: current.accountWait,
           pendingFallback: current.pendingFallback,
           pendingReturn: current.pendingReturn,
           lastFailedAttempt: current.lastFailedAttempt,
@@ -9688,6 +9701,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // traversal is over". Taking the fallback would make a settled
             // grace card immortal - the host never re-sends a card it has
             // cleared, so nothing would ever take it back down.
+            accountWait: readChatAccountWait(frame),
             pendingFallback: frame.pendingFallback,
             pendingReturn: frame.pendingReturn,
             lastFailedAttempt: frame.lastFailedAttempt,
@@ -9774,6 +9788,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // copies of the rule". Without these two the held snapshot would
           // replay its own (older) card state when its tail arrives, and
           // because nothing re-sends a cleared card that replay is permanent.
+          accountWait: readChatAccountWait(frame),
           pendingFallback: frame.pendingFallback,
           pendingReturn: frame.pendingReturn,
           lastFailedAttempt: frame.lastFailedAttempt,
@@ -10709,6 +10724,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       accumulatedSummaryGenerationSeated: false,
       accumulatedSummaryAssemblyStarted: false,
       backgroundItems: undefined,
+      accountWait: null,
       pendingFallback: undefined,
       pendingReturn: undefined,
       lastFailedAttempt: undefined,
