@@ -1488,14 +1488,38 @@ describe("<BotThreadPanel /> the anchor", () => {
     expect(screen.queryByTestId("bot-thread-replies")).toBeNull();
   });
 
-  it("heads the thread with its name, the bot's picture and the bot's title, without a hash", () => {
+  it("heads the thread with its name and the bot's title, without a hash or a picture", () => {
     mountPanel(listed("user-teammate"), []);
 
     const channel = screen.getByTestId("bot-thread-channel");
     expect(within(channel).getByText("Release Bot")).toBeTruthy();
     expect(channel.textContent).not.toContain("#");
-    expect(within(channel).getByTestId("bot-avatar")).toBeTruthy();
+    expect(within(channel).queryByTestId("bot-avatar")).toBeNull();
     expect(screen.getByRole("heading", { name: "Thread" })).toBeTruthy();
+  });
+
+  it("still draws the bot's picture in the replying strip while the bot replies in the thread", () => {
+    mountPanel(listed("user-teammate"), []);
+
+    act(() => {
+      activityStore.setState({
+        activity: {
+          trunk: null,
+          threads: {
+            [THREAD_ID]: {
+              state: "replying",
+              startedAt: 1_000,
+              step: null,
+              requestId: "req-1",
+              reason: null,
+            },
+          },
+        },
+      });
+    });
+
+    const strip = screen.getByTestId("bot-thread-replying-strip");
+    expect(within(strip).getByTestId("bot-avatar")).toBeTruthy();
   });
 
   it("rule 8: has no Activity button on a listed thread", () => {
