@@ -30,6 +30,7 @@ function renderPlans(overrides: {
       teamName="Acme"
       plans={overrides.plans ?? [plan]}
       canAdminister={overrides.canAdminister}
+      linkReachable
       adminNames={overrides.adminNames ?? ["Ada", "Grace"]}
       isPending={false}
       onLink={overrides.onLink ?? vi.fn()}
@@ -99,6 +100,7 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister
+        linkReachable
         adminNames={["Ada"]}
         isPending={false}
         onLink={() => undefined}
@@ -134,6 +136,7 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister={false}
+        linkReachable
         adminNames={["Ada"]}
         isPending={false}
         onLink={() => undefined}
@@ -160,6 +163,7 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister
+        linkReachable
         adminNames={["Ada"]}
         isPending={false}
         onLink={() => undefined}

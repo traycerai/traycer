@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useEffect,
   useMemo,
@@ -222,6 +223,7 @@ function CloudMediaContent(props: {
       kind={props.kind}
       url={query.data.url}
       onRetry={async () => {
+        if (showHostUpdateNeededForGesture(props.hostId)) return;
         await refetch({ throwOnError: true });
       }}
     />

@@ -1,10 +1,13 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "@/components/settings/environment/configuration-source";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { mayChangeTeamComputer } from "@/lib/environment/team-computer-role";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /** The picked computer's team authority, never the currently selected settings page's. */
@@ -33,7 +36,9 @@ export function useCanSetRemoteAccess(
       environment.ownerKind === "organization" &&
       environment.environmentId === environmentId,
   );
-  return team !== undefined && mayChangeTeamComputer(team);
+  return (
+    team !== undefined && mayChangeConfiguration(configurationRoleOf(team))
+  );
 }
 
 /** A read's answer once it has one and is not re-reading, else `null`. */
