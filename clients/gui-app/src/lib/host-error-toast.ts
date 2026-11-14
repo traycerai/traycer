@@ -7,6 +7,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import { staleWriteOfHostError } from "@/lib/environment/stale-write";
@@ -241,7 +242,8 @@ export function toastUnknownOutcomeAfterRefusedRetry(
   fallback: string,
 ): void {
   const guidance =
-    finalRefusal.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
+    finalRefusal.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN" &&
+    reasonedDoorRefusal(finalRefusal) === null
       ? fallback
       : hostErrorToastMessage(finalRefusal, fallback);
   showUnknownOutcomeAfterRefusedRetry(guidance === fallback ? null : guidance);
@@ -371,7 +373,10 @@ export function toastFromHostErrorOnFork(
   error: HostRpcError,
   fallback: string,
 ): void {
-  const shareRefusal = epicShareRefusalFromErrorCode(error.code);
+  const shareRefusal =
+    reasonedDoorRefusal(error) === null
+      ? epicShareRefusalFromErrorCode(error.code)
+      : null;
   if (shareRefusal === null) {
     toastFromHostError(error, fallback);
     return;
@@ -411,6 +416,13 @@ export type SendRefusal =
 export function classifySendRefusal(error: unknown): SendRefusal {
   if (!(error instanceof HostRpcError) || isSilentHostError(error)) {
     return { kind: "silent" };
+  }
+  const byReason = reasonedDoorRefusal(error);
+  if (byReason !== null) {
+    const message = reasonedDoorRefusalMessage(byReason, "");
+    return message.length === 0
+      ? { kind: "failed" }
+      : { kind: "actionable", message };
   }
   const shareRefusal = epicShareRefusalFromErrorCode(error.code);
   if (shareRefusal !== null) {
@@ -564,7 +576,11 @@ export function toastFromBackgroundHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
-  if (error.code === "E_HOST_UNSUPPORTED") return;
+  if (
+    error.code === "E_HOST_UNSUPPORTED" &&
+    reasonedDoorRefusal(error) === null
+  )
+    return;
   if (isTransientHostRpcFailure(error)) return;
   toastFromHostError(error, fallback);
 }
@@ -612,28 +628,43 @@ export function toastFromHostErrorWithDetail(
  * it is not a credential statement and never leads to a sign-out.
  */
 function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
+  const byReason = reasonedDoorRefusal(error);
+  if (byReason !== null)
+    return (
+      isCredentialRefusal(byReason) &&
+      useAuthStore.getState().status !== "signed-out"
+    );
   if (error.code !== "UNAUTHORIZED") return false;
   if (hostRefusalOf(error)?.retryable === true) return false;
-  if (refusedForAnotherReason(error)) return false;
   return useAuthStore.getState().status !== "signed-out";
 }
 
 /**
- * A host's refusal whose recognised reason is not about the person's
- * credential (`clock_skew`, `enrolment_broken`, …): no sign-in advice fits
- * it, whatever its code. With no reason, or one this app does not know, the
- * code decides as it always has. The door's own notice says what is wrong.
+ * A host's refusal that its recognised reason decides, whatever code carries
+ * it: one the host did not mark retryable. `null` with no reason, one this
+ * app does not know, or a retryable refusal: then the code decides, as it
+ * always has. Every dispatch in this file reads this before any code.
  */
-function refusedForAnotherReason(error: HostRpcError): boolean {
+function reasonedDoorRefusal(error: HostRpcError): FatalErrorDetails | null {
   const refusal = hostRefusalOf(error);
-  if (refusal === null) return false;
+  if (refusal === null || refusal.retryable === true) return null;
   const reason = readDoorReason(refusal.doorReason);
-  return (
-    reason !== "absent" &&
-    reason !== "unrecognised" &&
-    !isCredentialRefusal(refusal)
-  );
+  return reason === "absent" || reason === "unrecognised" ? null : refusal;
 }
+
+/**
+ * What a reasoned refusal says: sign-in advice for a refusal of the
+ * credential, else the caller's `fallback`. The door's own notice says what
+ * is wrong with the computer.
+ */
+function reasonedDoorRefusalMessage(
+  refusal: FatalErrorDetails,
+  fallback: string,
+): string {
+  return isCredentialRefusal(refusal) ? SIGN_IN_AGAIN_MESSAGE : fallback;
+}
+
+const SIGN_IN_AGAIN_MESSAGE = "Please sign in again.";
 
 /**
  * Copy for a terminal verdict riding on a transport-class failure - the one
@@ -738,6 +769,8 @@ const AGENT_NOT_LOCAL_MESSAGE =
   "This agent runs on another host. Archive it from that host instead.";
 
 function hostErrorToastMessage(error: HostRpcError, fallback: string) {
+  const byReason = reasonedDoorRefusal(error);
+  if (byReason !== null) return reasonedDoorRefusalMessage(byReason, fallback);
   const verdict = hostTerminalVerdictMessage(error);
   if (verdict !== null) {
     return verdict;
@@ -796,8 +829,7 @@ function codeKeyedMessage(error: HostRpcError, fallback: string): string {
     if (hostRefusalOf(error)?.retryable === true) {
       return "The host couldn't verify your session. Try again in a moment.";
     }
-    if (refusedForAnotherReason(error)) return fallback;
-    return "Please sign in again.";
+    return SIGN_IN_AGAIN_MESSAGE;
   }
   if (error.code === "WORKTREE_BUSY") {
     return "Worktree is in use by an active agent or terminal. Stop those runs and try again.";
@@ -1003,8 +1035,12 @@ function emitHostFatalErrorNotification(
   // persistent app-local failure row. The one-shot toast already delivers the
   // upgrade guidance; a lingering feed entry would just be noise. This mirrors
   // `toastFromBackgroundHostError`, which suppresses `E_HOST_UNSUPPORTED`
-  // outright.
-  if (error.code === "E_HOST_UNSUPPORTED") return;
+  // outright. A refusal its reason decides is not a capability gap.
+  if (
+    error.code === "E_HOST_UNSUPPORTED" &&
+    reasonedDoorRefusal(error) === null
+  )
+    return;
   const dedupeKey = hostErrorDedupeKey(error);
   emitHostErrorNotification({
     id: dedupeKey ?? `${error.method}:${error.requestId}`,
