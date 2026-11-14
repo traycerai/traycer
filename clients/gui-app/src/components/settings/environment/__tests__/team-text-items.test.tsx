@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import {
   act,
   cleanup,
@@ -15,7 +15,11 @@ import type {
   EnvironmentConfigurationItemWriteResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { TeamTextItems } from "@/components/settings/environment/team-text-items";
-import { useConfigurationItemWrites } from "@/components/settings/environment/configuration-item-writes";
+import {
+  useConfigurationItemWrites,
+  type ConfigurationItemWrite,
+  type ConfigurationItemWrites,
+} from "@/components/settings/environment/configuration-item-writes";
 import { useConfigurationProviderItemsQuery } from "@/hooks/environment/team/use-provider-items-query";
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
 import { READ_BOUND_MS } from "@/hooks/environment/team/use-bounded-read";
@@ -394,6 +398,12 @@ describe("TeamTextItems accepted writes", () => {
       "environment.configuration.items.put": () => {
         puts += 1;
         if (puts === 1) return firstWrite.promise;
+        if (puts === 2) {
+          return {
+            outcome: "conflict",
+            current: { revision: 2, changedBy: "Teammate", changedAt: 2 },
+          };
+        }
         items = [variable("production", 3), linux];
         return { outcome: "saved", revision: 3 };
       },
@@ -443,15 +453,92 @@ describe("TeamTextItems accepted writes", () => {
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);
     commitNodeValue();
-    await expectUnlocked();
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(nodeValue()).toHaveProperty("value", "production");
+    await waitFor(() => expect(puts).toBe(2));
+    await waitFor(() => {
+      expect(nodeValue()).toHaveProperty("disabled", false);
+    });
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(2);
     expect(
       harness.paramsOf("environment.configuration.items.put")[1],
+    ).toMatchObject({ revision: 1 });
+    commitNodeValue();
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items.put"),
+      ).toHaveLength(3);
+    });
+    await expectUnlocked();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(nodeValue()).toHaveProperty("value", "production");
+    expect(
+      harness.paramsOf("environment.configuration.items.put")[2],
     ).toMatchObject({ revision: 2 });
+  });
+
+  it("the hook's unmount writer skips a failed draft restored to its submitted text", async () => {
+    const harness = mountEditor(
+      () => ({ items: [variable("development", 1)] }),
+      () => ({ outcome: "saved", revision: 2 }),
+    );
+    const observeWrites = vi.fn<(writes: ConfigurationItemWrites) => void>();
+    function WritesProbe(): ReactNode {
+      const query = useConfigurationVariablesQuery();
+      const writes = useConfigurationItemWrites(query, () => undefined);
+      useEffect(() => observeWrites(writes), [writes]);
+      return <p>{query.data === undefined ? "loading" : query.data.length}</p>;
+    }
+    render(<WritesProbe />, { wrapper: harness.Wrapper });
+    expect(await screen.findByText("1")).toBeTruthy();
+    const getWrites = (): ConfigurationItemWrites => {
+      const writes = observeWrites.mock.lastCall?.[0];
+      if (writes === undefined)
+        throw new Error("The item writes hook is absent.");
+      return writes;
+    };
+    const submitted: ConfigurationItemWrite = {
+      kind: "variable",
+      key: "NODE_ENV",
+      os: "any",
+      action: "put",
+      value: { value: "submitted" },
+      original: variable("development", 1),
+    };
+    const beforeWrite = vi.mocked(globalThis.fetch).mock.calls.length;
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(
+      new Error("The transport did not answer."),
+    );
+    const firstWrites = getWrites();
+    await act(async () => {
+      await firstWrites.write(submitted);
+    });
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
+      beforeWrite + 1,
+    );
+    const failedWrites = getWrites();
+    const failure = failedWrites.failure;
+    if (failure === null) throw new Error("The failed draft was not retained.");
+    expect(failure.write.value).toEqual(submitted.value);
+
+    act(() => {
+      failedWrites.updateDraft({
+        ...submitted,
+        value: { value: "submitted!" },
+      });
+    });
+    const editedWrites = getWrites();
+    act(() => {
+      editedWrites.updateDraft(submitted);
+    });
+    const restoredWrites = getWrites();
+    await act(async () => {
+      await restoredWrites.writeOnUnmount(submitted);
+    });
+
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
+      beforeWrite + 1,
+    );
   });
 
   it("retains acceptance after a failed read and retries only that read before unlocking", async () => {
