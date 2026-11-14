@@ -11,7 +11,7 @@ import { PATH_ID_PATTERN } from "./path-id";
  * a change to this file.
  */
 
-/** Bounds either call; each is a single write or read of one row. */
+/** Bounds the record call, a single write of one row. */
 const SIGN_IN_REQUEST_FETCH_TIMEOUT_MS = 15_000;
 
 const PROVIDER_SIGN_IN_KIND = "provider_sign_in";
@@ -125,10 +125,9 @@ function isPathSafe(request: ProviderLoginSignInRequest): boolean {
   );
 }
 
-async function call(
+async function post(
   url: string,
-  method: "GET" | "POST",
-  body: string | null,
+  body: string,
   bearerToken: string,
   callerSignal: AbortSignal,
 ): Promise<RawCall> {
@@ -139,18 +138,12 @@ async function call(
   try {
     const response = await untilAborted(
       fetch(url, {
-        method,
-        headers:
-          body === null
-            ? {
-                Authorization: `Bearer ${bearerToken}`,
-                Accept: "application/json",
-              }
-            : {
-                Authorization: `Bearer ${bearerToken}`,
-                Accept: "application/json",
-                "Content-Type": "application/json",
-              },
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
         body,
         redirect: "error",
         signal: abort.signal,
@@ -181,9 +174,8 @@ export async function recordSignInRequestViaHttp(
   signal: AbortSignal,
 ): Promise<SignInRequestRecordAnswer> {
   if (!isPathSafe(request)) return { kind: "failed" };
-  const raw = await call(
+  const raw = await post(
     intentsUrl(authnBaseUrl, request.environmentId),
-    "POST",
     JSON.stringify({
       operationId: request.operationId,
       kind: PROVIDER_SIGN_IN_KIND,
