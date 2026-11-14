@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -75,13 +76,6 @@ export interface WindowHostModalProps {
   readonly bootBody: ReactNode | null;
   readonly onRetry: (() => void) | null;
   readonly retryPending: boolean;
-  /**
-   * Re-runs the host install onto this build. `null` when this app cannot
-   * manage the host, or when the handshake says THIS APP is the outdated leg -
-   * forcing a host update can never fix an outdated client, so offering it
-   * there is an action that could only fail.
-   */
-  readonly onUpdateHost: (() => void) | null;
   readonly onOpenSettings: () => void;
   /**
    * Whether anything has failed yet. `Report issue` is the affordance that
@@ -315,17 +309,13 @@ function NarrationActions(
       {props.variant.kind === "update-client" ? (
         <ClientUpdateRequiredAction requirement={props.variant.requirement} />
       ) : null}
-      {props.onUpdateHost === null ? null : (
-        <Button
-          type="button"
-          size="sm"
-          variant="default"
-          onClick={props.onUpdateHost}
-          data-testid="window-host-modal-update-host"
-        >
-          Update host
-        </Button>
-      )}
+      {props.variant.kind === "update-host" ? (
+        <HostUpdateRequiredAction
+          hostId={props.variant.hostId}
+          detail={props.variant.detail}
+          testId="window-host-modal-update-host"
+        />
+      ) : null}
       {props.variant.kind === "team-membership-required" &&
       props.onSwitchAccount !== undefined ? (
         <Button

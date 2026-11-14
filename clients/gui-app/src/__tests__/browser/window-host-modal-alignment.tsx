@@ -191,7 +191,6 @@ export function WindowHostModalAlignmentFixture(): React.ReactElement {
             }
             onRetry={null}
             retryPending={false}
-            onUpdateHost={null}
             onOpenSettings={() => undefined}
             showReportIssue={false}
             settingsEmphasis="link"

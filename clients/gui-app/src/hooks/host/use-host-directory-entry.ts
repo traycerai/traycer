@@ -4,7 +4,7 @@ import {
   hostDirectoryEntryEquals,
   subscribeHostRowChanged,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
-import { useHostDirectory } from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
 
 /**
  * Re-exported from the connection registry, which OWNS this predicate now:
@@ -40,10 +40,11 @@ export { hostDirectoryEntryEquals };
 export function useHostDirectoryEntry(
   hostId: string | null,
 ): HostDirectoryEntry | null {
-  const directory = useHostDirectory();
+  const directory = useHostBinding()?.directory ?? null;
   const cacheRef = useRef<HostDirectoryEntry | null>(null);
   const subscribe = useCallback(
     (callback: () => void) => {
+      if (directory === null) return () => undefined;
       // The registry's PER-HOST arm (redesign P4.1). It answers the question
       // this hook is actually asking - "did host X's row move" - and it is
       // the arm that survives P4.2. The directory arm below stays because
@@ -65,7 +66,8 @@ export function useHostDirectoryEntry(
     [directory, hostId],
   );
   const getSnapshot = useCallback(() => {
-    const next = hostId === null ? null : directory.findById(hostId);
+    const next =
+      hostId === null || directory === null ? null : directory.findById(hostId);
     if (hostDirectoryEntryEquals(cacheRef.current, next)) {
       return cacheRef.current;
     }

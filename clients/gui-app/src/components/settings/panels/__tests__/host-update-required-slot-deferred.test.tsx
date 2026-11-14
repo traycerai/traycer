@@ -1,12 +1,7 @@
-// Does a click on Settings ▸ Update host show the
-// terminal-host refusal verbatim, when the REAL `useRunnerConvergeReady`
-// mutation is the one turning `{ kind: "deferred", message }` into a toast?
-//
-// `host-update-required-slot.test.tsx` mocks
-// `@/hooks/runner/use-runner-converge-ready-mutation` module-wide, which is
-// exactly the seam that would hide a defect in the hook's own
-// deferred -> rejection -> toast mapping. This file leaves that hook real and
-// only fakes its `IHostManagement` port, one level further down.
+// A click on Settings ▸ Update now shows a deferred `applyStaged` refusal
+// inline. The older-host hook is real; only the local-host id, the directory
+// row, and `IHostManagement` are faked. `convergeReady` must not run, and the
+// refusal is not a toast.
 const toastCalls = vi.hoisted(
   (): Array<{
     readonly message: unknown;
@@ -31,6 +26,27 @@ vi.mock("sonner", () => ({
     message: vi.fn(),
   },
 }));
+
+const appVersion = vi.hoisted((): { current: string | null } => ({
+  current: "1.5.0",
+}));
+vi.mock("@/lib/app-version", () => ({
+  getClientAppVersion: () => appVersion.current,
+  getClientAppVersionLabel: () => "v1.5.0",
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => "host-a",
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: () => null,
+  };
+});
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -78,6 +94,7 @@ function seedLeases(leases: readonly HostLeaseSnapshot[]): void {
 }
 
 function buildManagement(
+  applyStaged: IHostManagement["applyStaged"],
   convergeReady: IHostManagement["convergeReady"],
 ): IHostManagement {
   const notImplemented = (name: string) => () =>
@@ -86,7 +103,7 @@ function buildManagement(
     getHostControllerStatus: notImplemented("getHostControllerStatus"),
     convergeReady,
     getRemovalState: () => Promise.resolve({ removedByUser: false }),
-    applyStaged: notImplemented("applyStaged"),
+    applyStaged,
     activateInstalled: notImplemented("activateInstalled"),
     installVersion: notImplemented("installVersion"),
     uninstallHost: notImplemented("uninstallHost"),
@@ -154,7 +171,6 @@ function renderSlot(management: IHostManagement): void {
               live: false,
             },
           })}
-          canManageHost
         />
       </QueryClientProvider>
     </RunnerHostProvider>,
@@ -170,20 +186,26 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
 });
 
-describe("<HostUpdateRequiredSlot /> - a deferred (terminal-host) convergeReady outcome, through the REAL mutation hook", () => {
-  it("shows the refusal verbatim in the error toast's description", async () => {
+describe("<HostUpdateRequiredSlot /> - a deferred applyStaged outcome, through the real older-host hook", () => {
+  it("shows the refusal inline and does not call convergeReady or a toast", async () => {
     seedLeases([INCOMPATIBLE]);
-    renderSlot(
-      buildManagement(() =>
-        Promise.resolve({ kind: "deferred" as const, message: SENTENCE }),
-      ),
+    const applyStaged = vi.fn(() =>
+      Promise.resolve({ kind: "deferred" as const, message: SENTENCE }),
     );
+    const convergeReady = vi.fn(() =>
+      Promise.reject(new Error("convergeReady must not run")),
+    );
+    renderSlot(buildManagement(applyStaged, convergeReady));
 
     fireEvent.click(screen.getByTestId("host-scope-update-host"));
 
     await waitFor(() => {
-      expect(toastCalls.length).toBe(1);
+      expect(
+        screen.getByTestId("host-ensure-failure-message").textContent,
+      ).toBe(SENTENCE);
     });
-    expect(toastCalls[0]?.options?.description).toBe(SENTENCE);
+    expect(applyStaged).toHaveBeenCalledWith("manual", false);
+    expect(convergeReady).not.toHaveBeenCalled();
+    expect(toastCalls).toEqual([]);
   });
 });
