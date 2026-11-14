@@ -4592,8 +4592,9 @@ export const providersAwaitLoginResponseSchemaV24 = lazySchema(() =>
 /**
  * What a caller records at authn before the computer uploads a completed
  * sign-in: `operationId` is the offer's transfer id, minted by the computer.
- * Carried only on an unfinished answer, never with a final `profileOutcome`.
- * No email, account id, path or token.
+ * A computer sends it only on an unfinished answer, never with a final
+ * `profileOutcome`; the schema does not enforce that, and a reader that sees
+ * both takes the outcome as the answer. No email, account id, path or token.
  */
 export const providerLoginSignInRequestSchema = lazySchema(() =>
   z.object({
@@ -4610,6 +4611,8 @@ export type ProviderLoginSignInRequest = z.infer<
 
 export const providersAwaitLoginResponseSchema = lazySchema(() =>
   providersAwaitLoginResponseSchemaV24.extend({
+    // Absent stays absent and unreadable parses as null, as `profileOutcome`
+    // does; a reader takes either as null (`?? null`).
     signInRequest: providerLoginSignInRequestSchema
       .nullable()
       .optional()
