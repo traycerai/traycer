@@ -168,9 +168,10 @@ export type SettingsSaveAnswer = z.infer<typeof settingsSaveAnswerSchema>;
  *
  * `deliveredRevision` is the revision of the delivered item this host's edit
  * sits on, fixed when the edit was made: not the latest revision delivered
- * since. Null when the item did not exist on this host then. The app passes
- * it as the expected live revision when it applies the hold, so an item
- * changed by someone else since the edit is a conflict, never overwritten.
+ * since. Null when the item did not exist on this host then. It is this
+ * host's own bookkeeping, shown for display. An app applying its own hold
+ * expects the revision it read itself when the person made the edit, never
+ * this one: this host may have received a later write before the save.
  */
 export const environmentProposalSchema = lazySchema(() =>
   z.object({

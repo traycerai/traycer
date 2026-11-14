@@ -2,14 +2,19 @@
  * Which environment item a save made in a host's settings becomes.
  *
  * The host builds its proposal from this, and the app remembers its edit
- * from this, so the value the app remembers and the value authn holds
- * compare byte for byte through {@link canonicalSettingValue}. The function
- * reads its two arguments and nothing else: the request, and the rows of the
- * item the save is built over ({@link SettingsSaveBase}).
+ * from this; the app compares what it remembers with the value authn holds
+ * through {@link canonicalSettingValue}. The function reads its two
+ * arguments and nothing else: the request, and the rows of the item the save
+ * is built over ({@link SettingsSaveBase}).
  *
  * A save whose item a host can only build from what it alone holds is
  * `unmapped`, with the reason, and nothing may fill it from host state: the
  * app cannot say "this is what I sent" for it.
+ *
+ * A settings method absent from {@link SettingsSave} proposes nothing: it
+ * changes this host only (log levels, worktrees, visualization, session
+ * names, catalog, simulator, the local-override pair, and the provider
+ * settings that stay on this computer).
  */
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -185,8 +190,10 @@ export type SettingsSaveMapping =
   /** The save proposes nothing (it changes this host only, or is refused). */
   | { readonly kind: "local_only" }
   /**
-   * The host deletes a leftover item of a retired kind on its own token, as
-   * it does today: no proposal and no hold, so the app remembers nothing.
+   * A skill removed from this host's global settings. The host's managed
+   * entries decide whether it also deletes a leftover item of the retired
+   * `skill` kind, on its own token, as it does today. Either way there is no
+   * proposal and no hold, so the app remembers nothing.
    */
   | { readonly kind: "retired_item_delete" }
   /**
@@ -264,27 +271,29 @@ function remove(
 }
 
 /**
- * The one canonical text of an item value: JSON with every object's keys in
- * code-unit order at every depth and no whitespace. Two values that are the
- * same JSON give the same text whatever order their keys were written or
- * stored in.
+ * The one canonical text of an item value: JSON with every object's own keys
+ * in code-unit order at every depth and no whitespace. Two values give the
+ * same text exactly when they are the same JSON, whatever order their keys
+ * were written in; every own key counts, `__proto__` included. It compares
+ * the values it is handed: a parser that drops a key before the value
+ * reaches it is outside what it can see.
  */
 export function canonicalSettingValue(value: SettingValue): string {
-  return JSON.stringify(sortedKeys(value));
-}
-
-function sortedKeys(value: SettingValue): SettingValue {
-  if (Array.isArray(value)) return value.map(sortedKeys);
-  if (value === null || typeof value !== "object") return value;
-  const sorted: Record<string, SettingValue> = {};
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalSettingValue).join(",")}]`;
+  }
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
   const keys = Object.keys(value).sort((left, right) =>
     left < right ? -1 : left > right ? 1 : 0,
   );
+  const members: string[] = [];
   for (const key of keys) {
     const child = value[key];
-    if (child !== undefined) sorted[key] = sortedKeys(child);
+    if (child !== undefined) {
+      members.push(`${JSON.stringify(key)}:${canonicalSettingValue(child)}`);
+    }
   }
-  return sorted;
+  return `{${members.join(",")}}`;
 }
 
 function objectOf(value: SettingValue): Record<string, SettingValue> | null {
