@@ -93,6 +93,7 @@ describe("main resolves the browser.sessions host itself", () => {
     const refreshCompleted = new Promise<void>((resolve) => {
       resolveRefresh = resolve;
     });
+    let refreshPublished = false;
     const listRegisteredHosts = vi.fn(() => registryRead);
     const directory = createBrowserSessionsHostDirectory({
       authnBaseUrl: () => "https://authn.test",
@@ -106,11 +107,25 @@ describe("main resolves the browser.sessions host itself", () => {
       listRegisteredHosts,
       now: () => now,
     });
-    directory.subscribe(resolveRefresh);
+    directory.subscribe(() => {
+      refreshPublished = true;
+      resolveRefresh();
+    });
 
-    const entry = await directory.resolve("host-1");
+    let entrySettled = false;
+    const entryPromise = directory.resolve("host-1").then((entry) => {
+      entrySettled = true;
+      return entry;
+    });
+    await Promise.resolve();
+    const returnedBeforeRefresh = entrySettled;
+    const refreshWasStillPending = !refreshPublished;
 
     expect(listRegisteredHosts).toHaveBeenCalledTimes(1);
+    expect(returnedBeforeRefresh).toBe(true);
+    expect(refreshWasStillPending).toBe(true);
+
+    const entry = await entryPromise;
     expect(entry).toMatchObject({
       kind: "local",
       owner: null,
