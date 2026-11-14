@@ -1353,17 +1353,17 @@ export function useProviderDestinationLoginFlow(
           };
           const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
             if (attemptAbandoned()) return;
-            if (target !== null) {
+            if (target !== null && result.profileOutcome != null) {
               setState({
                 ...result,
                 kind: "target-outcome",
-                profileOutcome: result.profileOutcome ?? null,
+                profileOutcome: result.profileOutcome,
                 admissionId: nextProfileId,
               });
               return;
             }
             const outcome =
-              profileOutcomes === null
+              target !== null || profileOutcomes === null
                 ? null
                 : resolveProfileOutcome(
                     result.profileOutcome ?? null,
@@ -1394,9 +1394,31 @@ export function useProviderDestinationLoginFlow(
               return;
             }
             const resolution =
-              mode === "reauth" && existingProfileId === null
+              target === null && mode === "reauth" && existingProfileId === null
                 ? classifyAmbientAwaitResult(result)
-                : classifyProfileAwaitResult(result, nextProfileId);
+                : classifyProfileAwaitResult(
+                    result,
+                    target === null ? nextProfileId : awaitProfileId,
+                  );
+            if (resolution.kind === "codeRejected") {
+              restart("codeRejected");
+              return;
+            }
+            if (
+              resolution.kind === "authPending" &&
+              scheduleAuthPendingRepoll()
+            ) {
+              return;
+            }
+            if (target !== null) {
+              setState({
+                ...result,
+                kind: "target-outcome",
+                profileOutcome: null,
+                admissionId: awaitProfileId,
+              });
+              return;
+            }
             if (resolution.kind === "authenticated") {
               awaitOutcomeRef.current = "authenticated";
               successPayloadRef.current = resolution.payload;
@@ -1412,16 +1434,6 @@ export function useProviderDestinationLoginFlow(
                 "authentication",
                 resolution.refusal,
               );
-              return;
-            }
-            if (resolution.kind === "codeRejected") {
-              restart("codeRejected");
-              return;
-            }
-            if (
-              resolution.kind === "authPending" &&
-              scheduleAuthPendingRepoll()
-            ) {
               return;
             }
             awaitOutcomeRef.current = "notAuthenticated";
