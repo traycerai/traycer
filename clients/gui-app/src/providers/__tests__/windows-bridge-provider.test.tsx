@@ -1131,6 +1131,7 @@ describe("<WindowsBridgeProvider />", () => {
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
         closed: false,
+        accountFollowsDefault: true,
       },
     ]);
     expect(typeof latestDrafts?.[0].lastTouchedAt).toBe("number");
@@ -1185,6 +1186,7 @@ describe("<WindowsBridgeProvider />", () => {
         composerMode: "chat",
         workspace: emptyLandingDraftWorkspaceSnapshot(),
         closed: false,
+        accountFollowsDefault: true,
       },
     ]);
     expect(typeof flushedDrafts?.[0].lastTouchedAt).toBe("number");

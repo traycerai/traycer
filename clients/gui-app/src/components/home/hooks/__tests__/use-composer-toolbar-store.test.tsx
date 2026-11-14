@@ -463,6 +463,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     });
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ model: "visible-model" }),
+      false,
     );
     expect(
       useComposerHarnessMemoryStore.getState().byHost[TEST_HOST_ID]
@@ -520,6 +521,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
     expect(onSettingsChange).not.toHaveBeenCalledWith(
       expect.objectContaining({ model: "hidden-model" }),
+      expect.any(Boolean),
     );
     expect(
       useComposerHarnessMemoryStore
@@ -544,6 +546,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         harnessId: "opencode",
         model: "visible-model",
       }),
+      false,
     );
     expect(
       useComposerHarnessMemoryStore.getState().byHost[TEST_HOST_ID]
@@ -913,6 +916,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ reasoningEffort: "high" }),
+      false,
     );
   });
 
@@ -966,6 +970,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           model: "resolved-haiku",
           reasoningEffort: "high",
         }),
+        false,
       ),
     );
     expect(result.current.getState().pendingSettingsEmit).toBe(false);
@@ -1108,6 +1113,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         model: "low-only",
         reasoningEffort: "low",
       }),
+      false,
     );
   });
 
@@ -1158,6 +1164,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(result.current.getState().serviceTier).toBe("");
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ model: "fast-only", serviceTier: null }),
+      false,
     );
     // ...but the raw preference survives for a later model that honors it.
     expect(result.current.getState().values.serviceTier).toBe("priority");
@@ -1210,6 +1217,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         model: "priority-capable",
         serviceTier: "priority",
       }),
+      false,
     );
   });
 
@@ -1287,6 +1295,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         profileId: "profile-b",
         serviceTier: "priority",
       }),
+      false,
     );
     expect(result.current.getState().serviceTier).toBe("priority");
     expect(registeredComposerCatalogSelections.at(-1)).toEqual({
@@ -1302,6 +1311,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         model: modelSlug,
         profileId: "profile-b",
       }),
+      false,
     );
   });
 
@@ -1370,6 +1380,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         profileId: "profile-b",
         serviceTier: null,
       }),
+      false,
     );
 
     failedModelProfiles.delete("profile-b");
@@ -1395,6 +1406,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         serviceTier: null,
         permissionMode: "auto_accept_edits",
       }),
+      false,
     );
   });
 
@@ -1447,6 +1459,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           serviceTier: "ultrafast",
           permissionMode: "auto_accept_edits",
         }),
+        false,
       );
     },
   );
@@ -1515,6 +1528,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ model: "multi", reasoningEffort: "high" }),
+      false,
     );
   });
 
@@ -1642,6 +1656,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         reasoningEffort: "medium",
         serviceTier: null,
       }),
+      false,
     );
   });
 
@@ -1741,6 +1756,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ model: "survivor", reasoningEffort: "medium" }),
+      false,
     );
     expect(result.current.getState().selectionCatalogConfirmed).toBe(true);
   });
@@ -1788,6 +1804,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledTimes(1);
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ model: "remembered", reasoningEffort: "high" }),
+      false,
     );
     // ...but it is NOT catalog-confirmed yet, so the record write skips it.
     expect(result.current.getState().pendingSettingsEmit).toBe(false);

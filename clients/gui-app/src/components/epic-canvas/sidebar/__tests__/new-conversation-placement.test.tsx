@@ -293,9 +293,22 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
+    accountChosen: false,
+    defaultAccount: null,
+    setAccountChosen: vi.fn(),
+    setDefaultAccount: vi.fn(),
     ultracode: false,
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
     values: {
