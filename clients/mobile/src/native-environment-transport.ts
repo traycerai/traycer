@@ -1,5 +1,8 @@
 import { CapacitorHttp } from "@capacitor/core";
-import type { EnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  MAX_ENVIRONMENT_BODY_BYTES,
+  type EnvironmentTransport,
+} from "@traycer-clients/shared/environment/environment-cloud";
 
 /**
  * The phone's transport for the app's own calls to authn's environment routes.
@@ -15,6 +18,10 @@ import type { EnvironmentTransport } from "@traycer-clients/shared/environment/e
  * The body goes as its JSON value, which the native layer serializes for the
  * `application/json` the request names. A failure rejects with nothing of the
  * request or its answer: no URL, header, body or token in its text.
+ *
+ * The body cap is applied after the body arrives: the native request reads
+ * the whole answer before it hands any of it back, and offers neither a
+ * stream nor a size limit. A body over the cap is then dropped, as on desktop.
  */
 export const nativeEnvironmentTransport: EnvironmentTransport = async (
   request,
@@ -32,7 +39,10 @@ export const nativeEnvironmentTransport: EnvironmentTransport = async (
   } catch {
     throw new Error("The request was not answered.");
   }
-  return { status: answer.status, text: textOf(answer.data) };
+  const text = textOf(answer.data);
+  const overCap =
+    new TextEncoder().encode(text).byteLength > MAX_ENVIRONMENT_BODY_BYTES;
+  return { status: answer.status, text: overCap ? null : text };
 };
 
 /** The native layer parses a JSON answer whatever `responseType` asks; this undoes it. */

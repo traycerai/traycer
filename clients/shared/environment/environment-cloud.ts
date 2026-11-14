@@ -73,8 +73,12 @@ export const CLOUD_UNAVAILABLE_MESSAGE =
 /** One call's deadline. */
 export const ENVIRONMENT_REQUEST_TIMEOUT_MS = 15_000;
 
-/** A failure body longer than this is not read: only its status counts. */
-const MAX_BODY_CHARS = 256 * 1024;
+/**
+ * No answer's body is read past this many bytes, whatever its status. A
+ * failure over it counts by its status alone; a success over it is one this
+ * client cannot read (`unavailable`), as it was before the read was bounded.
+ */
+export const MAX_ENVIRONMENT_BODY_BYTES = 256 * 1024;
 
 /**
  * Where a call goes and on whose sign-in.
@@ -100,10 +104,13 @@ export interface EnvironmentTransportRequest {
   readonly signal: AbortSignal;
 }
 
-/** The answer as received: its status and its body's text. */
+/**
+ * The answer as received: its status and its body's text, or null when the
+ * body was over {@link MAX_ENVIRONMENT_BODY_BYTES}.
+ */
 export interface EnvironmentTransportAnswer {
   readonly status: number;
-  readonly text: string;
+  readonly text: string | null;
 }
 
 /**
@@ -111,7 +118,8 @@ export interface EnvironmentTransportAnswer {
  * resend the bearer, and a body that may hold a credential, to wherever it
  * points. A 3xx (or a browser's opaque redirect, status 0) is returned as the
  * answer, which every caller reads as a non-success. It rejects only when
- * nothing answered, and its rejection carries nothing of the request.
+ * nothing answered, and its rejection carries nothing of the request or of
+ * the answer's body.
  */
 export type EnvironmentTransport = (
   request: EnvironmentTransportRequest,
@@ -128,8 +136,37 @@ export const fetchEnvironmentTransport: EnvironmentTransport = async (
     redirect: "manual",
     signal: request.signal,
   });
-  return { status: response.status, text: await response.text() };
+  return { status: response.status, text: await boundedText(response) };
 };
+
+/**
+ * The body's text, read chunk by chunk: at the first chunk that takes it past
+ * {@link MAX_ENVIRONMENT_BODY_BYTES} the rest of the stream is cancelled and
+ * nothing more is pulled; the answer is then null.
+ */
+async function boundedText(response: Response): Promise<string | null> {
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_ENVIRONMENT_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 export function environmentPath(environmentId: string): string {
   return `api/v3/environments/${encodeURIComponent(environmentId)}`;
@@ -139,8 +176,8 @@ export function isSuccess(answer: EnvironmentAnswer): boolean {
   return answer.status >= 200 && answer.status < 300;
 }
 
-function bodyOf(text: string): unknown {
-  if (text.length === 0 || text.length > MAX_BODY_CHARS) return null;
+function bodyOf(text: string | null): unknown {
+  if (text === null || text.length === 0) return null;
   try {
     const parsed: unknown = JSON.parse(text);
     return parsed;
