@@ -120,8 +120,6 @@ const mocks = vi.hoisted(() => ({
   deleteOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
     Promise.resolve(),
   ),
-  /** What `useHostCredentialRefusal` answers; `null` is a host that takes env overrides. */
-  credentialRefusal: null as string | null,
 }));
 
 vi.mock(
@@ -153,17 +151,12 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
-vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
-  useHostCredentialRefusal: () => mocks.credentialRefusal,
-}));
-
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
   vi.clearAllMocks();
-  mocks.credentialRefusal = null;
   hostsRunningPersonalMock.current = { hosts: [], state: "ready" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
@@ -271,8 +264,6 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
 });
 
 describe("ProviderEnvOverridesSection on a host that takes no credentials", () => {
-  const REFUSAL = "Sandboxes don't take sign-ins";
-
   function renderWithOverride(): void {
     render(
       withQueryClient(
@@ -287,38 +278,7 @@ describe("ProviderEnvOverridesSection on a host that takes no credentials", () =
     );
   }
 
-  it("disables the whole editor, shows the refusal, and sends nothing", () => {
-    mocks.credentialRefusal = REFUSAL;
-    renderWithOverride();
-
-    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
-    expect(
-      screen
-        .getByRole("button", { name: "Add a variable" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen
-        .getByLabelText("Name for CURSOR_BASE_URL")
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen
-        .getByRole("button", { name: "Remove CURSOR_BASE_URL" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove CURSOR_BASE_URL" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
-
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-    expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("New variable name")).toBeNull();
-  });
-
-  it("control: on a host that takes overrides the editor is live and shows no refusal", () => {
+  it("keeps the editor live and saves a credential-shaped variable", async () => {
     renderWithOverride();
 
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
@@ -332,6 +292,26 @@ describe("ProviderEnvOverridesSection on a host that takes no credentials", () =
         .getByLabelText("Name for CURSOR_BASE_URL")
         .hasAttribute("disabled"),
     ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "CURSOR_API_KEY" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "sk-cursor" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "cursor",
+      key: "CURSOR_API_KEY",
+      value: "sk-cursor",
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 });
 
@@ -472,75 +452,63 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   }
 
   it.each([
-    {
-      providerId: "cursor",
-      name: "Cursor",
-      variable: "CURSOR_API_KEY",
-      label: "Account",
-    },
-    {
-      providerId: "amp",
-      name: "Amp",
-      variable: "AMP_API_KEY",
-      label: "Account",
-    },
+    { providerId: "cursor", variable: "CURSOR_API_KEY" },
+    { providerId: "amp", variable: "AMP_API_KEY" },
   ] as const)(
-    "refuses $name's own key variable with a pointer to $label, clears the value and stores nothing",
-    async ({ providerId, name, variable, label }) => {
-      const open = vi.fn<() => void>();
+    "saves $variable through the editor",
+    async ({ providerId, variable }) => {
       renderProviderEnvTab(providerId, []);
 
       await typeVariable(variable, HELD_VALUE);
 
-      const line = await screen.findByTestId("env-key-refusal");
-      expect(line.textContent).toBe(
-        `This is ${name}'s key. Set it on ${name}'s ${label}.`,
+      await waitFor(() =>
+        expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
       );
-      expect(screen.getByLabelText("New variable value")).toBe(
-        screen.getByDisplayValue(""),
-      );
-      expect(document.body.textContent).not.toContain(HELD_VALUE);
-      expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-      expect(open).not.toHaveBeenCalled();
-
-      fireEvent.click(
-        within(line).getByRole("button", { name: `${name}'s ${label}` }),
-      );
-
-      expect(open).toHaveBeenCalledTimes(1);
-      expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-      expect(screen.queryByLabelText("New variable name")).toBeNull();
+      expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+        providerId,
+        key: variable,
+        value: HELD_VALUE,
+        executableWriteGrant: null,
+      });
+      expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     },
   );
 
-  it("still sends any other key-shaped name to Add a secret, with the value kept", async () => {
-    const open = vi.fn<() => void>();
+  it("saves any other key-shaped name through the editor", async () => {
     renderProviderEnvTab("kiro", []);
 
     await typeVariable("NOTES", HELD_VALUE);
 
-    expect((await screen.findByTestId("env-key-refusal")).textContent).toBe(
-      "This looks like a key. Add it as a secret.",
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
-    expect(screen.getByDisplayValue(HELD_VALUE)).toBeTruthy();
-    expect(open).not.toHaveBeenCalled();
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "kiro",
+      key: "NOTES",
+      value: HELD_VALUE,
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("uses the generic line for the provider's own key variable when it has no key tab", async () => {
+  it("saves the provider's own key variable when it has no key tab", async () => {
     renderProviderEnvTab("kiro", []);
 
     await typeVariable("KIRO_API_KEY", HELD_VALUE);
 
-    expect((await screen.findByTestId("env-key-refusal")).textContent).toBe(
-      "This looks like a key. Add it as a secret.",
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
-    expect(screen.getByDisplayValue(HELD_VALUE)).toBeTruthy();
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "kiro",
+      key: "KIRO_API_KEY",
+      value: HELD_VALUE,
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("masks a saved key-shaped own key variable, points it at the key tab, and leaves it saved", async () => {
-    const open = vi.fn<() => void>();
+  it("masks a saved key-shaped own key variable and leaves it saved", async () => {
     renderProviderEnvTab("kiro", [{ key: "KIRO_API_KEY", value: HELD_VALUE }]);
 
     const row = await screen.findByTestId("env-masked-row");
@@ -552,42 +520,24 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     expect(screen.queryByLabelText("Name for KIRO_API_KEY")).toBeNull();
     expect(screen.queryByDisplayValue(HELD_VALUE)).toBeNull();
     expect(document.body.textContent).not.toContain(HELD_VALUE);
-    const line = within(row).getByTestId("env-key-refusal");
-    expect(line.textContent).toBe(
-      "This is Kiro's key. Set it on Kiro's Account.",
-    );
-
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Kiro's Account" }),
-    );
-
-    expect(open).toHaveBeenCalledTimes(1);
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
     expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
     expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
   });
 
-  it("masks a saved key-shaped value on a provider with no key tab and carries it into Add a secret, deleting nothing", async () => {
+  it("masks a saved key-shaped value and leaves it saved", async () => {
     renderProviderEnvTab("claude-code", [
       { key: "ANTHROPIC_API_KEY", value: HELD_VALUE },
     ]);
 
     const row = await screen.findByTestId("env-masked-row");
+    expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+      "••••••••",
+    );
     expect(screen.queryByDisplayValue(HELD_VALUE)).toBeNull();
     expect(screen.queryByLabelText("Value for ANTHROPIC_API_KEY")).toBeNull();
-    const line = within(row).getByTestId("env-key-refusal");
-    expect(line.textContent).toBe("This looks like a key. Add it as a secret.");
-
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    const dialog = await screen.findByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-    ).toBe("ANTHROPIC_API_KEY");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-    ).toBe(HELD_VALUE);
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
     expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
     expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
   });
@@ -618,7 +568,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     });
   });
 
-  it("refuses a key-shaped value typed on the provider's Env tab, stores nothing, and hands it to Add a secret", async () => {
+  it("saves a key-shaped value typed on the provider's Env tab", async () => {
     renderProviderEnvTab("cursor", []);
     fireEvent.click(
       await screen.findByRole("button", { name: "Add a variable" }),
@@ -631,23 +581,17 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     });
     fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 
-    expect((await screen.findByTestId("env-key-refusal")).textContent).toBe(
-      "This looks like a key. Add it as a secret.",
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    const dialog = await screen.findByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-    ).toBe("NOTES");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-    ).toBe(HELD_VALUE);
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "cursor",
+      key: "NOTES",
+      value: HELD_VALUE,
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
   });
 
   const OWN_URL = "https://own.example.invalid";
@@ -844,18 +788,21 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     };
 
     // Nothing binds a secret to a name in one provider's env, so a saved
-    // key-shaped value there is this provider's own value and gets the key
-    // refusal — whether or not a Personal secret of that name exists.
+    // key-shaped value there stays this provider's own masked value —
+    // whether or not a Personal secret of that name exists.
     it.each([
       ["with no secret of that name", []],
       ["with a secret of that name", [secretSettingIt]],
     ] as const)(
-      "masks and refuses a saved key-shaped value %s",
+      "masks a saved key-shaped value %s",
       async (_label, secrets) => {
         renderClaudeEnvTab({ localOverrides: [], secrets }, TOKEN_ROW);
 
         const row = await screen.findByTestId("env-masked-row");
-        expect(within(row).getByTestId("env-key-refusal")).toBeTruthy();
+        expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+          "••••••••",
+        );
+        expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
         expect(screen.queryByTestId("env-claimed-row")).toBeNull();
         expect(document.body.textContent).not.toContain(HELD_VALUE);
       },

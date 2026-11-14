@@ -42,7 +42,6 @@ interface EditorInput {
   }[];
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
-  readonly credentialRefusal: string | null;
   readonly applyingHostsCount: number | null;
   readonly staleRefusal: EnvStaleRefusal | null;
   readonly rowNotes: ReadonlyMap<string, ReactNode>;
@@ -50,18 +49,13 @@ interface EditorInput {
 }
 
 const NO_REFUSAL = {
-  credentialRefusal: null,
   applyingHostsCount: null,
   staleRefusal: null,
   rowNotes: NO_NOTES,
   renderDetails: undefined,
 } satisfies Pick<
   EditorInput,
-  | "credentialRefusal"
-  | "applyingHostsCount"
-  | "staleRefusal"
-  | "rowNotes"
-  | "renderDetails"
+  "applyingHostsCount" | "staleRefusal" | "rowNotes" | "renderDetails"
 >;
 
 beforeEach(() => {
@@ -82,7 +76,7 @@ function editorElement(input: EditorInput): ReactNode {
         rowNotes={input.rowNotes}
         claimedBy={NOT_CLAIMED}
         staleRefusal={input.staleRefusal}
-        namePlaceholder="NODE_ENV"
+        namePlaceholder="OPENAI_API_KEY"
         emptyLabel="No environment variables."
         applyingHostsCount={input.applyingHostsCount}
         onCommit={input.onCommit}
@@ -347,7 +341,7 @@ describe("EnvOverrideEditor on a phone", () => {
     expect(screen.getAllByText(detail)).toHaveLength(1);
   });
 
-  it("shows the saved key refusal under a masked phone row", () => {
+  it("shows a saved key as dots under the phone row, with no key line", () => {
     renderEditor({
       ...NO_REFUSAL,
       overrides: [{ key: "ANTHROPIC_API_KEY", value: KEY_VALUE }],
@@ -356,13 +350,11 @@ describe("EnvOverrideEditor on a phone", () => {
     });
 
     const row = screen.getByTestId("env-masked-row");
-    expect(within(row).getByTestId("env-key-refusal")).toHaveProperty(
+    expect(within(row).getByTestId("env-masked-value")).toHaveProperty(
       "textContent",
-      "This looks like a key. Add it as a secret.",
+      "••••••••",
     );
-    expect(
-      within(row).getByRole("button", { name: "Add it as a secret." }),
-    ).toBeTruthy();
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
     expect(document.body.textContent).not.toContain(KEY_VALUE);
   });
 
@@ -513,13 +505,11 @@ describe("EnvOverrideEditor on a phone", () => {
     },
   );
 
-  it("keeps a sign-in refusal in the sheet and stores nothing", async () => {
+  it("saves a sign-in URL from the sheet", async () => {
     const onCommit = vi.fn<EnvCommit>();
-    const refusal = "Sandboxes don't take sign-ins";
     renderEditor({
       ...NO_REFUSAL,
       overrides: [{ key: "REPO_URL", value: "https://github.com/o/r" }],
-      credentialRefusal: refusal,
       onCommit,
       onDelete: vi.fn<EnvDelete>(),
     });
@@ -530,15 +520,8 @@ describe("EnvOverrideEditor on a phone", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(
-      within(screen.getByRole("dialog")).getByText(
-        `${refusal}: remove the sign-in from this URL.`,
-      ),
-    ).toBeTruthy();
-    expect(
-      within(screen.getByRole("dialog")).getByLabelText("Value for REPO_URL"),
-    ).toHaveProperty("value", SIGN_IN_URL);
+    expect(onCommit).toHaveBeenCalledWith("REPO_URL", "REPO_URL", SIGN_IN_URL);
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
   it("snaps an invalid name back and stores nothing", async () => {
@@ -565,9 +548,8 @@ describe("EnvOverrideEditor on a phone", () => {
     );
   });
 
-  it("refuses a key-shaped draft in the sheet and hands it to Add a secret", async () => {
+  it("saves a key-shaped draft from the sheet", async () => {
     const onCommit = vi.fn<EnvCommit>();
-    const onLink = vi.fn<(name: string, value: string) => void>();
     renderEditor({
       ...NO_REFUSAL,
       overrides: [{ key: "NODE_ENV", value: "development" }],
@@ -581,25 +563,8 @@ describe("EnvOverrideEditor on a phone", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
-    expect(onCommit).not.toHaveBeenCalled();
-    const refused = screen.getByRole("dialog");
-    expect(within(refused).getByTestId("env-key-refusal")).toHaveProperty(
-      "textContent",
-      "This looks like a key. Add it as a secret.",
-    );
-    expect(within(refused).getByLabelText("Value for NODE_ENV")).toHaveProperty(
-      "value",
-      KEY_VALUE,
-    );
-    await userEvent.click(
-      within(refused).getByRole("button", { name: "Add it as a secret." }),
-    );
-    expect(onLink).toHaveBeenCalledTimes(1);
-    expect(onLink).toHaveBeenCalledWith("NODE_ENV", KEY_VALUE);
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(
-      within(screen.getByRole("dialog")).getByLabelText("Value for NODE_ENV"),
-    ).toHaveProperty("value", "development");
+    expect(onCommit).toHaveBeenCalledWith("NODE_ENV", "NODE_ENV", KEY_VALUE);
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
   it("keeps Saving, then a refusal, inside the sheet", async () => {
@@ -695,7 +660,6 @@ describe("EnvOverrideEditor on a phone", () => {
 
   it("keeps a saved key masked and remove-only", async () => {
     const onDelete = vi.fn<EnvDelete>();
-    const onLink = vi.fn<(name: string, value: string) => void>();
     renderEditor({
       ...NO_REFUSAL,
       overrides: [{ key: "ANTHROPIC_API_KEY", value: KEY_VALUE }],
@@ -718,15 +682,8 @@ describe("EnvOverrideEditor on a phone", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByRole("button", { name: "Save" })).toBeNull();
     expect(within(dialog).queryByRole("textbox")).toBeNull();
+    expect(within(dialog).queryByTestId("env-key-refusal")).toBeNull();
     expect(document.body.textContent).not.toContain(KEY_VALUE);
-    expect(within(dialog).getByTestId("env-key-refusal")).toHaveProperty(
-      "textContent",
-      "This looks like a key. Add it as a secret.",
-    );
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: "Add it as a secret." }),
-    );
-    expect(onLink).toHaveBeenCalledWith("ANTHROPIC_API_KEY", KEY_VALUE);
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Remove ANTHROPIC_API_KEY" }),
     );

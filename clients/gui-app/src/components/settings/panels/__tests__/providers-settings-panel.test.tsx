@@ -515,6 +515,7 @@ vi.mock(
 vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
   useProvidersSetEnvOverride: () => ({
     mutate: providerMocks.setEnvOverrideMutate,
+    mutateAsync: providerMocks.setEnvOverrideMutate,
     isPending: false,
   }),
 }));
@@ -4125,47 +4126,43 @@ describe("<ProvidersSettingsPanel />", () => {
         apiKey: { supported: true, configured: false, source: null },
       });
 
-    it("sends the provider's own key variable to Account when Profiles & Limits is absent, with the value cleared and nothing saved", () => {
+    it("saves the provider's own key variable through the Env tab", async () => {
       renderOnPersonalPage([withKey("cursor")]);
       selectTab("Env");
 
       typeVariable("CURSOR_API_KEY", KEY_VALUE);
 
-      const line = screen.getByTestId("env-key-refusal");
-      expect(line.textContent).toBe(
-        "This is Cursor's key. Set it on Cursor's Account.",
+      await waitFor(() =>
+        expect(providerMocks.setEnvOverrideMutate).toHaveBeenCalledTimes(1),
       );
-      expect(providerMocks.setEnvOverrideMutate).not.toHaveBeenCalled();
-
-      fireEvent.click(
-        within(line).getByRole("button", { name: "Cursor's Account" }),
-      );
-
-      expect(
-        screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
-      ).toBe("active");
-      expect(
-        within(screen.getByRole("tabpanel")).getByLabelText<HTMLInputElement>(
-          "API key",
-        ).value,
-      ).toBe("");
-      expect(document.body.textContent).not.toContain(KEY_VALUE);
-      expect(providerMocks.setEnvOverrideMutate).not.toHaveBeenCalled();
+      expect(providerMocks.setEnvOverrideMutate.mock.calls[0]?.[0]).toEqual({
+        providerId: "cursor",
+        key: "CURSOR_API_KEY",
+        value: KEY_VALUE,
+        executableWriteGrant: null,
+      });
+      expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });
 
-    it("keeps the Add-a-secret line for another key-shaped name", () => {
+    it("saves another key-shaped name through the Env tab", async () => {
       renderOnPersonalPage([withKey("cursor")]);
       selectTab("Env");
 
       typeVariable("NOTES", KEY_VALUE);
 
-      expect(screen.getByTestId("env-key-refusal").textContent).toBe(
-        "This looks like a key. Add it as a secret.",
+      await waitFor(() =>
+        expect(providerMocks.setEnvOverrideMutate).toHaveBeenCalledTimes(1),
       );
-      expect(screen.getByDisplayValue(KEY_VALUE)).toBeDefined();
+      expect(providerMocks.setEnvOverrideMutate.mock.calls[0]?.[0]).toEqual({
+        providerId: "cursor",
+        key: "NOTES",
+        value: KEY_VALUE,
+        executableWriteGrant: null,
+      });
+      expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });
 
-    it("uses the generic line for a provider without an Account key", () => {
+    it("saves a key-shaped name for a provider without an Account key", async () => {
       renderOnPersonalPage([
         providerState({
           providerId: "opencode",
@@ -4179,9 +4176,16 @@ describe("<ProvidersSettingsPanel />", () => {
 
       typeVariable("ANTHROPIC_API_KEY", KEY_VALUE);
 
-      expect(screen.getByTestId("env-key-refusal").textContent).toBe(
-        "This looks like a key. Add it as a secret.",
+      await waitFor(() =>
+        expect(providerMocks.setEnvOverrideMutate).toHaveBeenCalledTimes(1),
       );
+      expect(providerMocks.setEnvOverrideMutate.mock.calls[0]?.[0]).toEqual({
+        providerId: "opencode",
+        key: "ANTHROPIC_API_KEY",
+        value: KEY_VALUE,
+        executableWriteGrant: null,
+      });
+      expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });
 
     const SAVED_KEY = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
@@ -4201,7 +4205,7 @@ describe("<ProvidersSettingsPanel />", () => {
       });
     }
 
-    it("masks the saved key of a provider with no Account tab, and its link carries the value into Add a secret without deleting it", async () => {
+    it("masks the saved key of a provider with no Account tab and leaves it saved", () => {
       renderOnPersonalPage([
         savedOn("claude-code", "ANTHROPIC_API_KEY", false),
       ]);
@@ -4209,89 +4213,33 @@ describe("<ProvidersSettingsPanel />", () => {
 
       const row = screen.getByTestId("env-masked-row");
       expect(row.textContent).toContain("ANTHROPIC_API_KEY");
+      expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+        "••••••••",
+      );
       expect(screen.queryByLabelText("Value for ANTHROPIC_API_KEY")).toBeNull();
       expect(screen.queryByDisplayValue(SAVED_KEY)).toBeNull();
       expect(document.body.textContent).not.toContain(SAVED_KEY);
-      const line = within(row).getByTestId("env-key-refusal");
-      expect(line.textContent).toBe(
-        "This looks like a key. Add it as a secret.",
-      );
-
-      fireEvent.click(
-        within(line).getByRole("button", { name: "Add it as a secret." }),
-      );
-
-      const dialog = await screen.findByTestId("add-secret-dialog");
-      expect(
-        within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-      ).toBe("ANTHROPIC_API_KEY");
-      expect(
-        within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-      ).toBe(SAVED_KEY);
+      expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
       expect(providerMocks.setEnvOverrideMutate).not.toHaveBeenCalled();
       expect(providerMocks.deleteEnvOverrideMutate).not.toHaveBeenCalled();
     });
 
-    it("masks the saved own key of a provider with an Account tab and sends its link there", () => {
+    it("masks the saved own key of a provider with an Account tab and leaves it saved", () => {
       renderOnPersonalPage([savedOn("cursor", "CURSOR_API_KEY", true)]);
       selectTab("Env");
 
       const row = screen.getByTestId("env-masked-row");
+      expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+        "••••••••",
+      );
       expect(screen.queryByDisplayValue(SAVED_KEY)).toBeNull();
-      const line = within(row).getByTestId("env-key-refusal");
-      expect(line.textContent).toBe(
-        "This is Cursor's key. Set it on Cursor's Account.",
-      );
-
-      fireEvent.click(
-        within(line).getByRole("button", { name: "Cursor's Account" }),
-      );
-
-      expect(
-        screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
-      ).toBe("active");
+      expect(document.body.textContent).not.toContain(SAVED_KEY);
+      expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
       expect(providerMocks.setEnvOverrideMutate).not.toHaveBeenCalled();
       expect(providerMocks.deleteEnvOverrideMutate).not.toHaveBeenCalled();
     });
 
-    it("names Account and opens that tab even when Profiles & Limits is also supported", () => {
-      renderOnPersonalPage([
-        providerState({
-          providerId: "cursor",
-          selected: { kind: "bundled" },
-          candidates: [],
-          envOverrides: [],
-          nativeCapabilities: FULL_TABS,
-          apiKey: { supported: true, configured: false, source: null },
-        }),
-      ]);
-      selectTab("Env");
-      typeVariable("CURSOR_API_KEY", KEY_VALUE);
-
-      const line = screen.getByTestId("env-key-refusal");
-      expect(line.textContent).toBe(
-        "This is Cursor's key. Set it on Cursor's Account.",
-      );
-      fireEvent.click(
-        within(line).getByRole("button", {
-          name: "Cursor's Account",
-        }),
-      );
-
-      expect(
-        screen.getByRole("tab", { name: "Profiles & Limits" }),
-      ).toBeDefined();
-      expect(
-        screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
-      ).toBe("active");
-      const panel = within(screen.getByRole("tabpanel"));
-      expect(panel.queryByRole("region", { name: "Key" })).toBeNull();
-      expect(panel.getByLabelText<HTMLInputElement>("API key").value).toBe("");
-      expect(panel.getByRole("button", { name: "Save" })).toBeDefined();
-      expect(document.body.textContent).not.toContain(KEY_VALUE);
-    });
-
-    it("names Amp's Account tab and opens it, because Amp has a key and no Profiles & Limits", () => {
+    it("saves Amp's own key variable through the Env tab", async () => {
       renderOnPersonalPage([
         providerState({
           providerId: "amp",
@@ -4305,26 +4253,16 @@ describe("<ProvidersSettingsPanel />", () => {
       selectTab("Env");
       typeVariable("AMP_API_KEY", KEY_VALUE);
 
-      const line = screen.getByTestId("env-key-refusal");
-      expect(line.textContent).toBe(
-        "This is Amp's key. Set it on Amp's Account.",
+      await waitFor(() =>
+        expect(providerMocks.setEnvOverrideMutate).toHaveBeenCalledTimes(1),
       );
-      expect(
-        screen.queryByRole("tab", { name: "Profiles & Limits" }),
-      ).toBeNull();
-      fireEvent.click(
-        within(line).getByRole("button", { name: "Amp's Account" }),
-      );
-
-      expect(
-        screen.getByRole("tab", { name: "Account" }).getAttribute("data-state"),
-      ).toBe("active");
-      expect(
-        within(screen.getByRole("tabpanel")).getByLabelText<HTMLInputElement>(
-          "API key",
-        ).value,
-      ).toBe("");
-      expect(document.body.textContent).not.toContain(KEY_VALUE);
+      expect(providerMocks.setEnvOverrideMutate.mock.calls[0]?.[0]).toEqual({
+        providerId: "amp",
+        key: "AMP_API_KEY",
+        value: KEY_VALUE,
+        executableWriteGrant: null,
+      });
+      expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });
   });
 

@@ -61,12 +61,19 @@ import { cn } from "@/lib/utils";
  * once more before Save. API keys and database logins are offered; a
  * provider's key is set on that provider's page, which the picker points to, and
  * SSH, the cloud and certificate kinds have no row. A kind no protocol of
- * which is brokered is greyed with the catalogue's own line.
+ * which is brokered is greyed with the catalogue's own line. A name and
+ * value the caller already has arrive as `prefill`, filled in.
  *
  * The typed value lives in this component's state only: Verify and Save read
  * it when their request is dispatched, so it reaches no query or mutation
  * cache, and closing the dialog drops it.
  */
+
+/** A name and value Add a secret opens with. */
+export interface SecretPrefill {
+  readonly name: string;
+  readonly value: string;
+}
 
 type Step =
   | { readonly kind: "pick" }
@@ -231,20 +238,37 @@ function Busy(props: { readonly busy: boolean }): ReactNode {
   ) : null;
 }
 
+/** A kind's empty form, with a carried-in name and value when there is one. */
+function prefilledForm(
+  kind: DesktopSecretKind,
+  prefill: SecretPrefill | null,
+): SecretFormState {
+  const form = initialSecretForm(kind);
+  return prefill === null
+    ? form
+    : { ...form, name: prefill.name, value: prefill.value };
+}
+
 /** A named kind opens its form; otherwise the kind picker. */
-function initialStepOf(initialKind: DesktopSecretKind | undefined): Step {
+function initialStepOf(
+  initialKind: DesktopSecretKind | undefined,
+  prefill: SecretPrefill | null,
+): Step {
   return initialKind === undefined
     ? PICK
-    : { kind: "form", form: initialSecretForm(initialKind) };
+    : { kind: "form", form: prefilledForm(initialKind, prefill) };
 }
 
 export function AddSecretDialog(props: {
   readonly open: boolean;
   readonly initialKind?: DesktopSecretKind;
+  /** A name and value the form opens with, or `null`. */
+  readonly prefill: SecretPrefill | null;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;
 }): ReactNode {
-  const initialStep = initialStepOf(props.initialKind);
+  const { prefill } = props;
+  const initialStep = initialStepOf(props.initialKind, prefill);
   const [step, setStep] = useState<Step>(initialStep);
   // The form a Verify or Save sends, read at dispatch.
   const sentForm = useRef<SecretFormState | null>(null);
@@ -285,7 +309,7 @@ export function AddSecretDialog(props: {
 
   const pick = (kind: DesktopSecretKind): void => {
     setContinuePressed(false);
-    setStep({ kind: "form", form: initialSecretForm(kind) });
+    setStep({ kind: "form", form: prefilledForm(kind, prefill) });
   };
 
   const continueToConfirm = (form: SecretFormState): void => {

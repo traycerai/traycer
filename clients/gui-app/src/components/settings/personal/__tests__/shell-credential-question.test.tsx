@@ -54,10 +54,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
-vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
-  useHostCredentialRefusal: () => null,
-}));
-
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -165,8 +161,7 @@ interface Rendered {
 }
 
 function renderShellPage(options: {
-  /** `null`: the host's `environment.status` read never resolves. */
-  readonly status: EnvironmentStatusResponseV12 | null;
+  readonly status: EnvironmentStatusResponseV12;
   /** The methods the host advertises; the config family is always there. */
   readonly environmentMethods: readonly string[];
   readonly existingVariables: readonly { key: string; value: string }[];
@@ -200,7 +195,6 @@ function renderShellPage(options: {
       "config.env.localOverride.clear": clear,
       "environment.status": () => {
         statusCalls += 1;
-        if (options.status === null) return new Promise<never>(() => {});
         return options.status;
       },
       "environment.localOverrides": () => ({
@@ -339,73 +333,35 @@ async function addVariable(name: string, value: string): Promise<void> {
   fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 }
 
-const KEY_REFUSAL = "This looks like a key. Add it as a secret.";
-
 describe("a key-shaped variable on a Personal page (ready status)", () => {
-  it("refuses a credential-looking variable, stores nothing and shows no dialog", async () => {
-    const { cli, set } = renderShellPage(READY_HOST);
+  it("saves a credential-looking variable and shows no dialog", async () => {
+    const { set } = renderShellPage(READY_HOST);
     await pageIsReady();
     await addVariable("API_TOKEN", API_KEY_VALUE);
 
-    expect((await screen.findByTestId("env-key-refusal")).textContent).toBe(
-      KEY_REFUSAL,
-    );
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "API_TOKEN",
+      value: API_KEY_VALUE,
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("credential-choice-dialog")).toBeNull();
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([]);
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
   });
 
-  it("refuses a harmless name when the VALUE has a known token shape", async () => {
+  it("saves a harmless name when the value has a known token shape", async () => {
     const { set } = renderShellPage(READY_HOST);
     await pageIsReady();
     await addVariable("NOTES", API_KEY_VALUE);
 
-    expect(await screen.findByTestId("env-key-refusal")).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
-  });
-
-  it("'Add it as a secret.' opens Add a secret on the API key form with the name and value filled in, and stores nothing", async () => {
-    const { cli, runnerHost, set } = renderShellPage(READY_HOST);
-    await pageIsReady();
-    await addVariable("API_TOKEN", API_KEY_VALUE);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add it as a secret." }),
-    );
-
-    const dialog = await screen.findByTestId("add-secret-dialog");
-    expect(screen.queryByTestId("secret-kind-picker")).toBeNull();
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-    ).toBe("API_TOKEN");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-    ).toBe(API_KEY_VALUE);
-    // The add row closed: nothing is left staged.
-    expect(screen.queryByLabelText("New variable name")).toBeNull();
-    expect(navigateToSettingsSectionMock).not.toHaveBeenCalled();
-    expect(runnerHost.openedExternalLinks).toEqual([]);
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([]);
-  });
-
-  it("closing Add a secret drops the value and stores nothing", async () => {
-    const { cli, set } = renderShellPage(READY_HOST);
-    await pageIsReady();
-    await addVariable("API_TOKEN", API_KEY_VALUE);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add it as a secret." }),
-    );
-    const dialog = await screen.findByTestId("add-secret-dialog");
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "NOTES",
+      value: API_KEY_VALUE,
+      executableWriteGrant: null,
     });
-    expect(document.body.textContent).not.toContain(API_KEY_VALUE);
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([]);
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
   it("stores a plain value without refusing it", async () => {
@@ -422,8 +378,8 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("refuses an existing variable edited into a key, keeps the stored value and sends nothing", async () => {
-    const { cli, set } = renderShellPage({
+  it("saves an existing variable edited into a key", async () => {
+    const { set } = renderShellPage({
       ...READY_HOST,
       existingVariables: [{ key: "EDITOR", value: "vim" }],
     });
@@ -433,21 +389,19 @@ describe("a key-shaped variable on a Personal page (ready status)", () => {
     fireEvent.change(value, { target: { value: API_KEY_VALUE } });
     fireEvent.blur(value);
 
-    expect(await screen.findByTestId("env-key-refusal")).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([{ key: "EDITOR", value: "vim" }]);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add it as a secret." }),
-    );
-    expect(await screen.findByTestId("add-secret-dialog")).toBeTruthy();
-    expect(screen.getByDisplayValue("vim")).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "EDITOR",
+      value: API_KEY_VALUE,
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
   });
 });
 
 describe("a saved key-shaped variable on a Personal page", () => {
-  it("shows the saved variable masked with the key line, and its link carries the value into Add a secret leaving the variable saved", async () => {
+  it("shows the saved variable masked and leaves it saved", async () => {
     const { cli, set } = renderShellPage({
       ...READY_HOST,
       existingVariables: [{ key: "API_TOKEN", value: API_KEY_VALUE }],
@@ -456,24 +410,14 @@ describe("a saved key-shaped variable on a Personal page", () => {
 
     const row = await screen.findByTestId("env-masked-row");
     expect(row.textContent).toContain("API_TOKEN");
+    expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+      "••••••••",
+    );
     expect(screen.queryByLabelText("Value for API_TOKEN")).toBeNull();
     expect(screen.queryByDisplayValue(API_KEY_VALUE)).toBeNull();
     expect(document.body.textContent).not.toContain(API_KEY_VALUE);
-    expect(within(row).getByTestId("env-key-refusal").textContent).toBe(
-      KEY_REFUSAL,
-    );
-
-    fireEvent.click(
-      within(row).getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    const dialog = await screen.findByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-    ).toBe("API_TOKEN");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-    ).toBe(API_KEY_VALUE);
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
     expect(set).not.toHaveBeenCalled();
     expect(cli.envOverrides).toEqual([
       { key: "API_TOKEN", value: API_KEY_VALUE },
@@ -540,20 +484,6 @@ describe("a key-shaped variable when the page is not on a ready Personal host", 
     expect(await screen.findByTestId("env-masked-row")).toBeTruthy();
     expect(screen.queryByDisplayValue(API_KEY_VALUE)).toBeNull();
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
-  });
-});
-
-describe("a key-shaped variable while the Personal host's status is not known yet", () => {
-  it("refuses it while the status read is still pending", async () => {
-    const { set, statusCalls } = renderShellPage({
-      ...READY_HOST,
-      status: null,
-    });
-    await waitFor(() => expect(statusCalls()).toBeGreaterThan(0));
-    await addVariable("API_TOKEN", API_KEY_VALUE);
-
-    expect(await screen.findByTestId("env-key-refusal")).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
   });
 });
 
@@ -731,17 +661,29 @@ describe("a variable this computer keeps its own value for", () => {
     });
   });
 
-  it("shows dots and no Use everywhere for a value that looks like a key", async () => {
-    renderShellPage({
+  it("shows dots and Use everywhere for a value that looks like a key, and the click saves that value", async () => {
+    const { set, clear } = renderShellPage({
       ...OWN_VALUE_HOST,
       localOverrides: [variableOverride("LOG_LEVEL", API_KEY_VALUE)],
     });
     await pageIsReady();
 
     const note = await screen.findByTestId("env-row-own-value");
-    expect(note.textContent).toBe("host-a uses: ••••••••");
-    expect(screen.queryByRole("button", { name: "Use everywhere" })).toBeNull();
+    expect(note.textContent).toBe("host-a uses: •••••••• · Use everywhere");
     expect(document.body.textContent).not.toContain(API_KEY_VALUE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "LOG_LEVEL",
+      value: API_KEY_VALUE,
+      executableWriteGrant: null,
+    });
+    await waitFor(() => expect(clear).toHaveBeenCalledTimes(1));
+    expect(clear).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "LOG_LEVEL" },
+    });
   });
 });
 
@@ -777,15 +719,17 @@ describe("a variable a secret sets on the Personal page", () => {
     expect(document.body.textContent).not.toContain(API_KEY_VALUE);
   });
 
-  it("control: with no secret claiming the name, the saved key-shaped value is masked and refused", async () => {
+  it("control: with no secret claiming the name, the saved key-shaped value is masked", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
     renderShellPage({ ...withKeyShapedValue, secrets: [] });
     await pageIsReady();
 
     const row = await screen.findByTestId("env-masked-row");
-    expect(within(row).getByTestId("env-key-refusal").textContent).toBe(
-      KEY_REFUSAL,
+    expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+      "••••••••",
     );
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
     expect(screen.queryByTestId("env-claimed-row")).toBeNull();
+    expect(document.body.textContent).not.toContain(API_KEY_VALUE);
   });
 });

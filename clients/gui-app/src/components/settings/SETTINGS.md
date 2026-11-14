@@ -1248,9 +1248,8 @@ warning. A kind none of whose protocols is brokered is greyed with the
 catalogue's own line. The form and Save's confirmation carry "Stored encrypted
 in Traycer's cloud. Computers running Personal receive the value, readable by
 their tools and agents; sandboxes use it without seeing it." and How Traycer
-handles this, and nothing else before Save. A value a Variables or
-provider-variable row refused opens it with the name and value filled in
-(`prefill`). The typed value is sent by a direct `client.request`, never through
+handles this, and nothing else before Save. A team's provider key opens it
+with the key's name filled in (`prefill`). The typed value is sent by a direct `client.request`, never through
 a query or mutation, so it reaches no cache, and closing the dialog drops it. A
 refusal shows the host's words (`Connect to manage secrets.` with no session on
 this computer) or the `secretChangeRefusalLine` for a create refusal's code;
