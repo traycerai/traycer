@@ -26,6 +26,7 @@ const fixture = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
   hostId: "mock-local",
   supportsSignOut: false,
+  offersSignIns: false,
   supportChecks: [] as Array<{ hostId: string | null; method: string }>,
   openChanges: [] as boolean[],
 }));
@@ -42,6 +43,11 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     fixture.supportChecks.push({ hostId, method });
     return fixture.supportsSignOut;
   },
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => ({
+    data: fixture.offersSignIns ? { offersSignIns: true } : undefined,
+  }),
 }));
 vi.mock(
   "@/components/settings/personal/personal-page-context",
@@ -227,6 +233,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     fixture.supportsSignOut = false;
     fixture.supportChecks = [];
     fixture.openChanges = [];
+    fixture.offersSignIns = false;
   });
 
   afterEach(() => {
@@ -339,6 +346,35 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       ),
     ).toBeTruthy();
     fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => expect(messenger.calls).toHaveLength(1));
+    expect(messenger.calls[0]?.params).toEqual({
+      providerId: "claude-code",
+      profileId: "profile-work",
+    });
+  });
+
+  it("offers the broker action for a mirror row even when this computer has no credential home", async () => {
+    fixture.supportsSignOut = true;
+    fixture.offersSignIns = true;
+    const messenger = installSignOutClient();
+    const mirrorProfile = { ...profile(undefined, undefined), aliases: [] };
+    renderDialog(mirrorProfile);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(screen.getByTestId("confirm-action")).toBeTruthy();
+    expect(
+      screen.getByText("Sign out of Work account in this environment?"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Running work finishes first. The account stays in the list and needs a sign-in. This does not reach a computer that already left or has not updated, or a separate Terminal login.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Sign out on every host" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
     await waitFor(() => expect(messenger.calls).toHaveLength(1));
     expect(messenger.calls[0]?.params).toEqual({
       providerId: "claude-code",

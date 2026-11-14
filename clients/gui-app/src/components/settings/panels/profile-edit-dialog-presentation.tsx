@@ -47,6 +47,7 @@ export function ProfileEditDialogPresentation(props: {
   readonly confirmRemoveOpen: boolean;
   readonly onConfirmRemoveOpenChange: (open: boolean) => void;
   readonly removeDescription: string;
+  readonly removeConfirmation: ReactNode | null;
   readonly onConfirmRemove: () => void;
   readonly children: ReactNode;
 }): ReactNode {
@@ -143,17 +144,19 @@ export function ProfileEditDialogPresentation(props: {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <ConfirmDestructiveDialog
-        blockedReason={null}
-        open={props.confirmRemoveOpen}
-        onOpenChange={props.onConfirmRemoveOpenChange}
-        title={`Remove ${profileDisplayLabel(props.profile)}?`}
-        description={props.removeDescription}
-        cascadeSummary={null}
-        actionLabel="Remove"
-        isPending={props.removePending}
-        onConfirm={props.onConfirmRemove}
-      />
+      {props.removeConfirmation ?? (
+        <ConfirmDestructiveDialog
+          blockedReason={null}
+          open={props.confirmRemoveOpen}
+          onOpenChange={props.onConfirmRemoveOpenChange}
+          title={`Remove ${profileDisplayLabel(props.profile)}?`}
+          description={props.removeDescription}
+          cascadeSummary={null}
+          actionLabel="Remove"
+          isPending={props.removePending}
+          onConfirm={props.onConfirmRemove}
+        />
+      )}
     </>
   );
 }
