@@ -47,11 +47,12 @@ export function withAppWordsAfterReason(
   return `${reason}\n${appWords.trimStart()}`;
 }
 
+const MESSAGE_NOT_ACCEPTED = "A message was not accepted";
+
 /**
  * The sentence for a send refused while another unsent message waits in the
- * composer: the computer's reason inside the parenthesis, or the pin's words
- * for the removed-account code. Kept in this one place so the sentence's
- * other form, the owner's to choose, is a change here and nowhere else.
+ * composer, as its saved draft says it: the computer's reason inside the
+ * parenthesis, or the pin's words for the removed-account code.
  */
 export function messageNotAcceptedCircumstance(
   code: string | null,
@@ -60,5 +61,20 @@ export function messageNotAcceptedCircumstance(
   const said = isRemovedProfileRefusalCode(code)
     ? REMOVED_PROFILE_PIN_TEXT
     : (reason ?? "Action rejected.").replace(/\.$/, "");
-  return `A message was not accepted (${said})`;
+  return `${MESSAGE_NOT_ACCEPTED} (${said})`;
+}
+
+/**
+ * The same sentence as its notice opens: for the removed-account code the
+ * pin's words stand on their own line above it, with no parenthesis; any
+ * other code reads as {@link messageNotAcceptedCircumstance}.
+ */
+export function messageNotAcceptedNoticeCircumstance(
+  code: string | null,
+  reason: string | null,
+): string {
+  if (!isRemovedProfileRefusalCode(code)) {
+    return messageNotAcceptedCircumstance(code, reason);
+  }
+  return `${REMOVED_PROFILE_PIN_TEXT}\n${MESSAGE_NOT_ACCEPTED}`;
 }

@@ -62,6 +62,10 @@ interface GateCreateChatRequest {
 
 /** The toolbar slices the modal reads; the catalog is the new host's answer. */
 interface ToolbarMockState {
+  readonly accountChosen: boolean;
+  readonly defaultAccount: null;
+  readonly setAccountChosen: () => void;
+  readonly setDefaultAccount: () => void;
   readonly ultracode: boolean;
   readonly selectedModel: null;
   readonly values: {
@@ -230,6 +234,10 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
 });
 
 const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
+  accountChosen: false,
+  defaultAccount: null,
+  setAccountChosen: vi.fn(),
+  setDefaultAccount: vi.fn(),
   ultracode: false,
   selectedModel: null,
   values: {
@@ -261,6 +269,15 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   useStagedSendSignInCheck: () => ({
     check: () => null,
     beforeSend: () => Promise.resolve(null),
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
   }),
 }));
 

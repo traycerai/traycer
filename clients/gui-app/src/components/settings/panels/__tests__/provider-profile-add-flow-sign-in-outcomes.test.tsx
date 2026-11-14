@@ -125,6 +125,8 @@ const ADD_FLOW_DEFAULTS = {
   codePaste: false,
   holdStart: false,
   holdAwait: false,
+  failRecolor: false,
+  freshlyLinkedProfile: false,
 } satisfies {
   readonly echoedProfiles: readonly ProviderProfile[] | undefined;
   readonly echoedExistingProfileId: string | null | undefined;
@@ -140,6 +142,8 @@ const ADD_FLOW_DEFAULTS = {
   readonly codePaste: boolean;
   readonly holdStart: boolean;
   readonly holdAwait: boolean;
+  readonly failRecolor: boolean;
+  readonly freshlyLinkedProfile: boolean;
 };
 
 afterEach(() => {
@@ -334,6 +338,8 @@ function renderAddFlow(input: {
   readonly holdStart: boolean;
   readonly holdAwait: boolean;
   readonly submitOutcome: SubmitLoginCodeResponse["outcome"];
+  readonly failRecolor: boolean;
+  readonly freshlyLinkedProfile: boolean;
 }): AddFlowHarness {
   const calls: RecordedCall[] = [];
   const created = vi.fn<(profileId: string) => void>();
@@ -391,7 +397,7 @@ function renderAddFlow(input: {
             settleHeldAwait = release;
           });
         }
-        const answer =
+        const echoedAnswer =
           input.echoedProfiles === undefined
             ? nothingChanged(input.outcome)
             : echoedAwait(
@@ -401,6 +407,9 @@ function renderAddFlow(input: {
                   ? (input.echoedProfiles.at(0)?.profileId ?? null)
                   : input.echoedExistingProfileId,
               );
+        const answer = input.freshlyLinkedProfile
+          ? { ...echoedAnswer, existingProfileId: null }
+          : echoedAnswer;
         if (input.unknownProfileOutcome) {
           Object.defineProperty(answer, "profileOutcome", {
             value: { kind: "future-kind" },
@@ -424,6 +433,9 @@ function renderAddFlow(input: {
               : profile,
           );
           return setEnabledEcho();
+        }
+        if (input.failRecolor) {
+          throw new Error("providers.setEnabled recolor failed");
         }
         return new Promise((resolve) => {
           release = resolve;
@@ -948,6 +960,7 @@ describe("Add a profile around one sign-in", () => {
             : null,
         echoedProfiles: [existing, created],
         echoedExistingProfileId: null,
+        seedCache: offers === true,
       });
       await pressAccount(offers);
       expect(
@@ -955,6 +968,12 @@ describe("Add a profile around one sign-in", () => {
           "Terminal account already uses this email. Name this profile so you can tell them apart.",
         ),
       ).toBeTruthy();
+      if (offers === true) {
+        expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
+        expect(
+          methodCount(harness.messenger.calls, "providers.setEnabled"),
+        ).toBe(0);
+      }
       fireEvent.change(screen.getByLabelText("Profile name"), {
         target: { value: "Personal" },
       });
@@ -965,6 +984,11 @@ describe("Add a profile around one sign-in", () => {
         expect(
           methodCount(harness.messenger.calls, "providers.setEnabled"),
         ).toBe(1);
+        if (offers === true) {
+          expect(methodCount(harness.messenger.calls, "providers.list")).toBe(
+            2,
+          );
+        }
       });
       expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
         1,
@@ -982,6 +1006,119 @@ describe("Add a profile around one sign-in", () => {
       ).toBe(0);
     },
   );
+
+  it("says signed in when the profile color save fails after sign-in", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [workProfile()],
+      outcome: { kind: "signed-in", profileId: PROFILE_ID },
+      seedCache: true,
+      failRecolor: true,
+    });
+    await pressAccount(true);
+
+    expect(
+      await screen.findByText(
+        "The account was signed in, but the profile color could not be saved.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "The account was linked, but the profile color could not be saved.",
+      ),
+    ).toBeNull();
+    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+      1,
+    );
+    expect(harness.created).not.toHaveBeenCalled();
+  });
+
+  it("says signed in when the profile color save fails after naming", async () => {
+    const { existing, created } = sameEmailRenameProfiles();
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [existing],
+      profilesAfter: [existing, created],
+      outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
+      echoedProfiles: [existing, created],
+      seedCache: true,
+      failRecolor: true,
+    });
+    await pressAccount(true);
+    expect(
+      await screen.findByText(
+        "Terminal account already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Personal" },
+    });
+    const pickedColor = PROVIDER_PROFILE_ACCENT_COLORS[2];
+    expect(pickedColor).not.toBe(created.accentColor);
+    fireEvent.click(
+      screen.getByRole("button", { name: `Use color ${pickedColor}` }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+
+    expect(
+      await screen.findByText(
+        "The account was signed in, but the profile color could not be saved.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "The account was linked, but the profile color could not be saved.",
+      ),
+    ).toBeNull();
+    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+      2,
+    );
+    expect(harness.created).not.toHaveBeenCalled();
+  });
+
+  it("keeps linked copy when the profile color save fails without sign-in offers", async () => {
+    const linked = mintedSignedInRow();
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: false,
+      profilesBefore: [],
+      profilesAfter: [linked],
+      outcome: null,
+      echoedProfiles: [linked],
+      failRecolor: true,
+      freshlyLinkedProfile: true,
+    });
+    await pressAccount(false);
+    await waitFor(() => {
+      expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
+        1,
+      );
+      expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+        1,
+      );
+      expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+        1,
+      );
+    });
+
+    expect(
+      await screen.findByText(
+        "The account was linked, but the profile color could not be saved.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "The account was signed in, but the profile color could not be saved.",
+      ),
+    ).toBeNull();
+    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+      1,
+    );
+    expect(harness.created).not.toHaveBeenCalled();
+  });
 
   it.each([true, "10.11"] as const)(
     "finishes a distinct-email sign-in without a naming step when offersSignIns is %s",
