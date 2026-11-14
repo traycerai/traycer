@@ -839,6 +839,70 @@ describe("landing draft store: accountFollowsDefault across an own echo and a pe
     expect(after.settings?.profileId).toBeNull();
   });
 
+  it("drops the bit when a foreign write is observed before this window's acknowledgement", () => {
+    const ownRevision = 4;
+    const foreignContent = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "from the other window" }],
+        },
+      ],
+    };
+    useLandingDraftStore.setState({
+      drafts: [
+        baseDraft("echo-clamped", {
+          origin: "own",
+          adoption: { state: "adopted", hostId: "host-a" },
+          ownerHostId: "host-a",
+          hostRevision: 0,
+          generation: 3,
+          syncedGeneration: 1,
+          settings: TERMINAL_SETTINGS,
+          accountFollowsDefault: true,
+        }),
+      ],
+      activeDraftId: null,
+    });
+
+    const foreign = ownEcho("echo-clamped", null, ownRevision + 1);
+    expect(applyLandingHostDocument(foreign, foreignContent)).toBe(true);
+    const held = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-clamped");
+    if (held === undefined)
+      throw new Error("the foreign document dropped the draft");
+    expect(held.content).toEqual(NON_EMPTY_CONTENT);
+    expect(held.accountFollowsDefault).toBe(true);
+    expect(held.generation).toBeGreaterThan(held.syncedGeneration);
+    expect(held.hostRevision).toBe(ownRevision + 1);
+    expect(held.ownerHostId).toBe("host-a");
+
+    landingDraftRememberSynced(
+      "echo-clamped",
+      ownRevision,
+      held.generation,
+      "host-a",
+    );
+    const acked = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-clamped");
+    if (acked === undefined)
+      throw new Error("the acknowledgement dropped the draft");
+    expect(acked.generation).toBe(acked.syncedGeneration);
+    expect(acked.hostRevision).toBe(ownRevision + 1);
+
+    expect(applyLandingHostDocument(foreign, foreignContent)).toBe(true);
+    const after = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-clamped");
+    if (after === undefined) throw new Error("the replay dropped the draft");
+    expect(after.accountFollowsDefault).toBe(false);
+    expect(after.content).toEqual(foreignContent);
+    expect(after.settings?.profileId).toBeNull();
+  });
+
   it("drops the bit when the document is a cloud head at revision 0", () => {
     seedFollowing("echo-cloud");
     acknowledge("echo-cloud", 2);

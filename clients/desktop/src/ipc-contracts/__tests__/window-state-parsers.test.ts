@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { rawTerminalLandingProjection } from "../../../../gui-app/src/stores/home/__tests__/raw-terminal-landing-projection";
 import {
   parseJsonValue,
   parseLandingDraft,
@@ -198,6 +199,14 @@ describe("parseLandingDraft", () => {
     });
     if (explicitFalse === null) throw new Error("parser dropped a draft");
     expect(Object.hasOwn(explicitFalse, "accountFollowsDefault")).toBe(false);
+  });
+
+  it("keeps the bit on the writer's raw Terminal snapshot and omits it where that snapshot left it off", () => {
+    const entries = rawTerminalLandingProjection({
+      followsTouchedAt: 10,
+      chosenTouchedAt: 20,
+    });
+    expect(parseLandingDrafts(entries)).toEqual(entries);
   });
 
   it("defaults a missing/non-finite `lastTouchedAt` to 0 and a missing `selection` to null", () => {

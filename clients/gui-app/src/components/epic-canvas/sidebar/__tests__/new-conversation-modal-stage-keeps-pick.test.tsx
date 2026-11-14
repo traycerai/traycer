@@ -873,6 +873,78 @@ describe("a new conversation seeded on a signed-out Terminal login", () => {
       payloadAt(request, ["initialMessage", "settings", "profileId"]),
     ).toBeNull();
   });
+
+  it("creates the chat on Terminal when a foreign write arrived before this window's acknowledgement", async () => {
+    const ownRevision = 4;
+    const localContent: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "local" }] },
+      ],
+    };
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "user-a" },
+      profile: {
+        userId: "user-a",
+        userName: "user-a",
+        email: "user-a@example.com",
+      },
+    });
+    useNewConversationModalStore.getState().setContent(EPIC_ID, localContent);
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, EMPTY_TERMINAL_SEED);
+    useNewConversationModalStore
+      .getState()
+      .setAccountFollowsDefault(EPIC_ID, true);
+    const patch =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (patch === undefined || patch.draftId === null) {
+      throw new Error("expected a draft id");
+    }
+    expect(
+      applyNewChatHostDocument(terminalEcho(patch.draftId, ownRevision + 1)),
+    ).toBe(false);
+    const held =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+    if (held === undefined)
+      throw new Error("the foreign document dropped the patch");
+    expect(held.content).toEqual(localContent);
+    expect(held.hostRevision).toBe(ownRevision + 1);
+    newChatDraftRememberSynced(patch.draftId, ownRevision, held.generation);
+    expect(
+      applyNewChatHostDocument(terminalEcho(patch.draftId, ownRevision + 1)),
+    ).toBe(true);
+
+    host.createChat.mockResolvedValue({});
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const installEditor = host.installEditor;
+    const submit = host.bodySubmit;
+    if (installEditor === null || submit === null) {
+      throw new Error("the modal did not mount");
+    }
+    act(() => {
+      installEditor();
+    });
+    act(() => {
+      submit();
+    });
+
+    await waitFor(() => expect(host.createChat).toHaveBeenCalledTimes(1));
+    const request = host.createChat.mock.calls[0]?.[0];
+    expect(payloadAt(request, ["settings", "profileId"])).toBeNull();
+    expect(
+      payloadAt(request, ["initialMessage", "settings", "profileId"]),
+    ).toBeNull();
+  });
 });
 
 function terminalEcho(draftId: string, revision: number): DraftDocument {

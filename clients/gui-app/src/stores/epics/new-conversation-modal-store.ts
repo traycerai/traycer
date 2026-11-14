@@ -643,7 +643,7 @@ export function newChatDraftRememberSynced(
       draftPatchesByEpicId: {
         ...state.draftPatchesByEpicId,
         [found.epicId]: {
-          ...current,
+          ...withoutOwnEchoProofWhenClamped(current, hostRevision),
           // Never backward. This field IS the frontier
           // `applyNewChatHostDocument` fences on, and the store cannot check
           // the ordering of what reaches it: the session's held revision is
@@ -742,10 +742,32 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
 }
 
 /**
+ * An acknowledgement older than the revision the patch already holds means a
+ * newer write (another window's or device's) was observed first, so the held
+ * revision is no longer this window's own: the account provenance loses its
+ * proof and the draft counts as chosen.
+ */
+function withoutOwnEchoProofWhenClamped(
+  current: NewConversationModalDraftPatch,
+  hostRevision: number,
+): NewConversationModalDraftPatch {
+  if (
+    current.accountFollowsDefault !== true ||
+    hostRevision >= current.hostRevision
+  ) {
+    return current;
+  }
+  const { accountFollowsDefault: _dropped, ...rest } = current;
+  return rest;
+}
+
+/**
  * Only this window's own write coming back keeps the draft's account
  * provenance: a document on the same draft line at the revision the patch
- * already holds, which is its own acknowledged write
- * (`newChatDraftRememberSynced`). A newer revision is another window's or
+ * already holds. On a clean row with the bit set, that revision is this
+ * window's own acknowledged write: a dirty row only becomes clean through an
+ * acknowledgement, and `newChatDraftRememberSynced` clears the bit when one
+ * lands behind a newer observed write. A newer revision is another window's or
  * device's write, and a cloud head (revision 0) proves nothing, so those count
  * as chosen whatever account they name: equal values are not an own echo.
  */

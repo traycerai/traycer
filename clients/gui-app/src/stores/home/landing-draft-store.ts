@@ -2012,6 +2012,12 @@ export function landingDraftRememberSynced(
         hostRevision: sameLine
           ? Math.max(draft.hostRevision, hostRevision)
           : hostRevision,
+        // Clamped behind a newer observed revision: the held revision is
+        // another writer's, not this acknowledgement, so the account
+        // provenance loses its proof and the row counts as chosen.
+        accountFollowsDefault:
+          draft.accountFollowsDefault &&
+          !(sameLine && hostRevision < draft.hostRevision),
         // Record WHOSE revision this is. Nothing else on the ACK path does,
         // so without it a draft that was only ever published - never sent a
         // host document - keeps a null owner forever, and the frontier check
@@ -2120,12 +2126,14 @@ function keptReturnedSandbox(
 }
 
 /**
- * Only this window's own write coming back keeps the row's account
- * provenance: a document on the same host line at the revision the row
- * already holds, which is its own acknowledged write
- * (`landingDraftRememberSynced`). A newer revision is another window's or
- * device's write, and a cloud head (revision 0) proves nothing, so those count
- * as chosen whatever account they name: equal values are not an own echo.
+ * Only this window's own write coming back keeps the row's account provenance:
+ * a document on the same host line at the revision the row already holds. On a
+ * clean row with the bit set, that revision is this window's own acknowledged
+ * write: a dirty row only becomes clean through an acknowledgement, and
+ * `landingDraftRememberSynced` clears the bit when one lands behind a newer
+ * observed write. A newer revision is another window's or device's write, and a
+ * cloud head (revision 0) proves nothing, so those count as chosen whatever
+ * account they name: equal values are not an own echo.
  */
 function keptAccountFollowsDefault(
   existing: LandingDraftTab | undefined,

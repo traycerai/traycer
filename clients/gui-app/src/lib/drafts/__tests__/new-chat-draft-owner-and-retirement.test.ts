@@ -460,6 +460,48 @@ describe("new-chat account provenance follows this window's own acknowledgement"
     expect(patch.settings?.profileId).toBeNull();
   });
 
+  it("drops the bit when a foreign write is observed before this window's acknowledgement", () => {
+    const ownRevision = 4;
+    useNewConversationModalStore.getState().setContent(EPIC_ID, typed("local"));
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, LIVE_CLAUDE_SETTINGS);
+    const draftId = currentDraftId();
+    useNewConversationModalStore
+      .getState()
+      .setAccountFollowsDefault(EPIC_ID, true);
+    const dirty = patchForEpic();
+    if (dirty === undefined) throw new Error("expected a patch");
+    expect(dirty.generation).toBeGreaterThan(dirty.syncedGeneration);
+    expect(dirty.accountFollowsDefault).toBe(true);
+    expect(dirty.settings?.profileId).toBeNull();
+
+    const foreign = frozenHostDocument(
+      draftId,
+      ownRevision + 1,
+      FROZEN_CLAUDE_SETTINGS,
+    );
+    expect(applyNewChatHostDocument(foreign)).toBe(false);
+    const held = patchForEpic();
+    if (held === undefined) throw new Error("expected a patch");
+    expect(held.content).toEqual(typed("local"));
+    expect(held.accountFollowsDefault).toBe(true);
+    expect(held.hostRevision).toBe(ownRevision + 1);
+
+    newChatDraftRememberSynced(draftId, ownRevision, held.generation);
+    const acked = patchForEpic();
+    if (acked === undefined) throw new Error("expected a patch");
+    expect(acked.generation).toBe(acked.syncedGeneration);
+    expect(acked.hostRevision).toBe(ownRevision + 1);
+
+    expect(applyNewChatHostDocument(foreign)).toBe(true);
+    const after = patchForEpic();
+    if (after === undefined) throw new Error("expected a patch");
+    expect(Object.hasOwn(after, "accountFollowsDefault")).toBe(false);
+    expect(after.content).toEqual(typed("from the host"));
+    expect(after.settings?.profileId).toBeNull();
+  });
+
   it("refuses a document older than the acknowledged revision", () => {
     const draftId = acknowledgedTerminalPatch();
 
