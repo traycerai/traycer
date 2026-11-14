@@ -6033,8 +6033,7 @@ wrap`). Each row names the account its first usable match runs on, the
     - Each select's accessible name adds its group ("Archived chats: When"),
       since every window row reads "When".
     - A line under the groups says what applies: "Applies on every host in
-      this environment." It shows while Chats is on, and there is no line
-      while it is off.
+      this environment." It always shows, Chats on or off.
   - The first two groups are the configuration's `storage_policy` item (key `storage`, value
     `{ chats, idleTaskDays, archivedChatHours }`, the idle window
     in whole days and the archived-chat window in whole hours, each or

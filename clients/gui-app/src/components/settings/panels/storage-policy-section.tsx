@@ -304,10 +304,7 @@ function StoragePolicySectionBody(props: {
           }
         />
       </SettingsGroup>
-      <StoragePolicyFooter
-        note={shown.chats ? APPLIES_EVERYWHERE : null}
-        issue={issue}
-      />
+      <StoragePolicyFooter issue={issue} />
     </section>
   );
 }
@@ -355,23 +352,19 @@ function ReadErrorStatus(props: { readonly onRetry: () => void }): ReactNode {
   );
 }
 
-/** The line under the groups, while Chats is on, and a write's outcome. */
+/** The line under the groups, and a write's outcome. */
 function StoragePolicyFooter(props: {
-  readonly note: string | null;
   readonly issue: ConfigurationWriteIssue | null;
 }): ReactNode {
-  if (props.note === null && props.issue === null) return null;
   return (
     <div className="flex flex-col gap-2 px-1">
-      {props.note === null ? null : (
-        <p className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-          <span
-            aria-hidden
-            className="size-1.5 shrink-0 rounded-full bg-success"
-          />
-          {props.note}
-        </p>
-      )}
+      <p className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full bg-success"
+        />
+        {APPLIES_EVERYWHERE}
+      </p>
       <ConfigurationWriteFeedback issue={props.issue} />
     </div>
   );

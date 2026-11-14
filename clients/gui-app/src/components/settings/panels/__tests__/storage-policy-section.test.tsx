@@ -16,6 +16,7 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { toast } from "sonner";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
@@ -60,6 +61,7 @@ const PERSONAL_ENV = "env-personal";
 const PERSONAL_SECTION = <StoragePolicySection pick={{ kind: "personal" }} />;
 const TEAM_ENV = "env-acme";
 const PUT = "environment.configuration.items.put";
+const SAVE_ERROR = "Couldn't save these settings.";
 
 function descriptor(
   effectiveRole: EnvironmentDescriptorV11["effectiveRole"],
@@ -232,8 +234,27 @@ function expectSnapshotPut(
   });
 }
 
+function heldWriteRefusal(): {
+  readonly promise: Promise<EnvironmentConfigurationItemWriteResponse>;
+  readonly refuse: () => void;
+} {
+  let rejectWrite: (error: Error) => void = (error) => {
+    throw error;
+  };
+  const promise = new Promise<EnvironmentConfigurationItemWriteResponse>(
+    (_resolve, reject) => {
+      rejectWrite = (error) => reject(error);
+    },
+  );
+  return {
+    promise,
+    refuse: () => rejectWrite(new Error("write refused")),
+  };
+}
+
 describe("<StoragePolicySection />", () => {
   beforeEach(() => {
+    toast.dismiss();
     resetNegotiatedManifests();
     recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [PUT]);
     host.teamRole = "admin";
@@ -245,6 +266,7 @@ describe("<StoragePolicySection />", () => {
   });
   afterEach(() => {
     cleanup();
+    toast.dismiss();
   });
 
   it("shows the defaults and the footnote while no storage_policy item is set", async () => {
@@ -391,15 +413,22 @@ describe("<StoragePolicySection />", () => {
 
   it("drops a refused snapshot write back to its read value and shows the save error", async () => {
     host.items = [snapshotItem({ quietChatDays: 90 }, 4)];
-    host.put = () => Promise.reject(new Error("write refused"));
+    const write = heldWriteRefusal();
+    host.put = () => write.promise;
     renderSection(PERSONAL_SECTION);
     await settled();
+    expect(screen.queryByText(SAVE_ERROR)).toBeNull();
 
     pickOption(snapshotsSelect(), "Never");
+    await waitFor(() => {
+      expect(snapshotsSelect().textContent).toContain("Never");
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+    });
+    act(() => {
+      write.refuse();
+    });
 
-    expect(
-      (await screen.findAllByText("Couldn't save these settings.")).length,
-    ).toBeGreaterThan(0);
+    expect(await screen.findByText(SAVE_ERROR)).toBeTruthy();
     await waitFor(() => {
       expect(snapshotsSelect().textContent).toContain("After 90 days");
     });
@@ -430,16 +459,23 @@ describe("<StoragePolicySection />", () => {
   });
 
   it("drops back to the value it read and toasts when the write is refused", async () => {
-    host.put = () => Promise.reject(new Error("write refused"));
+    const write = heldWriteRefusal();
+    host.put = () => write.promise;
     renderSection(PERSONAL_SECTION);
     await settled();
     const control = await chatsSwitch();
+    expect(screen.queryByText(SAVE_ERROR)).toBeNull();
 
     await userEvent.click(control);
+    await waitFor(() => {
+      expect(control.getAttribute("aria-checked")).toBe("false");
+      expect(control.hasAttribute("disabled")).toBe(true);
+    });
+    act(() => {
+      write.refuse();
+    });
 
-    expect(
-      (await screen.findAllByText("Couldn't save these settings.")).length,
-    ).toBeGreaterThan(0);
+    expect(await screen.findByText(SAVE_ERROR)).toBeTruthy();
     await waitFor(() => {
       expect(control.getAttribute("aria-checked")).toBe("true");
     });
@@ -455,7 +491,8 @@ describe("<StoragePolicySection />", () => {
     });
     expect(archivedChatsSelect().textContent).toContain("Never");
     expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
-    expect(screen.queryByText(/Applies on every host/)).toBeNull();
+    expect(screen.getByText(APPLIES)).toBeTruthy();
+    expect(screen.queryByText(COMES_BACK)).toBeNull();
 
     pickOption(archivedChatsSelect(), "After 7 days");
 
@@ -488,35 +525,29 @@ describe("<StoragePolicySection />", () => {
     {
       state: "nothing cleanable",
       value: { chats: false, archivedChatHours: null },
-      line: null,
+      showsChatLine: false,
     },
     {
       state: "chats on",
       value: { chats: true, archivedChatHours: null },
-      line: APPLIES,
+      showsChatLine: true,
     },
     {
       state: "archived chats only",
       value: { chats: false, archivedChatHours: 168 },
-      line: null,
+      showsChatLine: false,
     },
-  ])("draws the line under the groups for $state", async ({ value, line }) => {
-    host.items = [storageItem({ ...value, idleTaskDays: null }, 3)];
-    renderSection(PERSONAL_SECTION);
-    await settled();
+  ])(
+    "draws the environment line under the groups for $state",
+    async ({ value, showsChatLine }) => {
+      host.items = [storageItem({ ...value, idleTaskDays: null }, 3)];
+      renderSection(PERSONAL_SECTION);
+      await settled();
 
-    expect(screen.queryByText(APPLIES)?.textContent ?? null).toBe(line);
-    expect(screen.queryByText(COMES_BACK)?.textContent ?? null).toBe(
-      line === null ? null : COMES_BACK,
-    );
-    if (line !== null) {
-      const archivedSection = groupOf(ARCHIVED_GROUP);
-      const chatNote = screen.getByText(COMES_BACK);
-      expect(archivedSection.contains(chatNote)).toBe(false);
-      expect(
-        archivedSection.compareDocumentPosition(chatNote) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
+      expect(screen.getByText(APPLIES)).toBeTruthy();
+      expect(screen.queryByText(COMES_BACK)?.textContent ?? null).toBe(
+        showsChatLine ? COMES_BACK : null,
+      );
       const snapshotGroup = groupOf(SNAPSHOT_GROUP);
       const environmentNote = screen.getByText(APPLIES);
       expect(snapshotGroup.contains(environmentNote)).toBe(false);
@@ -524,8 +555,17 @@ describe("<StoragePolicySection />", () => {
         snapshotGroup.compareDocumentPosition(environmentNote) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
-    }
-  });
+      if (showsChatLine) {
+        const archivedSection = groupOf(ARCHIVED_GROUP);
+        const chatNote = screen.getByText(COMES_BACK);
+        expect(archivedSection.contains(chatNote)).toBe(false);
+        expect(
+          archivedSection.compareDocumentPosition(chatNote) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
+    },
+  );
 
   it("disables only the task window while Chats is off", async () => {
     host.items = [
@@ -577,6 +617,50 @@ describe("<StoragePolicySection />", () => {
     });
     await waitFor(() => {
       expect(snapshotsSelect().hasAttribute("disabled")).toBe(false);
+    });
+  });
+
+  it("shows the storage pending value while preserving snapshots during a held storage write", async () => {
+    let finish: () => void = () => {
+      throw new Error("write has not started");
+    };
+    host.items = [snapshotItem({ quietChatDays: 90 }, 4)];
+    host.put = () =>
+      new Promise<EnvironmentConfigurationItemWriteResponse>((resolve) => {
+        finish = () => resolve({ outcome: "saved", revision: 1 });
+      });
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    await userEvent.click(await chatsSwitch());
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("switch", { name: "Chats" })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+      expect(snapshotsSelect().textContent).toContain("After 90 days");
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+      expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
+      expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByRole("switch", { name: "Chats" }).hasAttribute("disabled"),
+      ).toBe(true);
+      expectPut(
+        PERSONAL_ENV,
+        { chats: false, idleTaskDays: null, archivedChatHours: 4 },
+        null,
+      );
+    });
+
+    act(() => {
+      finish();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("switch", { name: "Chats" }).hasAttribute("disabled"),
+      ).toBe(false);
     });
   });
 
@@ -687,11 +771,15 @@ describe("<StoragePolicySection />", () => {
 
 describe("<StorageSettingsPanel />", () => {
   beforeEach(() => {
+    toast.dismiss();
     resetNegotiatedManifests();
     recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [PUT]);
+    host.teamRole = "admin";
     host.items = [];
     host.teamItems = [];
+    host.readFails = false;
     host.put = null;
+    harness = null;
     useSettingsEnvironmentPickStore.setState({
       pick: null,
       defaultPick: PERSONAL_PICK,
@@ -699,6 +787,7 @@ describe("<StorageSettingsPanel />", () => {
   });
   afterEach(() => {
     cleanup();
+    toast.dismiss();
   });
 
   it("shows the page title and no switch under a Local pick", () => {
