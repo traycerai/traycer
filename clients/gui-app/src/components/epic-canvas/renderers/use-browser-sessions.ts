@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { allowsBrowserLoginSync } from "@traycer-clients/shared/host-client/browser-login-ownership";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { isPersonalRemoteHost } from "@traycer-clients/shared/host-client/personal-remote-host";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
@@ -201,7 +202,7 @@ export function jarBridgeForHost(
   browserView: BrowserViewBridge | null,
   hostEntry: HostDirectoryEntry | null,
 ): BrowserViewBridge | null {
-  if (hostEntry?.owner?.kind === "team") return null;
+  if (!allowsBrowserLoginSync(hostEntry)) return null;
   if (
     hostEntry !== null &&
     isRemoteHostDirectoryEntry(hostEntry) &&
