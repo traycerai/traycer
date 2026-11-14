@@ -34,6 +34,7 @@ import {
 import type {
   BotMemoryEntry,
   BotRecord,
+  BotDirectoryRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import {
   SLACK_APP_REFUSAL_BOT_NOT_FOUND,
@@ -362,7 +363,7 @@ function inProviders(children: ReactNode): ReactNode {
 }
 
 /** The channel settings panel, as it first opens: nothing folded. */
-function mountPanel(bot: BotRecord, personal: boolean): void {
+function mountPanel(bot: BotDirectoryRecord, personal: boolean): void {
   render(
     inProviders(
       <StrictMode>
