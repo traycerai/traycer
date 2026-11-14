@@ -12,7 +12,7 @@ afterEach(() => {
 
 describe("openEnvironmentPage", () => {
   it.each(["personal", "team-environment"])(
-    "opens Agent memories for configuration %s",
+    "opens Memories for configuration %s",
     (configurationId) => {
       openEnvironmentPage({ configurationId, pageId: "agent-memories" });
 
