@@ -1712,6 +1712,7 @@ describe("HostDirectoryService", () => {
         hostId: localSnapshot.hostId,
         label: "hardiks-macbook",
         kind: "local",
+        owner: null,
         websocketUrl: null,
         version: "1.2.2",
         // Not the twin's presence lease: `not-dialable` is the truth, and it
