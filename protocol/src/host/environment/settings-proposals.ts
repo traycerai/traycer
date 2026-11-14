@@ -51,9 +51,11 @@ export type SettingsProposalOperation = z.infer<
  * - `queued`: kept on this host, durably, and not yet answered by authn
  *   (offline, or behind earlier proposals for the same environment).
  * - `proposed`: authn answered that it holds the change.
- * - `refused`: authn will not hold it; `reason` says why. The save still
- *   stands on this host. The app remembers nothing for it: no hold will
- *   ever match.
+ * - `refused`: authn will not hold it; `reason` says why. The save itself
+ *   stood: its answer was `saved`, and the value is in force on this
+ *   computer only. `environment.proposals` keeps listing the item as a local
+ *   override with this refused receipt. The app remembers nothing for it: no
+ *   hold will ever match.
  */
 export const SETTINGS_PROPOSAL_STATES = [
   "queued",
@@ -62,26 +64,43 @@ export const SETTINGS_PROPOSAL_STATES = [
 ] as const;
 
 /**
- * Why authn would not hold a proposal.
+ * Why authn would not hold a proposal, as far as this protocol knows.
  *
- * - `not_shared`: this computer no longer shares that environment (it was
- *   moved, removed, or stopped sharing).
- * - `invalid`: the environment does not take this value for this setting.
+ * - `not_bound`: this computer is no longer in that environment, or stopped
+ *   sharing with it.
  * - `too_large`: the value is over the size an environment takes.
- * - `forbidden`: this computer may not propose changes to that environment.
+ * - `invalid`: the environment does not take this value for this setting.
+ * - `not_allowed`: this computer may not propose changes to that
+ *   environment.
+ *
+ * A newer host may name a reason outside this list; it still parses, and
+ * {@link readSettingsProposalRefusalReason} reads it as `unrecognised`.
  */
 export const SETTINGS_PROPOSAL_REFUSAL_REASONS = [
-  "not_shared",
-  "invalid",
+  "not_bound",
   "too_large",
-  "forbidden",
+  "invalid",
+  "not_allowed",
 ] as const;
-export const settingsProposalRefusalReasonSchema = lazySchema(() =>
+export type SettingsProposalRefusalReason =
+  (typeof SETTINGS_PROPOSAL_REFUSAL_REASONS)[number];
+
+const knownRefusalReasonSchema = lazySchema(() =>
   z.enum(SETTINGS_PROPOSAL_REFUSAL_REASONS),
 );
-export type SettingsProposalRefusalReason = z.infer<
-  typeof settingsProposalRefusalReasonSchema
->;
+
+/** The wire field: any non-empty string, so a newer reason never fails a parse. */
+export const settingsProposalRefusalReasonSchema = lazySchema(() =>
+  z.string().min(1),
+);
+
+/** A refusal reason as this client reads it; `unrecognised` comes from a newer host. */
+export function readSettingsProposalRefusalReason(
+  reason: string,
+): SettingsProposalRefusalReason | "unrecognised" {
+  const parsed = knownRefusalReasonSchema.safeParse(reason);
+  return parsed.success ? parsed.data : "unrecognised";
+}
 
 const receiptFields = {
   /**
