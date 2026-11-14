@@ -49,7 +49,6 @@ interface LookSender {
   readonly queryClient: QueryClient;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly userId: string | null;
-  readonly hostId: string;
   readonly send: (
     botId: string,
     change: BotLookChange,
@@ -341,7 +340,6 @@ export function useBotLookSaver(
           queryClient,
           client,
           userId: client?.getRequestContextUserId() ?? null,
-          hostId,
           send: (id, parts) => mutateAsync({ botId: id, ...parts }),
         },
         botId,

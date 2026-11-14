@@ -7,6 +7,10 @@
  * typed, on another the file goes through the landing file route.
  */
 import {
+  fileTransfer,
+  pdfFile,
+} from "@/lib/composer/__tests__/file-drop-fixtures";
+import {
   cleanup,
   fireEvent,
   render,
@@ -111,16 +115,8 @@ function LandingZone(props: {
 }
 
 function dropReport(): void {
-  const file = new File([crypto.randomUUID()], "report.pdf", {
-    type: "application/pdf",
-  });
   fireEvent.drop(screen.getByTestId("zone"), {
-    dataTransfer: {
-      files: [file],
-      types: ["Files"],
-      items: [{ kind: "file", type: file.type, getAsFile: () => file }],
-      getData: () => "",
-    },
+    dataTransfer: fileTransfer([pdfFile("report.pdf")]),
   });
 }
 
