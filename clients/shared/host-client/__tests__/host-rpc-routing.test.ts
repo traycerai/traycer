@@ -57,6 +57,7 @@ const CONFIGURATION_POOL_ONLY = [
   "environment.members.seats",
   "environment.members.setRole",
   "environment.plans.list",
+  "environment.providers.list",
   "environment.plans.unlink",
   "environment.plans.unlinkPreview",
   "environment.secrets.consent",
