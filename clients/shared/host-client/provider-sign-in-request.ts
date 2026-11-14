@@ -16,13 +16,16 @@ const SIGN_IN_REQUEST_FETCH_TIMEOUT_MS = 15_000;
 
 const PROVIDER_SIGN_IN_KIND = "provider_sign_in";
 
-/** The record route's refusal for an operation id that names another request. */
+/**
+ * The record route's refusal for an operation id that names another request
+ * (another person's, or a different body). An exact repeat answers 200.
+ */
 const DUPLICATE_OPERATION_CODE = "move_acceptance_conflict";
 
 /** What the record call answered. */
 export type SignInRequestRecordAnswer =
   | { readonly kind: "recorded" }
-  /** The operation id names a request already: it was recorded. */
+  /** 409: the operation id names a request that is not this one. */
   | { readonly kind: "duplicate" }
   /** 401: the session that sent it has ended. */
   | { readonly kind: "unauthorized" }
@@ -44,11 +47,10 @@ export interface SignInRequestClient {
 
 /**
  * How the recording step ended. `recorded`: await again on the same handle
- * with `recordedOperationId`. Otherwise the sign-in ends, and the caller
- * shows the existing sentence for the reason: `forbidden` is a team's 3a,
- * `unavailable` a team's 3b; every other reason on a team's dialog, and
- * every reason on a person's own, is "Sign-in did not finish. Retry when you
- * are ready.".
+ * with `recordedOperationId`. Otherwise the sign-in ends; the reason carries
+ * no sentence, and each screen shows its own: on a team's dialog `forbidden`
+ * is 3a, `unavailable` 3b and the others its "did not finish", and every
+ * other screen shows its own "did not finish" for every reason.
  */
 export type SignInRecording =
   | { readonly kind: "recorded"; readonly recordedOperationId: string }
@@ -64,11 +66,10 @@ export type SignInRecording =
 /**
  * Records `request` once. `recorded` holds every operation id this caller
  * has already recorded and sent back: a computer that answers the same id
- * again has ignored it, so the step ends instead of recording again. A
- * duplicate-id refusal proves a request under that id exists, so it goes on
- * to the next await like a recording: the computer's upload then gets the
- * true answer from authn. The step ends by itself only where the recording
- * was refused outright or could not be sent.
+ * again has ignored it, so the step ends instead of recording again. A 200,
+ * the first time or an exact repeat, goes on to the next await. A duplicate-id
+ * refusal names a request that is not this person's, so the step ends there
+ * as `already-recorded` and no await carries that id.
  */
 export async function recordSignInRequestOnce(
   client: SignInRequestClient,
@@ -83,8 +84,9 @@ export async function recordSignInRequestOnce(
   const answer = await client.recordSignInRequest(request, signal);
   switch (answer.kind) {
     case "recorded":
-    case "duplicate":
       return { kind: "recorded", recordedOperationId: request.operationId };
+    case "duplicate":
+      return { kind: "ended", reason: "already-recorded" };
     case "unauthorized":
       return { kind: "ended", reason: "session-ended" };
     case "forbidden":

@@ -44,7 +44,8 @@ type AwaitLoginContext = { readonly hostId: string | null };
  * Why the recording step ended the sign-in, as `SignInRecording` names it:
  * `forbidden` (the record route answered 403), `unavailable` (404, or the
  * call failed or was not answered), `session-ended` (401), `already-recorded`
- * (the computer asked again for an id already recorded and sent back).
+ * (the id names another request, or the computer asked again for an id
+ * already recorded and sent back).
  */
 export type SignInRecordingEnd = Extract<
   SignInRecording,
