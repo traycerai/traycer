@@ -1,33 +1,34 @@
 import type { ReactNode } from "react";
+import { useClaimRunningChats } from "./claim-running-chats";
 
 /**
- * The claim confirm's line for the team work it stops, board C13's Proposal
- * character for character. Only the board's plural form exists; a count of
- * one has no words yet.
+ * The claim confirm's line for the team work it stops: board C13's Proposal,
+ * and board C30's Proposal (row 5) for exactly one chat, built while that
+ * board waits.
  */
 function claimRunningChatsLine(chats: number): string {
-  return `${chats} chats are running and will stop.`;
+  return chats === 1
+    ? "1 chat is running and will stop."
+    : `${chats} chats are running and will stop.`;
 }
 
 /**
- * How many of the team's chats are running on the computer, or `null` when
- * that is not known. No host method answers it yet (the head's ruling 191:
- * `environment.previewLocalFacts@1.0` gains a subject for it), so it is not
- * known, and the confirm shows the board's nothing-running form.
+ * What the confirm says when the count is not known, ruled by the owner
+ * (ruling 210). Never the nothing-running form: an unread count is not 0.
  */
-function useClaimRunningChats(_hostId: string | null): number | null {
-  return null;
-}
+const claimRunningChatsNotKnownLine = "Running chats will stop.";
 
-/** The confirm's running-work line: none when nothing runs or it is not known. */
+/** The confirm's running-work line, by what is known of the computer's chats. */
 export function ClaimRunningWork(props: {
   readonly hostId: string | null;
 }): ReactNode {
-  const chats = useClaimRunningChats(props.hostId);
-  if (chats === null || chats === 0) return null;
+  const running = useClaimRunningChats(props.hostId);
+  if (running.kind === "counted" && running.chats === 0) return null;
   return (
     <p className="text-ui-sm text-muted-foreground">
-      {claimRunningChatsLine(chats)}
+      {running.kind === "not-known"
+        ? claimRunningChatsNotKnownLine
+        : claimRunningChatsLine(running.chats)}
     </p>
   );
 }

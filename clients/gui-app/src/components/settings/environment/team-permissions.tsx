@@ -14,7 +14,10 @@ import {
   useCanEditConfiguration,
   useConfigurationIsPersonal,
 } from "./configuration-source";
-import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
+import {
+  canChangeSentence,
+  useConfigurationCanChangeNames,
+} from "@/hooks/environment/team/can-change-names";
 import { ConfigurationConflict } from "./configuration-conflict";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { useConfigurationName } from "./team-pick-label";
@@ -65,7 +68,7 @@ function TeamPolicyEditor(props: {
   const teamName = useConfigurationName();
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
-  const members = useConfigurationAdminNames();
+  const namesThatCanChange = useConfigurationCanChangeNames();
   const mutation = useConfigurationPolicyMutation();
   const [body, setBody] = useState(props.body);
   const [confirm, setConfirm] = useState(false);
@@ -123,10 +126,7 @@ function TeamPolicyEditor(props: {
         </div>
       ) : (
         <p className="text-ui-xs text-muted-foreground">
-          Admins change this
-          {members.adminNames.length === 0
-            ? "."
-            : `: ${members.adminNames.join(", ")}.`}
+          {canChangeSentence(namesThatCanChange, "this")}
         </p>
       )}
       {mutation.data?.outcome === "forbidden" ? (

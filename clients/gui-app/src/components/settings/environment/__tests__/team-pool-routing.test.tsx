@@ -132,7 +132,7 @@ describe("team pages on a build with a server pool", () => {
       wrapper: harness.Wrapper,
     });
 
-    expect(await screen.findByText("Admins change this: Ada.")).toBeTruthy();
+    expect(await screen.findByText("Ada can change this.")).toBeTruthy();
     await waitFor(() => {
       expect(hostIdsOf(harness, "environment.list")).not.toHaveLength(0);
     });

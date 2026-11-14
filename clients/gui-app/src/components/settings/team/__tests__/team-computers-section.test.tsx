@@ -19,6 +19,7 @@ import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-cli
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
   ConfigurationSourceContext,
+  configurationRoleOf,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { TeamComputersSection } from "@/components/settings/team/team-computers-section";
@@ -33,6 +34,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTeamComputersSeenStore } from "@/stores/hosts/claimed-computer-notice-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import type { ClaimRunningChats } from "@/components/settings/team/claim-running-chats";
 
 const ENVIRONMENT_ID = "env-a";
 const OTHER_ENVIRONMENT_ID = "env-b";
@@ -41,6 +43,24 @@ const OTHER_USER = "user-b";
 const hostBinding = vi.hoisted((): { value: unknown } => ({ value: null }));
 const noteHostMembershipChanged = vi.hoisted(() =>
   vi.fn<(hostId: string) => void>(),
+);
+const runningChatsAnswer = vi.hoisted(
+  (): { value: ClaimRunningChats | null } => ({ value: null }),
+);
+
+vi.mock(
+  "@/components/settings/team/claim-running-chats",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/team/claim-running-chats")
+      >();
+    return {
+      ...actual,
+      useClaimRunningChats: (hostId: string | null): ClaimRunningChats =>
+        runningChatsAnswer.value ?? actual.useClaimRunningChats(hostId),
+    };
+  },
 );
 
 vi.mock("@/lib/host/local-admission-invalidation", () => ({
@@ -82,15 +102,27 @@ function computer(overrides: Partial<TeamComputer>): TeamComputer {
 
 function sourceFor(
   environmentId: string,
-  effectiveRole: "owner" | "admin" | "editor" | null,
+  effectiveRole: "owner" | "admin" | "editor" | "viewer" | null,
 ): ConfigurationSource {
+  const descriptor: EnvironmentDescriptorV11 = {
+    environmentId,
+    ownerKind: effectiveRole === "owner" ? "user" : "organization",
+    ownerId: effectiveRole === "owner" ? CURRENT_USER : "team-a",
+    roomId: `room-${environmentId}`,
+    label: "Acme",
+    effectiveRole: effectiveRole ?? "viewer",
+    kind: effectiveRole === "owner" ? "personal" : "team",
+    hostCount: 1,
+    providerHandle: `handle-${environmentId}`,
+  };
   return {
     kind: "pool",
     configuration: "team",
     environmentId,
     roomId: `room-${environmentId}`,
     providerHandle: `handle-${environmentId}`,
-    effectiveRole,
+    effectiveRole:
+      effectiveRole === null ? null : configurationRoleOf(descriptor),
   };
 }
 
@@ -114,7 +146,7 @@ function environment(
 function sectionTree(
   harness: TeamPageHarness,
   environmentId: string,
-  effectiveRole: "owner" | "admin" | "editor" | null,
+  effectiveRole: "owner" | "admin" | "editor" | "viewer" | null,
   runnerHost: IRunnerHost,
 ): ReactNode {
   return (
@@ -132,7 +164,7 @@ function sectionTree(
 
 function mountSection(
   environmentId: string,
-  effectiveRole: "owner" | "admin" | "editor" | null,
+  effectiveRole: "owner" | "admin" | "editor" | "viewer" | null,
   providerHandle: string | null,
 ) {
   const harness = mountTeamPage(sourceFor(environmentId, effectiveRole), {
@@ -165,6 +197,7 @@ async function openClaimDialog(user: UserEvent) {
 
 beforeEach(() => {
   hostBinding.value = { auth, directory };
+  runningChatsAnswer.value = null;
   listTeamComputers.mockReset();
   releaseTeamComputer.mockReset();
   noteHostMembershipChanged.mockReset();
@@ -337,7 +370,6 @@ describe("TeamComputersSection", () => {
           "This computer will become yours. The team will lose access to it.",
         ),
       ).toBeTruthy();
-      expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
       expect(releaseTeamComputer).not.toHaveBeenCalled();
 
       await user.click(
@@ -388,6 +420,73 @@ describe("TeamComputersSection", () => {
     expect(
       screen.getByRole("button", { name: "Refresh" }).hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("does not offer claiming to a Viewer", async () => {
+    mountSection(ENVIRONMENT_ID, "viewer", `handle-${ENVIRONMENT_ID}`);
+
+    await screen.findByText("Studio");
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
+    expect(releaseTeamComputer).not.toHaveBeenCalled();
+  });
+
+  it("renders the not-known running-chat state", async () => {
+    runningChatsAnswer.value = { kind: "not-known" };
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+
+    const dialog = await openClaimDialog(user);
+
+    expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
+    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
+  });
+
+  it("renders a plural count of running chats", async () => {
+    runningChatsAnswer.value = { kind: "counted", chats: 3 };
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+
+    const dialog = await openClaimDialog(user);
+
+    expect(
+      within(dialog).getByText("3 chats are running and will stop."),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
+  });
+
+  it("renders the singular count of one running chat", async () => {
+    runningChatsAnswer.value = { kind: "counted", chats: 1 };
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+
+    const dialog = await openClaimDialog(user);
+
+    expect(
+      within(dialog).getByText("1 chat is running and will stop."),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
+  });
+
+  it("renders no running-chat line for a counted zero", async () => {
+    runningChatsAnswer.value = { kind: "counted", chats: 0 };
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+
+    const dialog = await openClaimDialog(user);
+
+    expect(
+      within(dialog).getByText(
+        "This computer will become yours. The team will lose access to it.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
+    expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
   });
 
   it("shows a fixed error when claiming a computer fails", async () => {

@@ -51,12 +51,17 @@ export function useConfigurationIsPersonal(): boolean {
   return source.kind === "pool" && source.configuration === "personal";
 }
 
+/**
+ * Names the roles that change a configuration: Admin and Editor on a team,
+ * the owner on Personal. Every other role, a Viewer or one not known, may
+ * not; a role added later stays read-only until it is named here.
+ */
 export function useCanEditConfiguration(): boolean {
   const source = useConfigurationSource();
-  return (
-    source.kind === "host" ||
-    (!source.transportReadOnly && source.effectiveRole !== null)
-  );
+  if (source.kind === "host") return true;
+  if (source.transportReadOnly) return false;
+  const role = source.effectiveRole;
+  return role === "owner" || role === "admin" || role === "editor";
 }
 
 /** An older inventory cannot authorize edits to a team, and answers `null`. */

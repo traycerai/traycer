@@ -11,7 +11,10 @@ import userEvent from "@testing-library/user-event";
 import { EditorView } from "@uiw/react-codemirror";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
-import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
+import {
+  grantedEnvironmentRole,
+  type EnvironmentMembersResponseV12,
+} from "@traycer/protocol/host/environment/contracts";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { TeamProviderKeys } from "@/components/settings/environment/team-provider-keys";
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
@@ -586,18 +589,63 @@ describe("TeamPermissions", () => {
     legacyMembers: [],
   };
 
-  it("shows a viewer the policy read-only and names the admins who change it", async () => {
+  it.each([
+    { role: "an Admin", source: poolSource("admin"), canChange: true },
+    { role: "an Editor", source: poolSource("editor"), canChange: true },
+    { role: "a Viewer", source: poolSource("viewer"), canChange: false },
+    {
+      role: "a role not known",
+      source: {
+        ...poolSource("editor"),
+        effectiveRole: grantedEnvironmentRole("auditor"),
+      },
+      canChange: false,
+    },
+  ])(
+    "lets $role change the policy: $canChange",
+    async ({ source, canChange }) => {
+      const harness = mountTeamPage(source, {
+        "environment.configuration.items": () => ({
+          items: [policy(3, "Allow reads")],
+        }),
+        "environment.members": () => members,
+      });
+      render(<TeamPermissions>{null}</TeamPermissions>, {
+        wrapper: harness.Wrapper,
+      });
+
+      await screen.findByRole("textbox", { name: "Approval policy" });
+      expect(screen.queryByRole("button", { name: "Save" }) !== null).toBe(
+        canChange,
+      );
+    },
+  );
+
+  it("shows a viewer the policy read-only and names the admins and editors who change it", async () => {
+    const ada = members.members[0];
     const harness = mountTeamPage(poolSource("viewer"), {
       "environment.configuration.items": () => ({
         items: [policy(3, "Allow reads")],
       }),
-      "environment.members": () => members,
+      "environment.members": () => ({
+        ...members,
+        members: [
+          ada,
+          {
+            ...ada,
+            userId: "u-2",
+            displayName: "Sam",
+            effectiveRole: "editor",
+          },
+          { ...ada, userId: "u-3", displayName: "Kit", inviteState: "pending" },
+        ],
+      }),
     });
     render(<TeamPermissions>{null}</TeamPermissions>, {
       wrapper: harness.Wrapper,
     });
 
-    expect(await screen.findByText("Admins change this: Ada.")).toBeTruthy();
+    expect(await screen.findByText("Ada, Sam can change this.")).toBeTruthy();
     expect(
       screen.getByRole("textbox", { name: "Approval policy" }).textContent,
     ).toContain("Allow reads");
@@ -876,7 +924,9 @@ describe("TeamPermissions", () => {
       wrapper: harness.Wrapper,
     });
 
-    expect(await screen.findByText("Admins change this.")).toBeTruthy();
+    expect(
+      await screen.findByText("Editors and admins can change this."),
+    ).toBeTruthy();
     expect(
       screen.getByRole("textbox", { name: "Approval policy" }).textContent,
     ).toContain("Allow reads");

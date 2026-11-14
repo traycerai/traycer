@@ -607,7 +607,6 @@ describe("HostEnvironmentSection", () => {
           "This computer will become yours. The team will lose access to it.",
         ),
       ).toBeTruthy();
-      expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
       fireEvent.click(
         within(dialog).getByRole("button", { name: "Claim this computer" }),
       );

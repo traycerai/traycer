@@ -22,9 +22,10 @@ import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transp
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   ConfigurationSourceContext,
+  configurationRoleOf,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
-import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -73,20 +74,31 @@ export function requireTeamHostClient(): HostClient<HostRpcRegistry> {
 }
 
 /**
- * `effectiveRole` is the wire's spelling. `"viewer"` is the retired role, and
- * the source it yields holds none, exactly as an inventory row naming it
- * decodes in the app.
+ * Build a real environment-list descriptor before deriving its configuration
+ * source. The retired Viewer role and an absent role both authorize nothing,
+ * but remain separate inputs to the test fixture.
  */
 export function poolSource(
   effectiveRole: "owner" | "admin" | "editor" | "viewer",
 ): ConfigurationSource {
+  const descriptor: EnvironmentDescriptorV11 = {
+    environmentId: "env-a",
+    ownerKind: effectiveRole === "owner" ? "user" : "organization",
+    ownerId: effectiveRole === "owner" ? "user-me" : "team-a",
+    roomId: "room-a",
+    label: effectiveRole === "owner" ? "Personal" : "Acme",
+    effectiveRole,
+    kind: effectiveRole === "owner" ? "personal" : "team",
+    hostCount: 1,
+    providerHandle: effectiveRole === "owner" ? null : "handle-a",
+  };
   return {
     kind: "pool",
     configuration: "team",
     environmentId: "env-a",
     roomId: "room-a",
     providerHandle: "handle-a",
-    effectiveRole: grantedEnvironmentRole(effectiveRole),
+    effectiveRole: configurationRoleOf(descriptor),
   };
 }
 
