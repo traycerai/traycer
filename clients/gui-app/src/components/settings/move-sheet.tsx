@@ -4,6 +4,7 @@ import {
   existingSecretsArriveSentence,
   MOVE_ACCEPTS_AS_SHOWN,
   MOVE_DISCLOSURE,
+  MOVE_DISCLOSURE_VERSION,
   MOVE_SECTIONS,
   moveKeyChoices,
   moveRecipientSentence,
@@ -176,6 +177,7 @@ function MoveSheetBody(props: {
   // host list has answered: an unread list is not "no other computer".
   const shownPlan = planOnceReachKnown(runningPersonal, plan.data);
   const environmentId = personal.environmentId;
+  const versionDiffers = disclosureDiffers(shownPlan);
   return (
     <>
       <SheetHeader>
@@ -188,7 +190,7 @@ function MoveSheetBody(props: {
         className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4"
         data-testid="move-sheet"
       >
-        {supported === false ? (
+        {supported === false || versionDiffers ? (
           <p className="text-ui-sm text-muted-foreground">
             {needsUpdateSubtitle(target.hostName)}
           </p>
@@ -258,29 +260,54 @@ function MoveSheetBody(props: {
         >
           Not now
         </Button>
-        <Button
-          type="button"
-          data-testid="move-sheet-accept"
-          disabled={
-            shownPlan === null || environmentId === null || accept.isPending
-          }
-          onClick={() => {
-            if (shownPlan !== null && environmentId !== null)
-              send(shownPlan, environmentId);
-          }}
-        >
-          Move to Personal
-          {accept.isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-              tone="muted"
-            />
-          ) : null}
-        </Button>
+        <MoveAcceptButton
+          plan={shownPlan}
+          environmentId={environmentId}
+          pending={accept.isPending}
+          onAccept={send}
+        />
       </SheetFooter>
     </>
+  );
+}
+
+/** A plan whose disclosure is another version than {@link MOVE_DISCLOSURE}'s. */
+function disclosureDiffers(plan: MovePlan | null): boolean {
+  return plan !== null && plan.disclosureVersion !== MOVE_DISCLOSURE_VERSION;
+}
+
+/**
+ * Move to Personal: disabled until the plan is read, and absent for a plan
+ * whose disclosure this app cannot draw.
+ */
+function MoveAcceptButton(props: {
+  readonly plan: MovePlan | null;
+  readonly environmentId: string | null;
+  readonly pending: boolean;
+  readonly onAccept: (plan: MovePlan, environmentId: string) => void;
+}): ReactNode {
+  const { plan, environmentId } = props;
+  if (disclosureDiffers(plan)) return null;
+  return (
+    <Button
+      type="button"
+      data-testid="move-sheet-accept"
+      disabled={plan === null || environmentId === null || props.pending}
+      onClick={() => {
+        if (plan !== null && environmentId !== null)
+          props.onAccept(plan, environmentId);
+      }}
+    >
+      Move to Personal
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+          tone="muted"
+        />
+      ) : null}
+    </Button>
   );
 }
 

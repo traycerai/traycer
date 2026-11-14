@@ -15,6 +15,12 @@ export type MoveKeyChoice = EnvironmentMoveStaysChoice["choice"];
 export const MOVE_DISCLOSURE =
   "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
 
+/**
+ * The plan's `disclosureVersion` that {@link MOVE_DISCLOSURE} is. A plan of
+ * any other version shows the needs-an-update line and no accept.
+ */
+export const MOVE_DISCLOSURE_VERSION = 1;
+
 export const MOVE_ACCEPTS_AS_SHOWN =
   "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.";
 
