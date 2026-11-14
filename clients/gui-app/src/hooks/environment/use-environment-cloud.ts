@@ -9,7 +9,10 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type {
+  EnvironmentCloud,
+  EnvironmentCloudSource,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -26,6 +29,7 @@ import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -64,10 +68,16 @@ export function environmentCloudQueryKey<Method extends EnvironmentCloudMethod>(
   ];
 }
 
-/** The app's own client for authn's environment routes; null with no session service. */
-export function useEnvironmentCloud(): EnvironmentCloud | null {
+/**
+ * Makes the app's own client for authn's environment routes, one per
+ * operation, bound to the sign-in it begins on; null with no session service.
+ */
+export function useEnvironmentCloud(): EnvironmentCloudSource | null {
   const auth = useHostBinding()?.auth ?? null;
-  return useMemo(() => auth?.environmentCloud() ?? null, [auth]);
+  return useMemo(
+    () => (auth === null ? null : () => auth.environmentCloud()),
+    [auth],
+  );
 }
 
 /** Marks every cached read of `methods`, under every scope, stale. */
@@ -89,14 +99,14 @@ export function invalidateEnvironmentReads(
  * gave; with no session service it fails as a host with no client does.
  */
 export function requestEnvironmentCloud<Method extends EnvironmentCloudMethod>(
-  cloud: EnvironmentCloud | null,
+  cloud: EnvironmentCloudSource | null,
   method: Method,
   request: RequestOfMethod<HostRpcRegistry, Method>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   return withHostQueryErrorBoundary(method, async () => {
     cloudVerdictPreflight(method)();
     if (cloud === null) throw hostClientUnavailableError(method);
-    return callEnvironmentCloud(cloud, method, request);
+    return callEnvironmentCloud(cloud(), method, request);
   });
 }
 
@@ -168,6 +178,9 @@ export function useEnvironmentCloudQuery<
       ...tablePolling,
       queryKey,
       queryFn: async () => mapResponse(await send(method, params)),
+      // Keyed where a host read of `method` would be, so the poll coordinator
+      // reads its method from the same stamp `useHostQuery` writes.
+      meta: stampHostRpcMethod(undefined, method),
       enabled:
         args.enabled && cloud !== null && viewerId.length > 0 && authorized,
     }),
@@ -206,12 +219,13 @@ export function useEnvironmentCloudOwnRead<
         params,
         viewerId,
       ],
+      meta: stampHostRpcMethod(undefined, method),
       queryFn: () =>
         withHostQueryErrorBoundary(method, async () => {
           cloudVerdictPreflight(method)();
           if (cloud === null) throw hostClientUnavailableError(method);
           try {
-            return await read(cloud);
+            return await read(cloud());
           } catch (error) {
             throw environmentCloudHostError(method, error);
           }

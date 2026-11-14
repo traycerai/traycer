@@ -13,6 +13,7 @@ import {
   useEnvironmentCloudQuery,
   useEnvironmentCloudSender,
 } from "@/hooks/environment/use-environment-cloud";
+import type { RequiredHostMethodVersion } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { EnvironmentCloudMethod } from "@/lib/environment/environment-cloud-calls";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -61,13 +62,18 @@ export function useSecretsRead<Method extends SecretsMethod>(args: {
   return named ? cloud : hostOwn;
 }
 
-/** A secrets write: authn's for a named environment, the host's own otherwise. */
+/**
+ * A secrets write: authn's for a named environment, the host's own otherwise.
+ * `hostOwnFloor` is the version the host's own call needs, refused before it
+ * is sent by a host below it; null when any version takes it.
+ */
 export function useSecretsWrite<
   Method extends SecretsMethod,
   TContext = unknown,
 >(args: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly method: Method;
+  readonly hostOwnFloor: RequiredHostMethodVersion | null;
   readonly mutationKey: ReadonlyArray<unknown>;
   readonly onMutate?: (() => TContext) | undefined;
   readonly onSuccess?:
@@ -84,7 +90,7 @@ export function useSecretsWrite<
   TContext
 > {
   const send = useEnvironmentCloudSender();
-  const { client, method } = args;
+  const { client, method, hostOwnFloor } = args;
   return useMutation<
     ResponseOfMethod<HostRpcRegistry, Method>,
     HostRpcError,
@@ -95,7 +101,14 @@ export function useSecretsWrite<
     mutationFn: (request) =>
       namedEnvironmentOf(request) === null
         ? withHostQueryErrorBoundary(method, () =>
-            client.request(method, request),
+            hostOwnFloor === null
+              ? client.request(method, request)
+              : client.requestWithSignalRequiringHostMethodVersion(
+                  method,
+                  request,
+                  undefined,
+                  hostOwnFloor,
+                ),
           )
         : send(method, request),
     onMutate: args.onMutate,

@@ -8,6 +8,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type {
   EnvironmentLocalOverridesResponse,
   EnvironmentNoticesResponse,
+  EnvironmentReviewResponse,
   EnvironmentReviewResponseV11,
   EnvironmentStatusResponseV12,
 } from "@traycer/protocol/host/environment-schemas";
@@ -180,9 +181,19 @@ export type EnvironmentReviewSheet = Omit<
   "entries"
 > & {
   readonly entries: readonly ReviewHeldEntry[];
-  /** Whether the host answered its own record; until then its three facts read null. */
+  /**
+   * Whether the host's answer carried its own record (`environment.review@1.1`
+   * or later); until then, and from an older host, its three facts read null.
+   */
   readonly recorded: boolean;
 };
+
+/** A host below `environment.review@1.1` answers its `entries` alone, with no record. */
+function isReviewV11(
+  review: EnvironmentReviewResponse,
+): review is EnvironmentReviewResponseV11 {
+  return "shownAt" in review && "evidence" in review;
+}
 
 /**
  * The review sheet for the host `hostId`: Personal's holds, read by the app
@@ -216,15 +227,17 @@ export function useEnvironmentReviewRead(
   // Waits only for a record read under way; one that cannot be sent reads null.
   const recordPending =
     record.data === undefined && record.fetchStatus === "fetching";
+  const recorded =
+    record.data !== undefined && isReviewV11(record.data) ? record.data : null;
   const data: EnvironmentReviewSheet | null =
     holds.data === undefined || recordPending
       ? null
       : {
-          shownAt: record.data?.shownAt ?? null,
-          acknowledgedAt: record.data?.acknowledgedAt ?? null,
-          evidence: record.data?.evidence ?? { version: null, at: null },
+          shownAt: recorded?.shownAt ?? null,
+          acknowledgedAt: recorded?.acknowledgedAt ?? null,
+          evidence: recorded?.evidence ?? { version: null, at: null },
           entries: holds.data,
-          recorded: record.data !== undefined,
+          recorded: recorded !== null,
         };
   return { supported: true, data, isError: holds.isError };
 }

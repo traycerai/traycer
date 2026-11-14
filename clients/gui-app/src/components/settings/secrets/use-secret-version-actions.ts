@@ -22,6 +22,7 @@ export function useSecretVersionActions(props: {
   const undo = useSecretsWrite({
     client: props.client,
     method: "environment.secrets.undo",
+    hostOwnFloor: null,
     mutationKey: settingsDetailsMutationKeys.secretUndo(),
     onSuccess: async (answer) => {
       if (answer.outcome !== "refused") await reread();
@@ -30,6 +31,7 @@ export function useSecretVersionActions(props: {
   const destroy = useSecretsWrite({
     client: props.client,
     method: "environment.secrets.destroy",
+    hostOwnFloor: null,
     mutationKey: settingsDetailsMutationKeys.secretDestroy(),
     onSuccess: async (answer) => {
       if (answer.outcome !== "refused") await reread();

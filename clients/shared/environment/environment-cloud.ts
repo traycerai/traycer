@@ -31,13 +31,17 @@ export type EnvironmentPurpose = "settings" | "secrets";
  * - `unauthorized`: authn refused the person's credential (401);
  * - `forbidden`: the person's role does not allow it (403);
  * - `invalid`: authn refused the request, or it names nothing it can serve;
+ * - `refused`: authn did not take a review, notice or Undo call, which the
+ *   host answered as a plain refusal rather than by its cause;
  * - `unavailable`: the cloud failed, or answered in a shape this cannot read;
- * - `no_response`: nothing answered, or no sign-in to send.
+ * - `no_response`: nothing answered, no sign-in to send, or the sign-in is
+ *   no longer the one the operation began on.
  */
 export type EnvironmentErrorKind =
   | "unauthorized"
   | "forbidden"
   | "invalid"
+  | "refused"
   | "unavailable"
   | "no_response";
 
@@ -52,9 +56,7 @@ export class EnvironmentCloudError extends Error {
   }
 }
 
-export const NEEDS_CONNECTION_MESSAGE: Readonly<
-  Record<EnvironmentPurpose, string>
-> = {
+const NEEDS_CONNECTION_MESSAGE: Readonly<Record<EnvironmentPurpose, string>> = {
   settings: "Connect to manage settings.",
   secrets: "Connect to manage secrets.",
 };
@@ -66,22 +68,26 @@ export const SIGN_IN_AGAIN_MESSAGE: Readonly<
   secrets: "Sign in again to manage secrets.",
 };
 
+/** The words of a `forbidden` failure: the person's role does not allow it. */
+export const NEEDS_PERMISSION_MESSAGE = "This change needs permission.";
+
 /** The words of an `unavailable` failure, as the host's cloud errors say them. */
 export const CLOUD_UNAVAILABLE_MESSAGE =
   "Cloud service is temporarily unavailable. Please try again shortly.";
 
 /** One call's deadline. */
-export const ENVIRONMENT_REQUEST_TIMEOUT_MS = 15_000;
+const ENVIRONMENT_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
- * No answer's body is read past this many bytes, whatever its status. A
- * failure over it counts by its status alone; a success over it is one this
- * client cannot read (`unavailable`), as it was before the read was bounded.
+ * No failure's body is read past this many bytes: one over it counts by its
+ * status alone. A success is read whole, as the host reads it today: an
+ * environment's items list has no size of its own to cap.
  */
-export const MAX_ENVIRONMENT_BODY_BYTES = 256 * 1024;
+export const MAX_FAILURE_BODY_BYTES = 256 * 1024;
 
 /**
- * Where a call goes and on whose sign-in.
+ * Where one operation's calls go and on whose sign-in. An operation (a read,
+ * or a write of one or more requests) is given its own, made when it begins.
  *
  * Invariant: `bearer` answers the person's verified sign-in, refreshed as the
  * session refreshes it, and null when there is none (signed out, or a token
@@ -93,7 +99,16 @@ export interface EnvironmentCloud {
   readonly authnBaseUrl: string;
   readonly bearer: CloudBearerSource;
   readonly transport: EnvironmentTransport;
+  /**
+   * Whether the sign-in the operation began on (the same person, in the same
+   * sign-in session) is still the current one. Asked before every request;
+   * while it answers false, nothing is sent.
+   */
+  readonly onOriginSignIn: () => boolean;
 }
+
+/** Makes one operation's {@link EnvironmentCloud}, bound to the sign-in current when it is made. */
+export type EnvironmentCloudSource = () => EnvironmentCloud;
 
 /** One request as the transport sends it; `body` is the JSON value, or null. */
 export interface EnvironmentTransportRequest {
@@ -105,8 +120,8 @@ export interface EnvironmentTransportRequest {
 }
 
 /**
- * The answer as received: its status and its body's text, or null when the
- * body was over {@link MAX_ENVIRONMENT_BODY_BYTES}.
+ * The answer as received: its status and its body's text, or null when a
+ * failure's body was over {@link MAX_FAILURE_BODY_BYTES}.
  */
 export interface EnvironmentTransportAnswer {
   readonly status: number;
@@ -136,12 +151,16 @@ export const fetchEnvironmentTransport: EnvironmentTransport = async (
     redirect: "manual",
     signal: request.signal,
   });
-  return { status: response.status, text: await boundedText(response) };
+  const success = response.status >= 200 && response.status < 300;
+  return {
+    status: response.status,
+    text: success ? await response.text() : await boundedText(response),
+  };
 };
 
 /**
- * The body's text, read chunk by chunk: at the first chunk that takes it past
- * {@link MAX_ENVIRONMENT_BODY_BYTES} the rest of the stream is cancelled and
+ * A failure's text, read chunk by chunk: at the first chunk that takes it past
+ * {@link MAX_FAILURE_BODY_BYTES} the rest of the stream is cancelled and
  * nothing more is pulled; the answer is then null.
  */
 async function boundedText(response: Response): Promise<string | null> {
@@ -153,7 +172,7 @@ async function boundedText(response: Response): Promise<string | null> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_ENVIRONMENT_BODY_BYTES) {
+    if (size > MAX_FAILURE_BODY_BYTES) {
       await reader.cancel().catch(() => undefined);
       return null;
     }
@@ -176,6 +195,20 @@ export function isSuccess(answer: EnvironmentAnswer): boolean {
   return answer.status >= 200 && answer.status < 300;
 }
 
+/**
+ * A 3xx, or a browser's opaque redirect (status 0): the transport follows
+ * none, so authn never answered the request itself. No write reports one as
+ * its own outcome.
+ */
+export function isRedirect(answer: EnvironmentAnswer): boolean {
+  return !isSuccess(answer) && answer.status < 400;
+}
+
+/** A redirect or a 5xx: the cloud did not answer this request as asked. */
+export function isCloudFailure(answer: EnvironmentAnswer): boolean {
+  return isRedirect(answer) || answer.status >= 500;
+}
+
 function bodyOf(text: string | null): unknown {
   if (text === null || text.length === 0) return null;
   try {
@@ -189,16 +222,39 @@ function bodyOf(text: string | null): unknown {
 /**
  * One authn call on the person's bearer. Throws `no_response` with
  * {@link NEEDS_CONNECTION_MESSAGE} of `purpose` when nothing answered (or not
- * in time), or there is no sign-in to send.
+ * in time), or there is no sign-in to send: none at all, or not the one the
+ * operation began on.
  */
-export async function sendEnvironmentRequest(
+async function sendEnvironmentRequest(
   cloud: EnvironmentCloud,
   purpose: EnvironmentPurpose,
   method: EnvironmentHttpMethod,
   path: string,
   body: unknown,
 ): Promise<EnvironmentAnswer> {
-  const bearer = cloud.bearer.getBearerToken();
+  const sent = await sendEnvironmentRequestWithBearer(
+    cloud,
+    purpose,
+    method,
+    path,
+    body,
+  );
+  return sent.answer;
+}
+
+/**
+ * {@link sendEnvironmentRequest}, also answering the bearer the request
+ * carried, for a caller that must keep it out of anything it shows. The
+ * bearer is used for that comparison and never kept.
+ */
+export async function sendEnvironmentRequestWithBearer(
+  cloud: EnvironmentCloud,
+  purpose: EnvironmentPurpose,
+  method: EnvironmentHttpMethod,
+  path: string,
+  body: unknown,
+): Promise<{ readonly answer: EnvironmentAnswer; readonly bearer: string }> {
+  const bearer = cloud.onOriginSignIn() ? cloud.bearer.getBearerToken() : null;
   if (bearer === null || bearer.length === 0) {
     throw new EnvironmentCloudError(
       "no_response",
@@ -224,7 +280,10 @@ export async function sendEnvironmentRequest(
       }),
       abort.signal,
     );
-    return { status: answer.status, body: bodyOf(answer.text) };
+    return {
+      answer: { status: answer.status, body: bodyOf(answer.text) },
+      bearer,
+    };
   } catch {
     throw new EnvironmentCloudError(
       "no_response",
@@ -255,11 +314,8 @@ export function settingsRefusal(
       SIGN_IN_AGAIN_MESSAGE.settings,
     );
   if (answer.status === 403)
-    return new EnvironmentCloudError(
-      "forbidden",
-      "This change needs permission.",
-    );
-  if (answer.status >= 500)
+    return new EnvironmentCloudError("forbidden", NEEDS_PERMISSION_MESSAGE);
+  if (isCloudFailure(answer))
     return new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
   return new EnvironmentCloudError(
     "invalid",

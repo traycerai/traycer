@@ -30,6 +30,7 @@ describe("the phone's environment transport", () => {
         authnBaseUrl: AUTHN,
         bearer: { kind: "cloud", getBearerToken: () => BEARER },
         transport: nativeEnvironmentTransport,
+        onOriginSignIn: () => true,
       },
       "env-1",
       { environmentId: "env-1", target: "secret", secretId: "sec-1" },
@@ -39,7 +40,7 @@ describe("the phone's environment transport", () => {
     if (!(error instanceof EnvironmentCloudError)) {
       throw new Error("expected the caller's refusal");
     }
-    expect(error.kind).toBe("invalid");
+    expect(error.kind).toBe("unavailable");
     expect(error.message).not.toContain(BEARER);
     expect(native.request).toHaveBeenCalledTimes(1);
     expect(native.request).toHaveBeenCalledWith(

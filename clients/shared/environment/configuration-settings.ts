@@ -1,6 +1,6 @@
 /**
  * `environment.configuration.items*`, `.revision`, `.mcpServers.*`,
- * `.policy.put`, `environment.history` and `environment.plans.*` as the app's
+ * `.policy.put` and `environment.plans.*` as the app's
  * own calls to authn's environment routes (`environment-cloud.ts`). Each
  * function answers exactly what the host's and the pool's forwarder answered
  * for the same method (`packages/common/src/environments/configuration-
@@ -23,8 +23,6 @@ import {
   type EnvironmentConfigurationPolicyPutRequest,
   type EnvironmentConfigurationRevisionResponse,
   type EnvironmentConfigurationWriteResponse,
-  type EnvironmentHistoryRequest,
-  type EnvironmentHistoryResponse,
   type EnvironmentPlansListResponse,
   type EnvironmentPlansUnlinkResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -47,9 +45,11 @@ import {
   EnvironmentCloudError,
   environmentPath,
   errorBodyCode,
+  isRedirect,
   isSuccess,
   parseSettings,
   sendSettings,
+  settingsRefusal,
   type EnvironmentAnswer,
   type EnvironmentCloud,
 } from "./environment-cloud";
@@ -60,6 +60,9 @@ function mutationOutcome(answer: EnvironmentAnswer): {
 } {
   if (answer.status === 403) return { outcome: "forbidden", reason: null };
   if (isSuccess(answer)) return { outcome: "saved", reason: null };
+  // As the host's forwarder: any other answer, a 401 or a 5xx too, is the
+  // write's refusal. A redirect never reached authn.
+  if (isRedirect(answer)) throw settingsRefusal(answer);
   return { outcome: "refused", reason: errorBodyCode(answer.body) };
 }
 
@@ -362,9 +365,16 @@ export async function listConfigurationMcpServers(
   };
 }
 
+/**
+ * `seenItemRevision` is the revision of the server's item the editor showed:
+ * null for a new server, and for one shown with no item (switched off). An
+ * edit whose item has moved since is refused as a revision conflict, and
+ * authn checks the same revision when it writes.
+ */
 export async function putConfigurationMcpServer(
   cloud: EnvironmentCloud,
   request: EnvironmentConfigurationMcpServerPutRequestV11,
+  seenItemRevision: number | null,
 ): Promise<EnvironmentConfigurationMcpServerPutResponseV11> {
   const { environmentId, serverId, credential, offFor, ...body } = request;
   // The broker binds a credential to an http destination; a stdio server
@@ -386,6 +396,9 @@ export async function putConfigurationMcpServer(
     items.some((row) => row.key === body.name && row.mcpServerId !== serverId)
   ) {
     return { outcome: "refused", reason: "name_taken", serverId: null };
+  }
+  if (serverId !== null && (held?.revision ?? null) !== seenItemRevision) {
+    return { outcome: "refused", reason: "revision_conflict", serverId: null };
   }
   if (serverId !== null) {
     // An edit is one request: authn writes the row and its item, and a
@@ -417,6 +430,7 @@ export async function putConfigurationMcpServer(
     if (answer.status === 403) {
       return { outcome: "forbidden", reason: null, serverId: null };
     }
+    if (isRedirect(answer)) throw settingsRefusal(answer);
     if (!isSuccess(answer)) {
       return {
         outcome: "refused",
@@ -472,6 +486,7 @@ export async function putConfigurationMcpServer(
     return { outcome: "saved", reason: null, serverId: saved.id };
   }
   await rollBack();
+  if (isRedirect(itemAnswer)) throw settingsRefusal(itemAnswer);
   return {
     outcome: "refused",
     reason:
@@ -571,7 +586,7 @@ export async function setConfigurationMcpServerEnabled(
   return mutationOutcome(answer);
 }
 
-// ── policy, history ─────────────────────────────────────────────────────────
+// ── policy ─────────────────────────────────────────────────────────────────
 
 export async function putConfigurationPolicy(
   cloud: EnvironmentCloud,
@@ -585,31 +600,6 @@ export async function putConfigurationPolicy(
       { body: request.body, policyVersion: request.policyVersion },
     ),
   );
-}
-
-export async function readConfigurationHistory(
-  cloud: EnvironmentCloud,
-  request: EnvironmentHistoryRequest,
-): Promise<EnvironmentHistoryResponse> {
-  const query = new URLSearchParams();
-  if (request.subject !== null) {
-    query.set("subject", `${request.subject.kind}:${request.subject.key}`);
-  }
-  const history = parseSettings(
-    await sendSettings(
-      cloud,
-      "GET",
-      `${environmentPath(request.environmentId)}/history${query.size === 0 ? "" : `?${query.toString()}`}`,
-      null,
-    ),
-    environmentHistoryResponseSchema,
-  );
-  // The contract answers newest first; authn lists them oldest first.
-  // `toSorted` is stable, so entries of one time keep authn's order.
-  return {
-    ...history,
-    entries: history.entries.toSorted((a, b) => b.at - a.at),
-  };
 }
 
 // ── plans ───────────────────────────────────────────────────────────────────

@@ -9,7 +9,6 @@ import {
   listConfigurationMcpServers,
   listConfigurationPlans,
   putConfigurationItem,
-  putConfigurationMcpServer,
   putConfigurationPolicy,
   readConfigurationItems,
   readConfigurationRevision,
@@ -46,7 +45,6 @@ export type EnvironmentCloudMethod =
   | "environment.configuration.items.put"
   | "environment.configuration.items.delete"
   | "environment.configuration.mcpServers.list"
-  | "environment.configuration.mcpServers.put"
   | "environment.configuration.mcpServers.delete"
   | "environment.configuration.mcpServers.setEnabled"
   | "environment.configuration.policy.put"
@@ -93,7 +91,6 @@ const CALLS: {
   "environment.configuration.items.delete": deleteConfigurationItem,
   "environment.configuration.mcpServers.list": (cloud, request) =>
     listConfigurationMcpServers(cloud, request.environmentId),
-  "environment.configuration.mcpServers.put": putConfigurationMcpServer,
   "environment.configuration.mcpServers.delete": deleteConfigurationMcpServer,
   "environment.configuration.mcpServers.setEnabled":
     setConfigurationMcpServerEnabled,
@@ -142,6 +139,7 @@ const HOST_CODE_OF: Readonly<Record<EnvironmentErrorKind, RpcErrorCode>> = {
   unauthorized: "UNAUTHORIZED",
   forbidden: "E_ROLE_FORBIDDEN",
   invalid: "E_INVALID_ARGUMENT",
+  refused: "RPC_ERROR",
   unavailable: "RPC_ERROR",
   no_response: "RPC_ERROR",
 };

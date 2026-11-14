@@ -41,7 +41,7 @@ const nullableOsSchema = lazySchema(() => z.enum(ITEM_OS_VALUES).nullable());
 // ── items ───────────────────────────────────────────────────────────────────
 
 /** One row of `GET …/items?kind=`: who wrote it last beside its value and revision. */
-export const authnItemRowSchema = lazySchema(() =>
+const authnItemRowSchema = lazySchema(() =>
   z.object({
     kind: z.string().min(1).max(64),
     key: z.string().min(1).max(3072),
@@ -70,10 +70,6 @@ export const authnItemWriteResponseSchema = lazySchema(() =>
     revision: revisionSchema,
   }),
 );
-export type AuthnItemWriteResponse = z.infer<
-  typeof authnItemWriteResponseSchema
->;
-
 /** 409: the row moved since the revision sent; `current` null when it is gone. */
 export const authnItemConflictSchema = lazySchema(() =>
   z.object({
@@ -97,7 +93,7 @@ const authnMcpCredentialSchema = lazySchema(() =>
   z.object({ present: z.boolean(), secretId: z.string().nullable() }),
 );
 
-export const authnMcpServerSchema = lazySchema(() =>
+const authnMcpServerSchema = lazySchema(() =>
   z.object({
     id: z.string().min(1),
     name: z.string().min(1).max(128),
@@ -158,7 +154,7 @@ export const SECRETS_LIST_INCLUDES = ["cleanup_failure"] as const;
 
 // ── plans (harness connections) ─────────────────────────────────────────────
 
-export const authnHarnessConnectionSchema = lazySchema(() =>
+const authnHarnessConnectionSchema = lazySchema(() =>
   z.object({
     profileId: z.string().min(1),
     harnessId: z.string().min(1),
@@ -218,7 +214,7 @@ function heldChangeFields() {
 }
 
 /** A held change as the operation view carries it: a put with its value, or a delete. */
-export const authnReviewHeldChangeSchema = lazySchema(() =>
+const authnReviewHeldChangeSchema = lazySchema(() =>
   z.discriminatedUnion("op", [
     z.object({ ...heldChangeFields(), op: z.literal("put"), value: z.json() }),
     z.object({
@@ -228,10 +224,8 @@ export const authnReviewHeldChangeSchema = lazySchema(() =>
     }),
   ]),
 );
-export type AuthnReviewHeldChange = z.infer<typeof authnReviewHeldChangeSchema>;
-
 /** A migrated account whose sign-in did not move. */
-export const authnReviewNeedsLinkSchema = lazySchema(() =>
+const authnReviewNeedsLinkSchema = lazySchema(() =>
   z.object({
     type: z.literal("needs_link"),
     key: z.string().min(1),
@@ -260,10 +254,6 @@ export const authnOperationReviewResponseSchema = lazySchema(() =>
       .nullable(),
   }),
 );
-export type AuthnOperationReview = NonNullable<
-  z.infer<typeof authnOperationReviewResponseSchema>["review"]
->;
-
 /** 409 to an apply with both revisions. */
 export const authnHeldApplyConflictSchema = lazySchema(() =>
   z.discriminatedUnion("code", [
@@ -275,12 +265,8 @@ export const authnHeldApplyConflictSchema = lazySchema(() =>
   ]),
 );
 
-export const authnHeldDiscardResponseSchema = lazySchema(() =>
-  z.object({ outcome: z.literal("discarded") }),
-);
-
 /** One row of `GET …/notices`: a change that displaced a value Undo can restore. */
-export const authnNoticeRowSchema = lazySchema(() =>
+const authnNoticeRowSchema = lazySchema(() =>
   z.object({
     kind: z.string().min(1).max(64),
     key: z.string().min(1).max(3072),
@@ -299,7 +285,7 @@ export const authnNoticesResponseSchema = lazySchema(() =>
   z.object({ notices: z.array(authnNoticeRowSchema) }),
 );
 
-export const UNDO_REFUSAL_CODES = [
+const UNDO_REFUSAL_CODES = [
   "superseded",
   "nothing_displaced",
   "change_not_found",

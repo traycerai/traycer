@@ -18,8 +18,10 @@ import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-qu
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import {
   useConfigurationMcpServerMutations,
+  useConfigurationMcpServerSave,
   useConfigurationMcpServersQuery,
   type EnvironmentMcpServer,
+  type McpServerSave,
 } from "@/hooks/environment/team/use-mcp-servers";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { cn } from "@/lib/utils";
@@ -42,8 +44,7 @@ import { McpIntroduction } from "./configuration-introduction";
 import { McpServerDialog } from "./mcp-server-dialog";
 import {
   initialMcpServerForm,
-  mcpServerCredential,
-  mcpServerPutRequest,
+  mcpServerSave,
   mcpServerReady,
   type McpServerForm,
 } from "./mcp-server-form";
@@ -69,6 +70,9 @@ import {
 } from "./mcp-skills-copy";
 import { TeamReadFailed } from "./team-read-failed";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
+
+/** An endpoint edit leaves the server's sign-in as it is. */
+const UNCHANGED_CREDENTIAL = { kind: "unchanged" } as const;
 
 export function EnvironmentMcpServersPage(): ReactNode {
   const configurationKey = useConfigurationKey();
@@ -580,7 +584,8 @@ function McpOpenEditor(props: {
   readonly onDetail: (line: string | null) => void;
 }): ReactNode {
   const source = useConfigurationSource();
-  const { put, putItem } = useConfigurationMcpServerMutations();
+  const { putItem } = useConfigurationMcpServerMutations();
+  const put = useConfigurationMcpServerSave(() => UNCHANGED_CREDENTIAL);
   const initial = endpointInitial(props.server);
   const [endpoint, setEndpoint] = useState(initial);
   const groups = groupServerTools(props.server, props.using, props.lists);
@@ -620,12 +625,15 @@ function McpOpenEditor(props: {
           ? request
           : {
               ...request,
-              toolToggles: togglesFromDraft(
-                item.toolToggles,
-                groups,
-                draft.value,
-                draft.edited,
-              ),
+              request: {
+                ...request.request,
+                toolToggles: togglesFromDraft(
+                  item.toolToggles,
+                  groups,
+                  draft.value,
+                  draft.edited,
+                ),
+              },
             };
       if (saved !== null)
         put.mutate(saved, {
@@ -774,18 +782,17 @@ function endpointReady(
   endpoint: string,
 ): boolean {
   const form = formForEndpoint(server, endpoint);
-  return mcpServerReady(form, mcpServerCredential(form, true, false));
+  return mcpServerReady(form, UNCHANGED_CREDENTIAL);
 }
 
 function endpointPutRequest(
   server: EnvironmentMcpServer,
   endpoint: string,
   environmentId: string,
-) {
+): McpServerSave | null {
   const form = formForEndpoint(server, endpoint);
-  const credential = mcpServerCredential(form, true, false);
-  if (credential === null || !mcpServerReady(form, credential)) return null;
-  return mcpServerPutRequest(form, server, environmentId, credential);
+  if (!mcpServerReady(form, UNCHANGED_CREDENTIAL)) return null;
+  return mcpServerSave(form, server, environmentId);
 }
 
 function ToolReadNotices(props: {

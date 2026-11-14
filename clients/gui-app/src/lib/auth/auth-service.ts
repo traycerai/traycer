@@ -6177,15 +6177,24 @@ export class AuthService {
   }
 
   /**
-   * The app's own calls to authn's environment routes
+   * One operation's calls to authn's environment routes
    * (`@traycer-clients/shared/environment`), on this session's verified
-   * bearer: the one `cloudBearer()` answers, asked at each call.
+   * bearer: the one `cloudBearer()` answers, asked at each call. The
+   * operation is bound to the sign-in current now, the person and the
+   * identity generation: after a sign-out or a sign-in, as anyone, it sends
+   * nothing more. A same-user refresh keeps it.
    */
   environmentCloud(): EnvironmentCloud {
+    const userId = this.currentProfile?.userId ?? null;
+    const generation = this.identityGeneration;
     return {
       authnBaseUrl: this.runnerHost.authnBaseUrl,
       bearer: { kind: "cloud", getBearerToken: () => this.cloudBearer() },
       transport: this.runnerHost.environmentTransport,
+      onOriginSignIn: () =>
+        userId !== null &&
+        this.currentProfile?.userId === userId &&
+        this.identityGeneration === generation,
     };
   }
 }
