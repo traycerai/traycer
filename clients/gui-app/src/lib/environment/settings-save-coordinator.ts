@@ -20,12 +20,18 @@ import type {
   SettingsProposalReceipt,
 } from "@traycer/protocol/host/environment/settings-proposals";
 import type { SettingsSaveMapping } from "@traycer/protocol/host/environment/settings-save-mapping";
+import { settingsSaveMemoryKey } from "@/lib/persist";
 import {
   SETTINGS_SAVE_MEMORY_TTL_MS,
   settingsSaveMemoryRecord,
   useSettingsSaveMemoryStore,
   type SettingsSaveMemoryRecord,
 } from "@/stores/settings/settings-save-memory-store";
+
+const NOTHING_TO_REMEMBER: SettingsSaveBeginning = {
+  kind: "nothing_to_remember",
+};
+const ACCOUNT_CHANGED: SettingsSaveBeginning = { kind: "account_changed" };
 
 /** An apply that went unanswered is tried once more at the same hold revision. */
 const TRIES_PER_HOLD_REVISION = 2;
@@ -39,6 +45,11 @@ const UNLISTED_GRACE_MS = 60_000;
 
 /** Where a save is made, and what the person saw when they made it. */
 export interface SettingsSaveContext {
+  /**
+   * The account the save's preparation began for
+   * ({@link SettingsSaveCoordinator.account}, read before its first await).
+   */
+  readonly accountId: string;
   readonly environmentId: string;
   readonly hostId: string;
   /** The host's sharing generation when the save is made. */
@@ -72,16 +83,33 @@ export interface SettingsSaveTicket {
   readonly editId: string;
 }
 
+/** What {@link SettingsSaveCoordinator.begin} did with a save. */
+export type SettingsSaveBeginning =
+  | { readonly kind: "remembered"; readonly ticket: SettingsSaveTicket }
+  /** The save proposes nothing to remember; it is sent as it is. */
+  | { readonly kind: "nothing_to_remember" }
+  /**
+   * The account changed since the save's preparation began: it is neither
+   * remembered nor sent.
+   */
+  | { readonly kind: "account_changed" };
+
 export interface SettingsSaveCoordinator {
   /**
+   * The account a save's preparation begins for: the signed-in one, while
+   * the memory is that account's. Null otherwise, and then nothing is
+   * remembered. A preparation that reads a different answer after any await
+   * is for an account that is no longer here.
+   */
+  readonly account: () => string | null;
+  /**
    * Called before the save is sent: remembers a save that maps to a proposal
-   * and marks it sent. Answers the ticket {@link settle} takes, or null when
-   * the save proposes nothing to remember.
+   * and marks it sent, answering the ticket {@link settle} takes.
    */
   readonly begin: (
     mapping: SettingsSaveMapping,
     context: SettingsSaveContext,
-  ) => Promise<SettingsSaveTicket | null>;
+  ) => Promise<SettingsSaveBeginning>;
   /**
    * The save's send is over: `hostAnswered` when the host answered it, false
    * when it failed or nothing answered. An answered save's host is
@@ -292,15 +320,27 @@ export function createSettingsSaveCoordinator(
     return next;
   };
 
+  const account = (): string | null => {
+    const signedIn = ports.accountId();
+    return signedIn !== null &&
+      useSettingsSaveMemoryStore.persist.getOptions().name ===
+        settingsSaveMemoryKey(signedIn)
+      ? signedIn
+      : null;
+  };
+
   const begin = async (
     mapping: SettingsSaveMapping,
     context: SettingsSaveContext,
-  ): Promise<SettingsSaveTicket | null> => {
-    if (mapping.kind !== "proposal") return null;
-    if (ports.accountId() === null) return null;
+  ): Promise<SettingsSaveBeginning> => {
+    if (account() !== context.accountId) return ACCOUNT_CHANGED;
+    if (mapping.kind !== "proposal") return NOTHING_TO_REMEMBER;
     const { edit } = mapping;
     const valueDigest =
       edit.operation === "put" ? await settingValueDigest(edit.value) : null;
+    // The memory may be another account's by now: an edit is remembered only
+    // in the memory of the account it was made for.
+    if (account() !== context.accountId) return ACCOUNT_CHANGED;
     const editId = crypto.randomUUID();
     const id = store().remember({
       editId,
@@ -317,7 +357,7 @@ export function createSettingsSaveCoordinator(
       unanswered: null,
     });
     store().markSent(id);
-    return { id, editId };
+    return { kind: "remembered", ticket: { id, editId } };
   };
 
   const settle = async (
@@ -330,5 +370,5 @@ export function createSettingsSaveCoordinator(
     await reconcile(record.hostId);
   };
 
-  return { begin, settle, reconcile };
+  return { account, begin, settle, reconcile };
 }
