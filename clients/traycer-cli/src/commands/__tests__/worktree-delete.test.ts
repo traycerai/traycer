@@ -6,7 +6,7 @@ import {
   EXPECTED_CLI_ERROR_CODES,
 } from "../../runner/errors";
 import type { CommandContext, CommandResult } from "../../runner/runner";
-import type { ProgressInfo } from "../../runner/output";
+import { createOutput, type ProgressInfo } from "../../runner/output";
 import type { StreamCloseReason } from "../../../../shared/host-transport/i-stream-session";
 import type { StreamMethodSupport } from "../../../../shared/host-transport/ws-stream-client";
 import { resolveHostAuth } from "../../internal/host-auth";
@@ -523,6 +523,82 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     expect(new Set<string>(EXPECTED_CLI_ERROR_CODES).has(error.code)).toBe(
       true,
     );
+  });
+
+  // The inventory rides the batch `target.failed` frame beside the code. The
+  // person reads it from the JSON envelope the runner writes on a failure:
+  // `error.details.holders` names the shell and the agent that still hold the
+  // worktree, and the message names them in words.
+  it("carries the host's holder inventory from a WORKTREE_BUSY target.failed frame into the JSON error envelope", async () => {
+    const holders = [
+      {
+        ownerRef: { epicId: "e1", ownerKind: "chat", ownerId: "c1" },
+        holdKind: "supervised-shell",
+        activity: "working",
+        label: "Shell: dev server",
+        holderId: "holder-shell-1",
+      },
+      {
+        ownerRef: { epicId: "e1", ownerKind: "chat", ownerId: "c1" },
+        holdKind: "chat-turn",
+        activity: "idle",
+        label: "Chat: fix flaky test",
+        holderId: "holder-chat-1",
+        chatTier: "background",
+      },
+    ];
+    const pending = buildWorktreeDeleteCommand({
+      worktreePath: "/wt/x",
+    })(ctx);
+
+    await waitForSessions(1);
+    const { frameHandler } = commandSession();
+    if (frameHandler === null) throw new Error("no frame handler subscribed");
+    frameHandler({
+      kind: "target.failed",
+      worktreePath: "/wt/x",
+      reason: "worktree is busy",
+      code: "WORKTREE_BUSY",
+      holders,
+      hasBinaryPayload: false,
+    });
+
+    const error: unknown = await pending.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw error;
+    const stdout = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      createOutput({
+        json: true,
+        quiet: false,
+        noProgress: false,
+        noBootstrap: true,
+        nonInteractive: true,
+        environment: "production",
+        logger: loggerMock,
+      }).emitError(error.code, error.message, error.details);
+      const written = stdout.mock.calls
+        .map((call) => String(call[0]))
+        .join("")
+        .split("\n")
+        .filter((line) => line.length > 0);
+      expect(written).toHaveLength(1);
+      expect(JSON.parse(written[0] ?? "{}")).toMatchObject({
+        type: "result",
+        status: "error",
+        error: {
+          code: "E_WORKTREE_BUSY",
+          message: expect.stringContaining(
+            "Held by Shell: dev server, Chat: fix flaky test.",
+          ),
+          details: { holders },
+        },
+      });
+    } finally {
+      stdout.mockRestore();
+    }
   });
 
   it("keeps UNEXPECTED for a target.failed frame without a typed busy code", async () => {
