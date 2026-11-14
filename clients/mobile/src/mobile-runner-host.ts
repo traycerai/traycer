@@ -164,11 +164,14 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import {
+  deleteBotViaHttp,
   updateBotReplyModeViaHttp,
   updateBotRunSettingsViaHttp,
+  type BotDeleteResult,
   type BotSetupWriteResult,
 } from "@traycer-clients/shared/host-client/bot-setup";
 import type {
+  BotDeleteRequest,
   BotUpdateReplyModeRequest,
   BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
@@ -1092,6 +1095,19 @@ export class MobileRunnerHost implements IRunnerHost {
     request: BotUpdateReplyModeRequest,
   ): Promise<BotSetupWriteResult> {
     return updateBotReplyModeViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return deleteBotViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,

@@ -266,6 +266,7 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     updateBotReplyMode: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    deleteBot: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

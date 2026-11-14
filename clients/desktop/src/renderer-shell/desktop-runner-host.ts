@@ -187,8 +187,12 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import type { BotSetupWriteResult } from "@traycer-clients/shared/host-client/bot-setup";
 import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
   BotUpdateReplyModeRequest,
   BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
@@ -366,6 +370,10 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     request: BotUpdateReplyModeRequest,
   ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -1520,6 +1528,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     request: BotUpdateReplyModeRequest,
   ): Promise<BotSetupWriteResult> {
     return this.bridge.updateBotReplyMode(bearerToken, request);
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return this.bridge.deleteBot(bearerToken, request);
   }
 
   getSandboxGrants(

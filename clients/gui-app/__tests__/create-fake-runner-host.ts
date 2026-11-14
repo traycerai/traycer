@@ -146,6 +146,7 @@ export function createFakeRunnerHost(
     updateBotRunSettings: () =>
       Promise.resolve({ kind: "no_response" as const }),
     updateBotReplyMode: () => Promise.resolve({ kind: "no_response" as const }),
+    deleteBot: () => Promise.resolve({ kind: "no_response" as const }),
     getSandboxGrants: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getTeamEnvironment: () =>

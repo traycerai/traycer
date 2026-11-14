@@ -56,11 +56,14 @@ import {
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import {
+  deleteBotViaHttp,
   updateBotReplyModeViaHttp,
   updateBotRunSettingsViaHttp,
+  type BotDeleteResult,
   type BotSetupWriteResult,
 } from "../bot-setup";
 import type {
+  BotDeleteRequest,
   BotUpdateReplyModeRequest,
   BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
@@ -1060,6 +1063,19 @@ export class MockRunnerHost implements IRunnerHost {
     request: BotUpdateReplyModeRequest,
   ): Promise<BotSetupWriteResult> {
     return updateBotReplyModeViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return deleteBotViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,

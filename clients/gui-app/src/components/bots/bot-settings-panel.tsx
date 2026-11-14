@@ -82,11 +82,14 @@ const BOT_TITLE_MAX = 500;
  *   pane the bot's card opens (decision 148);
  * - deleting the bot, behind a confirmation.
  *
- * Every write goes through the tab host's client - the host `bot.open` chose
- * to serve the tab - with nothing gated on which host that is: a host that
- * cannot make the change refuses it, and the refusal is shown in place,
- * under the control. The stream snapshot, not the mutation's answer, is what
- * the header re-renders from.
+ * The model, the reply mode and the delete are the app's own calls to the
+ * server on the person's sign-in, so they need no host, and are offered only
+ * to a person whose role may change the bot's environment. Every other write
+ * goes through the tab host's client - the host `bot.open` chose to serve the
+ * tab - with nothing gated on which host that is. A refusal is shown in
+ * place, under the control. The stream snapshot, not the mutation's answer,
+ * is what the header re-renders from (a direct write lays its answer over
+ * that snapshot).
  */
 export function BotChannelSettingsPanel(props: {
   readonly bot: BotRecord;
@@ -744,14 +747,20 @@ function ChoiceOption(props: {
   );
 }
 
+/**
+ * Deleting the bot, behind a confirmation: the app's own call to the server,
+ * so it needs no host; drawn only to a person whose role may change the
+ * bot's environment.
+ */
 function BotDeleteSection(props: {
   readonly bot: BotRecord;
   readonly onDeleted: () => void;
 }): ReactNode {
   const { bot, onDeleted } = props;
-  const client = useTabHostClient();
-  const remove = useBotDeleteMutation(client);
+  const remove = useBotDeleteMutation();
+  const mayChange = useBotMayChange(bot.environmentId);
   const [open, setOpen] = useState(false);
+  if (!mayChange) return null;
   return (
     <section
       className="flex flex-col gap-2"

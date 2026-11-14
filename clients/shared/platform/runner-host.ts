@@ -65,8 +65,12 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import type { BotSetupWriteResult } from "../host-client/bot-setup";
 import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "../host-client/bot-setup";
+import type {
+  BotDeleteRequest,
   BotUpdateReplyModeRequest,
   BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
@@ -638,6 +642,10 @@ export interface IRunnerHost {
     bearerToken: string,
     request: BotUpdateReplyModeRequest,
   ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See

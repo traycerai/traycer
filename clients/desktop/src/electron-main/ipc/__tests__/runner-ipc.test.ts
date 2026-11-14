@@ -855,6 +855,7 @@ describe("RunnerIpcBridge", () => {
           // A bot's settings, on traycer-server too.
           RunnerHostInvoke.updateBotRunSettings,
           RunnerHostInvoke.updateBotReplyMode,
+          RunnerHostInvoke.deleteBot,
           RunnerHostInvoke.readHostOwnership,
           RunnerHostInvoke.listTeamComputers,
           RunnerHostInvoke.releaseTeamComputer,

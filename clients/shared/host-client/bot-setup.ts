@@ -14,8 +14,10 @@
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
+  botDeleteResponseSchema,
   botReplyModeSchema,
   botUpdateRunSettingsRequestSchema,
+  type BotDeleteRequest,
   type BotUpdateReplyModeRequest,
   type BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
@@ -62,6 +64,11 @@ export type BotSetupWriteResult =
   | { readonly kind: "ok"; readonly bot: BotSetupRow }
   | BotSetupFailure;
 
+/** A delete's answer: `deleted` is false when the bot was already archived, which is not a failure. */
+export type BotDeleteResult =
+  | { readonly kind: "ok"; readonly deleted: boolean }
+  | BotSetupFailure;
+
 const botSetupRowAnswerSchema = lazySchema(() =>
   z.object({
     bot: botUpdateRunSettingsRequestSchema.extend({
@@ -70,7 +77,7 @@ const botSetupRowAnswerSchema = lazySchema(() =>
   }),
 );
 
-type BotSetupRoute = "update-run-settings" | "update-reply-mode";
+type BotSetupRoute = "update-run-settings" | "update-reply-mode" | "delete";
 
 type PostResult =
   | { readonly kind: "ok"; readonly body: unknown }
@@ -198,4 +205,32 @@ export async function updateBotReplyModeViaHttp(
       { botId: request.botId, replyMode: request.replyMode },
     ),
   );
+}
+
+/**
+ * `POST /api/bots/delete`: archives the bot; a repeat answers
+ * `deleted: false`. The server's notices for the automations the bot set up
+ * are not staged here: the bot's own computer repeats the delete when it
+ * next runs, and stages them then.
+ */
+export async function deleteBotViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+  transport: EnvironmentTransport,
+  request: BotDeleteRequest,
+): Promise<BotDeleteResult> {
+  const result = await post(
+    serverBaseUrl,
+    bearerToken,
+    proxyToken,
+    transport,
+    "delete",
+    { botId: request.botId },
+  );
+  if (result.kind !== "ok") return result;
+  const parsed = botDeleteResponseSchema.safeParse(result.body);
+  return parsed.success
+    ? { kind: "ok", deleted: parsed.data.deleted }
+    : { kind: "unavailable" };
 }

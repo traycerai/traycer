@@ -73,8 +73,12 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import type { BotSetupWriteResult } from "@traycer-clients/shared/host-client/bot-setup";
 import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
   BotUpdateReplyModeRequest,
   BotUpdateRunSettingsRequest,
 } from "@traycer/protocol/host/bot/schemas";
@@ -3534,6 +3538,12 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "no_response" };
     return this.runnerHost.updateBotReplyMode(bearer, request);
+  }
+
+  async deleteBot(request: BotDeleteRequest): Promise<BotDeleteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.deleteBot(bearer, request);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

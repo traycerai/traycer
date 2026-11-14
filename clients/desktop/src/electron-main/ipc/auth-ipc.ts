@@ -58,6 +58,7 @@ import {
   setSlackAppDmsViaHttp,
 } from "@traycer-clients/shared/host-client/slack-app";
 import {
+  deleteBotViaHttp,
   updateBotReplyModeViaHttp,
   updateBotRunSettingsViaHttp,
 } from "@traycer-clients/shared/host-client/bot-setup";
@@ -78,6 +79,7 @@ import {
   assertNumber,
   assertNullableString,
   assertString,
+  parseBotDeleteRequest,
   parseBotUpdateReplyModeRequest,
   parseBotUpdateRunSettingsRequest,
   parseDesktopAuthSession,
@@ -514,6 +516,21 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
       assertString(bearerToken, "updateBotReplyMode.bearerToken");
       const parsedRequest = parseBotUpdateReplyModeRequest(request);
       return updateBotReplyModeViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        parsedRequest,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.deleteBot,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "deleteBot.bearerToken");
+      const parsedRequest = parseBotDeleteRequest(request);
+      return deleteBotViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
