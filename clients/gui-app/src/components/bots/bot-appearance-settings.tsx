@@ -11,7 +11,6 @@ import { BotMascotPreview } from "@/components/bots/bot-avatars";
 import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
 import { useBotLookSaver } from "@/hooks/bots/use-bot-look-save";
 import {
@@ -63,12 +62,10 @@ export function BotAppearanceSettings(props: {
   const { botId } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
-  const supported =
-    useHostMethodSupport(hostId, "bot.updateAppearance") === true;
   const saver = useBotLookSaver(client, hostId, botId);
   const look = useBotLook(botId);
   const main = useBotIsMain(botId);
-  if (!supported) return null;
+  if (!saver.supported) return null;
   const appearance: BotAppearance = look ?? {
     mark: null,
     color: null,

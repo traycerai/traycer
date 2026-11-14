@@ -13,6 +13,7 @@ import {
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   invalidateBotLists,
   useBotUpdateAppearanceMutation,
@@ -254,6 +255,11 @@ async function sendInOrder(
 
 /** What a bot's settings read and do about its look's saves. */
 export interface BotLookSaver {
+  /**
+   * Whether the host can change a bot's look at all. Where it cannot, the
+   * settings draw nothing and `choose` does nothing.
+   */
+  readonly supported: boolean;
   /** Draws `change` at once and saves it after any save under way. */
   readonly choose: (change: BotLookChange) => void;
   /** Whether a save naming `part` has not been answered. */
@@ -274,6 +280,8 @@ export function useBotLookSaver(
 ): BotLookSaver {
   const queryClient = useQueryClient();
   const { mutateAsync } = useBotUpdateAppearanceMutation(client);
+  const supported =
+    useHostMethodSupport(hostId, "bot.updateAppearance") === true;
   const save = useBotLookSaveStore(
     (state) => state.saves[botId] ?? NO_BOT_LOOK_SAVE,
   );
@@ -302,7 +310,9 @@ export function useBotLookSaver(
     };
   }, [botId]);
   return {
+    supported,
     choose: (change) => {
+      if (!supported) return;
       const held = botLookSaveOf(botId);
       const refusals = withoutParts(held.refusals, partsOf(change));
       const chosen = { ...held.chosen, ...change };
