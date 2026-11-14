@@ -354,6 +354,7 @@ export const TUI_HARNESS_ID_TO_PROVIDER_ID: Record<TuiHarnessId, ProviderId> = {
   codex: "codex",
   opencode: "opencode",
   cursor: "cursor",
+  antigravity: "antigravity",
 };
 
 /**

@@ -217,8 +217,13 @@ export type GuiHarnessIdPreCommandCode = z.infer<
 
 // Cursor remains a reserved compatibility value: it shipped in this persisted
 // enum before the unfinished runtime surface was withdrawn from the product.
+// Antigravity is a staging value: its terminal binary is the `agy` CLI (the
+// GUI/ACP surface runs the separate `agy_acp_server`), accepted so its
+// terminal-agent records persist once the host ships support; inert until then.
+// Kept identical to the host `.extract()` copy in `host/agent/shared.ts`
+// (guarded by `tui-harness-enum-sync.test.ts`).
 export const tuiHarnessIdSchema = lazySchema(() =>
-  z.enum(["claude", "codex", "opencode", "cursor"]),
+  z.enum(["claude", "codex", "opencode", "cursor", "antigravity"]),
 );
 export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 
