@@ -234,6 +234,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -292,6 +293,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -334,6 +336,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -379,6 +382,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -410,6 +414,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -438,6 +443,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -468,6 +474,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -676,6 +683,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const first = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: firstAttempt.signal,
+      readsProfileOutcome: false,
     });
     const firstOutcome = trackOutcome(first);
     await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
@@ -700,6 +708,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const second = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: secondAttempt.signal,
+      readsProfileOutcome: false,
     });
     // Before the fix this attached to attempt one's in-flight request and no
     // second dispatch ever reached the host.
@@ -739,6 +748,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const first = startWait(result.current.mutateAsync, {
       request: firstRequest,
       signal: undefined,
+      readsProfileOutcome: false,
     });
     await expect(firstArrival).resolves.toEqual(firstRequest);
 
@@ -747,6 +757,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const second = startWait(result.current.mutateAsync, {
       request: secondRequest,
       signal: undefined,
+      readsProfileOutcome: false,
     });
     await expect(secondArrival).resolves.toEqual(secondRequest);
     expect(awaitDispatches(messenger)).toHaveLength(2);
@@ -777,6 +788,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const wait = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: attempt.signal,
+      readsProfileOutcome: false,
     });
     const outcome = trackOutcome(wait);
     await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
@@ -811,6 +823,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const wait = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: liveAttempt.signal,
+      readsProfileOutcome: false,
     });
     await expect(wait).rejects.toBeInstanceOf(HostRpcError);
 
@@ -906,6 +919,7 @@ describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
   function recordCallerRead(input: {
     readonly reads: () => number;
     readonly queryClient: QueryClient;
+    readonly readsProfileOutcome: boolean;
     readonly mutate: (
       variables: AwaitLoginVariables,
       options: { readonly onSuccess: () => void },
@@ -921,6 +935,7 @@ describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
         {
           request: { providerId: "copilot", profileId: null },
           signal: undefined,
+          readsProfileOutcome: input.readsProfileOutcome,
         },
         {
           onSuccess: () => {
@@ -945,6 +960,7 @@ describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
     const caller = recordCallerRead({
       reads,
       queryClient,
+      readsProfileOutcome: false,
       mutate: (variables, options) => {
         result.current.awaitLogin.mutate(variables, options);
       },
@@ -965,6 +981,7 @@ describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
       result.current.awaitLogin.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.awaitLogin.isSuccess).toBe(true));
@@ -982,6 +999,7 @@ describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
       const caller = recordCallerRead({
         reads,
         queryClient,
+        readsProfileOutcome: true,
         mutate: (variables, options) => {
           result.current.awaitLogin.mutate(variables, options);
         },
@@ -1004,6 +1022,7 @@ describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
       const caller = recordCallerRead({
         reads,
         queryClient,
+        readsProfileOutcome: true,
         mutate: (variables, options) => {
           result.current.awaitLogin.mutate(variables, options);
         },
@@ -1013,6 +1032,48 @@ describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
       );
       expect(caller.fetchStatus()).toBe("idle");
       expect(reads()).toBe(mountReads + 1);
+    },
+  );
+
+  it.each([
+    {
+      name: "waiting-for-profile",
+      outcome: { kind: "waiting-for-profile" },
+    },
+    { name: "account-mismatch", outcome: { kind: "account-mismatch" } },
+    { name: "account-unproven", outcome: { kind: "account-unproven" } },
+    {
+      name: "target-refused",
+      outcome: { kind: "target-refused", reason: "offer-refused" },
+    },
+    {
+      name: "staged-for-leave",
+      outcome: { kind: "staged-for-leave", profileId: "work" },
+    },
+  ] satisfies readonly {
+    readonly name: string;
+    readonly outcome: ProviderLoginProfileOutcome;
+  }[])(
+    "does not reread providers.list for the no-state $name outcome",
+    async ({ outcome }) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome,
+        state: null,
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() => {
+        expect(result.current.awaitLogin.isSuccess).toBe(true);
+        expect(caller.readsWhenCallerRan()).toBe(mountReads);
+      });
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(1);
     },
   );
 });

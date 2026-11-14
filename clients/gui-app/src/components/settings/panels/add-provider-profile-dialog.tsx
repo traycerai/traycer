@@ -380,16 +380,12 @@ export function AddProviderProfileDialog({
         onPointerDownOutside={(event) => {
           if (dismissalLocked) event.preventDefault();
         }}
+        {...dialogDescriptionProps(offersSignIns)}
       >
-        <DialogHeader className="gap-1.5">
-          <DialogTitle>
-            {addProfileDialogTitle(offersSignIns, state.providerId)}
-          </DialogTitle>
-          <DialogDescription>
-            Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
-            its color, then link the account it should use.
-          </DialogDescription>
-        </DialogHeader>
+        <AddProfileDialogHeader
+          offersSignIns={offersSignIns}
+          providerId={state.providerId}
+        />
 
         <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
           <ProviderProfileCard
@@ -541,6 +537,41 @@ function addProfileDialogTitle(
   return offersSignIns
     ? ADD_PROFILE_DIALOG_TITLE
     : `Add new ${PROVIDER_DISPLAY_NAMES[providerId]} profile`;
+}
+
+const NO_DIALOG_DESCRIPTION = { "aria-describedby": undefined } as const;
+
+/**
+ * A computer that offers sign-ins draws no line under the header, so the
+ * dialog says it has no description; any other keeps today's, which Radix
+ * links by itself.
+ */
+function dialogDescriptionProps(
+  offersSignIns: boolean,
+): typeof NO_DIALOG_DESCRIPTION | null {
+  return offersSignIns ? NO_DIALOG_DESCRIPTION : null;
+}
+
+function AddProfileDialogHeader({
+  offersSignIns,
+  providerId,
+}: {
+  readonly offersSignIns: boolean;
+  readonly providerId: ProviderCliState["providerId"];
+}): ReactNode {
+  return (
+    <DialogHeader className="gap-1.5">
+      <DialogTitle>
+        {addProfileDialogTitle(offersSignIns, providerId)}
+      </DialogTitle>
+      {offersSignIns ? null : (
+        <DialogDescription>
+          Name this {PROVIDER_DISPLAY_NAMES[providerId]} profile, choose its
+          color, then link the account it should use.
+        </DialogDescription>
+      )}
+    </DialogHeader>
+  );
 }
 
 /**

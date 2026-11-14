@@ -1065,9 +1065,11 @@ export function useProviderProfileOutcomeLoginFlow(
     ],
   );
 
-  // A completed sign-in, whatever it ended as: nothing is released, since
-  // there is no login left to hold, and a cancel would retire the answer the
-  // computer keeps for it.
+  // Where an outcome the flow reads ends the attempt. Every arm but `failed`
+  // releases nothing: there is no login left to hold, and a cancel would
+  // retire the answer the computer keeps for it. `failed`, an outcome that
+  // does not belong to this dialog, takes today's failed state whole,
+  // release included.
   const settleProfileOutcome = useCallback(
     (thisAttemptId: number, outcome: ProfileOutcomeResolution): void => {
       if (attemptIdRef.current !== thisAttemptId) return;
@@ -1396,6 +1398,7 @@ export function useProviderProfileOutcomeLoginFlow(
                   lastSeenReaderCount,
                 },
                 signal: awaitAbort.signal,
+                readsProfileOutcome: profileOutcomes !== null,
               },
               { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
             );
