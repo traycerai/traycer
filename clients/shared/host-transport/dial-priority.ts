@@ -106,6 +106,9 @@ const BACKGROUND_METHODS: ReadonlySet<string> = new Set([
   // Decorates the agent rows' reach marks and the composer's mirror line; answers second.
   "epic.listTaskHosts",
   "worktree.listBindingsForEpic",
+  // Dialed only once a read has already failed and is already shown as
+  // failed; its frames re-ask that read, and no surface waits on them.
+  "cloud.recovered.subscribe",
 ]);
 
 /**

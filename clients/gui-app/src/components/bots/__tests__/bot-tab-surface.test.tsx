@@ -464,6 +464,15 @@ function surface(): ReactNode {
   return surfaceFor(BOT_ID);
 }
 
+/** The surface outside StrictMode, for a case that counts its mount's opens. */
+function unstrictSurface(): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
+    </QueryClientProvider>
+  );
+}
+
 /** Nothing on a tab says where a bot runs or offers to move it. */
 function expectNoMachineWording(container: HTMLElement): void {
   expect(container.textContent).not.toMatch(
@@ -1022,7 +1031,7 @@ describe("<BotTabSurface /> bot.open", () => {
   });
 
   it("opens the bot once on mount, for this bot", () => {
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
 
     expect(mocks.open).toHaveBeenCalledTimes(1);
     expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
@@ -1627,7 +1636,7 @@ describe("<BotTabSurface /> paused", () => {
       kind: "paused",
       reason: "reachability-unknown",
     });
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
     expect(mocks.open).toHaveBeenCalledTimes(1);
 
     mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
@@ -1643,7 +1652,7 @@ describe("<BotTabSurface /> bot.open fails", () => {
   it("shows the error with a Retry, and no tab, when there is no earlier answer", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = { kind: "error", message: "the host is busy" };
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
 
     const alert = screen.getByTestId("bot-tab-error");
     expect(alert.textContent).toContain(

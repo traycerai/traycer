@@ -1,4 +1,3 @@
-import { normalizeSandboxArtifactPath } from "./sandbox-artifact-path";
 import { randomUUID } from "node:crypto";
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import {
@@ -8,10 +7,19 @@ import {
   type SandboxArtifactRequest,
 } from "../../ipc-contracts/sandbox-artifact-types";
 import {
-  parseSandboxArtifactHost,
+  parseSandboxArtifactUrl,
   SANDBOX_CONTENT_SECURITY_POLICY,
-  SANDBOX_SCHEME,
 } from "./sandbox-protocol";
+
+interface ArtifactMount {
+  readonly windowId: string;
+  /**
+   * The artifact this mount serves, taken from its first request. That
+   * request is the frame's own navigation, issued by the renderer that
+   * registered the mount, so a page cannot claim another artifact's mount.
+   */
+  artifactId: string | null;
+}
 
 interface SpanWaiter {
   readonly windowId: string;
@@ -46,7 +54,7 @@ function errorResponse(status: number, reason: string): Response {
 
 /** Main only transports spans; the owning renderer resolves files through its host. */
 export class SandboxArtifactServer {
-  private readonly mounts = new Map<string, string>();
+  private readonly mounts = new Map<string, ArtifactMount>();
   private readonly waiters = new Map<string, SpanWaiter>();
 
   constructor(private readonly sendToWindow: SendToWindow) {}
@@ -54,15 +62,16 @@ export class SandboxArtifactServer {
   register(mountId: string, windowId: string): void {
     if (!/^[a-z0-9]+$/.test(mountId))
       throw new Error("Invalid artifact mount id");
-    const owner = this.mounts.get(mountId);
-    if (owner !== undefined && owner !== windowId) {
+    const mount = this.mounts.get(mountId);
+    if (mount === undefined) {
+      this.mounts.set(mountId, { windowId, artifactId: null });
+    } else if (mount.windowId !== windowId) {
       throw new Error("Artifact mount belongs to another window");
     }
-    this.mounts.set(mountId, windowId);
   }
 
   ownsMount(mountId: string, windowId: string): boolean {
-    return this.mounts.get(mountId) === windowId;
+    return this.mounts.get(mountId)?.windowId === windowId;
   }
 
   unregister(mountId: string): void {
@@ -71,14 +80,14 @@ export class SandboxArtifactServer {
   }
 
   dropWindow(windowId: string): void {
-    for (const [mountId, owner] of this.mounts) {
-      if (owner === windowId) this.mounts.delete(mountId);
+    for (const [mountId, mount] of this.mounts) {
+      if (mount.windowId === windowId) this.mounts.delete(mountId);
     }
     this.failWaiters((waiter) => waiter.windowId === windowId);
   }
 
   retainWindows(windowIds: ReadonlySet<string>): void {
-    for (const windowId of this.mounts.values()) {
+    for (const { windowId } of this.mounts.values()) {
       if (!windowIds.has(windowId)) this.dropWindow(windowId);
     }
   }
@@ -116,7 +125,7 @@ export class SandboxArtifactServer {
       status: 503,
       reason,
     });
-    if (this.mounts.get(mountId) !== windowId || signal.aborted) {
+    if (!this.ownsMount(mountId, windowId) || signal.aborted) {
       return Promise.resolve(unavailable("Artifact window unavailable"));
     }
     return new Promise((resolve) => {
@@ -169,20 +178,27 @@ export class SandboxArtifactServer {
     });
   }
 
+  /**
+   * The window that serves a mount under an artifact's site: `null` for an
+   * unknown mount, and for one whose own artifact is another.
+   */
+  private windowServing(artifactId: string, mountId: string): string | null {
+    const mount = this.mounts.get(mountId);
+    if (mount === undefined) return null;
+    mount.artifactId ??= artifactId;
+    return mount.artifactId === artifactId ? mount.windowId : null;
+  }
+
   async fetch(request: Request): Promise<Response> {
-    let url: URL;
-    try {
-      url = new URL(request.url);
-    } catch {
+    if (!URL.canParse(request.url))
       return errorResponse(400, "Invalid artifact URL");
-    }
-    const path = normalizeSandboxArtifactPath(request.url);
+    const address = parseSandboxArtifactUrl(request.url);
+    if (address === null) return errorResponse(404, "Artifact not found");
+    const path = address.pathname;
     if (path === null) return errorResponse(400, "Invalid artifact path");
-    const host = parseSandboxArtifactHost(url.host);
-    if (url.protocol !== `${SANDBOX_SCHEME}:` || host === null)
-      return errorResponse(404, "Artifact not found");
-    const windowId = this.mounts.get(host.mountId);
-    if (windowId === undefined)
+    const { mountId } = address;
+    const windowId = this.windowServing(address.artifactId, mountId);
+    if (windowId === null)
       return errorResponse(404, "Artifact mount not found");
 
     const range = request.headers.get("Range");
@@ -207,7 +223,7 @@ export class SandboxArtifactServer {
         ? ARTIFACT_OBJECT_SPAN_BYTES
         : Math.min(ARTIFACT_OBJECT_SPAN_BYTES, last - position + 1);
     const first = await this.requestSpan(
-      host.mountId,
+      mountId,
       windowId,
       path,
       offset,
@@ -247,7 +263,7 @@ export class SandboxArtifactServer {
           } else if (position <= end) {
             const length = spanLength(position);
             const next = await this.requestSpan(
-              host.mountId,
+              mountId,
               windowId,
               path,
               position,

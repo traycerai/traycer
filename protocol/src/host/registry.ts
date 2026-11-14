@@ -1429,6 +1429,7 @@ import {
   providersChangedV11,
   providersChangedV12,
 } from "@traycer/protocol/host/providers-changed-stream";
+import { cloudRecoveredV10 } from "@traycer/protocol/host/cloud-recovered-stream";
 import {
   epicCommunicationGraphSubscribeV10,
   epicCommunicationGraphSubscribeV11,
@@ -16475,6 +16476,16 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         2: {
           contract: providersChangedV12,
+        },
+      },
+    },
+  },
+  "cloud.recovered.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: cloudRecoveredV10,
         },
       },
     },
