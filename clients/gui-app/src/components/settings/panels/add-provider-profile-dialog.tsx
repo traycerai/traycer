@@ -191,13 +191,18 @@ export function AddProviderProfileDialog(
   props: AddProviderProfileDialogProps,
 ): ReactNode {
   return (
-    <ProviderProfileSignInDialog {...props} switchSourceProfileId={null} />
+    <ProviderProfileSignInDialog
+      {...props}
+      switchSourceProfileId={null}
+      onSwitchProfileChosen={null}
+    />
   );
 }
 
 export function SwitchAccountSignInDialog(
   props: AddProviderProfileDialogProps & {
     readonly switchSourceProfileId: string;
+    readonly onSwitchProfileChosen: (profile: ProviderProfile) => void;
   },
 ): ReactNode {
   return <ProviderProfileSignInDialog {...props} />;
@@ -214,8 +219,10 @@ function ProviderProfileSignInDialog({
   target,
   targetResult,
   switchSourceProfileId,
+  onSwitchProfileChosen,
 }: AddProviderProfileDialogProps & {
   readonly switchSourceProfileId: string | null;
+  readonly onSwitchProfileChosen: ((profile: ProviderProfile) => void) | null;
 }): ReactNode {
   const openLink = useOpenLink();
   // Every entry point gates on the target host already; this is the floor
@@ -312,15 +319,16 @@ function ProviderProfileSignInDialog({
   // is set (see `commitNaming`), so a later recolor retry never re-shows it.
   const naming = resolveNamingStep(flow.state, namingCommittedFor);
 
-  const complete = (profileId: string): void => {
+  const complete = (profile: ProviderProfile): void => {
     onFailedAttempt(null);
-    onProfileCreated(profileId);
+    onProfileCreated(profile.profileId);
+    onSwitchProfileChosen?.(profile);
     onOpenChange(false);
   };
 
   const finalizeProfile = (profile: ProviderProfile): void => {
     if (accentColor === profile.accentColor) {
-      complete(profile.profileId);
+      complete(profile);
       return;
     }
     recolorProfile.mutate(
@@ -329,7 +337,7 @@ function ProviderProfileSignInDialog({
         profileId: profile.profileId,
         accentColor,
       },
-      { onSuccess: () => complete(profile.profileId) },
+      { onSuccess: () => complete(profile) },
     );
   };
 
@@ -996,7 +1004,7 @@ function AddProfileOutcomeFooter({
   readonly showsSignedIn: boolean;
   readonly finalizing: boolean;
   readonly signInAgainDisabled: boolean;
-  readonly onUse: (profileId: string) => void;
+  readonly onUse: (profile: ProviderProfile) => void;
   readonly onSignInWithAnother: () => void;
   readonly listRereadPending: boolean;
   readonly onRetryListRead: () => void;
@@ -1059,11 +1067,7 @@ function AddProfileOutcomeFooter({
         >
           {SIGN_IN_WITH_ANOTHER_TEXT}
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => onUse(profile.profileId)}
-        >
+        <Button type="button" size="sm" onClick={() => onUse(profile)}>
           {USE_PROFILE_TEXT}
         </Button>
         <FooterSentence>{alreadySignedInAsText(profile.label)}</FooterSentence>

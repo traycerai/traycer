@@ -259,27 +259,51 @@ export function buildProfileLoginCommand(
             ...typed,
             profileId: isAmbientProfileId(row.profileId) ? null : row.profileId,
           };
-    const switchSource = opts.target.kind === "switch"
-      ? findProfileByIdOrAlias(state.profiles, parseProfileArgument(opts.target.profile))
-      : null;
+    const switchSource =
+      opts.target.kind === "switch"
+        ? findProfileByIdOrAlias(
+            state.profiles,
+            parseProfileArgument(opts.target.profile),
+          )
+        : null;
     const switching = list.offersSignIns === true && switchSource !== null;
     const loginTarget: ResolvedTarget = switching
-      ? { create: { label: null }, profileId: null, switchHint: null,
-          switchSource: { profileId: switchSource.profileId, label: switchSource.label } }
+      ? {
+          create: { label: null },
+          profileId: null,
+          switchHint: null,
+          switchSource: {
+            profileId: switchSource.profileId,
+            label: switchSource.label,
+          },
+        }
       : target;
-    return await runLogin(ctx, io, providerId, loginTarget, state, list.offersSignIns === true);
+    return await runLogin(
+      ctx,
+      io,
+      providerId,
+      loginTarget,
+      state,
+      list.offersSignIns === true,
+    );
   };
 }
 
 interface ResolvedTarget {
-  readonly switchSource: { readonly profileId: string; readonly label: string } | null;
+  readonly switchSource: {
+    readonly profileId: string;
+    readonly label: string;
+  } | null;
   readonly switchHint: string | null;
   readonly create: { readonly label: string | null } | null;
   /** The existing row to sign in; null for a create and for ambient. */
   readonly profileId: string | null;
 }
 
-function resolveTarget(target: ProfileLoginTarget, providerArgument: string): ResolvedTarget {
+function resolveTarget(
+  target: ProfileLoginTarget,
+  providerArgument: string,
+): ResolvedTarget {
   if (target.kind === "create") {
     return {
       create: {
@@ -301,7 +325,10 @@ function resolveTarget(target: ProfileLoginTarget, providerArgument: string): Re
   };
 }
 
-function switchAccountHint(providerArgument: string, profileArgument: string): string {
+function switchAccountHint(
+  providerArgument: string,
+  profileArgument: string,
+): string {
   return `To add it as its own profile, run: traycer profile login ${printable(providerArgument)} ${printable(profileArgument)} --switch-account`;
 }
 
@@ -347,7 +374,10 @@ async function readProviderState(
   return requireProviderState(await readProviderStates(), providerId);
 }
 
-function requireProviderState(providers: readonly ProviderListState[], providerId: ProviderId): ProviderListState {
+function requireProviderState(
+  providers: readonly ProviderListState[],
+  providerId: ProviderId,
+): ProviderListState {
   const state = providers.find((p) => p.providerId === providerId);
   if (state === undefined) {
     throw cliError({
@@ -828,7 +858,9 @@ async function profileResultOf(
         );
       }
       const signInLine = `${outcome.kind === "signed-in" ? "Signed in" : "Already signed in"} as ${printable(profile.label)}`;
-      const switched = target.switchSource !== null && outcome.profileId !== target.switchSource.profileId;
+      const switched =
+        target.switchSource !== null &&
+        outcome.profileId !== target.switchSource.profileId;
       return {
         data: {
           providerId,
@@ -836,7 +868,9 @@ async function profileResultOf(
           profile,
           created,
         },
-        human: switched ? `${signInLine}\nNothing was moved from ${printable(target.switchSource.label)}.` : signInLine,
+        human: switched
+          ? `${signInLine}\nNothing was moved from ${printable(target.switchSource.label)}.`
+          : signInLine,
         exitCode: 0,
       };
     }

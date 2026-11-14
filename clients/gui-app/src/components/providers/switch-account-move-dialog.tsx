@@ -5,10 +5,7 @@ import type {
   ProvidersPreviewProfileMoveRequest,
   ProvidersPreviewProfileMoveResponse,
 } from "@traycer/protocol/host/profile-move-schemas";
-import type {
-  ProviderId,
-  ProviderProfile,
-} from "@traycer/protocol/host/provider-schemas";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,7 +34,7 @@ export const SWITCH_ACCOUNT_TEXT = "Switch account";
 interface SwitchAccountMoveProps {
   readonly providerId: ProviderId;
   readonly source: SwitchAccountSource;
-  readonly destination: ProviderProfile;
+  readonly destination: SwitchAccountSource;
   readonly moveHostId: string | null;
   readonly teamName: string | null;
   readonly onDone: () => void;
