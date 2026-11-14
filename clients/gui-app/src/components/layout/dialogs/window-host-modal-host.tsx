@@ -344,7 +344,8 @@ function NarratingWindowHostModal(props: {
  * Only the cold-start cause gets the healthy grace period. `no-usable-host`
  * means nothing can serve this window right now, which IS the settled failure -
  * there is no in-progress start to protect there, and withholding recovery on
- * that arm would be the mirror defect.
+ * that arm would be the mirror defect. `access-refused` is no failure at all:
+ * the host answered, so there is nothing to retry and nothing to report.
  */
 interface SettledFailure {
   readonly failed: boolean;
@@ -356,6 +357,7 @@ function hasSettledFailure(
   presentation: DefaultHostReadinessPresentation,
 ): SettledFailure {
   if (cause === "no-usable-host") return { failed: true, slow: false };
+  if (cause === "access-refused") return { failed: false, slow: false };
   return {
     // `provisioningError` is read ONLY under this cause. Its own contract warns
     // it outlives the attempt that produced it - a host that failed to install

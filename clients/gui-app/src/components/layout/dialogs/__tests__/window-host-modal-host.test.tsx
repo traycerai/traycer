@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -26,6 +27,10 @@ import {
   type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
@@ -324,6 +329,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useSelectionAuthorityStore.getState().reset();
+  useHostDoorStateStore.setState({ byHost: new Map() });
   useDesktopDialogStore.getState().setReportIssueAvailable(false);
   useAuthStore.setState({ status: "signed-out" });
   useSignOutConfirmStore.getState().setOpen(false);
@@ -1343,6 +1349,90 @@ describe("<WindowHostModalHost />", () => {
    * reads before it reserves a touch. The gesture is the phone's only history
    * affordance, so the narration must not cost it.
    */
+  it("a computer that does not admit this account draws board C1's 'No reason known' state and nothing else, on every shell", async () => {
+    // A lane running on this machine, so the cover's silence about it is a
+    // decision rather than an absence of progress.
+    controllerStatus.data = {
+      mutation: {
+        kind: "respawn",
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    const shells = [
+      {
+        name: "desktop",
+        mobile: false,
+        gate: GATE_OPEN,
+        testId: "window-host-modal",
+      },
+      {
+        name: "phone",
+        mobile: true,
+        gate: GATE_OPEN,
+        testId: "window-host-startup-card",
+      },
+      {
+        name: "launch",
+        mobile: false,
+        gate: GATE_BLOCKING,
+        testId: "window-host-startup-card",
+      },
+    ] as const;
+    for (const shell of shells) {
+      setMobileApp(shell.mobile);
+      noteHostDoorState({
+        hostId: LOCAL_HOST_ID,
+        kind: "not-admitted",
+        detail: null,
+      });
+      applySnapshot({
+        attached: true,
+        effectiveHostId: null,
+        targetHostId: LOCAL_HOST_ID,
+        leases: [],
+      });
+      renderHostWithGate(
+        { ...EMPTY_PRESENTATION, targetKind: "local", canManageHost: true },
+        false,
+        new MockTraycerCli(),
+        shell.gate,
+      );
+
+      const surface = await screen.findByTestId(shell.testId);
+      expect(surface.getAttribute("data-variant"), shell.name).toBe(
+        "not-admitted",
+      );
+      const title = within(surface).getByRole("heading");
+      expect(title.textContent, shell.name).toBe(
+        "This account cannot access this computer",
+      );
+      expect(
+        within(surface).getByText("Switch accounts to use it."),
+      ).toBeTruthy();
+      expect(
+        within(surface)
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+        shell.name,
+      ).toEqual(["Open settings"]);
+      expect(
+        within(surface)
+          .getByTestId("window-host-modal-open-settings")
+          .getAttribute("data-emphasis"),
+        shell.name,
+      ).toBe("link");
+      expect(
+        within(surface).queryByTestId("window-host-modal-progress"),
+        shell.name,
+      ).toBeNull();
+
+      cleanup();
+      useSelectionAuthorityStore.getState().reset();
+      useHostDoorStateStore.setState({ byHost: new Map() });
+    }
+  });
+
   describe("on the mobile app", () => {
     beforeEach(() => {
       setMobileApp(true);

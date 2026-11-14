@@ -380,12 +380,12 @@ function NarrationActions(
       >
         Open settings
       </Button>
-      {props.showReportIssue ? (
+      {props.showReportIssue && props.copy.report !== null ? (
         <ReportIssueAction
           context={createReportIssueContext({
-            title: props.copy.reportTitle,
-            message: props.copy.reportMessage,
-            code: props.copy.reportCode,
+            title: props.copy.report.title,
+            message: props.copy.report.message,
+            code: props.copy.report.code,
             source: "Host connection",
           })}
           presentation="text"
@@ -410,6 +410,9 @@ function WindowHostModalBody(props: {
   if (props.variant.kind === "unrecognised-refusal") {
     return <RefusalDetail code={props.variant.code} />;
   }
+  // The refused computer's cover is its title, its line and Open settings: a
+  // lane running on this machine is not part of it.
+  if (props.variant.kind === "not-admitted") return null;
   if (props.bootBody !== null) return props.bootBody;
   if (props.progress === null) return null;
   return <LaneProgressLine progress={props.progress} />;
@@ -551,9 +554,12 @@ function ClientCompatibilityDetail(props: {
 interface WindowHostModalCopy {
   readonly title: string;
   readonly description: string;
-  readonly reportTitle: string;
-  readonly reportMessage: string;
-  readonly reportCode: string;
+  /** What an issue report is pre-filled with; `null` where there is no report to make. */
+  readonly report: {
+    readonly title: string;
+    readonly message: string;
+    readonly code: string;
+  } | null;
 }
 
 /**
@@ -582,18 +588,18 @@ function modalCopy(
       title: "This computer belongs to a team",
       description:
         "This account is not a member. Switch accounts to use Traycer here.",
-      reportTitle: "Team membership required",
-      reportMessage: "This account cannot use this team's computer.",
-      reportCode: "TEAM_MEMBERSHIP_REQUIRED",
+      report: {
+        title: "Team membership required",
+        message: "This account cannot use this team's computer.",
+        code: "TEAM_MEMBERSHIP_REQUIRED",
+      },
     };
   }
   if (variant.kind === "not-admitted") {
     return {
       title: "This account cannot access this computer",
       description: "Switch accounts to use it.",
-      reportTitle: "No Traycer Host is reachable",
-      reportMessage: "No host on this account could be reached.",
-      reportCode: "HOST_NONE_USABLE",
+      report: null,
     };
   }
   if (variant.kind === "update-client") {
@@ -608,10 +614,12 @@ function modalCopy(
         requirement.observedClientAppVersion === null
           ? "This Traycer installation is too old to identify a compatible generation. Install the latest Traycer app."
           : `This host needs a newer Traycer generation. You are running ${requirement.observedClientAppVersion}; install the latest version.`,
-      reportTitle: "Traycer app update required",
-      reportMessage:
-        "The host refused this app at its client-compatibility epoch gate.",
-      reportCode: "CLIENT_INCOMPATIBLE",
+      report: {
+        title: "Traycer app update required",
+        message:
+          "The host refused this app at its client-compatibility epoch gate.",
+        code: "CLIENT_INCOMPATIBLE",
+      },
     };
   }
   if (variant.kind === "update-host") {
@@ -628,9 +636,11 @@ function modalCopy(
       description: variant.isTargetHost
         ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
         : "Another host on this account is running a version this app can't talk to, and it can't be updated from here. Update Traycer on that computer, or switch to a host this one can reach.",
-      reportTitle: "Host update required",
-      reportMessage: "Traycer Host requires an update.",
-      reportCode: "HOST_INCOMPATIBLE",
+      report: {
+        title: "Host update required",
+        message: "Traycer Host requires an update.",
+        code: "HOST_INCOMPATIBLE",
+      },
     };
   }
   if (cause === "cold-start") {
@@ -638,17 +648,21 @@ function modalCopy(
       title: "Setting up Traycer",
       description:
         "Traycer is getting this computer's host ready. This runs once, and the app opens as soon as it's done.",
-      reportTitle: "Traycer Host did not start",
-      reportMessage: "Traycer Host did not become available at launch.",
-      reportCode: "HOST_COLD_START_FAILED",
+      report: {
+        title: "Traycer Host did not start",
+        message: "Traycer Host did not become available at launch.",
+        code: "HOST_COLD_START_FAILED",
+      },
     };
   }
   return {
     title: "No host is available",
     description:
       "Traycer can't reach any of this account's hosts right now. It will connect again on its own as soon as one comes back.",
-    reportTitle: "No Traycer Host is reachable",
-    reportMessage: "No host on this account could be reached.",
-    reportCode: "HOST_NONE_USABLE",
+    report: {
+      title: "No Traycer Host is reachable",
+      message: "No host on this account could be reached.",
+      code: "HOST_NONE_USABLE",
+    },
   };
 }
