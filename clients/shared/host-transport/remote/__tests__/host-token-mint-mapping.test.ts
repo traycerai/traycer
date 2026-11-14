@@ -112,6 +112,47 @@ describe("host-only token mint response mapping", () => {
     expect(requestUrl(calls[0])).toContain("/session-grant");
   });
 
+  it("does not follow a session-grant redirect with the sign-in token", async () => {
+    const calls: RequestCapture[] = [];
+    const sessionGrantUrl = `${BASE_URL}/api/v3/hosts/${HOST_ID}/session-grant`;
+    const redirectUrl = "https://elsewhere.test/steal";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        calls.push({ input, init });
+        const redirect = new Response(null, {
+          status: 302,
+          headers: { Location: redirectUrl },
+        });
+        if (init?.redirect === "manual") return redirect;
+
+        const location = redirect.headers.get("Location");
+        if (location === null) throw new Error("expected a redirect location");
+        calls.push({ input: location, init });
+        return new Response(
+          JSON.stringify({
+            session_grant: "redirected-host-token",
+            session_grant_expires_in: 300,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    const result = await mintHostTokenViaHttp(
+      BASE_URL,
+      HOST_ID,
+      SIGN_IN_TOKEN,
+      null,
+    );
+
+    expect(result).toEqual({
+      kind: "unavailable",
+      detail: "authn answered HTTP 302",
+    });
+    expect(calls.map(requestUrl)).toEqual([sessionGrantUrl]);
+  });
+
   it("sends only the attach role and session-grant version, and accepts both returned credentials", async () => {
     const calls = stubResponse(200, {
       grant: "relay-pass-a",
