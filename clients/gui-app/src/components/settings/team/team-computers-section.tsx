@@ -170,7 +170,10 @@ function TeamComputerClaimDialog(props: {
             This computer will become yours. The team will lose access to it.
           </DialogDescription>
         </DialogHeader>
-        <ClaimRunningWork hostId={props.computer?.hostId ?? null} />
+        <ClaimRunningWork
+          hostId={props.computer?.hostId ?? null}
+          environmentId={props.computer?.environmentId ?? null}
+        />
         {props.failure !== null ? (
           <p role="alert" className="text-ui-sm text-destructive">
             {props.failure}

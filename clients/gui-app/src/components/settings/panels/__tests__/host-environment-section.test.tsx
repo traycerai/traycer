@@ -78,6 +78,8 @@ const mocks = vi.hoisted(() => ({
     binding: null as EnvironmentHostBinding | null,
     status: null as EnvironmentStatusResponseV11 | null,
     teamRole: "editor",
+    /** The rendered host's client, which a request named for its id reaches. */
+    client: null as HostClient<HostRpcRegistry> | null,
   },
   auth: {
     currentAuthEra: vi.fn<() => AuthEra>(),
@@ -112,6 +114,11 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+// A request named for the rendered host goes out on that host's own client.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === "host-a" ? mocks.state.client : null,
+}));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
   useEnvironmentHostReadQuery: () => ({
     kind: "binding",
@@ -218,6 +225,8 @@ function renderSection(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  const client = makeClient(handlers);
+  mocks.state.client = client;
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostContext.Provider
@@ -246,7 +255,7 @@ function renderSection(
                     }
                   : null,
             }),
-            client: makeClient(handlers),
+            client,
           })}
         />
       </RunnerHostContext.Provider>
@@ -283,6 +292,7 @@ function ownershipResult(
 
 beforeEach(() => {
   mocks.state.teamRole = "editor";
+  mocks.state.client = null;
   mocks.auth.currentAuthEra.mockReset();
   mocks.auth.currentAuthEra.mockReturnValue({
     identity: "user-me",
@@ -592,6 +602,7 @@ describe("HostEnvironmentSection", () => {
     mocks.auth.releaseTeamComputer.mockReturnValue(claim.promise);
     const stopRequests: unknown[] = [];
     let stopPreviewCalls = 0;
+    const countRequests: unknown[] = [];
     const queryClient = renderSection("personal", {
       owner: TEAM_OWNER,
       isLocalMachine: true,
@@ -605,6 +616,10 @@ describe("HostEnvironmentSection", () => {
           stopPreviewCalls += 1;
           throw new Error("returning a team computer does not need a preview");
         },
+        "environment.previewLocalFacts": (request) => {
+          countRequests.push(request);
+          return { activeTurns: 2, terminals: 0 };
+        },
       },
     });
 
@@ -617,7 +632,12 @@ describe("HostEnvironmentSection", () => {
         "This computer will become yours. The team will lose access to it.",
       ),
     ).toBeTruthy();
-    expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
+    expect(
+      await within(dialog).findByText("2 chats are running and will stop."),
+    ).toBeTruthy();
+    expect(countRequests).toEqual([
+      { environmentId: TEAM.environmentId, subject: { kind: "computer" } },
+    ]);
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Claim this computer" }),
     );

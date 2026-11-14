@@ -26,6 +26,7 @@ import { TeamComputersSection } from "@/components/settings/team/team-computers-
 import {
   mountTeamPage,
   requireTeamHostClient,
+  requireViewingHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
@@ -33,7 +34,6 @@ import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { RunnerHostContext } from "@/providers/runner-host-context";
-import type { ClaimRunningChats } from "@/components/settings/team/claim-running-chats";
 
 const ENVIRONMENT_ID = "env-a";
 const OTHER_ENVIRONMENT_ID = "env-b";
@@ -44,30 +44,27 @@ const noteHostMembershipChanged = vi.hoisted(() =>
   vi.fn<(hostId: string) => void>(),
 );
 
-const runningChatsAnswer = vi.hoisted(
-  (): { value: ClaimRunningChats | null } => ({ value: null }),
+/** What the claimed computer answers `environment.previewLocalFacts` with. */
+const previewLocalFacts = vi.hoisted(
+  (): {
+    answer: () => { activeTurns: number | null; terminals: number | null };
+  } => ({ answer: () => ({ activeTurns: null, terminals: null }) }),
 );
+const askedHostIds = vi.hoisted((): string[] => []);
 
 vi.mock("@/lib/host/local-admission-invalidation", () => ({
   noteHostMembershipChanged,
 }));
 
-// The host's `{ kind: "computer" }` subject is not on the stack yet, so a
-// count can only come from here; `null` leaves the real read in place.
-vi.mock(
-  "@/components/settings/team/claim-running-chats",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/components/settings/team/claim-running-chats")
-      >();
-    return {
-      ...actual,
-      useClaimRunningChats: (hostId: string | null): ClaimRunningChats =>
-        runningChatsAnswer.value ?? actual.useClaimRunningChats(hostId),
-    };
+// The claimed computer's own requester: a real one over the page's messenger,
+// so the count is answered by `environment.previewLocalFacts` there.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    if (hostId === null) return requireTeamHostClient();
+    askedHostIds.push(hostId);
+    return requireViewingHostClient();
   },
-);
+}));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -164,6 +161,7 @@ function mountSection(
         environment(OTHER_ENVIRONMENT_ID, `handle-${OTHER_ENVIRONMENT_ID}`),
       ],
     }),
+    "environment.previewLocalFacts": () => previewLocalFacts.answer(),
   });
   const runnerHost = dashboardRunnerHost();
   const view = render(
@@ -187,7 +185,8 @@ async function openClaimDialog(user: UserEvent) {
 
 beforeEach(() => {
   hostBinding.value = { auth, directory };
-  runningChatsAnswer.value = null;
+  previewLocalFacts.answer = () => ({ activeTurns: null, terminals: null });
+  askedHostIds.length = 0;
   listTeamComputers.mockReset();
   releaseTeamComputer.mockReset();
   noteHostMembershipChanged.mockReset();
@@ -338,60 +337,79 @@ describe("TeamComputersSection", () => {
     expect(noteHostMembershipChanged).toHaveBeenCalledTimes(1);
   });
 
-  it("says running chats will stop when the computer's count is not known", async () => {
-    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
-    const user = userEvent.setup();
-    await screen.findByRole("button", { name: "Claim this computer" });
+  it.each([
+    ["answers no count", () => ({ activeTurns: null, terminals: null })],
+    [
+      "fails the read",
+      () => {
+        throw new Error("The computer did not answer.");
+      },
+    ],
+  ] as const)(
+    "says running chats will stop when the computer %s",
+    async (_case, answer) => {
+      previewLocalFacts.answer = answer;
+      const { harness } = mountSection(
+        ENVIRONMENT_ID,
+        "editor",
+        `handle-${ENVIRONMENT_ID}`,
+      );
+      const user = userEvent.setup();
+      await screen.findByRole("button", { name: "Claim this computer" });
 
-    const dialog = await openClaimDialog(user);
+      const dialog = await openClaimDialog(user);
 
-    expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
-    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
-  });
+      await waitFor(() =>
+        expect(harness.paramsOf("environment.previewLocalFacts")).toEqual([
+          { environmentId: ENVIRONMENT_ID, subject: { kind: "computer" } },
+        ]),
+      );
+      expect(askedHostIds).toContain("host-computer-a");
+      expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
+      expect(within(dialog).queryByText(/running and will stop/)).toBeNull();
+    },
+  );
 
-  it("says how many chats will stop when the computer counts them", async () => {
-    runningChatsAnswer.value = { kind: "counted", chats: 3 };
-    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
-    const user = userEvent.setup();
-    await screen.findByRole("button", { name: "Claim this computer" });
+  it.each([
+    [3, "3 chats are running and will stop."],
+    [1, "1 chat is running and will stop."],
+  ] as const)(
+    "says how many chats will stop when the computer counts %i",
+    async (activeTurns, line) => {
+      previewLocalFacts.answer = () => ({ activeTurns, terminals: 0 });
+      mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+      const user = userEvent.setup();
+      await screen.findByRole("button", { name: "Claim this computer" });
 
-    const dialog = await openClaimDialog(user);
+      const dialog = await openClaimDialog(user);
 
-    expect(
-      within(dialog).getByText("3 chats are running and will stop."),
-    ).toBeTruthy();
-    expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
-  });
-
-  it("says one chat will stop when the computer counts exactly one", async () => {
-    runningChatsAnswer.value = { kind: "counted", chats: 1 };
-    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
-    const user = userEvent.setup();
-    await screen.findByRole("button", { name: "Claim this computer" });
-
-    const dialog = await openClaimDialog(user);
-
-    expect(
-      within(dialog).getByText("1 chat is running and will stop."),
-    ).toBeTruthy();
-    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
-  });
+      expect(await within(dialog).findByText(line)).toBeTruthy();
+      expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
+    },
+  );
 
   it("draws no running-chats line when the computer has none running", async () => {
-    runningChatsAnswer.value = { kind: "counted", chats: 0 };
-    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    previewLocalFacts.answer = () => ({ activeTurns: 0, terminals: 0 });
+    const { harness } = mountSection(
+      ENVIRONMENT_ID,
+      "editor",
+      `handle-${ENVIRONMENT_ID}`,
+    );
     const user = userEvent.setup();
     await screen.findByRole("button", { name: "Claim this computer" });
 
     const dialog = await openClaimDialog(user);
 
+    await waitFor(() =>
+      expect(within(dialog).queryByText("Running chats will stop.")).toBeNull(),
+    );
+    expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(1);
     expect(
       within(dialog).getByText(
         "This computer will become yours. The team will lose access to it.",
       ),
     ).toBeTruthy();
-    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
-    expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
+    expect(within(dialog).queryByText(/running and will stop/)).toBeNull();
   });
 
   it.each([

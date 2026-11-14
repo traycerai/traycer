@@ -303,7 +303,10 @@ function ClaimLocalTeamComputer(props: {
               This computer will become yours. The team will lose access to it.
             </DialogDescription>
           </DialogHeader>
-          <ClaimRunningWork hostId={props.hostId} />
+          <ClaimRunningWork
+            hostId={props.hostId}
+            environmentId={props.environmentId}
+          />
           {mutation.isError ? (
             <p role="alert" className="text-ui-sm text-destructive">
               {mutation.error.message}
