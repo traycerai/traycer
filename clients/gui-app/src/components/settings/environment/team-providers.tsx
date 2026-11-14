@@ -284,7 +284,6 @@ function TeamProvidersView(props: {
                 ) : (
                   <TeamSyncedProviderProfiles
                     providerId={providerId}
-                    items={profiles}
                     onOutcome={onOutcome}
                   />
                 )}

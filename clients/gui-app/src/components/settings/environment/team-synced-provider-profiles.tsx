@@ -1,5 +1,8 @@
 import { useState, type ReactNode } from "react";
-import { z } from "zod";
+import { useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { useAuthService } from "@/lib/host";
+import { environmentMutationKeys } from "@/lib/query-keys";
 import type {
   ProviderId,
   ProviderProfile,
@@ -13,8 +16,6 @@ import {
 } from "@/components/providers/provider-profile-model";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
-import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
   providerDisplayName,
   providerIdToGuiHarnessId,
@@ -34,7 +35,6 @@ import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamSyncedProviderProfiles(props: {
   readonly providerId: ProviderId;
-  readonly items: readonly ConfigurationItem[];
   readonly onOutcome: (
     result: EnvironmentConfigurationItemWriteResponse,
   ) => void;
@@ -46,7 +46,32 @@ export function TeamSyncedProviderProfiles(props: {
     readonly source: ProviderProfile;
     readonly destination: ProviderProfile;
   } | null>(null);
-  const { put } = useConfigurationItemMutations();
+  const auth = useAuthService();
+  const put = useMutation({
+    mutationKey: environmentMutationKeys.providersSetEnabled(),
+    retry: false,
+    mutationFn: async (request: {
+      readonly environmentId: string;
+      readonly profileId: string;
+      readonly enabled: boolean;
+    }) => {
+      const result = await auth.setProfileRecordEnabled(
+        request.environmentId,
+        providerIdToGuiHarnessId(props.providerId),
+        request.profileId,
+        request.enabled,
+        null,
+      );
+      if (result.kind === "forbidden")
+        throw new Error("You don't have permission to do that.");
+      if (result.kind === "conflict")
+        throw new Error("This connection changed. Refresh and try again.");
+      if (result.kind === "failed")
+        throw new Error("Couldn't update profile availability.");
+    },
+    onError: (error: Error) => toast.error(error.message),
+    onSettled: () => records?.reread(),
+  });
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<ProviderProfile | null>(null);
   const [login, setLogin] = useState<{
@@ -69,30 +94,8 @@ export function TeamSyncedProviderProfiles(props: {
     setLogin({ profile, switchSource });
   };
   const setEnabled = (profileId: string | null, enabled: boolean): void => {
-    if (!canEdit || put.isPending) return;
-    const item = props.items.find(
-      (candidate) =>
-        candidate.kind === "managed_profile" &&
-        candidate.key ===
-          `${providerIdToGuiHarnessId(props.providerId)}:${profileId}`,
-    );
-    if (item === undefined) return;
-    put.mutate(
-      {
-        environmentId: source.environmentId,
-        kind: "managed_profile",
-        key: item.key,
-        os: null,
-        value: { ...z.record(z.string(), z.json()).parse(item.value), enabled },
-        revision: item.revision,
-      },
-      {
-        onSuccess: props.onOutcome,
-        onSettled: () => {
-          void records.reread();
-        },
-      },
-    );
+    if (!canEdit || put.isPending || profileId === null) return;
+    put.mutate({ environmentId: source.environmentId, profileId, enabled });
   };
   if (records.readPending) return <MutedAgentSpinner />;
   if (records.readFailed)
