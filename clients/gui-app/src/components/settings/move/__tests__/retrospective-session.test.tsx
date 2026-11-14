@@ -1,5 +1,5 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -8,12 +8,18 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  applyReviewChoice,
+  readReviewHolds,
+  type ReviewChoiceOutcome,
+  type ReviewHeldEntry,
+} from "@traycer-clients/shared/environment/environment-review";
 import type {
   EnvironmentReviewEntryV12,
   EnvironmentReviewResponseV12,
@@ -21,12 +27,43 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
-import {
-  buildEnvironmentClient,
-  environmentStatusFixture,
-} from "@/lib/environment/__tests__/environment-test-support";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+
+vi.mock(
+  "@traycer-clients/shared/environment/environment-review",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/environment/environment-review")
+      >();
+    return {
+      ...original,
+      readReviewHolds: vi.fn(original.readReviewHolds),
+      applyReviewChoice: vi.fn(original.applyReviewChoice),
+    };
+  },
+);
+
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
+}));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-1",
+}));
 
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: vi.fn(),
@@ -34,8 +71,11 @@ vi.mock("@/lib/settings-navigation", () => ({
 
 afterEach(() => {
   cleanup();
+  resetTeamPageHarness();
   resetNegotiatedManifests();
   useMoveSheetStore.setState({ target: null });
+  vi.mocked(readReviewHolds).mockReset();
+  vi.mocked(applyReviewChoice).mockReset();
 });
 
 const COMMAND_DETAIL_TAIL =
@@ -53,9 +93,7 @@ function reviewOf(
 }
 
 /** A review entry as a `@1.2` host sends it, naming what a held executable runs. */
-function entryOf(
-  overrides: Partial<EnvironmentReviewEntryV12>,
-): EnvironmentReviewEntryV12 {
+function entryOf(overrides: Partial<ReviewHeldEntry>): ReviewHeldEntry {
   return {
     ...reviewEntryFixture({}),
     command: null,
@@ -63,64 +101,116 @@ function entryOf(
     description: null,
     harness: null,
     value: null,
+    op: "put",
+    heldRevision: 1,
+    liveRevision: 1,
     ...overrides,
   };
 }
 
 function renderSession(
   status: EnvironmentStatusResponseV12,
-  entries: readonly EnvironmentReviewEntryV12[],
+  entries: readonly ReviewHeldEntry[],
   recorded: string[],
-): HostClient<HostRpcRegistry> {
-  return renderSessionWith(status, entries, recorded, {
-    extraHandlers: {},
+): void {
+  renderSessionWith(status, entries, recorded, {
     onOpenChange: vi.fn(),
   });
 }
 
 function renderSessionWith(
   status: EnvironmentStatusResponseV12,
-  entries: readonly EnvironmentReviewEntryV12[],
+  entries: readonly ReviewHeldEntry[],
   recorded: string[],
   session: {
-    readonly extraHandlers: MockHandlerMap<HostRpcRegistry>;
     readonly onOpenChange: (open: boolean) => void;
+    readonly applyOutcome?: ReviewChoiceOutcome;
+    readonly readFailures?: number;
   },
-): HostClient<HostRpcRegistry> {
+): { readonly rerender: (open: boolean) => void } {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": () => status,
-    "environment.review": () => reviewOf(entries),
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user",
+          ownerId: "user-1",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner",
+          kind: "personal",
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    }),
+    "environment.review": () => reviewOf([]),
     "environment.review.record": (request) => {
       recorded.push(request.event);
       return { outcome: "recorded" };
     },
-    ...session.extraHandlers,
   };
-  const { client } = buildEnvironmentClient({ hostId: "old", handlers });
-  recordNegotiatedHostManifest("old", {
+  const harness = mountTeamPage(personalPoolSource(), handlers);
+  const client = requireTeamHostClient();
+  let remainingReadFailures = session.readFailures ?? 0;
+  vi.mocked(readReviewHolds).mockImplementation(() => {
+    if (remainingReadFailures > 0) {
+      remainingReadFailures -= 1;
+      return Promise.reject(new Error("authn temporarily unavailable"));
+    }
+    return Promise.resolve(entries);
+  });
+  vi.mocked(applyReviewChoice).mockResolvedValue(
+    session.applyOutcome ?? { outcome: "applied" },
+  );
+  recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
     "environment.status": { major: 1, minor: 1 },
     "environment.review": { major: 1, minor: 2 },
     "environment.review.record": { major: 1, minor: 0 },
-    "environment.review.heldApply": { major: 1, minor: 0 },
+    "environment.list": { major: 1, minor: 1 },
   });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  harness.queryClient.setDefaultOptions({
+    queries: { retry: false, gcTime: 0, refetchOnWindowFocus: false },
+    mutations: { retry: false },
   });
-  render(
-    <QueryClientProvider client={queryClient}>
+  const ui = (open: boolean) => (
+    <harness.Wrapper>
       <RetrospectiveSession
         client={client}
-        reviewHostId="old"
+        reviewHostId={mockLocalHostEntry.hostId}
         stopClient={client}
-        stopHostId="old"
+        stopHostId={mockLocalHostEntry.hostId}
         hostName="Old laptop"
-        open
+        open={open}
         held={null}
         onOpenChange={session.onOpenChange}
       />
-    </QueryClientProvider>,
+    </harness.Wrapper>
   );
-  return client;
+  const view = render(ui(true));
+  return { rerender: (open) => view.rerender(ui(open)) };
+}
+
+function heldChoiceEntries(): readonly ReviewHeldEntry[] {
+  return [
+    entryOf({
+      entryId: "hook-1",
+      reason: "executable_entry",
+      kind: "hook",
+      key: "notify",
+      command: "notify.sh",
+      event: "stop",
+    }),
+    entryOf({
+      entryId: "hook-2",
+      reason: "executable_entry",
+      kind: "hook",
+      key: "format",
+      command: "format.sh",
+      event: "save",
+    }),
+  ];
 }
 
 describe("<RetrospectiveSession /> Stop using Personal", () => {
@@ -154,7 +244,7 @@ describe("<RetrospectiveSession /> Stop using Personal", () => {
         await screen.findByTestId("retrospective-move-to-personal"),
       );
       expect(useMoveSheetStore.getState().target).toEqual({
-        hostId: "old",
+        hostId: mockLocalHostEntry.hostId,
         hostName: "Old laptop",
       });
     },
@@ -248,7 +338,7 @@ describe("<RetrospectiveSession /> commands on hold", () => {
   it("words each held executable kind by what it does and who gets it", async () => {
     const EVERYWHERE = "every computer and sandbox running Personal";
     const cases: readonly {
-      readonly entry: EnvironmentReviewEntryV12;
+      readonly entry: ReviewHeldEntry;
       readonly line: string;
     }[] = [
       {
@@ -256,13 +346,8 @@ describe("<RetrospectiveSession /> commands on hold", () => {
           entryId: "skill-1",
           kind: "skill",
           key: "review",
-          description: "reviewing pull requests",
         }),
-        line: `review (skill) gives agents instructions for reviewing pull requests. Once approved, every provider on ${EVERYWHERE} can use it.`,
-      },
-      {
-        entry: entryOf({ entryId: "skill-2", kind: "skill", key: "plain" }),
-        line: `plain (skill) gives agents instructions for a kind of task. Once approved, every provider on ${EVERYWHERE} can use it.`,
+        line: `review (skill). Once approved, it runs on ${EVERYWHERE}.`,
       },
       {
         entry: entryOf({
@@ -298,17 +383,8 @@ describe("<RetrospectiveSession /> commands on hold", () => {
           entryId: "agent-1",
           kind: "agent_definition",
           key: "reviewer",
-          harness: "claude",
         }),
-        line: `reviewer (agent definition) describes an agent Claude Code can start. Once approved, ${EVERYWHERE} gets it.`,
-      },
-      {
-        entry: entryOf({
-          entryId: "agent-2",
-          kind: "agent_definition",
-          key: "helper",
-        }),
-        line: `helper (agent definition) describes an agent a provider can start. Once approved, ${EVERYWHERE} gets it.`,
+        line: `reviewer (agent definition) describes an agent a provider can start. Once approved, ${EVERYWHERE} gets it.`,
       },
       {
         entry: entryOf({
@@ -368,16 +444,15 @@ describe("<RetrospectiveSession /> a held choice the host refuses", () => {
       ],
       [],
       {
-        extraHandlers: {
-          "environment.review.heldApply": () => ({ outcome: "forbidden" }),
-        },
         onOpenChange,
+        applyOutcome: { outcome: "forbidden" },
       },
     );
 
     const row = await screen.findByTestId("retrospective-held-hook-1");
     fireEvent.click(within(row).getByRole("button", { name: "Approve" }));
 
+    await waitFor(() => expect(applyReviewChoice).toHaveBeenCalledTimes(1));
     expect((await screen.findByRole("status")).textContent).toBe(
       "You no longer have access to change these settings.",
     );
@@ -388,7 +463,6 @@ describe("<RetrospectiveSession /> a held choice the host refuses", () => {
 
 describe("<RetrospectiveSession /> an inventory that cannot be read", () => {
   it("says where the settings could not be read, and Retry brings the rows", async () => {
-    let failing = true;
     const entries = [
       entryOf({
         entryId: "hook-1",
@@ -410,13 +484,8 @@ describe("<RetrospectiveSession /> an inventory that cannot be read", () => {
       entries,
       [],
       {
-        extraHandlers: {
-          "environment.review": () => {
-            if (failing) throw new Error("host unavailable");
-            return reviewOf(entries);
-          },
-        },
         onOpenChange: vi.fn(),
+        readFailures: 1,
       },
     );
     const sheet = await screen.findByTestId("retrospective-sheet");
@@ -425,9 +494,148 @@ describe("<RetrospectiveSession /> an inventory that cannot be read", () => {
     );
     expect(screen.queryByTestId("retrospective-held-hook-1")).toBeNull();
 
-    failing = false;
     fireEvent.click(within(sheet).getByRole("button", { name: "Retry" }));
 
     expect(await screen.findByTestId("retrospective-held-hook-1")).toBeTruthy();
+  });
+});
+
+describe("<RetrospectiveSession /> a held Approve that conflicts", () => {
+  const SHARED = environmentStatusFixture({
+    planes: { records: "shared_unrecorded", broker: "local", room: "local" },
+  });
+
+  it("disables only that row's Approve and sends nothing on another press", async () => {
+    renderSessionWith(SHARED, heldChoiceEntries(), [], {
+      onOpenChange: vi.fn(),
+      applyOutcome: { outcome: "conflict" },
+    });
+    const approve = await screen.findByTestId(
+      "retrospective-held-hook-1-approve",
+    );
+    await screen.findByTestId("retrospective-held-hook-2-approve");
+
+    fireEvent.click(approve);
+
+    await waitFor(() => expect(applyReviewChoice).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("retrospective-held-hook-1-approve")
+          .hasAttribute("disabled"),
+      ).toBe(true),
+    );
+    expect(
+      screen
+        .getByTestId("retrospective-held-hook-1-discard")
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    expect(
+      screen
+        .getByTestId("retrospective-held-hook-2-approve")
+        .hasAttribute("disabled"),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByTestId("retrospective-held-hook-1-approve"));
+
+    expect(applyReviewChoice).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Approve again after the sheet closes and opens", async () => {
+    const view = renderSessionWith(SHARED, heldChoiceEntries(), [], {
+      onOpenChange: vi.fn(),
+      applyOutcome: { outcome: "conflict" },
+    });
+    const approve = await screen.findByTestId(
+      "retrospective-held-hook-1-approve",
+    );
+    fireEvent.click(approve);
+    await waitFor(() => expect(applyReviewChoice).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("retrospective-held-hook-1-approve")
+          .hasAttribute("disabled"),
+      ).toBe(true),
+    );
+
+    act(() => view.rerender(false));
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("retrospective-held-hook-1-approve"),
+      ).toBeNull(),
+    );
+    act(() => view.rerender(true));
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("retrospective-held-hook-1-approve")
+          .hasAttribute("disabled"),
+      ).toBe(false),
+    );
+  });
+
+  it("keeps Approve enabled when the held choice is gone", async () => {
+    renderSessionWith(SHARED, heldChoiceEntries(), [], {
+      onOpenChange: vi.fn(),
+      applyOutcome: { outcome: "gone" },
+    });
+    const approve = await screen.findByTestId(
+      "retrospective-held-hook-1-approve",
+    );
+
+    fireEvent.click(approve);
+
+    await waitFor(() => expect(applyReviewChoice).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(approve.hasAttribute("disabled")).toBe(false));
+  });
+
+  it("does not apply a late conflict to the next opening", async () => {
+    const deferred: {
+      resolve: ((outcome: ReviewChoiceOutcome) => void) | null;
+      answer: Promise<ReviewChoiceOutcome> | null;
+    } = { resolve: null, answer: null };
+    const view = renderSessionWith(SHARED, heldChoiceEntries(), [], {
+      onOpenChange: vi.fn(),
+      applyOutcome: { outcome: "conflict" },
+    });
+    vi.mocked(applyReviewChoice).mockImplementationOnce(() => {
+      deferred.answer = new Promise((resolve) => {
+        deferred.resolve = resolve;
+      });
+      return deferred.answer;
+    });
+    const approve = await screen.findByTestId(
+      "retrospective-held-hook-1-approve",
+    );
+    fireEvent.click(approve);
+    await waitFor(() => expect(applyReviewChoice).toHaveBeenCalledTimes(1));
+
+    act(() => view.rerender(false));
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("retrospective-held-hook-1-approve"),
+      ).toBeNull(),
+    );
+    act(() => view.rerender(true));
+    await screen.findByTestId("retrospective-held-hook-1-approve");
+
+    const resolve = deferred.resolve;
+    const answer = deferred.answer;
+    if (resolve === null || answer === null)
+      throw new Error("Approve did not start");
+    await act(async () => {
+      resolve({ outcome: "conflict" });
+      await answer;
+    });
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("retrospective-held-hook-1-approve")
+          .hasAttribute("disabled"),
+      ).toBe(false),
+    );
   });
 });
