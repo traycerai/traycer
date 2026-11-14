@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,10 +11,12 @@ import {
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { SandboxBillingRuntime } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
-  buysTeamCredits: false,
   toastError: vi.fn<(message: string) => void>(),
 }));
 
@@ -25,14 +27,6 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
   },
 }));
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostBinding: () => mocks.binding,
-}));
-vi.mock("@/hooks/sandboxes/use-team-billing-admin", () => ({
-  useOffersAddCredits: () => mocks.buysTeamCredits,
-}));
-
 const TEAM_CONFIGURATION: SandboxPageConfiguration = {
   kind: "team",
   teamId: "team-acme",
@@ -41,6 +35,7 @@ const TEAM_CONFIGURATION: SandboxPageConfiguration = {
 };
 
 const PERSONAL_CONFIGURATION: SandboxPageConfiguration = { kind: "personal" };
+const environmentListRequests: Array<string | null> = [];
 
 function refusedCreate(): SandboxCreateFetchResult {
   return {
@@ -48,8 +43,8 @@ function refusedCreate(): SandboxCreateFetchResult {
     status: 402,
     code: "insufficient_credit",
     reason: "denied",
-    shortfallMc: 120,
-    newRateMcPerHour: 120,
+    shortfallMc: 1_200,
+    newRateMcPerHour: 1_200,
     currentAwakeBurnMcPerHour: 0,
     message: null,
     creditSource: "team",
@@ -58,13 +53,21 @@ function refusedCreate(): SandboxCreateFetchResult {
 
 async function retryAndExpectToast(
   configuration: SandboxPageConfiguration,
-  buysTeamCredits: boolean,
+  environmentRole: "admin" | "editor" | "viewer",
   refusal: SandboxCreateFetchResult,
   expected: string,
 ): Promise<void> {
   const binding = createFakeSandboxBinding();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   mocks.binding = binding;
-  mocks.buysTeamCredits = buysTeamCredits;
+  if (configuration.kind === "team") {
+    binding.auth.getTeamEnvironment.mockResolvedValue({
+      kind: "ok",
+      environmentId: configuration.environmentId ?? "env-acme",
+    });
+  }
   binding.auth.createSandbox.mockResolvedValue(refusal);
   useAuthStore.setState({
     status: "signed-in",
@@ -75,12 +78,32 @@ async function retryAndExpectToast(
     },
     contextMetadata: { userId: "viewer", username: "viewer" },
   });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-
   render(
-    <QueryClientProvider client={queryClient}>
+    <SandboxBillingRuntime
+      answer={{ kind: "ready", role: environmentRole }}
+      hostId="billing-host"
+      environmentId={
+        configuration.kind === "team"
+          ? (configuration.environmentId ?? "env-acme")
+          : "env-acme"
+      }
+      queryClient={queryClient}
+      onBinding={(runtimeBinding: HostRuntimeBinding<HostRpcRegistry>) => {
+        const fakeBinding = mocks.binding;
+        if (fakeBinding === null) {
+          throw new Error("the fake AuthService answers were not prepared");
+        }
+        vi.spyOn(runtimeBinding.auth, "getTeamEnvironment").mockImplementation(
+          (teamId) => fakeBinding.auth.getTeamEnvironment(teamId),
+        );
+        vi.spyOn(runtimeBinding.auth, "createSandbox").mockImplementation(
+          (request) => fakeBinding.auth.createSandbox(request),
+        );
+      }}
+      onEnvironmentListRequest={(hostId) => {
+        environmentListRequests.push(hostId);
+      }}
+    >
       <SandboxFailedRowActions
         summary={sandboxSummaryFixture({
           id: "failed-team-sandbox",
@@ -89,9 +112,24 @@ async function retryAndExpectToast(
         })}
         configuration={configuration}
       />
-    </QueryClientProvider>,
+    </SandboxBillingRuntime>,
   );
-  await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+  if (configuration.kind === "team") {
+    await waitFor(() => {
+      expect(environmentListRequests).toContain("billing-host");
+      expect(
+        queryClient
+          .getQueryCache()
+          .getAll()
+          .some(
+            (query) =>
+              query.queryKey.includes("environment.list") &&
+              query.state.status === "success",
+          ),
+      ).toBe(true);
+    });
+  }
+  await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
   await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith(expected));
   expect(binding.auth.createSandbox).toHaveBeenCalledTimes(1);
@@ -100,7 +138,7 @@ async function retryAndExpectToast(
 afterEach(() => {
   cleanup();
   mocks.binding = null;
-  mocks.buysTeamCredits = false;
+  environmentListRequests.length = 0;
   mocks.toastError.mockReset();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
@@ -110,14 +148,14 @@ describe("SandboxFailedRowActions Retry", () => {
     {
       reader: "Editor",
       configuration: TEAM_CONFIGURATION,
-      buysTeamCredits: false,
+      environmentRole: "editor",
       refusal: refusedCreate(),
       expected: "The team's credits don't cover an hour of this sandbox.",
     },
     {
       reader: "Admin",
       configuration: TEAM_CONFIGURATION,
-      buysTeamCredits: true,
+      environmentRole: "admin",
       refusal: refusedCreate(),
       expected:
         "The team's credits don't cover an hour of this sandbox. Add $1.20 and try again.",
@@ -125,7 +163,7 @@ describe("SandboxFailedRowActions Retry", () => {
     {
       reader: "Personal reader",
       configuration: PERSONAL_CONFIGURATION,
-      buysTeamCredits: false,
+      environmentRole: "editor",
       refusal: { ...refusedCreate(), creditSource: "personal" },
       expected:
         "Your credits don't cover an hour of this sandbox. Add $1.20 and try again.",
@@ -133,17 +171,17 @@ describe("SandboxFailedRowActions Retry", () => {
     {
       reader: "team reader with an unverified balance",
       configuration: TEAM_CONFIGURATION,
-      buysTeamCredits: false,
+      environmentRole: "editor",
       refusal: { ...refusedCreate(), reason: "unverified" },
       expected:
         "Traycer couldn't confirm your credit balance. Try again in a moment.",
     },
   ])(
     "shows the right create refusal to a $reader after Retry",
-    async ({ configuration, buysTeamCredits, refusal, expected }) => {
+    async ({ configuration, environmentRole, refusal, expected }) => {
       await retryAndExpectToast(
         configuration,
-        buysTeamCredits,
+        environmentRole,
         refusal,
         expected,
       );
