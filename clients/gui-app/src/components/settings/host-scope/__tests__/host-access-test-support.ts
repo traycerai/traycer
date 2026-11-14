@@ -282,14 +282,16 @@ export function reviewEntryFixture(
 /** The sign-in origin the dashboard links resolve against. */
 export const DASHBOARD_ORIGIN = "https://example.invalid";
 
+export interface FakeEnvironmentCloud {
+  readonly cloud: EnvironmentCloud;
+  readonly requests: EnvironmentTransportRequest[];
+}
+
 /** An authn transport fake that records the request without changing its path. */
 export function fakeEnvironmentCloud(answer: {
   readonly status: number;
   readonly body: unknown;
-}): {
-  readonly cloud: EnvironmentCloud;
-  readonly requests: EnvironmentTransportRequest[];
-} {
+}): FakeEnvironmentCloud {
   const requests: EnvironmentTransportRequest[] = [];
   return {
     cloud: {

@@ -32,6 +32,7 @@ import {
   ACCESS_METHODS,
   buildAccessHost,
   fakeEnvironmentCloud,
+  type FakeEnvironmentCloud,
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { REMOTE_ACCESS_TEXT } from "@/components/settings/host-scope/host-access-model";
@@ -127,10 +128,10 @@ function renderTab(
   return queryClient;
 }
 
-function useEnvironmentCloudForTest(answer: {
+function signInWithEnvironmentCloud(answer: {
   readonly status: number;
   readonly body: unknown;
-}): ReturnType<typeof fakeEnvironmentCloud> {
+}): FakeEnvironmentCloud {
   const environmentCloud = fakeEnvironmentCloud(answer);
   useAuthStore.setState({
     status: "signed-in",
@@ -257,7 +258,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
   it("shows the permission refusal for authn's 403 and does not refresh the host", async () => {
     const host = hostWithRemoteAccess("off", "on");
-    const { requests } = useEnvironmentCloudForTest({ status: 403, body: {} });
+    const { requests } = signInWithEnvironmentCloud({ status: 403, body: {} });
     renderTab(host, ACCESS_METHODS, true);
 
     fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
@@ -370,7 +371,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
   it("Turn on sends enabled: true and shows what the host reads next", async () => {
     const host = hostWithRemoteAccess("off", "on");
-    const { requests } = useEnvironmentCloudForTest({
+    const { requests } = signInWithEnvironmentCloud({
       status: 200,
       body: { remoteAccess: { enabled: true, epoch: 1 } },
     });
@@ -404,7 +405,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
   it("shows the generic refusal for authn's 409 and does not refresh the host", async () => {
     const host = hostWithRemoteAccess("off", "on");
-    const { requests } = useEnvironmentCloudForTest({ status: 409, body: {} });
+    const { requests } = signInWithEnvironmentCloud({ status: 409, body: {} });
     renderTab(host, ACCESS_METHODS, true);
 
     fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
