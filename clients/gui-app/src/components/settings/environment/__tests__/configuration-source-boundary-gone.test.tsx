@@ -1273,6 +1273,19 @@ describe("a team the environment list no longer carries", () => {
     expect(screen.queryByText(/and change its settings/)).toBeNull();
   });
 
+  it("promises an admin's invitation changing the settings", async () => {
+    mountBoundary({
+      environments: () => [PERSONAL],
+      invitations: [{ ...INVITATION, role: "admin" }],
+    });
+
+    expect(
+      await screen.findByText(
+        "You're invited to Acme. Accept to see and change its settings.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("keeps the failed read's own line and Retry, which an answer has not refuted", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
