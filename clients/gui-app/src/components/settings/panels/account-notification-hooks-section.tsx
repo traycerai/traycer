@@ -14,6 +14,7 @@ export function AccountNotificationHooksSection(props: {
   return (
     <CloudNotificationHooksSection
       scope="account"
+      teamName={null}
       snapshot={{
         hooks: accountHooksForEditor(props.account.settings?.hooks ?? []),
         revision: props.account.revision,

@@ -29,6 +29,7 @@ interface HookEditorState {
 /** A cloud list's editor always saves against the snapshot the gesture opened. */
 export function CloudNotificationHooksSection(props: {
   readonly scope: "account" | "team";
+  readonly teamName: string | null;
   readonly snapshot: CloudHookSnapshot;
   readonly saving: boolean;
   readonly error: string | null;
@@ -211,7 +212,10 @@ export function CloudNotificationHooksSection(props: {
           blockedReason={null}
           open
           title={CLOUD_NOTIFICATION_LIST_COPY.deleteTitle}
-          description={CLOUD_NOTIFICATION_LIST_COPY.deleteDescription}
+          description={CLOUD_NOTIFICATION_LIST_COPY.deleteDescription(
+            pendingDelete.hook.name ?? pendingDelete.hook.id,
+            props.teamName,
+          )}
           cascadeSummary={null}
           actionLabel="Delete"
           isPending={props.saving}

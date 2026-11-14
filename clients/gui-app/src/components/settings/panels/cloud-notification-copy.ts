@@ -20,9 +20,12 @@ export const ACCOUNT_NOTIFICATIONS_COPY = {
   computerTab: "Notifications",
 } as const;
 
-/** C30's interim state: no claim about a cloud hook's computer file. */
+/** Built to the Proposal of board C30, row 2; awaiting the owner. */
 export const CLOUD_NOTIFICATION_LIST_COPY = {
   deleteTitle: "Delete hook?",
-  deleteDescription: null,
+  deleteDescription: (name: string, team: string | null) =>
+    team === null
+      ? `"${name}" will stop being sent from your computers.`
+      : `"${name}" will stop being sent from ${team}'s computers.`,
   emptyState: null,
 } as const;
