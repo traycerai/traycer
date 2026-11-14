@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resolveEndpointMock: vi.fn(),
   callHostRpcAtResolvedEndpointMock: vi.fn(),
   provisionRunningHostCredentialMock: vi.fn(),
+  readRunningChatCountMock: vi.fn(),
   questionMock: vi.fn(),
   closePromptMock: vi.fn(),
 }));
@@ -38,6 +39,10 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
   };
 });
 
+vi.mock("../../host/running-chat-count", () => ({
+  readRunningChatCount: () => mocks.readRunningChatCountMock(),
+}));
+
 vi.mock("node:readline/promises", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("node:readline/promises")>();
@@ -53,6 +58,12 @@ vi.mock("node:readline/promises", async (importOriginal) => {
 import { buildHostClaimCommand } from "../host-claim";
 import type { HostClaimArgs } from "../host-claim";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import type { RunningChats } from "../../host/running-chat-count";
+
+const { readRunningChatCount: readRealRunningChatCount } =
+  await vi.importActual<typeof import("../../host/running-chat-count")>(
+    "../../host/running-chat-count",
+  );
 
 const HOST_ID = "host-local";
 const TEAM_ID = "team-acme";
@@ -154,6 +165,7 @@ beforeEach(() => {
     return { kind: "active", minted: false };
   });
   mocks.questionMock.mockImplementation(async () => questionAnswer);
+  mocks.readRunningChatCountMock.mockImplementation(readRealRunningChatCount);
   ownership = {
     hostId: HOST_ID,
     owner: { kind: "team", id: TEAM_ID, name: "acme" },
@@ -184,18 +196,12 @@ function setStdinIsTTY(value: boolean): void {
 }
 
 describe("buildHostClaimCommand", () => {
-  it("with the running count unknown, uses the C17 claim words, releases the team's computer, then provisions its credential", async () => {
+  it("releases the team's computer, then provisions its credential", async () => {
     setStdinIsTTY(true);
     const ctx = fakeCtx(false);
 
     const result = await makeClaimCommand(false)(ctx);
 
-    expect(ctx.output.humanRequired).toHaveBeenCalledWith(
-      "This computer belongs to acme.",
-    );
-    expect(mocks.questionMock).toHaveBeenCalledWith(
-      "Claim it as your own? [y/N] ",
-    );
     expect(result).toMatchObject({
       data: { claimed: true, hostId: HOST_ID, team: "acme" },
       human: "This computer is yours.",
@@ -226,13 +232,67 @@ describe("buildHostClaimCommand", () => {
     expect(events).toEqual(["ownership", "release", "provision"]);
   });
 
-  it("skips the question with --yes", async () => {
-    const result = await makeClaimCommand(true)(fakeCtx(false));
+  // Board C17's confirm; the not-known sentence is ruling 210. `null` keeps
+  // the command's own reader, which answers not known until the computer
+  // subject of `environment.previewLocalFacts` is on this stack.
+  const confirmStates: ReadonlyArray<{
+    readonly label: string;
+    readonly running: RunningChats | null;
+    readonly confirm: string;
+  }> = [
+    {
+      label: "chats running",
+      running: { kind: "count", count: 3 },
+      confirm:
+        "This computer belongs to acme. 3 chats are running and will stop.",
+    },
+    {
+      label: "nothing running",
+      running: { kind: "none" },
+      confirm: "This computer belongs to acme.",
+    },
+    {
+      label: "the running count not known",
+      running: null,
+      confirm: "This computer belongs to acme. Running chats will stop.",
+    },
+  ];
 
-    expect(mocks.questionMock).not.toHaveBeenCalled();
-    expect(result.human).toBe("This computer is yours.");
-    expect(requests).toHaveLength(2);
-  });
+  it.each(confirmStates)(
+    "with $label, confirms with its line and asks the question",
+    async ({ running, confirm }) => {
+      if (running !== null) {
+        mocks.readRunningChatCountMock.mockResolvedValue(running);
+      }
+      setStdinIsTTY(true);
+      const ctx = fakeCtx(false);
+
+      const result = await makeClaimCommand(false)(ctx);
+
+      expect(ctx.output.humanRequired).toHaveBeenCalledWith(confirm);
+      expect(mocks.questionMock).toHaveBeenCalledWith(
+        "Claim it as your own? [y/N] ",
+      );
+      expect(result.human).toBe("This computer is yours.");
+    },
+  );
+
+  it.each(confirmStates)(
+    "with $label, --yes prints its line and skips the question",
+    async ({ running, confirm }) => {
+      if (running !== null) {
+        mocks.readRunningChatCountMock.mockResolvedValue(running);
+      }
+      const ctx = fakeCtx(false);
+
+      const result = await makeClaimCommand(true)(ctx);
+
+      expect(ctx.output.humanRequired).toHaveBeenCalledWith(confirm);
+      expect(mocks.questionMock).not.toHaveBeenCalled();
+      expect(result.human).toBe("This computer is yours.");
+      expect(requests).toHaveLength(2);
+    },
+  );
 
   it("prints Nothing changed and makes no release call when the person declines", async () => {
     setStdinIsTTY(true);

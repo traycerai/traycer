@@ -12,6 +12,10 @@ import {
   formatCredentialProvisionNote,
   provisionRunningHostCredential,
 } from "../host/install-auth";
+import {
+  readRunningChatCount,
+  type RunningChats,
+} from "../host/running-chat-count";
 import { CLI_ERROR_CODES, cliError, type CliErrorCode } from "../runner/errors";
 import type {
   CommandContext,
@@ -27,9 +31,8 @@ const CLAIM_WORDS = {
   belongsTo: (slug: string) => `This computer belongs to ${slug}.`,
   chatsWillStop: (count: number) =>
     `${String(count)} chats are running and will stop.`,
-  // What the confirm says when the running count could not be read is not
-  // ruled; the slot stays empty until it is.
-  runningChatsUnknown: "",
+  // When the count could not be read (ruling 210).
+  runningChatsUnknown: "Running chats will stop.",
   question: "Claim it as your own? [y/N] ",
   claimed: "This computer is yours.",
   declined: "Nothing changed.",
@@ -97,7 +100,9 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         PLAIN_DISPATCH,
       ),
     );
-    ctx.output.humanRequired(confirmLine(owner.name, await readRunningChats()));
+    ctx.output.humanRequired(
+      confirmLine(owner.name, await readRunningChatCount()),
+    );
     if (!args.yes && !(await confirmClaim(ctx))) {
       return {
         data: { claimed: false, hostId: endpoint.hostId, team: owner.name },
@@ -155,21 +160,6 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
   };
 }
 
-/**
- * The team work the claim stops, as the app's claim confirm shows it (board
- * C13). `unknown` is a failed read, a null answer or a host that does not
- * answer; it is never read as `none`.
- */
-type RunningChats =
-  | { readonly kind: "none" }
-  | { readonly kind: "count"; readonly count: number }
-  | { readonly kind: "unknown" };
-
-// No host method in this repository answers the count yet.
-function readRunningChats(): Promise<RunningChats> {
-  return Promise.resolve({ kind: "unknown" });
-}
-
 function confirmLine(slug: string, running: RunningChats): string {
   switch (running.kind) {
     case "none":
@@ -177,9 +167,7 @@ function confirmLine(slug: string, running: RunningChats): string {
     case "count":
       return `${CLAIM_WORDS.belongsTo(slug)} ${CLAIM_WORDS.chatsWillStop(running.count)}`;
     case "unknown":
-      return [CLAIM_WORDS.belongsTo(slug), CLAIM_WORDS.runningChatsUnknown]
-        .filter((part) => part !== "")
-        .join(" ");
+      return `${CLAIM_WORDS.belongsTo(slug)} ${CLAIM_WORDS.runningChatsUnknown}`;
   }
 }
 
