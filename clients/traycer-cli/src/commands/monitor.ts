@@ -2,8 +2,13 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import {
   hostDoorRefusalCliError,
+  olderHostCliError,
   type HostDoorCredential,
 } from "../internal/host-door-words";
+import {
+  hostVersionNeedsUpdate,
+  MINIMUM_HOST_VERSION,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import {
   createCliHostTokens,
   type SignInRevalidator,
@@ -169,12 +174,6 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     });
     throw new Error("traycer monitor: epic id required — set TRAYCER_EPIC_ID.");
   }
-  const capability = readAgentSessionCapability(PROCESS_AGENT_ENVIRONMENT);
-  const credential =
-    capability === null
-      ? await signInMonitorCredential(logger, { agentId, epicId })
-      : capabilityMonitorCredential(capability);
-
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
   // refreshes the cached endpoint is the CLI's equivalent of the renderer's
   // host directory — reconnects survive a host restart on a new port. Polls
@@ -194,6 +193,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     agentId,
     epicId,
   });
+  // After the floor, so a host below it is refused before any credential is
+  // read.
+  const capability = readAgentSessionCapability(PROCESS_AGENT_ENVIRONMENT);
+  const credential =
+    capability === null
+      ? await signInMonitorCredential(logger, { agentId, epicId })
+      : capabilityMonitorCredential(capability);
   let pollInFlight = false;
   const poll = setInterval(() => {
     if (pollInFlight) {
@@ -210,6 +216,9 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           });
         }
       })
+      // A host restarted below the floor is never dialed: the monitor keeps
+      // the endpoint it has. Logged where it is found.
+      .catch(() => undefined)
       .finally(() => {
         pollInFlight = false;
       });
@@ -982,6 +991,10 @@ async function handleServerFrame(
   }
 }
 
+/**
+ * The host the pid file names, `null` while it names none usable; throws the
+ * older-host error for a host below the minimum version.
+ */
 async function tryResolveStreamEndpoint(
   logger: ILogger,
   logState: EndpointResolutionLogState,
@@ -1006,6 +1019,19 @@ async function tryResolveStreamEndpoint(
       );
     });
     return null;
+  }
+  // Before any dial, as the app does: a host older than the paired floor
+  // cannot read this CLI's credential, and its refusal would read as one.
+  if (hostVersionNeedsUpdate(metadata.version, MINIMUM_HOST_VERSION)) {
+    logEndpointResolution(logState, `older:${metadata.hostId}`, () => {
+      logger.warn("Monitor endpoint is a host below the floor", {
+        environment: config.environment,
+        hostId: metadata.hostId,
+        hostVersion: metadata.version,
+        minimumHostVersion: MINIMUM_HOST_VERSION,
+      });
+    });
+    throw olderHostCliError();
   }
   // `WsStreamClient` maps the `/rpc` URL to `/stream` itself.
   logState.value = `ready:${metadata.hostId}:${metadata.websocketUrl}`;

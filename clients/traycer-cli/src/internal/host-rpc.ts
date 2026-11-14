@@ -9,8 +9,13 @@ import {
 import {
   hostDoorRefusalCliError,
   hostTokenFailureCliError,
+  olderHostCliError,
   signedOutCliError,
 } from "./host-door-words";
+import {
+  hostVersionNeedsUpdate,
+  MINIMUM_HOST_VERSION,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -542,8 +547,9 @@ async function requestWithHostToken<
  * pid file advertises the unary endpoint URL verbatim. Exported so streaming
  * commands (`worktree delete`) that dial the shared `WsStreamClient` resolve
  * the endpoint through the same liveness-checked path as the unary calls -
- * an absent/dead pid surfaces as a clean `HOST_NOT_RUNNING` CliError, and the
- * stream client maps the `/rpc` URL to `/stream` itself.
+ * an absent/dead pid surfaces as a clean `HOST_NOT_RUNNING` CliError, a host
+ * below the minimum version as the older-host line, and the stream client
+ * maps the `/rpc` URL to `/stream` itself.
  */
 export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
   const logger = createCliLogger(config.environment);
@@ -592,6 +598,20 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
       details: null,
       exitCode: 1,
     });
+  }
+  // Before any dial, as the app does: a host older than the paired floor
+  // cannot read this CLI's credential, and its refusal would read as one.
+  if (hostVersionNeedsUpdate(metadata.version, MINIMUM_HOST_VERSION)) {
+    logger.warn(
+      "Host RPC refused before dialing; the host is below the floor",
+      {
+        environment: config.environment,
+        hostId: metadata.hostId,
+        hostVersion: metadata.version,
+        minimumHostVersion: MINIMUM_HOST_VERSION,
+      },
+    );
+    throw olderHostCliError();
   }
   logger.debug("Host RPC endpoint resolved", {
     environment: config.environment,
