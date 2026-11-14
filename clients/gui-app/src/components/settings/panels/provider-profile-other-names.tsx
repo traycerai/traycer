@@ -32,16 +32,31 @@ export function ProfileOtherNames(props: {
   const answerName = useProvidersAnswerProfileNameForClient(useHostClient());
   if (!supported) return null;
 
+  return (
+    <ProfileOtherNamesControl
+      profile={profile}
+      pending={answerName.isPending}
+      onPick={(label) => {
+        answerName.mutate({
+          providerId: props.providerId,
+          profileId: profile.profileId,
+          label,
+        });
+      }}
+    />
+  );
+}
+
+export function ProfileOtherNamesControl(props: {
+  readonly profile: ProviderProfile;
+  readonly pending: boolean;
+  readonly onPick: (label: string) => void;
+}): ReactNode {
+  const { profile } = props;
   const names = [...new Set([profile.label, ...profileOtherNames(profile)])];
   const pickName = (label: string): void => {
-    if (answerName.isPending) return;
-    answerName.mutate({
-      providerId: props.providerId,
-      profileId: profile.profileId,
-      label,
-    });
+    if (!props.pending) props.onPick(label);
   };
-
   return (
     <div className="flex flex-col items-start gap-2 text-ui-xs text-muted-foreground">
       <p className="whitespace-normal break-words">
@@ -52,19 +67,19 @@ export function ProfileOtherNames(props: {
         options={names.map((name) => ({ value: name, label: name }))}
         onChange={pickName}
         ariaLabel="Account name"
-        disabled={answerName.isPending}
+        disabled={props.pending}
       />
       <span className="inline-flex items-center gap-1.5">
         <Button
           type="button"
           variant="link"
           size="inline-xs"
-          disabled={answerName.isPending}
+          disabled={props.pending}
           onClick={() => pickName(profile.label)}
         >
           {keepNameAndHideText(profile.label)}
         </Button>
-        {answerName.isPending ? (
+        {props.pending ? (
           <AgentSpinningDots
             className={undefined}
             testId={undefined}

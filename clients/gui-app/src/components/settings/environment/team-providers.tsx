@@ -44,6 +44,12 @@ import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { ConfigurationProfiles } from "./team-configuration-profiles";
 import { TeamPlans } from "./team-plans";
+import {
+  TeamProviderRecordsContext,
+  useTeamProviderRecordsRead,
+  useTeamProviderRecords,
+} from "./team-provider-records";
+import { TeamSyncedProviderProfiles } from "./team-synced-provider-profiles";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
 import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { EnvironmentProviderSkillsTab } from "./environment-skills";
@@ -69,6 +75,7 @@ export function TeamProviders(): ReactNode {
   const read = useBoundedRead(query);
   const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
+  const records = useTeamProviderRecordsRead(scope);
   const catalog = useProvidersListForClient(scope.client, {
     enabled: scope.client !== null,
     subscribed: true,
@@ -134,26 +141,28 @@ export function TeamProviders(): ReactNode {
     ]),
   ];
   return (
-    <TeamProvidersView
-      providerId={providerId}
-      os={os}
-      onOsChange={setOs}
-      issue={issue}
-      readPending={read.pending}
-      readFailed={read.failed}
-      onRetry={read.retry}
-      ready={query.data !== undefined}
-      rows={rows}
-      onSelect={selectProvider}
-      profiles={profiles}
-      adminNames={members.adminNames}
-      packIds={packIds}
-      packs={packs}
-      items={items}
-      writes={writes}
-      harness={harness}
-      onOutcome={(result) => setIssue(configurationWriteIssue(result))}
-    />
+    <TeamProviderRecordsContext.Provider value={records}>
+      <TeamProvidersView
+        providerId={providerId}
+        os={os}
+        onOsChange={setOs}
+        issue={issue}
+        readPending={read.pending}
+        readFailed={read.failed}
+        onRetry={read.retry}
+        ready={query.data !== undefined}
+        rows={rows}
+        onSelect={selectProvider}
+        profiles={profiles}
+        adminNames={members.adminNames}
+        packIds={packIds}
+        packs={packs}
+        items={items}
+        writes={writes}
+        harness={harness}
+        onOutcome={(result) => setIssue(configurationWriteIssue(result))}
+      />
+    </TeamProviderRecordsContext.Provider>
   );
 }
 
@@ -199,6 +208,7 @@ function TeamProvidersView(props: {
     harness,
     onOutcome,
   } = props;
+  const records = useTeamProviderRecords();
   return (
     <SettingsPanelShell
       title="Providers"
@@ -258,11 +268,19 @@ function TeamProvidersView(props: {
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
                 <TeamPlans providerId={providerId} adminNames={adminNames} />
-                <ConfigurationProfiles
-                  providerLabel={providerDisplayName(providerId)}
-                  profiles={profiles}
-                  onOutcome={onOutcome}
-                />
+                {records === null ? (
+                  <ConfigurationProfiles
+                    providerLabel={providerDisplayName(providerId)}
+                    profiles={profiles}
+                    onOutcome={onOutcome}
+                  />
+                ) : (
+                  <TeamSyncedProviderProfiles
+                    providerId={providerId}
+                    items={profiles}
+                    onOutcome={onOutcome}
+                  />
+                )}
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">

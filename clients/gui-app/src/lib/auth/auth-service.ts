@@ -81,6 +81,8 @@ import type {
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -3572,6 +3574,18 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getTeamEnvironment(bearer, teamId);
+  }
+
+  async replaceEnvironmentApiKey(
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    try {
+      return await this.runnerHost.replaceEnvironmentApiKey(bearer, request);
+    } catch {
+      return { kind: "failed" };
+    }
   }
 
   /** An environment's provider counts: its API keys and linked plans. */
