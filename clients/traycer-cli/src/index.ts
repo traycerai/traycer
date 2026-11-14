@@ -108,6 +108,7 @@ import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
 import { buildHostUseCommand } from "./commands/host-use";
+import { buildHostClaimCommand } from "./commands/host-claim";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
@@ -1709,6 +1710,14 @@ function registerHostCommands(program: Command): void {
       .argument("<slug>", "Team slug from its dashboard address")
       .description("Give this computer to a team you belong to."),
     (_opts, [team]) => buildHostUseCommand(team ?? ""),
+  );
+
+  withRunner(
+    host
+      .command("claim")
+      .description("Claim this team computer as your own.")
+      .option("--yes", "Skips the question, for scripts."),
+    (opts) => buildHostClaimCommand({ yes: opts.yes === true }),
   );
 
   withRunner(
