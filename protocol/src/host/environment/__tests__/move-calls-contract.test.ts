@@ -550,6 +550,12 @@ describe("dormant move call contracts", () => {
         subject: { kind: "member", userId: "u" },
       }).subject.kind,
     ).toBe("member");
+    expect(
+      environmentPreviewLocalFactsV10.requestSchema.parse({
+        environmentId: "e",
+        subject: { kind: "computer" },
+      }),
+    ).toEqual({ environmentId: "e", subject: { kind: "computer" } });
     expect(() =>
       environmentPreviewLocalFactsV10.requestSchema.parse({
         environmentId: "e",
@@ -562,6 +568,12 @@ describe("dormant move call contracts", () => {
         subject: { kind: "member" },
       }),
     ).toThrow();
+    expect(
+      environmentPreviewLocalFactsV10.responseSchema.parse({
+        activeTurns: 3,
+        terminals: 1,
+      }),
+    ).toEqual({ activeTurns: 3, terminals: 1 });
     for (const invalid of [
       { activeTurns: -1, terminals: null },
       { activeTurns: 0, terminals: -1 },
