@@ -14,6 +14,7 @@ import {
   cleanup,
   fireEvent,
   render as renderComponent,
+  renderHook,
   screen,
   waitFor,
   type RenderResult,
@@ -51,6 +52,23 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import type { FileAttachmentUploadClient } from "@/lib/composer/file-attachment-upload";
+import { putOnlyRequester } from "@/lib/composer/__tests__/file-attachment-fixtures";
+import {
+  attachedFileNames,
+  fileTransfer,
+  pdfFile,
+  typedPathSpans,
+} from "@/lib/composer/__tests__/file-drop-fixtures";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import {
+  useStagedSandboxStore,
+  type StagedSandboxTarget,
+} from "@/stores/composer/staged-sandbox-store";
+import {
+  STAGED_NEW_TARGET,
+  stagedExistingTarget,
+} from "@/stores/composer/__tests__/staged-sandbox-fixtures";
 import type { DesktopPerWindowStatePatch } from "@/lib/windows/types";
 import * as idb from "idb-keyval";
 
@@ -63,6 +81,16 @@ const mocks = vi.hoisted(() => ({
   capturedHandle: {
     current: null as ComposerPromptEditorHandle | null,
   },
+  /** What the renderer's file drop host resolves a dropped file to. */
+  resolveDroppedFilePaths: vi.fn<
+    (files: ReadonlyArray<File>) => Promise<string[]>
+  >(() => Promise.resolve([])),
+  /** This renderer's own host id, which the placement host is compared with. */
+  localHostId: null as string | null,
+  /** The placement host's client; `null` leaves the composer with nowhere to upload. */
+  placementClient: null as FileAttachmentUploadClient | null,
+  /** The `drafts.putBlob` request the placement client received. */
+  putBlob: vi.fn<FileAttachmentUploadClient["requestWithOptions"]>(),
 }));
 
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
@@ -179,8 +207,9 @@ vi.mock(
         instance.setContent(content, selection),
       syncContent: (content, selection) =>
         instance.syncContent(content, selection),
-      insertFileAttachment: () => false,
-      settleFileAttachment: () => false,
+      insertFileAttachment: (attrs) => instance.insertFileAttachment(attrs),
+      settleFileAttachment: (id, settlement) =>
+        instance.settleFileAttachment(id, settlement),
       insertImageAttachments: (attrs) => instance.insertImageAttachments(attrs),
       insertMentionAttachment: (mention) =>
         instance.insertMentionAttachment(mention),
@@ -285,12 +314,22 @@ vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
   useRunnerHost: () => ({
     fileDrops: {
-      resolveDroppedFilePaths: () => Promise.resolve([]),
+      resolveDroppedFilePaths: (files: ReadonlyArray<File>) =>
+        mocks.resolveDroppedFilePaths(files),
       copyDroppedFilePaths: (paths: readonly string[]) =>
         Promise.resolve([...paths]),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
   }),
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => mocks.localHostId,
+}));
+// The drafts control a first edit brings up navigates to a row it opens; no
+// router is mounted here.
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
 }));
 
 // The staged sandbox's send reads the account and the catalogue; this suite
@@ -392,7 +431,7 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
     },
     target: {
       resolvedHostId: "host-test",
-      client: null,
+      client: mocks.placementClient,
       hostLabel: "Local",
       isPinned: false,
       namedHostDead: false,
@@ -470,6 +509,11 @@ beforeEach(async () => {
   mocks.scheduleLandingImageReconcile.mockImplementation(() => undefined);
   mocks.rewriteResults.length = 0;
   mocks.capturedHandle.current = null;
+  mocks.resolveDroppedFilePaths.mockReset();
+  mocks.resolveDroppedFilePaths.mockResolvedValue([]);
+  mocks.localHostId = null;
+  mocks.placementClient = null;
+  mocks.putBlob.mockReset();
   window.localStorage.clear();
   setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -496,6 +540,7 @@ const originalCreateImageBitmap = globalThis.createImageBitmap;
 
 afterEach(() => {
   cleanup();
+  useStagedSandboxStore.setState({ bySurface: {} });
   draftRuntimeRegistry.resetForTesting();
   resetLandingImageBudgetReservationsForTesting();
   setLandingDraftDesktopProjectionBridge(null);
@@ -1464,6 +1509,60 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
   });
 });
 
+// A staged sandbox is where the staged send runs the draft, though the
+// placement has not moved. The placement host is this machine here, so a path
+// typed into the draft would be one the placement can read and the sandbox
+// cannot: the dropped file travels as an attachment instead.
+describe("landing composer: a file dropped while a sandbox is staged", () => {
+  const REPORT_PATH = "/Users/me/report.pdf";
+
+  beforeEach(() => {
+    mocks.localHostId = "host-test";
+    mocks.placementClient = putOnlyRequester(mocks.putBlob);
+    mocks.putBlob.mockResolvedValue({ ok: true });
+    mocks.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
+  });
+
+  it("is typed as a path, and not uploaded, when nothing is staged", async () => {
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    dropReport();
+    await waitForPasteToSettle();
+
+    expect(typedPathSpans(editorDocument())).toEqual([REPORT_PATH]);
+    expect(attachedFileNames(editorDocument())).toEqual([]);
+    expect(mocks.putBlob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { staged: "a new sandbox", target: STAGED_NEW_TARGET },
+    {
+      staged: "a resting sandbox on another computer",
+      target: stagedExistingTarget("sandbox-host"),
+    },
+  ])(
+    "is uploaded as an attachment, with no path typed, when $staged is staged",
+    async ({ target }) => {
+      render(<KeyedLandingComposerHarness />);
+      await waitForEditorReady();
+      stageOnLandingSurface(target);
+
+      dropReport();
+      await waitForPasteToSettle();
+
+      expect(typedPathSpans(editorDocument())).toEqual([]);
+      expect(attachedFileNames(editorDocument())).toEqual(["report.pdf"]);
+      expect(mocks.putBlob).toHaveBeenCalledTimes(1);
+      expect(mocks.putBlob.mock.calls[0][1]).toMatchObject({
+        kind: "file",
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+      });
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1488,6 +1587,36 @@ function pasteComposerContent(content: JsonContent): void {
       getData: (type: string) => (type === "text/html" ? html : ""),
     },
   });
+}
+
+function editorDocument(): JsonContent {
+  const handle = mocks.capturedHandle.current;
+  if (handle === null) throw new Error("the composer's editor is not mounted");
+  return handle.getJSON();
+}
+
+function dropReport(): void {
+  fireEvent.drop(screen.getByTestId("composer-editor"), {
+    dataTransfer: fileTransfer([pdfFile("report.pdf")]),
+  });
+}
+
+/** Resolves once the drop's path resolution and upload are over: send is no longer held. */
+async function waitForPasteToSettle(): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getByTestId("lifecycle-attachment-pending").textContent).toBe(
+      "false",
+    );
+  });
+}
+
+/** Stages `target` under the key the landing composer stages under. */
+function stageOnLandingSurface(target: StagedSandboxTarget): void {
+  const surfaceKey = renderHook(() => useComposerSurfaceHostKey());
+  act(() => {
+    useStagedSandboxStore.getState().stage(surfaceKey.result.current, target);
+  });
+  surfaceKey.unmount();
 }
 
 function mixedContent(b64a: string, b64b: string): JsonContent {

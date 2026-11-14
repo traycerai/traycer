@@ -21,7 +21,8 @@ import {
   CanvasFrameEventsContext,
   type CanvasArtifactFixture,
 } from "./canvas-surface-context";
-import { LIVE_BOARD_SLOT_BUDGET } from "./canvas-model";
+import { liveBoardSlotBudget } from "./canvas-model";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useCanvasLayout, useCanvasLayoutDocument } from "./use-canvas-layout";
 
 export interface CanvasErrorAttachment extends CanvasPageError {
@@ -118,6 +119,10 @@ function LiveCanvasSurface({
     resolveOutsideReference,
   );
   const { boardFiles, boardByteLengths } = useBoardFiles(artifact);
+  const liveSlotBudget = liveBoardSlotBudget(
+    useRunnerHostOrNull()?.sandboxArtifacts ?? null,
+    artifactId,
+  );
   return store === null ? (
     <div role="status" className="p-4 text-ui-sm text-muted-foreground">
       Opening canvas…
@@ -137,7 +142,7 @@ function LiveCanvasSurface({
       boardFiles={boardFiles}
       boardByteLengths={boardByteLengths}
       frameEvents={frameEvents}
-      liveSlotBudget={LIVE_BOARD_SLOT_BUDGET}
+      liveSlotBudget={liveSlotBudget}
     />
   );
 }
@@ -164,6 +169,10 @@ function FixtureCanvasSurface({
     fixture.resolveOutsideReference,
   );
   const { boardFiles, boardByteLengths } = useBoardFiles(artifact);
+  const liveSlotBudget = liveBoardSlotBudget(
+    useRunnerHostOrNull()?.sandboxArtifacts ?? null,
+    artifactId,
+  );
   return store === null ? null : (
     <CanvasArtifactEditor
       key={artifactId}
@@ -179,7 +188,7 @@ function FixtureCanvasSurface({
       boardFiles={boardFiles}
       boardByteLengths={boardByteLengths}
       frameEvents={frameEvents}
-      liveSlotBudget={LIVE_BOARD_SLOT_BUDGET}
+      liveSlotBudget={liveSlotBudget}
     />
   );
 }

@@ -8,6 +8,7 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 export interface BotSessionStatusData {
   readonly tasks: readonly BotTaskEntry[];
   readonly subscriptions: readonly BotNotificationSubscription[] | null;
+  readonly boundHostId: string | null;
 }
 
 export const BotSessionStatusDataContext =
