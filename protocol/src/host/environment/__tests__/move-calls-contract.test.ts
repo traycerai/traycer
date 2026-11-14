@@ -18,6 +18,7 @@ import { environmentPreviewLocalFactsV10 } from "@traycer/protocol/host/environm
 
 const UUID = "123e4567-e89b-42d3-a456-426614174000";
 const HASH = "a".repeat(64);
+const PERSONAL = { items: [], holdsSecrets: false };
 
 function stageAnswer(kind: "personal" | "team") {
   const common = {
@@ -82,8 +83,12 @@ describe("dormant move call contracts", () => {
     expect(
       environmentMovePlanV20.requestSchema.parse({
         target: { kind: "personal", environmentId: "personal" },
+        personal: PERSONAL,
       }),
-    ).toEqual({ target: { kind: "personal", environmentId: "personal" } });
+    ).toEqual({
+      target: { kind: "personal", environmentId: "personal" },
+      personal: PERSONAL,
+    });
     expect(
       environmentMovePlanV20.responseSchema.parse({
         planHash: HASH,
@@ -121,6 +126,7 @@ describe("dormant move call contracts", () => {
     const stageRequest = {
       target: { kind: "personal" as const, environmentId: "personal" },
       keyChoices: [],
+      personal: PERSONAL,
     };
     expect(environmentMoveStageV10.requestSchema.parse(stageRequest)).toEqual(
       stageRequest,
@@ -360,45 +366,53 @@ describe("dormant move call contracts", () => {
       environmentMoveStageV10.requestSchema.parse({
         target: { kind: "personal", environmentId: "p" },
         keyChoices: [choice(3072)],
+        personal: PERSONAL,
       }),
     ).toBeTruthy();
     expect(() =>
       environmentMoveStageV10.requestSchema.parse({
         target: { kind: "personal", environmentId: "p" },
         keyChoices: [choice(3073)],
+        personal: PERSONAL,
       }),
     ).toThrow();
     expect(() =>
       environmentMoveStageV10.requestSchema.parse({
         target: { kind: "personal", environmentId: "p" },
         keyChoices: [{ key: "", choice: "stays" }],
+        personal: PERSONAL,
       }),
     ).toThrow();
     expect(
       environmentMoveStageV10.requestSchema.parse({
         target: { kind: "personal", environmentId: "p" },
         keyChoices: [],
+        personal: PERSONAL,
       }),
     ).toEqual({
       target: { kind: "personal", environmentId: "p" },
       keyChoices: [],
+      personal: PERSONAL,
     });
     expect(
       environmentMoveStageV10.requestSchema.parse({
         target: { kind: "personal", environmentId: "p" },
         keyChoices: Array.from({ length: 4096 }, () => choice(1)),
+        personal: PERSONAL,
       }).keyChoices,
     ).toHaveLength(4096);
     expect(() =>
       environmentMoveStageV10.requestSchema.parse({
         target: { kind: "personal", environmentId: "p" },
         keyChoices: Array.from({ length: 4097 }, () => choice(1)),
+        personal: PERSONAL,
       }),
     ).toThrow();
     expect(() =>
       environmentMoveStageV10.requestSchema.parse({
         target: { kind: "personal", environmentId: "p" },
         keyChoices: [{ key: "x", choice: "variable" }],
+        personal: PERSONAL,
       }),
     ).toThrow();
   });
@@ -465,12 +479,14 @@ describe("dormant move call contracts", () => {
     expect(
       environmentMovePlanV20.requestSchema.parse({
         target: { kind: "team", environmentId: "t", teamId: UUID },
+        personal: null,
       }),
     ).toHaveProperty("target.kind", "team");
     expect(() => environmentMovePlanV20.requestSchema.parse({})).toThrow();
     expect(() =>
       environmentMovePlanV20.requestSchema.parse({
         target: { kind: "team", environmentId: "t", teamId: "not-a-uuid" },
+        personal: null,
       }),
     ).toThrow();
     const response = {
@@ -582,5 +598,133 @@ describe("dormant move call contracts", () => {
         outcome: "not_awaiting",
       }),
     ).toEqual({ outcome: "not_awaiting" });
+  });
+});
+
+describe("move request personal field", () => {
+  const personalTarget = { kind: "personal" as const, environmentId: "p" };
+  const teamTarget = {
+    kind: "team" as const,
+    environmentId: "t",
+    teamId: UUID,
+  };
+  type Target = typeof personalTarget | typeof teamTarget;
+  const requestCases: Array<{
+    parse: (input: unknown) => unknown;
+    build: (target: Target, personal: unknown) => Record<string, unknown>;
+  }> = [
+    {
+      parse: (input) => environmentMovePlanV20.requestSchema.parse(input),
+      build: (target, personal) => ({ target, personal }),
+    },
+    {
+      parse: (input) => environmentMoveStageV10.requestSchema.parse(input),
+      build: (target, personal) => ({ target, keyChoices: [], personal }),
+    },
+  ];
+
+  it("requires personal and accepts null for both request contracts", () => {
+    for (const requestCase of requestCases) {
+      const missing = requestCase.build(personalTarget, PERSONAL);
+      Reflect.deleteProperty(missing, "personal");
+      expect(() => requestCase.parse(missing)).toThrow();
+
+      const request = requestCase.build(personalTarget, null);
+      expect(requestCase.parse(request)).toEqual(request);
+    }
+  });
+
+  it("parses personal rows and nullable operating systems for both contracts", () => {
+    const row = {
+      kind: "variable",
+      key: "FOO",
+      os: "any",
+      value: { value: "bar" },
+    };
+    const withOperatingSystem = { items: [row], holdsSecrets: true };
+    const withoutOperatingSystem = {
+      items: [{ ...row, os: null }],
+      holdsSecrets: true,
+    };
+    for (const requestCase of requestCases) {
+      const request = requestCase.build(personalTarget, withOperatingSystem);
+      expect(requestCase.parse(request)).toEqual(request);
+
+      const nullableOsRequest = requestCase.build(
+        personalTarget,
+        withoutOperatingSystem,
+      );
+      expect(requestCase.parse(nullableOsRequest)).toEqual(nullableOsRequest);
+    }
+  });
+
+  it("bounds personal item count at 4096 for both contracts", () => {
+    const row = { kind: "variable", key: "k", os: null, value: null };
+    for (const requestCase of requestCases) {
+      const accepted = requestCase.build(personalTarget, {
+        items: Array.from({ length: 4096 }, () => row),
+        holdsSecrets: false,
+      });
+      expect(() => requestCase.parse(accepted)).not.toThrow();
+
+      const refused = requestCase.build(personalTarget, {
+        items: Array.from({ length: 4097 }, () => row),
+        holdsSecrets: false,
+      });
+      expect(() => requestCase.parse(refused)).toThrow();
+    }
+  });
+
+  it("bounds personal keys at 1..3072 characters for both contracts", () => {
+    for (const requestCase of requestCases) {
+      const accepted = requestCase.build(personalTarget, {
+        items: [
+          { kind: "variable", key: "k".repeat(3072), os: null, value: null },
+        ],
+        holdsSecrets: false,
+      });
+      expect(requestCase.parse(accepted)).toEqual(accepted);
+
+      for (const key of ["", "k".repeat(3073)]) {
+        const refused = requestCase.build(personalTarget, {
+          items: [{ kind: "variable", key, os: null, value: null }],
+          holdsSecrets: false,
+        });
+        expect(() => requestCase.parse(refused)).toThrow();
+      }
+    }
+  });
+
+  it("requires holdsSecrets and rejects extra personal and row keys", () => {
+    const row = { kind: "variable", key: "k", os: null, value: null };
+    for (const requestCase of requestCases) {
+      expect(() =>
+        requestCase.parse(
+          requestCase.build(personalTarget, {
+            items: [row],
+            holdsSecrets: false,
+            extra: true,
+          }),
+        ),
+      ).toThrow();
+      expect(() =>
+        requestCase.parse(
+          requestCase.build(personalTarget, {
+            items: [{ ...row, extra: true }],
+            holdsSecrets: false,
+          }),
+        ),
+      ).toThrow();
+      expect(() =>
+        requestCase.parse(requestCase.build(personalTarget, { items: [row] })),
+      ).toThrow();
+    }
+  });
+
+  it("parses a team target with personal null for both contracts", () => {
+    for (const requestCase of requestCases) {
+      const request = requestCase.build(teamTarget, null);
+      expect(requestCase.parse(request)).toEqual(request);
+    }
   });
 });
