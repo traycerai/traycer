@@ -417,7 +417,7 @@ export function isRoleDemotion(from: TeamRole, to: TeamRole): boolean {
 }
 
 export function demotionLossLine(memberName: string): string {
-  return `${memberName} can no longer invite people, change roles or edit the approval policy.`;
+  return `${memberName} can no longer invite people or change roles.`;
 }
 
 export function demotionViewerLossLine(

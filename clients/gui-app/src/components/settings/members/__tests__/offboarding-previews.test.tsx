@@ -204,7 +204,7 @@ describe("DemotionPreviewDialog", () => {
       screen.getByTestId("members-demotion-confirm").hasAttribute("disabled"),
     ).toBe(false);
     expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
+      "Priya can no longer invite people or change roles.",
     );
     // The line says what failed and claims nothing about the button, which is
     // on.
@@ -254,7 +254,7 @@ describe("DemotionPreviewDialog", () => {
       dialog.getAttribute("aria-describedby") ?? "",
     );
     expect(described?.textContent).toContain(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
+      "Priya can no longer invite people or change roles.",
     );
     expect(described?.textContent).toContain(
       "Acme's agents stop using this plan.",
@@ -303,7 +303,7 @@ describe("DemotionPreviewDialog", () => {
       screen.getByText("Change Priya's role in Acme to editor?"),
     ).toBeTruthy();
     expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
+      "Priya can no longer invite people or change roles.",
     );
     expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
       "Change to editor",

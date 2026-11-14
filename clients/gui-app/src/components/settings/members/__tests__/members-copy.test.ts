@@ -10,6 +10,7 @@ import {
   memberRemovedToastBody,
   memberRowTitle,
   removePreviewTitle,
+  ROLE_LABELS,
   seeButNotChangeLine,
 } from "@/components/settings/members/copy";
 import type { MembersListMember } from "@/components/settings/members/types";
@@ -140,19 +141,25 @@ describe("role changes that need a confirm", () => {
 
   it("says both losses when an admin goes straight to viewer", () => {
     expect(demotionConfirmBody("Priya", "Acme", "admin", "viewer")).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy. Priya can no longer change Acme's settings. They can still see them.",
+      "Priya can no longer invite people or change roles. Priya can no longer change Acme's settings. They can still see them.",
     );
   });
 
   it("says what an admin loses on the way to editor", () => {
     expect(demotionConfirmBody("Priya", "Acme", "admin", "editor")).toBe(
-      "Priya can no longer invite people, change roles or edit the approval policy.",
+      "Priya can no longer invite people or change roles.",
     );
   });
 
   it("names the role on the button", () => {
     expect(demotionConfirmLabel("editor")).toBe("Change to editor");
     expect(demotionConfirmLabel("viewer")).toBe("Change to viewer");
+  });
+});
+
+describe("role labels", () => {
+  it("labels a Viewer role", () => {
+    expect(ROLE_LABELS.viewer).toBe("Viewer");
   });
 });
 

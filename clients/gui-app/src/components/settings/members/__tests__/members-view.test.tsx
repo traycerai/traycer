@@ -519,7 +519,7 @@ describe("MembersView demotion", () => {
       await screen.findByText("Change Grace's role in Acme to editor?"),
     ).toBeTruthy();
     expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Grace can no longer invite people, change roles or edit the approval policy.",
+      "Grace can no longer invite people or change roles.",
     );
     expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
       "Change to editor",
@@ -669,7 +669,7 @@ describe("MembersView demotion announcement", () => {
     }
     expect(described).not.toBeNull();
     expect(described).toContain(
-      "Grace can no longer invite people, change roles or edit the approval policy.",
+      "Grace can no longer invite people or change roles.",
     );
     expect(described).toContain("Acme's agents stop using this plan.");
   });
