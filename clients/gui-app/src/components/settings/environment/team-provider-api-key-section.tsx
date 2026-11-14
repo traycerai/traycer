@@ -12,14 +12,14 @@ interface TeamProviderApiKeySectionProps {
   readonly providerId: ProviderId;
   readonly environmentId: string;
   readonly environmentName: string | null;
-  readonly mayManageAccounts: boolean;
+  readonly canManage: boolean;
 }
 
 /** The team's page edits a key only through the window's own joined computer. */
 export function TeamProviderApiKeySection(
   props: TeamProviderApiKeySectionProps,
 ): ReactNode {
-  if (!props.mayManageAccounts || !isProviderKeyProviderId(props.providerId))
+  if (!props.canManage || !isProviderKeyProviderId(props.providerId))
     return null;
   return (
     <TeamProviderApiKeyEditor
