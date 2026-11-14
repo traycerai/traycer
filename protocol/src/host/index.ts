@@ -50,6 +50,7 @@ export * from "./workspace";
 export * from "./worktree-auto-cleanup-schemas";
 export * from "./worktree-changed-stream";
 export * from "./providers-changed-stream";
+export * from "./cloud-recovered-stream";
 
 export {
   hostRpcRegistry,

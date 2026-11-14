@@ -839,6 +839,9 @@ export const HOST_STREAM_RPC_ROUTES = {
   "browser.sessions": "target-host",
   "chat.serving.subscribe": "pool-only",
   "chat.subscribe": "target-host-live-pool-at-rest",
+  // The doorbell of the host that answered a read, never another: its
+  // `recovered` re-asks only that host's own failed reads.
+  "cloud.recovered.subscribe": "target-host",
   "drafts.subscribe": "target-host",
   "epic.communicationGraph.subscribe": "target-host",
   "epic.state.subscribe": "target-host",
