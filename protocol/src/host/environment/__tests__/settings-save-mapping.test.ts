@@ -29,6 +29,7 @@ import {
 } from "@traycer/protocol/host/environment/settings-save-mapping";
 import { readSettingsProposalRefusalReason } from "@traycer/protocol/host/environment/settings-proposals";
 import {
+  providersSetEnabledRequestSchemaV22,
   providersSetEnabledRequestSchemaV21,
   providersSetPackPolicyRequestSchema,
   providersUsePackVersionRequestSchema,
@@ -58,11 +59,6 @@ const EMPTY_ARGS_SHELL = { path: "/bin/zsh", args: emptyShellArgs };
 const EMPTY_ARGS_CANONICAL = '{"args":[],"path":"/bin/zsh"}';
 
 const HOST_SHELL = { path: "/bin/zsh", args: ["-l"] };
-const COMPUTED_OTHER_SHELL: { path: string; args: string[] } = {
-  path: "/bin/bash",
-  args: [],
-};
-const COMPUTED_OTHER_CANONICAL = '{"args":[],"path":"/bin/bash"}';
 const WAITING_SHELL = { path: "/usr/local/bin/Fish", args: ["--login"] };
 const WAITING_SHELL_CANONICAL =
   '{"args":["--login"],"path":"/usr/local/bin/Fish"}';
@@ -107,9 +103,6 @@ const NULL_PIN_CANONICAL = '{"autoDownload":true,"pinnedVersion":null}';
 const WAITING_POLICY = { pinnedVersion: "2.0.0", autoDownload: true };
 const WAITING_POLICY_CANONICAL =
   '{"autoDownload":true,"pinnedVersion":"2.0.0"}';
-const COMPUTED_OTHER_POLICY = { pinnedVersion: "0.1.0", autoDownload: false };
-const COMPUTED_OTHER_POLICY_CANONICAL =
-  '{"autoDownload":false,"pinnedVersion":"0.1.0"}';
 
 const OTHER_PACK: SettingsSaveBase = {
   rows: [{ os: null, value: { pinnedVersion: "9.0.0", autoDownload: true } }],
@@ -565,6 +558,79 @@ describe("settingsSaveItemEdit", () => {
       expectEachShellMethod(EXACT_SELECTION, EXACT_HELD, LOCAL_ONLY);
     });
 
+    it("compares a shell row independently of object key order", () => {
+      expect(
+        settingsSaveItemEdit(shellSave("config.shell.set", EXACT_SELECTION), {
+          rows: [
+            {
+              os: "linux",
+              value: { args: EXACT_SHELL.args, path: EXACT_SHELL.path },
+            },
+          ],
+          hostOs: "linux",
+        }),
+      ).toEqual(LOCAL_ONLY);
+    });
+
+    it("puts empty args when the base shell has no args field", () => {
+      expect(
+        settingsSaveItemEdit(
+          shellSave("config.shell.set", {
+            kind: "shell",
+            path: EMPTY_ARGS_SHELL.path,
+            args: EMPTY_ARGS_SHELL.args,
+          }),
+          {
+            rows: [{ os: "linux", value: { path: "/bin/zsh" } }],
+            hostOs: "linux",
+          },
+        ),
+      ).toEqual(shellPut("linux", EMPTY_ARGS_SHELL, EMPTY_ARGS_CANONICAL));
+    });
+
+    it("puts when the shell argument order differs", () => {
+      expect(
+        settingsSaveItemEdit(shellSave("config.shell.set", EXACT_SELECTION), {
+          rows: [
+            {
+              os: "linux",
+              value: {
+                path: EXACT_SHELL.path,
+                args: [...EXACT_SHELL.args].reverse(),
+              },
+            },
+          ],
+          hostOs: "linux",
+        }),
+      ).toEqual(shellPut("linux", EXACT_SHELL, EXACT_CANONICAL));
+    });
+
+    it("puts when shell argument case differs", () => {
+      expect(
+        settingsSaveItemEdit(shellSave("config.shell.set", EXACT_SELECTION), {
+          rows: [
+            {
+              os: "linux",
+              value: { path: EXACT_SHELL.path, args: ["-l", "-l", "-l"] },
+            },
+          ],
+          hostOs: "linux",
+        }),
+      ).toEqual(shellPut("linux", EXACT_SHELL, EXACT_CANONICAL));
+    });
+
+    it("compares the host OS row when both any and host rows exist", () => {
+      expect(
+        settingsSaveItemEdit(shellSave("config.shell.set", EXACT_SELECTION), {
+          rows: [
+            { os: "any", value: HOST_SHELL },
+            { os: "linux", value: { path: "/bin/sh", args: [] } },
+          ],
+          hostOs: "linux",
+        }),
+      ).toEqual(shellPut("linux", EXACT_SHELL, EXACT_CANONICAL));
+    });
+
     it("puts an empty argument list on the host OS row", () => {
       expectEachShellMethod(
         {
@@ -628,7 +694,7 @@ describe("settingsSaveItemEdit", () => {
       ).toEqual({ kind: "unmapped", reason: "host_os_unknown" });
     });
 
-    it("a stated selection the host also computes is the app's expectation, and its canonical is that host value", () => {
+    it("proposes the stated shell selection", () => {
       const hostShell = { path: HOST_SHELL.path, args: HOST_SHELL.args };
       expect(
         settingsSaveItemEdit(
@@ -638,14 +704,14 @@ describe("settingsSaveItemEdit", () => {
             args: hostShell.args,
           }),
           {
-            rows: [{ os: "linux", value: COMPUTED_OTHER_SHELL }],
+            rows: [{ os: "linux", value: THIRD_SHELL }],
             hostOs: "linux",
           },
         ),
       ).toEqual(shellPut("linux", hostShell, canonicalSettingValue(hostShell)));
     });
 
-    it("a stated selection the host does not compute stays the app's expectation (the hold then waits in the review list: the host and app slices test that)", () => {
+    it("proposes the stated shell selection when it differs from the base", () => {
       expect(
         settingsSaveItemEdit(
           shellSave("config.shell.set", {
@@ -656,9 +722,6 @@ describe("settingsSaveItemEdit", () => {
           { rows: [{ os: "linux", value: THIRD_SHELL }], hostOs: "linux" },
         ),
       ).toEqual(shellPut("linux", WAITING_SHELL, WAITING_SHELL_CANONICAL));
-      expect(canonicalSettingValue(COMPUTED_OTHER_SHELL)).toEqual(
-        COMPUTED_OTHER_CANONICAL,
-      );
     });
 
     it("deletes the host OS row on reset and leaves a missing row local_only", () => {
@@ -700,29 +763,26 @@ describe("settingsSaveItemEdit", () => {
       ).toEqual(LOCAL_ONLY);
     });
 
-    it("a stated policy the host also computes is the app's expectation, and its canonical is that host value", () => {
-      const hostPolicy = {
-        pinnedVersion: STATED_POLICY.pinnedVersion,
-        autoDownload: STATED_POLICY.autoDownload,
-      };
-      expect(
-        settingsSaveItemEdit(
-          packSave("providers.setPackPolicy", hostPolicy),
-          OTHER_PACK,
-        ),
-      ).toEqual(packPut(hostPolicy, canonicalSettingValue(hostPolicy)));
-    });
-
-    it("a stated policy the host does not compute stays the app's expectation (the hold then waits in the review list: the host and app slices test that)", () => {
+    it("proposes the stated policy when it differs from the base", () => {
       expect(
         settingsSaveItemEdit(
           packSave("providers.setPackPolicy", WAITING_POLICY),
           WAITING_PACK,
         ),
       ).toEqual(packPut(WAITING_POLICY, WAITING_POLICY_CANONICAL));
-      expect(canonicalSettingValue(COMPUTED_OTHER_POLICY)).toEqual(
-        COMPUTED_OTHER_POLICY_CANONICAL,
-      );
+    });
+
+    it("leaves an older usePackVersion caller local_only after upgrading its request", () => {
+      const request = providersUsePackVersionUpgradeV11ToV12.upgradeRequest({
+        packId: "traycer-cli",
+        version: "1.2.3",
+      });
+      expect(
+        settingsSaveItemEdit(
+          { method: "providers.usePackVersion", request },
+          OTHER_PACK,
+        ),
+      ).toEqual(LOCAL_ONLY);
     });
   });
 
@@ -742,6 +802,220 @@ describe("settingsSaveItemEdit", () => {
       expect(settingsSaveItemEdit(recolorSave("#ec4899"), PROFILE_ROW)).toEqual(
         profilePut(RECOLORED_PROFILE, RECOLORED_CANONICAL),
       );
+    });
+
+    it("keeps an own __proto__ profile field when proposing a rename", () => {
+      const baseProfile = JSON.parse(
+        '{"__proto__":"own","name":"Work","color":"#3b82f6","harnessId":"claude","accountIdentity":"ada@example.com","needsLink":true,"enabled":false,"bindingVersion":4,"custodyVersion":9,"note":"kept"}',
+      );
+      expect(
+        settingsSaveItemEdit(renameSave("Desk"), {
+          rows: [{ os: null, value: baseProfile }],
+          hostOs: "linux",
+        }),
+      ).toEqual({
+        kind: "proposal",
+        edit: {
+          kind: "managed_profile",
+          key: "claude:env-profile-1",
+          os: null,
+          operation: "put",
+          value: { ...baseProfile, name: "Desk" },
+          canonicalValue:
+            '{"__proto__":"own","accountIdentity":"ada@example.com","bindingVersion":4,"color":"#3b82f6","custodyVersion":9,"enabled":false,"harnessId":"claude","name":"Desk","needsLink":true,"note":"kept"}',
+        },
+      });
+    });
+
+    it("puts a pack policy when a null field is absent from the base", () => {
+      expect(
+        settingsSaveItemEdit(
+          packSave("providers.usePackVersion", NULL_PIN_POLICY),
+          {
+            rows: [{ os: null, value: { autoDownload: true } }],
+            hostOs: "linux",
+          },
+        ),
+      ).toEqual(packPut(NULL_PIN_POLICY, NULL_PIN_CANONICAL));
+    });
+
+    it("leaves a recolor with no environment profile id local_only", () => {
+      expect(
+        settingsSaveItemEdit(
+          {
+            method: "providers.setEnabled",
+            request: {
+              providerId: "claude-code",
+              enabled: true,
+              profileAction: {
+                type: "recolor",
+                profileId: "profile-1",
+                accentColor: "#ec4899",
+                environmentProfileId: null,
+              },
+            },
+          },
+          PROFILE_ROW,
+        ),
+      ).toEqual(LOCAL_ONLY);
+    });
+
+    it("keeps a recolor from an older caller local_only after upgrading its request", () => {
+      const recolor = {
+        providerId: "claude-code" as const,
+        enabled: false,
+        profileAction: {
+          type: "recolor" as const,
+          profileId: "profile-1",
+          accentColor: "#3b82f6" as const,
+        },
+      };
+      const recolorUpgraded =
+        providersSetEnabledUpgradeV21ToV22.upgradeRequest(recolor);
+      expect(
+        settingsSaveItemEdit(
+          { method: "providers.setEnabled", request: recolorUpgraded },
+          PROFILE_ROW,
+        ),
+      ).toEqual(LOCAL_ONLY);
+    });
+
+    it("proposes the browser access setting", () => {
+      expect(
+        settingsSaveItemEdit(
+          { method: "config.browser.set", request: { agentAccess: true } },
+          EMPTY,
+        ),
+      ).toEqual({
+        kind: "proposal",
+        edit: {
+          kind: "browser_agent_access",
+          key: "browser",
+          os: null,
+          operation: "put",
+          value: { enabled: true },
+          canonicalValue: '{"enabled":true}',
+        },
+      });
+    });
+
+    it("proposes the agent memories setting", () => {
+      expect(
+        settingsSaveItemEdit(
+          {
+            method: "config.agentMemories.set",
+            request: { enabled: false },
+          },
+          EMPTY,
+        ),
+      ).toEqual({
+        kind: "proposal",
+        edit: {
+          kind: "agent_memory",
+          key: "memory",
+          os: null,
+          operation: "put",
+          value: { enabled: false },
+          canonicalValue: '{"enabled":false}',
+        },
+      });
+    });
+
+    it("proposes the fallback policy setting", () => {
+      expect(
+        settingsSaveItemEdit(
+          {
+            method: "providers.fallbackPolicy.set",
+            request: {
+              policy: {
+                enabled: true,
+                ladder: [],
+                graceWindowSeconds: 30,
+                maxWaitMinutes: 60,
+                returnToPreferred: "prompt",
+                tierGroups: [],
+                defaultTierGroupId: null,
+              },
+            },
+          },
+          EMPTY,
+        ),
+      ).toEqual({
+        kind: "proposal",
+        edit: {
+          kind: "fallback_policy",
+          key: "fallback",
+          os: null,
+          operation: "put",
+          value: {
+            document: {
+              enabled: true,
+              ladder: [],
+              graceWindowSeconds: 30,
+              maxWaitMinutes: 60,
+              returnToPreferred: "prompt",
+              tierGroups: [],
+              defaultTierGroupId: null,
+            },
+          },
+          canonicalValue:
+            '{"document":{"defaultTierGroupId":null,"enabled":true,"graceWindowSeconds":30,"ladder":[],"maxWaitMinutes":60,"returnToPreferred":"prompt","tierGroups":[]}}',
+        },
+      });
+    });
+
+    it("proposes the environment setup script", () => {
+      expect(
+        settingsSaveItemEdit(
+          {
+            method: "environment.setup.put",
+            request: {
+              os: "linux",
+              text: "echo setup",
+              expectedRevision: null,
+              executableWriteGrant: null,
+            },
+          },
+          EMPTY,
+        ),
+      ).toEqual({
+        kind: "proposal",
+        edit: {
+          kind: "setup_script",
+          key: "setup",
+          os: "linux",
+          operation: "put",
+          value: { text: "echo setup" },
+          canonicalValue: '{"text":"echo setup"}',
+        },
+      });
+    });
+
+    it("proposes the environment agent definition", () => {
+      expect(
+        settingsSaveItemEdit(
+          {
+            method: "environment.agentDefinitions.put",
+            request: {
+              name: "reviewer",
+              text: "Review the change.",
+              expectedRevision: null,
+              executableWriteGrant: null,
+            },
+          },
+          EMPTY,
+        ),
+      ).toEqual({
+        kind: "proposal",
+        edit: {
+          kind: "agent_definition",
+          key: "reviewer",
+          os: null,
+          operation: "put",
+          value: { text: "Review the change." },
+          canonicalValue: '{"text":"Review the change."}',
+        },
+      });
     });
 
     it("rename to the base's own name leaves the whole item unchanged, so local_only (the form lays over the base, so no other field can differ)", () => {
@@ -1248,6 +1522,112 @@ describe("version bridges", () => {
 });
 
 describe("dormant contracts", () => {
+  it("parses the v1.1 shell get response entries and requires entries", () => {
+    const response = {
+      path: "/bin/zsh",
+      args: ["-l"],
+      synthesised: false,
+      entries: [
+        { path: "/bin/bash", args: null },
+        { path: "/bin/fish", args: [] },
+      ],
+    };
+    expect(configShellGetV11.responseSchema.parse(response)).toEqual(response);
+    expect(() =>
+      configShellGetV11.responseSchema.parse({
+        path: "/bin/zsh",
+        args: ["-l"],
+        synthesised: false,
+      }),
+    ).toThrow();
+  });
+
+  it("parses v2.2 rename and recolor ids and requires the rename id", () => {
+    const rename = {
+      providerId: "claude-code" as const,
+      enabled: true,
+      profileAction: {
+        type: "rename" as const,
+        profileId: "profile-1",
+        label: "Desk",
+        environmentProfileId: "env-profile-1",
+      },
+    };
+    const recolor = {
+      providerId: "claude-code" as const,
+      enabled: true,
+      profileAction: {
+        type: "recolor" as const,
+        profileId: "profile-1",
+        accentColor: "#ec4899" as const,
+        environmentProfileId: "env-profile-2",
+      },
+    };
+    expect(providersSetEnabledRequestSchemaV22.parse(rename)).toEqual(rename);
+    expect(providersSetEnabledRequestSchemaV22.parse(recolor)).toEqual(recolor);
+    expect(() =>
+      providersSetEnabledRequestSchemaV22.parse({
+        ...rename,
+        profileAction: {
+          type: "rename",
+          profileId: "profile-1",
+          label: "Desk",
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("projects a valid v2.2 setEnabled response to the v1.0 response", () => {
+    const state = {
+      providerId: "claude-code" as const,
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled" as const },
+      candidates: [],
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      auth: {
+        status: "unknown" as const,
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      availabilityPending: false,
+      profiles: [],
+    };
+    const response = providersSetEnabledV22.responseSchema.parse({ state });
+    expect(
+      providersSetEnabledDowngradeV22ToV10.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        state: {
+          providerId: "claude-code",
+          enabled: true,
+          disabledBy: null,
+          selected: { kind: "bundled" },
+          candidates: [],
+          authPending: false,
+          checkedAt: null,
+          apiKey: { supported: false, configured: false, source: null },
+          terminalAgentArgs: "",
+          envOverrides: [],
+          loginCapability: null,
+          auth: {
+            status: "unknown",
+            badgeText: null,
+            label: null,
+            detail: null,
+          },
+        },
+      },
+    });
+  });
+
   it("parses one request for each contract the registry cannot reach yet", () => {
     const checks: readonly (() => void)[] = [
       () => {
