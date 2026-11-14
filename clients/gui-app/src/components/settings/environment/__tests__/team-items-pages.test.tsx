@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -801,6 +802,230 @@ describe("TeamVariablesAndShells", () => {
         harness.paramsOf("environment.configuration.items.put")[1],
       ).toMatchObject({ revision: 4 });
       expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
+    });
+
+    it("keeps shell Save at the last-told revision through a quiet newer read", async () => {
+      let current = shellItem;
+      let puts = 0;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 1) {
+            current = {
+              ...shellItem,
+              revision: 4,
+              value: { path: "/bin/bash", args: [] },
+            };
+            return {
+              outcome: "conflict",
+              current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          if (puts === 2) {
+            current = {
+              ...shellItem,
+              revision: 5,
+              value: { path: "/bin/fish", args: [] },
+            };
+            return {
+              outcome: "conflict",
+              current: { revision: 5, changedBy: "Grace", changedAt: 3 },
+            };
+          }
+          current = {
+            ...shellItem,
+            revision: 6,
+            value: { path: "/bin/zsh", args: [] },
+          };
+          return { outcome: "saved", revision: 6 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
+      expect(
+        await screen.findByText("Changed by Grace a moment ago"),
+      ).toBeTruthy();
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      current = {
+        ...shellItem,
+        revision: 5,
+        value: { path: "/bin/fish", args: [] },
+      };
+      await act(async () => {
+        await harness.queryClient.refetchQueries();
+      });
+      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
+        reads + 1,
+      );
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({
+          revision: 3,
+          value: { path: "/bin/zsh", args: [] },
+        }),
+      ]);
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "value",
+        "/bin/zsh",
+      );
+      await waitFor(() => {
+        expect(
+          within(shellEditor()).getByRole("button", { name: "Save" }),
+        ).toHaveProperty("disabled", false);
+      });
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+          [
+            expect.objectContaining({ revision: 3 }),
+            expect.objectContaining({ revision: 4 }),
+          ],
+        );
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+          [
+            expect.objectContaining({ revision: 3 }),
+            expect.objectContaining({ revision: 4 }),
+            expect.objectContaining({ revision: 5 }),
+          ],
+        );
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+    });
+
+    it("retries a transport-failed shell Save at the revision named by the conflict", async () => {
+      let current = { ...shellItem, revision: 1 };
+      let puts = 0;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 1) {
+            current = {
+              ...shellItem,
+              revision: 2,
+              value: { path: "/bin/fish", args: [] },
+            };
+            return {
+              outcome: "conflict",
+              current: { revision: 2, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          current = {
+            ...shellItem,
+            revision: 3,
+            value: { path: "/bin/zsh", args: [] },
+          };
+          return { outcome: "saved", revision: 3 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await screen.findByLabelText("Shell path");
+      const authnFetch = vi.mocked(globalThis.fetch).getMockImplementation();
+      if (authnFetch === undefined)
+        throw new Error("The authn fetch fixture is absent.");
+      let rejectFirstShellPut = true;
+      vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+        const target = new URL(input instanceof Request ? input.url : input);
+        const method =
+          init?.method ?? (input instanceof Request ? input.method : "GET");
+        if (
+          rejectFirstShellPut &&
+          method === "PUT" &&
+          target.pathname.endsWith("/items/shell")
+        ) {
+          rejectFirstShellPut = false;
+          throw new Error("The transport did not answer.");
+        }
+        return authnFetch(input, init);
+      });
+      const requestStart = vi.mocked(globalThis.fetch).mock.calls.length;
+      await typeNewPath(user);
+      expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeGreaterThan(
+        requestStart,
+      );
+      const failedRequest = vi.mocked(globalThis.fetch).mock.calls[
+        requestStart
+      ];
+      expect(failedRequest[1]?.method).toBe("PUT");
+      expect(failedRequest[1]?.body).toContain('"revision":1');
+      expect(await screen.findByRole("alert")).toHaveProperty(
+        "textContent",
+        "Connect to manage settings.",
+      );
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
+
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      current = {
+        ...shellItem,
+        revision: 2,
+        value: { path: "/bin/fish", args: [] },
+      };
+      await act(async () => {
+        await harness.queryClient.refetchQueries();
+      });
+      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
+        reads + 1,
+      );
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "value",
+        "/bin/zsh",
+      );
+
+      await waitFor(() => {
+        expect(
+          within(shellEditor()).getByRole("button", { name: "Save" }),
+        ).toHaveProperty("disabled", false);
+      });
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+          [expect.objectContaining({ revision: 1 })],
+        );
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+          [
+            expect.objectContaining({ revision: 1 }),
+            expect.objectContaining({ revision: 2 }),
+          ],
+        );
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
     });
   });
 
