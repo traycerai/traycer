@@ -64,7 +64,9 @@ afterEach(() => {
 });
 
 async function openMenu(user: UserEvent): Promise<void> {
-  await user.click(await screen.findByTestId("bot-thread-menu"));
+  await user.click(
+    await screen.findByRole("button", { name: "Thread actions" }),
+  );
 }
 
 describe("<BotThreadFollowControl />", () => {
@@ -74,11 +76,11 @@ describe("<BotThreadFollowControl />", () => {
       true,
     );
 
-    const menu = await screen.findByTestId("bot-thread-menu");
-    expect(menu.getAttribute("aria-label")).toBe("Thread actions");
-    expect(screen.queryByTestId("bot-thread-follow")).toBeNull();
-    expect(screen.queryByTestId("bot-thread-following")).toBeNull();
-    expect(screen.queryByTestId("bot-thread-following-reason")).toBeNull();
+    await screen.findByRole("button", { name: "Thread actions" });
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Following/ })).toBeNull();
+    expect(screen.queryByText(/Following/)).toBeNull();
     expect(document.body.textContent).not.toContain("Following");
   });
 
@@ -88,11 +90,9 @@ describe("<BotThreadFollowControl />", () => {
 
     await openMenu(user);
 
-    const item = await screen.findByTestId("bot-thread-follow");
-    expect(item.textContent).toBe("Follow");
-    expect(screen.queryByTestId("bot-thread-following-reason")).toBeNull();
-    expect(screen.queryByTestId("bot-thread-unfollow")).toBeNull();
-    expect(screen.queryByText("Open thread")).toBeNull();
+    const item = await screen.findByRole("menuitem", { name: "Follow" });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    expect(screen.queryByText(/Following/)).toBeNull();
     await user.click(item);
     await waitFor(() =>
       expect(fixture.writes).toEqual([
@@ -114,9 +114,7 @@ describe("<BotThreadFollowControl />", () => {
 
       await openMenu(user);
 
-      expect(
-        (await screen.findByTestId("bot-thread-following-reason")).textContent,
-      ).toBe(text);
+      expect(await screen.findByText(text)).toBeTruthy();
     },
   );
 
@@ -128,10 +126,8 @@ describe("<BotThreadFollowControl />", () => {
     );
 
     await openMenu(user);
-    expect(screen.queryByTestId("bot-thread-follow")).toBeNull();
-    expect(screen.queryByText("Open thread")).toBeNull();
-    const item = await screen.findByTestId("bot-thread-unfollow");
-    expect(item.textContent).toBe("Unfollow");
+    const item = await screen.findByRole("menuitem", { name: "Unfollow" });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
     await user.click(item);
 
     await waitFor(() =>
@@ -147,17 +143,17 @@ describe("<BotThreadFollowControl />", () => {
 
     await openMenu(user);
 
-    expect(await screen.findByTestId("bot-thread-follow")).toBeTruthy();
-    expect(screen.queryByTestId("bot-thread-following-reason")).toBeNull();
+    expect(
+      await screen.findByRole("menuitem", { name: "Follow" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Following/)).toBeNull();
   });
 
   it("draws nothing on a host without the methods", () => {
     mocks.supported = false;
     mount({}, false);
 
-    expect(screen.queryByTestId("bot-thread-menu")).toBeNull();
-    expect(screen.queryByTestId("bot-thread-follow")).toBeNull();
-    expect(screen.queryByTestId("bot-thread-following")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
 
@@ -177,13 +173,10 @@ describe("<BotThreadRowMenu />", () => {
       </mocks.follows.Wrapper>,
     );
 
-    await user.click(screen.getByTestId("bot-thread-row-menu"));
+    await user.click(screen.getByRole("button", { name: "Thread actions" }));
 
-    const open = await screen.findByTestId("bot-thread-row-open");
-    expect(open.textContent).toBe("Open thread");
-    expect(screen.getByTestId("bot-thread-row-follow").textContent).toBe(
-      "Follow",
-    );
+    const open = await screen.findByRole("menuitem", { name: "Open thread" });
+    expect(screen.getByRole("menuitem", { name: "Follow" })).toBeTruthy();
     await user.click(open);
     expect(onOpenThread).toHaveBeenCalledTimes(1);
   });
