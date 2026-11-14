@@ -168,6 +168,15 @@ function mockHostClientKey(client: MockHostClient): string {
   return client.id;
 }
 
+/** Includes `removedProfiles` only when the fixture set the 10.11 key. */
+function providersListEnvelope(providers: readonly ProviderCliState[]) {
+  const removedProfiles = queryMock.removedProfiles;
+  if (removedProfiles === undefined) {
+    return { providers };
+  }
+  return { providers, removedProfiles };
+}
+
 const queryMock = vi.hoisted(() => ({
   /** The cloud catalog's Traycer models, read for a sandbox refusal only. */
   cloudTraycerModels: undefined as ReadonlyArray<ModelOption> | undefined,
@@ -180,6 +189,15 @@ const queryMock = vi.hoisted(() => ({
   catalogHarnessesLoading: false,
   modelsLoading: false,
   providerStates: [] as ProviderCliState[],
+  // `undefined` omits the envelope key, the way a 10.10 computer does.
+  // An array, including an empty one, is the 10.11 key.
+  removedProfiles: undefined as
+    | ReadonlyArray<{
+        readonly providerId: string;
+        readonly profileId: string;
+        readonly aliases: readonly string[];
+      }>
+    | undefined,
   // Per-target-host override for `useProvidersListForClient` - keyed by the
   // sentinel `useHostClientForHostId` returns ("default" for a null host id,
   // else the raw host id). A test that never populates this map gets
@@ -277,7 +295,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
     });
     return {
       data: activity.enabled
-        ? { providers: queryMock.providerStates }
+        ? providersListEnvelope(queryMock.providerStates)
         : undefined,
       isPending: false,
       isError: false,
@@ -324,7 +342,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       queryMock.providerStatesByClient.get(mockHostClientKey(client)) ??
       queryMock.providerStates;
     return {
-      data: activity.enabled ? { providers } : undefined,
+      data: activity.enabled ? providersListEnvelope(providers) : undefined,
       isPending: false,
       isError: false,
       error: null,
@@ -396,7 +414,7 @@ vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
   },
 }));
 
-// The capability gate resolves the "Create new profile" row's target host
+// The capability gate resolves the "Add a profile" row's target host
 // via `useAddressableHostId()` / `useHostDirectoryList()` - stub both to a
 // single local host so the row is enabled by default (mirrors
 // `providers-settings-panel.test.tsx`'s equivalent stubs).
@@ -732,6 +750,11 @@ import {
 import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
 import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
 import {
+  legacyProfile,
+  pinProfile,
+  removedEntry,
+} from "@/components/providers/__tests__/profile-pin-fixtures";
+import {
   createComposerToolbarStore,
   type ComposerToolbarStore,
 } from "@/stores/composer/composer-toolbar-store";
@@ -937,7 +960,7 @@ function providerCliStateWithProfiles(input: {
     terminalAgentArgs: "",
     envOverrides: [],
     // Capable by default (local host, OAuth login args) so the picker's
-    // "Create new profile" row is enabled unless a test explicitly narrows
+    // "Add a profile" row is enabled unless a test explicitly narrows
     // this to exercise the capability gate.
     loginCapability:
       input.loginCapability === undefined
@@ -1270,6 +1293,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.catalogHarnessesLoading = false;
     queryMock.modelsLoading = false;
     queryMock.providerStates = [];
+    queryMock.removedProfiles = undefined;
     queryMock.providerStatesByClient = new Map();
     queryMock.harnessesByClient = new Map();
     queryMock.modelsByClient = new Map();
@@ -3195,9 +3219,7 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
     expect(profileUsageHookMock.runTargetHostIds).toContain(null);
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
 
     // The add-profile flow opens in its own global host, outside the picker
     // popover - the create-row must close the picker itself so the two never
@@ -3232,9 +3254,7 @@ describe("<HarnessModelPicker />", () => {
 
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
 
     const onProfileCreated =
       useProviderProfileAddFlowStore.getState().onProfileCreated;
@@ -3330,9 +3350,7 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
     expect(profileUsageHookMock.runTargetHostIds).toContain("tab-host-1");
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
 
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBe("claude");
     expect(useProviderProfileAddFlowStore.getState().hostId).toBe("tab-host-1");
@@ -3711,13 +3729,13 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
     expect(row.disabled).toBe(true);
     expect(tooltipTextNear(row)).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "Add profiles from a local computer with browser sign-in available.",
     );
     fireEvent.click(row);
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBeNull();
@@ -3779,7 +3797,7 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
@@ -3848,10 +3866,9 @@ describe("<HarnessModelPicker />", () => {
     // Target host: DOES advertise OAuth login capability. The rail's own
     // visible profiles now ALSO resolve through `runTargetHostId` (this
     // migration; it used to read the app-wide default's `providers.list`
-    // unconditionally), so this fixture needs 2+ profiles of its own for the
-    // dropdown - and thus the "Create new profile" row - to render at all;
-    // otherwise the picker falls back to the single-profile ambient-auth
-    // line and the row this test targets never exists to click.
+    // unconditionally). Claude can have profiles, so the account dropdown
+    // and its "Add a profile" row render from one row; this fixture keeps
+    // two profiles so the row this test clicks is the same one as before.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
@@ -3871,7 +3888,7 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
@@ -3895,9 +3912,9 @@ describe("<HarnessModelPicker />", () => {
         profiles: claudeProfilesForDropdown(),
       }),
     ];
-    // Target host: no OAuth login capability. See the sibling "enables…"
-    // test above for why this needs 2+ profiles of its own now that the
-    // rail's visible profiles also resolve through `runTargetHostId`.
+    // Target host: no OAuth login capability. The rail's visible profiles
+    // resolve through `runTargetHostId`. Claude draws the dropdown from one
+    // row; this fixture keeps two profiles, matching the sibling above.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
@@ -3910,13 +3927,13 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
     expect(row.disabled).toBe(true);
     expect(tooltipTextNear(row)).toBe(
-      "Add profiles from a local host with browser sign-in available.",
+      "Add profiles from a local computer with browser sign-in available.",
     );
   });
 
@@ -6062,6 +6079,267 @@ describe("<HarnessModelPicker />", () => {
       await openPicker();
 
       expect(screen.queryByRole("switch", { name: "Ultracode" })).toBeNull();
+    });
+  });
+
+  it("shows the account dropdown for one 10.10 row of a provider that can have profiles", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "codex",
+        profiles: [
+          legacyProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+          }),
+        ],
+      }),
+    ];
+    renderPicker(undefined);
+    await openPicker();
+
+    expect(
+      screen.getByRole("button", { name: "Codex profile: Desk" }),
+    ).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: "Desk" })).toBeDefined();
+    expect(screen.queryByText("Not authenticated")).toBeNull();
+  });
+
+  it("shows one 10.11 row's other name, Terminal line and person state in the account dropdown", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          pinProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+            aliases: [],
+            personNotice: "needs-sign-in",
+            terminalOnThisComputer: true,
+            otherNames: ["Home"],
+          }),
+        ],
+      }),
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(
+      screen.getByRole("button", { name: "Claude profile: Desk" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Desk, Terminal account, Also named Home, Needs a sign-in",
+      }),
+    ).toBeDefined();
+    expect(screen.getByText("Home")).toBeDefined();
+    expect(screen.getByText("Terminal account")).toBeDefined();
+    expect(screen.getByText("Needs a sign-in")).toBeDefined();
+    expect(screen.queryByTestId("terminal-account-first-mention")).toBeNull();
+    expect(screen.queryByText("Not authenticated")).toBeNull();
+  });
+
+  it("shows the account dropdown for one signed-out Terminal row instead of the auth line", async () => {
+    const signedOut = providerCliStateWithProfiles({
+      providerId: "claude-code",
+      profiles: [
+        legacyProfile({
+          profileId: "ambient",
+          label: "Terminal account",
+          kind: "ambient",
+          enabled: true,
+          authStatus: "unauthenticated",
+        }),
+      ],
+    });
+    queryMock.providerStates = [
+      {
+        ...signedOut,
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(
+      screen.getByRole("button", {
+        name: "Claude profile: Terminal account, Terminal",
+      }),
+    ).toBeDefined();
+    expect(screen.queryByText("Not authenticated")).toBeNull();
+  });
+
+  it("keeps today's status line for one row of a provider that cannot have profiles", async () => {
+    const copilot: HarnessOption = {
+      id: "copilot",
+      label: "Copilot",
+      enabled: true,
+      available: true,
+      error: null,
+      modes: ["gui", "tui"],
+      requiresApiKey: false,
+      supportedPermissionModes: [...ALL_PERMISSION_MODES],
+      nativeAutoJudge: false,
+      availabilityPending: false,
+    };
+    queryMock.harnesses = [...queryMock.harnesses, copilot];
+    queryMock.catalogHarnesses = [
+      ...queryMock.catalogHarnesses,
+      catalogHarness(copilot, []),
+    ];
+    const state = providerCliStateWithProfiles({
+      providerId: "copilot",
+      profiles: [
+        legacyProfile({
+          profileId: "copilot-row",
+          label: "Desk",
+          kind: "managed",
+          enabled: true,
+          authStatus: "authenticated",
+        }),
+      ],
+    });
+    queryMock.providerStates = [
+      {
+        ...state,
+        auth: {
+          status: "authenticated",
+          badgeText: "GitHub CLI",
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Copilot" }));
+
+    expect(screen.getByText("GitHub CLI")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /profile:/ })).toBeNull();
+  });
+
+  it("shows the status line and no account dropdown when a provider has no row and no removed pin", async () => {
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "unauthenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(screen.getByText("Not authenticated")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /profile:/ })).toBeNull();
+  });
+
+  it("keeps a removed pin on the trigger and on a model pick when one live row remains", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          legacyProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+          }),
+        ],
+      }),
+    ];
+    queryMock.removedProfiles = [
+      removedEntry({
+        providerId: "claude-code",
+        profileId: "gone-row",
+        aliases: [],
+      }),
+    ];
+    const { selections } = renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "gone-row",
+      },
+    });
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+
+    expect(
+      screen.getByRole("button", { name: "Claude profile: Was removed" }),
+    ).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: "Desk" })).toBeDefined();
+    fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet 4\.6/ }));
+    expect(selections.at(-1)?.profileId).toBe("gone-row");
+  });
+
+  it("keeps a removed pin on the trigger and on a model pick when no live row remains", async () => {
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "authenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+    queryMock.removedProfiles = [
+      removedEntry({
+        providerId: "claude-code",
+        profileId: "gone-row",
+        aliases: [],
+      }),
+    ];
+    const { selections } = renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "gone-row",
+      },
+    });
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+
+    expect(
+      screen.getByRole("button", { name: "Claude profile: Was removed" }),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet 4\.6/ }));
+    expect(selections.at(-1)?.profileId).toBe("gone-row");
+  });
+
+  it("opens the add-profile dialog from one row's Add a profile entry", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: [
+          legacyProfile({
+            profileId: "desk-row",
+            label: "Desk",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+          }),
+        ],
+      }),
+    ];
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
+
+    expect(useProviderProfileAddFlowStore.getState().harnessId).toBe("claude");
+    expect(useProviderProfileAddFlowStore.getState().hostId).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
     });
   });
 });

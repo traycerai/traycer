@@ -18,6 +18,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   profileCommitId,
+  profileTerminalAccountLine,
   removedProfilesForProvider,
   resolveProfilePin,
   type ProfileRowAdmission,
@@ -209,16 +210,41 @@ function useRunTargetComputerName(
   return name === UNNAMED_HOST_LABEL ? null : name;
 }
 
-function PickerProfileDropdownView({
-  props,
-  usagePresentation,
-  removedProfiles,
-}: {
+interface PickerProfileDropdownViewInput {
   readonly props: PickerProfileDropdownProps;
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
   readonly removedProfiles: readonly RemovedProviderProfile[];
+}
+
+/**
+ * Only a record's row that is this computer's Terminal login draws the
+ * computer's name, so the directory is read only when such a row is listed.
+ */
+function PickerProfileDropdownView(input: PickerProfileDropdownViewInput) {
+  return input.props.profiles.some(
+    (profile) => profileTerminalAccountLine(profile, null) !== null,
+  ) ? (
+    <PickerProfileDropdownWithComputerName {...input} />
+  ) : (
+    <PickerProfileDropdownRows {...input} computerName={null} />
+  );
+}
+
+function PickerProfileDropdownWithComputerName(
+  input: PickerProfileDropdownViewInput,
+) {
+  const computerName = useRunTargetComputerName(input.props.runTargetHostId);
+  return <PickerProfileDropdownRows {...input} computerName={computerName} />;
+}
+
+function PickerProfileDropdownRows({
+  props,
+  usagePresentation,
+  removedProfiles,
+  computerName,
+}: PickerProfileDropdownViewInput & {
+  readonly computerName: string | null;
 }) {
-  const computerName = useRunTargetComputerName(props.runTargetHostId);
   return (
     <ProfileDropdown
       providerLabel={props.providerLabel}

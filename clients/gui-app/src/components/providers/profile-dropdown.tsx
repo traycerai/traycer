@@ -89,8 +89,8 @@ export interface ProfileDropdownEligibilityControls {
 
 interface ProfileDropdownProps {
   readonly providerLabel: string;
-  /** 2+ selectable profiles - progressive disclosure (no dropdown under 2) is
-   *  the caller's gate, not this component's. */
+  /** The provider's selectable profiles; whether to draw the dropdown at all
+   *  is the caller's gate (`profileDropdownShown`), not this component's. */
   readonly profiles: ReadonlyArray<ProviderProfile>;
   /** What the selected or pinned id names in `profiles`
    *  (`resolveProfilePin`): its row, an account a person removed (the
@@ -148,7 +148,7 @@ interface ProfileDropdownProps {
  * strip) and Settings' profile-scoped provider section. Closed: accent dot +
  * active profile name + chevron. Open: one row per profile (dot + name +
  * status suffix for signed-out/unavailable + optional shortcut hint), then a
- * separator and a final "Create new profile" row.
+ * separator and a final "Add a profile" row.
  */
 export function ProfileDropdown(props: ProfileDropdownProps) {
   const {
@@ -171,15 +171,13 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
   } = props;
   const rowIdPrefix = useId();
   const triggerId = `${rowIdPrefix}-trigger`;
-  const pinnedRemoved = pin.kind === "removed";
   // The row drawn checked: only the row the pin resolved to. A removed or
   // unknown pin checks none, and the trigger draws the first row for an
   // unknown one.
   const checkedProfile = pin.kind === "row" ? pin.profile : null;
-  const activeProfile = checkedProfile ?? profiles[0];
-  const activeCommitId = profileCommitId(activeProfile);
-  // A removed account has no row, so nothing to switch on or off.
-  const triggerEligibilityControls = pinnedRemoved ? null : eligibilityControls;
+  const triggerProfile = triggerRow(pin, profiles);
+  const activeCommitId =
+    triggerProfile === null ? null : profileCommitId(triggerProfile);
   const [open, setOpen] = useState(false);
   const [previewProfileId, setPreviewProfileId] = useState<string | null>(
     activeCommitId,
@@ -235,14 +233,16 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
             type="button"
             aria-label={profileTriggerAccessibleLabel(
               providerLabel,
-              pinnedRemoved ? null : activeProfile,
+              triggerProfile,
               showTerminalBadge,
             )}
             className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
           >
             <ProfileTriggerContents
-              profile={pinnedRemoved ? null : activeProfile}
-              besideSwitch={triggerEligibilityControls !== null}
+              profile={triggerProfile}
+              besideSwitch={
+                triggerProfile !== null && eligibilityControls !== null
+              }
               showTerminalBadge={showTerminalBadge}
             />
             <ChevronDown
@@ -251,17 +251,10 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
             />
           </button>
         </DropdownMenuTrigger>
-        <ProfileEnablementSwitch
-          controls={triggerEligibilityControls}
-          profile={activeProfile}
-          commitId={activeCommitId}
-          label={profileDisplayLabel(activeProfile)}
+        <TriggerEnablementSwitch
+          controls={eligibilityControls}
+          profile={triggerProfile}
           selectionId={triggerId}
-          pending={triggerEligibilityControls?.pending(activeCommitId) ?? false}
-          disabledReason={
-            triggerEligibilityControls?.disabledReason(activeProfile) ?? null
-          }
-          className="absolute end-10 top-1/2 z-10 -translate-y-1/2"
         />
       </div>
       <DropdownMenuContent
@@ -338,7 +331,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                   onSelect={onCreateProfile}
                 >
                   <Plus className="size-3.5" />
-                  Create new profile
+                  Add a profile
                 </DropdownMenuItem>
               </span>
             </TooltipWrapper>
@@ -687,6 +680,41 @@ function ProfileShortcut(props: {
         {props.shortcutHint.label}
       </Kbd>
     </DropdownMenuShortcut>
+  );
+}
+
+/**
+ * The trigger's row: the checked one, the first for an unknown pin, and none
+ * for a removed account, which has no row (and nothing to switch on or off),
+ * even when the provider has no row left.
+ */
+function triggerRow(
+  pin: ProfilePinResolution,
+  profiles: readonly ProviderProfile[],
+): ProviderProfile | null {
+  if (pin.kind === "removed") return null;
+  return pin.kind === "row" ? pin.profile : (profiles.at(0) ?? null);
+}
+
+function TriggerEnablementSwitch(props: {
+  readonly controls: ProfileDropdownEligibilityControls | null;
+  readonly profile: ProviderProfile | null;
+  readonly selectionId: string;
+}): ReactNode {
+  const { controls, profile } = props;
+  if (controls === null || profile === null) return null;
+  const commitId = profileCommitId(profile);
+  return (
+    <ProfileEnablementSwitch
+      controls={controls}
+      profile={profile}
+      commitId={commitId}
+      label={profileDisplayLabel(profile)}
+      selectionId={props.selectionId}
+      pending={controls.pending(commitId)}
+      disabledReason={controls.disabledReason(profile)}
+      className="absolute end-10 top-1/2 z-10 -translate-y-1/2"
+    />
   );
 }
 

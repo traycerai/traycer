@@ -55,6 +55,23 @@ export interface ProviderReauthGate {
   readonly reason: ProviderReauthReason | null;
   /** The matched profile's own label, when one was found (missing has none). */
   readonly profileLabel: string | null;
+  /**
+   * The chat is on the Terminal login (`null`) and the record's row that is
+   * this computer's Terminal login blocks it; `profileId` names that row so
+   * Sign in opens it.
+   */
+  readonly terminalPinGatedByRecord: boolean;
+}
+
+/**
+ * Whether the banner offers "Continue on Terminal account": never for the
+ * provider's own sign-out, and never for a chat already on the Terminal login
+ * that a record's row blocks, where continuing would change nothing.
+ */
+export function continueOnTerminalOffered(gate: ProviderReauthGate): boolean {
+  return (
+    gate.reason !== "provider_unauthenticated" && !gate.terminalPinGatedByRecord
+  );
 }
 
 /**
@@ -228,6 +245,8 @@ function resolveProviderReauthGate(input: {
     signedOut: reason !== null,
     reason,
     profileLabel: matchedProfile?.label ?? null,
+    terminalPinGatedByRecord:
+      profileId === null && matchedProfile !== null && reason !== null,
   };
 }
 

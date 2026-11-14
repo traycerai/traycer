@@ -195,6 +195,9 @@ describe("failed-turn picker alias pin", () => {
     expect(profileTrigger().getAttribute("aria-label")).toBe(
       "Claude profile: Work",
     );
+    const replay = screen.getByText(/^Replays on /).textContent;
+    expect(replay).toBe("Replays on Claude Sonnet 4 · Work in a new session");
+    expect(replay).not.toContain("failed01");
     expect(footerConfirm().disabled).toBe(true);
 
     await userEvent.click(profileTrigger());

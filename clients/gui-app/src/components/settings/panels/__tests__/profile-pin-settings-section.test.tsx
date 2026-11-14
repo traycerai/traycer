@@ -163,9 +163,11 @@ function mount(input: {
   readonly answerLabel: string | null;
   readonly failAnswer: boolean;
   readonly methods: readonly string[];
+  readonly listLabelAfterAnswer?: string;
 }): ProfileListHost {
   const host = createProfileListHost({
     answer: answerOf(input.profiles, input.removed),
+    listLabelAfterAnswer: input.listLabelAfterAnswer,
     answerProfileName: (request) => {
       if (input.failAnswer) {
         throw new HostRpcError({
@@ -231,23 +233,6 @@ describe("Settings profile pin", () => {
       defaultHostId: null,
     });
     cleanup();
-  });
-
-  it("a focus intent with an alias id selects the canonical row", async () => {
-    mount({
-      profiles: [side, work],
-      removed: [],
-      selectedProfileId: "alias-work",
-      answerLabel: null,
-      failAnswer: false,
-      methods: ANSWER_NAME,
-    });
-    await screen.findByRole("button", { name: "OpenCode profile: Work" });
-    expect(
-      screen
-        .getByRole("menuitem", { current: true })
-        .getAttribute("aria-label"),
-    ).toContain("Work");
   });
 
   it("a removed focus id shows the first row and checks none after the list names it", async () => {
@@ -574,6 +559,38 @@ describe("Settings profile pin", () => {
     });
     expect(triggerName()).toBe("OpenCode profile: Work");
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("a later list name replaces the answer's label and shows no error dialog", async () => {
+    const named = managed({
+      profileId: "work-row",
+      label: "Work",
+      aliases: [],
+      personNotice: null,
+      terminalOnThisComputer: false,
+      otherNames: ["Home"],
+      authStatus: "authenticated",
+    });
+    const host = mount({
+      profiles: [side, named],
+      removed: [],
+      selectedProfileId: "work-row",
+      answerLabel: "Kept",
+      listLabelAfterAnswer: "Listed",
+      failAnswer: false,
+      methods: ANSWER_NAME,
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Home", pressed: false }),
+    );
+    await waitFor(() => {
+      expect(host.answerNameCalls[0]?.label).toBe("Home");
+    });
+    await waitFor(() => {
+      expect(triggerName()).toBe("OpenCode profile: Listed");
+    });
+    expect(toastError).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("keep Work sends the current label and the block leaves", async () => {

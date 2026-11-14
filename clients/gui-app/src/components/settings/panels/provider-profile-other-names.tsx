@@ -18,7 +18,8 @@ import { useHostClient } from "@/lib/host";
 /**
  * The account's other names, in its details: pick the name every computer
  * uses, or keep the current one and hide this. Either one, or Rename, clears
- * the other names, and the block leaves with them.
+ * the other names, and the block leaves with them. Mounted only for a row
+ * that has other names.
  */
 export function ProfileOtherNames(props: {
   readonly hostId: string | null;
@@ -29,10 +30,9 @@ export function ProfileOtherNames(props: {
   const supported =
     useHostMethodSupport(props.hostId, "providers.answerProfileName") === true;
   const answerName = useProvidersAnswerProfileNameForClient(useHostClient());
-  const otherNames = profileOtherNames(profile);
-  if (!supported || otherNames.length === 0) return null;
+  if (!supported) return null;
 
-  const names = [...new Set([profile.label, ...otherNames])];
+  const names = [...new Set([profile.label, ...profileOtherNames(profile)])];
   const pickName = (label: string): void => {
     if (answerName.isPending) return;
     answerName.mutate({

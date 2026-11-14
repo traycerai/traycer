@@ -35,6 +35,7 @@ import {
   profileInventoryAttributes,
   profileCommitId,
   profileDisplayLabel,
+  profileOtherNames,
   profilePersonNoticeText,
   profileTerminalAccountLine,
   removedProfilesForProvider,
@@ -438,11 +439,13 @@ export function ProviderProfileScopedSection(
           onSignIn={openProfileSignIn}
           onManage={openProfileEditor}
         />
-        <ProfileOtherNames
-          hostId={hostId}
-          providerId={state.providerId}
-          profile={selectedProfile}
-        />
+        {profileOtherNames(selectedProfile).length > 0 ? (
+          <ProfileOtherNames
+            hostId={hostId}
+            providerId={state.providerId}
+            profile={selectedProfile}
+          />
+        ) : null}
 
         <ProfileScopedSectionMessages
           addProfileDisabled={addProfileDisabled}

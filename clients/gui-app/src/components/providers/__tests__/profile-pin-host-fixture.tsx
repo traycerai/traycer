@@ -58,6 +58,8 @@ export function createProfileListHost(input: {
     request: AnswerProfileNameRequest,
   ) => AnswerProfileNameResponse;
   readonly failSetEnabled: boolean;
+  /** When set, the list row after an answer uses this label, not the answer's. */
+  readonly listLabelAfterAnswer?: string;
 }): ProfileListHost {
   const queryClient = createAppQueryClient();
   const listCalls: unknown[] = [];
@@ -83,6 +85,10 @@ export function createProfileListHost(input: {
         "providers.answerProfileName": (params) => {
           answerNameCalls.push(params);
           const response = input.answerProfileName(params);
+          const listedLabel =
+            input.listLabelAfterAnswer === undefined
+              ? response.label
+              : input.listLabelAfterAnswer;
           input.answer.providers = input.answer.providers.map((provider) =>
             provider.providerId !== params.providerId
               ? provider
@@ -90,7 +96,7 @@ export function createProfileListHost(input: {
                   ...provider,
                   profiles: provider.profiles.map((profile) =>
                     profile.profileId === params.profileId
-                      ? { ...profile, label: response.label, otherNames: [] }
+                      ? { ...profile, label: listedLabel, otherNames: [] }
                       : profile,
                   ),
                 },

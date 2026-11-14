@@ -83,13 +83,6 @@ const NO_HOST_SHOWN_PROFILES: StatusBarHostShownProfiles = {};
  */
 const USAGE_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
-function usageProfileRow(
-  profiles: ReadonlyArray<ProviderProfile>,
-  profileId: string | null,
-): ProviderProfile | null {
-  return resolvedProfileRow(profiles, USAGE_REMOVED_PROFILES, profileId);
-}
-
 /**
  * The accounts one provider's strip segments describe, in the order the strip
  * draws them. Never empty.
@@ -115,7 +108,7 @@ export function resolveStatusBarProfileIds(
 ): ReadonlyArray<string | null> {
   const checked = selection.shownProfiles[providerId] ?? [];
   const checkedRows = checked.map((profileId) =>
-    usageProfileRow(profiles, profileId),
+    resolvedProfileRow(profiles, USAGE_REMOVED_PROFILES, profileId),
   );
   const shown = profiles
     .filter((profile) => checkedRows.includes(profile))
@@ -157,7 +150,11 @@ function resolveFallbackProfileId(
   // ambient login whenever the provider still lists one.
   const remembered = Object.hasOwn(selection.lastProfileByHarness, harnessId);
   const lastUsed = selection.lastProfileByHarness[harnessId] ?? null;
-  const lastUsedRow = usageProfileRow(profiles, lastUsed);
+  const lastUsedRow = resolvedProfileRow(
+    profiles,
+    USAGE_REMOVED_PROFILES,
+    lastUsed,
+  );
   // The Terminal login's row, or the record's row that is the Terminal login.
   if (remembered && lastUsed === null && lastUsedRow !== null) {
     return profileCommitId(lastUsedRow);

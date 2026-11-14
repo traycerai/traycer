@@ -61,6 +61,25 @@ describe("stagedTerminalLaunchOnHost", () => {
     });
   });
 
+  it("keeps a removed profile id when the new host lists no row", () => {
+    const launch = stagedTerminalLaunchOnHost(
+      CAPTURED,
+      catalog([harnessRow("codex", { modes: ["gui", "tui"] })]),
+      [providerRow("codex", null)],
+      [
+        {
+          providerId: "codex",
+          profileId: "old-host-profile",
+          aliases: [],
+        },
+      ],
+    );
+    if (launch === null) {
+      throw new Error("expected the captured launch to resolve");
+    }
+    expect(launch.profileId).toBe("old-host-profile");
+  });
+
   it("launches nothing when the captured harness is unavailable there, though another one is ready", () => {
     expect(
       stagedTerminalLaunchOnHost(

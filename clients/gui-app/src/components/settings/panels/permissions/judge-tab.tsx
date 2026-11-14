@@ -697,7 +697,7 @@ function PickTileContent(
           // the palette's "Change model…" belong to the chat behind Settings.
           registerActivation={false}
           // The machine Settings is scoped to, for the catalog and for
-          // "Create new profile", whose flow mounts outside Settings' binding.
+          // "Add a profile", whose flow mounts outside Settings' binding.
           // `null` only while Settings follows the effective host, where the
           // two are the same machine.
           createProfileHostId={props.hostId}

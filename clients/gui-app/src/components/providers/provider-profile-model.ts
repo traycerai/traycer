@@ -2,6 +2,7 @@ import type {
   ProviderProfile,
   ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
+import { providerSupportsManagedProfiles } from "@traycer/protocol/host/provider-profile-inheritance";
 import {
   PERSON_NOTICE_TEXT,
   terminalAccountLineText,
@@ -110,6 +111,39 @@ function resolveTerminalPin(
   return terminalRows.length === 1
     ? { kind: "row", profile: terminalRows[0] }
     : UNKNOWN_PIN;
+}
+
+/**
+ * Whether the picker draws a provider's account dropdown, in place of its
+ * status line:
+ * - for a pin to a removed account, whatever the rows, so it reads "Was
+ *   removed" rather than turning into the Terminal pin when a model is
+ *   chosen;
+ * - for a provider that can have profiles (`providerSupportsManagedProfiles`),
+ *   from one account row, one row as for many (owner, 14 Nov);
+ * - for any other provider, from two rows, as before.
+ *
+ * `providerId` is the provider CLI id (`claude-code`, not the harness id).
+ */
+export function profileDropdownShown(
+  providerId: string | null,
+  profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
+  pinnedId: string | null,
+): boolean {
+  if (resolveProfilePin(profiles, removedProfiles, pinnedId).kind === "removed")
+    return true;
+  return profiles.length >= profileDropdownMinimumRows(providerId);
+}
+
+/**
+ * The rows a provider needs before its account dropdown is drawn: one for a
+ * provider that can have profiles, two for any other.
+ */
+export function profileDropdownMinimumRows(providerId: string | null): number {
+  return providerId !== null && providerSupportsManagedProfiles(providerId)
+    ? 1
+    : 2;
 }
 
 /** The row a stored id resolves to, or `null` when it resolves to no row. */

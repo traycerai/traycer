@@ -1,11 +1,15 @@
 import type { HarnessOption } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
+import {
+  guiHarnessIdToProviderId,
+  sortGuiHarnessesByProviderOrder,
+} from "@/lib/provider-ordering";
 import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
 import {
   profileAccentDotInput,
   profileCommitId,
+  profileDropdownShown,
   resolveProfilePin,
   type ProfileAccentDotInput,
   type RemovedProviderProfile,
@@ -53,9 +57,9 @@ export interface RailEntry {
    *  missing an API key). Profile-level auth issues surface in the dropdown,
    *  not here. */
   readonly degraded: boolean;
-  /** Bottom-right accent-dot data, present only when the provider has 2+
-   *  selectable profiles (progressive disclosure).
-   *  `null` renders no dot at all. */
+  /** Bottom-right accent-dot data, present whenever the provider's account
+   *  dropdown is drawn (`profileDropdownShown`). `null` renders no dot at
+   *  all: no dropdown, or a pin to a removed account. */
   readonly accentDot: ProfileAccentDotInput | null;
   /** Non-null while this provider's managed pack is downloading or stuck on an
    *  error. The entry always stays VISIBLE and labelled - the dictation-mic
@@ -73,24 +77,36 @@ export function railEntryKey(harnessId: GuiHarnessId): string {
 }
 
 /**
- * Resolves which profile is "active" for a harness with 2+ selectable
- * profiles: the reducer's browsed `activeProfileId` if it belongs to this
+ * Resolves which profile is "active" for a harness whose account dropdown is
+ * drawn: the reducer's browsed `activeProfileId` if it belongs to this
  * harness, else the composer's already-committed `selectedProfileId` if the
  * list resolves it (`resolveProfilePin`: its row, a row it is an alias of,
  * the record's row that is the Terminal login, or an account a person
  * removed), else the harness's first selectable profile (typically its
  * ambient row). A resolved committed id is returned as it is, never its
  * row's id, so a pin is never rewritten by browsing. Returns `null` outright
- * under 2 profiles - profile identity has no meaning there (progressive
- * disclosure).
+ * when the account dropdown is not drawn (`profileDropdownShown`) - profile
+ * identity has no meaning there (progressive disclosure). A pin to a removed
+ * account always draws it, so choosing a model keeps that pin.
  */
-export function resolveActiveProfileForHarness(
-  profiles: ReadonlyArray<ProviderProfile>,
-  removedProfiles: readonly RemovedProviderProfile[],
-  browsedProfileId: string | null,
-  selectedProfileId: string | null,
-): string | null {
-  if (profiles.length < 2) return null;
+export function resolveActiveProfileForHarness(input: {
+  readonly harnessId: GuiHarnessId;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
+  readonly browsedProfileId: string | null;
+  readonly selectedProfileId: string | null;
+}): string | null {
+  const { profiles, removedProfiles, browsedProfileId, selectedProfileId } =
+    input;
+  if (
+    !profileDropdownShown(
+      guiHarnessIdToProviderId(input.harnessId),
+      profiles,
+      removedProfiles,
+      selectedProfileId,
+    )
+  )
+    return null;
   const matchBrowsed = profiles.find(
     (profile) => profileCommitId(profile) === browsedProfileId,
   );
@@ -106,11 +122,20 @@ export function resolveActiveProfileForHarness(
 }
 
 function resolveAccentDot(
+  harnessId: GuiHarnessId,
   profiles: ReadonlyArray<ProviderProfile>,
   removedProfiles: readonly RemovedProviderProfile[],
   activeProfileId: string | null,
 ): ProfileAccentDotInput | null {
-  if (profiles.length < 2) return null;
+  if (
+    !profileDropdownShown(
+      guiHarnessIdToProviderId(harnessId),
+      profiles,
+      removedProfiles,
+      activeProfileId,
+    )
+  )
+    return null;
   const pin = resolveProfilePin(profiles, removedProfiles, activeProfileId);
   // A removed account has no colour of its own, and another row's would
   // name the wrong account.
@@ -132,6 +157,7 @@ function buildRailEntry(input: {
     harness: input.harness,
     degraded: railHarnessDegraded(input.harness, input.degradedHarnessIds),
     accentDot: resolveAccentDot(
+      input.harness.id,
       input.profiles,
       input.removedProfiles,
       input.activeProfileId,

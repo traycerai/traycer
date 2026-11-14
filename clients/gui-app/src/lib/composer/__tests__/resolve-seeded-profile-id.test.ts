@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import { removedEntry } from "@/components/providers/__tests__/profile-pin-fixtures";
 import { resolveSeededProfileId } from "../resolve-seeded-profile-id";
 
 /**
@@ -58,6 +59,22 @@ describe("resolveSeededProfileId", () => {
 
   it("ticket 07: clears a non-null profileId to null once settled with an undefined profiles entry (provider not found in a settled response)", () => {
     expect(resolveSeededProfileId("work-uuid", undefined, [], true)).toBeNull();
+  });
+
+  it("keeps a removed id once settled when the row list is empty", () => {
+    const removed = [
+      removedEntry({
+        providerId: "codex",
+        profileId: "gone-row",
+        aliases: [],
+      }),
+    ];
+    expect(resolveSeededProfileId("gone-row", [], removed, true)).toBe(
+      "gone-row",
+    );
+    expect(resolveSeededProfileId("gone-row", undefined, removed, true)).toBe(
+      "gone-row",
+    );
   });
 
   it("keeps a still-live profile id when settled and the profile is present", () => {

@@ -166,7 +166,8 @@ function ProfileUnavailableBanner({
   readonly profileId: string | null;
   readonly profileLabel: string | null;
   readonly hostId: string;
-  readonly onContinueOnAmbient: () => void;
+  /** `null` offers no Terminal-account fallback (`continueOnTerminalOffered`). */
+  readonly onContinueOnAmbient: (() => void) | null;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
   const message =
@@ -209,9 +210,11 @@ function ProfileUnavailableBanner({
     >
       <span className="text-foreground/90">{message}</span>
       <div className="flex flex-wrap items-center gap-3">
-        <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
-          Continue on Terminal account
-        </Button>
+        {onContinueOnAmbient === null ? null : (
+          <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
+            Continue on Terminal account
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
@@ -485,11 +488,6 @@ export function ProviderReauthBanner({
   // independent of the tab-host-reachability plumbing below that only the
   // ambient `provider_unauthenticated` path needs.
   if (reason !== "provider_unauthenticated") {
-    if (onContinueOnAmbient === null) {
-      throw new Error(
-        "ProviderReauthBanner: onContinueOnAmbient is required for a profile-specific reason.",
-      );
-    }
     return (
       <ProfileUnavailableBanner
         providerId={providerId}

@@ -8,12 +8,15 @@ import {
   mocks,
   mount,
   SANDBOX_HOST,
+  createChatCalls,
   seed,
   SEEDED,
   SURFACE,
   waitForCreateChats,
 } from "@/components/sandboxes/__tests__/pending-sandbox-send-fixture";
 
+import { PICKED_SETTINGS } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import { removedEntry } from "@/components/providers/__tests__/profile-pin-fixtures";
 import { toast } from "sonner";
 
 function refusal(code: "removed-by-person" | "RPC_ERROR", message: string) {
@@ -71,5 +74,46 @@ describe("pending sandbox create and a removed account", () => {
       ).toContain("Couldn't confirm the agent was created.");
     });
     expect(toastTitles(toastError.mock.calls)).not.toContain("Was removed");
+  });
+
+  it("keeps a removed profile id when the sandbox lists no row", async () => {
+    seed({
+      ...SEEDED,
+      send: { settings: { ...PICKED_SETTINGS, profileId: "gone-row" } },
+    });
+    answerHost(SANDBOX_HOST, {
+      ...CODEX_READY,
+      removedProfiles: [
+        removedEntry({
+          providerId: "codex",
+          profileId: "gone-row",
+          aliases: [],
+        }),
+      ],
+    });
+    mount();
+
+    await waitForCreateChats(1);
+    const settings = createChatCalls()[0]?.input.settings;
+    if (settings === undefined || settings === null) {
+      throw new Error("create chat had no settings");
+    }
+    expect(settings.profileId).toBe("gone-row");
+  });
+
+  it("clears an unknown profile id when the sandbox lists no row", async () => {
+    seed({
+      ...SEEDED,
+      send: { settings: { ...PICKED_SETTINGS, profileId: "gone-row" } },
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    const settings = createChatCalls()[0]?.input.settings;
+    if (settings === undefined || settings === null) {
+      throw new Error("create chat had no settings");
+    }
+    expect(settings.profileId).toBeNull();
   });
 });

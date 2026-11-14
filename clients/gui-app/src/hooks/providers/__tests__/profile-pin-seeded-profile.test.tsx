@@ -204,4 +204,30 @@ describe("useResolvedSeededProfileId pin", () => {
       expect(current()).toBe("work-row");
     });
   });
+
+  it("keeps a removed id when the list has no row", async () => {
+    const { host, current } = mount(
+      [],
+      [
+        removedEntry({
+          providerId: "codex",
+          profileId: "gone-row",
+          aliases: [],
+        }),
+      ],
+      "gone-row",
+    );
+    await waitFor(() => {
+      expect(host.listCalls.length).toBeGreaterThan(0);
+      expect(current()).toBe("gone-row");
+    });
+  });
+
+  it("clears an unknown id when the list has no row", async () => {
+    const { host, current } = mount([], [], "gone-row");
+    await waitFor(() => {
+      expect(host.listCalls.length).toBeGreaterThan(0);
+      expect(current()).toBeNull();
+    });
+  });
 });

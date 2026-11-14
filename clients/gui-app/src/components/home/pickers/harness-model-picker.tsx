@@ -93,6 +93,7 @@ import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers
 import {
   profileDisplayLabel,
   removedProfilesForProvider,
+  profileDropdownShown,
   resolveProfilePin,
   type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
@@ -284,7 +285,7 @@ interface HarnessModelPickerProps {
    */
   registerActivation: boolean;
   /**
-   * The host "Create new profile" creates on - the id of the picker's owning
+   * The host "Add a profile" creates on - the id of the picker's owning
    * tab, or `null` when this picker isn't bound to any tab yet (landing
    * composer, add-node dropdown), meaning the app-wide default host applies.
    * A tab-bound surface (the chat composer, fork dialogs) MUST pass its own
@@ -934,20 +935,23 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // reducer's `activeProfileId` (a strip click or ⌘-digit rail switch) if it
   // belongs to this harness, else the committed selection's profile if it
   // belongs to this harness, else the harness's first selectable profile.
-  // `null` (and no strip) under 2 profiles.
+  // `null` (and no dropdown) when the provider has no account row and no
+  // removed pin (`profileDropdownShown`).
   const activePanelProfileId = useMemo(
     () =>
-      resolveActiveProfileForHarness(
-        profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
-        removedProfilesForHarness(
+      resolveActiveProfileForHarness({
+        harnessId: resolvedActiveProviderId,
+        profiles: profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
+        removedProfiles: removedProfilesForHarness(
           removedProfilesByHarnessId,
           resolvedActiveProviderId,
         ),
-        activeProfileId,
-        selection.harnessId === resolvedActiveProviderId
-          ? selection.profileId
-          : null,
-      ),
+        browsedProfileId: activeProfileId,
+        selectedProfileId:
+          selection.harnessId === resolvedActiveProviderId
+            ? selection.profileId
+            : null,
+      }),
     [
       activeProfileId,
       profilesByHarnessId,
@@ -1022,7 +1026,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     [activeProvider, harnesses, resolvedActiveProviderId],
   );
   // Profiles the active provider's strip renders (provisional/mid-OAuth
-  // profiles filtered out) - under 2 means no strip and no rail dot.
+  // profiles filtered out) - none means no dropdown and no rail dot.
   const activeProviderProfiles = useMemo(
     () => profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
     [profilesByHarnessId, resolvedActiveProviderId],
@@ -1199,12 +1203,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // provider's (a same-provider re-click / no-op), else the committed
       // selection's profile if this provider is already selected, else the
       // provider's first selectable profile.
-      const resolvedProfileId = resolveActiveProfileForHarness(
-        profilesByHarnessId.get(providerId) ?? [],
-        removedProfilesForHarness(removedProfilesByHarnessId, providerId),
-        providerId === activeProviderId ? activeProfileId : null,
-        providerId === selection.harnessId ? selection.profileId : null,
-      );
+      const resolvedProfileId = resolveActiveProfileForHarness({
+        harnessId: providerId,
+        profiles: profilesByHarnessId.get(providerId) ?? [],
+        removedProfiles: removedProfilesForHarness(
+          removedProfilesByHarnessId,
+          providerId,
+        ),
+        browsedProfileId:
+          providerId === activeProviderId ? activeProfileId : null,
+        selectedProfileId:
+          providerId === selection.harnessId ? selection.profileId : null,
+      });
       // Only an AVAILABLE, non-degraded entry commits a switch (restoring its
       // remembered model/effort/tier, or landing on an embedding's own
       // model). A degraded / unavailable entry just browses the rail - the
@@ -1421,6 +1431,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       ultracodeRequested={ultracodeControls.requested}
       maxModeLabel={maxModeLabel(presentation.maxModeRequired)}
       profileLabel={profileTooltipLabel(
+        selection.harnessId,
         profilesByHarnessId.get(selection.harnessId) ?? [],
         removedProfilesForHarness(
           removedProfilesByHarnessId,
@@ -1867,11 +1878,20 @@ function serviceTierTooltip(
 }
 
 function profileTooltipLabel(
+  harnessId: GuiHarnessId,
   profiles: ReadonlyArray<ProviderProfile>,
   removedProfiles: readonly RemovedProviderProfile[],
   selectedProfileId: string | null,
 ): string | null {
-  if (profiles.length < 2) return null;
+  if (
+    !profileDropdownShown(
+      guiHarnessIdToProviderId(harnessId),
+      profiles,
+      removedProfiles,
+      selectedProfileId,
+    )
+  )
+    return null;
   const pin = resolveProfilePin(profiles, removedProfiles, selectedProfileId);
   if (pin.kind === "removed") return REMOVED_PROFILE_PIN_TEXT;
   const activeProfile = pin.kind === "row" ? pin.profile : profiles.at(0);

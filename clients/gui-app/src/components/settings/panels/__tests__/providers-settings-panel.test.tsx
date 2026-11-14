@@ -11,6 +11,10 @@ import {
   type ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import {
+  pinProfile,
+  removedEntry,
+} from "@/components/providers/__tests__/profile-pin-fixtures";
 import type { ProviderNativeCapabilities } from "@traycer/protocol/host/provider-native-schemas";
 import {
   HostTransportFailureError,
@@ -179,6 +183,11 @@ type CancelLoginVariables = RequestOfMethod<
 interface ProvidersListEnvelope {
   providers: ProviderCliState[];
   credentialsManagedInAccount?: boolean;
+  removedProfiles?: ReadonlyArray<{
+    readonly providerId: string;
+    readonly profileId: string;
+    readonly aliases: readonly string[];
+  }>;
 }
 
 const providerMocks = vi.hoisted(() => {
@@ -1950,6 +1959,103 @@ describe("<ProvidersSettingsPanel />", () => {
     // a later visit does not yank the scope back to a host the user has since
     // navigated away from.
     expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
+  });
+
+  function focusCodexProfiles(input: {
+    readonly profileId: string;
+    readonly removed: ReadonlyArray<{
+      readonly providerId: string;
+      readonly profileId: string;
+      readonly aliases: readonly string[];
+    }>;
+  }): void {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          profiles: [
+            pinProfile({
+              profileId: "side-row",
+              label: "Side",
+              kind: "managed",
+              enabled: true,
+              authStatus: "authenticated",
+              aliases: [],
+              personNotice: null,
+              terminalOnThisComputer: false,
+              otherNames: [],
+            }),
+            pinProfile({
+              profileId: "work-row",
+              label: "Work",
+              kind: "managed",
+              enabled: true,
+              authStatus: "authenticated",
+              aliases: ["alias-work"],
+              personNotice: null,
+              terminalOnThisComputer: false,
+              otherNames: [],
+            }),
+          ],
+        }),
+      ],
+      removedProfiles: [...input.removed],
+    };
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "codex",
+      hostId: "host-a",
+      profileId: input.profileId,
+      startSignIn: false,
+    });
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    openProfilesTab();
+  }
+
+  function currentProfileLabel(): string | null {
+    return screen
+      .getByRole("menuitem", { current: true })
+      .getAttribute("aria-label");
+  }
+
+  it("a focus intent with an alias id selects the canonical row", () => {
+    focusCodexProfiles({ profileId: "alias-work", removed: [] });
+    expect(
+      screen.getByRole("button", { name: "Codex profile: Work" }),
+    ).toBeDefined();
+    expect(currentProfileLabel()).toBe("Work");
+  });
+
+  it("a focus intent with a removed id opens on the first row", () => {
+    focusCodexProfiles({
+      profileId: "gone-row",
+      removed: [
+        removedEntry({
+          providerId: "codex",
+          profileId: "gone-row",
+          aliases: [],
+        }),
+      ],
+    });
+    expect(
+      screen.getByRole("button", { name: "Codex profile: Side" }),
+    ).toBeDefined();
+    expect(currentProfileLabel()).toBe("Side");
+  });
+
+  it("a focus intent with an unknown id opens on the first row", () => {
+    focusCodexProfiles({ profileId: "missing-id", removed: [] });
+    expect(
+      screen.getByRole("button", { name: "Codex profile: Side" }),
+    ).toBeDefined();
+    expect(currentProfileLabel()).toBe("Side");
   });
 
   it("refuses a profile intent whose target host is not the one on screen", () => {
@@ -4785,7 +4891,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByText("Profiles")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
     expect(
-      screen.queryByRole("menuitem", { name: "Create new profile" }),
+      screen.queryByRole("menuitem", { name: "Add a profile" }),
     ).toBeNull();
   });
 
@@ -8407,9 +8513,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     expect(screen.queryByText("Use terminal skills and plugins")).toBeNull();
   });
 
@@ -8463,9 +8567,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     const checkbox = screen.getByRole("checkbox", {
       name: "Use terminal account skills and plugins",
     });
@@ -8536,9 +8638,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [startVariables] = firstStartLoginCall();
@@ -8600,9 +8700,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
@@ -8722,9 +8820,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
@@ -8829,9 +8925,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
@@ -8927,9 +9021,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
     await act(() => {
@@ -9051,9 +9143,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     openProfilesTab();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     const ambientColorButton = screen.getByRole("button", {
       name: `Use color ${ambientColor}`,
     });

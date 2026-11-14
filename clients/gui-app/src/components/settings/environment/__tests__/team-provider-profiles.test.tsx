@@ -189,13 +189,10 @@ describe("TeamProviders profiles", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen.queryByRole("menuitem", { name: "Create new profile" }),
+      screen.queryByRole("menuitem", { name: "Add a profile" }),
     ).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Create new profile" }),
-    ).toBeNull();
 
     fireEvent.click(profileRowSwitch("Home"));
     await waitFor(() => {

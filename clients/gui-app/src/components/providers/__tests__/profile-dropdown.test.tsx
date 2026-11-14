@@ -688,9 +688,7 @@ describe("<ProfileDropdown />", () => {
     const onCreateProfile = vi.fn();
     renderDropdown(baseDropdownInput({ onCreateProfile }), true);
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Create new profile" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add a profile" }));
     expect(onCreateProfile).toHaveBeenCalledTimes(1);
   });
 
@@ -708,7 +706,7 @@ describe("<ProfileDropdown />", () => {
       true,
     );
 
-    const row = screen.getByRole("menuitem", { name: "Create new profile" });
+    const row = screen.getByRole("menuitem", { name: "Add a profile" });
     if (!(row instanceof HTMLButtonElement)) {
       throw new Error("Expected create row mock to render as a button.");
     }

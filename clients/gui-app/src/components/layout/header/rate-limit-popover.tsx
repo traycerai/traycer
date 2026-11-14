@@ -38,7 +38,10 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { ProfileOtherNameChips } from "@/components/providers/profile-other-name-chips";
 import {
+  profileCommitId,
   profileDisplayLabel,
+  resolvedProfileRow,
+  type RemovedProviderProfile,
   profileInventoryNotice,
   profileInventoryAttributes,
   profileOtherNames,
@@ -196,6 +199,9 @@ const NO_RATE_LIMIT_FETCH_ELIGIBILITY: RateLimitFetchEligibility = {
 };
 /** What the strip draws for a provider while the strip itself is not on screen. */
 const NO_PROFILE_IDS: ReadonlyArray<string | null> = [];
+const NO_PROFILES: readonly ProviderProfile[] = [];
+// The usage cards draw live rows only; a reveal never names a removed account.
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 const POPOVER_SURFACE_CLASS_NAME =
   "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
@@ -2030,7 +2036,7 @@ function SingleProfileRateLimitProviderBlock({
   readonly manageProvider: (providerId: ProviderId) => void;
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
-  const cardRef = useRevealedProfileCard(providerId, null);
+  const cardRef = useRevealedProfileCard(providerId, null, NO_PROFILES);
   // Single source of truth for this provider's refresh action + spinner state
   // (fresh-on-open, and a forced fetch for the ephemeral lane), shared verbatim
   // with the Settings card so they can't drift apart.
@@ -2316,6 +2322,7 @@ function ProfileRateLimitProviderBlock({
               providerId={providerId}
               profile={target.profile}
               profileId={target.profileId}
+              providerProfiles={profiles}
               fetchEligible={target.fetchEligible}
               shownOnStrip={shownProfileIds.includes(target.profileId)}
               checkedForStrip={checkedProfileIds.includes(target.profileId)}
@@ -2675,6 +2682,7 @@ function RateLimitProviderProfileRow({
   providerId,
   profile,
   profileId,
+  providerProfiles,
   fetchEligible,
   shownOnStrip,
   checkedForStrip,
@@ -2690,6 +2698,8 @@ function RateLimitProviderProfileRow({
   readonly providerId: RateLimitProviderId;
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
+  /** Every row of this provider, so a reveal armed on an alias finds its row. */
+  readonly providerProfiles: readonly ProviderProfile[];
   readonly fetchEligible: boolean;
   /**
    * Whether the strip is drawing this account - checked, or the fallback.
@@ -2714,7 +2724,11 @@ function RateLimitProviderProfileRow({
   const client = useHostClient();
   const refreshProfileStatus =
     useProvidersRefreshProfileStatusForClient(client);
-  const cardRef = useRevealedProfileCard(providerId, profileId);
+  const cardRef = useRevealedProfileCard(
+    providerId,
+    profileId,
+    providerProfiles,
+  );
   useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
@@ -2804,11 +2818,13 @@ function RateLimitProviderProfileRow({
  * view once it is on screen, then consumes the request so the next open of
  * the panel is not still answering it. Both card shapes mount this - the
  * per-profile row and the profile-less provider block, whose one segment
- * names it with `profileId: null`.
+ * names it with `profileId: null`. A reveal armed on an id that is now an
+ * alias reaches the card of the row it resolves to.
  */
 function useRevealedProfileCard(
   providerId: RateLimitProviderId,
   profileId: string | null,
+  providerProfiles: readonly ProviderProfile[],
 ): RefObject<HTMLDivElement | null> {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const revealProfile = useRateLimitPopoverStore(
@@ -2819,7 +2835,12 @@ function useRevealedProfileCard(
   );
   useEffect(() => {
     if (
-      !isRevealTargetFor(revealProfile, providerId, profileId) ||
+      !isRevealTargetFor(
+        revealProfile,
+        providerId,
+        profileId,
+        providerProfiles,
+      ) ||
       cardRef.current === null
     ) {
       return;
@@ -2832,7 +2853,13 @@ function useRevealedProfileCard(
       cardRef.current.scrollIntoView({ block: "nearest" });
     }
     clearRevealProfile();
-  }, [clearRevealProfile, profileId, providerId, revealProfile]);
+  }, [
+    clearRevealProfile,
+    profileId,
+    providerId,
+    providerProfiles,
+    revealProfile,
+  ]);
   return cardRef;
 }
 
@@ -2840,12 +2867,16 @@ function isRevealTargetFor(
   target: RateLimitPopoverRevealTarget | null,
   providerId: RateLimitProviderId,
   profileId: string | null,
+  providerProfiles: readonly ProviderProfile[],
 ): boolean {
-  return (
-    target !== null &&
-    target.providerId === providerId &&
-    target.profileId === profileId
+  if (target === null || target.providerId !== providerId) return false;
+  if (target.profileId === profileId) return true;
+  const row = resolvedProfileRow(
+    providerProfiles,
+    NO_REMOVED_PROFILES,
+    target.profileId,
   );
+  return row !== null && profileCommitId(row) === profileId;
 }
 
 function RateLimitProviderProfileStatusBadges({

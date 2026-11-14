@@ -22,6 +22,10 @@ import {
   providerDisplayName,
 } from "@/lib/provider-ordering";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import {
+  removedProfilesForProvider,
+  resolvedProfileRow,
+} from "@/components/providers/provider-profile-model";
 import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   catalogOpencodeLineParam,
@@ -244,7 +248,7 @@ export function useFallbackProfileLabels(
     () =>
       data === undefined
         ? new Map<string, string>()
-        : buildFallbackProfileLabels(data.providers),
+        : withAliasLabels(data, buildFallbackProfileLabels(data.providers)),
     [data],
   );
 
@@ -256,6 +260,35 @@ export function useFallbackProfileLabels(
           : resolveFallbackProfileLabel(byId, profileId),
     [byId],
   );
+}
+
+/**
+ * An alias (`aliases`, `providers.list@10.11`) names the account of the row it
+ * resolves to, so a chat pinned to a folded id shows that account's name and
+ * not a prefix of its old id. An alias two rows list resolves to no row and
+ * keeps the prefix.
+ */
+function withAliasLabels(
+  list: ResponseOfMethod<HostRpcRegistry, "providers.list">,
+  labels: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const named = new Map(labels);
+  for (const provider of list.providers) {
+    const removed = removedProfilesForProvider(list, provider.providerId);
+    for (const alias of provider.profiles.flatMap(
+      (profile) => profile.aliases ?? [],
+    )) {
+      const row = resolvedProfileRow(provider.profiles, removed, alias);
+      if (row === null) continue;
+      named.set(
+        alias,
+        row.kind === "ambient"
+          ? TERMINAL_ACCOUNT_LABEL
+          : resolveFallbackProfileLabel(labels, row.profileId),
+      );
+    }
+  }
+  return named;
 }
 
 /**

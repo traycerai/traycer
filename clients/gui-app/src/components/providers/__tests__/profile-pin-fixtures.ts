@@ -7,13 +7,6 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { RemovedProviderProfile } from "@/components/providers/provider-profile-model";
 
-const AUTHENTICATED: ProviderAuth = {
-  status: "authenticated",
-  badgeText: null,
-  label: null,
-  detail: null,
-};
-
 /** A profile row with none of the 10.11 keys set, as a 10.10 computer sends it. */
 export function legacyProfile(input: {
   readonly profileId: string;
@@ -114,5 +107,3 @@ export function providerState(input: {
     profiles: [...input.profiles],
   };
 }
-
-export const SIGNED_IN: ProviderAuth = AUTHENTICATED;

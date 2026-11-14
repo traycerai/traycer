@@ -26,10 +26,13 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import type {
-  ProfileRowAdmission,
-  RemovedProviderProfile,
+import {
+  profileDropdownShown,
+  type ProfileRowAdmission,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
+import { removedProfilesForHarness } from "@/components/home/pickers/harness-rail-providers";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
@@ -86,8 +89,8 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
   readonly profileEnablementPending: (profileId: string | null) => boolean;
   /** The browsed provider's CLI state, for the ambient-auth line shown when
-   *  the provider has under 2 profiles (the profile dropdown owns identity
-   *  above that). `null` when `providers.list` hasn't resolved it. */
+   *  the account dropdown is not (`profileDropdownShown`). `null` when
+   *  `providers.list` hasn't resolved it. */
   readonly activeProviderState: ProviderCliState | null;
   readonly lockedHarnessId: ProviderId | null;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
@@ -107,7 +110,7 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly onOpenProviderSettings: (focusTab: string) => void;
   readonly onOpenHostUpdates: () => void;
   /** Closes the picker popover without opening Settings - used by the profile
-   *  dropdown's "Create new profile" row, which opens the add-profile flow in
+   *  dropdown's "Add a profile" row, which opens the add-profile flow in
    *  its own global host, not Settings. */
   readonly onClosePicker: () => void;
   readonly listRef: RefObject<VirtuosoHandle | null>;
@@ -135,7 +138,7 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
   readonly maxModeContextKind?: MaxModeContext["kind"];
   readonly maxModeRequired?: boolean;
-  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
+  /** The host "Add a profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly createProfileHostId: string | null;
   /** Exact host where the next run executes. Never inferred from the create
@@ -380,11 +383,21 @@ export function HarnessModelPickerPanelBody(
           className="flex min-h-0 min-w-0 flex-col overflow-hidden"
         >
           {/* The dropdown is the picker's second interaction level: only when
-              the active provider has 2+ profiles, and it persists while
-              typing - search stays scoped to the active provider+profile
-              pair. Under 2 profiles the same slot carries the ambient-auth
-              line instead, so account identity has one home either way. */}
-          {activeProviderProfiles.length >= 2 ? (
+              `profileDropdownShown` (a removed pin, one row of a provider
+              that can have profiles, two rows of any other), and
+              it persists while typing - search stays scoped to the active
+              provider+profile pair. Otherwise the same slot carries the
+              ambient-auth line instead, so account identity has one home
+              either way. */}
+          {profileDropdownShown(
+            guiHarnessIdToProviderId(resolvedActiveProviderId),
+            activeProviderProfiles,
+            removedProfilesForHarness(
+              removedProfilesByHarnessId,
+              resolvedActiveProviderId,
+            ),
+            activeProfileId,
+          ) ? (
             <div className="shrink-0 border-b p-2">
               <PickerProfileDropdown
                 providerId={resolvedActiveProviderId}
