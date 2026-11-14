@@ -983,4 +983,17 @@ export const ENVIRONMENT_RPC_METHODS = {
       downgradePathsFromLatest: {},
     },
   },
+  "host.status.refresh": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostStatusRefreshV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
 } as const;
