@@ -43,6 +43,8 @@ interface ItemWriteState {
   readonly changedAgain: ConfigurationItemWrite | null;
   readonly failure: ConfigurationItemWriteFailure | null;
   readonly drafts: readonly ConfigurationItemWrite[];
+  /** Addresses whose draft was refused as out of date, which the person was told. */
+  readonly answered: readonly Pick<ConfigurationItem, "kind" | "key" | "os">[];
 }
 
 export interface ConfigurationItemWrites {
@@ -200,6 +202,7 @@ export function useConfigurationItemWrites(
     changedAgain: null,
     failure: null,
     drafts: [],
+    answered: [],
   });
   const active = useRef<ConfigurationItemWrite | null>(null);
   const attempt = useRef(0);
@@ -210,6 +213,7 @@ export function useConfigurationItemWrites(
       changedAgain: null,
       failure: null,
       drafts: [],
+      answered: [],
     });
   }
   const pending = state.scope === scope ? state.pending : null;
@@ -301,6 +305,9 @@ export function useConfigurationItemWrites(
             drafts: current.drafts.filter(
               (draft) => !sameConfigurationItemAddress(draft, address),
             ),
+            answered: current.answered.filter(
+              (told) => !sameConfigurationItemAddress(told, address),
+            ),
             failure:
               current.failure !== null &&
               sameConfigurationItemAddress(current.failure.write, address)
@@ -309,16 +316,35 @@ export function useConfigurationItemWrites(
           },
     );
   };
-  const write = async (write: ConfigurationItemWrite): Promise<void> => {
+  const write = async (asked: ConfigurationItemWrite): Promise<void> => {
     if (source.kind !== "pool" || active.current !== null) return;
+    // A held draft was typed over its own `original`, which a newer read may
+    // since have replaced in the row: the write names that revision, so the
+    // first save after a change the person was not shown is refused as out of
+    // date. Once that refusal has been shown, the draft is over the row's
+    // current item, and the deliberate save names its revision.
+    const held = state.drafts.find((draft) =>
+      sameConfigurationItemAddress(draft, asked),
+    );
+    const told = state.answered.some((address) =>
+      sameConfigurationItemAddress(address, asked),
+    );
+    const write =
+      held === undefined || told
+        ? asked
+        : { ...asked, original: held.original };
     active.current = write;
-    // Submitted drafts survive a refused write and any read that remounts its editor.
+    // Submitted drafts survive a failed or refused write and any read that
+    // remounts its editor.
     setState((current) => ({
       scope,
       pending: { write, accepted: null },
       changedAgain: null,
       failure: null,
       drafts: retainDraft(current.drafts, write),
+      answered: current.answered.filter(
+        (address) => !sameConfigurationItemAddress(address, write),
+      ),
     }));
     const request = {
       environmentId: source.environmentId,
@@ -352,8 +378,20 @@ export function useConfigurationItemWrites(
     onOutcome(result);
     if (result.outcome !== "saved") {
       active.current = null;
+      const stale = result.outcome === "conflict";
       setState((current) =>
-        current.scope !== scope ? current : { ...current, pending: null },
+        current.scope !== scope
+          ? current
+          : {
+              ...current,
+              pending: null,
+              answered: stale
+                ? [
+                    ...current.answered,
+                    { kind: write.kind, key: write.key, os: write.os },
+                  ]
+                : current.answered,
+            },
       );
       return;
     }
