@@ -58,7 +58,7 @@ export const STREAM_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
  * instead of tripping the unknown-frame guard.
  *
  * The two capabilities are deliberately independent. `credentialUpdate` pushes
- * the person's renewed host-only token onto a live connection; this one hands the host its
+ * the connection's renewed token onto a live connection; this one hands the host its
  * OWN long-lived credential, which it then refreshes autonomously.
  */
 export const STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION =

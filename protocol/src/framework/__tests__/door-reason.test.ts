@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   HOST_DOOR_REASONS,
   readDoorReason,
@@ -20,7 +21,8 @@ import {
  * `doorReason` on the fatal-error payload (`/rpc`, `/stream`, relay `FATAL`)
  * and on a persistent `/rpc` response error, plus `namedUserId` on a session
  * OPEN's `authz`. An empty string fails the parse. A missing key stays
- * missing. An older copy of a door-reason carrier strips `doorReason`.
+ * missing. An older fatal or response schema strips `doorReason`, and an
+ * older OPEN schema strips `namedUserId`.
  */
 
 const FATAL_DETAILS = {
@@ -125,6 +127,19 @@ describe("doorReason", () => {
     expect(read(KNOWN_REASON)).toBe(KNOWN_REASON);
   });
 
+  it("pins HOST_DOOR_REASONS to the closed list, in order", () => {
+    expect(HOST_DOOR_REASONS).toEqual([
+      "keys_unavailable",
+      "clock_skew",
+      "token_expired",
+      "not_admitted",
+      "enrolment_broken",
+      "membership_removed",
+      "session_revoked",
+      "host_claimed",
+    ]);
+  });
+
   it.each(HOST_DOOR_REASONS)(
     "readDoorReason narrows %s from an /rpc fatalError frame",
     (reason) => {
@@ -223,5 +238,30 @@ describe("session OPEN authz.namedUserId", () => {
         authz: { v: 1, grant: "grant-1", namedUserId: "" },
       }).success,
     ).toBe(false);
+  });
+
+  it("strips namedUserId when an older OPEN schema parses it", () => {
+    expect(sessionOpenPayloadSchema instanceof z.ZodObject).toBe(true);
+    if (!(sessionOpenPayloadSchema instanceof z.ZodObject)) {
+      return;
+    }
+    const authzField: unknown = sessionOpenPayloadSchema.shape.authz;
+    expect(authzField instanceof z.ZodNullable).toBe(true);
+    if (!(authzField instanceof z.ZodNullable)) {
+      return;
+    }
+    const slot: unknown = authzField.unwrap();
+    expect(slot instanceof z.ZodObject).toBe(true);
+    if (!(slot instanceof z.ZodObject)) {
+      return;
+    }
+    const olderOpen = sessionOpenPayloadSchema.extend({
+      authz: slot.omit({ namedUserId: true }).nullable(),
+    });
+    const parsed = olderOpen.parse({
+      ...sessionOpenBase,
+      authz: { v: 1, grant: "grant-1", namedUserId: "user-1" },
+    });
+    expect(parsed.authz).toEqual({ v: 1, grant: "grant-1" });
   });
 });
