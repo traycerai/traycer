@@ -5,6 +5,9 @@ import {
   type GrantedEnvironmentRole,
 } from "@traycer/protocol/host/environment/contracts";
 
+/** A role a configuration answers: one that may change it, or a Viewer's. */
+export type ConfigurationRole = GrantedEnvironmentRole | "viewer";
+
 export type ConfigurationSource =
   | { readonly kind: "host" }
   | {
@@ -18,12 +21,24 @@ export type ConfigurationSource =
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
-      /** `null` for a role that authorizes nothing - an older inventory's
-       *  unknown role, or a retired one. */
-      readonly effectiveRole: GrantedEnvironmentRole | null;
-      /** The serving computer can read configuration without changing it. */
+      /** Read through `mayChangeConfiguration`, never by comparing with
+       *  `null`: a role that changes nothing is not always absent. */
+      readonly effectiveRole: ConfigurationRole | null;
+      /** `personalReadOnlyOnTeamComputer`'s answer for this page. */
       readonly transportReadOnly?: boolean;
     };
+
+/**
+ * Personal is shown but never changed while the window's host is a team's
+ * computer: Personal talks only to Personal. A team's own settings follow the
+ * role authn answers, whichever computer the window is on.
+ */
+export function personalReadOnlyOnTeamComputer(
+  configuration: "personal" | "team",
+  windowHostIsTeamComputer: boolean,
+): boolean {
+  return configuration === "personal" && windowHostIsTeamComputer;
+}
 
 const HOST_SOURCE: ConfigurationSource = { kind: "host" };
 
@@ -51,11 +66,22 @@ export function useConfigurationIsPersonal(): boolean {
   return source.kind === "pool" && source.configuration === "personal";
 }
 
+/**
+ * Whether a role may change a configuration: Personal's owner, or a team's
+ * Admin or Editor. A Viewer, and a role this app does not know, change
+ * nothing.
+ */
+export function mayChangeConfiguration(
+  role: ConfigurationRole | null,
+): boolean {
+  return role === "owner" || role === "admin" || role === "editor";
+}
+
 export function useCanEditConfiguration(): boolean {
   const source = useConfigurationSource();
   return (
     source.kind === "host" ||
-    (!source.transportReadOnly && source.effectiveRole !== null)
+    (!source.transportReadOnly && mayChangeConfiguration(source.effectiveRole))
   );
 }
 
@@ -68,11 +94,15 @@ export function useCanAdministerConfiguration(): boolean {
   );
 }
 
-/** An older inventory cannot authorize edits to a team, and answers `null`. */
+/**
+ * A Viewer answers `viewer`; a role this app does not know, and an older
+ * inventory's, answer `null`. Read it through `mayChangeConfiguration`.
+ */
 export function configurationRoleOf(
   descriptor: EnvironmentDescriptorV11,
-): GrantedEnvironmentRole | null {
+): ConfigurationRole | null {
   if (descriptor.ownerKind === "user") return "owner";
+  if (descriptor.effectiveRole === "viewer") return "viewer";
   const role = grantedEnvironmentRole(descriptor.effectiveRole);
   return role === "admin" || role === "editor" ? role : null;
 }

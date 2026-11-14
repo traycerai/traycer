@@ -9,7 +9,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EnvironmentPickerRow } from "./environment-picker-row";
-import { configurationRoleOf } from "./configuration-source";
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "./configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
 import { useHostClient } from "@/lib/host";
@@ -98,9 +101,9 @@ export function TeamRows(props: TeamRowsProps): ReactNode {
             badge={null}
             badgeTooltip={null}
             subtitle={
-              configurationRoleOf(team) === null
-                ? "Read-only settings"
-                : "You edit"
+              mayChangeConfiguration(configurationRoleOf(team))
+                ? "You edit"
+                : "Read-only settings"
             }
             nested={false}
             disabled={false}

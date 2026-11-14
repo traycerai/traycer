@@ -1,3 +1,4 @@
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -9,7 +10,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { agentMutationKeys } from "@/lib/query-keys";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { toastFromHostErrorWithDetail } from "@/lib/host-error-toast";
 
 interface StartTerminalSessionMutationContext {
@@ -24,6 +25,7 @@ interface StartTerminalSessionMutationContext {
  */
 export function useAgentStartTerminalSession(
   client: HostClient<HostRpcRegistry> | null,
+  origin: "gesture" | "automatic",
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "agent.tui.prepareLaunch">,
   HostRpcError,
@@ -39,7 +41,7 @@ export function useAgentStartTerminalSession(
     withHostMutationLifecycleBoundary("agent.tui.prepareLaunch", {
       mutationKey: agentMutationKeys.startTerminalSession(),
       mutationFn: (variables) =>
-        withHostQueryErrorBoundary("agent.tui.prepareLaunch", () => {
+        withHostMutationErrorBoundary("agent.tui.prepareLaunch", () => {
           if (client === null) {
             return Promise.reject(
               new HostRpcErrorCtor({
@@ -55,6 +57,8 @@ export function useAgentStartTerminalSession(
         }),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onError: (error) => {
+        if (origin === "automatic" && error instanceof HostBelowMinimumError)
+          return;
         toastFromHostErrorWithDetail(
           error,
           "Couldn't start terminal agent session.",
