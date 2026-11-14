@@ -1,4 +1,3 @@
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MemberRowDetails } from "@/components/settings/details/member-row-details";
@@ -15,7 +14,7 @@ import {
   type EnvironmentMembersListMember,
 } from "@/hooks/environment/use-environment-members-list";
 import { useEnvironmentMembersWrites } from "@/hooks/environment/use-environment-members-writes";
-import { useHostDirectory, useOptionalHostClient } from "@/lib/host";
+import { useHostDirectory } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 export interface MembersPageProps {
@@ -90,14 +89,12 @@ function membersReadState(
 
 /**
  * Settings ▸ Members for a team pick. Reads the members and writes invite /
- * setRole / remove / noticeSeen as the app's own calls to authn; the view's
- * dialogs read removePreview for the member they name from the host, and the
- * invite sheet reads seats from authn.
+ * setRole / remove / noticeSeen, the invite sheet's seats and the removal
+ * confirm's preview as the app's own calls to authn. Only the removed
+ * member's running work is counted by a computer, a team one the app can
+ * reach.
  */
 export function MembersPage(props: MembersPageProps): ReactNode {
-  // Only a removal's preview is still the host's: what a team sandbox counts
-  // of the member's running work.
-  const client = usePoolTierHostClient(useOptionalHostClient());
   const teamLabel = usePickedTeamLabel(props.environmentId);
   const team = useTeamEnvironmentDescriptor(props.environmentId);
   const list = useEnvironmentMembersList(props.environmentId, true);
@@ -163,7 +160,6 @@ export function MembersPage(props: MembersPageProps): ReactNode {
 
   return (
     <MembersView
-      client={client}
       environmentId={props.environmentId}
       teamName={teamName}
       teamHandle={team.teamHandle}

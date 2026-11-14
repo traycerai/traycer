@@ -1,7 +1,7 @@
 import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
 import type {
+  MemberWorkNow,
   MembersListMember,
-  RemovePreviewModel,
   SeatDelta,
   TeamRole,
 } from "@/components/settings/members/types";
@@ -77,15 +77,6 @@ export const LEGACY_NOTICE_READ_FAILED =
 
 export function removePreviewFailed(memberName: string): string {
   return `Couldn't load what removing ${memberName} interrupts, so Remove stays off until it loads.`;
-}
-
-/**
- * The plan check says what a demotion interrupts. It does not decide whether
- * the demotion can be made, so this line says what failed and claims nothing
- * about the button beside it.
- */
-export function demotionPreviewFailed(memberName: string): string {
-  return `Couldn't load what changing ${memberName}'s role interrupts.`;
 }
 
 export function membersHeaderLine(teamName: string): string {
@@ -313,10 +304,6 @@ export function acceptedPeopleCount(
   return members.filter(isAcceptedMember).length;
 }
 
-export function demotionWhatKeepsWorking(): string {
-  return "Sandboxes keep running.";
-}
-
 export function removePreviewTitle(
   memberName: string,
   memberEmail: string | null,
@@ -333,49 +320,36 @@ export function removePreviewLead(
   memberName: string,
   teamName: string,
 ): string {
-  return `${memberName} loses ${teamName}'s settings, hosts and connected services. Here is what the removal stops, for ${memberName} and for everyone else.`;
+  return `${memberName} loses ${teamName}'s settings, hosts and connected services.`;
+}
+
+/** What a removal does to the member's work, with or without its count. */
+export function removeWorkContinues(teamName: string): string {
+  return `Their connections close now. Work they started keeps running for ${teamName} under their name.`;
 }
 
 /**
- * The member's running turns and terminals with the timing rule. Null counts
- * (the serving host holds no facts for the team) are never shown as a count;
- * both zero is "None.". The host is named only when this window knows it.
+ * The member's running turns and terminals where a team computer counted
+ * them, then what the removal does to that work; without a count, the second
+ * part alone. Both counts zero is "None.". The host is named only when this
+ * window knows it.
  */
 export function removeWorkNow(
-  memberName: string,
-  preview: RemovePreviewModel,
+  teamName: string,
+  workNow: MemberWorkNow | null,
 ): string {
-  if (preview.activeTurns === null || preview.terminals === null) {
-    return `${memberName}'s access is revoked now. Anything they have running finishes its current step and starts no new one; Traycer can't list that work from here.`;
-  }
-  if (preview.activeTurns === 0 && preview.terminals === 0) return NONE;
-  const where = preview.hostName === null ? "" : ` on ${preview.hostName}`;
-  return `${countNoun(preview.activeTurns, "turn")} and ${countNoun(preview.terminals, "terminal")}${where}. ${memberName}'s access is revoked now; each finishes its current step and starts no new one. If a host does not answer in time, stopping shows as pending until it does.`;
+  if (workNow === null) return removeWorkContinues(teamName);
+  if (workNow.activeTurns === 0 && workNow.terminals === 0) return NONE;
+  const where = workNow.hostName === null ? "" : ` on ${workNow.hostName}`;
+  return `${countNoun(workNow.activeTurns, "turn")} and ${countNoun(workNow.terminals, "terminal")}${where}. ${removeWorkContinues(teamName)}`;
 }
 
 export function removeSharedSignInConsequence(
   teamName: string,
-  sharedSignIns: readonly string[],
+  sandboxesToRekey: number,
 ): string {
-  if (sharedSignIns.length === 0) return NONE;
-  return `${teamName}'s sandboxes get a replacement sign-in for the team's connected services; it is complete when each host and the provider confirm. Other members' agents there pause while it lands.`;
-}
-
-export function removePaidSandboxesConsequence(
-  memberName: string,
-  teamName: string,
-  sandboxes: RemovePreviewModel["paidSandboxes"],
-): string {
-  if (sandboxes.length === 0) {
-    return `${memberName} pays for no ${teamName} sandboxes.`;
-  }
-  const names = sandboxes.map((sandbox) => sandbox.name).join(", ");
-  return `${names} pauses for everyone when ${memberName} leaves. Another member resumes it with their own ${teamName} credits; nothing transfers silently.`;
-}
-
-export function removeLinkedPlanConsequence(linkedPlan: string | null): string {
-  if (linkedPlan === null) return NONE;
-  return linkedPlan;
+  if (sandboxesToRekey === 0) return NONE;
+  return `${teamName}'s sandboxes get a replacement sign-in for the team's connected services; it is complete when each host and the provider confirm.`;
 }
 
 export function removeCannotRecall(
@@ -453,71 +427,13 @@ export function demotionConfirmLabel(nextRole: TeamRole): string {
   return `Change to ${ROLE_WORDS[nextRole]}`;
 }
 
-/**
- * The row's tell while a picked demotion's check is still out. It names the
- * role, because the select still shows the role the person HAS: without it the
- * row says only that something is being checked.
- */
-export function roleCheckRunning(nextRole: TeamRole): string {
-  return `Checking ${ROLE_WORDS[nextRole]}…`;
-}
-
-/** The row's way out of that wait, named for what it drops. */
-export function cancelRoleChangeAriaLabel(
-  memberName: string,
-  nextRole: TeamRole,
-): string {
-  return `Cancel the change to ${ROLE_WORDS[nextRole]} for ${memberName}`;
-}
-
-export function planUnlinkTitle(planLabel: string, teamName: string): string {
-  return `Unlink ${planLabel} from ${teamName}`;
-}
-
-export function planUnlinkLead(teamName: string): string {
-  return `${teamName}'s agents stop using this plan. Nothing about a sandbox changes: sandbox charges use ${teamName} credits, not the plan.`;
-}
-
-export function planUnlinkTurnsLineFor(
-  teamName: string,
-  turnsOnPlan: number | null,
-): string {
-  const stops = `then stops with "${teamName}'s Claude plan was unlinked. An admin can link one."`;
-  if (turnsOnPlan === null) {
-    return `Unavailable. Each turn on Claude Code finishes its current step, ${stops}`;
-  }
-  return `${countNoun(turnsOnPlan, "turn")} on Claude Code. Each finishes its current step, ${stops}`;
-}
-
-export function planUnlinkAfterwards(teamName: string): string {
-  return `A member who sends to Claude Code on a ${teamName} host gets the unlink sentence, with a link to Providers. A host that does not answer in time shows the unlink as pending until it confirms.`;
-}
-
-export function planUnlinkWhoPays(): string {
-  return "Nobody changes: no sandbox's payer transfers on an unlink or a demotion.";
-}
-
 export function removeWorkNowLabel(memberName: string): string {
   return `${memberName}'s work now`;
 }
 
 export const SHARED_SIGN_INS_LABEL = "Shared sign-ins";
 
-export function paidSandboxesLabel(memberName: string): string {
-  return `Sandboxes ${memberName} pays for`;
-}
-
-export const LINKED_PLAN_LABEL = "Linked plan";
-
 export const CANNOT_RECALL_LABEL = "Can't be recalled";
-
-export const AGENTS_ON_PLAN_LABEL = "Agents on it now";
-
-export const WHAT_KEEPS_WORKING_LABEL = "What keeps working";
-
-export const AFTERWARDS_LABEL = "Afterwards";
-
-export const WHO_PAYS_LABEL = "Who pays";
 
 export function revokeInviteTitle(): string {
   return "Revoke this invitation";

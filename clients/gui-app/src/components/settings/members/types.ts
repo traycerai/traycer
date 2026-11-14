@@ -58,34 +58,25 @@ export interface MembersListMember {
   readonly removalState: MemberRemovalState;
 }
 
-export interface PaidSandboxPreview {
-  readonly name: string;
-  readonly startedBy: string;
-}
-
-/** The member named by a row and its dialogs, not by a preview. */
-export interface RemovePreviewModel {
-  readonly activeTurns: number | null;
-  readonly terminals: number | null;
+/** A member's running work, as a team computer counted it. */
+export interface MemberWorkNow {
+  readonly activeTurns: number;
+  readonly terminals: number;
   readonly hostName: string | null;
-  readonly sharedSignIns: readonly string[];
-  readonly paidSandboxes: readonly PaidSandboxPreview[];
-  readonly linkedPlan: string | null;
-}
-
-/** `turnsOnPlan` null: the serving host cannot see the member's turns. */
-export interface PlanUnlinkPreviewModel {
-  readonly planLabel: string;
-  readonly turnsOnPlan: number | null;
-  readonly whatKeepsWorking: string;
 }
 
 /**
- * A dialog's preview: still being read, read, or refused. What `loading` means
- * depends on when its dialog opens. The remove confirm opens before its read,
- * so there it is a first load; the demotion confirm opens only once the read
- * has answered, so there it is only ever a Retry already in flight.
+ * What the removal confirm shows. The member is named by the row and the
+ * dialog, not by a preview.
  */
+export interface RemovePreviewModel {
+  /** authn's: the team's sandboxes that get a replacement sign-in. */
+  readonly sandboxesToRekey: number;
+  /** Null until a team computer has counted it, and when none can. */
+  readonly workNow: MemberWorkNow | null;
+}
+
+/** The removal confirm's read: still being read, read, or refused. */
 export type PreviewState<Preview> =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly preview: Preview }
@@ -111,19 +102,6 @@ export interface MembersDetailsSubject {
   readonly kind: "member";
   readonly key: string;
   readonly roleLabel: string | null;
-}
-
-/**
- * A role change picked in a row whose check has not answered yet. Its confirm
- * is deferred until the answer lands, so for that while the row is the only
- * place the pick exists: `running` names the role being checked, since the
- * select still shows the one the member holds, and `cancelLabel` names what
- * the control beside it drops.
- */
-export interface PendingRoleCheck {
-  readonly userId: string;
-  readonly running: string;
-  readonly cancelLabel: string;
 }
 
 export function isTeamRole(value: string): value is TeamRole {

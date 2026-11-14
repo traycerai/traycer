@@ -39,7 +39,6 @@ import type {
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   mountTeamPage,
-  requireTeamHostClient,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
@@ -176,7 +175,6 @@ function renderView(options: {
     <harness.Wrapper>
       <RunnerHostContext.Provider value={dashboardRunnerHost()}>
         <MembersView
-          client={requireTeamHostClient()}
           environmentId="env-1"
           teamName="Acme"
           teamHandle="acme"
@@ -1054,7 +1052,6 @@ describe("MembersView pending writes", () => {
             Send elsewhere
           </button>
           <MembersView
-            client={requireTeamHostClient()}
             environmentId="env-1"
             teamName="Acme"
             teamHandle="acme"

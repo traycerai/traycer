@@ -6,8 +6,9 @@
  * forwarding/members.ts` in the internal repository), so Members reads the
  * same shapes whether a host served it or authn did.
  *
- * `environment.members.removePreview` is not here: its answer joins what a
- * team sandbox counts of the member's running work, which only a host knows.
+ * `environment.members.removePreview` is not here: the member's running
+ * turns and terminals are counted by a computer. What authn says a removal
+ * changes for the team is `readConfigurationRemovalPreview`.
  */
 import { z } from "zod";
 import type {
@@ -316,6 +317,43 @@ export async function removeConfigurationMember(
   if (receiptId !== null) return { outcome: "pending", receiptId };
   if (member.inviteState === "pending") return { outcome: "revoked" };
   throw new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
+}
+
+/**
+ * authn's removal preview, as much of it as the removal confirm reads. Not
+ * strict, and nothing else required: authn answers more fields than the
+ * confirm reads, and some of them are leaving.
+ */
+const removalPreviewSchema = z.object({
+  sandboxesToRekey: z.number().int().nonnegative(),
+});
+
+/** What authn says a member's removal changes for the team. */
+export interface ConfigurationRemovalPreview {
+  /** The team's sandboxes that get a replacement sign-in for its services. */
+  readonly sandboxesToRekey: number;
+}
+
+/**
+ * The removal preview for `userId`, for an admin. The member's seat is read
+ * fresh, as a removal names it at the write.
+ */
+export async function readConfigurationRemovalPreview(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  userId: string,
+): Promise<ConfigurationRemovalPreview> {
+  const member = await targetMember(cloud, environmentId, userId);
+  const { sandboxesToRekey } = parseSettings(
+    await sendSettings(
+      cloud,
+      "POST",
+      `${membersPath(environmentId)}/removal-preview`,
+      { memberIds: [member.id] },
+    ),
+    removalPreviewSchema,
+  );
+  return { sandboxesToRekey };
 }
 
 export async function recordConfigurationNoticeSeen(

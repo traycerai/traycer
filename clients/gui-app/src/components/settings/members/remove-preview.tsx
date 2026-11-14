@@ -2,14 +2,10 @@ import type { ReactNode } from "react";
 import {
   CANCEL_LABEL,
   CANNOT_RECALL_LABEL,
-  LINKED_PLAN_LABEL,
   RETRY_LABEL,
   SHARED_SIGN_INS_LABEL,
-  paidSandboxesLabel,
   removeCannotRecall,
   removeConfirmLabel,
-  removeLinkedPlanConsequence,
-  removePaidSandboxesConsequence,
   REMOVE_PENDING_UNTIL_COMMITTED,
   removePreviewFailed,
   removePreviewLead,
@@ -45,23 +41,11 @@ function removePreviewRows(
   return [
     {
       label: removeWorkNowLabel(memberName),
-      value: removeWorkNow(memberName, preview),
+      value: removeWorkNow(teamName, preview.workNow),
     },
     {
       label: SHARED_SIGN_INS_LABEL,
-      value: removeSharedSignInConsequence(teamName, preview.sharedSignIns),
-    },
-    {
-      label: paidSandboxesLabel(memberName),
-      value: removePaidSandboxesConsequence(
-        memberName,
-        teamName,
-        preview.paidSandboxes,
-      ),
-    },
-    {
-      label: LINKED_PLAN_LABEL,
-      value: removeLinkedPlanConsequence(preview.linkedPlan),
+      value: removeSharedSignInConsequence(teamName, preview.sandboxesToRekey),
     },
     {
       label: CANNOT_RECALL_LABEL,
@@ -71,11 +55,12 @@ function removePreviewRows(
 }
 
 /**
- * Offboarding preview for an accepted member. Every row shows each time,
- * "None." when it has nothing; work the serving host cannot count is never
- * given a count. Never names a clock. A preview that could not be read says
- * so, offers Retry, and keeps Remove off: nothing is shown as a consequence
- * that was not read.
+ * Offboarding preview for an accepted member, read from authn. Every row
+ * shows each time, "None." when it has nothing. The member's work is counted
+ * only where a team computer counted it, and the confirm never waits for
+ * that count. Never names a clock. A preview that could not be read says so,
+ * offers Retry, and keeps Remove off: nothing is shown as a consequence that
+ * was not read.
  */
 export function RemovePreviewDialog(props: {
   readonly open: boolean;

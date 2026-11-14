@@ -11,7 +11,6 @@ import {
 import type {
   MembersDetailsSubject,
   MembersListMember,
-  PendingRoleCheck,
   TeamRole,
 } from "@/components/settings/members/types";
 
@@ -26,9 +25,6 @@ export function MembersList(props: {
   readonly peopleCount: number;
   readonly legacyMembers: readonly string[];
   readonly rowDetails: (subject: MembersDetailsSubject) => ReactNode;
-  /** The role change still waiting on its check, with no dialog up for it yet. */
-  readonly checkingRole: PendingRoleCheck | null;
-  readonly onCancelRoleChange: () => void;
   readonly onRoleChange: (member: MembersListMember, role: TeamRole) => void;
   readonly onRemove: (member: MembersListMember) => void;
   readonly onRetry: () => void;
@@ -53,12 +49,6 @@ export function MembersList(props: {
               isLastAdmin={lastAdmin}
               viewerIsAdmin={props.viewerIsAdmin}
               gainedEditing={gainedEditing}
-              checkingRole={
-                props.checkingRole?.userId === member.userId
-                  ? props.checkingRole
-                  : null
-              }
-              onCancelRoleChange={props.onCancelRoleChange}
               details={props.rowDetails({
                 environmentId: props.environmentId,
                 kind: "member",
