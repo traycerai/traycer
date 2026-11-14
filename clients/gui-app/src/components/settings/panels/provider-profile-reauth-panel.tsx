@@ -83,7 +83,9 @@ export interface ReauthSignInOutcomes {
   /** The cached list a completed sign-in's profile is looked up in. */
   readonly reader: CachedProviderProfilesReader;
   /** Leaves this sign-in for Add, on the same provider. */
-  readonly onAddAsNewProfile: () => void;
+  readonly onAddAsNewProfile: (
+    reason: "account-mismatch" | "account-unproven",
+  ) => void;
   /** True while the sign-in rests on a sentence the person only reads and
    *  leaves (the list has not caught up, or nothing was changed). */
   readonly onSettledChange: (settled: boolean) => void;
@@ -282,7 +284,9 @@ function ProviderProfileReauthOutcome({
 }: {
   readonly flowState: ProviderProfileLoginFlow["state"];
   readonly entryProfile: ProviderProfile;
-  readonly onAddAsNewProfile: () => void;
+  readonly onAddAsNewProfile: (
+    reason: "account-mismatch" | "account-unproven",
+  ) => void;
   readonly onDone: () => void;
 }): ReactNode {
   if (flowState.kind === "waiting-for-profile") {
@@ -320,8 +324,12 @@ function ProviderProfileReauthOutcome({
             Done
           </Button>
         ) : null}
-        <Button type="button" size="sm" onClick={onAddAsNewProfile}>
-          {ADD_AS_NEW_PROFILE_TEXT}
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => onAddAsNewProfile(flowState.reason)}
+        >
+          {mismatch ? "Switch account" : ADD_AS_NEW_PROFILE_TEXT}
         </Button>
       </div>
     </div>

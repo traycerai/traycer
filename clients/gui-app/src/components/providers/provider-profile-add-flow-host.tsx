@@ -1,11 +1,16 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { hostIsLocalForLoginAutoOpen } from "@/components/providers/provider-signin-availability";
-import { AddProviderProfileDialog } from "@/components/settings/panels/add-provider-profile-dialog";
+import {
+  AddProviderProfileDialog,
+  SwitchAccountSignInDialog,
+} from "@/components/settings/panels/add-provider-profile-dialog";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { SwitchAccountMoveDialog } from "./switch-account-move-dialog";
+import { listOffersSignIns } from "./provider-profile-model";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 
@@ -44,6 +49,11 @@ function ProviderProfileAddFlowSession({
    *  `hostId` at the same "Add a profile" click. */
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
+  const switchSource = useProviderProfileAddFlowStore(
+    (state) => state.switchSource,
+  );
+  const [destinationId, setDestinationId] = useState<string | null>(null);
+  const signedIn = useRef(false);
   const close = useProviderProfileAddFlowStore((state) => state.close);
   const client = useHostClientForHostId(hostId);
   const directory = useHostDirectoryList();
@@ -68,20 +78,48 @@ function ProviderProfileAddFlowSession({
 
   if (state === null) return null;
 
-  return (
-    <AddProviderProfileDialog
-      target={null}
-      targetResult={null}
-      key={state.providerId}
-      state={state}
-      client={client}
-      isLocalHost={isLocalHost}
-      open
-      onOpenChange={(open) => {
-        if (!open) close();
-      }}
-      onFailedAttempt={() => {}}
-      onProfileCreated={onProfileCreated}
+  const destination = state.profiles.find(
+    (profile) => profile.profileId === destinationId,
+  );
+  const switching =
+    switchSource !== null && listOffersSignIns(providersQuery.data);
+  if (switching && destination !== undefined) {
+    return (
+      <SwitchAccountMoveDialog
+        providerId={state.providerId}
+        source={switchSource}
+        destination={destination}
+        moveHostId={hostId}
+        teamName={null}
+        onDone={close}
+      />
+    );
+  }
+  const signInProps = {
+    state,
+    client,
+    isLocalHost,
+    open: true,
+    target: null,
+    targetResult: null,
+    onOpenChange: (open: boolean) => {
+      if (!open && !signedIn.current) close();
+    },
+    onFailedAttempt: () => {},
+    onProfileCreated: (profileId: string) => {
+      onProfileCreated(profileId);
+      if (switching) {
+        signedIn.current = true;
+        setDestinationId(profileId);
+      }
+    },
+  };
+  return switching ? (
+    <SwitchAccountSignInDialog
+      {...signInProps}
+      switchSourceProfileId={switchSource.profileId}
     />
+  ) : (
+    <AddProviderProfileDialog {...signInProps} />
   );
 }
