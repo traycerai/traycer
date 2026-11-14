@@ -23,6 +23,7 @@ import type {
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -6173,6 +6174,18 @@ export class AuthService {
     for (const handler of this.sessionSnapshotListeners) {
       handler(snapshot);
     }
+  }
+
+  /**
+   * The app's own calls to authn's environment routes
+   * (`@traycer-clients/shared/environment`), on this session's verified
+   * bearer: the one `cloudBearer()` answers, asked at each call.
+   */
+  environmentCloud(): EnvironmentCloud {
+    return {
+      authnBaseUrl: this.runnerHost.authnBaseUrl,
+      bearer: { kind: "cloud", getBearerToken: () => this.cloudBearer() },
+    };
   }
 }
 
