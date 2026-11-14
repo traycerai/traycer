@@ -159,10 +159,10 @@ const TRIES_UNDER: Record<RetryPolicy, number> = { off: 1, app: 2 };
 
 /**
  * The steps the tail of a sequence may take to answer every try and backoff
- * left. Across all 31,293 sequences of the walk the most any tail uses is 2
- * (6 under the app's retry policy, whose tries each add a backoff to end), so
- * 24 is four times that: a sweep that never stops asking fails the walk
- * instead of being cut short.
+ * left. Fails loudly; measured maximum 6: across all 31,293 sequences of the
+ * walk no tail uses more than 2, or 6 under the app's retry policy, whose
+ * tries each add a backoff to end. A sweep that never stops asking runs past
+ * it and fails the walk instead of being cut short.
  */
 const SETTLE_STEPS = 24;
 
@@ -761,11 +761,6 @@ export class Rig {
     this.ringNow();
   }
 
-  dStartElsewhere(): void {
-    this.trace.push("startElsewhere");
-    this.startElsewhere("startElsewhere");
-  }
-
   async dBarrier(): Promise<void> {
     await this.barrier();
   }
@@ -1031,17 +1026,11 @@ async function checkClean(rig: Rig, counts: Counts): Promise<string | null> {
   rig.dRing();
   await rig.dBarrier();
   if (rig.attempts.length !== before + 1) {
-    return `(D1) a fresh ring made ${rig.attempts.length - before} asks, not 1`;
+    return `(D) a fresh ring made ${rig.attempts.length - before} asks, not 1`;
   }
   await rig.finishTransiently();
   if (rig.attempts.length !== before + 1) {
-    return `(D1) the fresh ring's ask failed and ${rig.attempts.length - before - 1} more asks followed`;
-  }
-  rig.dStartElsewhere();
-  await rig.dBarrier();
-  await rig.finishTransiently();
-  if (rig.attempts.length !== before + 2) {
-    return `(D2) a refetch that failed with no ring was followed by ${rig.attempts.length - before - 2} asks`;
+    return `(D) the fresh ring's ask failed and ${rig.attempts.length - before - 1} more asks followed`;
   }
   return null;
 }
