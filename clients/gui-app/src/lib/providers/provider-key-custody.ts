@@ -32,6 +32,18 @@ export function providerKeyIsPersonalSecret(
   );
 }
 
+/** The record's custody applies to every computer running its environment. */
+export function recordKeyCustodyLine(
+  providerId: ProviderId,
+  environmentName: string | null,
+): string {
+  const environment = environmentName?.trim() || "this environment";
+  const sandbox = PERSONAL_SECRET_KEY_PROVIDERS.has(providerId)
+    ? "; sandboxes use it without seeing it."
+    : ".";
+  return `Stored encrypted in Traycer's cloud. Computers running ${environment} receive the value, readable by their tools and agents${sandbox}`;
+}
+
 /**
  * Whether the host runs Personal, so its other computers and sandboxes are
  * worth naming as the ones the key does not reach. `false` on a Local pick,

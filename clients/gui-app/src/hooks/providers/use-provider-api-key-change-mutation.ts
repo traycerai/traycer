@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import {
   changeProviderApiKey,
+  ProviderApiKeyEnvironmentChangedError,
   type ProviderApiKeyChange,
   type ProviderApiKeyChangeResponse,
 } from "@traycer-clients/shared/host-client/provider-api-key-change";
@@ -39,6 +40,7 @@ const UNAVAILABLE_CHANGE_MESSAGES = {
 } as const;
 
 interface ProviderApiKeyChangeMutationArgs<Variables> {
+  readonly expectedEnvironmentId: string | null;
   readonly method: "providers.setApiKey" | "providers.clearApiKey";
   readonly mutationKey: readonly unknown[];
   readonly errorMessage: string;
@@ -79,6 +81,7 @@ export function useProviderApiKeyChangeMutation<Variables>(
             auth,
             providerId,
             change,
+            args.expectedEnvironmentId,
           );
           if (
             outcome.result !== null &&
@@ -126,7 +129,7 @@ export function useProviderApiKeyChangeMutation<Variables>(
         }
         toastFromHostError(error, args.errorMessage);
       },
-      onSettled: (_data, _error, _variables, context) => {
+      onSettled: (_data, error, _variables, context) => {
         if (context === undefined || context.hostId === null) return;
         for (const method of PROVIDER_INVALIDATIONS) {
           void queryClient.invalidateQueries({
@@ -138,6 +141,19 @@ export function useProviderApiKeyChangeMutation<Variables>(
                 null,
               ),
               method,
+            ),
+          });
+        }
+        if (error instanceof ProviderApiKeyEnvironmentChangedError) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              hostRpcServingTierHostId(
+                "environment.status",
+                context.hostId,
+                readProcessHostRpcTierPlan(),
+                null,
+              ),
+              "environment.status",
             ),
           });
         }

@@ -78,6 +78,7 @@ import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
   providerKeyIsPersonalSecret,
+  recordKeyCustodyLine,
   type ProviderKeyPrincipal,
 } from "@/lib/providers/provider-key-custody";
 import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
@@ -547,6 +548,7 @@ export function ProviderReauthBanner({
         keyCustody={{
           principal,
           hostName: tabEntry?.label ?? null,
+          recordEnvironmentId: state?.apiKey.recordEnvironmentId ?? null,
         }}
       />
     </HostRuntimeContext.Provider>
@@ -1031,6 +1033,7 @@ function OAuthWaitingRow({
 interface KeyCustody {
   readonly principal: ProviderKeyPrincipal;
   readonly hostName: string | null;
+  readonly recordEnvironmentId: string | null;
 }
 
 /** Where a provider-level key is kept; an environment-variable override has no custody line. */
@@ -1039,6 +1042,25 @@ function PastedKeyCustody(props: {
   readonly keyCustody: KeyCustody;
 }): ReactNode {
   const { providerId, keyCustody } = props;
+  if (keyCustody.recordEnvironmentId !== null) {
+    const principal = keyCustody.principal;
+    const environmentName =
+      principal?.kind === "personal"
+        ? "Personal"
+        : principal?.kind === "team"
+          ? principal.teamName
+          : null;
+    return (
+      <>
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {recordKeyCustodyLine(providerId, environmentName)}
+        </p>
+        {providerKeyIsPersonalSecret(providerId, principal) ? (
+          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+        ) : null}
+      </>
+    );
+  }
   if (providerKeyIsPersonalSecret(providerId, keyCustody.principal)) {
     return (
       <>
@@ -1085,7 +1107,7 @@ function TokenReauthForm({
   const [probing, setProbing] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const setEnvOverride = useProvidersSetEnvOverride();
-  const setApiKey = useProvidersSetApiKey();
+  const setApiKey = useProvidersSetApiKey(null);
   const refreshProviders = useTabRefreshProviders();
   const queryClient = useQueryClient();
   const tabHostId = useTabHostId();

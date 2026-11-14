@@ -8,7 +8,9 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useProviderApiKeyChangeMutation } from "@/hooks/providers/use-provider-api-key-change-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
-export function useProvidersSetApiKey(): UseMutationResult<
+export function useProvidersSetApiKey(
+  expectedEnvironmentId: string | null,
+): UseMutationResult<
   ProviderApiKeyChangeResponse,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.setApiKey">,
@@ -17,6 +19,7 @@ export function useProvidersSetApiKey(): UseMutationResult<
   return useProviderApiKeyChangeMutation<
     RequestOfMethod<HostRpcRegistry, "providers.setApiKey">
   >({
+    expectedEnvironmentId,
     method: "providers.setApiKey",
     mutationKey: providersMutationKeys.setApiKey(),
     errorMessage: "Couldn't save the API key.",

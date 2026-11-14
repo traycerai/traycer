@@ -27,12 +27,27 @@ export interface ProviderApiKeyChangeResponse extends ProvidersSetApiKeyResponse
     | null;
 }
 
+/** A team page cannot send a key after its computer changes environments. */
+export class ProviderApiKeyEnvironmentChangedError extends HostRpcError {
+  constructor(action: "set" | "clear") {
+    super({
+      code: "RPC_ERROR",
+      requestId: "provider-key-change",
+      method:
+        action === "set" ? "providers.setApiKey" : "providers.clearApiKey",
+      message: "Provider key change failed",
+      fatalDetails: null,
+    });
+  }
+}
+
 /** The key travels to the computer only on the released legacy path. */
 export async function changeProviderApiKey(
   host: ProviderApiKeyChangeHost,
   records: ProviderKeyRecordClient,
   providerId: ProviderId,
   change: ProviderApiKeyChange,
+  expectedEnvironmentId: string | null,
 ): Promise<ProviderApiKeyChangeOutcome> {
   const legacy = async (): Promise<ProviderApiKeyChangeOutcome> => ({
     response:
@@ -44,15 +59,28 @@ export async function changeProviderApiKey(
         : await host.request("providers.clearApiKey", { providerId }),
     result: null,
   });
-  if (!isProviderKeyProviderId(providerId)) return legacy();
+  if (!isProviderKeyProviderId(providerId)) {
+    if (expectedEnvironmentId !== null)
+      throw new ProviderApiKeyEnvironmentChangedError(change.action);
+    return legacy();
+  }
   const context = host.getRequestContext();
   let begin: ProvidersBeginApiKeyChangeResponse;
   try {
     begin = await host.request("providers.beginApiKeyChange", { providerId });
   } catch (error) {
-    if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED")
+    if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {
+      if (expectedEnvironmentId !== null)
+        throw new ProviderApiKeyEnvironmentChangedError(change.action);
       return legacy();
+    }
     throw error;
+  }
+  if (
+    expectedEnvironmentId !== null &&
+    (begin.mode === "legacy" || begin.environmentId !== expectedEnvironmentId)
+  ) {
+    throw new ProviderApiKeyEnvironmentChangedError(change.action);
   }
   if (begin.mode === "legacy") return legacy();
   const method =
@@ -165,7 +193,7 @@ export interface ProviderKeyRecordClient {
 const codedBodySchema = z.object({ code: z.string() });
 const keySchema = z.string().regex(/^[\x21-\x7e]{1,4096}$/);
 
-function isProviderKeyProviderId(
+export function isProviderKeyProviderId(
   providerId: string,
 ): providerId is ProviderKeyProviderId {
   return providerKeyProviderIdSchema.safeParse(providerId).success;

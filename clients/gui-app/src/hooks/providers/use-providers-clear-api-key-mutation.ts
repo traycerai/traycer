@@ -8,7 +8,9 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useProviderApiKeyChangeMutation } from "@/hooks/providers/use-provider-api-key-change-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
-export function useProvidersClearApiKey(): UseMutationResult<
+export function useProvidersClearApiKey(
+  expectedEnvironmentId: string | null,
+): UseMutationResult<
   ProviderApiKeyChangeResponse,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.clearApiKey">,
@@ -17,6 +19,7 @@ export function useProvidersClearApiKey(): UseMutationResult<
   return useProviderApiKeyChangeMutation<
     RequestOfMethod<HostRpcRegistry, "providers.clearApiKey">
   >({
+    expectedEnvironmentId,
     method: "providers.clearApiKey",
     mutationKey: providersMutationKeys.clearApiKey(),
     errorMessage: "Couldn't clear the API key.",
