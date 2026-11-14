@@ -391,6 +391,100 @@ test.describe("ctrl-wheel zoom", () => {
   });
 });
 
+test.describe("the stage around a zoom gesture", () => {
+  test("keeps the dot grid and fill on the whole stage while a zoom-out scales the boards", async ({
+    page,
+  }) => {
+    await open(page);
+    // The wheel events come from the page, one per frame, so the boxes are
+    // read while the gesture is still held. Real input would let the
+    // gesture's redraw land between the wheel and the read on a loaded runner.
+    const held = await page.evaluate(async () => {
+      const flow = document.querySelector('[aria-label="Canvas workspace"]');
+      const grid = document.querySelector('[data-testid="rf__background"]');
+      if (flow === null || grid === null)
+        throw new Error("the canvas is not mounted");
+      const box = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        };
+      };
+      const before = { flow: box(flow), grid: box(grid) };
+      for (let frame = 0; frame < 4; frame += 1) {
+        flow.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: 120,
+            ctrlKey: true,
+            clientX: before.flow.x + 300,
+            clientY: before.flow.y + 200,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      return { before, during: { flow: box(flow), grid: box(grid) } };
+    });
+
+    // The gesture is scaling everything drawn in canvas coordinates...
+    expect(held.during.flow.width).toBeLessThan(held.before.flow.width * 0.8);
+    // ...and the backdrop still covers exactly what it covered: no edge of
+    // the shrinking layer shows against the stage.
+    for (const side of ["x", "y", "width", "height"] as const)
+      expect(
+        Math.abs(held.during.grid[side] - held.before.grid[side]),
+      ).toBeLessThan(0.5);
+  });
+
+  test("stays where it is when a board scrolls its own content into view", async ({
+    page,
+  }) => {
+    await open(page);
+    const zoomReadout = page.getByRole("button", { name: /, zoom$/ });
+    const zoomBefore = await zoomReadout.textContent();
+    const paneBox = await page
+      .getByRole("application", { name: "Canvas workspace" })
+      .boundingBox();
+    if (paneBox === null) throw new Error("the canvas pane has no box");
+    // Zoom in about the left edge until board B runs past the right one:
+    // only then is there anywhere the canvas could be scrolled to.
+    await page.mouse.move(paneBox.x + 80, paneBox.y + paneBox.height - 40);
+    await page.keyboard.down("Control");
+    try {
+      await page.mouse.wheel(0, -240);
+    } finally {
+      await page.keyboard.up("Control");
+    }
+    await expect(zoomReadout).not.toHaveText(zoomBefore ?? "");
+    await nextFrames(page, 2);
+    const boardA = page.locator('iframe[title="A"]');
+    const boardB = page.locator('iframe[title="B"]');
+    const before = await boardA.boundingBox();
+    const boxB = await boardB.boundingBox();
+    if (before === null || boxB === null) throw new Error("a board has no box");
+    expect(boxB.x + boxB.width).toBeGreaterThan(paneBox.x + paneBox.width);
+
+    // A page revealing something of its own asks every scrollable ancestor
+    // to scroll, the app's included.
+    await board(page, "B")
+      .locator("body")
+      .evaluate((body) => {
+        const far = document.createElement("div");
+        far.style.cssText =
+          "position:absolute;right:0;bottom:0;width:8px;height:8px";
+        body.append(far);
+        far.scrollIntoView();
+      });
+    await nextFrames(page, 2);
+
+    expect(await boardA.boundingBox()).toEqual(before);
+  });
+});
+
 // The fixture seeds one element thread on each of boards A and B
 // (`data-tid="name"`), a local-homed epic (no cloud verdict needed) with an
 // open records lane carrying both threads, and a negotiated

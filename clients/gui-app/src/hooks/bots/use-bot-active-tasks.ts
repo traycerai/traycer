@@ -31,7 +31,7 @@ export type BotActiveTasks = {
 };
 
 /**
- * The tasks the bot started that are still active (`activeTasksOf`): the
+ * The bot's listed tasks that are still active (`activeTasksOf`): the
  * agents working in each as the activity plane counts them, and each task's
  * unread done or failure as the notification indicators hold it.
  */

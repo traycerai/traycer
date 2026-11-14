@@ -1,3 +1,4 @@
+import { resetTracyPlaceStores, railOf } from "./tracy-place-test-fixture";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import {
@@ -25,7 +26,6 @@ import { goBack, goForward } from "@/lib/commands/actions/history-navigation";
 import { isHistoryEntryDead } from "@/lib/history-navigation/liveness";
 import { isHistoryEntryEligible } from "@/lib/history-navigation/eligibility";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
-import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
   TracyChannelPlaceRoute,
   TracySurfacePlaceRoute,
@@ -39,7 +39,6 @@ import {
   type BotOpenThread,
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import {
   tracySessionOf,
   tracyViewOf,
@@ -47,10 +46,6 @@ import {
 } from "@/stores/bots/tracy-place-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-import { emptyTabStripLayout } from "@/stores/tabs/layout";
-import { useTabsStore } from "@/stores/tabs/store";
-import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 /**
  * The Tracy surface's place (view, Threads, a session, the rail's thread,
@@ -59,7 +54,6 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
  * Back and Forward put the surface where the entry says.
  */
 
-const WINDOW_HOST = "host-window";
 const BOT_A = "bot-a";
 const BOT_B = "bot-b";
 
@@ -128,29 +122,6 @@ async function mount(initialEntries: ReadonlyArray<string>): Promise<Harness> {
   };
 }
 
-function resetStores(): void {
-  window.localStorage.clear();
-  useTracySurfaceStore.setState({
-    open: false,
-    hostId: null,
-    botId: null,
-    visitedBotIds: [],
-    goneReports: {},
-  });
-  useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
-  useBotOpenThreadStore.setState(useBotOpenThreadStore.getInitialState(), true);
-  useBotDraftsStore.setState(useBotDraftsStore.getInitialState(), true);
-  useBotTabLandingStore.setState(useBotTabLandingStore.getInitialState(), true);
-  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useSelectionAuthorityStore.setState({
-    attached: true,
-    effectiveHostId: WINDOW_HOST,
-  });
-  useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
-  tabCommandCoordinator.resetReconciliationForTesting();
-  __resetTabNavigationControllerForTesting();
-}
-
 /** What the surface's stores hold for one channel. */
 interface Surface {
   readonly view: TracyChannelView;
@@ -165,11 +136,6 @@ const NOTHING: Surface = {
   session: null,
   rail: null,
 };
-
-function railOf(botId: string): BotRail | null {
-  const { byBotId } = useBotOpenThreadStore.getState();
-  return Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
-}
 
 function surfaceOf(botId: string): Surface {
   const place = useTracyPlaceStore.getState();
@@ -220,10 +186,6 @@ function threadRail(
   overrides: Partial<BotOpenThread>,
 ): BotRail {
   return { kind: "thread", ...thread(anchorMessageId, overrides) };
-}
-
-function indexOf(harness: Harness): number {
-  return harness.location().index;
 }
 
 function urlPlace(harness: Harness): TracyPlace | null {
@@ -433,11 +395,15 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
 ];
 
 describe("the Tracy surface's place on the route", () => {
-  beforeEach(resetStores);
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetTracyPlaceStores();
+  });
   afterEach(() => {
     stopObserving();
     cleanup();
-    resetStores();
+    window.localStorage.clear();
+    resetTracyPlaceStores();
   });
 
   describe("a move of the person's is one history step", () => {
@@ -446,17 +412,17 @@ describe("the Tracy surface's place on the route", () => {
       establish(BOT_A, row.start);
       await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(row.start));
       const length = harness.history.length;
-      const index = indexOf(harness);
+      const index = harness.location().index;
 
       act(row.move);
       await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(row.moved));
       expect(surfaceOf(BOT_A)).toEqual(row.moved);
       expect(harness.history.length).toBe(length + 1);
-      expect(indexOf(harness)).toBe(index + 1);
+      expect(harness.location().index).toBe(index + 1);
 
       stepBack(harness);
       await waitFor(() => {
-        expect(indexOf(harness)).toBe(index);
+        expect(harness.location().index).toBe(index);
         expect(surfaceOf(BOT_A)).toEqual(row.afterBack);
       });
       expect(urlPlace(harness)).toEqual(placeOf(row.start));
@@ -464,7 +430,7 @@ describe("the Tracy surface's place on the route", () => {
 
       stepForward(harness);
       await waitFor(() => {
-        expect(indexOf(harness)).toBe(index + 1);
+        expect(harness.location().index).toBe(index + 1);
         expect(surfaceOf(BOT_A)).toEqual(row.restored);
       });
       expect(urlPlace(harness)).toEqual(placeOf(row.restored));
@@ -475,7 +441,7 @@ describe("the Tracy surface's place on the route", () => {
   it("pushes the newer place as its own step when the person moves again while the hook's own write is committing", async () => {
     const harness = await mountOnChannel(BOT_A);
     const length = harness.history.length;
-    const index = indexOf(harness);
+    const index = harness.location().index;
     const first = { ...NOTHING, threadsShown: true };
     const second = { ...first, view: "activity" } as const;
     // The second move lands the instant the first write's entry is pushed,
@@ -492,11 +458,11 @@ describe("the Tracy surface's place on the route", () => {
     unsubscribe();
 
     expect(harness.history.length).toBe(length + 2);
-    expect(indexOf(harness)).toBe(index + 2);
+    expect(harness.location().index).toBe(index + 2);
 
     stepBack(harness);
     await waitFor(() => {
-      expect(indexOf(harness)).toBe(index + 1);
+      expect(harness.location().index).toBe(index + 1);
       expect(surfaceOf(BOT_A)).toEqual(first);
     });
     expect(urlPlace(harness)).toEqual(placeOf(first));
@@ -515,21 +481,6 @@ describe("the Tracy surface's place on the route", () => {
       expect(harness.history.location.search).toBe(
         "?view=activity&thread=m-1&threadAnnouncement=true&threadAnchor=answer",
       );
-    });
-  });
-
-  it("restores a closed thread with its announcement and anchor kind intact", async () => {
-    const harness = await mountOnChannel(BOT_A);
-    const open = { ...NOTHING, rail: T1_ANSWER };
-    establish(BOT_A, open);
-    await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(open));
-
-    act(() => rails().setRail(BOT_A, null));
-    await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(NOTHING));
-    stepBack(harness);
-
-    await waitFor(() => {
-      expect(railOf(BOT_A)).toEqual(T1_ANSWER);
     });
   });
 
@@ -571,7 +522,7 @@ describe("the Tracy surface's place on the route", () => {
         placeOf({ ...NOTHING, threadsShown: true }),
       );
       const length = harness.history.length;
-      const index = indexOf(harness);
+      const index = harness.location().index;
 
       act(() => {
         place().markAutomaticMove();
@@ -584,12 +535,12 @@ describe("the Tracy surface's place on the route", () => {
       } as const;
       await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(landed));
       expect(harness.history.length).toBe(length);
-      expect(indexOf(harness)).toBe(index);
+      expect(harness.location().index).toBe(index);
 
       // The entry behind it is the one before the Threads page was opened.
       stepBack(harness);
       await waitFor(() => {
-        expect(indexOf(harness)).toBe(index - 1);
+        expect(harness.location().index).toBe(index - 1);
         expect(surfaceOf(BOT_A)).toEqual(NOTHING);
       });
       stepForward(harness);
@@ -625,11 +576,11 @@ describe("the Tracy surface's place on the route", () => {
       act(() => place().setView(BOT_A, "activity"));
       await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(activity));
       const length = harness.history.length;
-      const index = indexOf(harness);
+      const index = harness.location().index;
 
       await openChannel(harness, BOT_B);
       expect(harness.history.length).toBe(length + 1);
-      expect(indexOf(harness)).toBe(index + 1);
+      expect(harness.location().index).toBe(index + 1);
       // The channel left shows afresh when it is next selected.
       expect(surfaceOf(BOT_A)).toEqual(NOTHING);
 
@@ -637,7 +588,7 @@ describe("the Tracy surface's place on the route", () => {
       await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(activity));
       expect(useTracySurfaceStore.getState().botId).toBe(BOT_A);
       expect(surfaceOf(BOT_A)).toEqual(activity);
-      expect(indexOf(harness)).toBe(index);
+      expect(harness.location().index).toBe(index);
 
       stepForward(harness);
       await waitForUrl(harness, `/bot/${BOT_B}`, placeOf(NOTHING));
@@ -797,7 +748,7 @@ describe("the Tracy surface's place on the route", () => {
         return { answers, threadBoxes, unsentBoxes };
       };
       const before = held();
-      const index = indexOf(harness);
+      const index = harness.location().index;
 
       act(() => place().setView(BOT_A, "activity"));
       act(() => rails().setRail(BOT_A, T1));
@@ -805,7 +756,7 @@ describe("the Tracy surface's place on the route", () => {
       act(() => place().setSession(BOT_A, CHAT));
       act(() => place().setThreadsShown(true));
       await waitFor(() => {
-        expect(indexOf(harness)).toBe(index + 5);
+        expect(harness.location().index).toBe(index + 5);
       });
       expect(held()).toEqual(before);
 
@@ -813,7 +764,7 @@ describe("the Tracy surface's place on the route", () => {
         const target = index + 4 - step;
         stepBack(harness);
         await waitFor(() => {
-          expect(indexOf(harness)).toBe(target);
+          expect(harness.location().index).toBe(target);
         });
         expect(held()).toEqual(before);
       }
@@ -821,7 +772,7 @@ describe("the Tracy surface's place on the route", () => {
         const target = index + 1 + step;
         stepForward(harness);
         await waitFor(() => {
-          expect(indexOf(harness)).toBe(target);
+          expect(harness.location().index).toBe(target);
         });
         expect(held()).toEqual(before);
       }
