@@ -306,7 +306,6 @@ describe("the face", () => {
           );
           const where = `${name} ${shape} ${eyewear}`;
           expect(faces[3], where).not.toBe(faces[0]);
-          expect(new Set(faces).size, where).toBeGreaterThan(1);
         }
       }
     }

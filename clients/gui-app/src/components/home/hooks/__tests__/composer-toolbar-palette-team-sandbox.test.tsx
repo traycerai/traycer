@@ -19,13 +19,13 @@ const gateState = vi.hoisted(() => ({
   blockedIds: new Set<string>(),
 }));
 
-// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
 // The store reads the provider rows for the model providers a person hid
 // from the pickers. Nothing here turns that on, so the rows stay absent and
 // the catalog these cases assert on is the whole one.
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined, isError: false }),
 }));
+// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   useSandboxTraycerModels: () => ({ data: undefined }),
 }));

@@ -337,8 +337,8 @@ export function LiveBotAvatar(props: {
 }
 
 /**
- * A named bot's picture outside that bot's own surface, as a channel row in
- * the sidebar draws each bot it lists.
+ * A named bot's picture without a live activity reading, for mentions and
+ * search results.
  */
 export function NamedBotAvatar(props: {
   readonly botId: string;

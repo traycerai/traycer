@@ -365,16 +365,6 @@ describe("one bot.subscribe stream per bot per host", () => {
     expect(ledger.botStreams).toHaveLength(1);
   });
 
-  it("opens one stream when Home's row, a per-host reader and the sidebar avatar read the same bot on the same host", async () => {
-    await mountReaders({
-      home: true,
-      perHostReaderOn: EFFECTIVE_HOST.hostId,
-      sidebarAvatarOn: EFFECTIVE_HOST.hostId,
-    });
-
-    expect(ledger.botStreams).toHaveLength(1);
-  });
-
   it("keeps the shared stream open until its last of three readers unmounts", async () => {
     const { setReaders } = await mountReaders({
       home: true,
