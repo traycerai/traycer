@@ -25,6 +25,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { DetailsStatus } from "@/lib/settings-details-entry";
+import { beginEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
 
 type SecretsList = ResponseOfMethod<
   HostRpcRegistry,
@@ -135,7 +136,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       {
         hostId,
         client,
-        environmentCloud: null,
+        environmentCloud: beginEnvironmentCloudOperation(null),
         queryClient: harness.queryClient,
       },
       STATUS,
@@ -178,7 +179,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
       {
         hostId,
         client,
-        environmentCloud: null,
+        environmentCloud: beginEnvironmentCloudOperation(null),
         queryClient: harness.queryClient,
       },
       STATUS,

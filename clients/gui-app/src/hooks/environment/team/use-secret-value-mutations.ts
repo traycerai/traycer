@@ -17,7 +17,7 @@ import type {
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
 import {
   invalidateEnvironmentReads,
-  useEnvironmentCloudSender,
+  useEnvironmentCloudOperation,
 } from "@/hooks/environment/use-environment-cloud";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -72,7 +72,7 @@ export function useEnvironmentSecretsCreateMutation(
 > {
   const { environmentId } = useAddressedEnvironment();
   const queryClient = useQueryClient();
-  const send = useEnvironmentCloudSender();
+  const begin = useEnvironmentCloudOperation();
   const named = useMutation<
     ResponseOfMethod<HostRpcRegistry, "environment.secrets.create">,
     HostRpcError,
@@ -81,7 +81,10 @@ export function useEnvironmentSecretsCreateMutation(
   >({
     mutationKey: settingsDetailsMutationKeys.secretCreate(),
     mutationFn: () =>
-      send("environment.secrets.create", { ...readRequest(), environmentId }),
+      begin()("environment.secrets.create", {
+        ...readRequest(),
+        environmentId,
+      }),
     onMutate: () => ({ hostId: null }),
     onSuccess: (outcome) => {
       if (outcome.outcome !== "refused") {
@@ -123,14 +126,17 @@ export function useEnvironmentSecretsVerifyCandidateMutation(
   void
 > {
   const { environmentId } = useAddressedEnvironment();
-  const send = useEnvironmentCloudSender();
+  const begin = useEnvironmentCloudOperation();
   const named = useMutation<
     ResponseOfMethod<HostRpcRegistry, "environment.secrets.verify">,
     HostRpcError
   >({
     mutationKey: settingsDetailsMutationKeys.secretVerifyCandidate(),
     mutationFn: () =>
-      send("environment.secrets.verify", { ...readRequest(), environmentId }),
+      begin()("environment.secrets.verify", {
+        ...readRequest(),
+        environmentId,
+      }),
   });
   const hostOwn = useHostMutation<
     HostRpcRegistry,
@@ -165,7 +171,7 @@ export function useEnvironmentSecretsReplaceValueMutation(
 > {
   const { environmentId } = useAddressedEnvironment();
   const queryClient = useQueryClient();
-  const send = useEnvironmentCloudSender();
+  const begin = useEnvironmentCloudOperation();
   const named = useMutation<
     ResponseOfMethod<HostRpcRegistry, "environment.secrets.replaceValue">,
     HostRpcError,
@@ -174,7 +180,7 @@ export function useEnvironmentSecretsReplaceValueMutation(
   >({
     mutationKey: settingsDetailsMutationKeys.secretReplaceValue(),
     mutationFn: (target) =>
-      send("environment.secrets.replaceValue", {
+      begin()("environment.secrets.replaceValue", {
         ...target,
         value: readValue(),
         environmentId,

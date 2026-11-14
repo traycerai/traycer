@@ -19,6 +19,7 @@ import {
 import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { beginEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
 
 const NOW = 1_791_100_000_000;
 
@@ -472,7 +473,7 @@ function loadSandboxDetails(queryClient: QueryClient, sandboxId: string) {
       hostId: null,
       // Unused: a sandbox's evidence is the control plane's, not a host's.
       client: {} as HostClient<HostRpcRegistry>,
-      environmentCloud: null,
+      environmentCloud: beginEnvironmentCloudOperation(null),
       queryClient,
     },
   );

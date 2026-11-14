@@ -11,7 +11,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   useEnvironmentCloudQuery,
-  useEnvironmentCloudSender,
+  useEnvironmentCloudOperation,
 } from "@/hooks/environment/use-environment-cloud";
 import type { RequiredHostMethodVersion } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -89,7 +89,7 @@ export function useSecretsWrite<
   RequestOfMethod<HostRpcRegistry, Method>,
   TContext
 > {
-  const send = useEnvironmentCloudSender();
+  const begin = useEnvironmentCloudOperation();
   const { client, method, hostOwnFloor } = args;
   return useMutation<
     ResponseOfMethod<HostRpcRegistry, Method>,
@@ -110,7 +110,7 @@ export function useSecretsWrite<
                   hostOwnFloor,
                 ),
           )
-        : send(method, request),
+        : begin()(method, request),
     onMutate: args.onMutate,
     onSuccess: args.onSuccess,
   });
