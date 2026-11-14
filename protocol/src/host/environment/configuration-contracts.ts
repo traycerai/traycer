@@ -17,6 +17,8 @@
  * the plans linked into a configuration.
  * `environment.providers.list` - the environment's accounts on the caller's
  * session, in the same profile projection as the computer's own list.
+ * `environment.providers.signOutProfile` / `.removeProfile` / `.renameProfile`
+ * - act on an environment's account on that same caller's session.
  * `environment.history` - what happened to a configuration, or to one thing
  * in it.
  *
@@ -35,7 +37,12 @@ import {
   environmentOsSchema,
 } from "@traycer/protocol/host/environment-schemas";
 import { providerSkillInspectCandidateSchema } from "@traycer/protocol/host/provider-native-schemas";
-import { providerProfileProjectionSchema } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerProfileProjectionSchema,
+  providersAnswerProfileNameRequestSchema,
+  providersAnswerProfileNameResponseSchema,
+  providersSignOutProfileResponseSchema,
+} from "@traycer/protocol/host/provider-schemas";
 
 const environmentIdSchema = lazySchema(() => z.string().min(1));
 const itemKeySchema = lazySchema(() => z.string().min(1).max(3072));
@@ -1223,6 +1230,94 @@ export const environmentProvidersListV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentProvidersListRequestSchema,
   responseSchema: environmentProvidersListResponseSchema,
+});
+
+/**
+ * Caller-session actions on the row's own id from `environment.providers.list`.
+ * No revision or harness id is on the wire, and no answer carries an account
+ * identifier. A refusal by the answering side is an ordinary error of this
+ * seam, as for `environment.plans.unlink`; there is no new error code.
+ */
+const environmentProviderProfileTargetRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: environmentIdSchema,
+    // The answering side maps this to the broker's harness id and refuses a
+    // provider it does not know.
+    providerId: z.string().min(1),
+    profileId: z.string().min(1),
+  }),
+);
+
+/**
+ * Signs the account out for the environment; its row and other ids stay.
+ * Repeating it succeeds and changes nothing.
+ */
+export const environmentProvidersSignOutProfileRequestSchema =
+  environmentProviderProfileTargetRequestSchema;
+export type EnvironmentProvidersSignOutProfileRequest = z.infer<
+  typeof environmentProvidersSignOutProfileRequestSchema
+>;
+export const environmentProvidersSignOutProfileResponseSchema =
+  providersSignOutProfileResponseSchema;
+export type EnvironmentProvidersSignOutProfileResponse = z.infer<
+  typeof environmentProvidersSignOutProfileResponseSchema
+>;
+
+export const environmentProvidersSignOutProfileV10 = defineRpcContract({
+  method: "environment.providers.signOutProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentProvidersSignOutProfileRequestSchema,
+  responseSchema: environmentProvidersSignOutProfileResponseSchema,
+});
+
+/**
+ * Removes the account from the environment and its list. Repeating it succeeds
+ * and changes nothing.
+ */
+export const environmentProvidersRemoveProfileRequestSchema =
+  environmentProviderProfileTargetRequestSchema;
+export type EnvironmentProvidersRemoveProfileRequest = z.infer<
+  typeof environmentProvidersRemoveProfileRequestSchema
+>;
+export const environmentProvidersRemoveProfileResponseSchema = lazySchema(() =>
+  z.object({ removed: z.literal(true) }),
+);
+export type EnvironmentProvidersRemoveProfileResponse = z.infer<
+  typeof environmentProvidersRemoveProfileResponseSchema
+>;
+
+export const environmentProvidersRemoveProfileV10 = defineRpcContract({
+  method: "environment.providers.removeProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentProvidersRemoveProfileRequestSchema,
+  responseSchema: environmentProvidersRemoveProfileResponseSchema,
+});
+
+/**
+ * Sets the account's name everywhere and clears its other names, as
+ * `providers.answerProfileName` does on a computer. Sending the current name
+ * keeps it and clears the others. No revision and no conflict: the later write
+ * is the name. The answer is the name the account uses after this call.
+ */
+export const environmentProvidersRenameProfileRequestSchema = lazySchema(() =>
+  environmentProviderProfileTargetRequestSchema.extend({
+    label: providersAnswerProfileNameRequestSchema.shape.label,
+  }),
+);
+export type EnvironmentProvidersRenameProfileRequest = z.infer<
+  typeof environmentProvidersRenameProfileRequestSchema
+>;
+export const environmentProvidersRenameProfileResponseSchema =
+  providersAnswerProfileNameResponseSchema;
+export type EnvironmentProvidersRenameProfileResponse = z.infer<
+  typeof environmentProvidersRenameProfileResponseSchema
+>;
+
+export const environmentProvidersRenameProfileV10 = defineRpcContract({
+  method: "environment.providers.renameProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentProvidersRenameProfileRequestSchema,
+  responseSchema: environmentProvidersRenameProfileResponseSchema,
 });
 
 // ── environment.plans.* ─────────────────────────────────────────────────────
