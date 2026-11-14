@@ -198,8 +198,8 @@ function EffectiveModelLabel(props: {
 
 /**
  * The line under a picked judge that can run: who is billed, naming the
- * account only when its provider has more than one on this machine, as the
- * chip does. Copilot adds its measured rate.
+ * account where the composer button names it (`judgePickAccount`). Copilot
+ * adds its measured rate.
  */
 export function PickedStatus(props: {
   readonly selection: AutoJudgeSelection;

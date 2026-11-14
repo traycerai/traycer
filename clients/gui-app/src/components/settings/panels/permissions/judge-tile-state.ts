@@ -23,7 +23,11 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { HarnessModelSelection } from "@/components/home/data/landing-options";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
+import {
+  profileDropdownShown,
+  resolvedProfileRow,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import {
   judgeProviderBlocker,
   judgeWarningCause,
@@ -300,22 +304,37 @@ export function judgeSeedSelection(input: {
 }
 
 /**
- * The account a pick names, when its provider has more than one on this
- * machine. `null` for one account or none, or an account that is gone (the
- * warning line says so).
+ * The account a pick names, under the composer button's rule
+ * (`profileDropdownShown`): from one account of a provider that can have
+ * profiles, from two of any other. `null` below that, or for an account that
+ * is gone (the warning line says so).
  */
 export function judgePickAccount(
   providers: ReadonlyArray<ProviderCliState> | undefined,
   selection: AutoJudgeSelection,
 ): ProviderProfile | null {
-  const profiles = providerForHarness(providers, selection.harnessId)?.profiles;
-  if (profiles === undefined || profiles.length < 2) return null;
-  return (
-    profiles.find(
-      (profile) => profileCommitId(profile) === selection.profileId,
-    ) ?? null
+  const provider = providerForHarness(providers, selection.harnessId);
+  if (provider === undefined) return null;
+  // A removed pin resolves to no row whether or not it is listed as removed,
+  // so the removed list cannot change what this names.
+  if (
+    !profileDropdownShown(
+      provider.providerId,
+      provider.profiles,
+      NO_REMOVED_PROFILES,
+      selection.profileId,
+    )
+  ) {
+    return null;
+  }
+  return resolvedProfileRow(
+    provider.profiles,
+    NO_REMOVED_PROFILES,
+    selection.profileId,
   );
 }
+
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 /**
  * The few words the dimmed face adds after a last pick that cannot run, so
