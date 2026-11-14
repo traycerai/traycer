@@ -40,6 +40,7 @@ import { useProfileEligibilityGate } from "@/components/chat/composer/use-profil
 import { ProviderReauthBanner } from "@/components/chat/composer/provider-reauth-banner";
 import {
   SIGNED_OUT_SEND_HINT,
+  continueOnTerminalOffered,
   useLandingProviderReauthGate,
   type ProviderReauthGate,
 } from "@/components/chat/composer/use-provider-reauth-gate";
@@ -1189,6 +1190,7 @@ export function LandingComposer(props: LandingComposerProps) {
               stagedTerminalLaunch,
               toolbarStore.getState(),
               providers,
+              stagedProviders.data?.removedProfiles ?? [],
             );
             if (launch === null) return false;
             return dispatchStartTerminal(launch)
@@ -1374,9 +1376,7 @@ function LandingReauthBanner(props: {
         epicId={null}
         viewTabId={null}
         onContinueOnAmbient={
-          gate.reason === "provider_unauthenticated"
-            ? null
-            : props.onContinueOnAmbient
+          continueOnTerminalOffered(gate) ? props.onContinueOnAmbient : null
         }
       />
     </TabHostContext.Provider>

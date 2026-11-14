@@ -50,6 +50,11 @@ import type { ChatForkMode } from "@/components/chat/chat-message";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
+import type {
+  ProviderCliState,
+  ProvidersListResponse,
+} from "@traycer/protocol/host/provider-schemas";
+import type { RemovedProviderProfile } from "@/components/providers/provider-profile-model";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
 import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
@@ -423,6 +428,19 @@ const COMPACT_ACTION_LOCK_MS = 1500;
  * every time and re-partition the setup lifecycle on every streamed token.
  */
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
+const NO_PROVIDERS: ReadonlyArray<ProviderCliState> = [];
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
+
+/** The two halves of the tab's `providers.list` answer the footer reads. */
+function tombstonedProfileListProps(list: ProvidersListResponse | undefined): {
+  readonly providers: ReadonlyArray<ProviderCliState>;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
+} {
+  return {
+    providers: list?.providers ?? NO_PROVIDERS,
+    removedProfiles: list?.removedProfiles ?? NO_REMOVED_PROFILES,
+  };
+}
 
 /** Per-chat compact-conversation state, keyed by `handle.chatId` - see the comment on `compactConversation`. */
 interface CompactChatState {
@@ -825,7 +843,7 @@ function ChatTileForChat(props: ChatTileProps) {
       />
       <SandboxReadyLineForChat chatId={node.id} />
       <TombstonedProfileProvider
-        providers={providersList.data?.providers ?? []}
+        {...tombstonedProfileListProps(providersList.data)}
         hostId={tabHostId}
       >
         <ChatSandboxLineContext value={sandbox.line !== null}>

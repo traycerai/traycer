@@ -171,13 +171,11 @@ function resolveReasoningLabel(
   );
 }
 
-// Deliberately the same three lines as the model picker's own badge resolution
-// (`deriveHarnessModelPickerPresentation`), including the shape of what it
-// declines to show:
+// What the worktree owner's dot declines to show:
 //
-//   - Fewer than 2 profiles is the progressive-disclosure gate. A dot that is
-//     always present signals nothing; it earns its pixels only once the
-//     provider actually has more than one account to be confused between.
+//   - Fewer than 2 profiles shows no dot. A dot that is always present signals
+//     nothing; it earns its pixels only once the provider actually has more
+//     than one account to be confused between.
 //   - `null` here is AMBIENT, not "no profile" - it matches the ambient row via
 //     `profileCommitId`, so a chat running on the Terminal account gets its own
 //     mark rather than silently reading as an unconfigured one.

@@ -138,6 +138,7 @@ import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { sideChatSlashCommands } from "@/lib/chats/side-chat-command";
 import {
   SIGNED_OUT_SEND_HINT,
+  continueOnTerminalOffered,
   useProviderReauthGate,
   type ProviderReauthGate,
   type ProviderReauthReason,
@@ -1151,9 +1152,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
               epicId={currentEpicId}
               viewTabId={viewTabId}
               onContinueOnAmbient={
-                reauthBanner.reason === "provider_unauthenticated"
-                  ? null
-                  : () => onSwitchProfile(null)
+                continueOnTerminalOffered(reauthGate)
+                  ? () => onSwitchProfile(null)
+                  : null
               }
             />
           ) : null}

@@ -105,7 +105,11 @@ import { providerRowUnreadableCopy } from "./provider-row-reset-copy";
 import {
   defaultSelectedProfileId,
   profileCommitId,
+  removedProfilesForProvider,
+  resolvedProfileRow,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
+import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
 import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
 import { providerCanStartProfileOauth } from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
@@ -308,15 +312,36 @@ function resolveTabForProvider(
 
 function initialSelectedProfileId(
   profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
   focusProfileId: string | null,
 ): string | null {
   if (focusProfileId !== null) {
-    const focused = profiles.find(
-      (profile) => profile.profileId === focusProfileId,
+    const focused = focusedSettingsProfile(
+      profiles,
+      removedProfiles,
+      focusProfileId,
     );
-    if (focused !== undefined) return profileCommitId(focused);
+    if (focused !== null) return profileCommitId(focused);
   }
   return defaultSelectedProfileId(profiles);
+}
+
+/**
+ * The row a focus intent names. An intent carries the wire `profileId`
+ * ("ambient" for the Terminal login); the row is the one that id, or an
+ * alias of it, resolves to. A removed or unknown id focuses nothing, and the
+ * page opens on its first row as it does for any id it does not list.
+ */
+function focusedSettingsProfile(
+  profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
+  focusProfileId: string,
+): ProviderProfile | null {
+  return resolvedProfileRow(
+    profiles,
+    removedProfiles,
+    focusProfileId === AMBIENT_PROFILE_ID_SENTINEL ? null : focusProfileId,
+  );
 }
 
 // NOTE: the per-tab "has content" dot that used to render here is gone on
@@ -1456,8 +1481,17 @@ function ProviderDetail({
   // keys `<ProviderDetail>` by `active.providerId`, remounting this component
   // (and this `useState`'s lazy initializer) whenever the active provider
   // changes.
+  const removedProfiles = removedProfilesForProvider(
+    useProvidersList({ enabled: true, subscribed: true }).data,
+    providerId,
+  );
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
-    () => initialSelectedProfileId(state.profiles, initialProfileId),
+    () =>
+      initialSelectedProfileId(
+        state.profiles,
+        removedProfiles,
+        initialProfileId,
+      ),
   );
   const setEnabled = useProvidersSetEnabled();
   const setProfileEnabled = useProvidersSetProfileEnabledForClient(
@@ -1515,9 +1549,11 @@ function ProviderDetail({
   const focusedProfile =
     initialProfileId === null
       ? null
-      : (state.profiles.find(
-          (profile) => profile.profileId === initialProfileId,
-        ) ?? null);
+      : focusedSettingsProfile(
+          state.profiles,
+          removedProfiles,
+          initialProfileId,
+        );
   const shouldStartInReauth =
     initialSignIn &&
     focusedProfile !== null &&

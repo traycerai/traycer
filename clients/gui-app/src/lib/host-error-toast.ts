@@ -17,6 +17,7 @@ import {
   type EpicShareRefusal,
   type EpicSharePromotionPendingReason,
 } from "@traycer/protocol/host/epic/share-refusal";
+import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-copy";
 
 /**
  * One stable id for every PRE-SEND transport notice, across every call site.
@@ -721,6 +722,9 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   if (verdict !== null) {
     return verdict;
   }
+  // A start named an account a person removed: the pin's own words, never
+  // the computer's text, which carries the profile id.
+  if (error.code === "removed-by-person") return REMOVED_PROFILE_PIN_TEXT;
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";
   }

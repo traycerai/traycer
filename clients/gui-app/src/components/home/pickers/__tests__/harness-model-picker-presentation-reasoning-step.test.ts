@@ -41,6 +41,7 @@ function presentationFor(reasoningFooter: ReasoningFooterConfig | null) {
     modelsPending: false,
     selectedHarnessAvailable: true,
     selectedHarnessProfiles: [],
+    selectedHarnessRemovedProfiles: [],
   });
 }
 

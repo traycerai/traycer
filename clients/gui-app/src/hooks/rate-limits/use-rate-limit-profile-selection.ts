@@ -1,7 +1,11 @@
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { useShallow } from "zustand/react/shallow";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
+import {
+  profileCommitId,
+  resolvedProfileRow,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import {
@@ -72,14 +76,23 @@ export function useRateLimitProfileSelection(
 const NO_HOST_SHOWN_PROFILES: StatusBarHostShownProfiles = {};
 
 /**
+ * The usage surfaces resolve a remembered id to the row it names - its own,
+ * the row it folded into as an alias, or the record's row that is the
+ * Terminal login - and treat every other id as gone, removed by a person or
+ * not, exactly as before. They read no removed accounts of their own.
+ */
+const USAGE_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
+
+/**
  * The accounts one provider's strip segments describe, in the order the strip
  * draws them. Never empty.
  *
  * The checked list wins when any of it still names a profile the provider
- * reports: the result is those profiles in the PROVIDER's order with the
- * ambient login last, not the order they were checked in, so two windows
- * with the same checks draw the same strip. A checked id whose profile has
- * since been removed is skipped, not drawn as ambient.
+ * reports (or names as an alias): the result is those profiles in the
+ * PROVIDER's order with the ambient login last, not the order they were
+ * checked in, so two windows with the same checks draw the same strip. A
+ * checked id whose profile has since been removed is skipped, not drawn as
+ * ambient.
  *
  * With nothing checked - or nothing checked that still exists - the provider
  * draws ONE account, and the chain is: the profile last picked in a composer
@@ -94,8 +107,11 @@ export function resolveStatusBarProfileIds(
   profiles: ReadonlyArray<ProviderProfile>,
 ): ReadonlyArray<string | null> {
   const checked = selection.shownProfiles[providerId] ?? [];
+  const checkedRows = checked.map((profileId) =>
+    resolvedProfileRow(profiles, USAGE_REMOVED_PROFILES, profileId),
+  );
   const shown = profiles
-    .filter((profile) => checked.includes(profileCommitId(profile)))
+    .filter((profile) => checkedRows.includes(profile))
     .map(profileCommitId);
   if (shown.length > 0) {
     // Ambient last, wherever the host lists it.
@@ -134,23 +150,24 @@ function resolveFallbackProfileId(
   // ambient login whenever the provider still lists one.
   const remembered = Object.hasOwn(selection.lastProfileByHarness, harnessId);
   const lastUsed = selection.lastProfileByHarness[harnessId] ?? null;
-  if (
-    remembered &&
-    lastUsed === null &&
-    profiles.some((profile) => profile.kind === "ambient")
-  ) {
-    return null;
+  const lastUsedRow = resolvedProfileRow(
+    profiles,
+    USAGE_REMOVED_PROFILES,
+    lastUsed,
+  );
+  // The Terminal login's row, or the record's row that is the Terminal login.
+  if (remembered && lastUsed === null && lastUsedRow !== null) {
+    return profileCommitId(lastUsedRow);
   }
   // A remembered id that no longer addresses a profile here falls through to
   // the next rule rather than short-circuiting to ambient: the memory is
   // about a credential that is gone, and the provider still has others.
   if (
     lastUsed !== null &&
-    profiles.some(
-      (profile) => profile.kind === "managed" && profile.profileId === lastUsed,
-    )
+    lastUsedRow !== null &&
+    lastUsedRow.kind === "managed"
   ) {
-    return lastUsed;
+    return profileCommitId(lastUsedRow);
   }
   const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);

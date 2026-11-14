@@ -16,7 +16,8 @@ export interface JudgeFace {
   readonly selection: HarnessModelSelection | null;
   /**
    * Everything the chip says after the provider icon: the model, the account
-   * when its provider has more than one, and why a last pick cannot run.
+   * where the composer button names it (`judgeFaceAccount`), and why a last
+   * pick cannot run.
    */
   readonly label: string;
   readonly accentDot: ProfileAccentDotInput | null;

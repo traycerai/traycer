@@ -324,6 +324,11 @@ interface CreateChatCall {
 export interface HostAnswers {
   readonly harnesses: ReadonlyArray<GuiHarnessOption>;
   readonly providers: ReadonlyArray<ProviderCliState>;
+  readonly removedProfiles?: ReadonlyArray<{
+    readonly providerId: string;
+    readonly profileId: string;
+    readonly aliases: readonly string[];
+  }>;
 }
 
 const mocks = vi.hoisted(() => ({
@@ -415,6 +420,16 @@ const mocks = vi.hoisted(() => ({
     readonly subscribed: boolean;
   }>,
 }));
+
+function providersListData(answers: HostAnswers) {
+  if (answers.removedProfiles === undefined) {
+    return { providers: answers.providers };
+  }
+  return {
+    providers: answers.providers,
+    removedProfiles: answers.removedProfiles,
+  };
+}
 
 function answersFor(hostId: string): HostAnswers | undefined {
   const answers = mocks.hostAnswers.get(hostId);
@@ -585,8 +600,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
         ? undefined
         : answersFor(client.hostId);
     return {
-      data:
-        answers === undefined ? undefined : { providers: answers.providers },
+      data: answers === undefined ? undefined : providersListData(answers),
       isError: false,
       refetch: refetchNothing,
     };

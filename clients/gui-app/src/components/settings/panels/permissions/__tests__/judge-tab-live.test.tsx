@@ -66,6 +66,13 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
     usePersonalHostScope: useHostScope,
   };
 });
+// The picker's Terminal account sentence reads the fleet's rows for the run
+// target's name; this suite has no fleet.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return { useHostOptions: () => hostOptionsFixture({ hosts: [] }) };
+});
 vi.mock(
   "@/components/settings/host-scope/use-scoped-host-binding",
   async () => {

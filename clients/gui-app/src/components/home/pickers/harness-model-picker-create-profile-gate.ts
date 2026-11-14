@@ -23,7 +23,7 @@ export const EMPTY_PROVIDER_STATE_BY_HARNESS_ID: ReadonlyMap<
 > = new Map();
 
 /**
- * Host-scoped, capability-gated "Create new profile" support for the
+ * Host-scoped, capability-gated "Add a profile" support for the
  * picker. OAuth sign-in needs a local host that advertises login args for
  * the browsed provider - this mirrors Settings' `providerCanStartProfileOauth`
  * gate (`providers-settings-panel.tsx`), scoped to whichever host the
@@ -57,7 +57,7 @@ function isHostLocal(
   return directory.find((entry) => entry.hostId === hostId)?.kind === "local";
 }
 
-/** Whether the "Create new profile" target host (`createProfileHostId`, or
+/** Whether the "Add a profile" target host (`createProfileHostId`, or
  *  the app-wide default when `null`) is local - OAuth sign-in needs a local
  *  host to spawn the browser flow on. */
 export function useCreateProfileHostIsLocal(
@@ -89,7 +89,7 @@ export function resolveCreateProfileGate(
   // A terminal-login provider is answered before the `oauthArgs` gate below,
   // whichever way its `oauthArgs` point. Copilot carries real ones (its
   // headless command exists, the host just refuses it), so without this it
-  // would read as gate-passing and offer a "Create new profile" flow the host
+  // would read as gate-passing and offer a "Add a profile" flow the host
   // refuses; Qwen, Droid, OMP and OpenCode carry none, and would fall to the
   // generic copy - which names browser sign-in, exactly the thing none of
   // these providers do. Ordering is safe against a null/absent capability
@@ -110,7 +110,8 @@ export function resolveCreateProfileGate(
   if (oauthArgs === null || (!hostIsLocal && !remoteSafe)) {
     return {
       disabled: true,
-      reason: "Add profiles from a local host with browser sign-in available.",
+      reason:
+        "Add profiles from a local computer with browser sign-in available.",
     };
   }
   // After the permanent reasons, as in `providerSignInUnavailableReason`. A

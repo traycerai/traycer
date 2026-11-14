@@ -10,15 +10,24 @@ import {
 } from "@/components/providers/profile-dropdown";
 import type { ProfileDropdownUsagePresentation } from "@/components/providers/profile-dropdown-usage";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
-import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import {
+  useHostClientForHostId,
+  useHostDirectoryEntryForHostId,
+} from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   profileCommitId,
+  profileTerminalAccountLine,
+  removedProfilesForProvider,
+  resolveProfilePin,
   type ProfileRowAdmission,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
+import { hostNameFromLabel, UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
 
 const EMPTY_PROFILES: ReadonlyArray<ProviderProfile> = [];
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 interface PickerProfileDropdownProps {
   readonly providerId: GuiHarnessId;
@@ -46,7 +55,13 @@ interface PickerProfileDropdownProps {
 export function PickerProfileDropdown(props: PickerProfileDropdownProps) {
   const providerId = guiHarnessIdToProviderId(props.providerId);
   if (providerId === null) {
-    return <PickerProfileDropdownView props={props} usagePresentation={null} />;
+    return (
+      <PickerProfileDropdownView
+        props={props}
+        usagePresentation={null}
+        removedProfiles={NO_REMOVED_PROFILES}
+      />
+    );
   }
   return (
     <ProfileUsagePickerProfileDropdown props={props} providerId={providerId} />
@@ -85,6 +100,10 @@ function ProfileUsagePickerProfileDropdown({
     <PickerProfileDropdownView
       props={props}
       usagePresentation={usagePresentation}
+      removedProfiles={removedProfilesForProvider(
+        runTargetProvidersQuery.data,
+        providerId,
+      )}
     />
   );
 }
@@ -175,18 +194,66 @@ function hasSameAccountIdentity(
   );
 }
 
-function PickerProfileDropdownView({
-  props,
-  usagePresentation,
-}: {
+/**
+ * The run target's name as a person knows it, or `null` when the directory
+ * has none: the second line of a record's row that is this computer's
+ * Terminal login names it.
+ */
+function useRunTargetComputerName(
+  runTargetHostId: string | null,
+): string | null {
+  const runTargetClient = useHostClientForHostId(runTargetHostId);
+  const hostId = runTargetClient?.getActiveHostId() ?? runTargetHostId;
+  const label = useHostDirectoryEntryForHostId(hostId)?.label ?? null;
+  if (hostId === null) return null;
+  const name = hostNameFromLabel(label, hostId);
+  return name === UNNAMED_HOST_LABEL ? null : name;
+}
+
+interface PickerProfileDropdownViewInput {
   readonly props: PickerProfileDropdownProps;
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
+}
+
+/**
+ * Only a record's row that is this computer's Terminal login draws the
+ * computer's name, so the directory is read only when such a row is listed.
+ */
+function PickerProfileDropdownView(input: PickerProfileDropdownViewInput) {
+  return input.props.profiles.some(
+    (profile) => profileTerminalAccountLine(profile, null) !== null,
+  ) ? (
+    <PickerProfileDropdownWithComputerName {...input} />
+  ) : (
+    <PickerProfileDropdownRows {...input} computerName={null} />
+  );
+}
+
+function PickerProfileDropdownWithComputerName(
+  input: PickerProfileDropdownViewInput,
+) {
+  const computerName = useRunTargetComputerName(input.props.runTargetHostId);
+  return <PickerProfileDropdownRows {...input} computerName={computerName} />;
+}
+
+function PickerProfileDropdownRows({
+  props,
+  usagePresentation,
+  removedProfiles,
+  computerName,
+}: PickerProfileDropdownViewInput & {
+  readonly computerName: string | null;
 }) {
   return (
     <ProfileDropdown
       providerLabel={props.providerLabel}
       profiles={props.profiles}
-      activeProfileId={props.activeProfileId}
+      pin={resolveProfilePin(
+        props.profiles,
+        removedProfiles,
+        props.activeProfileId,
+      )}
       onSelectProfile={props.onSelectProfile}
       onCreateProfile={props.onCreateProfile}
       createProfileDisabled={props.createProfileDisabled}
@@ -199,6 +266,7 @@ function PickerProfileDropdownView({
       eligibilityControls={null}
       admissionByProfileId={props.admissionByProfileId}
       showTerminalBadge
+      terminalComputerName={computerName}
     />
   );
 }

@@ -44,6 +44,7 @@ export const providersMutationKeys = {
   setPackPolicy: () => ["providers.setPackPolicy"] as const,
   refreshPackDiscovery: () => ["providers.refreshPackDiscovery"] as const,
   renameProfile: () => ["providers.renameProfile"] as const,
+  answerProfileName: () => ["providers.answerProfileName"] as const,
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,
   refresh: () => ["providers.refresh"] as const,

@@ -1,17 +1,42 @@
 import type { HarnessOption } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
+import {
+  guiHarnessIdToProviderId,
+  sortGuiHarnessesByProviderOrder,
+} from "@/lib/provider-ordering";
 import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
 import {
   profileAccentDotInput,
   profileCommitId,
+  profileDropdownShown,
+  resolveProfilePin,
   type ProfileAccentDotInput,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
 import {
   providerPackBlocksExecution,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
+
+/** Shared empty map for a computer that reports no removed accounts. */
+export const EMPTY_REMOVED_PROFILES_BY_HARNESS_ID: ReadonlyMap<
+  GuiHarnessId,
+  readonly RemovedProviderProfile[]
+> = new Map();
+
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
+
+/** One harness's removed accounts; none where the map has no entry. */
+export function removedProfilesForHarness(
+  removedProfilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    readonly RemovedProviderProfile[]
+  >,
+  harnessId: GuiHarnessId,
+): readonly RemovedProviderProfile[] {
+  return removedProfilesByHarnessId.get(harnessId) ?? NO_REMOVED_PROFILES;
+}
 
 /** Shared empty map so callers that have no provider data don't allocate one. */
 export const EMPTY_PREPARING_BY_HARNESS_ID: ReadonlyMap<
@@ -32,9 +57,9 @@ export interface RailEntry {
    *  missing an API key). Profile-level auth issues surface in the dropdown,
    *  not here. */
   readonly degraded: boolean;
-  /** Bottom-right accent-dot data, present only when the provider has 2+
-   *  selectable profiles (progressive disclosure).
-   *  `null` renders no dot at all. */
+  /** Bottom-right accent-dot data, present whenever the provider's account
+   *  dropdown is drawn (`profileDropdownShown`). `null` renders no dot at
+   *  all: no dropdown, or a pin to a removed account. */
   readonly accentDot: ProfileAccentDotInput | null;
   /** Non-null while this provider's managed pack is downloading or stuck on an
    *  error. The entry always stays VISIBLE and labelled - the dictation-mic
@@ -52,39 +77,70 @@ export function railEntryKey(harnessId: GuiHarnessId): string {
 }
 
 /**
- * Resolves which profile is "active" for a harness with 2+ selectable
- * profiles: the reducer's browsed `activeProfileId` if it belongs to this
- * harness, else the composer's already-committed `selectedProfileId` if it
- * belongs to this harness, else the harness's first selectable profile
- * (typically its ambient row). Returns `null` outright under 2 profiles -
- * profile identity has no meaning there (progressive disclosure).
+ * Resolves which profile is "active" for a harness whose account dropdown is
+ * drawn: the reducer's browsed `activeProfileId` if it belongs to this
+ * harness, else the composer's already-committed `selectedProfileId` if the
+ * list resolves it (`resolveProfilePin`: its row, a row it is an alias of,
+ * the record's row that is the Terminal login, or an account a person
+ * removed), else the harness's first selectable profile (typically its
+ * ambient row). A resolved committed id is returned as it is, never its
+ * row's id, so a pin is never rewritten by browsing. Returns `null` outright
+ * when the account dropdown is not drawn (`profileDropdownShown`) - profile
+ * identity has no meaning there (progressive disclosure). A pin to a removed
+ * account always draws it, so choosing a model keeps that pin.
  */
-export function resolveActiveProfileForHarness(
-  profiles: ReadonlyArray<ProviderProfile>,
-  browsedProfileId: string | null,
-  selectedProfileId: string | null,
-): string | null {
-  if (profiles.length < 2) return null;
+export function resolveActiveProfileForHarness(input: {
+  readonly harnessId: GuiHarnessId;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
+  readonly browsedProfileId: string | null;
+  readonly selectedProfileId: string | null;
+}): string | null {
+  const { profiles, removedProfiles, browsedProfileId, selectedProfileId } =
+    input;
+  if (
+    !profileDropdownShown(
+      guiHarnessIdToProviderId(input.harnessId),
+      profiles,
+      removedProfiles,
+      selectedProfileId,
+    )
+  )
+    return null;
   const matchBrowsed = profiles.find(
     (profile) => profileCommitId(profile) === browsedProfileId,
   );
   if (matchBrowsed !== undefined) return profileCommitId(matchBrowsed);
-  const matchSelected = profiles.find(
-    (profile) => profileCommitId(profile) === selectedProfileId,
-  );
-  if (matchSelected !== undefined) return profileCommitId(matchSelected);
+  if (
+    resolveProfilePin(profiles, removedProfiles, selectedProfileId).kind !==
+    "unknown"
+  ) {
+    return selectedProfileId;
+  }
   const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);
 }
 
 function resolveAccentDot(
+  harnessId: GuiHarnessId,
   profiles: ReadonlyArray<ProviderProfile>,
+  removedProfiles: readonly RemovedProviderProfile[],
   activeProfileId: string | null,
 ): ProfileAccentDotInput | null {
-  if (profiles.length < 2) return null;
-  const dotProfile =
-    profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
-    profiles.at(0);
+  if (
+    !profileDropdownShown(
+      guiHarnessIdToProviderId(harnessId),
+      profiles,
+      removedProfiles,
+      activeProfileId,
+    )
+  )
+    return null;
+  const pin = resolveProfilePin(profiles, removedProfiles, activeProfileId);
+  // A removed account has no colour of its own, and another row's would
+  // name the wrong account.
+  if (pin.kind === "removed") return null;
+  const dotProfile = pin.kind === "row" ? pin.profile : profiles.at(0);
   if (dotProfile === undefined) return null;
   return profileAccentDotInput(dotProfile);
 }
@@ -92,6 +148,7 @@ function resolveAccentDot(
 function buildRailEntry(input: {
   readonly harness: HarnessOption;
   readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
   readonly activeProfileId: string | null;
   readonly preparing: ProviderPackPreparing | null;
@@ -99,7 +156,12 @@ function buildRailEntry(input: {
   return {
     harness: input.harness,
     degraded: railHarnessDegraded(input.harness, input.degradedHarnessIds),
-    accentDot: resolveAccentDot(input.profiles, input.activeProfileId),
+    accentDot: resolveAccentDot(
+      input.harness.id,
+      input.profiles,
+      input.removedProfiles,
+      input.activeProfileId,
+    ),
     preparing: input.preparing,
   };
 }
@@ -115,6 +177,11 @@ export interface VisibleRailEntriesInput {
   readonly profilesByHarnessId: ReadonlyMap<
     GuiHarnessId,
     ReadonlyArray<ProviderProfile>
+  >;
+  /** Each provider's removed accounts (`providers.list` `removedProfiles`). */
+  readonly removedProfilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    readonly RemovedProviderProfile[]
   >;
   /**
    * The profile whose accent color a harness's dot should reflect (the
@@ -147,6 +214,7 @@ export function visibleRailEntries(
     degradedHarnessIds,
     preparingByHarnessId,
     profilesByHarnessId,
+    removedProfilesByHarnessId,
     activeProfileIdByHarnessId,
     offeredAgents,
   } = input;
@@ -163,6 +231,10 @@ export function visibleRailEntries(
     buildRailEntry({
       harness,
       profiles: profilesByHarnessId.get(harness.id) ?? [],
+      removedProfiles: removedProfilesForHarness(
+        removedProfilesByHarnessId,
+        harness.id,
+      ),
       degradedHarnessIds,
       activeProfileId: activeProfileIdByHarnessId.get(harness.id) ?? null,
       preparing: preparingByHarnessId.get(harness.id) ?? null,

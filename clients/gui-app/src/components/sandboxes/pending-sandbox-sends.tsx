@@ -137,6 +137,10 @@ import {
 } from "@/lib/composer/attachments-by-hash";
 import { inlineHashOnlyImageBytes } from "@/lib/composer/image-atoms";
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
+import {
+  removedProfilesForProvider,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
@@ -175,6 +179,8 @@ import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control"
 import { sandboxMutationKeys } from "@/lib/query-keys";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-copy";
 import {
   holdPendingSandboxSendOwnership,
   ownsPendingSandboxSend,
@@ -623,6 +629,7 @@ function PendingSendDelivery(
       requested: {
         readiness: requested.readiness,
         profiles: requested.profiles,
+        removedProfiles: requested.removedProfiles,
       },
       model: { model: model.model, refetch: refetchModel },
     });
@@ -635,6 +642,7 @@ function PendingSendDelivery(
     runner,
     requested.profiles,
     requested.readiness,
+    requested.removedProfiles,
     rowState,
     send,
     stage,
@@ -760,7 +768,10 @@ function executePendingReadiness(input: {
   readonly send: PendingSandboxSend;
   readonly stage: StagedSandbox;
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly requested: Pick<PendingAgentReadiness, "readiness" | "profiles">;
+  readonly requested: Pick<
+    PendingAgentReadiness,
+    "readiness" | "profiles" | "removedProfiles"
+  >;
   readonly model: Pick<PendingDefaultModel, "model" | "refetch">;
 }): void {
   const { decision, send, stage: current, client, requested, model } = input;
@@ -791,6 +802,7 @@ function executePendingReadiness(input: {
     client,
     model: model.model,
     profiles: requested.profiles,
+    removedProfiles: requested.removedProfiles,
     opencodeLine: requested.readiness.opencodeLine,
   });
 }
@@ -802,6 +814,7 @@ function preparePendingReadySend(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly model: string | null;
   readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
   readonly opencodeLine: OpencodeLine | null;
 }): void {
   const { send, stage, client } = input;
@@ -811,6 +824,7 @@ function preparePendingReadySend(input: {
     profileId: resolveSeededProfileId(
       send.settings.profileId,
       input.profiles,
+      input.removedProfiles,
       true,
     ),
   };
@@ -838,6 +852,7 @@ function preparePendingReadySend(input: {
 interface PendingAgentReadiness {
   readonly readiness: RequestedAgentReadiness | null;
   readonly profiles: ReadonlyArray<ProviderProfile> | undefined;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
   readonly refetch: () => void;
 }
 
@@ -923,20 +938,26 @@ function useRequestedAgentOnHost(
         opencodeLine,
       )
     : null;
-  const profiles = useMemo(() => {
-    const providerId = guiHarnessIdToProviderId(harnessId);
-    return providerId === null
-      ? undefined
-      : providerRows?.find((provider) => provider.providerId === providerId)
-          ?.profiles;
-  }, [harnessId, providerRows]);
+  const providerId = guiHarnessIdToProviderId(harnessId);
+  const profiles = useMemo(
+    () =>
+      providerId === null
+        ? undefined
+        : providerRows?.find((provider) => provider.providerId === providerId)
+            ?.profiles,
+    [providerId, providerRows],
+  );
+  const removedProfiles = useMemo(
+    () => removedProfilesForProvider(providers.data, providerId),
+    [providers.data, providerId],
+  );
   const refetchHarnesses = harnesses.refetch;
   const refetchProviders = providers.refetch;
   const refetch = useCallback((): void => {
     void refetchHarnesses();
     void refetchProviders();
   }, [refetchHarnesses, refetchProviders]);
-  return { readiness, profiles, refetch };
+  return { readiness, profiles, removedProfiles, refetch };
 }
 
 /**
@@ -2221,6 +2242,14 @@ async function runPendingDispatch(
       error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED"
     ) {
       refusePendingDispatch(send, dispatch);
+    } else if (
+      error instanceof HostRpcError &&
+      error.code === "removed-by-person"
+    ) {
+      // The account this send names was removed by a person: a retry cannot
+      // succeed, so it is refused and says why.
+      refusePendingDispatch(send, dispatch);
+      toastFromHostError(error, REMOVED_PROFILE_PIN_TEXT);
     } else {
       usePendingSandboxSendStore
         .getState()

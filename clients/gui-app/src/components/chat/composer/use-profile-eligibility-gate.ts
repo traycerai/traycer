@@ -1,6 +1,10 @@
 import type { GuiHarnessId } from "@traycer/protocol/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
+import {
+  profileCommitId,
+  removedProfilesForProvider,
+  resolvedProfileRow,
+} from "@/components/providers/provider-profile-model";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
   useProviderProfileEnablementPending,
@@ -32,12 +36,20 @@ export function useProfileEligibilityGate(
     client,
     providerId,
   );
-  const enablePending = profileEnablementPending(profileId);
   const provider = providersQuery.data?.providers.find(
     (candidate) => candidate.providerId === providerId,
   );
-  const profile = provider?.profiles.find(
-    (candidate) => profileCommitId(candidate) === profileId,
+  // The row the pin or its alias names; a removed or unknown pin has none.
+  const profile =
+    provider === undefined
+      ? undefined
+      : (resolvedProfileRow(
+          provider.profiles,
+          removedProfilesForProvider(providersQuery.data, providerId),
+          profileId,
+        ) ?? undefined);
+  const enablePending = profileEnablementPending(
+    profile === undefined ? profileId : profileCommitId(profile),
   );
 
   return {
