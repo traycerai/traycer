@@ -23,6 +23,7 @@ import { NotificationIndicatorIcon } from "@/components/notifications/notificati
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { credentialRefusalHeadline } from "@/lib/host-error-toast";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -511,14 +512,20 @@ export function EpicsListError(props: EpicsListErrorProps): ReactNode {
   );
 }
 
+const EPICS_LIST_ERROR_HEADLINE = "Couldn't load your tasks";
+
 function errorHeadline(error: Error): string {
   if (error instanceof HostRpcError) {
-    if (error.code === "UNAUTHORIZED") return "Please sign in again.";
+    const credential = credentialRefusalHeadline(
+      error,
+      EPICS_LIST_ERROR_HEADLINE,
+    );
+    if (credential !== null) return credential;
     if (error.code === "FORBIDDEN") {
       return "You don't have permission to view these epics.";
     }
   }
-  return "Couldn't load your tasks";
+  return EPICS_LIST_ERROR_HEADLINE;
 }
 
 function formatError(error: Error): string {

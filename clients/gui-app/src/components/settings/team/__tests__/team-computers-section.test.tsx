@@ -40,12 +40,12 @@ const VIEWER_HOST_ID = "host-viewer";
 const CURRENT_USER = "user-a";
 const OTHER_USER = "user-b";
 const hostBinding = vi.hoisted((): { value: unknown } => ({ value: null }));
-const invalidateLocalTeamAdmissionAfterClaim = vi.hoisted(() =>
-  vi.fn<(hostId: string, runnerHost: IRunnerHost) => Promise<void>>(),
+const noteHostMembershipChanged = vi.hoisted(() =>
+  vi.fn<(hostId: string) => void>(),
 );
 
-vi.mock("@/lib/host/app-local-open-auth", () => ({
-  invalidateLocalTeamAdmissionAfterClaim,
+vi.mock("@/lib/host/local-admission-invalidation", () => ({
+  noteHostMembershipChanged,
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -182,8 +182,7 @@ beforeEach(() => {
   listTeamComputers.mockReset();
   setEnvironmentBotHost.mockReset();
   releaseTeamComputer.mockReset();
-  invalidateLocalTeamAdmissionAfterClaim.mockReset();
-  invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
+  noteHostMembershipChanged.mockReset();
   directory.refresh.mockClear();
   listTeamComputers.mockImplementation((environmentId) =>
     Promise.resolve({
@@ -368,16 +367,8 @@ describe("TeamComputersSection", () => {
 
   it("lets a team member claim a computer after confirming", async () => {
     const pending = Promise.withResolvers<TeamComputerReleaseResult>();
-    const admissionInvalidation = Promise.withResolvers<void>();
     releaseTeamComputer.mockReturnValue(pending.promise);
-    invalidateLocalTeamAdmissionAfterClaim.mockReturnValue(
-      admissionInvalidation.promise,
-    );
-    const { runnerHost } = mountSection(
-      ENVIRONMENT_ID,
-      "editor",
-      `handle-${ENVIRONMENT_ID}`,
-    );
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
     expect(
@@ -408,16 +399,8 @@ describe("TeamComputersSection", () => {
       await pending.promise;
     });
     await waitFor(() =>
-      expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledWith(
-        "host-computer-a",
-        runnerHost,
-      ),
+      expect(noteHostMembershipChanged).toHaveBeenCalledWith("host-computer-a"),
     );
-    expect(confirm.hasAttribute("disabled")).toBe(true);
-    await act(async () => {
-      admissionInvalidation.resolve();
-      await admissionInvalidation.promise;
-    });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
     await waitFor(() =>
@@ -426,7 +409,7 @@ describe("TeamComputersSection", () => {
         ENVIRONMENT_ID,
       ),
     );
-    expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledTimes(1);
+    expect(noteHostMembershipChanged).toHaveBeenCalledTimes(1);
   });
 
   it("keeps claiming available when team configuration editing is not authorized", async () => {
@@ -477,7 +460,7 @@ describe("TeamComputersSection", () => {
       "host-computer-a",
       ENVIRONMENT_ID,
     );
-    expect(invalidateLocalTeamAdmissionAfterClaim).not.toHaveBeenCalled();
+    expect(noteHostMembershipChanged).not.toHaveBeenCalled();
   });
 
   it("clears claim confirmation when the signed-in account changes", async () => {

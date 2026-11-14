@@ -7,6 +7,7 @@ import type {
   ServerFrameHandler,
   StatusChangeHandler,
   StreamContinuity,
+  StreamCloseReason,
   StreamFrameEnvelope,
 } from "../i-stream-session";
 
@@ -94,47 +95,40 @@ export class FakeStreamSession implements IStreamSession {
 
   /** The close a host sends when it cannot serve `method` at all. */
   emitIncompatible(method: string, reason: string): void {
-    this.status = "closed";
-    this.statusHandler?.(
-      "closed",
-      {
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason,
-          incompatibleMethods: [
-            {
-              method,
-              clientCanonical: null,
-              hostCanonical: null,
-              blocking: "host-missing-method",
-            },
-          ],
-          upgradeGuidance: null,
-        },
+    this.emitClosed({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason,
+        incompatibleMethods: [
+          {
+            method,
+            clientCanonical: null,
+            hostCanonical: null,
+            blocking: "host-missing-method",
+          },
+        ],
+        upgradeGuidance: null,
       },
-      null,
-      null,
-    );
+    });
   }
 
   /** The terminal close a host sends with a specific code. */
   emitFatalWithCode(code: string, reason: string): void {
-    this.status = "closed";
-    this.statusHandler?.(
-      "closed",
-      {
-        kind: "fatalError",
-        details: {
-          code,
-          reason,
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        },
+    this.emitClosed({
+      kind: "fatalError",
+      details: {
+        code,
+        reason,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
       },
-      null,
-      null,
-    );
+    });
+  }
+
+  emitClosed(reason: StreamCloseReason): void {
+    this.status = "closed";
+    this.statusHandler?.("closed", reason, null, null);
   }
 
   /**

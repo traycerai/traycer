@@ -185,6 +185,12 @@ import {
   type UpdateHostVersionPolicyInput,
 } from "../host-version-policy-fetcher";
 import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "../../auth/host-token-source";
+import { mintHostTokenViaHttp } from "../../host-transport/remote/grant-client";
+import {
   deregisterHostViaHttp,
   type DeregisterHostFetchResult,
 } from "../host-deregister-fetcher";
@@ -1164,6 +1170,14 @@ export class MockRunnerHost implements IRunnerHost {
       this.secureStorageEntries.delete(key);
     },
   };
+
+  readonly hostTokens: HostTokenSource = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: (hostId, signInToken, signal) =>
+      mintHostTokenViaHttp(this.authnBaseUrl, hostId, signInToken, signal),
+    signIn: null,
+    now: Date.now,
+  });
 
   readonly tokenStore: ITokenStore = {
     getSignInStorageLow: async () => false,

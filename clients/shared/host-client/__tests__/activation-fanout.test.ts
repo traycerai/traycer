@@ -142,6 +142,10 @@ interface FanOutFixture {
   readonly invalidator: RecordingInvalidator;
   readonly messenger: MockHostMessenger<typeof registry>;
   readonly pending: Deferred[];
+  readonly hostTokenRenewals: Array<{
+    readonly hostId: string;
+    readonly delayed: boolean;
+  }>;
 }
 
 function buildFanOutFixture(): FanOutFixture {
@@ -175,6 +179,7 @@ function buildFanOutFixture(): FanOutFixture {
     },
     requestId: () => "req-1",
   });
+  const hostTokenRenewals: FanOutFixture["hostTokenRenewals"] = [];
   const runtime = new HostRuntime({
     runnerHost: new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -185,6 +190,9 @@ function buildFanOutFixture(): FanOutFixture {
       hasLocalHost: undefined,
       traycerCli: undefined,
     }),
+    onHostTokenRenewal: (hostId, delayed) => {
+      hostTokenRenewals.push({ hostId, delayed });
+    },
     registry,
     messenger,
     requestContextProvider: provider,
@@ -200,7 +208,14 @@ function buildFanOutFixture(): FanOutFixture {
     connectionRegistry: null,
   });
   runtime.start();
-  return { runtime, directory, invalidator, messenger, pending };
+  return {
+    runtime,
+    directory,
+    invalidator,
+    messenger,
+    pending,
+    hostTokenRenewals,
+  };
 }
 
 /**

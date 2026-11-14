@@ -1,5 +1,4 @@
 import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
-import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import type {
   HostCredentialMintFlow,
   HostCredentialMintOutcome,
@@ -81,6 +80,7 @@ export function resetHostCredentialProvisioning(): void {
   attemptsByHostId.clear();
   awaitingAdoptionByHostId.clear();
   mintBackoffByHostId.clear();
+  mintedBeforeOpenByHostId.clear();
 }
 
 /**
@@ -283,24 +283,6 @@ export function noteHostCredentialState(
   // Intentionally empty. See above.
 }
 
-/** Releases only the credential whose same-socket intake a snapshot proved. */
-export function noteAppMemberCredentialAdopted(
-  hostId: string,
-  credential: MemberCredentialHandoff,
-): void {
-  const claim = awaitingAdoptionByHostId.get(hostId);
-  if (
-    claim?.generation === generation &&
-    claim.familyId === credential.familyId &&
-    claim.provisionedAt === credential.provisionedAt
-  ) {
-    awaitingAdoptionByHostId.delete(hostId);
-    // A proved handoff ends this mint-failure episode. Local data connections
-    // deliberately reprovision, so healthy reconnects must not escalate it.
-    mintBackoffByHostId.delete(hostId);
-  }
-}
-
 /**
  * Whether a mint for `hostId` is still awaiting adoption, expiring the claim
  * if it has outlived {@link PENDING_ADOPTION_TTL_MS} or belongs to a
@@ -351,8 +333,30 @@ interface HostCredentialAttempt {
 
 const attemptsByHostId = new Map<string, HostCredentialAttempt>();
 
+/**
+ * A credential minted before its computer could be opened (see
+ * {@link mintHostCredentialBeforeOpen}), held for the first transport that
+ * opens the computer and asks to provision it.
+ */
+const mintedBeforeOpenByHostId = new Map<
+  string,
+  {
+    readonly generation: number;
+    readonly outcome: Extract<
+      HostCredentialMintOutcome,
+      { readonly kind: "provisioned" }
+    >;
+  }
+>();
+
 export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   const hostId = request.hostId;
+  const mintedBeforeOpen = mintedBeforeOpenByHostId.get(hostId);
+  if (mintedBeforeOpen !== undefined) {
+    mintedBeforeOpenByHostId.delete(hostId);
+    if (mintedBeforeOpen.generation === generation)
+      return Promise.resolve(mintedBeforeOpen.outcome);
+  }
   if (mintAwaitingAdoption(hostId)) {
     // A credential was minted for this host moments ago and has not been seen
     // adopted yet. The ask that brought us here is stale by construction - the
@@ -489,31 +493,29 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   return settled.then(claim);
 };
 
+const mintsBeforeOpen = new Map<string, Promise<boolean>>();
+
 /**
- * The member credential a team host spends for the signed-in person, minted
- * through {@link appHostCredentialMintFlow}: the same runner, the same
- * identity-change drop and the same one mint in flight per host. `null` when
- * nothing was minted for this caller, which the remote session logs and goes
- * on from.
- *
- * Every GUI composition that builds a remote session passes this one function:
- * it is not part of the session cache identity, so the first acquirer's value
- * is the one every later consumer of that session inherits.
+ * This computer's own credential, minted before any host-only token can be:
+ * authn answers a computer it has no row for with a bare 404, and minting the
+ * credential is what registers it. `true` when one was minted; it is then
+ * handed to the first transport that opens the computer, which provisions it.
+ * Concurrent asks share one mint.
  */
-export async function mintAppMemberCredential(
-  hostId: string,
-): Promise<MemberCredentialHandoff | null> {
-  const outcome = await appHostCredentialMintFlow({
-    hostId,
-    reason: "missing",
-  });
-  if (outcome.kind !== "provisioned") {
-    return null;
-  }
-  return {
-    token: outcome.token,
-    refreshToken: outcome.refreshToken,
-    familyId: outcome.familyId,
-    provisionedAt: outcome.provisionedAt,
-  };
+export function mintHostCredentialBeforeOpen(hostId: string): Promise<boolean> {
+  const running = mintsBeforeOpen.get(hostId);
+  if (running !== undefined) return running;
+  const startedAt = generation;
+  const attempt = appHostCredentialMintFlow({ hostId, reason: "missing" })
+    .then((outcome) => {
+      if (outcome.kind !== "provisioned" || generation !== startedAt)
+        return false;
+      mintedBeforeOpenByHostId.set(hostId, { generation: startedAt, outcome });
+      return true;
+    })
+    .finally(() => {
+      mintsBeforeOpen.delete(hostId);
+    });
+  mintsBeforeOpen.set(hostId, attempt);
+  return attempt;
 }
