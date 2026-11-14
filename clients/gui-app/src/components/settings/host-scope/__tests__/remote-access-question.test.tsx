@@ -9,7 +9,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
@@ -20,18 +20,30 @@ import {
   ACCESS_METHODS,
   buildAccessHost,
   buildAccessHostOn,
+  fakeEnvironmentCloud,
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const hostMock = vi.hoisted(
+  (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
+);
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostBinding: () => hostMock.binding };
+});
 
 const OTHER_HOST_ID = "host-b";
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  hostMock.binding = null;
   window.localStorage.clear();
+  useAuthStore.getState().setSignedOut();
   useHostAccessPromptsStore.setState({
     remoteAccessAnswered: {},
     movedNoticeDismissed: {},
@@ -146,6 +158,18 @@ describe("<RemoteAccessQuestion />", () => {
 
   it("On sends enabled: true, records the answer and stops asking", async () => {
     const host = askingHost({});
+    const { cloud, requests } = fakeEnvironmentCloud({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "remote-access-test", username: "remote" },
+    });
+    host.state.statusRefreshError = new Error("host is offline");
+    hostMock.binding = {
+      auth: { environmentCloud: () => cloud },
+    };
     renderQuestion({
       host,
       hostId: ACCESS_HOST_ID,
@@ -157,13 +181,19 @@ describe("<RemoteAccessQuestion />", () => {
     fireEvent.click(screen.getByRole("button", { name: "On" }));
 
     await waitFor(() => {
-      expect(host.paramsOf("host.remoteAccess.set")).toEqual([
-        { enabled: true },
-      ]);
-    });
-    await waitFor(() => {
       expect(screen.queryByTestId("remote-access-question")).toBeNull();
     });
+    expect(
+      requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(host.paramsOf("host.status.refresh")).toEqual([{}]);
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
     expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual({
       [ACCESS_HOST_ID]: true,
     });

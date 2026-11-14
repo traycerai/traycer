@@ -31,10 +31,10 @@ import {
   ACCESS_HOST_NAME,
   ACCESS_METHODS,
   buildAccessHost,
+  fakeEnvironmentCloud,
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { REMOTE_ACCESS_TEXT } from "@/components/settings/host-scope/host-access-model";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   environmentListUpgradeV10ToV11,
   type EnvironmentDescriptorV11,
@@ -127,6 +127,21 @@ function renderTab(
   return queryClient;
 }
 
+function useEnvironmentCloudForTest(answer: {
+  readonly status: number;
+  readonly body: unknown;
+}): ReturnType<typeof fakeEnvironmentCloud> {
+  const environmentCloud = fakeEnvironmentCloud(answer);
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "remote-access-test", username: "remote" },
+  });
+  hostMock.binding = {
+    auth: { environmentCloud: () => environmentCloud.cloud },
+  };
+  return environmentCloud;
+}
+
 /** What the section says now, as the person reads it. */
 async function shownState(): Promise<string> {
   const state = await screen.findByTestId("remote-access-state");
@@ -175,7 +190,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     });
   });
 
-  it("offers the team's switch only to its admin or editor, fails closed on unknown roles, and shows a refused change", async () => {
+  it("offers the team's switch only to its admin or editor and fails closed on unknown roles", async () => {
     useAuthStore.setState({
       status: "signed-in",
       contextMetadata: { userId: "viewer-test", username: "viewer" },
@@ -225,24 +240,6 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       await refreshing;
     });
     await screen.findByRole("button", { name: "Turn on" });
-    host.state.remoteAccessError = new HostRpcError({
-      code: "FORBIDDEN",
-      message: "private refusal detail",
-      requestId: "refused-access",
-      method: "host.remoteAccess.set",
-      fatalDetails: null,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "You don't have permission to change remote access on this computer.",
-    );
-    expect(host.paramsOf("host.remoteAccess.set")).toEqual([{ enabled: true }]);
-    expect(await shownState()).toBe(
-      "Off. Team members and agents can't reach this computer.",
-    );
-    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
-      {},
-    );
 
     host.state.environments = environmentListUpgradeV10ToV11.upgradeResponse({
       environments: [TEAM_ENVIRONMENT],
@@ -256,6 +253,29 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     host.state.failEnvironmentList = true;
     await rereadStatus(queryClient, host);
     noSwitch();
+  });
+
+  it("shows the permission refusal for authn's 403 and does not refresh the host", async () => {
+    const host = hostWithRemoteAccess("off", "on");
+    const { requests } = useEnvironmentCloudForTest({ status: 403, body: {} });
+    renderTab(host, ACCESS_METHODS, true);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "You don't have permission to change remote access on this computer.",
+    );
+    expect(
+      requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(host.paramsOf("host.status.refresh")).toEqual([]);
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
   });
 
   it("shows the unanswered prompt inside the Remote access group without a second row label", async () => {
@@ -350,16 +370,28 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
   it("Turn on sends enabled: true and shows what the host reads next", async () => {
     const host = hostWithRemoteAccess("off", "on");
+    const { requests } = useEnvironmentCloudForTest({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
     const queryClient = renderTab(host, ACCESS_METHODS, true);
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
 
     fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
 
     await waitFor(() => {
-      expect(host.paramsOf("host.remoteAccess.set")).toEqual([
-        { enabled: true },
-      ]);
+      expect(host.paramsOf("host.status.refresh")).toEqual([{}]);
     });
+    expect(
+      requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
     host.state.status = environmentStatusFixture({ remoteAccess: "on" });
     await rereadStatus(queryClient, host);
     await waitFor(() => {
@@ -368,6 +400,28 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       );
     });
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
+  });
+
+  it("shows the generic refusal for authn's 409 and does not refresh the host", async () => {
+    const host = hostWithRemoteAccess("off", "on");
+    const { requests } = useEnvironmentCloudForTest({ status: 409, body: {} });
+    renderTab(host, ACCESS_METHODS, true);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Couldn't change remote access. Try again.",
+    );
+    expect(
+      requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(host.paramsOf("host.status.refresh")).toEqual([]);
   });
 
   it("shows a host that is turning remote access off by itself the same way", async () => {

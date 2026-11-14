@@ -2,6 +2,10 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import type {
   EnvironmentNotice,
   EnvironmentReviewEntry,
   EnvironmentStatusResponseV12,
@@ -46,6 +50,7 @@ export const ACCESS_METHODS: readonly string[] = [
   "config.env.localOverride.clear",
   "config.env.list",
   "host.remoteAccess.set",
+  "host.status.refresh",
   "environment.host.read",
   "environment.list",
   "providers.list",
@@ -64,6 +69,8 @@ export interface AccessHostState {
   /** What `host.remoteAccess.set` answers. */
   remoteAccessAnswer: HostRemoteAccessSetResponse;
   remoteAccessError: HostRpcError | null;
+  /** What `host.status.refresh` answers. */
+  statusRefreshError: Error | null;
   binding: EnvironmentHostBinding | null;
   environments: EnvironmentDescriptorV11[];
   failEnvironmentList: boolean;
@@ -110,6 +117,7 @@ export function accessHostState(
     envEntries: [],
     remoteAccessAnswer: { state: "on" },
     remoteAccessError: null,
+    statusRefreshError: null,
     binding: null,
     environments: [],
     failEnvironmentList: false,
@@ -191,6 +199,11 @@ export function buildAccessHostOn(
         if (state.remoteAccessError !== null) throw state.remoteAccessError;
         return state.remoteAccessAnswer;
       },
+      "host.status.refresh": (request) => {
+        requests.push({ method: "host.status.refresh", params: request });
+        if (state.statusRefreshError !== null) throw state.statusRefreshError;
+        return {};
+      },
       "environment.setup.retry": (request) => {
         requests.push({ method: "environment.setup.retry", params: request });
         return { attemptId: "attempt-1" };
@@ -268,6 +281,32 @@ export function reviewEntryFixture(
 
 /** The sign-in origin the dashboard links resolve against. */
 export const DASHBOARD_ORIGIN = "https://example.invalid";
+
+/** An authn transport fake that records the request without changing its path. */
+export function fakeEnvironmentCloud(answer: {
+  readonly status: number;
+  readonly body: unknown;
+}): {
+  readonly cloud: EnvironmentCloud;
+  readonly requests: EnvironmentTransportRequest[];
+} {
+  const requests: EnvironmentTransportRequest[] = [];
+  return {
+    cloud: {
+      authnBaseUrl: "https://authn.test",
+      bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
+      onOriginSignIn: () => true,
+      transport: (request) => {
+        requests.push(request);
+        return Promise.resolve({
+          status: answer.status,
+          text: JSON.stringify(answer.body),
+        });
+      },
+    },
+    requests,
+  };
+}
 
 /** A shell with a sign-in origin, which is what the dashboard links need. */
 export function dashboardRunnerHost(): IRunnerHost {
