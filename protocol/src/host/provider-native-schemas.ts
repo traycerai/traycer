@@ -1523,6 +1523,28 @@ export const nativeMutationSchemaV12 = lazySchema(() =>
 );
 export type NativeMutationV12 = z.infer<typeof nativeMutationSchemaV12>;
 
+/**
+ * `providers.nativeMutate@1.5`'s `promoteToPersonal`: `@1.3`'s arm plus
+ * `intentOperationId`, the app's `mcp_promote` intent for this server, or
+ * null. Read only when `entryKind` is `mcp`; the intent binds the server's
+ * name alone, which the arm already names. Null, and every `@1.3` or `@1.4`
+ * caller, keeps today's path exactly.
+ */
+export const nativePromoteToPersonalMutationSchemaV15 = lazySchema(() =>
+  nativePromoteToPersonalMutationSchema.safeExtend({
+    intentOperationId: z.uuid().nullable().default(null),
+  }),
+);
+export type NativePromoteToPersonalMutationV15 = z.infer<
+  typeof nativePromoteToPersonalMutationSchemaV15
+>;
+
+/** The v1.5 mutation: every v1.2 arm plus the v1.5 `promoteToPersonal`. */
+export const nativeMutationSchemaV15 = lazySchema(() =>
+  z.union([nativeMutationSchema, nativePromoteToPersonalMutationSchemaV15]),
+);
+export type NativeMutationV15 = z.infer<typeof nativeMutationSchemaV15>;
+
 const providersMcpMutateActionSchemaV10Preimage = lazySchema(() =>
   z.discriminatedUnion("action", [
     z.object({

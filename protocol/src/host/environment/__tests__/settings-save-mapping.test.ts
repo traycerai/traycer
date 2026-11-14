@@ -440,12 +440,12 @@ function variableDelete(os: "linux" | "any"): SettingsSaveMapping {
   };
 }
 
-function envSet(): SettingsSave {
+function envSet(value: string | null): SettingsSave {
   return {
     method: "config.env.set",
     request: {
       key: "DOCS_TOKEN",
-      value: "kept",
+      value,
       executableWriteGrant: null,
     },
   };
@@ -486,13 +486,13 @@ function overrideDelete(os: "linux" | "any"): SettingsSaveMapping {
   };
 }
 
-function overrideSet(): SettingsSave {
+function overrideSet(value: string | null): SettingsSave {
   return {
     method: "providers.setEnvOverride",
     request: {
       providerId: "claude-code",
       key: "DOCS_TOKEN",
-      value: "kept",
+      value,
       executableWriteGrant: null,
     },
   };
@@ -1132,12 +1132,30 @@ describe("settingsSaveItemEdit", () => {
   });
 
   describe("variable", () => {
+    it("leaves a null variable or override local_only, apart from its delete", () => {
+      expect(settingsSaveItemEdit(envSet(null), LINUX_NULL)).toEqual(
+        LOCAL_ONLY,
+      );
+      expect(settingsSaveItemEdit(envDelete(), LINUX_NULL)).toEqual(
+        variableDelete("linux"),
+      );
+
+      expect(settingsSaveItemEdit(overrideSet(null), LINUX_NULL)).toEqual(
+        LOCAL_ONLY,
+      );
+      expect(settingsSaveItemEdit(overrideDeleteSave(), LINUX_NULL)).toEqual(
+        overrideDelete("linux"),
+      );
+    });
+
     it("puts a different variable on the host OS, or on any when that OS has no row", () => {
-      expect(settingsSaveItemEdit(envSet(), LINUX_NULL)).toEqual(
+      expect(settingsSaveItemEdit(envSet("kept"), LINUX_NULL)).toEqual(
         variablePut("linux"),
       );
-      expect(settingsSaveItemEdit(envSet(), LINUX_KEPT)).toEqual(LOCAL_ONLY);
-      expect(settingsSaveItemEdit(envSet(), OTHER_OS_ROW)).toEqual(
+      expect(settingsSaveItemEdit(envSet("kept"), LINUX_KEPT)).toEqual(
+        LOCAL_ONLY,
+      );
+      expect(settingsSaveItemEdit(envSet("kept"), OTHER_OS_ROW)).toEqual(
         variablePut("any"),
       );
     });
@@ -1155,10 +1173,10 @@ describe("settingsSaveItemEdit", () => {
 
   describe("env override", () => {
     it("puts a different override on the host OS row and leaves an equal one local_only", () => {
-      expect(settingsSaveItemEdit(overrideSet(), LINUX_NULL)).toEqual(
+      expect(settingsSaveItemEdit(overrideSet("kept"), LINUX_NULL)).toEqual(
         overridePut("linux"),
       );
-      expect(settingsSaveItemEdit(overrideSet(), LINUX_KEPT)).toEqual(
+      expect(settingsSaveItemEdit(overrideSet("kept"), LINUX_KEPT)).toEqual(
         LOCAL_ONLY,
       );
     });

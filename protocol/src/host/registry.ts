@@ -1591,6 +1591,7 @@ import {
   providersNativeMutateRequestSchemaV10Preimage,
   providersNativeMutateRequestSchemaV11,
   providersNativeMutateRequestSchemaV14,
+  providersNativeMutateRequestSchemaV15,
   providersNativeMutateResponseSchema,
   providersNativeMutateResponseSchemaV10Preimage,
   providersNativeMutateResponseSchemaV11Preimage,
@@ -5213,6 +5214,36 @@ export const providersNativeMutateUpgradeV13ToV14 = defineUpgradePath<
   from: { major: 1, minor: 3 },
   to: { major: 1, minor: 4 },
   upgradeRequest: (request) => ({ ...request, expectedEnvironmentId: null }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `providers.nativeMutate@1.5`: the `promoteToPersonal` arm carries the app's
+ * `intentOperationId`. The response is `@1.4`'s. Defined and not registered:
+ * it registers with the app's click that sends it. A `@1.5` request to a
+ * `@1.4` host is re-parsed onto `@1.4`, whose non-strict arm strips the key.
+ */
+export const providersNativeMutateV15 = defineRpcContract({
+  method: "providers.nativeMutate",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: providersNativeMutateRequestSchemaV15,
+  responseSchema: providersNativeMutateResponseSchemaV14,
+});
+
+/** A `@1.4` caller states no intent: its promote arm gains null. */
+export const providersNativeMutateUpgradeV14ToV15 = defineUpgradePath<
+  typeof providersNativeMutateV14,
+  typeof providersNativeMutateV15
+>({
+  from: { major: 1, minor: 4 },
+  to: { major: 1, minor: 5 },
+  upgradeRequest: (request) => ({
+    ...request,
+    mutation:
+      request.mutation.kind === "promoteToPersonal"
+        ? { ...request.mutation, intentOperationId: null }
+        : request.mutation,
+  }),
   upgradeResponse: (response) => response,
 });
 

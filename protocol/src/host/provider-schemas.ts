@@ -53,6 +53,7 @@ import {
   nativeMutationResultSchemaV11Preimage,
   nativeMutationSchema,
   nativeMutationSchemaV12,
+  nativeMutationSchemaV15,
   nativeMutationSchemaV10Preimage,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaBeforeOpenChatPlugins,
@@ -4578,6 +4579,20 @@ export const providersNativeMutateRequestSchemaV14 = lazySchema(() =>
 );
 export type ProvidersNativeMutateRequestV14 = z.infer<
   typeof providersNativeMutateRequestSchemaV14
+>;
+
+/**
+ * `providers.nativeMutate@1.5` request: `@1.4` with the `promoteToPersonal`
+ * arm carrying `intentOperationId` (`nativePromoteToPersonalMutationSchemaV15`).
+ * The field is on the arm, not on the request.
+ */
+export const providersNativeMutateRequestSchemaV15 = lazySchema(() =>
+  providersNativeMutateRequestSchemaV14.extend({
+    mutation: nativeMutationSchemaV15,
+  }),
+);
+export type ProvidersNativeMutateRequestV15 = z.infer<
+  typeof providersNativeMutateRequestSchemaV15
 >;
 
 /**
