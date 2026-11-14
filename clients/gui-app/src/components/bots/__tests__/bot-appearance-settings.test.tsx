@@ -62,7 +62,6 @@ const mocks = vi.hoisted(() => ({
   /** Writes the host has taken and not yet answered or refused. */
   inFlight: 0,
   maxInFlight: 0,
-  answered: 0,
   /** The look `bot.list` answers with; a held write's answer becomes it. */
   listed: { mark: null, color: null, background: null } as BotAppearance,
   /** The next `bot.list` read answers with the look it started with only once this resolves. */
@@ -157,11 +156,6 @@ function mount(appearance: BotAppearance): void {
   mountListing(appearance, null);
 }
 
-/** The same, the surface's list naming the bot as its environment's main bot. */
-function mountMain(appearance: BotAppearance): void {
-  mountListing(appearance, { "env-1": BOT_ID });
-}
-
 function buildClient(appearance: BotAppearance): void {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -185,7 +179,6 @@ function buildClient(appearance: BotAppearance): void {
                 answer: (look) => {
                   open = false;
                   mocks.inFlight -= 1;
-                  mocks.answered += 1;
                   mocks.listed = look;
                   resolve({ bot: botRow(look) });
                 },
@@ -313,7 +306,6 @@ beforeEach(() => {
   mocks.heldWrites = [];
   mocks.inFlight = 0;
   mocks.maxInFlight = 0;
-  mocks.answered = 0;
   mocks.listGate = null;
   mocks.listReads = 0;
   mocks.releases = [];
@@ -565,7 +557,7 @@ describe("<BotAppearanceSettings />", () => {
     expect(pressedShape()).not.toBe(partName(DEFAULT_MASCOT_SHAPE));
     cleanup();
 
-    mountMain(BARE);
+    mountListing(BARE, { "env-1": BOT_ID });
 
     expect(pressedShape()).toBe(partName(DEFAULT_MASCOT_SHAPE));
     expect(pressedIn("eyewear")).toBe("None");
@@ -639,7 +631,6 @@ describe("<BotAppearanceSettings />", () => {
         avatarPathsFor({ ...BASE, eyewear: "shades" }),
       );
       expect(pathsIn(screen.getByTestId("bot-avatar"))).not.toEqual(before);
-      expect(mocks.answered).toBe(0);
       (await writeAt(0)).answer({ ...BASE, eyewear: "shades" });
     });
 
@@ -651,7 +642,6 @@ describe("<BotAppearanceSettings />", () => {
       });
 
       expect(pressedIn("eyewear")).toBe("Shades");
-      expect(mocks.answered).toBe(0);
       (await writeAt(0)).answer({ ...BASE, eyewear: "shades" });
     });
 

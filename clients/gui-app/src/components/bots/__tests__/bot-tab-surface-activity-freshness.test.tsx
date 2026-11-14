@@ -283,6 +283,7 @@ describe("<BotTabSurface /> Activity over a stream snapshot that is current, hel
     expect(pageText()).not.toContain("No activity yet");
     expect(pageText()).toContain("Status unknown");
     expect(pageText()).toContain("Subscriptions unavailable");
+    expect(screen.getByText("Notification subscriptions")).toBeTruthy();
 
     // The reconnect's snapshot makes it current again.
     stream.current = true;
@@ -290,32 +291,6 @@ describe("<BotTabSurface /> Activity over a stream snapshot that is current, hel
     expect(pageText()).toContain("No activity yet");
     expect(pageText()).not.toContain("Status unknown");
     expect(screen.queryByText("Notification subscriptions")).toBeNull();
-  });
-
-  describe("an empty snapshot that is not current", () => {
-    beforeEach(() => {
-      mocks.state.snapshot = { ...snapshot(), notificationSubscriptions: [] };
-      stream.current = false;
-    });
-
-    it("does not say there is no activity", async () => {
-      await openActivity();
-
-      expect(pageText()).not.toContain("No activity yet");
-    });
-
-    it("says Status unknown for the empty task list", async () => {
-      await openActivity();
-
-      expect(pageText()).toContain("Status unknown");
-    });
-
-    it("says Subscriptions unavailable, not that there are none", async () => {
-      await openActivity();
-
-      expect(pageText()).toContain("Subscriptions unavailable");
-      expect(screen.getByText("Notification subscriptions")).toBeTruthy();
-    });
   });
 
   it("keeps a cached non-empty snapshot visible while it is not current: its task as Status unknown and its subscription listed", async () => {
