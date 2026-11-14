@@ -304,12 +304,9 @@ export function isAllowedAppSubframeNavigation(
 ): boolean {
   if (isSandboxRoot) {
     if (isSandboxLoaderUrl(url)) return true;
-    // A document is served through its own mount; a URL naming none is a
-    // root-absolute asset reference, never a page to navigate to.
     const address = parseSandboxArtifactUrl(url);
     return (
       address !== null &&
-      address.mountId !== null &&
       address.pathname !== null &&
       /\.html?$/i.test(address.pathname)
     );

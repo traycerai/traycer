@@ -21,11 +21,6 @@ interface ArtifactMount {
   artifactId: string | null;
 }
 
-interface ServingMount {
-  readonly mountId: string;
-  readonly windowId: string;
-}
-
 interface SpanWaiter {
   readonly windowId: string;
   readonly mountId: string;
@@ -59,7 +54,6 @@ function errorResponse(status: number, reason: string): Response {
 
 /** Main only transports spans; the owning renderer resolves files through its host. */
 export class SandboxArtifactServer {
-  /** In registration order, so the last match is the newest mount. */
   private readonly mounts = new Map<string, ArtifactMount>();
   private readonly waiters = new Map<string, SpanWaiter>();
 
@@ -185,31 +179,14 @@ export class SandboxArtifactServer {
   }
 
   /**
-   * The mount a request is served through. A URL that names no mount is a
-   * root-absolute reference: agent-written pages sometimes link
-   * `/assets/x.css`, which resolves against the artifact's site and loses
-   * the `/m/<mountId>` prefix. Every mount of an artifact serves the same
-   * tree, so the newest one answers it. The request carries no window, so
-   * the mount may belong to another window showing the same artifact.
+   * The window that serves a mount under an artifact's site: `null` for an
+   * unknown mount, and for one whose own artifact is another.
    */
-  private resolveMount(
-    artifactId: string,
-    mountId: string | null,
-  ): ServingMount | null {
-    if (mountId === null) {
-      let newest: ServingMount | null = null;
-      for (const [candidate, mount] of this.mounts) {
-        if (mount.artifactId === artifactId)
-          newest = { mountId: candidate, windowId: mount.windowId };
-      }
-      return newest;
-    }
+  private windowServing(artifactId: string, mountId: string): string | null {
     const mount = this.mounts.get(mountId);
     if (mount === undefined) return null;
     mount.artifactId ??= artifactId;
-    return mount.artifactId === artifactId
-      ? { mountId, windowId: mount.windowId }
-      : null;
+    return mount.artifactId === artifactId ? mount.windowId : null;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -219,9 +196,10 @@ export class SandboxArtifactServer {
     if (address === null) return errorResponse(404, "Artifact not found");
     const path = address.pathname;
     if (path === null) return errorResponse(400, "Invalid artifact path");
-    const mount = this.resolveMount(address.artifactId, address.mountId);
-    if (mount === null) return errorResponse(404, "Artifact mount not found");
-    const { mountId, windowId } = mount;
+    const { mountId } = address;
+    const windowId = this.windowServing(address.artifactId, mountId);
+    if (windowId === null)
+      return errorResponse(404, "Artifact mount not found");
 
     const range = request.headers.get("Range");
     let offset = 0;

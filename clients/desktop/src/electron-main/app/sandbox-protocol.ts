@@ -86,13 +86,7 @@ export function parseSandboxArtifactHost(
     : null;
 }
 
-export interface SandboxArtifactAddress {
-  readonly artifactId: string;
-  /**
-   * `null` when the URL names the artifact's site but no mount: a
-   * root-absolute reference (`/assets/x.css`) from a page on that site.
-   */
-  readonly mountId: string | null;
+export interface SandboxArtifactAddress extends SandboxArtifactHost {
   /** The artifact-tree path the URL names; `null` when that path is malformed. */
   readonly pathname: string | null;
 }
@@ -110,6 +104,13 @@ const MOUNT_PATH_PREFIX = /^\/m\/([a-z0-9]+)(\/.*)?$/;
  * site per artifact, the shape the renderer builds) and
  * `traycer-sandbox://artifact-<artifactId>--<mountId>/<path>` (a site per
  * mount, kept for an artifact id that itself holds `--`).
+ *
+ * A site URL that names no mount is not an artifact address. A page's
+ * root-absolute reference (`/assets/x.css`) resolves to one, and it cannot be
+ * served: a request on this scheme carries no `Referer` or `Origin`, so
+ * nothing tells a page of that artifact from a page of another one that
+ * knows its id. The mount id, which only the artifact's own frames are
+ * given, stays the one thing that opens its files.
  */
 export function parseSandboxArtifactUrl(
   url: string,
@@ -132,19 +133,13 @@ export function parseSandboxArtifactUrl(
   if (perMount !== null)
     return { ...perMount, pathname: normalizeSandboxArtifactRawPath(rawPath) };
   const site = ARTIFACT_SITE_HOST.exec(parsed.host);
-  if (site === null) return null;
   const mount = MOUNT_PATH_PREFIX.exec(rawPath);
-  return mount === null
-    ? {
-        artifactId: site[1],
-        mountId: null,
-        pathname: normalizeSandboxArtifactRawPath(rawPath),
-      }
-    : {
-        artifactId: site[1],
-        mountId: mount[1],
-        pathname: normalizeSandboxArtifactRawPath(mount[2] ?? "/"),
-      };
+  if (site === null || mount === null) return null;
+  return {
+    artifactId: site[1],
+    mountId: mount[1],
+    pathname: normalizeSandboxArtifactRawPath(mount[2] ?? "/"),
+  };
 }
 
 export function isSandboxArtifactUrl(url: string): boolean {
