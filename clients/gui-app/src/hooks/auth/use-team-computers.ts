@@ -20,6 +20,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import { invalidateLocalTeamAdmissionAfterClaim } from "@/lib/host/app-local-open-auth";
 import { hostEnvironmentBindingQueryKey } from "@/hooks/bots/use-host-environment-bindings-query";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 
 function computerFailure(result: TeamComputerFailure): never {
   switch (result.kind) {
@@ -148,22 +149,19 @@ export function useTeamComputerClaim(
           queryKey: hostEnvironmentBindingQueryKey(hostId, userId),
         });
       }
-      for (const method of [
-        "environment.status",
-        "environment.host.list",
-      ] as const) {
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostRpcServingTierHostId(
-              method,
-              hostId,
-              readProcessHostRpcTierPlan(),
-              null,
-            ),
-            method,
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(
+          hostRpcServingTierHostId(
+            "environment.status",
+            hostId,
+            readProcessHostRpcTierPlan(),
+            null,
           ),
-        });
-      }
+          "environment.status",
+        ),
+      });
+      // The app's own read of authn, under every environment it was asked for.
+      void invalidateEnvironmentReads(queryClient, ["environment.host.list"]);
       void binding?.directory.refresh();
       requestFleetRefresh(runnerHost);
     },

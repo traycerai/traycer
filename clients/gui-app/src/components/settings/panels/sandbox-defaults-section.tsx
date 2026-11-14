@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import { mayChangeConfiguration } from "@/components/settings/environment/configuration-source";
 import { configurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -14,7 +15,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
-import { useHostClient } from "@/lib/host";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
@@ -132,11 +132,6 @@ type DefaultsCardBody =
       readonly shape: StageShape | null;
     };
 
-/** The roles that change a configuration's defaults; every other one reads them. */
-function changesDefaults(role: SandboxDefaultsEnvironment["role"]): boolean {
-  return role === "owner" || role === "admin" || role === "editor";
-}
-
 function defaultsCardBody(
   catalogue: SandboxCatalogue | null,
   environment: SandboxDefaultsEnvironment | null,
@@ -150,7 +145,7 @@ function defaultsCardBody(
   const shape = configurationStageShape(catalogue, ready?.defaults ?? null);
   if (
     environment === null ||
-    !changesDefaults(environment.role) ||
+    !mayChangeConfiguration(environment.role) ||
     ready === null ||
     shape === null
   ) {
@@ -197,7 +192,7 @@ export function SandboxDefaultsSection(props: {
       {body.kind === "list" ? (
         <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
       ) : null}
-      {environment !== null && !changesDefaults(environment.role) ? (
+      {environment !== null && !mayChangeConfiguration(environment.role) ? (
         <DefaultsEditors environmentId={environment.environmentId} />
       ) : null}
       {read !== null && read.kind === "failed" ? (
@@ -241,11 +236,7 @@ export function SandboxDefaultsSection(props: {
 
 /** Names are shown only after the complete membership read succeeds. */
 function DefaultsEditors(props: { readonly environmentId: string }): ReactNode {
-  const members = useEnvironmentMembersList(
-    useHostClient(),
-    props.environmentId,
-    true,
-  );
+  const members = useEnvironmentMembersList(props.environmentId, true);
   const names =
     members.isPending || members.isError
       ? []

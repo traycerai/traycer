@@ -235,7 +235,7 @@ function TracySurfaceShell(props: {
   const navigate = useNavigate();
   const client = useTabHostClient();
   const botList = useBotListQuery(client, true);
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   // A teammate's rename, claim or delete reaches the list (and so the
   // surface) without waiting for focus, through the surface's own host.
   useBotListChangedSubscriptionForHost(hostId, true);
@@ -589,7 +589,7 @@ function useChannelRoute(
 } {
   const client = useTabHostClient();
   const botList = useBotListQuery(client, true);
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   const groups = useBotsGroups(botList.data, environments.data);
   const teamSetups = useTeamSetups({ client, hostId, groups });
   const listed = botList.data?.bots.some((bot) => bot.botId === botId) ?? false;
@@ -1485,7 +1485,7 @@ function BotTabContent(props: {
   const threadsShown = threadsView.shown;
   const client = useTabHostClient();
   const isMain = isMainBot(mainBotIds, snapshot.bot);
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   const environment =
     environments.data?.environments.find(
       (entry) => entry.environmentId === snapshot.bot.environmentId,
@@ -1509,14 +1509,10 @@ function BotTabContent(props: {
         : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
-  // Who wrote each channel row. A host without the method shows the other
-  // members by id.
-  const membersSupported =
-    useHostMethodSupport(hostId, "environment.members") === true;
+  // Who wrote each channel row.
   const directory = useEnvironmentMemberDirectory(
-    client,
     snapshot.bot.environmentId,
-    membersSupported,
+    true,
   );
   const resolveMember = directory.resolve;
   const {

@@ -9,6 +9,7 @@ import {
   type ConfigurationWriteIssue,
 } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
+import { mayChangeConfiguration } from "@/components/settings/environment/configuration-source";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
@@ -32,10 +33,7 @@ import {
   useConfigurationStoragePolicy,
   type StoragePolicyValue,
 } from "@/hooks/environment/use-storage-policy";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
-import { useHostClient } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
 const APPLIES_EVERYWHERE = "Applies on every host in this environment.";
@@ -71,10 +69,8 @@ function afterHours(hours: number): string {
  * two groups: tasks nobody has used (the chats switch and its window) and
  * archived chats (their own window). Every control writes the whole value.
  *
- * Rendered only when the surface's host advertises the item write
- * (`environment.configuration.items.put`, answered by the pool in a pool
- * build): an older host draws nothing. The host is the one the write is sent
- * through (`useConfigurationItemMutations`). Keyed by the viewer, as the
+ * Read and written by the app itself on the viewer's sign-in
+ * (`useConfigurationItemMutations`). Keyed by the viewer, as the
  * auto-archive row is: the save in flight and its outcome belong to the
  * person using the page, so an account switch with Settings open starts the
  * page over instead of showing the outgoing account's save.
@@ -82,12 +78,7 @@ function afterHours(hours: number): string {
 export function StoragePolicySection(props: {
   readonly pick: Exclude<EnvironmentPick, { readonly kind: "local" }>;
 }): ReactNode {
-  const writeSupported = useHostSupportsMethod(
-    useReactiveHostReadiness(useHostClient()).hostId,
-    "environment.configuration.items.put",
-  );
   const viewerUserId = useCloudChatViewerId();
-  if (!writeSupported) return null;
   return <StoragePolicySectionBody key={viewerUserId} pick={props.pick} />;
 }
 
@@ -107,11 +98,7 @@ function StoragePolicySectionBody(props: {
   );
   const disabled =
     environment === null ||
-    !(
-      environment.role === "owner" ||
-      environment.role === "admin" ||
-      environment.role === "editor"
-    ) ||
+    !mayChangeConfiguration(environment.role) ||
     policy === undefined ||
     put.isPending;
   const write = <F extends StorageField>(

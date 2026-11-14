@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { useCallback, useMemo } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
@@ -237,7 +238,10 @@ export function usePrDetailSubscription(args: {
     data,
     error: errorEvent,
     isPending: data === null && errorEvent === null,
-    sendRefresh,
+    sendRefresh: () => {
+      if (showHostUpdateNeededForGesture(hostId)) return;
+      sendRefresh();
+    },
     methodSupported,
   };
 }

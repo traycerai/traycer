@@ -1,20 +1,18 @@
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
-import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
+import {
+  useSecretsRead,
+  useSecretsWrite,
+} from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
 
 export function useSecretRowActions(props: {
   readonly client: HostClient<HostRpcRegistry>;
-  readonly hostId: string | null;
   /** The secret by id, and its current version as the list last named it. */
   readonly secret: Pick<EnvironmentSecret, "secretId" | "currentVersionId">;
   readonly removing: boolean;
@@ -23,88 +21,41 @@ export function useSecretRowActions(props: {
   const { environmentId, resolved } = useAddressedEnvironment();
   const queryClient = useQueryClient();
   const [polling, setPolling] = useState(props.removing);
-  const versions = useHostQuery<
-    HostRpcRegistry,
-    "environment.secrets.versions"
-  >({
-    cacheKeyIdentity: undefined,
+  const versions = useSecretsRead({
     client: props.client,
     method: "environment.secrets.versions",
     params: { secretId: props.secret.secretId, environmentId },
-    requiredHostMethodVersion: () =>
-      environmentId === null
-        ? null
-        : {
-            method: "environment.secrets.versions",
-            version: { major: 1, minor: 1 },
-          },
-    options: { enabled: resolved, poll: polling },
+    enabled: resolved,
+    poll: polling,
   });
   const removal = versions.data?.removal;
   const unfinished =
     removal?.outcome !== "destroyed" &&
     (props.removing || (removal !== undefined && removal !== null));
   if (polling !== unfinished) setPolling(unfinished);
-  const verify = useHostMutation<HostRpcRegistry, "environment.secrets.verify">(
-    {
-      client: props.client,
-      method: "environment.secrets.verify",
-      mapVariables: (variables) => variables,
-      requiredHostMethodVersion: (variables) =>
-        variables.environmentId === null
-          ? null
-          : {
-              method: "environment.secrets.verify",
-              version: { major: 1, minor: 1 },
-            },
-      options: { mutationKey: settingsDetailsMutationKeys.secretVerify() },
-    },
-  );
-  const remove = useHostMutation<
-    HostRpcRegistry,
-    "environment.secrets.destroy",
-    { readonly hostId: string | null }
-  >({
+  const verify = useSecretsWrite({
+    client: props.client,
+    method: "environment.secrets.verify",
+    hostOwnFloor: null,
+    mutationKey: settingsDetailsMutationKeys.secretVerify(),
+  });
+  // Remove targets the current version: @1.0 refuses it, @1.1 revokes it,
+  // whatever the environment scope.
+  const remove = useSecretsWrite({
     client: props.client,
     method: "environment.secrets.destroy",
-    mapVariables: (variables) => variables,
-    // Remove targets the current version: @1.0 refuses it, @1.1 revokes it,
-    // whatever the environment scope.
-    requiredHostMethodVersion: () => ({
+    hostOwnFloor: {
       method: "environment.secrets.destroy",
       version: { major: 1, minor: 1 },
-    }),
-    options: {
-      mutationKey: settingsDetailsMutationKeys.secretDestroy(),
-      onMutate: () => ({ hostId: props.hostId }),
-      onSuccess: async (answer, _variables, captured) => {
-        if (answer.outcome === "refused") return;
-        await Promise.all([
-          queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(
-              hostRpcServingTierHostId(
-                "environment.secrets.versions",
-                captured.hostId,
-                readProcessHostRpcTierPlan(),
-                null,
-              ),
-              "environment.secrets.versions",
-            ),
-          }),
-          queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(
-              hostRpcServingTierHostId(
-                "environment.secrets.list",
-                captured.hostId,
-                readProcessHostRpcTierPlan(),
-                null,
-              ),
-              "environment.secrets.list",
-            ),
-          }),
-        ]);
-        props.onChanged();
-      },
+    },
+    mutationKey: settingsDetailsMutationKeys.secretDestroy(),
+    onSuccess: async (answer) => {
+      if (answer.outcome === "refused") return;
+      await invalidateEnvironmentReads(queryClient, [
+        "environment.secrets.versions",
+        "environment.secrets.list",
+      ]);
+      props.onChanged();
     },
   });
   const currentVersion = versions.data?.versions.find(

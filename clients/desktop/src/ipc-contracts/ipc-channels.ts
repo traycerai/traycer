@@ -88,6 +88,8 @@ export const RunnerHostInvoke = {
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
   listSandboxes: "runnerHost:sandboxes:list",
+  // The environment directory (traycer-server `/api/environments`), same reason.
+  listEnvironments: "runnerHost:environments:list",
   getSandboxCosts: "runnerHost:sandboxes:costs",
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   // traycer-server's Traycer model catalog, for a sandbox's model picker.

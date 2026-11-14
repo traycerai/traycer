@@ -56,6 +56,7 @@ import {
  * whose every flip fails is worse than no switch.
  */
 export function HostOverviewSimulatorsTab(props: {
+  readonly usable: boolean;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly hostName: string;
@@ -72,6 +73,7 @@ export function HostOverviewSimulatorsTab(props: {
     getSupported === null || setSupported === null
       ? null
       : getSupported && setSupported;
+  if (!props.usable) return null;
   return (
     <HostOverviewTabSections>
       <SettingsGroup

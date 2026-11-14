@@ -1,7 +1,5 @@
 import { BotMemoryContext } from "@/components/bots/bot-memory-context";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
-import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostMentionEntries } from "@/hooks/composer/use-host-mention-entries";
 import {
   useCallback,
@@ -261,16 +259,10 @@ function useBotMentionHosts(): {
   answered: boolean;
 } {
   const memory = useContext(BotMemoryContext);
-  const client = useHostClientForHostId(memory?.hostId ?? null);
-  const support = useHostMethodSupport(
-    memory?.hostId ?? null,
-    "environment.host.list",
-  );
   const environmentId = memory?.environmentId ?? null;
   const hostLists = useEnvironmentHostLists(
-    client,
     environmentId === null ? [] : [environmentId],
-    environmentId !== null && support === true,
+    environmentId !== null,
   );
   const environmentHosts =
     environmentId === null
@@ -286,10 +278,7 @@ function useBotMentionHosts(): {
   );
   return {
     hosts: mentionHosts,
-    answered:
-      environmentId === null ||
-      support === false ||
-      environmentHosts !== undefined,
+    answered: environmentId === null || environmentHosts !== undefined,
   };
 }
 

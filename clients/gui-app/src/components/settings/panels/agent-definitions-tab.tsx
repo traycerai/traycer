@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { AgentDefinition } from "@traycer/protocol/host/environment-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -63,15 +64,17 @@ export function AgentDefinitionsTab(): ReactNode {
 
 function useAgentDefinitionWrites() {
   const client = useHostClient();
-  // An agent definition is content an agent runs, so a save carries the grant.
-  const grant = useExecutableWriteGrant();
+  const queryClient = useQueryClient();
+  // A write that authn holds shows in the review the app reads from authn.
+  const rereadReview = () =>
+    void invalidateEnvironmentReads(queryClient, ["environment.review"]);
   const put = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.put",
-    prepareRequest: grant,
     mutationKey: environmentMutationKeys.agentDefinitionsPut(),
     errorMessage: "Couldn't save the agent definition.",
     invalidateMethods: [LIST, "environment.status", "environment.review"],
     onSuccess: noticeWriteOutcome,
+    onSettled: rereadReview,
   });
   const remove = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.delete",
@@ -79,6 +82,7 @@ function useAgentDefinitionWrites() {
     errorMessage: "Couldn't delete the agent definition.",
     invalidateMethods: [LIST, "environment.status", "environment.review"],
     onSuccess: noticeWriteOutcome,
+    onSettled: rereadReview,
   });
   return { put, remove };
 }

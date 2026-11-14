@@ -1,5 +1,4 @@
 import { environmentReadData } from "@/hooks/environment/environment-read-data";
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useEffect } from "react";
 import { create } from "zustand";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -13,9 +12,8 @@ import { useConfigurationSource } from "@/components/settings/environment/config
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -70,28 +68,24 @@ export interface TeamViewingHost {
 }
 
 /**
- * The team's host inventory is read through its serving tier on the viewer's
+ * The team's host inventory is the app's own read of authn on the viewer's
  * session. Host-local facts and file previews use the explicit team host
  * picked from that list, or no host; neither falls through to Personal.
  */
 export function useTeamViewingHost(): TeamViewingHost {
   const source = useConfigurationSource();
-  const surfaceClient = usePoolTierHostClient(useHostClient());
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
   const environmentId = source.kind === "pool" ? source.environmentId : "";
-  const hosts = useHostQuery({
-    cacheKeyIdentity: [viewerId],
-    client: surfaceClient,
+  const hosts = useEnvironmentCloudQuery({
     method: "environment.host.list",
     params: { environmentId },
-    preflight: cloudVerdictPreflight("environment.host.list"),
-    options: {
-      poll: true,
-      enabled: source.kind === "pool" && viewerId.length > 0 && authorized,
-    },
+    cacheKeyIdentity: [],
+    mapResponse: (response): EnvironmentHostListResponseV11 => response,
+    enabled: source.kind === "pool",
+    poll: true,
   });
   const key = JSON.stringify([viewerId, environmentId]);
   const pickedId = useViewingHosts((state) => state.picks[key]);

@@ -1,6 +1,6 @@
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   EnvironmentStatusResponse,
   EnvironmentWriteOutcome,
   LocalOverride,
@@ -308,7 +308,7 @@ const REVIEW_REASONS: Readonly<Partial<Record<string, string>>> = {
  * "DATABASE_URL is waiting for you: was changed without your confirmation.";
  * a held command reads `heldCommandText`.
  */
-export function reviewText(entry: EnvironmentReviewEntry): string {
+export function reviewText(entry: ReviewHeldEntry): string {
   if (entry.reason === "executable_entry") return heldCommandText(entry);
   const reason = REVIEW_REASONS[entry.reason];
   return reason === undefined
@@ -323,7 +323,7 @@ export function reviewText(entry: EnvironmentReviewEntry): string {
  * you choose"; every other kind by its own line (`heldCommandLine`). Its
  * row's `Review` opens the retrospective sheet.
  */
-function heldCommandText(entry: EnvironmentReviewEntry): string {
+function heldCommandText(entry: ReviewHeldEntry): string {
   const line = heldCommandLine(entry);
   return `${line.name} ${line.clause}${line.acts ? " and" : ""} is on hold until you choose`;
 }
