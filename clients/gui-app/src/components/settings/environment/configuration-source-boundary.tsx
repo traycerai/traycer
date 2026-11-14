@@ -8,6 +8,7 @@ import {
 import {
   ConfigurationSourceContext,
   configurationRoleOf,
+  mayChangeConfiguration,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { seeButNotChangeLine } from "@/components/settings/members/copy";
@@ -199,7 +200,8 @@ export function ConfigurationSourceBoundary(props: {
       value={source}
     >
       {source.kind === "pool" &&
-      (source.effectiveRole === null || source.transportReadOnly) ? (
+      (!mayChangeConfiguration(source.effectiveRole) ||
+        source.transportReadOnly) ? (
         <p className="px-5 pt-5 text-ui-sm text-muted-foreground">
           {seeButNotChangeLine(descriptor.label)}
         </p>
