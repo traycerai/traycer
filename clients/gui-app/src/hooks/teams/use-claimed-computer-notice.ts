@@ -117,7 +117,9 @@ function servingHostIds(
 ): ReadonlySet<string> {
   return new Set(
     leases
-      .filter((lease) => lease.status === "ready" || lease.status === "degraded")
+      .filter(
+        (lease) => lease.status === "ready" || lease.status === "degraded",
+      )
       .map((lease) => lease.hostId),
   );
 }
@@ -224,7 +226,7 @@ export function useClaimedComputerNotice(): void {
     ),
   });
   const failedTeams = targets
-    .filter((_target, index) =>  results[index]?.isError)
+    .filter((_target, index) => results[index]?.isError)
     .map((target) => target.teamId)
     .join("\u0000");
 
