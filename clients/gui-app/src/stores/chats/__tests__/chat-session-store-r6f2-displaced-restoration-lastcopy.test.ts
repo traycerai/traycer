@@ -18,6 +18,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
 
 import {
@@ -44,6 +45,33 @@ const EPIC_ID = "epic-r6f2";
 const CHAT_ID = "chat-r6f2";
 const OWNER_ID = "owner-r6f2";
 const HOST_ID = "host-r6f2";
+const REMOVED_PROFILE_REASON =
+  "That profile no longer exists. Choose a profile.";
+
+const ANNOTATION: BrowserAnnotationRecord = {
+  kind: "browser-annotation",
+  annotationId: "annotation-r6f2",
+  tabId: "tab-1",
+  sessionId: "session-1",
+  origin: "https://example.test",
+  pageUrl: "https://example.test/page",
+  pageTitle: "Example",
+  source: {
+    kind: "browser",
+    tabId: "tab-1",
+    sessionId: "session-1",
+    origin: "https://example.test",
+    pageUrl: "https://example.test/page",
+    pageTitle: "Example",
+  },
+  capturedAt: 1,
+  comment: "the marked button",
+  counts: { elements: 1, regions: 0, strokes: 0 },
+  elements: [],
+  imageFileName: "crop.png",
+  imageHash: "c".repeat(64),
+  droppedElementCount: 0,
+};
 
 const SETTINGS: ChatRunSettings = {
   ultracode: false,
@@ -60,6 +88,30 @@ function plainContent(text: string): JsonContent {
   return {
     type: "doc",
     content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
+function imageContent(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text },
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "image-r6f2",
+              fileName: "screenshot.png",
+              mimeType: "image/png",
+              size: 128,
+              hash: "e".repeat(64),
+            },
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -153,6 +205,7 @@ function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
 function sendMessageWithContent(
   harness: Harness,
   content: JsonContent,
+  browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>,
 ): { readonly clientActionId: string; readonly messageId: string } {
   const action = harness.handle.store.getState().sendMessage({
     content,
@@ -160,17 +213,79 @@ function sendMessageWithContent(
     settings: SETTINGS,
     attachments: buildAttachmentsFromJSONContent(content),
     deliveryPolicy: "auto",
-    restore: { content, browserAnnotations: [] },
+    restore: { content, browserAnnotations },
   });
   expect(action).not.toBeNull();
   if (action === null) throw new Error("sendMessage was refused");
   return action;
 }
 
+async function expectHandedOffLastParagraph(
+  marker: string,
+  expected: string,
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      const draft = handedOffDrafts().find((entry) =>
+        draftPlainText(entry.content).includes(marker),
+      );
+      expect(draft).toBeDefined();
+      if (draft === undefined) throw new Error("expected the handed-off draft");
+      expect(draft.content.content?.at(-1)?.content?.[0]?.text).toBe(expected);
+    },
+    { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
+  );
+}
+
+interface HandoffCodeCase {
+  readonly code: "removed-by-person" | "RPC_ERROR";
+  readonly reasonIsRemovedProfile: boolean;
+  readonly expectedLastParagraph: string;
+}
+
+const ANNOTATION_HANDOFF_CASES: ReadonlyArray<HandoffCodeCase> = [
+  {
+    code: "removed-by-person",
+    reasonIsRemovedProfile: true,
+    expectedLastParagraph:
+      "Unsent — Was removed\nA browser annotation was not saved with it.",
+  },
+  {
+    code: "RPC_ERROR",
+    reasonIsRemovedProfile: false,
+    expectedLastParagraph:
+      "Unsent — Was removed A browser annotation was not saved with it.",
+  },
+];
+
+const DISPLACED_SEND_CASES: ReadonlyArray<HandoffCodeCase> = [
+  {
+    code: "removed-by-person",
+    reasonIsRemovedProfile: true,
+    expectedLastParagraph:
+      "Unsent — A message was not accepted (Was removed). A browser annotation was not saved with it.",
+  },
+  {
+    code: "RPC_ERROR",
+    reasonIsRemovedProfile: false,
+    expectedLastParagraph:
+      "Unsent — A message was not accepted (That profile no longer exists. Choose a profile). A browser annotation was not saved with it.",
+  },
+];
+
 function rejectPlain(
   harness: Harness,
   clientActionId: string,
   reason: string,
+): void {
+  rejectPlainWithCode(harness, clientActionId, reason, null);
+}
+
+function rejectPlainWithCode(
+  harness: Harness,
+  clientActionId: string,
+  reason: string | null,
+  code: string | null,
 ): void {
   harness.callbacks().onActionAck({
     kind: "actionAck",
@@ -181,7 +296,7 @@ function rejectPlain(
     action: "send",
     status: "rejected",
     reason,
-    code: null,
+    code,
     backgroundStopTaskIds: [],
     token: null,
   });
@@ -210,6 +325,7 @@ describe("R6F2: stateFailedSendRestoration records the displaced prompt into las
     const { clientActionId } = sendMessageWithContent(
       harness,
       plainContent(TEXT),
+      [],
     );
     rejectPlain(harness, clientActionId, "Not accepted.");
     expect(
@@ -260,4 +376,111 @@ describe("R6F2: stateFailedSendRestoration records the displaced prompt into las
       { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
     );
   });
+
+  it.each(ANNOTATION_HANDOFF_CASES)(
+    "records the removed-profile flag and stashes an annotation after displacement for $code",
+    async ({ code, reasonIsRemovedProfile, expectedLastParagraph }) => {
+      harness = createHarness();
+      emitOwnerSnapshot(harness.callbacks());
+      const text = "displaced annotation prompt";
+      const { clientActionId } = sendMessageWithContent(
+        harness,
+        plainContent(text),
+        [ANNOTATION],
+      );
+      rejectPlainWithCode(
+        harness,
+        clientActionId,
+        code === "removed-by-person" ? REMOVED_PROFILE_REASON : "Was removed",
+        code,
+      );
+
+      expect(
+        harness.handle.store.getState().failedSendRestoration?.clientActionId,
+      ).toBe(clientActionId);
+      harness.handle.store
+        .getState()
+        .stateFailedSendRestoration(clientActionId);
+
+      const lastCopy =
+        harness.handle.store.getState().lastCopyPrompts[clientActionId];
+      expect(lastCopy.reason).toBe("Was removed");
+      expect(lastCopy.reasonIsRemovedProfile).toBe(reasonIsRemovedProfile);
+
+      harness.handle.dispose();
+      await expectHandedOffLastParagraph(text, expectedLastParagraph);
+    },
+  );
+
+  it("keeps the removed-profile flag when a displaced send loses its image", async () => {
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+    const text = "displaced image prompt";
+    const { clientActionId } = sendMessageWithContent(
+      harness,
+      imageContent(text),
+      [],
+    );
+    rejectPlainWithCode(
+      harness,
+      clientActionId,
+      REMOVED_PROFILE_REASON,
+      "removed-by-person",
+    );
+    harness.handle.store.getState().stateFailedSendRestoration(clientActionId);
+
+    const lastCopy =
+      harness.handle.store.getState().lastCopyPrompts[clientActionId];
+    expect(lastCopy.reason).toBe("Was removed");
+    expect(lastCopy.reasonIsRemovedProfile).toBe(true);
+
+    harness.handle.dispose();
+    await expectHandedOffLastParagraph(
+      text,
+      "Unsent — Was removed\nAn image was not saved with it: the bytes are no longer on this device.",
+    );
+  });
+
+  it.each(DISPLACED_SEND_CASES)(
+    "records the removed-profile flag and stashed annotation for a displaced send under $code",
+    async ({ code, reasonIsRemovedProfile, expectedLastParagraph }) => {
+      harness = createHarness();
+      emitOwnerSnapshot(harness.callbacks());
+      const occupantText = "first refused send holds the restoration slot";
+      const occupant = sendMessageWithContent(
+        harness,
+        plainContent(occupantText),
+        [],
+      );
+      rejectPlainWithCode(
+        harness,
+        occupant.clientActionId,
+        "The host refused this send.",
+        "SEND_REFUSED",
+      );
+
+      const text = "displaced send with annotation";
+      const { clientActionId } = sendMessageWithContent(
+        harness,
+        plainContent(text),
+        [ANNOTATION],
+      );
+      rejectPlainWithCode(
+        harness,
+        clientActionId,
+        REMOVED_PROFILE_REASON,
+        code,
+      );
+
+      expect(
+        harness.handle.store.getState().failedSendRestoration?.clientActionId,
+      ).toBe(occupant.clientActionId);
+      const lastCopy =
+        harness.handle.store.getState().lastCopyPrompts[clientActionId];
+      expect(lastCopy.reasonIsRemovedProfile).toBe(reasonIsRemovedProfile);
+
+      harness.handle.dispose();
+      await expectHandedOffLastParagraph(text, expectedLastParagraph);
+    },
+  );
 });

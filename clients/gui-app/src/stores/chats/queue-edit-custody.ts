@@ -109,6 +109,8 @@ export interface QueueEditRecord {
    * text is known saved, and by then the refusal's frame is gone.
    */
   readonly followUpReason: string | null;
+  /** The code the second frame's refusal came with. `null` unless refused. */
+  readonly followUpCode: string | null;
   /**
    * Whether the edited text has already been handed back. A refused content
    * edit returns it at once rather than waiting on the second frame, and an
@@ -156,6 +158,8 @@ export type QueueEditSettlement =
       readonly cause: QueueEditReturnCause;
       /** The host's refusal. `null` for every cause but `refused`. */
       readonly hostReason: string | null;
+      /** The code the refusal came with. `null` for every cause but `refused`. */
+      readonly hostCode: string | null;
     }
   /**
    * The text was saved and the second frame was not applied - or, after a
@@ -173,6 +177,8 @@ export type QueueEditSettlement =
       /** `true` for a refusal the host stated, `false` for one never answered. */
       readonly refused: boolean;
       readonly hostReason: string | null;
+      /** The code that came with {@link hostReason}. */
+      readonly hostCode: string | null;
     }
   /**
    * An edit handed back as unconfirmed that the host has since shown it did
@@ -192,6 +198,8 @@ export type QueueEditSettlement =
       readonly followUpRefused: boolean;
       /** The host's refusal of the second frame. `null` unless refused. */
       readonly hostReason: string | null;
+      /** The code that came with {@link hostReason}. `null` unless refused. */
+      readonly hostCode: string | null;
     }
   /**
    * The mirror of `partial`: the host refused the text and then took the
@@ -324,6 +332,7 @@ function settleQueueEditRecord(
   returned: {
     readonly cause: QueueEditReturnCause;
     readonly hostReason: string | null;
+    readonly hostCode: string | null;
   },
 ): SettledQueueEditRecord {
   const settlements: QueueEditSettlement[] = [];
@@ -339,6 +348,7 @@ function settleQueueEditRecord(
       wireContent: next.wireContent,
       cause: returned.cause,
       hostReason: returned.hostReason,
+      hostCode: returned.hostCode,
     });
     next = { ...next, contentReturned: true };
   }
@@ -354,6 +364,7 @@ function settleQueueEditRecord(
       requestedChanges: next.requestedChanges,
       refused: next.followUp === "rejected",
       hostReason: next.followUpReason,
+      hostCode: next.followUpCode,
     });
     return { record: null, settlements };
   }
@@ -408,6 +419,7 @@ export function foldQueueEditAck(
     readonly clientActionId: string;
     readonly status: "accepted" | "rejected";
     readonly reason: string | null;
+    readonly code: string | null;
   },
 ): QueueEditFold {
   const record = queueEditRecordForAction(records, ack.clientActionId);
@@ -419,10 +431,12 @@ export function foldQueueEditAck(
         ...record,
         followUp: followUpOutcomeForAck(record, ack.status),
         followUpReason: ack.status === "rejected" ? ack.reason : null,
+        followUpCode: ack.status === "rejected" ? ack.code : null,
       };
   const { record: next, settlements } = settleQueueEditRecord(answered, {
     cause: "refused",
     hostReason: answersEdit ? ack.reason : null,
+    hostCode: answersEdit ? ack.code : null,
   });
   return {
     records:
@@ -447,7 +461,7 @@ export function foldQueueEditSteerAwaitingConfirmation(
   }
   const { record: next, settlements } = settleQueueEditRecord(
     { ...record, followUp: "confirming" },
-    { cause: "refused", hostReason: null },
+    { cause: "refused", hostReason: null, hostCode: null },
   );
   return {
     records:
@@ -499,6 +513,7 @@ export function answerQueueEditAwaitingConfirmation(
       followUpActionId: replacement.clientActionId,
       followUp: "pending",
       followUpReason: null,
+      followUpCode: null,
     });
   }
   return record.edit === "accepted"
@@ -704,6 +719,7 @@ function accountForUnconfirmedRecord(
           followUpRefused: record.followUp === "rejected",
           hostReason:
             record.followUp === "rejected" ? record.followUpReason : null,
+          hostCode: record.followUp === "rejected" ? record.followUpCode : null,
         },
       ],
     };
@@ -724,8 +740,16 @@ function accountForUnconfirmedRecord(
   );
 }
 
-const UNCONFIRMED_RETURN = { cause: "unconfirmed", hostReason: null } as const;
-const NOT_APPLIED_RETURN = { cause: "not_applied", hostReason: null } as const;
+const UNCONFIRMED_RETURN = {
+  cause: "unconfirmed",
+  hostReason: null,
+  hostCode: null,
+} as const;
+const NOT_APPLIED_RETURN = {
+  cause: "not_applied",
+  hostReason: null,
+  hostCode: null,
+} as const;
 
 function editOutcomeForVerdict(
   current: QueueEditFrameOutcome,

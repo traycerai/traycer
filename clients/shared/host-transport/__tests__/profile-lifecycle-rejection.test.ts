@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isProfileLifecycleRejection } from "../profile-lifecycle-rejection";
+import {
+  isProfileLifecycleRejection,
+  isRemovedProfileRefusal,
+} from "../profile-lifecycle-rejection";
 
 const LIFECYCLE_MESSAGES = [
   'No profile "work-2" is registered for provider "codex".',
@@ -31,6 +34,15 @@ describe("isProfileLifecycleRejection", () => {
     },
   );
 
+  it.each(LIFECYCLE_MESSAGES)(
+    "rejects the same message under removed-by-person (%s)",
+    (message) => {
+      expect(isProfileLifecycleRejection("removed-by-person", message)).toBe(
+        false,
+      );
+    },
+  );
+
   it.each([
     "agent not found",
     "Invalid params for agent.sendMessage: profile: Required",
@@ -38,5 +50,32 @@ describe("isProfileLifecycleRejection", () => {
     'wrapped: Profile "x" for provider "codex" was removed and can no longer be used.',
   ])("rejects an RPC_ERROR with another message (%s)", (message) => {
     expect(isProfileLifecycleRejection("RPC_ERROR", message)).toBe(false);
+  });
+});
+
+describe("isRemovedProfileRefusal", () => {
+  it("accepts the unknown-profile sentence under removed-by-person", () => {
+    expect(
+      isRemovedProfileRefusal(
+        "removed-by-person",
+        'No profile "work-2" is registered for provider "codex".',
+      ),
+    ).toBe(true);
+  });
+
+  it.each(LIFECYCLE_MESSAGES.slice(1))(
+    "rejects another lifecycle sentence under removed-by-person (%s)",
+    (message) => {
+      expect(isRemovedProfileRefusal("removed-by-person", message)).toBe(false);
+    },
+  );
+
+  it("rejects the unknown-profile sentence under RPC_ERROR", () => {
+    expect(
+      isRemovedProfileRefusal(
+        "RPC_ERROR",
+        'No profile "work-2" is registered for provider "codex".',
+      ),
+    ).toBe(false);
   });
 });
