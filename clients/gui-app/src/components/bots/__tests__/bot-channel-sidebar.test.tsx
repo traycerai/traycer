@@ -1040,7 +1040,10 @@ describe("<BotChannelSidebar /> Threads", () => {
       "bot-release": {
         threads: [thread("release-new", 2_000)],
         follows: { "release-new": FOLLOWING },
-        cursors: { cursors: {}, latest: {} },
+        cursors: {
+          cursors: {},
+          latest: { "release-new": { messageId: "m-2", seq: 2_000 } },
+        },
       },
     };
     mount("bot-release", view(false));
