@@ -40,6 +40,7 @@ import {
   act,
   cleanup,
   render,
+  type RenderResult,
   screen,
   waitFor,
   within,
@@ -65,6 +66,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { botMutationKeys } from "@/lib/query-keys";
 import { CloudRecoveryDoorbellMount } from "@/providers/cloud-recovery-doorbell-mount";
+import { useCloudRecoveryRing } from "@/hooks/host/use-cloud-recovery-ring";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import {
   BOT,
@@ -262,6 +264,29 @@ function tree(): ReactNode {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <CloudRecoveryDoorbellMount />
+        <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
+      </QueryClientProvider>
+    </StrictMode>
+  );
+}
+
+/** Another caller that holds the doorbell of the tab's host, as a stranded read or another tab does. */
+function OtherHolder(props: { readonly onRing: () => void }): ReactNode {
+  useCloudRecoveryRing({
+    hostId: TAB_HOST,
+    held: true,
+    pending: false,
+    onRing: props.onRing,
+  });
+  return null;
+}
+
+function treeWithOtherHolder(onRing: () => void): ReactNode {
+  return (
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <CloudRecoveryDoorbellMount />
+        <OtherHolder onRing={onRing} />
         <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
       </QueryClientProvider>
     </StrictMode>
@@ -473,5 +498,138 @@ describe("<BotTabSurface /> Retry while a re-open is in flight", () => {
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
 
     await pressRetryTwiceWhileHeld();
+  });
+});
+
+describe("<BotTabSurface /> a ring while the first open is pending", () => {
+  /**
+   * Another holder keeps the doorbell open, the tab's first open is held at
+   * the host, and the doorbell rings once per `rings` before that open settles.
+   */
+  async function mountAndRing(rings: number): Promise<RenderResult> {
+    const otherRings = vi.fn<() => void>();
+    const view = render(treeWithOtherHolder(otherRings));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
+    await waitFor(() => expect(opens.length).toBeGreaterThan(0));
+    for (let ring = 1; ring <= rings; ring += 1) {
+      ringDoorbell(TAB_HOST);
+      expect(otherRings).toHaveBeenCalledTimes(ring);
+    }
+    expect(opens.every((open) => !open.settled)).toBe(true);
+    return view;
+  }
+
+  /**
+   * Fails the mount's opens one at a time until the tab shows Reconnecting,
+   * then stops: whatever the tab asks after that is the re-open under test.
+   * Returns how many mount opens it failed.
+   */
+  async function failMountOpensUntilReconnecting(): Promise<number> {
+    let failed = 0;
+    await waitFor(async () => {
+      const next = opens.find((open) => !open.settled);
+      if (next !== undefined) {
+        await settle(next, (open) => open.reject(TRANSIENT));
+        failed += 1;
+      }
+      expect(screen.queryByTestId("bot-tab-reconnecting")).not.toBeNull();
+    });
+    return failed;
+  }
+
+  async function settleMountOpensUntilIdle(
+    settleOpen: (open: HeldOpen) => void,
+  ): Promise<number> {
+    await waitFor(async () => {
+      for (const held of opens.filter((open) => !open.settled)) {
+        await settle(held, settleOpen);
+      }
+      expect(
+        queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
+      ).toBe(0);
+    });
+    return opens.length;
+  }
+
+  it("asks again once when the first open then fails transiently", async () => {
+    await mountAndRing(1);
+    const mounted = await failMountOpensUntilReconnecting();
+    expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy();
+    expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
+
+    await waitFor(() => expect(opens).toHaveLength(mounted + 1));
+    await settle(heldOpen(mounted), (open) => open.resolve(SERVING));
+    await waitFor(() => expectChannelOnly());
+    await waitFor(() =>
+      expect(
+        queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
+      ).toBe(0),
+    );
+    expect(opens).toHaveLength(mounted + 1);
+  });
+
+  it("asks again once, not once per ring, when several rings came before the transient failure", async () => {
+    await mountAndRing(3);
+    const mounted = await failMountOpensUntilReconnecting();
+
+    await waitFor(() => expect(opens).toHaveLength(mounted + 1));
+    await settle(heldOpen(mounted), (open) => open.reject(TRANSIENT));
+    await waitFor(() =>
+      expect(
+        queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
+      ).toBe(0),
+    );
+    expect(opens).toHaveLength(mounted + 1);
+  });
+
+  it("makes no extra open when the first open then succeeds", async () => {
+    await mountAndRing(1);
+    const mounted = await settleMountOpensUntilIdle((open) =>
+      open.resolve(SERVING),
+    );
+
+    await waitFor(() => expectChannelOnly());
+    expect(opens).toHaveLength(mounted);
+  });
+
+  it("spends no ring owed to an earlier open that succeeded when a later open fails transiently", async () => {
+    const view = await mountAndRing(1);
+    const mounted = await settleMountOpensUntilIdle((open) =>
+      open.resolve(SERVING),
+    );
+    await waitFor(() => expectChannelOnly());
+
+    mocks.state.paneVisible = false;
+    view.rerender(treeWithOtherHolder(vi.fn<() => void>()));
+    mocks.state.paneVisible = true;
+    view.rerender(treeWithOtherHolder(vi.fn<() => void>()));
+    await waitFor(() => expect(opens.some((open) => !open.settled)).toBe(true));
+    await rejectPendingOpens(TRANSIENT);
+    await waitFor(() =>
+      expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+    expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
+
+    const reopened = opens.length;
+    expect(reopened).toBeGreaterThan(mounted);
+    await waitFor(() =>
+      expect(
+        queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
+      ).toBe(0),
+    );
+    expect(opens).toHaveLength(reopened);
+  });
+
+  it("makes no extra open and shows the error with Retry when the first open then fails non-transiently", async () => {
+    await mountAndRing(1);
+    const mounted = await settleMountOpensUntilIdle((open) =>
+      open.reject(PERMANENT),
+    );
+
+    const alert = screen.getByTestId("bot-tab-error");
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
+    expect(opens).toHaveLength(mounted);
   });
 });

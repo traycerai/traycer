@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
+import { useEffect, useEffectEvent, useRef, useSyncExternalStore } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 /**
@@ -10,18 +10,38 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
  * The holder keeps `held` true while the call a ring made is in flight, and
  * when that call fails transiently again: releasing in between would close
  * the doorbell and dial it anew, and the host rings on every open.
+ *
+ * While `pending` and not yet `held`, a ring of a doorbell another holder
+ * keeps open is remembered without holding it. The call may then fail with
+ * an answer from before the cloud came back, and that doorbell rings no more
+ * for it, so the hold that failure takes spends the remembered ring once,
+ * however many rang. Each new pending call starts owing nothing.
  */
 export function useCloudRecoveryRing(input: {
   readonly hostId: string;
   readonly held: boolean;
+  readonly pending: boolean;
   readonly onRing: () => void;
 }): void {
-  const { hostId, held } = input;
+  const { hostId, held, pending } = input;
   const holds = ringHoldsFor(useQueryClient());
   const onRing = useEffectEvent(input.onRing);
+  const ringOwed = useRef(false);
+  useEffect(() => {
+    if (!pending || held) return undefined;
+    ringOwed.current = false;
+    return holds.watch(hostId, () => {
+      ringOwed.current = true;
+    });
+  }, [holds, hostId, pending, held]);
   useEffect(() => {
     if (!held) return undefined;
-    return holds.hold(hostId, () => onRing());
+    const release = holds.hold(hostId, () => onRing());
+    if (ringOwed.current) {
+      ringOwed.current = false;
+      onRing();
+    }
+    return release;
   }, [holds, hostId, held]);
 }
 
@@ -55,6 +75,8 @@ function ringHoldsFor(client: QueryClient): RingHolds {
 
 class RingHolds {
   private readonly holdsByHost = new Map<string, Set<() => void>>();
+  /** Hears `hostId`'s rings without holding its doorbell open. */
+  private readonly watchersByHost = new Map<string, Set<() => void>>();
   private snapshot: readonly string[] = NO_HOSTS;
   private readonly listeners = new Set<() => void>();
 
@@ -84,8 +106,26 @@ class RingHolds {
     };
   }
 
+  /**
+   * Hears `hostId`'s rings until the returned function is called, without
+   * holding its doorbell: a host nobody holds is not dialed for a watcher.
+   */
+  watch(hostId: string, onRing: () => void): () => void {
+    const watch = (): void => onRing();
+    const watchers = this.watchersByHost.get(hostId) ?? new Set<() => void>();
+    watchers.add(watch);
+    this.watchersByHost.set(hostId, watchers);
+    return () => {
+      watchers.delete(watch);
+      if (watchers.size === 0 && this.watchersByHost.get(hostId) === watchers) {
+        this.watchersByHost.delete(hostId);
+      }
+    };
+  }
+
   ring(hostId: string): void {
     for (const hold of [...(this.holdsByHost.get(hostId) ?? [])]) hold();
+    for (const watch of [...(this.watchersByHost.get(hostId) ?? [])]) watch();
   }
 
   private publish(): void {

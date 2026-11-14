@@ -786,10 +786,13 @@ function BotTabBody(props: {
   }, [reopen]);
   // An open the host failed only because it could not reach the cloud is
   // asked again once on each ring of that host's cloud-recovery doorbell. The
-  // failure stands while a ring's open is in flight, so the hold does too.
+  // failure stands while a ring's open is in flight, so the hold does too. A
+  // ring that came while the open was in flight, before it failed, asks once
+  // more when it does.
   useCloudRecoveryRing({
     hostId,
     held: openError?.transient === true,
+    pending: openPending,
     onRing: reopen,
   });
   // An open made while the connection comes back fails with nothing else to
