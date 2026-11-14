@@ -482,15 +482,25 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           rawSelection.profileId === null &&
           rawSelection.harnessId === defaultAccount.harnessId &&
           state.selection.harnessId === defaultAccount.harnessId;
+        let presentedSelection = state.selection;
+        if (defaultApplies && defaultAccount !== null) {
+          presentedSelection = {
+            ...state.selection,
+            profileId: defaultAccount.profileId,
+          };
+        } else if (
+          defaultAccount !== null &&
+          state.selection.profileId === defaultAccount.profileId
+        ) {
+          presentedSelection = {
+            ...state.selection,
+            profileId: rawSelection.profileId,
+          };
+        }
         const nextState: ToolbarMockState = {
           ...state,
           accountChosen: chosen,
-          selection: defaultApplies
-            ? { ...state.selection, profileId: defaultAccount.profileId }
-            : defaultAccount !== null &&
-                state.selection.profileId === defaultAccount.profileId
-              ? { ...state.selection, profileId: rawSelection.profileId }
-              : state.selection,
+          selection: presentedSelection,
         };
         replaceStatePreservingCatalog(state, nextState);
       },
@@ -508,15 +518,25 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           rawSelection.profileId === null &&
           rawSelection.harnessId === account.harnessId &&
           state.selection.harnessId === account.harnessId;
+        let presentedSelection = state.selection;
+        if (defaultApplies && account !== null) {
+          presentedSelection = {
+            ...state.selection,
+            profileId: account.profileId,
+          };
+        } else if (
+          state.defaultAccount !== null &&
+          state.selection.profileId === state.defaultAccount.profileId
+        ) {
+          presentedSelection = {
+            ...state.selection,
+            profileId: rawSelection.profileId,
+          };
+        }
         const nextState: ToolbarMockState = {
           ...state,
           defaultAccount: account,
-          selection: defaultApplies
-            ? { ...state.selection, profileId: account.profileId }
-            : state.defaultAccount !== null &&
-                state.selection.profileId === state.defaultAccount.profileId
-              ? { ...state.selection, profileId: rawSelection.profileId }
-              : state.selection,
+          selection: presentedSelection,
         };
         replaceStatePreservingCatalog(state, nextState);
       },
