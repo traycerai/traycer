@@ -54,6 +54,7 @@ interface TabFakes {
   status: SimulatorStatusResponse;
   /** The host's side of `simulator.status`: answers `status` unless a case says otherwise. */
   readStatus: Mock<() => Promise<SimulatorStatusResponse>>;
+  queryHooks: Mock<(name: string) => void>;
   write: Mock;
   remove: Mock;
   removePending: boolean;
@@ -74,6 +75,7 @@ const fakes = vi.hoisted((): TabFakes => ({
     installed: null,
   },
   readStatus: vi.fn(),
+  queryHooks: vi.fn(),
   write: vi.fn(),
   remove: vi.fn(),
   removePending: false,
@@ -111,10 +113,10 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
     >();
   return {
     INSTANCE_INVALIDATIONS,
-    useSimulatorInstancesQuery: () => ({
-      data: { instances: fakes.instances },
-      isError: false,
-    }),
+    useSimulatorInstancesQuery: () => {
+      fakes.queryHooks("instances");
+      return { data: { instances: fakes.instances }, isError: false };
+    },
     useSimulatorPowerOffMutation: () => ({
       mutation: useMutation({
         mutationFn: (request: SimulatorPowerOffRequest) =>
@@ -126,15 +128,15 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
       mutation: { mutate: vi.fn(), isPending: false },
       supported: true,
     }),
-    useSimulatorConfigQuery: () => ({
-      data: fakes.config,
-      isPending: false,
-      isError: false,
-    }),
+    useSimulatorConfigQuery: () => {
+      fakes.queryHooks("config");
+      return { data: fakes.config, isPending: false, isError: false };
+    },
     // A real query under the real key, so what the tab's Check again
     // invalidates is what this read answers again from `fakes.readStatus`.
-    useSimulatorStatusQuery: (_client: unknown, hostId: string | null) =>
-      useQuery({
+    useSimulatorStatusQuery: (_client: unknown, hostId: string | null) => {
+      fakes.queryHooks("status");
+      return useQuery({
         queryKey: hostQueryKeys.method<HostRpcRegistry, "simulator.status">(
           hostId,
           "simulator.status",
@@ -142,7 +144,8 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
         ),
         queryFn: () => fakes.readStatus(),
         staleTime: Number.POSITIVE_INFINITY,
-      }),
+      });
+    },
     useSimulatorConfigSetMutation: () => ({
       mutation: { mutate: fakes.write, isPending: false },
       supported: true,
@@ -181,6 +184,7 @@ beforeEach(() => {
   fakes.titles = new Map();
   fakes.openTask.mockReset();
   fakes.readStatus.mockReset();
+  fakes.queryHooks.mockClear();
   fakes.readStatus.mockImplementation(() => Promise.resolve(fakes.status));
   fakes.status = {
     platforms: [
@@ -210,13 +214,13 @@ function statusKey(): QueryKey {
 }
 
 /** The tab over a cache already holding the host's last status answer. */
-function renderTab(): QueryClient {
+function renderTabWithUsability(usable: boolean): QueryClient {
   const queryClient = new QueryClient();
   queryClient.setQueryData(statusKey(), fakes.status);
   render(
     <QueryClientProvider client={queryClient}>
       <HostOverviewSimulatorsTab
-        usable
+        usable={usable}
         client={null}
         hostId={HOST}
         hostName="Studio Mac"
@@ -224,6 +228,10 @@ function renderTab(): QueryClient {
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+function renderTab(): QueryClient {
+  return renderTabWithUsability(true);
 }
 
 const RUNNING: SimulatorHostInstance = {
@@ -248,6 +256,24 @@ function switchRow(): HTMLElement {
 }
 
 describe("HostOverviewSimulatorsTab", () => {
+  it("offers no simulator controls and starts no reads for an unusable host with retained capabilities and status", () => {
+    fakes.config = { enabled: true, idleMinutes: 15 };
+    fakes.instances = [RUNNING];
+    const queryClient = renderTabWithUsability(false);
+
+    expect(queryClient.getQueryData(statusKey())).toEqual(fakes.status);
+    expect(fakes.methodSupport["config.simulator.get"]).toBe(true);
+    expect(fakes.methodSupport["config.simulator.set"]).toBe(true);
+    expect(fakes.methodSupport["simulator.status"]).toBe(true);
+    expect(fakes.methodSupport["simulator.removeTools"]).toBe(true);
+    expect(screen.queryByTestId("settings-simulators-enabled")).toBeNull();
+    expect(screen.queryByTestId("settings-simulators-remove-tools")).toBeNull();
+    expect(screen.queryByTestId("settings-simulators-idle-minutes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    expect(fakes.queryHooks).not.toHaveBeenCalled();
+    expect(fakes.readStatus).not.toHaveBeenCalled();
+  });
+
   it("replaces the switch with one sentence while the host's methods are unknown or missing, and never draws an agent row", () => {
     fakes.methodSupport["config.simulator.set"] = null;
     renderTab();
