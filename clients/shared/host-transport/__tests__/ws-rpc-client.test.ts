@@ -674,7 +674,7 @@ describe("WsRpcClient", () => {
   it("omits only a null appVersion, never the identity or the epoch", async () => {
     const { factory, sockets } = makeFactory();
     const client = new WsRpcClient<typeof testRegistry>({
-      clientIdentity: { kind: "cli", compatibilityEpoch: 2, appVersion: null },
+      clientIdentity: { kind: "cli", compatibilityEpoch: 3, appVersion: null },
       registry: testRegistry,
       requestId: () => "req-no-version",
       webSocketFactory: factory,
@@ -698,7 +698,7 @@ describe("WsRpcClient", () => {
     await flush();
     expect(expectOpenFrame(sockets[0].sent[0]).clientIdentity).toEqual({
       kind: "cli",
-      compatibilityEpoch: 2,
+      compatibilityEpoch: 3,
     });
     sockets[0].socket.fireMessage(
       openAckWithOptionalHostEcho({ major: 1, minor: 0 }),

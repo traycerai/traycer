@@ -1392,7 +1392,7 @@ describe("RemoteSession client identity", () => {
         ...buildSessionOptions(relay, lease, null),
         clientIdentity: {
           kind: "cli",
-          compatibilityEpoch: 2,
+          compatibilityEpoch: 3,
           appVersion: null,
         },
       });
@@ -1401,7 +1401,7 @@ describe("RemoteSession client identity", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(relay.openIdentities[0]).toEqual({
           kind: "cli",
-          compatibilityEpoch: 2,
+          compatibilityEpoch: 3,
         });
       } finally {
         session.close();
