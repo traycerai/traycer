@@ -24,29 +24,19 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
 
-const ORIGINAL_HOME = process.env.HOME;
-const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   workHome = mkdtempSync(join(tmpdir(), "traycer-doctor-port-test-"));
   osHome.current = workHome;
-  process.env.HOME = workHome;
-  process.env.USERPROFILE = workHome;
+  vi.stubEnv("HOME", workHome);
+  vi.stubEnv("USERPROFILE", workHome);
   vi.resetModules();
 });
 
 afterEach(() => {
-  if (ORIGINAL_HOME === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = ORIGINAL_HOME;
-  }
-  if (ORIGINAL_USERPROFILE === undefined) {
-    delete process.env.USERPROFILE;
-  } else {
-    process.env.USERPROFILE = ORIGINAL_USERPROFILE;
-  }
+  vi.unstubAllEnvs();
   rmSync(workHome, { recursive: true, force: true });
   vi.restoreAllMocks();
   vi.doUnmock("../../manifest/host-install");
@@ -240,14 +230,13 @@ describe("runDoctor port-conflict detection", () => {
   });
 
   it.each([
-    ["directly", false],
-    [
-      "on the retry that ended an episode whose earlier attempt may have run",
-      true,
-    ],
+    { code: "UNAUTHORIZED", endedRetryEpisode: false },
+    { code: "UNAUTHORIZED", endedRetryEpisode: true },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", endedRetryEpisode: false },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", endedRetryEpisode: true },
   ] as const)(
-    "reads an UNAUTHORIZED RPC probe refusal %s as rejected credentials, with no restart",
-    async (_label, endedRetryEpisode) => {
+    "reads a reasonless non-retryable $code RPC probe refusal as an older host",
+    async ({ code, endedRetryEpisode }) => {
       // A listening port, so the engine goes on to the authenticated probe.
       const listener = createServer();
       await new Promise<void>((resolve) => {
@@ -276,11 +265,17 @@ describe("runDoctor port-conflict detection", () => {
         const { RetryEpisodeOutcomeUnknownError } =
           await import("../../../../shared/host-transport/retrying-messenger");
         const refusal = new HostRpcError({
-          code: "UNAUTHORIZED",
+          code,
           message: "no applicable key found in the JSON Web Key Set",
           requestId: "r",
           method: "host.status",
-          fatalDetails: null,
+          fatalDetails: {
+            code,
+            reason: "legacy host refusal",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: false,
+          },
         });
         vi.doMock("../../internal/host-rpc", () => ({
           callHostRpcAtEndpoint: () =>
@@ -303,7 +298,11 @@ describe("runDoctor port-conflict detection", () => {
         const rejected = result.issues.find(
           (i) => i.code === "HOST_RPC_UNAUTHORIZED",
         );
-        expect(rejected?.terminalCommand).toBe("traycer login");
+        expect(rejected?.terminalCommand).toBe("traycer host update");
+        expect(rejected?.message).toBe(
+          "The host is out of date. Reinstall the latest host with 'traycer host update'.",
+        );
+        expect(rejected?.message).not.toContain("Sign in again");
         expect(rejected?.fixAction).toBeNull();
         expect(
           result.issues.find((i) => i.code === "PORT_UNREACHABLE"),

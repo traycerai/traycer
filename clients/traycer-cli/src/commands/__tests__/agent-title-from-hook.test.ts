@@ -83,16 +83,12 @@ function stubStdin(value: {
   });
 }
 
-const PREV_ENV = {
-  epic: process.env.TRAYCER_EPIC_ID,
-  agent: process.env.TRAYCER_AGENT_ID,
-};
-
 beforeEach(() => {
+  vi.unstubAllEnvs();
   vi.clearAllMocks();
   rpcMock.mockResolvedValue({ accepted: true });
-  process.env.TRAYCER_EPIC_ID = "epic-1";
-  process.env.TRAYCER_AGENT_ID = "agent-1";
+  vi.stubEnv("TRAYCER_EPIC_ID", "epic-1");
+  vi.stubEnv("TRAYCER_AGENT_ID", "agent-1");
 });
 
 afterEach(() => {
@@ -104,10 +100,7 @@ afterEach(() => {
   if (realStdin !== undefined) {
     Object.defineProperty(process, "stdin", realStdin);
   }
-  if (PREV_ENV.epic === undefined) delete process.env.TRAYCER_EPIC_ID;
-  else process.env.TRAYCER_EPIC_ID = PREV_ENV.epic;
-  if (PREV_ENV.agent === undefined) delete process.env.TRAYCER_AGENT_ID;
-  else process.env.TRAYCER_AGENT_ID = PREV_ENV.agent;
+  vi.unstubAllEnvs();
 });
 
 describe("buildAgentTitleFromHookCommand", () => {
@@ -195,8 +188,8 @@ describe("buildAgentTitleFromHookCommand", () => {
   });
 
   it("uses an OpenCode harness session id without requiring per-agent env", async () => {
-    delete process.env.TRAYCER_EPIC_ID;
-    delete process.env.TRAYCER_AGENT_ID;
+    vi.stubEnv("TRAYCER_EPIC_ID", undefined);
+    vi.stubEnv("TRAYCER_AGENT_ID", undefined);
     stubStdin({
       isTTY: false,
       chunks: [
@@ -225,7 +218,7 @@ describe("buildAgentTitleFromHookCommand", () => {
   });
 
   it("exits cleanly without an RPC call when TRAYCER_EPIC_ID is missing", async () => {
-    delete process.env.TRAYCER_EPIC_ID;
+    vi.stubEnv("TRAYCER_EPIC_ID", undefined);
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ prompt: "hi" })],
@@ -247,7 +240,7 @@ describe("buildAgentTitleFromHookCommand", () => {
   });
 
   it("exits cleanly without an RPC call when TRAYCER_AGENT_ID is missing", async () => {
-    delete process.env.TRAYCER_AGENT_ID;
+    vi.stubEnv("TRAYCER_AGENT_ID", undefined);
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ prompt: "hi" })],

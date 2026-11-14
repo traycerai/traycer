@@ -104,14 +104,114 @@ describe("worktree-delete fatal close -> CLI guidance", () => {
     expect(error.message).toContain("update the host or CLI");
   });
 
-  it("leaves UNAUTHORIZED and unexpected closes untouched", () => {
+  it("maps a reasonless non-retryable UNAUTHORIZED as an older host", () => {
     const auth = fatalCloseToCliError({
       code: "UNAUTHORIZED",
       reason: "bad bearer",
       incompatibleMethods: null,
       upgradeGuidance: null,
+      retryable: false,
     });
-    expect(auth.code).toBe("E_AUTH_REJECTED");
+    expect(auth.code).toBe("E_HOST_INCOMPATIBLE");
+    expect(auth.message).toBe(
+      "The host is out of date. Reinstall the latest host with 'traycer host update'.",
+    );
+    expect(auth.message).not.toContain("traycer login");
+    const retryable = fatalCloseToCliError({
+      code: "UNAUTHORIZED",
+      reason: "bad bearer",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    });
+    expect(retryable.code).toBe("E_AUTH_REJECTED");
+    expect(retryable.message).toBe(
+      "traycer: host rejected the credential for worktree delete.",
+    );
+    const membership = fatalCloseToCliError({
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      reason: "legacy host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: false,
+    });
+    expect(membership.code).toBe("E_HOST_INCOMPATIBLE");
+    expect(membership.message).toContain("traycer host update");
+  });
+
+  it.each([
+    {
+      code: "UNAUTHORIZED",
+      doorReason: "keys_unavailable",
+      hostReason: "Host verification keys are not available.",
+      message:
+        "traycer: This computer needs to connect once before it can verify access. Check its connection, then retry.",
+    },
+    {
+      code: "FORBIDDEN",
+      doorReason: "clock_skew",
+      hostReason: "The host clock is outside the allowed window.",
+      message:
+        "traycer: This computer's date or time appears incorrect. Enable automatic date and time on that computer, then retry.",
+    },
+    {
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      doorReason: "enrolment_broken",
+      hostReason: "The computer's team enrollment needs repair.",
+      message:
+        "traycer: This computer's connection to the team needs repair. Ask a team administrator to restore it.",
+    },
+    {
+      code: "FORBIDDEN",
+      doorReason: "membership_removed",
+      hostReason: "The account was removed from the team.",
+      message:
+        "traycer: You no longer have access to this team's computer. Ask a team administrator if this is unexpected.",
+    },
+    {
+      code: "UNAUTHORIZED",
+      doorReason: "not_admitted",
+      hostReason: "The account is not admitted to this computer.",
+      message:
+        "traycer: This account cannot access this computer. Switch accounts to use it.",
+    },
+    {
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      doorReason: "host_claimed",
+      hostReason: "This computer was claimed by another member.",
+      message: "traycer: This computer was claimed by another member.",
+    },
+  ] as const)(
+    "maps the host-token $doorReason refusal under $code to its exact line",
+    (item) => {
+      const error = fatalCloseToCliError({
+        code: item.code,
+        reason: item.hostReason,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        doorReason: item.doorReason,
+      });
+      expect(error.code).toBe("E_AUTH_REJECTED");
+      expect(error.message).toBe(item.message);
+      expect(error.message).not.toContain("traycer login");
+    },
+  );
+
+  it("keeps a token_expired reason on worktree delete's credential line", () => {
+    const error = fatalCloseToCliError({
+      code: "UNAUTHORIZED",
+      reason: "expired",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      doorReason: "token_expired",
+    });
+    expect(error.code).toBe("E_AUTH_REJECTED");
+    expect(error.message).toBe(
+      "traycer: host rejected the credential for worktree delete.",
+    );
+    expect(error.message).not.toContain("traycer login");
+  });
+  it("keeps unrelated protocol closes unexpected", () => {
     const other = fatalCloseToCliError({
       code: "STREAM_PROTOCOL_ERROR",
       reason: "malformed frame",

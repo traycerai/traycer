@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
 import { buildWorktreeDeleteCommand } from "../worktree-delete";
 import {
   CliError,
@@ -35,6 +39,10 @@ type FakeSession = {
   frameHandler: ((envelope: unknown) => void) | null;
 };
 
+type CapturedStreamOptions = {
+  readonly bearer: () => () => OpenFrameBearerSource | null;
+};
+
 // Shared, hoisted so the module mock factory can reference them.
 const hoisted = vi.hoisted(() => ({
   subscribeMock: vi.fn(),
@@ -42,6 +50,9 @@ const hoisted = vi.hoisted(() => ({
   sessionCloseMock: vi.fn(),
   state: {
     sessions: [] as FakeSession[],
+    bearer: null as CapturedStreamOptions["bearer"] | null,
+    home: { path: null as string | null },
+    fetch: vi.fn(),
     // What the transport's compatibility check would say about the batch
     // method. Flipped per test to simulate an older host.
     methodSupport: "supported" as StreamMethodSupport,
@@ -51,7 +62,10 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
   // A real function (not an arrow) so `new WsStreamClient(...)` constructs; a
   // constructor returning an object yields that object.
-  WsStreamClient: vi.fn(function WsStreamClientMock() {
+  WsStreamClient: vi.fn(function WsStreamClientMock(
+    options: CapturedStreamOptions,
+  ) {
+    hoisted.state.bearer = options.bearer;
     return {
       subscribe: hoisted.subscribeMock,
       close: hoisted.clientCloseMock,
@@ -63,6 +77,14 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
     };
   }),
 }));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: () => hoisted.state.home.path ?? actual.homedir(),
+  };
+});
 
 vi.mock("../../internal/host-auth", () => ({
   resolveHostAuth: vi.fn(),
@@ -120,8 +142,23 @@ async function waitForSessions(count: number): Promise<void> {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  hoisted.state.home.path = await mkdtemp(
+    join(tmpdir(), "traycer-cli-delete-"),
+  );
+  hoisted.state.bearer = null;
+  hoisted.state.fetch.mockReset();
+  hoisted.state.fetch.mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        session_grant: "delete-host-only-token",
+        session_grant_expires_in: 3600,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
+  );
+  vi.stubGlobal("fetch", hoisted.state.fetch);
   hoisted.state.sessions = [];
   hoisted.state.methodSupport = "supported";
   resolveHostAuthMock.mockResolvedValue({
@@ -158,8 +195,12 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  const home = hoisted.state.home.path;
+  hoisted.state.home.path = null;
+  if (home !== null) await rm(home, { recursive: true, force: true });
 });
 
 // The readonly-surface refusal moved out of this command: `worktree delete` is
@@ -206,6 +247,9 @@ describe("buildWorktreeDeleteCommand input validation", () => {
     expect(session.params).toMatchObject({
       targets: [{ worktreePath: "/wt/feature ", scripts: null }],
     });
+    expect(hoisted.state.bearer?.()?.getBearerToken()).toBe(
+      "delete-host-only-token",
+    );
     session.frameHandler?.({
       kind: "target.complete",
       worktreePath: "/wt/feature ",
@@ -587,7 +631,7 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("maps an UNAUTHORIZED fatal close to an auth-rejected CliError", async () => {
+  it("maps a retryable UNAUTHORIZED fatal close to the credential line", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
     })(ctx);
@@ -600,12 +644,14 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
         reason: "bearer rejected",
         incompatibleMethods: null,
         upgradeGuidance: null,
+        retryable: true,
       },
     });
 
     await expect(pending).rejects.toMatchObject({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
       exitCode: 1,
+      message: "traycer: host rejected the credential for worktree delete.",
     });
   });
 

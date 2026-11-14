@@ -114,14 +114,12 @@ const RELINQUISH_RESPONSE: RelinquishAgentRoleResponseV11 = {
 };
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   callHostRpcMock.mockReset();
-  delete process.env.TRAYCER_EPIC_ID;
-  delete process.env.TRAYCER_AGENT_ID;
 });
 
 afterEach(() => {
-  delete process.env.TRAYCER_EPIC_ID;
-  delete process.env.TRAYCER_AGENT_ID;
+  vi.unstubAllEnvs();
 });
 
 describe("agent role claim command function", () => {
@@ -187,8 +185,8 @@ describe("agent role claim command function", () => {
 
   it("defaults ids from $TRAYCER_EPIC_ID / $TRAYCER_AGENT_ID; explicit flags win", async () => {
     callHostRpcMock.mockResolvedValue(CLAIM_RESPONSE);
-    process.env.TRAYCER_EPIC_ID = "epic-env";
-    process.env.TRAYCER_AGENT_ID = "agent-env";
+    vi.stubEnv("TRAYCER_EPIC_ID", "epic-env");
+    vi.stubEnv("TRAYCER_AGENT_ID", "agent-env");
 
     await buildAgentRoleClaimCommand({
       epicId: null,

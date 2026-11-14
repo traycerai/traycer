@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostDoorReason } from "@traycer/protocol/framework/door-reason";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  callAgentHostRpcWithDispatch,
   callHostRpc,
   callHostRpcAtEndpoint,
   callHostRpcAtResolvedEndpoint,
@@ -10,7 +14,9 @@ import {
   parseCanonicalHostResponse,
   toAgentCliError,
 } from "../host-rpc";
+import { buildAgentSendCommand } from "../../commands/agent-send";
 import { resolveHostAuth } from "../host-auth";
+import { hostTokenFailureCliError } from "../host-door-words";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import {
   HostRequestAbortedError,
@@ -18,14 +24,19 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "../../../../shared/host-transport/host-messenger";
-import {
-  finalRefusalOf,
-  RetryEpisodeOutcomeUnknownError,
-} from "../../../../shared/host-transport/retrying-messenger";
-import { isRefusalAfterRejectedSignIn } from "../sign-in-rejection";
+import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
+import { config } from "../../config";
+import {
+  createHostTokenFilePersistence,
+  hostTokensPath,
+} from "@traycer-clients/shared/auth/host-token-file";
+import type { HostRequestOptions } from "../../../../shared/host-transport/host-messenger";
+import { createOutput } from "../../runner/output";
+import type { CommandContext } from "../../runner/runner";
+import { resolveRuntimeContext } from "../../runner/runtime";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -81,13 +92,71 @@ function latestStreamServerFrameSchema<
 // `requestMock` is declared via `vi.hoisted` so it exists when the hoisted
 // `vi.mock` factory below captures it. `WsRpcClient` is mocked as a class so
 // `new WsRpcClient(...)` is constructable; every instance shares `requestMock`.
-const { requestMock, rpcClientConstructorMock, releaseIdleMock } = vi.hoisted(
-  () => ({
-    requestMock: vi.fn(),
-    rpcClientConstructorMock: vi.fn(),
-    releaseIdleMock: vi.fn(),
-  }),
+const {
+  requestMock,
+  rpcClientConstructorMock,
+  releaseIdleMock,
+  testHome,
+  fetchMock,
+  agentEnvironment,
+  openCliHostSessionMock,
+} = vi.hoisted(() => ({
+  requestMock: vi.fn(),
+  rpcClientConstructorMock: vi.fn(),
+  releaseIdleMock: vi.fn(),
+  testHome: { path: null as string | null },
+  fetchMock: vi.fn(),
+  agentEnvironment: {
+    capability: undefined as string | undefined,
+    agentId: undefined as string | undefined,
+    names: [] as string[],
+  },
+  openCliHostSessionMock: vi.fn(),
+}));
+const presentedHostTokens = vi.hoisted(() => [] as string[]);
+
+vi.mock("../agent-session-capability", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agent-session-capability")>();
+  return {
+    ...actual,
+    PROCESS_AGENT_ENVIRONMENT: (name: string) => {
+      agentEnvironment.names.push(name);
+      if (name === "TRAYCER_AGENT_SESSION_CAPABILITY")
+        return agentEnvironment.capability;
+      return name === "TRAYCER_AGENT_ID" ? agentEnvironment.agentId : undefined;
+    },
+  };
+});
+
+vi.mock("../cli-host-tokens", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cli-host-tokens")>();
+  return {
+    ...actual,
+    openCliHostSession: (
+      ...args: Parameters<typeof actual.openCliHostSession>
+    ) => {
+      openCliHostSessionMock(...args);
+      return actual.openCliHostSession(...args);
+    },
+  };
+});
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
 );
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => testHome.path ?? actual.homedir() };
+});
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -121,7 +190,23 @@ vi.mock(
           rpcClientConstructorMock(options);
         }
 
-        request = requestMock;
+        request = (
+          method: string,
+          params: unknown,
+          options: HostRequestOptions,
+        ) => {
+          presentedHostTokens.push(options.authority.bearer.getBearerToken());
+          return requestMock(method, params, options);
+        };
+        requestWithResponseTimeout = (
+          method: string,
+          params: unknown,
+          _responseTimeoutMs: number,
+          options: HostRequestOptions,
+        ) => {
+          presentedHostTokens.push(options.authority.bearer.getBearerToken());
+          return requestMock(method, params, options);
+        };
         releaseIdleLocalSessions = releaseIdleMock;
       },
     };
@@ -173,8 +258,71 @@ const fakeStore: CredentialsMutationStore = {
 
 const METHOD = "agent.list";
 
-beforeEach(() => {
+function agentSendCommand(): Promise<unknown> {
+  const runtime = resolveRuntimeContext(
+    { json: false, quiet: false, noProgress: false, noBootstrap: false },
+    {},
+  );
+  const output = createOutput(runtime);
+  const context: CommandContext = {
+    runtime,
+    output,
+    progress: (info) => output.progress(info),
+  };
+  return buildAgentSendCommand({
+    epicId: "epic-1",
+    senderAgentId: "agent-1",
+    to: "agent-2",
+    message: "capability probe",
+    expectReply: false,
+    responseId: null,
+    workspace: null,
+  })(context);
+}
+
+function fatalDoorError(args: {
+  readonly code: "UNAUTHORIZED" | "FORBIDDEN" | "TEAM_MEMBERSHIP_REQUIRED";
+  readonly doorReason: HostDoorReason;
+  readonly message: string;
+  readonly method: string;
+}): HostRpcError {
+  return new HostRpcError({
+    code: args.code,
+    message: args.message,
+    requestId: "door-refusal",
+    method: args.method,
+    fatalDetails: {
+      code: args.code,
+      reason: args.message,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      doorReason: args.doorReason,
+    },
+  });
+}
+
+beforeEach(async () => {
   vi.clearAllMocks();
+  requestMock.mockReset();
+  fetchMock.mockReset();
+  rotateMock.mockReset();
+  presentedHostTokens.length = 0;
+  agentEnvironment.capability = undefined;
+  agentEnvironment.agentId = undefined;
+  agentEnvironment.names.length = 0;
+  openCliHostSessionMock.mockReset();
+  testHome.path = await mkdtemp(join(tmpdir(), "traycer-cli-host-rpc-"));
+  fetchMock.mockImplementation(
+    async () =>
+      new Response(
+        JSON.stringify({
+          session_grant: `host-token-${fetchMock.mock.calls.length}`,
+          session_grant_expires_in: 3600,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+  );
+  vi.stubGlobal("fetch", fetchMock);
   resolveAuthMock.mockResolvedValue({
     token: "tok-1",
     authnBaseUrl: "https://authn.test",
@@ -183,7 +331,7 @@ beforeEach(() => {
   pidMock.mockResolvedValue({
     pid: 1,
     hostId: "d1",
-    version: "1.0.0",
+    version: "2.0.0",
     websocketUrl: "ws://127.0.0.1:9/rpc",
     startedAt: "2026-01-01T00:00:00.000Z",
     processStartIdentity: null,
@@ -196,8 +344,12 @@ beforeEach(() => {
   createStoreMock.mockReturnValue(fakeStore);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
+  const home = testHome.path;
+  testHome.path = null;
+  if (home !== null) await rm(home, { recursive: true, force: true });
 });
 
 describe("callHostRpc", () => {
@@ -249,6 +401,58 @@ describe("callHostRpc", () => {
     expect(releaseIdleMock).toHaveBeenCalledTimes(1);
   });
 
+  it("opens with the stored host-only token without asking authn", async () => {
+    const persistence = createHostTokenFilePersistence({
+      environment: config.environment,
+      lockWaitMs: 1_000,
+      lockPollIntervalMs: 10,
+    });
+    await persistence.update((table) => {
+      const users = new Map(table);
+      users.set(
+        "u1",
+        new Map([
+          [
+            "d1",
+            { token: "held-host-token", expiresAtMs: Date.now() + 60_000 },
+          ],
+        ]),
+      );
+      return users;
+    });
+    requestMock.mockResolvedValue({ agents: [] });
+
+    await callHostRpcAtEndpoint(
+      METHOD,
+      { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+      { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+    );
+
+    expect(presentedHostTokens).toEqual(["held-host-token"]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("mints once and saves a private host-only token when none is held", async () => {
+    requestMock.mockResolvedValue({ agents: [] });
+
+    await callHostRpcAtEndpoint(
+      METHOD,
+      { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+      { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(presentedHostTokens).toEqual(["host-token-1"]);
+    const path = hostTokensPath(config.environment);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    const saved = await readFile(path, "utf8");
+    expect(JSON.parse(saved)).toMatchObject({
+      version: 1,
+      users: { u1: { d1: { token: "host-token-1" } } },
+    });
+    expect(saved).not.toContain("tok-1");
+  });
+
   it("dials with an attestation window that outlasts the host's post-openAck deadline", async () => {
     requestMock.mockResolvedValue({ agents: [] });
 
@@ -292,6 +496,163 @@ describe("callHostRpc", () => {
     });
   });
 
+  it("a unary agent command sends only the session capability and never logs it", async () => {
+    const capability = "opaque-agent-session-capability";
+    agentEnvironment.capability = capability;
+    requestMock.mockResolvedValue({ responseId: null });
+
+    const result = await agentSendCommand();
+
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(presentedHostTokens).toEqual([capability]);
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    const loggerCalls = [
+      ...loggerMock.debug.mock.calls,
+      ...loggerMock.info.mock.calls,
+      ...loggerMock.warn.mock.calls,
+      ...loggerMock.error.mock.calls,
+    ];
+    expect(JSON.stringify(loggerCalls)).not.toContain(capability);
+  });
+
+  it("a not_admitted capability refusal keeps the host's generic line without recovery", async () => {
+    agentEnvironment.capability = "opaque-agent-capability";
+    requestMock.mockRejectedValue(
+      fatalDoorError({
+        code: "UNAUTHORIZED",
+        doorReason: "not_admitted",
+        message: "The agent session is not admitted.",
+        method: "agent.sendMessage",
+      }),
+    );
+
+    const error = await agentSendCommand().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      message: "The agent session is not admitted.",
+    });
+    if (!(error instanceof Error)) throw new Error("expected a mapped error");
+    expect(error.message).not.toContain("traycer login");
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("a VERB_NOT_ALLOWED capability refusal keeps its unexpected host message", async () => {
+    agentEnvironment.capability = "opaque-agent-capability";
+    requestMock.mockRejectedValue(
+      new HostRpcError({
+        code: "VERB_NOT_ALLOWED",
+        message: "agent.sendMessage is not allowed for this session",
+        requestId: "verb-refusal",
+        method: "agent.sendMessage",
+        fatalDetails: null,
+      }),
+    );
+
+    const error = await agentSendCommand().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: "agent.sendMessage is not allowed for this session",
+    });
+    if (!(error instanceof Error)) throw new Error("expected a mapped error");
+    expect(error.message).not.toContain("traycer login");
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("without the agent capability, a unary command uses the signed-out path", async () => {
+    resolveAuthMock.mockResolvedValue(null);
+
+    const error = await agentSendCommand().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+      "TRAYCER_AGENT_ID",
+    ]);
+    expect(requestMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a capabilityless agent command reads neither sign-in nor host token", async () => {
+    agentEnvironment.agentId = "agent-session";
+
+    const error = await agentSendCommand().catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
+    expect(agentEnvironment.names).toEqual([
+      "TRAYCER_AGENT_SESSION_CAPABILITY",
+      "TRAYCER_AGENT_ID",
+    ]);
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+    expect(requestMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("maps a superseded host-token mint to fixed access-unconfirmed copy", () => {
+    const error = hostTokenFailureCliError({ kind: "superseded" });
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message:
+        "traycer: We can't confirm access to this computer right now. Try the command again.",
+    });
+  });
+
+  it("refuses a below-floor host before dialing and dials a host at the floor", async () => {
+    pidMock.mockResolvedValueOnce({
+      pid: 1,
+      hostId: "d1",
+      version: "1.9.9",
+      websocketUrl: "ws://127.0.0.1:9/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      processStartIdentity: null,
+      processStartIdentityRead: "absent",
+      layer0: null,
+      layer0Slot: null,
+    });
+    const belowFloor = await agentSendCommand().catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(belowFloor).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+      message:
+        "The host is out of date. Reinstall the latest host with 'traycer host update'.",
+    });
+    if (!(belowFloor instanceof Error))
+      throw new Error("expected the older-host error");
+    expect(belowFloor.message).not.toContain("traycer login");
+    expect(rpcClientConstructorMock).not.toHaveBeenCalled();
+    expect(requestMock).not.toHaveBeenCalled();
+    expect(openCliHostSessionMock).not.toHaveBeenCalled();
+
+    requestMock.mockResolvedValue({ responseId: null });
+    await agentSendCommand();
+
+    expect(pidMock).toHaveBeenCalledTimes(2);
+    expect(rpcClientConstructorMock).toHaveBeenCalledTimes(1);
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects invalid host metadata endpoints before constructing the WS client", async () => {
     pidMock.mockResolvedValue({
       pid: process.pid,
@@ -318,20 +679,248 @@ describe("callHostRpc", () => {
     expect(requestMock).not.toHaveBeenCalled();
   });
 
-  it("rotates the bearer and retries once on UNAUTHORIZED", async () => {
-    requestMock
-      .mockRejectedValueOnce(
+  it.each(["token_expired", "not_admitted"] as const)(
+    "mints one replacement after a %s door refusal",
+    async (doorReason) => {
+      requestMock
+        .mockRejectedValueOnce(
+          new HostRpcError({
+            code: "UNAUTHORIZED",
+            message: "expired",
+            requestId: "r1",
+            method: METHOD,
+            fatalDetails: {
+              code: "UNAUTHORIZED",
+              reason: "expired",
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+              doorReason,
+            },
+          }),
+        )
+        .mockResolvedValueOnce({ agents: [] });
+
+      const result = await callHostRpc(METHOD, {
+        epicId: "e",
+        senderAgentId: "agent-1",
+        scope: "user",
+      });
+
+      expect(result).toEqual({ agents: [] });
+      expect(rotateMock).not.toHaveBeenCalled();
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(presentedHostTokens).toEqual(["host-token-1", "host-token-2"]);
+    },
+  );
+
+  it.each(["token_expired", "not_admitted"] as const)(
+    "does not send a third call after a replacement token is refused for %s",
+    async (doorReason) => {
+      const refusal = (requestId: string): HostRpcError =>
         new HostRpcError({
           code: "UNAUTHORIZED",
           message: "expired",
+          requestId,
+          method: METHOD,
+          fatalDetails: {
+            code: "UNAUTHORIZED",
+            reason: "expired",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            doorReason,
+          },
+        });
+      requestMock
+        .mockRejectedValueOnce(refusal("r1"))
+        .mockRejectedValueOnce(refusal("r2"));
+
+      const error = await toAgentCliError(
+        callHostRpc(METHOD, {
+          epicId: "e",
+          senderAgentId: "agent-1",
+          scope: "user",
+        }),
+      ).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message:
+          doorReason === "not_admitted"
+            ? "traycer: This account cannot access this computer. Switch accounts to use it."
+            : "expired",
+      });
+      if (!(error instanceof Error)) throw new Error("expected a mapped error");
+      expect(error.message).not.toContain("traycer login");
+      expect(rotateMock).not.toHaveBeenCalled();
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(presentedHostTokens).toEqual(["host-token-1", "host-token-2"]);
+    },
+  );
+
+  it.each([
+    {
+      code: "UNAUTHORIZED",
+      doorReason: "keys_unavailable",
+      hostReason: "Host verification keys are not available.",
+      line: "traycer: This computer needs to connect once before it can verify access. Check its connection, then retry.",
+      attempts: 1,
+    },
+    {
+      code: "FORBIDDEN",
+      doorReason: "clock_skew",
+      hostReason: "The host clock is outside the allowed window.",
+      line: "traycer: This computer's date or time appears incorrect. Enable automatic date and time on that computer, then retry.",
+      attempts: 1,
+    },
+    {
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      doorReason: "enrolment_broken",
+      hostReason: "The computer's team enrollment needs repair.",
+      line: "traycer: This computer's connection to the team needs repair. Ask a team administrator to restore it.",
+      attempts: 1,
+    },
+    {
+      code: "FORBIDDEN",
+      doorReason: "membership_removed",
+      hostReason: "The account was removed from the team.",
+      line: "traycer: You no longer have access to this team's computer. Ask a team administrator if this is unexpected.",
+      attempts: 1,
+    },
+    {
+      code: "UNAUTHORIZED",
+      doorReason: "not_admitted",
+      hostReason: "The account is not admitted to this computer.",
+      line: "traycer: This account cannot access this computer. Switch accounts to use it.",
+      attempts: 2,
+    },
+    {
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      doorReason: "host_claimed",
+      hostReason: "This computer was claimed by another member.",
+      line: "traycer: This computer was claimed by another member.",
+      attempts: 1,
+    },
+  ] as const)(
+    "maps the host-token $doorReason door refusal to its exact line under $code",
+    async ({ code, doorReason, hostReason, line, attempts }) => {
+      const refusal = (requestId: string) =>
+        new HostRpcError({
+          code,
+          message: hostReason,
+          requestId,
+          method: METHOD,
+          fatalDetails: {
+            code,
+            reason: hostReason,
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            doorReason,
+          },
+        });
+      requestMock.mockRejectedValueOnce(refusal("r1"));
+      if (attempts === 2) requestMock.mockRejectedValueOnce(refusal("r2"));
+
+      const error = await toAgentCliError(
+        callHostRpcAtEndpoint(
+          METHOD,
+          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        ),
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: line,
+      });
+      if (!(error instanceof Error)) throw new Error("expected a mapped error");
+      expect(error.message).not.toContain("access denied for this epic");
+      expect(error.message).not.toContain("traycer login");
+      expect(requestMock).toHaveBeenCalledTimes(attempts);
+    },
+  );
+
+  it.each(["UNAUTHORIZED", "TEAM_MEMBERSHIP_REQUIRED"] as const)(
+    "maps a reasonless non-retryable %s refusal to the older-host line",
+    async (code) => {
+      requestMock.mockRejectedValue(
+        new HostRpcError({
+          code,
+          message: "legacy host refusal",
           requestId: "r1",
           method: METHOD,
-          fatalDetails: null,
+          fatalDetails: {
+            code,
+            reason: "legacy host refusal",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: false,
+          },
         }),
-      )
-      .mockResolvedValueOnce({ agents: [] });
-    // The locked rotate mints a fresh pair; the real revalidator rotates the
-    // lease to it, and the auth-aware wrapper retries once against the new bearer.
+      );
+
+      await expect(
+        toAgentCliError(
+          callHostRpcAtEndpoint(
+            METHOD,
+            { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+            { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+          ),
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+        message:
+          "The host is out of date. Reinstall the latest host with 'traycer host update'.",
+      });
+      expect(requestMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("uses the access-unconfirmed line for retryable membership lookup failures", async () => {
+    requestMock.mockRejectedValue(
+      new HostRpcError({
+        code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+        message: "membership check is temporarily unavailable",
+        requestId: "r1",
+        method: METHOD,
+        fatalDetails: {
+          code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+          reason: "membership check is temporarily unavailable",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: true,
+        },
+      }),
+    );
+
+    const error = await toAgentCliError(
+      callHostRpc(METHOD, {
+        epicId: "e",
+        senderAgentId: "agent-1",
+        scope: "user",
+      }),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_UNAVAILABLE,
+      message:
+        "traycer: We can't confirm access to this computer right now. Try the command again.",
+    });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the sign-in once when authn rejects a mint, then mints again", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response("", { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            session_grant: "host-token-after-refresh",
+            session_grant_expires_in: 3600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
     rotateMock.mockResolvedValue({
       outcome: "applied",
       credentials: {
@@ -343,33 +932,25 @@ describe("callHostRpc", () => {
       rejection: null,
       diskPressure: "clear",
     });
+    requestMock.mockResolvedValue({ agents: [] });
 
-    const result = await callHostRpc(METHOD, {
-      epicId: "e",
-      senderAgentId: "agent-1",
-      scope: "user",
-    });
+    const result = await callHostRpcAtEndpoint(
+      METHOD,
+      { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+      { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+    );
 
     expect(result).toEqual({ agents: [] });
     expect(rotateMock).toHaveBeenCalledTimes(1);
     expect(rotateMock).toHaveBeenCalledWith(
       expect.objectContaining({ expectedUserId: "u1", expectedToken: "tok-1" }),
     );
-    expect(requestMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(presentedHostTokens).toEqual(["host-token-after-refresh"]);
   });
 
-  it("surfaces UNAUTHORIZED without retrying when the rotate refresh is rejected", async () => {
-    requestMock.mockRejectedValue(
-      new HostRpcError({
-        code: "UNAUTHORIZED",
-        message: "expired",
-        requestId: "r1",
-        method: METHOD,
-        fatalDetails: null,
-      }),
-    );
-    // A dead refresh token leaves the lease untouched, so the wrapper does not
-    // retry and the UNAUTHORIZED surfaces.
+  it("reports a refused sign-in refresh as not signed in", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
     rotateMock.mockResolvedValue({
       outcome: "refresh-rejected-credential",
       credentials: null,
@@ -378,62 +959,218 @@ describe("callHostRpc", () => {
     });
 
     await expect(
-      callHostRpc(METHOD, {
-        epicId: "e",
-        senderAgentId: "agent-1",
-        scope: "user",
+      toAgentCliError(
+        callHostRpcAtEndpoint(
+          METHOD,
+          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
+    expect(rotateMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it("reports signed out when an expired host token's mint and sign-in refresh are refused", async () => {
+    const persistence = createHostTokenFilePersistence({
+      environment: config.environment,
+      lockWaitMs: 1_000,
+      lockPollIntervalMs: 10,
+    });
+    await persistence.update((table) => {
+      const users = new Map(table);
+      users.set(
+        "u1",
+        new Map([
+          [
+            "d1",
+            { token: "held-host-token", expiresAtMs: Date.now() + 60_000 },
+          ],
+        ]),
+      );
+      return users;
+    });
+    requestMock.mockRejectedValue(
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "expired",
+        requestId: "r1",
+        method: METHOD,
+        fatalDetails: {
+          code: "UNAUTHORIZED",
+          reason: "expired",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason: "token_expired",
+        },
       }),
-    ).rejects.toBeInstanceOf(HostRpcError);
+    );
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 401 }));
+    rotateMock.mockResolvedValue({
+      outcome: "refresh-rejected-credential",
+      credentials: null,
+      rejection: null,
+      diskPressure: null,
+    });
+
+    await expect(
+      toAgentCliError(
+        callHostRpcAtEndpoint(
+          METHOD,
+          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
     expect(rotateMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports signed out when a not_admitted refusal's fresh mint and sign-in refresh are refused", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            session_grant: "initial-host-token",
+            session_grant_expires_in: 3600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(new Response("", { status: 401 }));
+    requestMock.mockRejectedValue(
+      fatalDoorError({
+        code: "UNAUTHORIZED",
+        doorReason: "not_admitted",
+        message: "The account is not admitted to this computer.",
+        method: METHOD,
+      }),
+    );
+    rotateMock.mockResolvedValue({
+      outcome: "refresh-rejected-credential",
+      credentials: null,
+      rejection: null,
+      diskPressure: null,
+    });
+
+    await expect(
+      toAgentCliError(
+        callHostRpcAtEndpoint(
+          METHOD,
+          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(rotateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports signed out when a session_revoked refusal's sign-in refresh is refused", async () => {
+    requestMock.mockRejectedValue(
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "The session was revoked.",
+        requestId: "session-revoked",
+        method: METHOD,
+        fatalDetails: {
+          code: "UNAUTHORIZED",
+          reason: "The session was revoked.",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason: "session_revoked",
+        },
+      }),
+    );
+    rotateMock.mockResolvedValue({
+      outcome: "refresh-rejected-credential",
+      credentials: null,
+      rejection: null,
+      diskPressure: null,
+    });
+
+    await expect(
+      toAgentCliError(
+        callHostRpcAtEndpoint(
+          METHOD,
+          { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+          { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "traycer: not signed in - run `traycer login` to authenticate.",
+    });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(rotateMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    ["the refresh is rejected", "refresh-rejected-credential", true],
-    ["the refresh rotates and the retry is refused again", "applied", false],
-    ["the refresh fails transiently", "refresh-network", false],
-  ] as const)(
-    "marks the host's refusal as a dead sign-in only when %s",
-    async (_label, rotateOutcome, marked) => {
-      const refusal = (requestId: string): HostRpcError =>
-        new HostRpcError({
-          code: "UNAUTHORIZED",
-          message: "Token expired",
-          requestId,
-          method: "host.status",
-          fatalDetails: null,
-        });
-      requestMock.mockRejectedValue(refusal("r1"));
-      rotateMock.mockResolvedValue({
-        outcome: rotateOutcome,
-        credentials:
-          rotateOutcome === "applied"
-            ? {
-                token: "tok-2",
-                refreshToken: "tok-2-refresh",
-                savedAt: "2026-01-01T00:00:00.000Z",
-                user: { id: "u1", email: "a@b.c", name: "A" },
-              }
-            : null,
-        rejection: null,
-        diskPressure: rotateOutcome === "applied" ? "clear" : null,
-      });
-
-      const failure = await callHostRpcAtEndpoint(
-        "host.status",
-        {},
-        { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
-      ).then(
-        () => null,
-        (error: unknown) => error,
-      );
-
-      expect(finalRefusalOf(failure)).toBeInstanceOf(HostRpcError);
-      expect(isRefusalAfterRejectedSignIn(finalRefusalOf(failure))).toBe(
-        marked,
-      );
+    {
+      name: "a team-membership refusal",
+      status: 403,
+      body: { code: "team_membership_required" },
+      code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
+      message: /team.*member/i,
     },
-  );
+    {
+      name: "an unadmitted host",
+      status: 404,
+      body: { message: "private server detail" },
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message:
+        "traycer: This account cannot access this computer. Switch accounts to use it.",
+    },
+    {
+      name: "a frozen sandbox",
+      status: 402,
+      body: { code: "sandbox_frozen", message: "private server detail" },
+      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
+      message: "traycer: This sandbox is out of credits.",
+    },
+    {
+      name: "an unavailable authn response",
+      status: 503,
+      body: { message: "private server detail" },
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message:
+        "traycer: We can't confirm access to this computer right now. Try the command again.",
+    },
+  ])("does not expose server details for $name", async (item) => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(item.body), {
+        status: item.status,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const failure = await callHostRpcAtEndpoint(
+      METHOD,
+      { epicId: "e", senderAgentId: "agent-1", scope: "user" },
+      { hostId: "d1", websocketUrl: "ws://127.0.0.1:9/rpc" },
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({ code: item.code, message: item.message });
+    expect(String(failure)).not.toContain("private server detail");
+    expect(String(failure)).not.toContain("run `traycer login`");
+    expect(requestMock).not.toHaveBeenCalled();
+  });
 
   it("does not rotate on a non-UNAUTHORIZED error", async () => {
     requestMock.mockRejectedValue(

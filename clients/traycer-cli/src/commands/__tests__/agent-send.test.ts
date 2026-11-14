@@ -87,17 +87,40 @@ async function rejection(promise: Promise<unknown>): Promise<CliError> {
   return error;
 }
 
-const PREV_EPIC = process.env.TRAYCER_EPIC_ID;
-
 beforeEach(() => {
   rpcMock.mockReset();
   rpcMock.mockResolvedValue({ responseId: null });
-  delete process.env.TRAYCER_EPIC_ID;
+  vi.unstubAllEnvs();
 });
 
 afterEach(() => {
-  if (PREV_EPIC === undefined) delete process.env.TRAYCER_EPIC_ID;
-  else process.env.TRAYCER_EPIC_ID = PREV_EPIC;
+  vi.unstubAllEnvs();
+});
+
+describe("agent send environment context", () => {
+  it("defaults epicId and senderAgentId from the agent's environment", async () => {
+    vi.stubEnv("TRAYCER_EPIC_ID", "epic-from-agent-environment");
+    vi.stubEnv("TRAYCER_AGENT_ID", "agent-from-agent-environment");
+
+    await buildAgentSendCommand({
+      epicId: null,
+      senderAgentId: null,
+      to: "agent-2",
+      message: "pick this up",
+      expectReply: false,
+      responseId: null,
+      workspace: null,
+    })(makeCtx());
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "agent.sendMessage",
+      expect.objectContaining({
+        epicId: "epic-from-agent-environment",
+        senderAgentId: "agent-from-agent-environment",
+      }),
+      expect.anything(),
+    );
+  });
 });
 
 describe("agent send --workspace", () => {
