@@ -20,6 +20,7 @@ import {
   SIGN_IN_REQUEST_BEARER,
   SIGN_IN_REQUEST_FIXTURE,
   UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  unreadableBodyReply,
   type SignInRequestFetchHarness,
   type SignInRequestFetchReply,
 } from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
@@ -61,8 +62,18 @@ const RECORD_ANSWER_CASES = [
     expected: { kind: "unauthorized" },
   },
   {
+    name: "a 401 answer with an unreadable body",
+    reply: unreadableBodyReply(401),
+    expected: { kind: "unauthorized" },
+  },
+  {
     name: "a 403 answer",
     reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+    expected: { kind: "forbidden" },
+  },
+  {
+    name: "a 403 answer with an unreadable body",
+    reply: unreadableBodyReply(403),
     expected: { kind: "forbidden" },
   },
   {

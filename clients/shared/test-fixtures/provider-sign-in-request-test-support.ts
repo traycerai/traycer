@@ -25,6 +25,7 @@ export type SignInRequestFetchReply =
       readonly status: number;
       readonly body: string;
     }
+  | { readonly kind: "unreadable-response"; readonly status: number }
   | { readonly kind: "no-answer" };
 
 export interface SignInRequestFetchHarness {
@@ -43,6 +44,10 @@ export function responseReply(
     status,
     body: JSON.stringify(body) ?? "",
   };
+}
+
+export function unreadableBodyReply(status: number): SignInRequestFetchReply {
+  return { kind: "unreadable-response", status };
 }
 
 export const RECORDED_SIGN_IN_REQUEST_REPLY = responseReply(200, {
@@ -109,6 +114,16 @@ export function installSignInRequestFetchHarness(): SignInRequestFetchHarness {
     const reply = replies.shift();
     if (reply === undefined || reply.kind === "no-answer") {
       throw new Error("test fetch has no answer");
+    }
+    if (reply.kind === "unreadable-response") {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new Error("test response body stream failed"));
+          },
+        }),
+        { status: reply.status },
+      );
     }
     return new Response(reply.body, { status: reply.status });
   });

@@ -3412,6 +3412,59 @@ describe("profile login outcomes", () => {
     ]);
   });
 
+  it("does not record a sign-in request for an already-signed-in login outcome", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        providersAwaitLoginResponseSchema.parse({
+          ...awaitResult({
+            state: signedInState([WORK_PROFILE]),
+            existingProfileId: "prof_work",
+            profileOutcome: {
+              kind: "already-signed-in",
+              profileId: "prof_work",
+            },
+          }),
+          signInRequest: SIGN_IN_REQUEST_FIXTURE,
+        }),
+      );
+    const fetchHarness = currentSignInRequestFetch();
+    const recordSignInRequest = vi.spyOn(
+      fetchHarness.client,
+      "recordSignInRequest",
+    );
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe(
+      'That account is already claude (Claude Code) profile prof_work "Work". No profile was added.',
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "already-exists",
+      profile: rowOf(WORK_PROFILE, "Work"),
+    });
+    expect(recordSignInRequest).not.toHaveBeenCalled();
+    expect(fetchHarness.fetchMock).not.toHaveBeenCalled();
+    expect(onlyCallTo("providers.awaitLogin")[1]).not.toHaveProperty(
+      "recordedOperationId",
+    );
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+  });
+
   it("repolls a pending ambient verdict when already-signed-in is ignored on login", async () => {
     scenario.startAnswers = [startAnswer({ profileId: null })];
     const answers = [

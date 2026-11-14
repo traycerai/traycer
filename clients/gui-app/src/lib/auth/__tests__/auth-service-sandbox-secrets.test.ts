@@ -19,6 +19,7 @@ import {
   RECORDED_SIGN_IN_REQUEST_REPLY,
   SIGN_IN_REQUEST_FIXTURE,
   UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  unreadableBodyReply,
   type SignInRequestFetchHarness,
 } from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 
@@ -390,6 +391,26 @@ describe("AuthService secrets-broker calls", () => {
       const fetchHarness = installSignInRequestFetchHarness();
       activeSignInRequestHarness = fetchHarness;
       fetchHarness.enqueue(UNAUTHORIZED_SIGN_IN_REQUEST_REPLY);
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "unauthorized" });
+
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("revalidates the current context once after a 401 with an unreadable body", async () => {
+      const { service } = await signedInService();
+      const revalidate = vi
+        .spyOn(service, "revalidateCurrentContext")
+        .mockResolvedValue(null);
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+      fetchHarness.enqueue(unreadableBodyReply(401));
 
       await expect(
         service.recordSignInRequest(
