@@ -56,14 +56,14 @@ const teamMembersSchema = z.object({
           avatarUrl: z.string().nullable(),
         })
         .nullable(),
-      effectiveRole: z.enum(["admin", "editor"]).nullable(),
+      effectiveRole: z.enum(["admin", "editor", "viewer"]).nullable(),
       linkedPlan: z.boolean(),
       inviteState: z.enum(["pending", "accepted"]),
       invitedAddress: z.string().nullable(),
     }),
   ),
   viewer: z.object({
-    effectiveRole: z.enum(["admin", "editor"]).nullable(),
+    effectiveRole: z.enum(["admin", "editor", "viewer"]).nullable(),
     legacyRoleNoticeSeenAt: z.string().nullable(),
     legacyMembers: z.array(z.string()),
   }),
