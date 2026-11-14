@@ -151,6 +151,7 @@ function MoveSheetBody(props: {
       },
       {
         onSuccess: (result) => {
+          if (result.kind === "sign_in_changed") return;
           if (result.kind === "plan_changed" || result.kind === "refused") {
             // The settle invalidates `environment.move.plan`, which re-reads
             // the plan the sheet shows; authn refusing the acceptance is the

@@ -39,6 +39,8 @@ export interface EnvironmentMoveAcceptance {
  *   read, so nothing was accepted and the sheet reads the plan again.
  * - `not_awaiting`: the computer has no move waiting.
  * - `refused`: authn did not take the acceptance.
+ * - `sign_in_changed`: the person signed out or switched while a call was
+ *   out, so nothing more was sent and nothing is shown.
  */
 export type EnvironmentMoveResult =
   | {
@@ -47,7 +49,8 @@ export type EnvironmentMoveResult =
     }
   | { readonly kind: "plan_changed" }
   | { readonly kind: "not_awaiting" }
-  | { readonly kind: "refused" };
+  | { readonly kind: "refused" }
+  | { readonly kind: "sign_in_changed" };
 
 /** Every choice is `stays`, so the same keys in the same order are the same choices. */
 function sameChoices(
@@ -78,6 +81,8 @@ function stagedAsAccepted(
   );
 }
 
+const SIGN_IN_CHANGED = { kind: "sign_in_changed" } as const;
+
 function isNotAwaiting(error: unknown): boolean {
   return error instanceof HostRpcError && error.code === "E_MOVE_NOT_AWAITING";
 }
@@ -87,6 +92,9 @@ function isNotAwaiting(error: unknown): boolean {
  * list, the app records the acceptance at authn on the person's sign-in, and
  * then hands the computer that acceptance. The computer moves itself; the app
  * never asks it to record the consent.
+ *
+ * The sign-in is the click's, `cloud`'s: once any call answers, nothing more
+ * is sent and nothing is reported unless that is still the sign-in.
  *
  * Throws what a call throws, other than the computer's `E_MOVE_NOT_AWAITING`.
  */
@@ -100,20 +108,24 @@ export async function runEnvironmentMove(
       target: accepted.target,
       keyChoices: [...accepted.keyChoices],
     });
+    if (!cloud.onOriginSignIn()) return SIGN_IN_CHANGED;
     if (!stagedAsAccepted(staged, accepted)) return { kind: "plan_changed" };
     const acceptance = await recordMoveAcceptance(
       cloud,
       accepted.hostId,
       staged,
     );
+    if (!cloud.onOriginSignIn()) return SIGN_IN_CHANGED;
     if (acceptance.kind === "refused") return { kind: "refused" };
     const outcome = await host.start({
       attemptId: staged.evidence.attemptId,
       planHash: staged.evidence.planHash,
       acceptanceId: acceptance.acceptanceId,
     });
+    if (!cloud.onOriginSignIn()) return SIGN_IN_CHANGED;
     return { kind: "started", outcome };
   } catch (error) {
+    if (!cloud.onOriginSignIn()) return SIGN_IN_CHANGED;
     if (isNotAwaiting(error)) return { kind: "not_awaiting" };
     throw error;
   }

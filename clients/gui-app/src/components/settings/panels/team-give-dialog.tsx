@@ -101,6 +101,7 @@ export function TeamGiveDialog(props: {
       { hostId: props.hostId, target, planHash, keyChoices: [] },
       {
         onSuccess: (result) => {
+          if (result.kind === "sign_in_changed") return;
           if (result.kind === "started") settle(result.outcome);
           else {
             setNotFinished(true);
