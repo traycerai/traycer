@@ -865,7 +865,12 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
-  if (err.code === "E_CLOUD_UNREACHABLE") {
+  // The host's own egress budget refusing a cloud request is retryable like a
+  // cloud that gave no verdict, and the person's next step is the same.
+  if (
+    err.code === "E_CLOUD_UNREACHABLE" ||
+    err.code === "E_CLOUD_REQUEST_REFUSED"
+  ) {
     return cliError({
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
       message: `traycer: ${err.message}`,

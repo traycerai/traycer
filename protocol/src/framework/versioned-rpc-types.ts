@@ -65,6 +65,14 @@ export const RPC_ERROR_CODES = [
   // nothing about the target, so it must not read as E_AGENT_NOT_FOUND. Same
   // additive degrade story as E_INVALID_ARGUMENT.
   "E_CLOUD_UNREACHABLE",
+  // The host's own egress budget refused a cloud request the call needed
+  // before it left the host: the route family's breaker is open, or the
+  // host's in-flight or rate budget is spent. RETRYABLE (503), and says
+  // nothing about the target. Its own code rather than E_CLOUD_UNREACHABLE
+  // because the host's idempotency cache discards a key on that code, and a
+  // refusal of a write's LATER call does not prove its earlier calls did not
+  // land. Same additive degrade story as E_INVALID_ARGUMENT.
+  "E_CLOUD_REQUEST_REFUSED",
   // A HOME-partitioned request (`clearAll@1.1`'s `home: "local"`) arrived
   // while this host could not read local-home membership. RETRYABLE (503) and
   // deliberately NOT collapsed into a generic failure: the alternative to

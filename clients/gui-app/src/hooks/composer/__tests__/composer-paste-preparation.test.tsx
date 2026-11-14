@@ -70,6 +70,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
   },
   mentionRoots: [],
   beginPathInsertion: () => null,
+  pathsReachTarget: true,
 };
 
 /**
@@ -95,12 +96,12 @@ function renderPasteHook(inserted: ImageAttachmentAttrs[][]) {
   };
   const editorRef = { current: handle };
   return renderHook(() =>
-    useComposerHashPaste(
-      editorRef,
-      NOOP_FILE_PATHS.fileDrops,
-      NOOP_FILE_PATHS.mentionRoots,
-      null,
-    ),
+    useComposerHashPaste(editorRef, {
+      fileDrops: NOOP_FILE_PATHS.fileDrops,
+      mentionRoots: NOOP_FILE_PATHS.mentionRoots,
+      fileRoute: null,
+      pathsReachTarget: NOOP_FILE_PATHS.pathsReachTarget,
+    }),
   );
 }
 

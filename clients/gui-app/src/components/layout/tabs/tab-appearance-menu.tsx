@@ -18,7 +18,13 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CSSProperties } from "react";
-import { useCallback, useId, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { Check, Pipette } from "lucide-react";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -33,8 +39,27 @@ export function TabColorPicker(props: {
   readonly color: string | null;
   readonly onChange: (color: string) => void;
   readonly onDefault?: () => void;
+  /**
+   * When set, the native picker reports each color it passes over here and
+   * `onChange` once, when it commits. Without it every color goes to
+   * `onChange`.
+   */
+  readonly onCustomPreview?: (color: string) => void;
 }) {
   const customColorId = useId();
+  const customInputRef = useRef<HTMLInputElement>(null);
+  const { onChange, onCustomPreview } = props;
+  const commitsOnce = onCustomPreview !== undefined;
+  // React's `onChange` is the DOM `input` event, which a color control fires
+  // for every color passed over. Its commit is the DOM `change` event, which
+  // React does not expose.
+  useEffect(() => {
+    const input = customInputRef.current;
+    if (!commitsOnce || input === null) return;
+    const commit = (): void => onChange(input.value);
+    input.addEventListener("change", commit);
+    return () => input.removeEventListener("change", commit);
+  }, [commitsOnce, onChange]);
   const selectedColor = props.color?.toLowerCase() ?? null;
   const customColor =
     selectedColor !== null &&
@@ -42,10 +67,13 @@ export function TabColorPicker(props: {
   const customInput = (
     <input
       id={customColorId}
+      ref={customInputRef}
       type="color"
       aria-label="Custom tab color"
       value={props.color ?? TAB_COLORS[1].value}
-      onChange={(event) => props.onChange(event.currentTarget.value)}
+      onChange={(event) =>
+        (onCustomPreview ?? onChange)(event.currentTarget.value)
+      }
       className="absolute inset-0 size-full min-w-0 cursor-pointer appearance-none rounded-full border-0 p-0 opacity-0"
     />
   );
