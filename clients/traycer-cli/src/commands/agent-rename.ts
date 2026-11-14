@@ -10,7 +10,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { isLegacyHost } from "@traycer/protocol/persistence/epic/chat";
 import {
-  callHostRpc,
+  callAgentHostRpc,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -63,7 +63,7 @@ export function buildAgentRenameCommand(opts: {
       "agent.list",
       listAgentsResponseSchema,
       await toAgentCliError(
-        callHostRpc("agent.list", {
+        callAgentHostRpc("agent.list", {
           epicId,
           senderAgentId,
           scope: "user" as const,
@@ -122,7 +122,7 @@ async function renameRecord(opts: {
       title: opts.name,
     });
     const result = await toAgentCliError(
-      callHostRpc("epic.renameChat", request),
+      callAgentHostRpc("epic.renameChat", request),
     );
     return parseCanonicalHostResponse(
       "epic.renameChat",
@@ -136,7 +136,7 @@ async function renameRecord(opts: {
     title: opts.name,
   });
   const result = await toAgentCliError(
-    callHostRpc("epic.renameTuiAgent", request),
+    callAgentHostRpc("epic.renameTuiAgent", request),
   );
   return parseCanonicalHostResponse(
     "epic.renameTuiAgent",

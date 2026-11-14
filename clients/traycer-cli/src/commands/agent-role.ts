@@ -12,7 +12,7 @@ import {
   formatRelinquishRoleResponseV11,
 } from "@traycer/protocol/agent/agent-roles-format";
 import {
-  callHostRpc,
+  callAgentHostRpc,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -48,7 +48,7 @@ export function buildAgentRoleClaimCommand(opts: {
       scope: opts.scope ?? "",
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.roles.claim", request),
+      callAgentHostRpc("agent.roles.claim", request),
     );
     const response = parseCanonicalHostResponse(
       "agent.roles.claim",
@@ -71,7 +71,7 @@ export function buildAgentRoleListCommand(opts: {
       epicId: resolveEpicId(opts.epicId),
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.roles.list", request),
+      callAgentHostRpc("agent.roles.list", request),
     );
     const response = parseCanonicalHostResponse(
       "agent.roles.list",
@@ -98,7 +98,7 @@ export function buildAgentRoleRelinquishCommand(opts: {
       claimId: opts.claimId ?? "",
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.roles.relinquish", request),
+      callAgentHostRpc("agent.roles.relinquish", request),
     );
     const response = parseCanonicalHostResponse(
       "agent.roles.relinquish",

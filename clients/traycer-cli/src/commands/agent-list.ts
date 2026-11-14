@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import { formatAgentListPage } from "@traycer/protocol/agent/agent-list-format";
 import {
-  callHostRpc,
+  callAgentHostRpc,
   parseCanonicalHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -36,7 +36,7 @@ export function buildAgentListCommand(opts: {
     const epicId = resolveEpicId(opts.epicId);
     const senderAgentId = resolveSenderAgentId(opts.senderAgentId);
     const result = await toAgentCliError(
-      callHostRpc("agent.list", {
+      callAgentHostRpc("agent.list", {
         epicId,
         senderAgentId,
         scope: opts.all ? ("all" as const) : ("user" as const),

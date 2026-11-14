@@ -1,6 +1,10 @@
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import { openCliHostSession } from "./cli-host-tokens";
 import {
+  PROCESS_AGENT_ENVIRONMENT,
+  readAgentSessionCapability,
+} from "./agent-session-capability";
+import {
   hostDoorRefusalCliError,
   hostTokenFailureCliError,
   signedOutCliError,
@@ -255,6 +259,70 @@ export async function callHostRpcWithDispatch<
     auth,
     dispatch,
   );
+}
+
+const FAIL_FAST_DISPATCH: HostRpcDispatch = {
+  ...PLAIN_DISPATCH,
+  failFast: true,
+};
+
+/**
+ * {@link callHostRpcWithDispatch} for an agent's own commands. With an agent
+ * session capability in the agent's environment the call presents it, and
+ * neither the stored sign-in nor a host-only token is read; the host's
+ * refusal of it ends the call, which recovers nothing. Without one the call
+ * is {@link callHostRpcWithDispatch} itself. Which methods a capability may
+ * call is the host's list, not this one's.
+ */
+export async function callAgentHostRpcWithDispatch<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  const capability = readAgentSessionCapability(PROCESS_AGENT_ENVIRONMENT);
+  if (capability === null)
+    return callHostRpcWithDispatch(method, params, dispatch);
+  createCliLogger(config.environment).debug(
+    "Host RPC requested with the agent session capability",
+    {
+      environment: config.environment,
+      method,
+      retryPolicy: dispatch.failFast ? "fast-fail" : "default",
+    },
+  );
+  const endpoint = await resolveEndpoint();
+  return requestWithHostToken(
+    method,
+    params,
+    endpoint,
+    capability.bearer,
+    capability.recovery,
+    dispatch.failFast
+      ? NO_RETRY_TRANSPORT_POLICY
+      : DEFAULT_TRANSPORT_RETRY_POLICY,
+    dispatch,
+    () => false,
+  );
+}
+
+/** {@link callHostRpc} for an agent's own commands; see {@link callAgentHostRpcWithDispatch}. */
+export function callAgentHostRpc<Method extends keyof HostRpcRegistry & string>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  return callAgentHostRpcWithDispatch(method, params, PLAIN_DISPATCH);
+}
+
+/** {@link callHostRpcFastFail} for an agent's own commands; see {@link callAgentHostRpcWithDispatch}. */
+export function callAgentHostRpcFastFail<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  return callAgentHostRpcWithDispatch(method, params, FAIL_FAST_DISPATCH);
 }
 
 /**

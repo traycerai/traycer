@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { buildAgentSendCommand } from "../agent-send";
-import { callHostRpcWithDispatch } from "../../internal/host-rpc";
+import { callAgentHostRpcWithDispatch } from "../../internal/host-rpc";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
@@ -22,11 +22,11 @@ vi.mock("../../internal/host-rpc", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/host-rpc")>();
   return {
     ...actual,
-    callHostRpcWithDispatch: vi.fn(),
+    callAgentHostRpcWithDispatch: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpcWithDispatch);
+const rpcMock = vi.mocked(callAgentHostRpcWithDispatch);
 
 function makeRuntime(): RuntimeContext {
   return {

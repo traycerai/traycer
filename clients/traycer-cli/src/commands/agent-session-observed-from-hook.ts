@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
-  callHostRpcFastFail,
+  callAgentHostRpcFastFail,
   isRequestVersionProjectionError,
   parseCanonicalHostResponse,
   parseUserInput,
@@ -99,7 +99,7 @@ export function buildAgentSessionObservedFromHookCommand(opts: {
     //   • host-unreachable: the hook fires unconditionally and the host may
     //     simply not be up.
     const rpcResult = await toAgentCliError(
-      callHostRpcFastFail("agent.tui.recordActivity", request).catch(
+      callAgentHostRpcFastFail("agent.tui.recordActivity", request).catch(
         (err: unknown) => {
           if (isRequestVersionProjectionError(err)) {
             return "host-too-old" as const;

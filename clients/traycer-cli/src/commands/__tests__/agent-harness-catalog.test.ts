@@ -3,7 +3,10 @@ import { buildAgentListHarnessesCommand } from "../agent-list-harnesses";
 import { buildAgentListHarnessModelsCommand } from "../agent-list-harness-models";
 import { AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import { buildProgram } from "../../index";
-import { callHostRpc, callHostRpcWithDispatch } from "../../internal/host-rpc";
+import {
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
+} from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
@@ -28,13 +31,13 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpc: vi.fn(),
-    callHostRpcWithDispatch: vi.fn(),
+    callAgentHostRpc: vi.fn(),
+    callAgentHostRpcWithDispatch: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpc);
-const dispatchMock = vi.mocked(callHostRpcWithDispatch);
+const rpcMock = vi.mocked(callAgentHostRpc);
+const dispatchMock = vi.mocked(callAgentHostRpcWithDispatch);
 const PREV_ENV = {
   epic: process.env.TRAYCER_EPIC_ID,
   agent: process.env.TRAYCER_AGENT_ID,

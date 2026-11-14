@@ -13,7 +13,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import { z } from "zod";
 import {
-  callHostRpcFastFail,
+  callAgentHostRpcFastFail,
   isRequestVersionProjectionError,
   parseCanonicalHostResponse,
   parseUserInput,
@@ -250,7 +250,7 @@ async function submitPrompt(
     turnId: report.turnId,
   });
   const rpcResult = await toAgentCliError(
-    callHostRpcFastFail("agent.tui.promptSubmitted", request),
+    callAgentHostRpcFastFail("agent.tui.promptSubmitted", request),
   ).catch((err: unknown) => {
     if (
       err instanceof CliError &&
@@ -318,7 +318,7 @@ async function callRecordActivity(
   // so a quiet no-op rather than hook noise. Caught on the raw transport
   // error, before `toAgentCliError` buckets it as UNEXPECTED.
   const rpcResult = await toAgentCliError(
-    callHostRpcFastFail("agent.tui.recordActivity", request).catch(
+    callAgentHostRpcFastFail("agent.tui.recordActivity", request).catch(
       (err: unknown) => {
         if (isRequestVersionProjectionError(err)) {
           return "host-too-old" as const;

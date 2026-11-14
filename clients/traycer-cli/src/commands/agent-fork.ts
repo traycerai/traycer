@@ -4,8 +4,8 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import { AGENT_FORK_SPEED_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
-  callHostRpc,
-  callHostRpcWithDispatch,
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
   PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
@@ -78,8 +78,8 @@ export function buildAgentForkCommand(opts: {
     });
     const result = await toAgentCliError(
       request.serviceTier === undefined && request.fastMode === undefined
-        ? callHostRpc("agent.fork", request)
-        : callHostRpcWithDispatch("agent.fork", request, {
+        ? callAgentHostRpc("agent.fork", request)
+        : callAgentHostRpcWithDispatch("agent.fork", request, {
             ...PLAIN_DISPATCH,
             requiredHostMethodVersion: AGENT_FORK_SPEED_REQUIRED_HOST_VERSION,
           }),

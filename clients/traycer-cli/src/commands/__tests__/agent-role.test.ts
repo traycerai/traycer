@@ -28,7 +28,7 @@ import {
   buildAgentRoleListCommand,
   buildAgentRoleRelinquishCommand,
 } from "../agent-role";
-import { callHostRpc } from "../../internal/host-rpc";
+import { callAgentHostRpc } from "../../internal/host-rpc";
 import { buildProgramWithAgentRoles } from "../../index";
 import { CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
@@ -73,11 +73,11 @@ vi.mock("../../internal/host-rpc", async (importOriginal) => {
     await importOriginal<typeof import("../../internal/host-rpc")>();
   return {
     ...actual,
-    callHostRpc: vi.fn(),
+    callAgentHostRpc: vi.fn(),
   };
 });
 
-const callHostRpcMock = vi.mocked(callHostRpc);
+const callHostRpcMock = vi.mocked(callAgentHostRpc);
 
 const CLAIM_ID = "11111111-1111-4111-8111-111111111111";
 

@@ -4,7 +4,7 @@ import {
   agentListProviderProfilesResponseSchema,
 } from "@traycer/protocol/host/agent/profiles";
 import {
-  callHostRpc,
+  callAgentHostRpc,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -35,7 +35,7 @@ export function buildAgentListProfilesCommand(opts: {
       harnessId: opts.harnessId,
     });
     const result = await toAgentCliError(
-      callHostRpc("agent.listProviderProfiles", request),
+      callAgentHostRpc("agent.listProviderProfiles", request),
     );
     const response = parseCanonicalHostResponse(
       "agent.listProviderProfiles",

@@ -6,7 +6,7 @@ import {
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import { GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS } from "@traycer/protocol/host/epic/unary-schemas";
 import {
-  callHostRpcFastFail,
+  callAgentHostRpcFastFail,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -111,7 +111,7 @@ export function buildAgentTitleFromHookCommand(opts: {
     // unconditionally and the host may simply not be installed/up. All
     // other RPC errors (auth, etc.) still surface.
     const rpcResult = await toAgentCliError(
-      callHostRpcFastFail("agent.tui.generateTitle", request),
+      callAgentHostRpcFastFail("agent.tui.generateTitle", request),
     ).catch((err: unknown) => {
       if (
         err instanceof CliError &&
