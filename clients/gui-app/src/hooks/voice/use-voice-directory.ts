@@ -8,8 +8,8 @@ import { directoryBots, type DirectoryBot } from "@/lib/voice/directory";
 
 /**
  * The bots the dial lists (Call Tracy, P11), from the reads the app already
- * makes through `client`: `environment.list` for the labels and membership,
- * and `bot.list`. Empty until both answer.
+ * makes: its own environment list for the labels and membership, and
+ * `bot.list` through `client`. Empty until both answer.
  */
 export function useVoiceDirectory(
   client: HostClient<HostRpcRegistry> | null,
@@ -18,9 +18,7 @@ export function useVoiceDirectory(
 ): ReadonlyArray<DirectoryBot> {
   const botsSupported =
     useHostMethodSupport(hostId, "bot.list") === true && enabled;
-  const environmentsSupported =
-    useHostMethodSupport(hostId, "environment.list") === true && enabled;
-  const environments = useEnvironmentListQuery(environmentsSupported);
+  const environments = useEnvironmentListQuery(enabled);
   const bots = useBotListQuery(client, botsSupported);
   const environmentRows = environments.data?.environments;
   const botRows = bots.data?.bots;

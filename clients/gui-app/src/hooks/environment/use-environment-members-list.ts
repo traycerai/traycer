@@ -284,9 +284,8 @@ const EMPTY_TEAM: TeamEnvironmentDescriptor = {
  */
 export function useTeamEnvironmentDescriptor(
   environmentId: string | null,
-  enabled: boolean,
 ): TeamEnvironmentDescriptor {
-  const query = useEnvironmentListQuery(enabled && environmentId !== null);
+  const query = useEnvironmentListQuery(environmentId !== null);
   return useMemo((): TeamEnvironmentDescriptor => {
     if (environmentId === null) return EMPTY_TEAM;
     const data: EnvironmentListResponseV11 | undefined = query.data;

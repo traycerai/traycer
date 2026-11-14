@@ -56,7 +56,6 @@ export function useChatTileHostLabel(
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const listSupport = useHostMethodSupport(appHostId, "environment.list");
   const hostListSupport = useHostMethodSupport(
     appHostId,
     "environment.host.list",
@@ -65,7 +64,6 @@ export function useChatTileHostLabel(
     directoryLabel === null &&
     reachability.status === "unreachable" &&
     authorized &&
-    listSupport === true &&
     hostListSupport === true;
   const environments = useEnvironmentListQuery(enabled);
   // Fresh each render is fine: the lists key their requests by the ids' text.

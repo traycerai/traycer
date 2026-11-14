@@ -223,8 +223,7 @@ function useAppliedOnHosts(
   reviewHostId: string | null,
   open: boolean,
 ): readonly string[] {
-  const listSupported = useHostMethodSupport(reviewHostId, "environment.list");
-  const environments = useEnvironmentListQuery(open && listSupported === true);
+  const environments = useEnvironmentListQuery(open);
   const personalEnvironmentId =
     environments.data?.environments.find(
       (environment) => environment.ownerKind === "user",

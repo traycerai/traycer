@@ -126,12 +126,10 @@ export function MembersPage(props: MembersPageProps): ReactNode {
           ENVIRONMENT_MEMBERS_FLOOR,
         )
       : membersPresent;
-  const listSupported =
-    useHostMethodSupport(hostId, "environment.list") === true;
   const seatsSupported =
     useHostMethodSupport(hostId, "environment.members.seats") === true;
   const teamLabel = usePickedTeamLabel(props.environmentId);
-  const team = useTeamEnvironmentDescriptor(props.environmentId, listSupported);
+  const team = useTeamEnvironmentDescriptor(props.environmentId);
   const list = useEnvironmentMembersList(
     client,
     props.environmentId,
