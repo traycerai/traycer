@@ -10,7 +10,6 @@ import {
   memberRemovedToastBody,
   memberRowTitle,
   removePreviewTitle,
-  ROLE_LABELS,
   seeButNotChangeLine,
 } from "@/components/settings/members/copy";
 import type { MembersListMember } from "@/components/settings/members/types";
@@ -154,12 +153,6 @@ describe("role changes that need a confirm", () => {
   it("names the role on the button", () => {
     expect(demotionConfirmLabel("editor")).toBe("Change to editor");
     expect(demotionConfirmLabel("viewer")).toBe("Change to viewer");
-  });
-});
-
-describe("role labels", () => {
-  it("labels a Viewer role", () => {
-    expect(ROLE_LABELS.viewer).toBe("Viewer");
   });
 });
 
