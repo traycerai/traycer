@@ -16,6 +16,10 @@ import {
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   fetchRegisteredHostsViaHttp,
@@ -234,7 +238,11 @@ export function createBrowserSessionsHostDirectory(
     },
     endpoint: (hostId) => {
       const entry = localEntryFor(hostId) ?? cachedRemote.get(hostId) ?? null;
-      if (entry === null) return null;
+      if (
+        entry === null ||
+        hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION)
+      )
+        return null;
       return { hostId, websocketUrl: entry.websocketUrl };
     },
     resolve: async (hostId) => {
@@ -296,6 +304,7 @@ export function openBrowserSessionsTransport(
   userId: string,
   deps: BrowserSessionsTransportDeps,
 ): BrowserSessionsHostTransport | null {
+  if (hostDirectoryEntryNeedsUpdate(target, MINIMUM_HOST_VERSION)) return null;
   const clientIdentity: FirstPartyClientIdentity = {
     kind: "desktop",
     compatibilityEpoch: CURRENT_CLIENT_COMPATIBILITY_EPOCH,

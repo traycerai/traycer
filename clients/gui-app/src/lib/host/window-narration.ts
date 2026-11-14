@@ -387,7 +387,7 @@ export function hostUpdateActionApplies(
 /**
  * The cover a blocking door state draws. Not being a member of the computer's
  * team owns the window outright; every other blocking state only while
- * nothing is serving it, and draws the "no host" cover.
+ * nothing is serving it.
  */
 function doorStateVariant(
   input: WindowNarrationInput,
@@ -401,6 +401,12 @@ function doorStateVariant(
     input.hasBeenServed &&
     isServingLease(findLease(input.leases, input.effectiveHostId));
   if (alreadyServing) return null;
+  if (state.kind === "older-host")
+    return olderHostUpdateVariant(
+      state.hostId,
+      state.hostId === input.targetHostId,
+      null,
+    );
   return { kind: "offline" };
 }
 

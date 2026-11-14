@@ -87,6 +87,10 @@ import {
   remoteEntry,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+} from "@traycer-clients/shared/auth/host-token-source";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildRawHostMessengerForTarget } from "@/lib/host/host-messenger";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
@@ -115,9 +119,19 @@ function localRow(version: string): HostDirectoryEntry {
   return { ...localEntry, hostId: FLOOR_HOST, version };
 }
 
+function hostTokens() {
+  return createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => Promise.resolve({ kind: "no-sign-in" }),
+    signIn: null,
+    now: () => Date.now(),
+  });
+}
+
 function messengerFor(target: HostDirectoryEntry) {
   return buildRawHostMessengerForTarget({
     target,
+    hostTokens: hostTokens(),
     registry: hostRpcRegistry,
     bearer: () => null,
     cloudAuthorized: () => false,
@@ -131,6 +145,7 @@ function messengerFor(target: HostDirectoryEntry) {
 function streamFor(target: HostDirectoryEntry) {
   return buildHostStreamClient({
     target,
+    hostTokens: hostTokens(),
     endpoint: () => null,
     bearer: () => null,
     cloudAuthorized: () => false,

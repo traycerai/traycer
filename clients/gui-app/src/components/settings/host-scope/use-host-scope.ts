@@ -22,6 +22,7 @@ import { appLogger } from "@/lib/logger";
 import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   deriveHostScopeStatus,
+  isHostScopeUsable,
   type HostScopeStatus,
 } from "@/components/settings/host-scope/host-scope-status";
 import {
@@ -321,8 +322,8 @@ function useHostScopeWithOptions(
   // hope — so only the `following` branch may swap in the ambient client.
   // Any other branch handing back `ambientClient` would be the exact
   // substitution this status enum exists to make impossible.
-  const resolvedClient =
-    status === "following" ? ambientClient : overrideClient;
+  const scopedClient = status === "following" ? ambientClient : overrideClient;
+  const resolvedClient = isHostScopeUsable(status) ? scopedClient : null;
 
   // The local-maintenance fallback wrap, HERE and nowhere else: this is the
   // one point where every scope consumer's client is decided, so decorating

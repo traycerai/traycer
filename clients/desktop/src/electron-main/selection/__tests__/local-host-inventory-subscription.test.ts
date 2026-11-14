@@ -338,10 +338,12 @@ function buildHarness(): Harness {
 const HOST_1: LocalHostEndpoint = {
   hostId: "host-1",
   websocketUrl: "ws://host-1",
+  version: "1.0.0",
 };
 const HOST_2: LocalHostEndpoint = {
   hostId: "host-2",
   websocketUrl: "ws://host-2",
+  version: "1.0.0",
 };
 
 describe("startLocalHostInventorySubscription", () => {

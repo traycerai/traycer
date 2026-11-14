@@ -813,7 +813,9 @@ export function useHostStreamClientBindingFor(
     }, [endpointKind, rebuildBackoff]),
   );
 
-  return binding?.client.isClosed() === true ? null : binding;
+  return transportKey === null || binding?.client.isClosed() === true
+    ? null
+    : binding;
 }
 
 export function useHostStreamClientFor(

@@ -54,7 +54,11 @@ describe("desktop main local streams open with host tokens", () => {
     const websocketUrl = mockLocalHostEntry.websocketUrl;
     if (websocketUrl === null)
       throw new Error("the mock local host has no websocket URL");
-    const endpoint = { hostId: mockLocalHostEntry.hostId, websocketUrl };
+    const endpoint = {
+      hostId: mockLocalHostEntry.hostId,
+      websocketUrl,
+      version: mockLocalHostEntry.version,
+    };
     const localHost = () => endpoint;
     const inventoryClient = createLocalHostInventoryStreamClient({
       hostTokens,
@@ -63,6 +67,8 @@ describe("desktop main local streams open with host tokens", () => {
       appVersion: "1.0.0-test",
     });
     const inventoryWsStreamClient = inventoryClient(endpoint, USER_A);
+    if (inventoryWsStreamClient === null)
+      throw new Error("local inventory stream client did not build");
     const inventory = new HostInventoryStreamClient({
       wsStreamClient: inventoryWsStreamClient,
       callbacks: {

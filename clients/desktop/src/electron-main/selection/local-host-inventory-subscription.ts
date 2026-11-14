@@ -3,6 +3,10 @@ import {
   hostTokenRevalidator,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import {
+  MINIMUM_HOST_VERSION,
+  hostVersionNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 /**
  * Main's subscription to THIS machine's host for the account's registry.
  *
@@ -97,6 +101,7 @@ const INVENTORY_METHOD = "host.hostInventory.subscribe";
 export interface LocalHostEndpoint {
   readonly hostId: string;
   readonly websocketUrl: string;
+  readonly version: string | null;
 }
 
 export interface LocalHostInventorySubscriptionDeps {
@@ -138,7 +143,7 @@ export interface LocalHostInventorySubscriptionDeps {
   readonly openStreamClient: (
     endpoint: LocalHostEndpoint,
     userId: string,
-  ) => IHostStreamClient<HostStreamRpcRegistry>;
+  ) => IHostStreamClient<HostStreamRpcRegistry> | null;
   /**
    * One pushed registry answer, with the host's own clock at the read that
    * produced it.
@@ -327,6 +332,11 @@ export function startLocalHostInventorySubscription(
       setPushActive(false);
       return;
     }
+    if (hostVersionNeedsUpdate(endpoint.version, MINIMUM_HOST_VERSION)) {
+      if (client !== null) teardown("local-inventory-host-update-needed");
+      setPushActive(false);
+      return;
+    }
     if (client !== null && attachedHostId === endpoint.hostId) return;
     // A different host id is a different machine identity, not a reconnect:
     // the memoized method support, the negotiated versions and the rows are
@@ -346,6 +356,10 @@ export function startLocalHostInventorySubscription(
     // happened since and whatever order the callbacks run in.
     const generationAtOpen = identity.generation;
     client = deps.openStreamClient(endpoint, identity.userId);
+    if (client === null) {
+      setPushActive(false);
+      return;
+    }
     unsubscribeSupport = client.subscribeMethodSupport(() => {
       if (disposed) return;
       if (stream === null) {
@@ -434,15 +448,21 @@ export function createLocalHostInventoryStreamClient(deps: {
 }): (
   endpoint: LocalHostEndpoint,
   userId: string,
-) => IHostStreamClient<HostStreamRpcRegistry> {
+) => IHostStreamClient<HostStreamRpcRegistry> | null {
   return (endpoint, userId) => {
+    if (hostVersionNeedsUpdate(endpoint.version, MINIMUM_HOST_VERSION))
+      return null;
     const client = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
       userId,
       endpoint: (): HostTransportEndpoint | null => {
         const current = deps.localHost();
-        if (current === null) return null;
+        if (
+          current === null ||
+          hostVersionNeedsUpdate(current.version, MINIMUM_HOST_VERSION)
+        )
+          return null;
         return { hostId: current.hostId, websocketUrl: current.websocketUrl };
       },
       bearer: hostTokenBearer(

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+} from "@traycer-clients/shared/auth/host-token-source";
+import {
   act,
   cleanup,
   fireEvent,
@@ -8,14 +12,24 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   MockRunnerHost,
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  FakeNativeWebSocket,
+  liveBearer,
+  newProvider,
+  sentFramesOfKind,
+  signIn,
+  USER_A,
+} from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import { HOST_BOOT_CARD_SURFACE } from "@/components/centered-card";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
@@ -26,6 +40,10 @@ import {
   type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  clearHostDoorState,
+  hostDoorStateFor,
+} from "@/stores/host/host-door-state-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
@@ -322,6 +340,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const socket of FakeNativeWebSocket.instances) {
+    socket.fireClose(1006, "test teardown");
+  }
+  FakeNativeWebSocket.instances.length = 0;
+  vi.unstubAllGlobals();
   cleanup();
   useSelectionAuthorityStore.getState().reset();
   useDesktopDialogStore.getState().setReportIssueAvailable(false);
@@ -373,6 +396,108 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByText("This computer belongs to a team")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByText("This computer belongs to a team")).toBeTruthy();
+  });
+
+  it("draws the older-host cover after a real host-token refusal when the directory version is unknown", async () => {
+    const hostId = "host-token-older-host-cover";
+    const hostToken = "host-only-token";
+    const signInToken = "sign-in-token";
+    let mintCalls = 0;
+    let signInRecoveryCalls = 0;
+    clearHostDoorState(hostId);
+    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    FakeNativeWebSocket.instances.length = 0;
+
+    const provider = newProvider();
+    signIn(provider, USER_A, signInToken);
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve({ kind: "no-sign-in" });
+      },
+      signIn: null,
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(USER_A, hostId, {
+      token: hostToken,
+      expiresAtMs: Date.now() + 3_600_000,
+    });
+    const target = { ...mockLocalHostEntry, hostId };
+    const client = buildHostStreamClient({
+      target,
+      endpoint: () =>
+        target.websocketUrl === null
+          ? null
+          : { hostId, websocketUrl: target.websocketUrl },
+      bearer: liveBearer(provider),
+      cloudAuthorized: () => true,
+      authnBaseUrl: "https://authn.test",
+      auth: {
+        revalidateForReconnect: () => {
+          signInRecoveryCalls += 1;
+          return Promise.resolve("rejected");
+        },
+      },
+      hostTokens,
+      userId: USER_A,
+      proactiveWakeEligible: false,
+      autoStart: false,
+    });
+    if (client === null) throw new Error("local stream client did not build");
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+
+    try {
+      applySnapshot({ targetHostId: hostId });
+      renderHost(EMPTY_PRESENTATION, false, undefined);
+      await waitFor(() =>
+        expect(FakeNativeWebSocket.instances).toHaveLength(1),
+      );
+      const socket = FakeNativeWebSocket.instances[0];
+      if (socket === undefined) throw new Error("host socket missing");
+      socket.fireOpen();
+      await waitFor(() =>
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+      );
+      const open = sentFramesOfKind(socket, "open")[0];
+      if (open === undefined) throw new Error("host open frame missing");
+      expect(open.token).toBe(hostToken);
+      expect(JSON.stringify(open)).not.toContain(signInToken);
+
+      act(() => {
+        socket.fireMessage(
+          JSON.stringify({
+            kind: "fatalError",
+            details: {
+              code: "UNAUTHORIZED",
+              reason: "refused at the host door",
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+            },
+          }),
+        );
+      });
+
+      await waitFor(() =>
+        expect(hostDoorStateFor(hostId)?.kind).toBe("older-host"),
+      );
+      expect(
+        (await screen.findByTestId("window-host-modal-title")).textContent,
+      ).toBe("Host update needed");
+      expect(
+        screen.getByTestId("window-host-modal-update-host").textContent,
+      ).toBe("Update now");
+      expect(
+        screen.getByTestId("window-host-modal-incompatible-detail").textContent,
+      ).not.toContain("Host version:");
+      expect(signInRecoveryCalls).toBe(0);
+      expect(mintCalls).toBe(0);
+      expect(hostTokens.current(USER_A, hostId)?.token).toBe(hostToken);
+    } finally {
+      session.close();
+      client.close("test complete");
+      clearHostDoorState(hostId);
+    }
   });
 
   it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; progress heading absent; attempt panel + log toggle present", async () => {

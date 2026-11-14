@@ -18,6 +18,10 @@ import { useHostLease } from "@/hooks/host/use-host-lease";
 import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import {
   isLocalHostBootingEntry,
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
@@ -399,10 +403,13 @@ function useChatSessionHandleInContainer(input: {
   // shape, and any host whose lease says `restarting-expected`, a hold the
   // lease's own bounds end. Everything else that nulls `transportKey` still
   // releases: identity loss, a missing entry, and a confirmed refusal with no
-  // restart episode vouching for the host.
+  // restart episode vouching for the host. The version floor applies before
+  // both restart graces: an older host cannot own a session.
   const sessionAllowed =
     servingSettled &&
     ownerIdentityKey !== null &&
+    (hostEntry === null ||
+      !hostDirectoryEntryNeedsUpdate(hostEntry, MINIMUM_HOST_VERSION)) &&
     (transportKey !== null ||
       isLocalHostBootingEntry(hostEntry) ||
       lease?.status === "restarting-expected");

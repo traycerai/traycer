@@ -433,6 +433,9 @@ export function classifySendRefusal(error: unknown): SendRefusal {
   if (!(error instanceof HostRpcError) || isSilentHostError(error)) {
     return { kind: "silent" };
   }
+  if (error instanceof HostBelowMinimumError) {
+    return { kind: "actionable", message: HOST_UPDATE_SKEW_COPY.title };
+  }
   const byReason = reasonedDoorRefusal(error);
   if (byReason !== null) {
     const message = reasonedDoorRefusalMessage(byReason, "");

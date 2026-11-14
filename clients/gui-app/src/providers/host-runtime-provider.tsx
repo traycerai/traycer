@@ -506,8 +506,8 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       const rotationSweepSubscription = directory.onChange(
         sweepRotatedHostScopes,
       );
-      // A frozen sandbox's terminal verdict ends once the list shows it
-      // thawed (a top-up), not when its TTL runs out.
+      // The same directory signal resumes reads cancelled below the minimum
+      // after a local or remote update, and drops thawed sandbox verdicts.
       const thawedVerdictSubscription = directory.onChange(() => {
         runtimeMessenger?.hostListChanged();
       });
