@@ -14,9 +14,8 @@ import { addToConfigurationLabel } from "./mcp-skills-copy";
 /**
  * "Add to <configuration>" on an entry a provider holds on one computer by
  * itself: the host uploads it into the configuration it serves, fenced to the
- * picked one. A refusal the host words (a name the configuration already
- * holds) shows beside the button as it reads. Shown only where the host takes
- * the promote.
+ * picked one. A refusal (a name the configuration already holds) shows beside
+ * the button. Shown only where the host takes the promote.
  */
 export function AddToConfigurationButton(props: {
   readonly entryKind: "mcp" | "skills";
@@ -32,7 +31,7 @@ export function AddToConfigurationButton(props: {
     useHostClient(),
     "providers.nativeMutate",
   );
-  const promote = useProvidersPromoteToPersonal();
+  const promote = useProvidersPromoteToPersonal(props.configurationName);
   const [refusal, setRefusal] = useState<string | null>(null);
   const supported =
     version !== null &&
@@ -59,19 +58,15 @@ export function AddToConfigurationButton(props: {
           promote.mutate(
             {
               providerId: props.providerId,
-              mutation: {
-                kind: "promoteToPersonal",
-                entryKind: props.entryKind,
-                scope: props.scope,
-                workspaceRoot: props.workspaceRoot,
-                name: props.name,
-              },
-              executableWriteGrant: null,
+              entryKind: props.entryKind,
+              scope: props.scope,
+              workspaceRoot: props.workspaceRoot,
+              name: props.name,
               expectedEnvironmentId: source.environmentId,
             },
             {
-              onSuccess: (data) => {
-                if (!data.result.ok) setRefusal(data.result.detail);
+              onSuccess: (outcome) => {
+                if (outcome.kind === "refused") setRefusal(outcome.text);
               },
             },
           );

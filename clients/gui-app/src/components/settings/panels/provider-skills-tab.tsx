@@ -1300,7 +1300,7 @@ function SkillRowAction({
       entryKind="skills"
       providerId={markTarget.providerId}
       name={skill.name}
-      label={`Add to ${environmentName}`}
+      environmentName={environmentName}
     />
   );
 }
