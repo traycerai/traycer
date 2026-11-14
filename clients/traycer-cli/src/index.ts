@@ -2942,13 +2942,14 @@ function registerProfileCommands(program: Command): void {
         "Sign an existing profile in again. Prints a sign-in link and waits for it to finish.",
       )
       .argument("<provider>", providerArgument)
-      .argument("<profile>", profileArgument),
-    (_opts, args) =>
+      .argument("<profile>", profileArgument)
+      .option("--switch-account", "Switch account"),
+    (opts, args) =>
       buildProfileLoginCommand(
         {
           provider: expectRequiredPositional(args[0], "provider"),
           target: {
-            kind: "existing",
+            kind: opts.switchAccount === true ? "switch" : "existing",
             profile: expectRequiredPositional(args[1], "profile"),
           },
         },
