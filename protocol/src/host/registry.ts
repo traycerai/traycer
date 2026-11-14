@@ -751,11 +751,15 @@ import {
   botListV10,
   botListV11,
   botListV12,
+  botListV13,
+  botListUpgradeV12ToV13,
   botListUpgradeV10ToV11,
   botListUpgradeV11ToV12,
   botOpenV10,
   botReadV10,
   botReadV11,
+  botReadV12,
+  botReadUpgradeV11ToV12,
   botReadUpgradeV10ToV11,
   botSubscribeV10,
   botSubscribeV11,
@@ -9790,7 +9794,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: { contract: botListV10, upgradeFromPreviousVersion: null },
         // @1.1 carries each environment's main bot (`mainBotIds`, T44b).
@@ -9804,6 +9808,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: botListV12,
           upgradeFromPreviousVersion: botListUpgradeV11ToV12,
         },
+        3: {
+          contract: botListV13,
+          upgradeFromPreviousVersion: botListUpgradeV12ToV13,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -9811,13 +9819,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: { contract: botReadV10, upgradeFromPreviousVersion: null },
         // @1.1 carries the row's appearance (T147); @1.0 binds it without.
         1: {
           contract: botReadV11,
           upgradeFromPreviousVersion: botReadUpgradeV10ToV11,
+        },
+        2: {
+          contract: botReadV12,
+          upgradeFromPreviousVersion: botReadUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
