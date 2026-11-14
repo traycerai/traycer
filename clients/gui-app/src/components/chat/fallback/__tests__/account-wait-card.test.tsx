@@ -16,10 +16,7 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import type {
-  RequestOfMethod,
-  ResponseOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   chatAccountWaitSchema,

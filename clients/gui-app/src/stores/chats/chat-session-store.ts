@@ -502,11 +502,14 @@ export interface UnattendedFallbackOutcome {
 // The legacy callback delivers the closed full snapshot; the store also BUILDS
 // one from its windowed transcript, whose rows are open on `1.22`, so the one
 // snapshot type the store applies is the open one (the closed frame is
-// assignable to it).
+// assignable to it). An adapted windowed snapshot also carries its account wait.
 type ChatSnapshotFrame = Omit<
   Parameters<ChatStreamCallbacks["onSnapshot"]>[0],
   "snapshot"
-> & { readonly snapshot: OpenChatSnapshot };
+> & {
+  readonly snapshot: OpenChatSnapshot &
+    Pick<ChatWindowedSnapshotFrame["snapshot"], "accountWait">;
+};
 type ChatWindowedSnapshotFrame = Parameters<
   ChatStreamCallbacks["onWindowedSnapshot"]
 >[0];
