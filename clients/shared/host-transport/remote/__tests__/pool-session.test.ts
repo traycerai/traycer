@@ -23,6 +23,7 @@ import {
 import {
   MuxFrameType,
   NOISE_PROLOGUE,
+  OPEN_AUTHZ_SESSION_GRANT_VERSION,
   QosClass,
   SESSION_CAPABILITY_MEMBER_CREDENTIAL,
   SESSION_CONTROL_STREAM_ID,
@@ -61,10 +62,10 @@ import type {
 import { RemoteSession } from "../remote-session";
 import { PoolSessionPresence } from "../pool-session-presence";
 
-// The pool is a peer on the SAME wire as a host: these drive the real client
-// `RemoteSession` against a scripted peer that speaks the real mux. The peer
-// runs in two modes so the pool's wire can be held against a relay host's
-// (Noise-sealed behind an attach_ack) rather than against a constant.
+// The pool is a peer on the same mux as a host. These drive the real client
+// `RemoteSession` against a scripted peer. A pool open still carries the user
+// bearer and no authz. A relay open carries the host-only token in authz v2
+// and an empty bearer.
 
 const EMPTY_AD = new Uint8Array(0);
 const WAIT = { timeout: 10_000, interval: 50 } as const;
@@ -529,9 +530,9 @@ function buildRelaySession(
         kind: "ok" as const,
         grant: { grant: "grant-jws", expiresInSeconds: 300 },
       }),
-    bearer: () => new MutableBearerLease("user-token", "user-1"),
+    hostToken: () => "host-token-1",
     auth: null,
-    sessionGrant: null,
+    door: null,
     cloudAuthorized: () => true,
     clock: null,
     rpcRegistry: hostRpcRegistry,
@@ -588,7 +589,7 @@ afterEach(() => {
 });
 
 describe("a pool session on the one remote session wire", () => {
-  it("opens with exactly the bytes a relay session sends, and reaches ready on the floor-only ack", async () => {
+  it("reaches ready on the floor-only ack with the user bearer, while the relay open carries the host token", async () => {
     const relayPeer = new WirePeer("relay");
     const relay = buildRelaySession(relayPeer, null);
     const poolPeer = new WirePeer("pool");
@@ -604,8 +605,19 @@ describe("a pool session on the one remote session wire", () => {
 
       expect(poolPeer.dialedUrls).toEqual([POOL_URL]);
       expect(poolPeer.opens).toHaveLength(1);
+      expect(poolPeer.opens[0]).toMatchObject({
+        bearer: "user-token",
+        authz: null,
+      });
+      expect(relayPeer.opens).toHaveLength(1);
+      expect(relayPeer.opens[0]).toMatchObject({
+        bearer: "",
+        authz: {
+          v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
+          grant: "host-token-1",
+        },
+      });
       expect(poolPeer.openPhaseFrames.length).toBeGreaterThan(0);
-      expect(poolPeer.openPhaseFrames).toEqual(relayPeer.openPhaseFrames);
       expect(poolPeer.errors).toEqual([]);
     } finally {
       relay.close();

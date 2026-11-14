@@ -639,7 +639,7 @@ describe("WsStreamClient", () => {
     expect(stub.textSent).toHaveLength(1);
     const openFrame = parseText(stub.textSent[0]);
     expect(openFrame.kind).toBe("open");
-    expect(openFrame.capabilities).toEqual(["teamCredentialState"]);
+    expect(openFrame).not.toHaveProperty("capabilities");
     expect(openFrame.token).toBe("token-abc");
     // The open frame's manifest is the client's raw canonical - no per-method
     // substitution needed. A same-major minor skew (e.g. host-v1.0.0's
@@ -1746,7 +1746,7 @@ describe("WsStreamClient", () => {
     expect(parseText(terminalSocket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "terminal.subscribe",
-      schemaVersion: { major: 1, minor: 7 },
+      schemaVersion: { major: 1, minor: 8 },
       params: {
         sessionId: "terminal-session-1",
         cols: 80,

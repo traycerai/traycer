@@ -70,6 +70,14 @@ import type {
 } from "../ipc-contracts/window-types";
 import type { SoundtrackSetReadResult } from "../ipc-contracts/soundtrack-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
+import type {
+  HostTokenBridgeChange,
+  HostTokensBridgeSurface,
+} from "../ipc-contracts/host-token-types";
+import type {
+  HostTokenMintOutcome,
+  HostTokenRenewal,
+} from "@traycer-clients/shared/auth/host-token-source";
 
 /**
  * Eagerly subscribe at module load so a cold-start browser-return deep link
@@ -640,6 +648,41 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
         legacy,
       ) as Promise<CredentialsMigrationOutcome>,
+  };
+}
+
+export function buildHostTokensBridge(): HostTokensBridgeSurface {
+  return {
+    obtain: (userId, hostId, fresh) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensObtain,
+        userId,
+        hostId,
+        fresh,
+      ) as Promise<HostTokenMintOutcome>,
+    renew: (userId, hostIds) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensRenew,
+        userId,
+        hostIds,
+      ) as Promise<HostTokenRenewal>,
+    adopt: (userId, hostId, token) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensAdopt,
+        userId,
+        hostId,
+        token,
+      ) as Promise<void>,
+    forgetUser: (userId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensForgetUser,
+        userId,
+      ) as Promise<void>,
+    subscribe: (handler) =>
+      subscribe<HostTokenBridgeChange>(
+        RunnerHostEvent.hostTokensChange,
+        handler,
+      ),
   };
 }
 

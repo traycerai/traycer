@@ -43,6 +43,12 @@ export const RunnerHostInvoke = {
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
   authTokenStoreDeleteIfToken: "runnerHost:auth:tokenStore:deleteIfToken",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
+  // The person's host-only tokens, owned by main beside the credentials file.
+  // No channel carries the sign-in token: main mints with its own copy.
+  hostTokensObtain: "runnerHost:auth:hostTokens:obtain",
+  hostTokensRenew: "runnerHost:auth:hostTokens:renew",
+  hostTokensAdopt: "runnerHost:auth:hostTokens:adopt",
+  hostTokensForgetUser: "runnerHost:auth:hostTokens:forgetUser",
   // Remote Host Support (§7): `GET /api/v3/hosts` with the user bearer. Run in
   // main for the same CORS reason as the token validators — authn-v3's CORS
   // allow-list is the web dashboard origin, not the app renderer.
@@ -364,7 +370,6 @@ export const RunnerHostInvoke = {
   // post-commit activation, or clearing activation debt). Resolves a
   // `MutationOutcome`.
   traycerHostActivateInstalled: "runnerHost:traycer:host:activateInstalled",
-  invalidateLocalTeamAdmission: "runnerHost:localAdmission:invalidate",
   // Pins an explicit version (incl. downgrades). Resolves a
   // `MutationOutcome`.
   traycerHostInstallVersion: "runnerHost:traycer:host:installVersion",
@@ -503,6 +508,7 @@ export const RunnerHostEvent = {
   // AND self-writes) so each renderer's reconcile worker re-reads the file. The
   // watcher itself lands in §4; the channel + preload subscription ship now.
   authTokenStoreChange: "runnerHost:event:auth:tokenStore:change",
+  hostTokensChange: "runnerHost:event:auth:hostTokens:change",
   authSignInStorageLowChanged:
     "runnerHost:event:auth:sign-in-storage-low-changed",
   // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a

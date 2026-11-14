@@ -17,10 +17,8 @@ import type {
   EnvironmentDescriptorV11,
   EnvironmentInvitation,
 } from "@traycer/protocol/host/environment/contracts";
-import type { LocalTeamAdmissionState } from "@traycer-clients/shared/host-transport/local-open-auth";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   remoteEntry,
   sandboxFacts,
@@ -48,7 +46,6 @@ import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   negotiateMethods,
@@ -168,13 +165,11 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 
 beforeEach(() => {
   hoisted.toasts.length = 0;
-  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
 });
 
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
-  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   useAuthStore.setState({ contextMetadata: null });
   resetNegotiatedManifests();
   surface.openSettings.mockClear();
@@ -234,11 +229,6 @@ const PERSONAL_PHYSICAL_HOST = {
   ...remoteEntry("host-personal-physical", null),
   owner: PERSONAL_OWNER,
 };
-
-interface LocalAdmissionFixture {
-  readonly userId: string;
-  readonly state: LocalTeamAdmissionState;
-}
 
 const INVITATION: EnvironmentInvitation = {
   environmentId: "env-a",
@@ -322,7 +312,6 @@ function mountConfigurationPermissionBoundary(options: {
   readonly target: CloudConfigurationTarget;
   readonly environments: readonly EnvironmentDescriptorV11[];
   readonly activeHost: HostDirectoryEntry;
-  readonly localAdmissionByHost: ReadonlyMap<string, LocalAdmissionFixture>;
 }): void {
   const harness = mountTeamPage(poolSource("admin"), {
     "environment.list": () => ({ environments: [...options.environments] }),
@@ -339,9 +328,6 @@ function mountConfigurationPermissionBoundary(options: {
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: "user-me", username: "user-me" },
-  });
-  useLocalTeamAdmissionStore.setState({
-    byHost: new Map(options.localAdmissionByHost),
   });
   render(
     <ConfigurationSourceBoundary target={options.target} section={null}>
@@ -1428,7 +1414,6 @@ describe("transport-scoped configuration access", () => {
       target: { kind: "team", environmentId: "env-a" },
       environments: [PERSONAL, team("admin")],
       activeHost: TEAM_OWNED_PHYSICAL_HOST,
-      localAdmissionByHost: new Map(),
     });
 
     await expectReadOnlyAdmin();
@@ -1439,7 +1424,6 @@ describe("transport-scoped configuration access", () => {
       target: { kind: "personal" },
       environments: [PERSONAL],
       activeHost: PERSONAL_PHYSICAL_HOST,
-      localAdmissionByHost: new Map(),
     });
 
     const probe = await screen.findByTestId("configuration-permission-probe");
@@ -1453,43 +1437,6 @@ describe("transport-scoped configuration access", () => {
       target: { kind: "team", environmentId: "env-a" },
       environments: [PERSONAL, team("admin")],
       activeHost: TEAM_OWNED_SANDBOX_HOST,
-      localAdmissionByHost: new Map(),
-    });
-
-    const probe = await screen.findByTestId("configuration-permission-probe");
-    expect(probe.getAttribute("data-effective-role")).toBe("admin");
-    expect(probe.getAttribute("data-can-edit")).toBe("true");
-    expect(screen.queryByText(/but not change them/)).toBeNull();
-  });
-
-  it.each(["admitted", "required", "unavailable"] as const)(
-    "makes team settings read-only on this user's local host with %s admission",
-    async (state) => {
-      mountConfigurationPermissionBoundary({
-        target: { kind: "team", environmentId: "env-a" },
-        environments: [PERSONAL, team("admin")],
-        activeHost: mockLocalHostEntry,
-        localAdmissionByHost: new Map([
-          [mockLocalHostEntry.hostId, { userId: "user-me", state }],
-        ]),
-      });
-
-      await expectReadOnlyAdmin();
-    },
-  );
-
-  it("ignores local admission records for another host or user", async () => {
-    mountConfigurationPermissionBoundary({
-      target: { kind: "team", environmentId: "env-a" },
-      environments: [PERSONAL, team("admin")],
-      activeHost: mockLocalHostEntry,
-      localAdmissionByHost: new Map([
-        [
-          mockLocalHostEntry.hostId,
-          { userId: "user-other", state: "admitted" },
-        ],
-        ["host-other", { userId: "user-me", state: "required" }],
-      ]),
     });
 
     const probe = await screen.findByTestId("configuration-permission-probe");

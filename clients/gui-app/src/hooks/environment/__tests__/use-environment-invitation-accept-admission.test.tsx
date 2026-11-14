@@ -11,8 +11,37 @@ import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type { EnvironmentInvitationsAcceptResponse } from "@traycer/protocol/host/environment/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { onAppLocalAdmissionInvalidated } from "@/lib/host/local-admission-invalidation";
+import {
+  hostDoorStateFor,
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
 import { useEnvironmentInvitationAcceptMutation } from "../use-environment-invitations";
+
+const otherHostId = "other-host";
+
+function seedDoorStates(): void {
+  noteHostDoorState({
+    hostId: localHostId,
+    kind: "not-a-member",
+    detail: null,
+  });
+  noteHostDoorState({
+    hostId: otherHostId,
+    kind: "older-host",
+    detail: null,
+  });
+}
+
+function expectLocalDoorCleared(): void {
+  expect(hostDoorStateFor(localHostId)).toBeNull();
+  expect(hostDoorStateFor(otherHostId)?.kind).toBe("older-host");
+}
+
+function expectDoorStatesKept(): void {
+  expect(hostDoorStateFor(localHostId)?.kind).toBe("not-a-member");
+  expect(hostDoorStateFor(otherHostId)?.kind).toBe("older-host");
+}
 
 const localHostId = "local-team-computer";
 const rpcHostId = "invitation-rpc-host";
@@ -141,28 +170,23 @@ function createRpcClient(
   return spine.createRequester(localEntry);
 }
 
-describe("invitation acceptance invalidates local team admission", () => {
+describe("invitation acceptance clears the local host door state", () => {
   let queryClient: QueryClient;
-  let invalidatedHostIds: string[];
-  let unsubscribe: (() => void) | null;
 
   beforeEach(() => {
     queryClient = createQueryClient();
-    invalidatedHostIds = [];
-    unsubscribe = null;
+    useHostDoorStateStore.setState({ byHost: new Map() });
     mocks.localHostId = localHostId;
     mocks.methodSupport = false;
     mocks.currentContext = null;
     mocks.binding = null;
-    unsubscribe = onAppLocalAdmissionInvalidated((hostId) => {
-      invalidatedHostIds.push(hostId);
-    });
+    seedDoorStates();
   });
 
   afterEach(() => {
     cleanup();
-    unsubscribe?.();
     queryClient.clear();
+    useHostDoorStateStore.setState({ byHost: new Map() });
     mocks.binding = null;
     mocks.currentContext = null;
   });
@@ -183,7 +207,7 @@ describe("invitation acceptance invalidates local team admission", () => {
     });
 
     expect(accept).toHaveBeenCalledWith("team-1");
-    expect(invalidatedHostIds).toEqual([localHostId]);
+    expectLocalDoorCleared();
   });
 
   it("does not invalidate after a direct invitation was not found", async () => {
@@ -198,7 +222,7 @@ describe("invitation acceptance invalidates local team admission", () => {
       await result.current.mutateAsync({ environmentId: "team-1" });
     });
 
-    expect(invalidatedHostIds).toEqual([]);
+    expectDoorStatesKept();
   });
 
   it("invalidates after an RPC accepted invitation", async () => {
@@ -217,7 +241,7 @@ describe("invitation acceptance invalidates local team admission", () => {
       await result.current.mutateAsync({ environmentId: "team-1" });
     });
 
-    expect(invalidatedHostIds).toEqual([localHostId]);
+    expectLocalDoorCleared();
   });
 
   it("does not invalidate after an RPC invitation was not found", async () => {
@@ -236,7 +260,7 @@ describe("invitation acceptance invalidates local team admission", () => {
       await result.current.mutateAsync({ environmentId: "team-1" });
     });
 
-    expect(invalidatedHostIds).toEqual([]);
+    expectDoorStatesKept();
   });
 
   it("does not invalidate on failure or when the account context changes before success", async () => {
@@ -255,7 +279,7 @@ describe("invitation acceptance invalidates local team admission", () => {
         failed.result.current.mutateAsync({ environmentId: "team-1" }),
       ).rejects.toThrow("request failed");
     });
-    expect(invalidatedHostIds).toEqual([]);
+    expectDoorStatesKept();
     failed.unmount();
 
     const accountChangeContext = createContext("before-switch");
@@ -286,6 +310,6 @@ describe("invitation acceptance invalidates local team admission", () => {
       await mutation.value;
     });
 
-    expect(invalidatedHostIds).toEqual([]);
+    expectDoorStatesKept();
   });
 });
