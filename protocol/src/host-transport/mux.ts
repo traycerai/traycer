@@ -231,6 +231,14 @@ export const OPEN_AUTHZ_SESSION_GRANT_VERSION = 2;
 export type ReservedAuthzSlot = {
   readonly v: number;
   readonly grant: string;
+  /**
+   * On a host-agent grant (`v: 1`), the person the session is for, named in
+   * plain by the dialing host inside the session the receiving host
+   * terminates. The receiving host admits the name only when it matches the
+   * reference authn signed into the grant. Absent when the session names
+   * nobody and from a dialer that predates the key. Not read on `v: 2`.
+   */
+  readonly namedUserId?: string;
 } | null;
 
 /** The session `open` frame (R4-A2 bridging-never-identity). */
@@ -462,7 +470,15 @@ const sessionManifestsSchema: z.ZodType<SessionManifests> = lazySchema(() =>
 );
 
 const reservedAuthzSlotSchema: z.ZodType<ReservedAuthzSlot> = lazySchema(() =>
-  z.object({ v: z.number(), grant: z.string() }).nullable(),
+  // Non-strict, so a released receiving host strips `namedUserId` and keeps
+  // parsing the OPEN.
+  z
+    .object({
+      v: z.number(),
+      grant: z.string(),
+      namedUserId: z.string().min(1).optional(),
+    })
+    .nullable(),
 );
 
 export const sessionOpenPayloadSchema: z.ZodType<SessionOpenPayload> =
