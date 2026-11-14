@@ -28,6 +28,11 @@ import {
 import { queryPidStartFingerprint } from "../credentials-lock";
 import { writeSidecarState } from "../credentials-wal";
 
+// Reload shared-worker modules so the lock path binds this file’s fs/promises mock.
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 const lockContention = vi.hoisted(() => ({
   lockPath: "",
   onLockBusy: null as (() => void) | null,
