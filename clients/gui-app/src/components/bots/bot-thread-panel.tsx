@@ -14,7 +14,6 @@ import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
-import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
@@ -251,7 +250,6 @@ export function BotThreadPanel(props: {
             data-testid="bot-thread-channel"
           >
             <span aria-hidden="true">·</span>
-            <BotAvatar size="xs" />
             <span className="truncate">{botTitle}</span>
           </span>
         </div>
