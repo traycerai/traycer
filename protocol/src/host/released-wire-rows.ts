@@ -74,9 +74,10 @@ export const RETIRED_SECRET_CREATE_FIELDS = {
 } as const;
 
 /**
- * `environment.move.plan`'s retired row group. A value that reads like a
- * credential is listed under `staysOnThisComputer` now, and the move offers
- * no choice for it, so this group is empty on every plan.
+ * `environment.move.plan`'s retired row group, `looksLikeAKey`. The host
+ * sorts every row into `moves`, `staysOnThisComputer`, `alreadyInPersonal`
+ * and `differsMasked` and has no other group, so this one is empty on every
+ * plan.
  */
 export const RETIRED_LOOKS_LIKE_A_KEY_ROWS: readonly never[] = [];
 

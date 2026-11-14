@@ -78,10 +78,8 @@ function Parent(props: {
     <EnvOverrideEditor
       overrides={rows}
       disabled={false}
-      credentialRefusal={null}
       rowNotes={new Map()}
       claimedBy={new Map()}
-      keyRefusal={null}
       staleRefusal={null}
       namePlaceholder="OPENAI_API_KEY"
       emptyLabel={EMPTY_LABEL}

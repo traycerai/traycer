@@ -15,7 +15,6 @@ import type {
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
-import { useKeyShapedSecret } from "@/components/settings/personal/use-key-shaped-secret";
 import {
   usePersonalPageHost,
   usePersonalRowNotes,
@@ -50,8 +49,6 @@ import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effe
 import {
   EnvOverrideEditor,
   type EnvStaleRefusal,
-  type KeyRefusal,
-  type KeyRefusalFor,
 } from "@/components/settings/panels/env-override-editor";
 import { staleWriteOf } from "@/lib/environment/stale-write";
 import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-chips";
@@ -67,11 +64,6 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HostRuntimeContext } from "@/lib/host";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
-import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
-import {
-  isCredentialShapedEnvName,
-  urlCarriesCredentials,
-} from "@/components/providers/credential-bearing-values";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
@@ -365,11 +357,6 @@ function ShellSettingsPanelBody(props: {
 
   const shellPending = controller.shellPending;
   const envPending = controller.envPending;
-  // A sandbox takes no credentials. Its host variables are runtime settings
-  // and stay editable, but a variable whose name looks like a credential's
-  // (the host's own rule) or whose value is a URL with a sign-in is refused
-  // here and never sent. Provider keys live in Providers, which refuses them.
-  const credentialRefusal = useHostCredentialRefusal(null);
   const [shellSaveTarget, setShellSaveTarget] =
     useState<ShellSaveTarget | null>(null);
   const [shellSavedTarget, setShellSavedTarget] =
@@ -495,9 +482,6 @@ function ShellSettingsPanelBody(props: {
     beginShellSave("flags");
     controller.revertShellArgs(config.path, shellSaveCallbacks("flags"));
   };
-  // A value that looks like a key is refused in its row, which offers
-  // Add a secret with it filled in.
-  const keyShaped = useKeyShapedSecret();
   const onEnvCommit = (
     oldKey: string,
     newKey: string,
@@ -505,13 +489,6 @@ function ShellSettingsPanelBody(props: {
   ): Promise<void> => {
     if (envPending)
       return Promise.reject(new Error("A variable is already being saved."));
-    if (
-      credentialRefusal !== null &&
-      (isCredentialShapedEnvName(newKey) ||
-        (value !== null && urlCarriesCredentials(value)))
-    ) {
-      return Promise.reject(new Error(credentialRefusal));
-    }
     beginEnvSave();
     return new Promise((resolve, reject) => {
       const feedback = envSaveCallbacks(oldKey);
@@ -583,12 +560,6 @@ function ShellSettingsPanelBody(props: {
   });
   const onUseEverywhere = (key: string, value: string): void => {
     if (envPending || useEverywhere.isPending) return;
-    if (
-      credentialRefusal !== null &&
-      (isCredentialShapedEnvName(key) || urlCarriesCredentials(value))
-    ) {
-      return;
-    }
     beginEnvSave();
     useEverywhere.mutate({ key, value }, envSaveCallbacks(key));
   };
@@ -623,15 +594,12 @@ function ShellSettingsPanelBody(props: {
         pending={envPending}
         saveActive={envSaveActive}
         justSaved={envJustSaved}
-        credentialRefusal={credentialRefusal}
         staleRefusal={envStaleRefusal}
-        keyRefusal={keyShaped.refusal}
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
         onUseEverywhere={onUseEverywhere}
         useEverywherePending={useEverywhere.isPending}
       />
-      {keyShaped.dialog}
     </div>
   );
 }
@@ -1015,9 +983,7 @@ function HostEnvironmentGroup(props: {
   readonly pending: boolean;
   readonly saveActive: boolean;
   readonly justSaved: boolean;
-  readonly credentialRefusal: string | null;
   readonly staleRefusal: EnvStaleRefusal | null;
-  readonly keyRefusal: KeyRefusal | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -1083,13 +1049,8 @@ function HostEnvironmentGroup(props: {
             claimedBy={claimedBy}
             overrides={props.overrides}
             disabled={props.pending}
-            credentialRefusal={props.credentialRefusal}
-            // No key-shaped hint on a host that takes no credentials.
-            namePlaceholder={
-              props.credentialRefusal === null ? "OPENAI_API_KEY" : "NODE_ENV"
-            }
+            namePlaceholder="OPENAI_API_KEY"
             emptyLabel={variablesEmptyLabel(personal)}
-            keyRefusal={keyRefusalOf(props.keyRefusal)}
             staleRefusal={props.staleRefusal}
             onCommit={props.onCommit}
             onDelete={props.onDelete}
@@ -1101,11 +1062,6 @@ function HostEnvironmentGroup(props: {
 }
 
 const VARIABLE_NOTES = { kind: "variable" } as const;
-
-/** One refusal for every name: Variables sends every key to Secrets. */
-function keyRefusalOf(refusal: KeyRefusal | null): KeyRefusalFor {
-  return refusal === null ? null : () => refusal;
-}
 
 function TransientSaveLiveStatus(props: {
   readonly pending: boolean;

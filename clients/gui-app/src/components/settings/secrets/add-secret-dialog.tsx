@@ -61,8 +61,8 @@ import { cn } from "@/lib/utils";
  * once more before Save. API keys and database logins are offered; a
  * provider's key is set on that provider's page, which the picker points to, and
  * SSH, the cloud and certificate kinds have no row. A kind no protocol of
- * which is brokered is greyed with the catalogue's own line. A value a
- * Variables row refused arrives as `prefill`, its name and value filled in.
+ * which is brokered is greyed with the catalogue's own line. A name and
+ * value the caller already has arrive as `prefill`, filled in.
  *
  * The typed value lives in this component's state only: Verify and Save read
  * it when their request is dispatched, so it reaches no query or mutation
@@ -249,23 +249,20 @@ function prefilledForm(
     : { ...form, name: prefill.name, value: prefill.value };
 }
 
-/** A named kind opens its form; a carried-in value opens an API key's. */
+/** A named kind opens its form; otherwise the kind picker. */
 function initialStepOf(
   initialKind: DesktopSecretKind | undefined,
   prefill: SecretPrefill | null,
 ): Step {
-  if (initialKind !== undefined) {
-    return { kind: "form", form: prefilledForm(initialKind, prefill) };
-  }
-  return prefill === null
+  return initialKind === undefined
     ? PICK
-    : { kind: "form", form: prefilledForm("api_key", prefill) };
+    : { kind: "form", form: prefilledForm(initialKind, prefill) };
 }
 
 export function AddSecretDialog(props: {
   readonly open: boolean;
   readonly initialKind?: DesktopSecretKind;
-  /** A name and value carried in from a refused variable, or `null`. */
+  /** A name and value the form opens with, or `null`. */
   readonly prefill: SecretPrefill | null;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;

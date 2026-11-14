@@ -1248,9 +1248,8 @@ warning. A kind none of whose protocols is brokered is greyed with the
 catalogue's own line. The form and Save's confirmation carry "Stored encrypted
 in Traycer's cloud. Computers running Personal receive the value, readable by
 their tools and agents; sandboxes use it without seeing it." and How Traycer
-handles this, and nothing else before Save. A value a Variables or
-provider-variable row refused opens it with the name and value filled in
-(`prefill`). The typed value is sent by a direct `client.request`, never through
+handles this, and nothing else before Save. A team's provider key opens it
+with the key's name filled in (`prefill`). The typed value is sent by a direct `client.request`, never through
 a query or mutation, so it reaches no cache, and closing the dialog drops it. A
 refusal shows the host's words (`Connect to manage secrets.` with no session on
 this computer) or the `secretChangeRefusalLine` for a create refusal's code;
@@ -1313,25 +1312,17 @@ kinds the page edits: each convergence notice from `environment.notices`
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 runs a command / was changed without your confirmation.") with Review, which
-opens Secrets. A value typed there that looks like a key (`classifyCredential`) is
-refused in its row with "This looks like a key. Add it as a secret.", whose
-link opens Add a secret with the name and value filled in; nothing is stored
-as a variable. A provider's own key variable typed on its Env tab
-(`envNamePlaceholder`, for every provider whose key has a tab) is refused
-instead with "This is Kiro's key. Set it on Kiro's Account." The key's home is
-Account whenever the provider takes a key (`providerKeyTab`), including when
-Profiles & Limits is also shown. The link opens that tab; the typed value is
-cleared and nothing is saved. A provider without a key tab, such as Claude
-Code, keeps the first line. A name one
+opens Secrets. A variable is saved as typed, whatever its name or value, on
+Variables and on a provider's Env tab, on every host a sandbox included. A
+name one
 of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
 `variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
 ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to
 edit there. A provider's Env has no such name: nothing binds a secret to a
 name in one provider's env. A value
-already saved that looks like a key shows as dots with Remove, never in a
-field, on every Variables and Env list (Personal, a team, a Local row), with
-the same line beneath where the page has one; its link carries the saved
-value on, and nothing is cleared until the person acts. On the host a variable or
+already saved that looks like a key (`classifyCredential`) shows as dots with
+Remove, never in a field, on every Variables and Env list (Personal, a team, a
+Local row). On the host a variable or
 provider-variable notice came from, "Keep dev-box's value on dev-box" writes
 the value that host has now as its own (`config.env.localOverride.set`, the
 value read as the page reads it: `config.env.list` or `providers.list`) and
@@ -1339,7 +1330,7 @@ then undoes the change everywhere; an undo that is refused leaves the kept
 value, equal to the current one, and the row says why. A Variables or
 provider-variable row this host keeps its own value for shows the shared
 value with "dev-box uses: error · Use everywhere" beneath (dots for a value
-that looks like a key, with no Use everywhere), and its Set and Remove change
+that looks like a key), and its Set and Remove change
 the shared value only. Use everywhere saves the host's value as the shared one
 and then clears the host's own (`config.env.localOverride.clear`); the host's
 own value is otherwise changed under Access and setup ▸ This host's own

@@ -16,10 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
-import {
-  isCredentialShapedEnvName,
-  urlCarriesCredentials,
-} from "@/components/providers/credential-bearing-values";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 
@@ -70,27 +66,7 @@ interface Draft {
   readonly value: string;
   readonly mode: EnvMode;
   readonly error: string | null;
-  /** Refused because the value looks like a key; the row offers Secrets. */
-  readonly keyShaped: boolean;
 }
-
-/**
- * What a row says when its value looks like a key, and where its link takes
- * the name and value: Add a secret, or the tab that holds that provider's
- * own key.
- */
-export interface KeyRefusal {
-  /** The line, with its link between `before` and `after`. */
-  readonly before: string;
-  readonly link: string;
-  readonly after: string;
-  /** The value is cleared from the field rather than carried on. */
-  readonly clearsValue: boolean;
-  readonly onLink: (name: string, value: string) => void;
-}
-
-/** The refusal for a variable's name; `null` where nothing is refused. */
-export type KeyRefusalFor = ((name: string) => KeyRefusal) | null;
 
 function modeForValue(value: string | null): EnvMode {
   return value === null ? "unset" : "set";
@@ -102,7 +78,6 @@ function draftOf(entry: EnvOverrideValue): Draft {
     value: entry.value ?? "",
     mode: modeForValue(entry.value),
     error: null,
-    keyShaped: false,
   };
 }
 
@@ -111,8 +86,7 @@ function draftShowsEntry(draft: Draft, entry: EnvOverrideValue): boolean {
     draft.key === entry.key &&
     draft.value === (entry.value ?? "") &&
     draft.mode === modeForValue(entry.value) &&
-    draft.error === null &&
-    !draft.keyShaped
+    draft.error === null
   );
 }
 
@@ -157,52 +131,13 @@ function EnvRowFooter(props: {
   readonly draft: Draft;
   readonly disabled: boolean;
   readonly onTrim: () => void;
-  readonly keyRefusal: KeyRefusalFor;
-  /** The link handed the value on: the row drops its draft. */
-  readonly onRefusalFollowed: () => void;
 }) {
   const { draft, disabled, onTrim } = props;
-  if (draft.keyShaped && props.keyRefusal !== null) {
-    const name = draft.key.trim();
-    return (
-      <KeyRefusalLine
-        refusal={props.keyRefusal(name)}
-        disabled={disabled}
-        onLink={(refusal) => {
-          refusal.onLink(name, draft.value);
-          props.onRefusalFollowed();
-        }}
-      />
-    );
-  }
   if (draft.error !== null) {
     return <p className="text-ui-xs text-destructive">{draft.error}</p>;
   }
   if (draft.mode !== "set" || !hasEdgeWhitespace(draft.value)) return null;
   return <EnvValueWhitespaceNotice disabled={disabled} onTrim={onTrim} />;
-}
-
-function KeyRefusalLine(props: {
-  readonly refusal: KeyRefusal;
-  readonly disabled: boolean;
-  readonly onLink: (refusal: KeyRefusal) => void;
-}) {
-  const { refusal } = props;
-  return (
-    <p className="text-ui-xs text-destructive" data-testid="env-key-refusal">
-      {refusal.before}
-      <Button
-        type="button"
-        variant="link"
-        size="inline-xs"
-        disabled={props.disabled}
-        onClick={() => props.onLink(refusal)}
-      >
-        {refusal.link}
-      </Button>
-      {refusal.after}
-    </p>
-  );
 }
 
 function EnvValueWhitespaceNotice(props: {
@@ -231,27 +166,11 @@ function EnvValueWhitespaceNotice(props: {
   );
 }
 
-/**
- * Whether a saved value looks like a key: such a row never shows it, on any
- * page, whether or not the page refuses one being typed.
- */
+/** Whether a saved value looks like a key: such a row never shows it. */
 function savedKeyShaped(entry: EnvOverrideValue): boolean {
   return (
     entry.value !== null &&
     classifyCredential({ name: entry.key, value: entry.value }).credentialLike
-  );
-}
-
-/** Whether `value` is refused here as a key: only where a handler is set. */
-function refusedAsKey(
-  key: string,
-  value: string | null,
-  keyRefusal: KeyRefusalFor,
-): boolean {
-  return (
-    keyRefusal !== null &&
-    value !== null &&
-    classifyCredential({ name: key, value }).credentialLike
   );
 }
 
@@ -260,27 +179,6 @@ function draftError(key: string, otherKeys: readonly string[]): string | null {
     return "Name must match /^[A-Za-z_][A-Za-z0-9_]*$/.";
   }
   if (otherKeys.includes(key)) return `${key} already exists.`;
-  return null;
-}
-
-/**
- * Why a variable cannot be sent to a host that takes no credentials
- * (`credentialRefusal` set): a name that looks like a credential's (the
- * host's own rule, mirrored), or a SET value that is a URL carrying a
- * sign-in. The typed name and value stay in the fields.
- */
-function credentialError(
-  key: string,
-  value: string | null,
-  credentialRefusal: string | null,
-): string | null {
-  if (credentialRefusal === null) return null;
-  if (isCredentialShapedEnvName(key)) {
-    return `${credentialRefusal}: a variable whose name looks like a credential is not stored here.`;
-  }
-  if (value !== null && urlCarriesCredentials(value)) {
-    return `${credentialRefusal}: remove the sign-in from this URL.`;
-  }
   return null;
 }
 
@@ -305,11 +203,6 @@ function envRowsWithPending(
 export function EnvOverrideEditor(props: {
   readonly overrides: readonly EnvOverrideValue[];
   readonly disabled: boolean;
-  /**
-   * Set when the host takes no credentials: a value that is a URL with a
-   * sign-in is refused with this line instead of being committed.
-   */
-  readonly credentialRefusal: string | null;
   readonly namePlaceholder: string;
   readonly emptyLabel: string;
   /**
@@ -322,12 +215,6 @@ export function EnvOverrideEditor(props: {
    * the secret NAME · Secrets", with no value and nothing to edit here.
    */
   readonly claimedBy: ReadonlyMap<string, string>;
-  /**
-   * Set where a value that looks like a key must not be stored as a
-   * variable: such a value is refused in its row with the refusal for its
-   * name, whose link takes the name and value on.
-   */
-  readonly keyRefusal: KeyRefusalFor;
   /** The latest stale refusal of a row's save, or `null` for none. */
   readonly staleRefusal: EnvStaleRefusal | null;
   /**
@@ -347,7 +234,7 @@ export function EnvOverrideEditor(props: {
   readonly onDelete: (key: string) => void | Promise<void>;
   readonly renderDetails?: (key: string) => ReactNode;
 }) {
-  const { credentialRefusal, namePlaceholder, emptyLabel } = props;
+  const { namePlaceholder, emptyLabel } = props;
   const phone = useIsSmallViewport();
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<PendingEnvWrite | null>(null);
@@ -474,7 +361,6 @@ export function EnvOverrideEditor(props: {
                   key={entry.key}
                   entry={entry}
                   disabled={disabled}
-                  keyRefusal={props.keyRefusal}
                   note={props.rowNotes.get(entry.key) ?? null}
                   details={props.renderDetails?.(entry.key) ?? null}
                   onDelete={onDelete}
@@ -490,8 +376,6 @@ export function EnvOverrideEditor(props: {
                 entry={entry}
                 otherKeys={keys.filter((k) => k !== entry.key)}
                 disabled={disabled}
-                credentialRefusal={credentialRefusal}
-                keyRefusal={props.keyRefusal}
                 note={props.rowNotes.get(entry.key) ?? null}
                 details={props.renderDetails?.(entry.key) ?? null}
                 staleRefusal={props.staleRefusal}
@@ -510,8 +394,6 @@ export function EnvOverrideEditor(props: {
           existingKeys={keys}
           claimedBy={props.claimedBy}
           disabled={disabled}
-          credentialRefusal={credentialRefusal}
-          keyRefusal={props.keyRefusal}
           namePlaceholder={namePlaceholder}
           onAdd={(key, value) => {
             onCommit("", key, value);
@@ -570,8 +452,6 @@ function EnvOverrideRow(props: {
   readonly entry: EnvOverrideValue;
   readonly otherKeys: readonly string[];
   readonly disabled: boolean;
-  readonly credentialRefusal: string | null;
-  readonly keyRefusal: KeyRefusalFor;
   readonly note: ReactNode;
   readonly details: ReactNode;
   readonly staleRefusal: EnvStaleRefusal | null;
@@ -583,8 +463,7 @@ function EnvOverrideRow(props: {
   ) => void;
   readonly onDelete: (key: string) => void;
 }) {
-  const { entry, otherKeys, disabled, credentialRefusal, onCommit, onDelete } =
-    props;
+  const { entry, otherKeys, disabled, onCommit, onDelete } = props;
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => draftOf(entry));
   // After a completed save or stale refusal, follow the authoritative value
@@ -615,7 +494,7 @@ function EnvOverrideRow(props: {
   }
   const editDraft = (update: (current: Draft) => Draft): void => {
     setFollowing(false);
-    setDraft((current) => ({ ...update(current), keyShaped: false }));
+    setDraft(update);
   };
   const draftRef = useRef(draft);
   useEffect(() => {
@@ -633,37 +512,12 @@ function EnvOverrideRow(props: {
   useEffect(() => {
     onCommitRef.current = onCommit;
   }, [onCommit]);
-  const credentialRefusalRef = useRef(credentialRefusal);
-  useEffect(() => {
-    credentialRefusalRef.current = credentialRefusal;
-  }, [credentialRefusal]);
-  const keyRefusalRef = useRef(props.keyRefusal);
-  useEffect(() => {
-    keyRefusalRef.current = props.keyRefusal;
-  }, [props.keyRefusal]);
 
   const commitValue = (nextValue: string | null): void => {
-    // A refused draft waits for an edit; its cleared field is no value.
-    if (draft.keyShaped) return;
     const nextKey = draft.key.trim();
     const error = draftError(nextKey, otherKeys);
     if (error !== null) {
       setDraft((current) => ({ ...current, key: entry.key, error }));
-      return;
-    }
-    const refused = credentialError(nextKey, nextValue, credentialRefusal);
-    if (refused !== null) {
-      setDraft((current) => ({ ...current, error: refused }));
-      return;
-    }
-    if (refusedAsKey(nextKey, nextValue, props.keyRefusal)) {
-      const cleared = props.keyRefusal?.(nextKey).clearsValue === true;
-      setDraft((current) => ({
-        ...current,
-        value: cleared ? "" : current.value,
-        error: null,
-        keyShaped: true,
-      }));
       return;
     }
     setDraft((current) => ({ ...current, error: null }));
@@ -689,19 +543,11 @@ function EnvOverrideRow(props: {
     return () => {
       if (phoneRef.current) return;
       const current = draftRef.current;
-      if (current.keyShaped) return;
       const currentEntry = entryRef.current;
       const nextKey = current.key.trim();
       const nextValue = current.mode === "unset" ? null : current.value;
       const error = draftError(nextKey, otherKeysRef.current);
       if (error !== null) return;
-      if (
-        credentialError(nextKey, nextValue, credentialRefusalRef.current) !==
-          null ||
-        refusedAsKey(nextKey, nextValue, keyRefusalRef.current)
-      ) {
-        return;
-      }
       if (nextKey !== currentEntry.key || nextValue !== currentEntry.value) {
         onCommitRef.current(currentEntry.key, nextKey, nextValue);
       }
@@ -731,17 +577,7 @@ function EnvOverrideRow(props: {
         )}
       </div>
       <EnvRowNote note={props.note} />
-      <EnvRowFooter
-        draft={draft}
-        disabled={disabled}
-        onTrim={trimValue}
-        keyRefusal={props.keyRefusal}
-        onRefusalFollowed={() => {
-          // The value went on; the row shows what is stored.
-          setFollowing(false);
-          setDraft(draftOf(entry));
-        }}
-      />
+      <EnvRowFooter draft={draft} disabled={disabled} onTrim={trimValue} />
       <EnvRowDetails details={props.details} />
     </>
   );
@@ -771,11 +607,7 @@ function EnvOverrideRow(props: {
         }}
       />
       {open ? null : (
-        <EnvPhoneRowStatus
-          note={props.note}
-          refusal={null}
-          details={props.details}
-        />
+        <EnvPhoneRowStatus note={props.note} details={props.details} />
       )}
       <VariableEditSheet
         open={open}
@@ -799,8 +631,7 @@ function EnvOverrideRow(props: {
 
 /**
  * A saved value that looks like a key: its name, dots in place of the value
- * and Remove, with the refusal for its name below where the page has one. The
- * value stays saved until the person acts; its link carries it on.
+ * and Remove.
  */
 function EnvMaskedRow(props: {
   readonly phone: boolean;
@@ -808,21 +639,12 @@ function EnvMaskedRow(props: {
   readonly onSheetToggle: () => void;
   readonly entry: EnvOverrideValue;
   readonly disabled: boolean;
-  readonly keyRefusal: KeyRefusalFor;
   readonly note: ReactNode;
   readonly details: ReactNode;
   readonly onDelete: (key: string) => void;
 }) {
   const { entry, disabled } = props;
   const [open, setOpen] = useState(false);
-  const refusal =
-    props.keyRefusal === null ? null : (
-      <KeyRefusalLine
-        refusal={props.keyRefusal(entry.key)}
-        disabled={disabled}
-        onLink={(refusal) => refusal.onLink(entry.key, entry.value ?? "")}
-      />
-    );
   const editor = (
     <>
       <div className={GRID}>
@@ -848,7 +670,6 @@ function EnvMaskedRow(props: {
         )}
       </div>
       <EnvRowNote note={props.note} />
-      {refusal}
       <EnvRowDetails details={props.details} />
     </>
   );
@@ -881,11 +702,7 @@ function EnvMaskedRow(props: {
         }}
       />
       {open ? null : (
-        <EnvPhoneRowStatus
-          note={props.note}
-          refusal={refusal}
-          details={props.details}
-        />
+        <EnvPhoneRowStatus note={props.note} details={props.details} />
       )}
       <VariableEditSheet
         open={open}
@@ -922,20 +739,17 @@ function EnvRowDetails(props: { readonly details: ReactNode }): ReactNode {
 }
 
 /**
- * Under a closed phone row: its note, refusal and details, as the desktop row
- * shows them. An open sheet shows them in the sheet instead.
+ * Under a closed phone row: its note and details, as the desktop row shows
+ * them. An open sheet shows them in the sheet instead.
  */
 function EnvPhoneRowStatus(props: {
   readonly note: ReactNode;
-  readonly refusal: ReactNode;
   readonly details: ReactNode;
 }): ReactNode {
-  if (props.note === null && props.refusal === null && props.details === null)
-    return null;
+  if (props.note === null && props.details === null) return null;
   return (
     <div className="flex min-w-0 flex-col gap-1 px-3 pb-2">
       <EnvRowNote note={props.note} />
-      {props.refusal}
       <EnvRowDetails details={props.details} />
     </div>
   );
@@ -1008,33 +822,23 @@ function EnvOverrideAddRow(props: {
   readonly existingKeys: readonly string[];
   readonly claimedBy: ReadonlyMap<string, string>;
   readonly disabled: boolean;
-  readonly credentialRefusal: string | null;
-  readonly keyRefusal: KeyRefusalFor;
   readonly namePlaceholder: string;
   readonly onAdd: (key: string, value: string | null) => void;
   readonly onCancel: () => void;
 }) {
-  const {
-    existingKeys,
-    disabled,
-    credentialRefusal,
-    namePlaceholder,
-    onAdd,
-    onCancel,
-  } = props;
+  const { existingKeys, disabled, namePlaceholder, onAdd, onCancel } = props;
   const [draft, setDraft] = useState<Draft>(() => ({
     key: "",
     value: "",
     mode: "set",
     error: null,
-    keyShaped: false,
   }));
   const [showClaim, setShowClaim] = useState(false);
   const secretName = showClaim
     ? (props.claimedBy.get(draft.key.trim()) ?? null)
     : null;
   const edit = (update: (current: Draft) => Draft): void => {
-    setDraft((current) => ({ ...update(current), keyShaped: false }));
+    setDraft(update);
     setShowClaim(false);
   };
 
@@ -1042,26 +846,13 @@ function EnvOverrideAddRow(props: {
     const nextKey = draft.key.trim();
     if (props.claimedBy.has(nextKey)) {
       setShowClaim(true);
-      setDraft((current) => ({ ...current, error: null, keyShaped: false }));
+      setDraft((current) => ({ ...current, error: null }));
       return;
     }
-    if (draft.keyShaped) return;
     const nextValue = draft.mode === "unset" ? null : draft.value;
-    const error =
-      draftError(nextKey, existingKeys) ??
-      credentialError(nextKey, nextValue, credentialRefusal);
+    const error = draftError(nextKey, existingKeys);
     if (error !== null) {
       setDraft((current) => ({ ...current, error }));
-      return;
-    }
-    if (refusedAsKey(nextKey, nextValue, props.keyRefusal)) {
-      const cleared = props.keyRefusal?.(nextKey).clearsValue === true;
-      setDraft((current) => ({
-        ...current,
-        value: cleared ? "" : current.value,
-        error: null,
-        keyShaped: true,
-      }));
       return;
     }
     onAdd(nextKey, nextValue);
@@ -1149,9 +940,6 @@ function EnvOverrideAddRow(props: {
           onTrim={() =>
             edit((current) => ({ ...current, value: current.value.trim() }))
           }
-          keyRefusal={props.keyRefusal}
-          // The value went on; nothing is stored here.
-          onRefusalFollowed={onCancel}
         />
       ) : null}
     </>

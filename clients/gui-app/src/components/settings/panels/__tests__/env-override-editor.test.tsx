@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EnvOverrideEditor, type KeyRefusalFor } from "../env-override-editor";
+import { EnvOverrideEditor } from "../env-override-editor";
 
 const NO_ROW_NOTES: ReadonlyMap<string, string> = new Map();
 const NOT_CLAIMED: ReadonlyMap<string, string> = new Map();
@@ -28,7 +28,6 @@ interface EditorInput {
     readonly key: string;
     readonly value: string | null;
   }[];
-  readonly credentialRefusal: string | null;
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
   readonly applyingHostsCount?: number | null;
@@ -39,10 +38,8 @@ function editorElement(input: EditorInput) {
     <EnvOverrideEditor
       overrides={input.overrides}
       disabled={false}
-      credentialRefusal={input.credentialRefusal}
       rowNotes={NO_ROW_NOTES}
       claimedBy={NOT_CLAIMED}
-      keyRefusal={null}
       staleRefusal={null}
       namePlaceholder="OPENAI_API_KEY"
       emptyLabel="No environment variables."
@@ -69,7 +66,6 @@ describe("EnvOverrideEditor", () => {
     const onDelete = vi.fn<EnvDelete>();
     const input: EditorInput = {
       overrides: [],
-      credentialRefusal: null,
       onCommit,
       onDelete,
     };
@@ -136,7 +132,6 @@ describe("EnvOverrideEditor", () => {
     const onDelete = vi.fn<EnvDelete>();
     const input: EditorInput = {
       overrides: [],
-      credentialRefusal: null,
       onCommit,
       onDelete,
       applyingHostsCount: 3,
@@ -175,7 +170,6 @@ describe("EnvOverrideEditor", () => {
     const onCommit = vi.fn<EnvCommit>(() => new Promise<void>(() => {}));
     renderEditor({
       overrides: [],
-      credentialRefusal: null,
       onCommit,
       onDelete: vi.fn<EnvDelete>(),
       applyingHostsCount: 1,
@@ -195,7 +189,6 @@ describe("EnvOverrideEditor", () => {
     const onCommit = vi.fn<EnvCommit>(() => new Promise<void>(() => {}));
     renderEditor({
       overrides: [],
-      credentialRefusal: null,
       onCommit,
       onDelete: vi.fn<EnvDelete>(),
       applyingHostsCount: null,
@@ -217,7 +210,6 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [],
-      credentialRefusal: null,
       onCommit,
       onDelete,
     });
@@ -238,7 +230,6 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "OPENAI_API_KEY", value: "token" }],
-      credentialRefusal: null,
       onCommit,
       onDelete,
     });
@@ -256,7 +247,6 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "KIMI_CODE_HOME", value: " /workspace/kimi " }],
-      credentialRefusal: null,
       onCommit,
       onDelete,
     });
@@ -285,7 +275,6 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [{ key: "KIMI_CODE_HOME", value: "/workspace/kimi" }],
-      credentialRefusal: null,
       onCommit,
       onDelete,
     });
@@ -301,7 +290,6 @@ describe("EnvOverrideEditor", () => {
 
     renderEditor({
       overrides: [],
-      credentialRefusal: null,
       onCommit,
       onDelete,
     });
@@ -329,19 +317,12 @@ describe("EnvOverrideEditor", () => {
     );
   });
 
-  describe("on a host that takes no credentials", () => {
-    const REFUSAL = "Sandboxes don't take sign-ins";
-    const REFUSED_LINE = `${REFUSAL}: remove the sign-in from this URL.`;
+  describe("a value is stored whatever it looks like", () => {
     const SIGN_IN_URL = "https://ghp_x@github.com/o/r";
 
-    function addRow(
-      refusal: string | null,
-      onCommit: EnvCommit,
-      value: string,
-    ): void {
+    function addRow(onCommit: EnvCommit, value: string): void {
       renderEditor({
         overrides: [],
-        credentialRefusal: refusal,
         onCommit,
         onDelete: vi.fn<EnvDelete>(),
       });
@@ -355,46 +336,33 @@ describe("EnvOverrideEditor", () => {
       fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
     }
 
-    it("refuses a staged value that is a URL with a sign-in: no commit, the line shown, the value kept", () => {
+    it("commits a staged sign-in URL", () => {
       const onCommit = vi.fn<EnvCommit>();
 
-      addRow(REFUSAL, onCommit, SIGN_IN_URL);
+      addRow(onCommit, SIGN_IN_URL);
 
-      expect(onCommit).not.toHaveBeenCalled();
-      expect(screen.getByText(REFUSED_LINE)).toBeDefined();
-      const valueField = screen.getByLabelText("New variable value");
-      expect((valueField as HTMLInputElement).value).toBe(SIGN_IN_URL);
+      expect(onCommit).toHaveBeenCalledWith("", "REPO_URL", SIGN_IN_URL);
+      expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     });
 
     it("applies a staged value that is a plain URL or text", () => {
       for (const value of ["https://github.com/o/r", "production"]) {
         const onCommit = vi.fn<EnvCommit>();
-        addRow(REFUSAL, onCommit, value);
+        addRow(onCommit, value);
         expect(onCommit).toHaveBeenCalledWith("", "REPO_URL", value);
         cleanup();
       }
     });
 
-    it("applies a staged sign-in URL when the host takes credentials (null refusal)", () => {
-      const onCommit = vi.fn<EnvCommit>();
-
-      addRow(null, onCommit, SIGN_IN_URL);
-
-      expect(onCommit).toHaveBeenCalledWith("", "REPO_URL", SIGN_IN_URL);
-      expect(screen.queryByText(REFUSED_LINE)).toBeNull();
-    });
-
-    function renderRow(refusal: string | null, onCommit: EnvCommit) {
+    function renderRow(onCommit: EnvCommit) {
       return render(
         <EnvOverrideEditor
           overrides={[{ key: "REPO_URL", value: "https://github.com/o/r" }]}
           disabled={false}
-          credentialRefusal={refusal}
           rowNotes={NO_ROW_NOTES}
           claimedBy={NOT_CLAIMED}
-          keyRefusal={null}
           staleRefusal={null}
-          namePlaceholder="NODE_ENV"
+          namePlaceholder="OPENAI_API_KEY"
           emptyLabel="No environment variables."
           onCommit={onCommit}
           onDelete={vi.fn<EnvDelete>()}
@@ -402,37 +370,9 @@ describe("EnvOverrideEditor", () => {
       );
     }
 
-    it("refuses a row edited into a sign-in URL on blur, shows the line and keeps the value", () => {
+    it("commits a row edited into a sign-in URL on blur", () => {
       const onCommit = vi.fn<EnvCommit>();
-      renderRow(REFUSAL, onCommit);
-
-      const field = screen.getByLabelText("Value for REPO_URL");
-      fireEvent.change(field, { target: { value: SIGN_IN_URL } });
-      fireEvent.blur(field);
-
-      expect(onCommit).not.toHaveBeenCalled();
-      expect(screen.getByText(REFUSED_LINE)).toBeDefined();
-      expect((field as HTMLInputElement).value).toBe(SIGN_IN_URL);
-    });
-
-    it("commits a row edited into a plain value on blur", () => {
-      const onCommit = vi.fn<EnvCommit>();
-      renderRow(REFUSAL, onCommit);
-
-      const field = screen.getByLabelText("Value for REPO_URL");
-      fireEvent.change(field, { target: { value: "https://github.com/o/s" } });
-      fireEvent.blur(field);
-
-      expect(onCommit).toHaveBeenCalledWith(
-        "REPO_URL",
-        "REPO_URL",
-        "https://github.com/o/s",
-      );
-    });
-
-    it("commits a row edited into a sign-in URL on blur when the host takes credentials", () => {
-      const onCommit = vi.fn<EnvCommit>();
-      renderRow(null, onCommit);
+      renderRow(onCommit);
 
       const field = screen.getByLabelText("Value for REPO_URL");
       fireEvent.change(field, { target: { value: SIGN_IN_URL } });
@@ -445,48 +385,47 @@ describe("EnvOverrideEditor", () => {
       );
     });
 
-    it("does not commit a sign-in URL when the row unmounts with it still in the field", () => {
+    it("commits a row edited into a plain value on blur", () => {
       const onCommit = vi.fn<EnvCommit>();
-      const view = renderRow(REFUSAL, onCommit);
+      renderRow(onCommit);
 
-      fireEvent.change(screen.getByLabelText("Value for REPO_URL"), {
-        target: { value: SIGN_IN_URL },
-      });
-      view.unmount();
+      const field = screen.getByLabelText("Value for REPO_URL");
+      fireEvent.change(field, { target: { value: "https://github.com/o/s" } });
+      fireEvent.blur(field);
 
-      expect(onCommit).not.toHaveBeenCalled();
+      expect(onCommit).toHaveBeenCalledWith(
+        "REPO_URL",
+        "REPO_URL",
+        "https://github.com/o/s",
+      );
     });
 
-    it("commits a plain edit when the row unmounts, and a sign-in URL when the host takes credentials", () => {
-      const refused = vi.fn<EnvCommit>();
-      const plain = renderRow(REFUSAL, refused);
+    it("commits a plain edit and a sign-in URL when the row unmounts", () => {
+      const plainCommit = vi.fn<EnvCommit>();
+      const plain = renderRow(plainCommit);
       fireEvent.change(screen.getByLabelText("Value for REPO_URL"), {
         target: { value: "https://github.com/o/s" },
       });
       plain.unmount();
-      expect(refused).toHaveBeenCalledWith(
+      expect(plainCommit).toHaveBeenCalledWith(
         "REPO_URL",
         "REPO_URL",
         "https://github.com/o/s",
       );
 
-      const allowed = vi.fn<EnvCommit>();
-      const personal = renderRow(null, allowed);
+      const signIn = vi.fn<EnvCommit>();
+      const view = renderRow(signIn);
       fireEvent.change(screen.getByLabelText("Value for REPO_URL"), {
         target: { value: SIGN_IN_URL },
       });
-      personal.unmount();
-      expect(allowed).toHaveBeenCalledWith("REPO_URL", "REPO_URL", SIGN_IN_URL);
+      view.unmount();
+      expect(signIn).toHaveBeenCalledWith("REPO_URL", "REPO_URL", SIGN_IN_URL);
     });
   });
 });
 
 describe("EnvOverrideEditor credential-shaped names", () => {
-  const REFUSAL = "Sandboxes don't take sign-ins";
-  const NAME_LINE = `${REFUSAL}: a variable whose name looks like a credential is not stored here.`;
-
   function renderWith(input: {
-    readonly refusal: string | null;
     readonly overrides: readonly {
       readonly key: string;
       readonly value: string | null;
@@ -497,12 +436,10 @@ describe("EnvOverrideEditor credential-shaped names", () => {
       <EnvOverrideEditor
         overrides={input.overrides}
         disabled={false}
-        credentialRefusal={input.refusal}
         rowNotes={NO_ROW_NOTES}
         claimedBy={NOT_CLAIMED}
-        keyRefusal={null}
         staleRefusal={null}
-        namePlaceholder="NODE_ENV"
+        namePlaceholder="OPENAI_API_KEY"
         emptyLabel="No environment variables."
         onCommit={input.onCommit}
         onDelete={vi.fn<EnvDelete>()}
@@ -521,32 +458,29 @@ describe("EnvOverrideEditor credential-shaped names", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
   }
 
-  it("refuses an added variable whose name looks like a credential: no commit, the line shown, the typed name kept", () => {
+  it("commits an added variable whose name looks like a credential", () => {
     const onCommit = vi.fn<EnvCommit>();
-    renderWith({ refusal: REFUSAL, overrides: [], onCommit });
+    renderWith({ overrides: [], onCommit });
 
     addRow("OPENAI_API_KEY", "sk-x");
 
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.getByText(NAME_LINE)).toBeDefined();
-    const nameField = screen.getByLabelText("New variable name");
-    expect((nameField as HTMLInputElement).value).toBe("OPENAI_API_KEY");
+    expect(onCommit).toHaveBeenCalledWith("", "OPENAI_API_KEY", "sk-x");
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("refuses a credential-shaped name whatever the value, an empty one included", () => {
+  it("commits a credential-shaped name whatever the value, an empty one included", () => {
     const onCommit = vi.fn<EnvCommit>();
-    renderWith({ refusal: REFUSAL, overrides: [], onCommit });
+    renderWith({ overrides: [], onCommit });
 
     addRow("GITHUB_TOKEN", "");
 
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.getByText(NAME_LINE)).toBeDefined();
+    expect(onCommit).toHaveBeenCalledWith("", "GITHUB_TOKEN", "");
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("refuses renaming an existing row to a credential-shaped name on blur, with the same line", () => {
+  it("commits renaming an existing row to a credential-shaped name on blur", () => {
     const onCommit = vi.fn<EnvCommit>();
     renderWith({
-      refusal: REFUSAL,
       overrides: [{ key: "EDITOR", value: "vim" }],
       onCommit,
     });
@@ -555,14 +489,13 @@ describe("EnvOverrideEditor credential-shaped names", () => {
     fireEvent.change(name, { target: { value: "GITHUB_TOKEN" } });
     fireEvent.blur(name);
 
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.getByText(NAME_LINE)).toBeDefined();
+    expect(onCommit).toHaveBeenCalledWith("EDITOR", "GITHUB_TOKEN", "vim");
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("sends nothing when a row unmounts with a credential-shaped name still in its field", () => {
+  it("commits when a row unmounts with a credential-shaped name still in its field", () => {
     const onCommit = vi.fn<EnvCommit>();
     const view = renderWith({
-      refusal: REFUSAL,
       overrides: [{ key: "EDITOR", value: "vim" }],
       onCommit,
     });
@@ -572,309 +505,24 @@ describe("EnvOverrideEditor credential-shaped names", () => {
     });
     view.unmount();
 
-    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCommit).toHaveBeenCalledWith("EDITOR", "GITHUB_TOKEN", "vim");
   });
 
-  it("still commits an ordinary name and value on a host that takes no credentials", () => {
+  it("still commits an ordinary name and value", () => {
     const onCommit = vi.fn<EnvCommit>();
-    renderWith({ refusal: REFUSAL, overrides: [], onCommit });
+    renderWith({ overrides: [], onCommit });
 
     addRow("EDITOR", "vim");
 
     expect(onCommit).toHaveBeenCalledWith("", "EDITOR", "vim");
-    expect(screen.queryByText(NAME_LINE)).toBeNull();
-  });
-
-  it("control: with no refusal the same credential-shaped names commit, added and renamed", () => {
-    const added = vi.fn<EnvCommit>();
-    const first = renderWith({ refusal: null, overrides: [], onCommit: added });
-    addRow("OPENAI_API_KEY", "sk-x");
-    expect(added).toHaveBeenCalledWith("", "OPENAI_API_KEY", "sk-x");
-    first.unmount();
-
-    const renamed = vi.fn<EnvCommit>();
-    renderWith({
-      refusal: null,
-      overrides: [{ key: "EDITOR", value: "vim" }],
-      onCommit: renamed,
-    });
-    const name = screen.getByLabelText("Name for EDITOR");
-    fireEvent.change(name, { target: { value: "GITHUB_TOKEN" } });
-    fireEvent.blur(name);
-    expect(renamed).toHaveBeenCalledWith("EDITOR", "GITHUB_TOKEN", "vim");
-  });
-});
-
-describe("EnvOverrideEditor refusing a value that looks like a key", () => {
-  const API_KEY_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
-  const REFUSAL = "This looks like a key. Add it as a secret.";
-
-  function renderRefusing(input: {
-    readonly overrides: readonly {
-      readonly key: string;
-      readonly value: string | null;
-    }[];
-    readonly onKeyShaped: ((name: string, value: string) => void) | null;
-    readonly onCommit: EnvCommit;
-  }) {
-    const { onKeyShaped } = input;
-    return renderWithRefusal({
-      overrides: input.overrides,
-      keyRefusal:
-        onKeyShaped === null
-          ? null
-          : () => ({
-              before: "This looks like a key. ",
-              link: "Add it as a secret.",
-              after: "",
-              clearsValue: false,
-              onLink: onKeyShaped,
-            }),
-      onCommit: input.onCommit,
-    });
-  }
-
-  function renderWithRefusal(input: {
-    readonly overrides: readonly {
-      readonly key: string;
-      readonly value: string | null;
-    }[];
-    readonly keyRefusal: KeyRefusalFor;
-    readonly onCommit: EnvCommit;
-  }) {
-    return render(
-      <EnvOverrideEditor
-        overrides={input.overrides}
-        disabled={false}
-        credentialRefusal={null}
-        rowNotes={NO_ROW_NOTES}
-        claimedBy={NOT_CLAIMED}
-        keyRefusal={input.keyRefusal}
-        staleRefusal={null}
-        namePlaceholder="NODE_ENV"
-        emptyLabel="No environment variables."
-        onCommit={input.onCommit}
-        onDelete={vi.fn<EnvDelete>()}
-      />,
-    );
-  }
-
-  function stageAdd(name: string, value: string): void {
-    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
-    fireEvent.change(screen.getByLabelText("New variable name"), {
-      target: { value: name },
-    });
-    fireEvent.change(screen.getByLabelText("New variable value"), {
-      target: { value },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
-  }
-
-  it("refuses a staged key-shaped value, stores nothing, and hands the name and value to Add a secret", () => {
-    const onCommit = vi.fn<EnvCommit>();
-    const onKeyShaped = vi.fn<(name: string, value: string) => void>();
-    renderRefusing({ overrides: [], onKeyShaped, onCommit });
-
-    stageAdd("NOTES", API_KEY_VALUE);
-
-    expect(screen.getByTestId("env-key-refusal").textContent).toBe(REFUSAL);
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(onKeyShaped).not.toHaveBeenCalled();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    expect(onKeyShaped).toHaveBeenCalledWith("NOTES", API_KEY_VALUE);
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("New variable name")).toBeNull();
-  });
-
-  it("clears the refusal once the staged value is edited, and then commits a plain value", () => {
-    const onCommit = vi.fn<EnvCommit>();
-    renderRefusing({
-      overrides: [],
-      onKeyShaped: vi.fn<(name: string, value: string) => void>(),
-      onCommit,
-    });
-    stageAdd("NOTES", API_KEY_VALUE);
-    expect(screen.getByTestId("env-key-refusal")).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText("New variable value"), {
-      target: { value: "plain" },
-    });
-    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
-
-    expect(onCommit).toHaveBeenCalledWith("", "NOTES", "plain");
-  });
-
-  it("refuses a row edited into a key on blur, then reverts it to the stored value when handed to Add a secret", () => {
-    const onCommit = vi.fn<EnvCommit>();
-    const onKeyShaped = vi.fn<(name: string, value: string) => void>();
-    renderRefusing({
-      overrides: [{ key: "EDITOR", value: "vim" }],
-      onKeyShaped,
-      onCommit,
-    });
-
-    const field = screen.getByLabelText("Value for EDITOR");
-    fireEvent.change(field, { target: { value: API_KEY_VALUE } });
-    fireEvent.blur(field);
-
-    expect(screen.getByTestId("env-key-refusal").textContent).toBe(REFUSAL);
-    expect(onCommit).not.toHaveBeenCalled();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    expect(onKeyShaped).toHaveBeenCalledWith("EDITOR", API_KEY_VALUE);
-    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
-    expect(screen.getByLabelText("Value for EDITOR")).toBe(
-      screen.getByDisplayValue("vim"),
-    );
-    expect(onCommit).not.toHaveBeenCalled();
-  });
-
-  it("stores nothing when a row holding a key-shaped draft unmounts", () => {
-    const onCommit = vi.fn<EnvCommit>();
-    const view = renderRefusing({
-      overrides: [{ key: "EDITOR", value: "vim" }],
-      onKeyShaped: vi.fn<(name: string, value: string) => void>(),
-      onCommit,
-    });
-
-    fireEvent.change(screen.getByLabelText("Value for EDITOR"), {
-      target: { value: API_KEY_VALUE },
-    });
-    view.unmount();
-
-    expect(onCommit).not.toHaveBeenCalled();
-  });
-
-  it("stores the same value as before where no handler is set", () => {
-    const onCommit = vi.fn<EnvCommit>();
-    renderRefusing({ overrides: [], onKeyShaped: null, onCommit });
-
-    stageAdd("NOTES", API_KEY_VALUE);
-
-    expect(onCommit).toHaveBeenCalledWith("", "NOTES", API_KEY_VALUE);
-    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
-  });
-
-  describe("a refusal that clears the value instead of carrying it", () => {
-    const OWN_KEY = "ANTHROPIC_API_KEY";
-    const ownKey =
-      (onLink: (name: string, value: string) => void): KeyRefusalFor =>
-      (name) =>
-        name === OWN_KEY
-          ? {
-              before: "This is Claude's key. Set it on ",
-              link: "Claude's Account tab",
-              after: ".",
-              clearsValue: true,
-              onLink,
-            }
-          : {
-              before: "This looks like a key. ",
-              link: "Add it as a secret.",
-              after: "",
-              clearsValue: false,
-              onLink,
-            };
-
-    it("clears a staged value on refusal, names the line by the name typed, and stores nothing", () => {
-      const onCommit = vi.fn<EnvCommit>();
-      const onLink = vi.fn<(name: string, value: string) => void>();
-      renderWithRefusal({
-        overrides: [],
-        keyRefusal: ownKey(onLink),
-        onCommit,
-      });
-
-      stageAdd(OWN_KEY, API_KEY_VALUE);
-
-      expect(screen.getByTestId("env-key-refusal").textContent).toBe(
-        "This is Claude's key. Set it on Claude's Account tab.",
-      );
-      expect(screen.getByLabelText("New variable value")).toBe(
-        screen.getByDisplayValue(""),
-      );
-      expect(document.body.textContent).not.toContain(API_KEY_VALUE);
-      expect(onCommit).not.toHaveBeenCalled();
-      // Applying again does not store the cleared field.
-      fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
-      expect(onCommit).not.toHaveBeenCalled();
-    });
-
-    it("hands the link the name and the value that was typed, then closes the add row", () => {
-      const onLink = vi.fn<(name: string, value: string) => void>();
-      renderWithRefusal({
-        overrides: [],
-        keyRefusal: ownKey(onLink),
-        onCommit: vi.fn<EnvCommit>(),
-      });
-      stageAdd(OWN_KEY, API_KEY_VALUE);
-
-      fireEvent.click(
-        screen.getByRole("button", { name: "Claude's Account tab" }),
-      );
-
-      expect(onLink).toHaveBeenCalledTimes(1);
-      expect(screen.queryByLabelText("New variable name")).toBeNull();
-    });
-
-    it("clears an edited row on blur, stores nothing on unmount, and a plain edit lifts the refusal", () => {
-      const onCommit = vi.fn<EnvCommit>();
-      const view = renderWithRefusal({
-        overrides: [{ key: OWN_KEY, value: "" }],
-        keyRefusal: ownKey(vi.fn<(name: string, value: string) => void>()),
-        onCommit,
-      });
-
-      const field = screen.getByLabelText(`Value for ${OWN_KEY}`);
-      fireEvent.change(field, { target: { value: API_KEY_VALUE } });
-      fireEvent.blur(field);
-
-      expect(screen.getByTestId("env-key-refusal")).toBeTruthy();
-      expect(screen.queryByDisplayValue(API_KEY_VALUE)).toBeNull();
-      view.unmount();
-      expect(onCommit).not.toHaveBeenCalled();
-    });
-
-    it("keeps the typed value in the field for a name that is not the provider's own key", () => {
-      const onLink = vi.fn<(name: string, value: string) => void>();
-      renderWithRefusal({
-        overrides: [],
-        keyRefusal: ownKey(onLink),
-        onCommit: vi.fn<EnvCommit>(),
-      });
-
-      stageAdd("NOTES", API_KEY_VALUE);
-
-      expect(screen.getByTestId("env-key-refusal").textContent).toBe(
-        "This looks like a key. Add it as a secret.",
-      );
-      expect(screen.getByDisplayValue(API_KEY_VALUE)).toBeTruthy();
-    });
   });
 });
 
 describe("EnvOverrideEditor saved values that look like a key", () => {
   const SAVED_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
   const NAME = "ANTHROPIC_API_KEY";
-  const onLinkMock = vi.fn<(name: string, value: string) => void>();
-  const refusal: KeyRefusalFor = () => ({
-    before: "This looks like a key. ",
-    link: "Add it as a secret.",
-    after: "",
-    clearsValue: false,
-    onLink: onLinkMock,
-  });
 
   function renderSaved(input: {
-    readonly keyRefusal: KeyRefusalFor;
     readonly onCommit: EnvCommit;
     readonly onDelete: EnvDelete;
   }) {
@@ -885,12 +533,10 @@ describe("EnvOverrideEditor saved values that look like a key", () => {
           { key: "NODE_ENV", value: "production" },
         ]}
         disabled={false}
-        credentialRefusal={null}
         rowNotes={new Map([[NAME, "Only on this computer."]])}
         claimedBy={NOT_CLAIMED}
-        keyRefusal={input.keyRefusal}
         staleRefusal={null}
-        namePlaceholder="NODE_ENV"
+        namePlaceholder="OPENAI_API_KEY"
         emptyLabel="No environment variables."
         renderDetails={(key) =>
           key === NAME ? <span data-testid="row-details">Details</span> : null
@@ -903,7 +549,6 @@ describe("EnvOverrideEditor saved values that look like a key", () => {
 
   it("masks the row: name as text, dots, no input carrying the value, and the note and details kept", () => {
     renderSaved({
-      keyRefusal: refusal,
       onCommit: vi.fn<EnvCommit>(),
       onDelete: vi.fn<EnvDelete>(),
     });
@@ -925,29 +570,8 @@ describe("EnvOverrideEditor saved values that look like a key", () => {
     expect(within(row).getByTestId("row-details")).toBeTruthy();
   });
 
-  it("shows the refusal line under the row, and its link hands over the saved name and value, changing nothing", () => {
-    const onCommit = vi.fn<EnvCommit>();
-    const onDelete = vi.fn<EnvDelete>();
-    onLinkMock.mockReset();
-    renderSaved({ keyRefusal: refusal, onCommit, onDelete });
-
-    const line = within(screen.getByTestId("env-masked-row")).getByTestId(
-      "env-key-refusal",
-    );
-    expect(line.textContent).toBe("This looks like a key. Add it as a secret.");
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    expect(onLinkMock).toHaveBeenCalledTimes(1);
-    expect(onLinkMock).toHaveBeenCalledWith(NAME, SAVED_VALUE);
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(onDelete).not.toHaveBeenCalled();
-  });
-
   it("masks it with no refusal line where nothing refuses a key", () => {
     renderSaved({
-      keyRefusal: null,
       onCommit: vi.fn<EnvCommit>(),
       onDelete: vi.fn<EnvDelete>(),
     });
@@ -960,7 +584,6 @@ describe("EnvOverrideEditor saved values that look like a key", () => {
   it("removes the masked row by its key", () => {
     const onDelete = vi.fn<EnvDelete>();
     renderSaved({
-      keyRefusal: refusal,
       onCommit: vi.fn<EnvCommit>(),
       onDelete,
     });
@@ -973,7 +596,6 @@ describe("EnvOverrideEditor saved values that look like a key", () => {
 
   it("keeps an ordinary saved value as an editable field beside it", () => {
     renderSaved({
-      keyRefusal: refusal,
       onCommit: vi.fn<EnvCommit>(),
       onDelete: vi.fn<EnvDelete>(),
     });
@@ -990,10 +612,8 @@ describe("EnvOverrideEditor rows a secret sets", () => {
       <EnvOverrideEditor
         overrides={[{ key: "STRIPE_TOKEN", value: "sk_live_9f3a7c1d2e4b5a60" }]}
         disabled={false}
-        credentialRefusal={null}
         rowNotes={NO_ROW_NOTES}
         claimedBy={new Map([["STRIPE_TOKEN", "STRIPE_KEY"]])}
-        keyRefusal={null}
         staleRefusal={null}
         namePlaceholder="OPENAI_API_KEY"
         emptyLabel="No environment variables."
