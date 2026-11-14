@@ -1,5 +1,6 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import type { HostDoorStateKind } from "../host-transport/host-door-state";
 import type {
   BearerSourceProvider,
@@ -16,6 +17,11 @@ export type HostTokenRevalidator = StreamAuthRevalidator & {
   readonly revalidateRefused: (
     refusal: FatalErrorDetails,
   ) => Promise<RevalidateOutcome>;
+};
+
+/** One session's recovery, told when that session's open is admitted. */
+export type HostTokenSessionRevalidator = HostTokenRevalidator & {
+  readonly admitted: () => void;
 };
 import type {
   HostTokenMintOutcome,
@@ -122,23 +128,45 @@ export function hostTokenBearerFor(
 }
 
 /**
- * Recovery for a host connection whose token was refused or ran out. Keyed on
- * the host's `doorReason`, never on its code, and a host's refusal never
- * starts sign-in recovery:
- * - no refusal yet (a token already known to have run out): mint a fresh
- *   token and reconnect.
- * - `token_expired`: one fresh token; refused as expired again while this
- *   clock still calls it unexpired, terminal, with no state.
- * - `not_admitted`: one fresh token; refused again with it, `not-admitted`.
- * - `session_revoked`: the ordinary sign-out path, through the sign-in
- *   token's own refresh.
- * - any other reason, or none (an older host): terminal here; the door
- *   observer has already raised its state.
- *
- * Only authn's own refusal of the sign-in token, a 401 on the mint, is handed
- * to `signInRecovery`.
+ * When a second `not_admitted` is final. A session's bound lasts until its
+ * open is admitted: a relay's every dial adopts the token its attach grant
+ * brings, so the token refused the second time is never the one minted after
+ * the first. A unary call is retried over a connection that does not redial,
+ * so its bound is the token minted after the first refusal.
  */
-export function hostTokenRevalidator(deps: {
+interface NotAdmittedBound {
+  readonly final: (held: string | null) => boolean;
+  readonly retried: (minted: string | null) => void;
+}
+
+/** A session's bound. {@link hostTokenSessionAuth} wires its reset. */
+function untilAdmittedBound(): NotAdmittedBound & {
+  readonly admitted: () => void;
+} {
+  let retried = false;
+  return {
+    final: () => retried,
+    retried: () => {
+      retried = true;
+    },
+    admitted: () => {
+      retried = false;
+    },
+  };
+}
+
+/** A unary call's bound, which no admitted open resets. */
+function sameTokenBound(): NotAdmittedBound {
+  let mintedAfterNotAdmitted: string | null = null;
+  return {
+    final: (held) => held !== null && held === mintedAfterNotAdmitted,
+    retried: (minted) => {
+      mintedAfterNotAdmitted = minted;
+    },
+  };
+}
+
+type HostTokenRevalidatorDeps = {
   readonly tokens: HostTokenAccess;
   /** Who is signed in now; read for their id, never their credential. */
   readonly currentUserId: () => string | null;
@@ -146,10 +174,71 @@ export function hostTokenRevalidator(deps: {
   readonly signInRecovery: StreamAuthRevalidator | null;
   readonly onState: HostTokenStateSink;
   readonly now: () => number;
-}): HostTokenRevalidator {
-  // The token minted in answer to the last `not_admitted`: a second refusal
-  // while it is still the one held is final.
-  let mintedAfterNotAdmitted: string | null = null;
+};
+
+/**
+ * A session's host-token recovery and the door observer that session reports
+ * to, composed so the recovery hears every admitted open. Every session that
+ * presents a host-only token builds its recovery here. `door` is the caller's
+ * own observer, told everything as before.
+ */
+export function hostTokenSessionAuth(
+  deps: HostTokenRevalidatorDeps,
+  door: SessionDoorObserver | null,
+): {
+  readonly auth: HostTokenSessionRevalidator;
+  readonly door: SessionDoorObserver;
+} {
+  const auth = hostTokenRevalidator(deps);
+  return {
+    auth,
+    door: {
+      refused: (details) => {
+        door?.refused(details);
+      },
+      admitted: () => {
+        auth.admitted();
+        door?.admitted();
+      },
+    },
+  };
+}
+
+/**
+ * Recovery for a host session whose token was refused or ran out. Keyed on
+ * the host's `doorReason`, never on its code, and a host's refusal never
+ * starts sign-in recovery:
+ * - no refusal yet (a token already known to have run out): mint a fresh
+ *   token and reconnect.
+ * - `token_expired`: one fresh token; refused as expired again while this
+ *   clock still calls it unexpired, terminal, with no state.
+ * - `not_admitted`: one fresh token; refused again before the session's open
+ *   is next admitted, `not-admitted`.
+ * - `session_revoked`: the ordinary sign-out path, through the sign-in
+ *   token's own refresh.
+ * - any other reason, or none (an older host): terminal here; the door
+ *   observer has already raised its state.
+ *
+ * Only authn's own refusal of the sign-in token, a 401 on the mint, is handed
+ * to `signInRecovery`.
+ *
+ * A session builds this through {@link hostTokenSessionAuth}, or nothing
+ * tells it the open was admitted and its `not_admitted` bound never resets.
+ */
+export function hostTokenRevalidator(
+  deps: HostTokenRevalidatorDeps,
+): HostTokenSessionRevalidator {
+  const bound = untilAdmittedBound();
+  return {
+    ...revalidatorWithBound(deps, bound),
+    admitted: bound.admitted,
+  };
+}
+
+function revalidatorWithBound(
+  deps: HostTokenRevalidatorDeps,
+  notAdmitted: NotAdmittedBound,
+): HostTokenRevalidator {
   // The token minted for this person in answer to their last
   // `token_expired`. Refused as expired again while this clock still calls it
   // usable, another mint cannot help: the next would be refused the same way.
@@ -198,19 +287,27 @@ export function hostTokenRevalidator(deps: {
       )
         return "rejected";
       const outcome = await mintFresh(userId, false);
-      const minted = deps.tokens.current(userId, deps.hostId)?.token ?? null;
-      mintedAfterExpiry = minted === null ? null : { userId, token: minted };
+      // Only a token that was in fact minted becomes the replacement: after
+      // a failed mint the old token is still the one held, and its next
+      // refusal earns another try once authn answers.
+      if (outcome === "rotated") {
+        const minted = deps.tokens.current(userId, deps.hostId)?.token ?? null;
+        mintedAfterExpiry = minted === null ? null : { userId, token: minted };
+      }
       return outcome;
     }
     if (reason === "not_admitted") {
       const held = deps.tokens.current(userId, deps.hostId)?.token ?? null;
-      if (held !== null && held === mintedAfterNotAdmitted) {
+      if (notAdmitted.final(held)) {
         deps.onState(deps.hostId, "not-admitted");
         return "rejected";
       }
       const outcome = await mintFresh(userId, false);
-      mintedAfterNotAdmitted =
-        deps.tokens.current(userId, deps.hostId)?.token ?? null;
+      // Likewise: a failed mint spends nothing of the bound.
+      if (outcome === "rotated")
+        notAdmitted.retried(
+          deps.tokens.current(userId, deps.hostId)?.token ?? null,
+        );
       return outcome;
     }
     if (reason === "session_revoked" && deps.signInRecovery !== null)
@@ -249,7 +346,7 @@ export function hostTokenUnaryRevalidator(deps: {
   const forHost = (hostId: string): HostTokenRevalidator => {
     let revalidator = byHost.get(hostId);
     if (revalidator === undefined) {
-      revalidator = hostTokenRevalidator({ ...deps, hostId });
+      revalidator = revalidatorWithBound({ ...deps, hostId }, sameTokenBound());
       byHost.set(hostId, revalidator);
     }
     return revalidator;

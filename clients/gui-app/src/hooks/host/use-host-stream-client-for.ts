@@ -35,7 +35,7 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
-  hostTokenRevalidator,
+  hostTokenSessionAuth,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
@@ -411,15 +411,17 @@ export function buildHostStreamClient(params: {
     // Every client recovers its host-only token, a one-shot included: a
     // refused open ran nothing. `params.auth === null` keeps a one-shot from
     // starting the sign-in's recovery.
-    auth: hostTokenRevalidator({
-      tokens: localTokens,
-      currentUserId: () => params.bearer()?.identity.userId ?? null,
-      hostId,
-      signInRecovery: params.auth,
-      onState: noteHostTokenRefusal,
-      now: Date.now,
-    }),
-    door: appHostDoorObserver(hostId),
+    ...hostTokenSessionAuth(
+      {
+        tokens: localTokens,
+        currentUserId: () => params.bearer()?.identity.userId ?? null,
+        hostId,
+        signInRecovery: params.auth,
+        onState: noteHostTokenRefusal,
+        now: Date.now,
+      },
+      appHostDoorObserver(hostId),
+    ),
     // App-wide for the same reason the mint flow below is: the wall clock is a
     // property of the machine, so every stream in the renderer parks and
     // resumes on ONE verdict. Without it, a bearer that reads "expired" only
