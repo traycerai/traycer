@@ -267,6 +267,7 @@ describe("returnPendingSandboxMessage through the unrecorded-prompt handoff", ()
     });
     expect(input.content).toEqual(MESSAGE_CONTENT);
     expect(input.browserAnnotations).toEqual([ANNOTATION]);
+    expect(input.reasonIsRemovedProfile).toBe(false);
     // Held: the record is still the message's only copy.
     expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
 

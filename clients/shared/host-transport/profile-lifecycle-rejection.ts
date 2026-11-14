@@ -16,8 +16,11 @@
  * rejection view (`gui-app/src/lib/tui-fork-profile-rejection.ts`) and the
  * CLI's host-error mapper (`traycer-cli/src/internal/host-rpc.ts`).
  */
+const UNKNOWN_PROFILE_MESSAGE_PATTERN =
+  /^No profile ".*" is registered for provider ".*"\./;
+
 const PROFILE_LIFECYCLE_MESSAGE_PATTERNS: ReadonlyArray<RegExp> = [
-  /^No profile ".*" is registered for provider ".*"\./,
+  UNKNOWN_PROFILE_MESSAGE_PATTERN,
   /^Profile ".*" for provider ".*" was removed and can no longer be used\./,
   /^Profile ".*" for provider ".*" is still completing setup and cannot be used yet\./,
   /^Provider ".*" does not support managed profiles\./,
@@ -35,5 +38,25 @@ export function isProfileLifecycleRejection(
   if (code !== "RPC_ERROR") return false;
   return PROFILE_LIFECYCLE_MESSAGE_PATTERNS.some((pattern) =>
     pattern.test(message),
+  );
+}
+
+/**
+ * True only for the code `removed-by-person` with the unknown-id sentence,
+ * which is what the computer answers on a unary start that names an account a
+ * person removed: the sentence it gives for an unknown id, under its own code.
+ *
+ * For the CLI's host-error mapper only, so that refusal prints exactly what an
+ * unknown id prints today. The app must not use it: for this code the app
+ * shows its own words (the profile pin's "Was removed"), never the computer's
+ * sentence, which carries the profile id.
+ */
+export function isRemovedProfileRefusal(
+  code: string,
+  message: string,
+): boolean {
+  return (
+    code === "removed-by-person" &&
+    UNKNOWN_PROFILE_MESSAGE_PATTERN.test(message)
   );
 }
