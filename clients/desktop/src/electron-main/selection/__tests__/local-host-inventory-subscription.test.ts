@@ -606,7 +606,7 @@ describe("startLocalHostInventorySubscription", () => {
     // Same host id (a fresh endpoint object, but the identity is unchanged):
     // no teardown, no new client.
     harness.setLocalHost({
-      hostId: "host-1",
+      ...HOST_1,
       websocketUrl: "ws://host-1-again",
     });
     expect(harness.clients).toHaveLength(1);
