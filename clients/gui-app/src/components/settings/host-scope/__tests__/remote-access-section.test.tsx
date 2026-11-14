@@ -133,13 +133,9 @@ function teamHost(remoteAccess: RemoteAccessState): AccessHost {
   });
 }
 
-function hostWithRemoteAccess(
-  remoteAccess: RemoteAccessState,
-  answer: RemoteAccessState,
-): AccessHost {
+function hostWithRemoteAccess(remoteAccess: RemoteAccessState): AccessHost {
   return buildAccessHost({
     status: environmentStatusFixture({ remoteAccess }),
-    remoteAccessAnswer: { state: answer },
   });
 }
 
@@ -203,7 +199,7 @@ const REMOTE_SESSION_IDENTITY: RemoteSessionIdentity = {
   relayAttachUrl: "wss://relay.test/attach",
   authRecovery: "revalidate",
   authEpoch: "remote-access-test-epoch",
-  openAuth: "remote-access-test-bearer",
+  openAuth: "user-bearer",
 };
 
 const REMOTE_SESSION_POLICY: RemoteSessionAcquirePolicy = {
@@ -466,7 +462,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("shows the permission refusal for authn's 403 and does not refresh the host", async () => {
-    const host = hostWithRemoteAccess("off", "on");
+    const host = hostWithRemoteAccess("off");
     const { requests } = signInWithEnvironmentCloud({ status: 403, body: {} });
     renderTab(host, ACCESS_METHODS, true);
 
@@ -489,7 +485,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("shows the unanswered prompt inside the Remote access group without a second row label", async () => {
-    const host = hostWithRemoteAccess("off", "off");
+    const host = hostWithRemoteAccess("off");
     renderTab(host, ACCESS_METHODS, false);
 
     const section = await screen.findByTestId("remote-access-section");
@@ -511,7 +507,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("Off shows 'turning off' until the host confirms", async () => {
-    const host = hostWithRemoteAccess("on", "turning_off");
+    const host = hostWithRemoteAccess("on");
     const queryClient = renderTab(host, ACCESS_METHODS, true);
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.on);
 
@@ -521,8 +517,9 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     await waitFor(() => {
       expect(host.paramsOf("host.remoteAccess.set")).toEqual([{}]);
     });
-    // The host answered `turning_off`, and its status read can still say `on`
-    // for a poll or two: the section shows the host's answer, not that read.
+    // The host took the Off, and its status read can still say `on` for a
+    // poll or two: the section says "turning off" from the taken Off, not
+    // from that read.
     await waitFor(() => {
       expect(screen.getByTestId("remote-access-state").textContent).toBe(
         "Turning off. Other devices and agents are being disconnected.",
@@ -566,7 +563,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("keeps the permission line when the host refuses Off", async () => {
-    const host = hostWithRemoteAccess("on", "off");
+    const host = hostWithRemoteAccess("on");
     host.state.remoteAccessError = HostRpcError.fromWireEnvelope(
       { code: "FORBIDDEN", message: "not allowed" },
       "remote-access-off",
@@ -585,7 +582,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("says what On means and offers Turn off", async () => {
-    renderTab(hostWithRemoteAccess("on", "turning_off"), ACCESS_METHODS, true);
+    renderTab(hostWithRemoteAccess("on"), ACCESS_METHODS, true);
 
     expect(await shownState()).toBe(
       "On. Other devices and agents signed in to your account can reach this computer.",
@@ -596,7 +593,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("Turn on sends enabled: true and shows what the host reads next", async () => {
-    const host = hostWithRemoteAccess("off", "on");
+    const host = hostWithRemoteAccess("off");
     const { requests } = signInWithEnvironmentCloud({
       status: 200,
       body: { remoteAccess: { enabled: true, epoch: 1 } },
@@ -639,7 +636,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("does not refresh or answer the question when the click's sign-in changes during authn's PUT", async () => {
-    const host = hostWithRemoteAccess("off", "on");
+    const host = hostWithRemoteAccess("off");
     const put = Promise.withResolvers<FakeEnvironmentCloudAnswer>();
     const authn = signInWithEnvironmentCloud(() => put.promise);
     renderTab(host, ACCESS_METHODS, false);
@@ -673,7 +670,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("does not acquire or dial a remote session when none is ready to refresh", async () => {
-    const host = hostWithRemoteAccess("off", "on");
+    const host = hostWithRemoteAccess("off");
     signInWithEnvironmentCloud({
       status: 200,
       body: { remoteAccess: { enabled: true, epoch: 1 } },
@@ -702,7 +699,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("releases a ready remote session after its one refresh rejects", async () => {
-    const host = hostWithRemoteAccess("off", "on");
+    const host = hostWithRemoteAccess("off");
     signInWithEnvironmentCloud({
       status: 200,
       body: { remoteAccess: { enabled: true, epoch: 1 } },
@@ -743,7 +740,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("shows the generic refusal for authn's 409 and does not refresh the host", async () => {
-    const host = hostWithRemoteAccess("off", "on");
+    const host = hostWithRemoteAccess("off");
     const { requests } = signInWithEnvironmentCloud({ status: 409, body: {} });
     renderTab(host, ACCESS_METHODS, true);
 
@@ -765,7 +762,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("shows a host that is turning remote access off by itself the same way", async () => {
-    renderTab(hostWithRemoteAccess("turning_off", "off"), ACCESS_METHODS, true);
+    renderTab(hostWithRemoteAccess("turning_off"), ACCESS_METHODS, true);
 
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.turning_off);
     expect(screen.getByTestId("remote-access-turning-off")).toBeTruthy();
@@ -773,7 +770,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("offers no switch on a host that does not have host.remoteAccess.set, and still says the state", async () => {
-    const host = hostWithRemoteAccess("on", "turning_off");
+    const host = hostWithRemoteAccess("on");
     renderTab(host, WITHOUT_REMOTE_ACCESS_SET, true);
 
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.on);
