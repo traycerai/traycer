@@ -182,7 +182,7 @@ export function RootComponent() {
               {/* The retrospective and move sheets. Here rather than in
                   Settings: the retrospective sheet opens by itself once on
                   the first launch after the update, whatever the window
-                  shows, and the Start toast opens it too. */}
+                  shows. */}
               <EnvironmentSheetsHost />
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}

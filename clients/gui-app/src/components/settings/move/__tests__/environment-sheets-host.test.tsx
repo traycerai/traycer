@@ -126,7 +126,6 @@ beforeEach(() => {
     target: null,
     open: false,
     checkedHostIds: new Set(),
-    heldToastDismissed: false,
   });
   useMoveSheetStore.setState({ target: null });
 });
