@@ -9,7 +9,6 @@ import type {
   ProviderNativeScope,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import {
   sendFollowedSave,
   useSettingsSave,
@@ -100,9 +99,6 @@ export function useProvidersMcpMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  // What this installs can run on the host, so it carries the grant; the host
-  // no longer reads it on a remove or a tool toggle, which are sent without.
-  const grant = useExecutableWriteGrant();
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
   return useMutation<
     McpMutateResult,
@@ -148,17 +144,12 @@ export function useProvidersMcpMutate(): UseMutationResult<
           mutation: variables.mutation,
         },
       };
-      const sent =
-        variables.mutation.action === "remove" ||
-        variables.mutation.action === "toggleTool"
-          ? request
-          : await grant(request, client);
       const response = await sendFollowedSave(
         await prepareSave(
-          { method: "providers.nativeMutate", request: sent },
+          { method: "providers.nativeMutate", request },
           hostId,
         ),
-        () => client.request("providers.nativeMutate", sent),
+        () => client.request("providers.nativeMutate", request),
       );
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
     },
