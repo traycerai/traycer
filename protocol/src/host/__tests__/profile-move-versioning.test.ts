@@ -229,7 +229,24 @@ describe("providers.commitProfileMove schemas", () => {
     ]);
   });
 
-  it("rejects deferred outcomes and non-waiting rows in waiting mode", () => {
+  it("accepts a skipped not-waiting result with a running row in waiting mode", () => {
+    const parsed = providersCommitProfileMoveResponseSchema.parse({
+      operationId: OPERATION_ID,
+      extent: "fleet",
+      mode: "waiting",
+      results: [
+        {
+          outcome: "skipped",
+          reason: "not-waiting",
+          target: ref,
+          row: { ...botTarget, standing: "running" },
+        },
+      ],
+    });
+    expect(parsed.results[0]?.row?.standing).toBe("running");
+  });
+
+  it("rejects deferred outcomes in waiting mode", () => {
     const base = {
       operationId: OPERATION_ID,
       extent: "fleet",
@@ -239,18 +256,6 @@ describe("providers.commitProfileMove schemas", () => {
       providersCommitProfileMoveResponseSchema.safeParse({
         ...base,
         results: [{ outcome: "deferred", target: ref, row: null }],
-      }).success,
-    ).toBe(false);
-    expect(
-      providersCommitProfileMoveResponseSchema.safeParse({
-        ...base,
-        results: [
-          {
-            outcome: "pending",
-            target: ref,
-            row: { ...botTarget, standing: "running" },
-          },
-        ],
       }).success,
     ).toBe(false);
   });

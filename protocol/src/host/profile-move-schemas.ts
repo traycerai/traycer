@@ -242,13 +242,6 @@ export const providersCommitProfileMoveResponseSchema = lazySchema(() =>
             message: "waiting mode does not defer",
           });
         }
-        if (result.row !== null && result.row.standing !== "waiting") {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["results", index, "row", "standing"],
-            message: "waiting mode lists waiting targets only",
-          });
-        }
       });
     }),
 );
