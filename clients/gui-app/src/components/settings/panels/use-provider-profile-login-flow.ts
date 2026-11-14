@@ -363,7 +363,7 @@ function classifyAmbientAwaitResult(
  * still in flight is "not settled yet", never a failure. Managed rows get an
  * awaited per-profile probe host-side, so that window is ambient-only.
  */
-function classifyProfileAwaitResult(
+export function classifyProfileAwaitResult(
   result: AwaitLoginResult,
   awaitedProfileId: string | null,
 ): AwaitLoginResolution {
