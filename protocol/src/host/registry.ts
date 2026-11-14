@@ -1675,9 +1675,11 @@ import {
   providersRemovePackVersionRequestSchema,
   providersRemovePackVersionResponseSchema,
   providersUsePackVersionRequestSchema,
+  providersUsePackVersionRequestSchemaV12,
   providersUsePackVersionResponseSchema,
   providersUsePackVersionResponseSchemaV10,
   providersSetPackPolicyRequestSchema,
+  providersSetPackPolicyRequestSchemaV11,
   providersSetPackPolicyResponseSchema,
   providersSetNativeMemoryRequestSchema,
   providersSetNativeMemoryResponseSchema,
@@ -1703,6 +1705,9 @@ import {
   providersSetEnabledRequestSchemaV10,
   providersSetEnabledRequestSchemaV20,
   providersSetEnabledRequestSchemaV21,
+  providersSetEnabledRequestSchemaV22,
+  type ProviderProfileAction,
+  type ProviderProfileActionV22,
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV10,
   providersSetEnabledResponseSchemaV20,
@@ -5328,6 +5333,49 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   responseSchema: providersSetPackPolicyResponseSchema,
 });
 
+// ── The pack policy a pack save leaves ─────────────────────────────────────
+//
+// A save made in a host's settings is proposed to the host's environment, and
+// the app recognises its own hold by the `pack_policy` item it states it
+// expects (`policy`, read by `settingsSaveItemEdit`). A caller older than
+// these minors states no policy: the upgrade fills null.
+// A newer request to an older host is re-parsed onto the older request,
+// whose non-strict object strips the key.
+
+export const providersUsePackVersionV12 = defineRpcContract({
+  method: "providers.usePackVersion",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: providersUsePackVersionRequestSchemaV12,
+  responseSchema: providersUsePackVersionResponseSchema,
+});
+
+export const providersUsePackVersionUpgradeV11ToV12 = defineUpgradePath<
+  typeof providersUsePackVersionV11,
+  typeof providersUsePackVersionV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => ({ ...request, policy: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const providersSetPackPolicyV11 = defineRpcContract({
+  method: "providers.setPackPolicy",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: providersSetPackPolicyRequestSchemaV11,
+  responseSchema: providersSetPackPolicyResponseSchema,
+});
+
+export const providersSetPackPolicyUpgradeV10ToV11 = defineUpgradePath<
+  typeof providersSetPackPolicyV10,
+  typeof providersSetPackPolicyV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => ({ ...request, policy: null }),
+  upgradeResponse: (response) => response,
+});
+
 /**
  * Set one provider's native-subagents switch (`providers.list@10.5` reads it
  * back as the row's `nativeSubagents`).
@@ -5680,6 +5728,47 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   }),
 });
 
+// v2.2 names the environment profile a rename or recolor is for
+// (`environmentProfileId`), so the app can state the `managed_profile` item
+// it expects and recognise its own hold. A 2.1 caller names none: the upgrade fills null, and the app expects no proposal. A 2.2
+// request to a 2.1 host is re-parsed onto the 2.1 request, whose non-strict
+// action objects strip the key. The response is unchanged.
+export const providersSetEnabledV22 = defineRpcContract({
+  method: "providers.setEnabled",
+  schemaVersion: { major: 2, minor: 2 } as const,
+  requestSchema: providersSetEnabledRequestSchemaV22,
+  responseSchema: providersSetEnabledResponseSchema,
+});
+
+function profileActionV22(
+  action: ProviderProfileAction,
+): ProviderProfileActionV22 {
+  switch (action.type) {
+    case "rename":
+    case "recolor":
+      return { ...action, environmentProfileId: null };
+    case "remove":
+    case "acknowledgeAmbientDrift":
+      return action;
+  }
+}
+
+export const providersSetEnabledUpgradeV21ToV22 = defineUpgradePath<
+  typeof providersSetEnabledV21,
+  typeof providersSetEnabledV22
+>({
+  from: { major: 2, minor: 1 },
+  to: { major: 2, minor: 2 },
+  upgradeRequest: (request) => ({
+    ...request,
+    profileAction:
+      request.profileAction === null
+        ? null
+        : profileActionV22(request.profileAction),
+  }),
+  upgradeResponse: (response) => response,
+});
+
 // Bridges from v2.1 (the latest installed version of major 2's line) down to
 // the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's
 // latest. Used directly by `provider-profiles-compat.test.ts` to assert
@@ -5759,11 +5848,37 @@ export const providersSetEnabledDowngradeV21ToV10 = defineDowngradePath<
   },
 });
 
-// THERE IS NO `providers.setEnabled@2.2`. It was opened to carry an optional
-// tri-state `mode` for a three-way Auto/On/Off settings control; `mode` was
-// its entire delta over 2.1, and both went away with that control. 2.1 is the
-// head minor again, and `providersSetEnabledDowngradeV21ToV10` above is once
-// more the registered bridge down to the frozen v1.0.
+// The bridge `providers.setEnabled@2.2` registers from its latest minor to the
+// frozen 1.0, the same projection as 2.1's: 1.0 knows no profile action.
+export const providersSetEnabledDowngradeV22ToV10 = defineDowngradePath<
+  typeof providersSetEnabledV22,
+  typeof providersSetEnabledV10
+>({
+  from: { major: 2, minor: 2 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersSetEnabledRequestSchemaV10, {
+      providerId: request.providerId,
+      enabled: request.enabled,
+    }),
+  downgradeResponse: (response) => {
+    const state = downgradeProviderStateForV10(response.state);
+    if (!state.ok) return state;
+    return {
+      ok: true,
+      value: providersSetEnabledResponseSchemaV10.parse({
+        state: state.value,
+      }),
+    };
+  },
+});
+
+// The only `providers.setEnabled@2.2` any build carries is the one above. An
+// earlier 2.2 that carried an optional tri-state `mode` was withdrawn before
+// any release, so no released peer negotiates a different 2.2. The bridge down
+// to the frozen v1.0 starts at whichever minor is major 2's latest:
+// `providersSetEnabledDowngradeV21ToV10` from 2.1,
+// `providersSetEnabledDowngradeV22ToV10` from 2.2.
 
 export const providersSetApiKeyV10 = defineRpcContract({
   method: "providers.setApiKey",
