@@ -478,7 +478,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
         rawSelection.harnessId === defaultAccount.harnessId &&
         state.selection.harnessId === defaultAccount.harnessId;
       let presentedSelection = state.selection;
-      if (defaultApplies && defaultAccount !== null) {
+      if (defaultApplies) {
         presentedSelection = {
           ...state.selection,
           profileId: defaultAccount.profileId,
@@ -512,7 +512,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
         rawSelection.harnessId === account.harnessId &&
         state.selection.harnessId === account.harnessId;
       let presentedSelection = state.selection;
-      if (defaultApplies && account !== null) {
+      if (defaultApplies) {
         presentedSelection = {
           ...state.selection,
           profileId: account.profileId,
