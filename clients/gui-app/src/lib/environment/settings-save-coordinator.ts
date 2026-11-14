@@ -77,10 +77,9 @@ export interface SettingsSaveCoordinatorPorts {
   readonly now: () => number;
 }
 
-/** One remembered edit: its record's id and the edit's own identity. */
+/** One remembered edit: its record's id, which is the edit's own identity. */
 export interface SettingsSaveTicket {
   readonly id: string;
-  readonly editId: string;
 }
 
 /** What {@link SettingsSaveCoordinator.begin} did with a save. */
@@ -157,12 +156,9 @@ function holdMatches(
   );
 }
 
-/** Whether `id` is still remembered as the edit `editId`. */
-function isCurrent(id: string, editId: string): boolean {
-  return (
-    settingsSaveMemoryRecord(useSettingsSaveMemoryStore.getState().records, id)
-      ?.editId === editId
-  );
+/** Whether the edit `id` is still remembered. */
+function isCurrent(id: string): boolean {
+  return Object.hasOwn(useSettingsSaveMemoryStore.getState().records, id);
 }
 
 /** Whether this window has sent `id`'s save and not yet seen it answered. */
@@ -253,7 +249,7 @@ export function createSettingsSaveCoordinator(
       // decided for this save.
       return false;
     } catch {
-      store().noteUnanswered(id, record.editId, hold.revision);
+      store().noteUnanswered(id, hold.revision);
       return true;
     }
   };
@@ -282,8 +278,8 @@ export function createSettingsSaveCoordinator(
     // save of the same item may have replaced it since, and then neither its
     // apply nor its forgetting is this run's to do.
     const sorted = sortByReceipt(mine, proposals, ports.now());
-    for (const { id, record } of sorted.forget) {
-      store().forgetEdit(id, record.editId);
+    for (const { id } of sorted.forget) {
+      store().forget(id);
     }
     if (sorted.proposed.size === 0) return;
 
@@ -298,10 +294,10 @@ export function createSettingsSaveCoordinator(
       }
       for (const { id, record } of saves) {
         if (!sameAccount()) return;
-        if (!isCurrent(id, record.editId)) continue;
+        if (!isCurrent(id)) continue;
         const stays = await applyHold(cloud, id, record, holds);
         if (!sameAccount()) return;
-        if (!stays) store().forgetEdit(id, record.editId);
+        if (!stays) store().forget(id);
       }
     }
   };
@@ -341,9 +337,8 @@ export function createSettingsSaveCoordinator(
     // The memory may be another account's by now: an edit is remembered only
     // in the memory of the account it was made for.
     if (account() !== context.accountId) return ACCOUNT_CHANGED;
-    const editId = crypto.randomUUID();
     const id = store().remember({
-      editId,
+      editId: crypto.randomUUID(),
       environmentId: context.environmentId,
       hostId: context.hostId,
       sharingGeneration: context.sharingGeneration,
@@ -357,7 +352,7 @@ export function createSettingsSaveCoordinator(
       unanswered: null,
     });
     store().markSent(id);
-    return { kind: "remembered", ticket: { id, editId } };
+    return { kind: "remembered", ticket: { id } };
   };
 
   const settle = async (
