@@ -8,6 +8,8 @@ rss: true
 <Update label="v1.5.4">
 Steadier Codex turns, more reliable file and artifact sync, lower resource use, and tighter privacy in logs.
 
+* **Memory and stability** - the Host no longer runs out of memory or stalls while a large batch of files is published, and closed Tasks are released from memory.
+* **Large Tasks** - Tasks with thousands of artifact versions load their versions again, and documents with many attachments can be compacted.
 * **Codex** - a turn ends properly when steered messages are waiting, and cleanup from an earlier turn can no longer disrupt the next one.
 * **File and artifact sync** - files rewritten in place are picked up, canvas saves made during a background update are kept, a failed sync can be retried so the Task reopens, and existing files are no longer reported as new edits when watching starts.
 * **CPU and memory** - new files no longer trigger full artifact-folder scans, usage tracking no longer loads whole Claude Code or Codex transcripts into memory, and a loop that kept rechecking credentials and could spike CPU is fixed.
