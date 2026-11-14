@@ -268,14 +268,29 @@ interface HookSnapshot {
   readonly hooks: readonly NotificationHookConfig[];
   readonly configurationRevision: string | null;
 }
-type EditorState =
-  | { readonly kind: "closed" }
-  | { readonly kind: "add"; readonly snapshot: HookSnapshot }
+type OpenEditorState =
+  | {
+      readonly kind: "add";
+      readonly snapshot: HookSnapshot;
+      readonly saveError: string | null;
+    }
   | {
       readonly kind: "edit";
       readonly hook: HookEntry;
       readonly snapshot: HookSnapshot;
+      readonly saveError: string | null;
     };
+type EditorState = { readonly kind: "closed" } | OpenEditorState;
+
+interface DeleteState {
+  readonly hook: HookEntry;
+  readonly snapshot: HookSnapshot;
+}
+
+type SaveOrigin =
+  | { readonly kind: "list" }
+  | { readonly kind: "editor"; readonly opening: OpenEditorState }
+  | { readonly kind: "delete"; readonly opening: DeleteState };
 
 function HooksEditor(props: {
   readonly hooks: readonly HookEntry[];
@@ -290,10 +305,7 @@ function HooksEditor(props: {
   // editor and its typed draft survive without being parked anywhere. A real
   // host switch remounts through the gate's key and correctly starts closed.
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
-  const [pendingDelete, setPendingDelete] = useState<{
-    readonly hook: HookEntry;
-    readonly snapshot: HookSnapshot;
-  } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<DeleteState | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const visibleHooks = props.hooks.filter((hook) => hook.localOnly === true);
@@ -305,7 +317,19 @@ function HooksEditor(props: {
     hooks: readonly NotificationHookConfig[],
     revision: string | null,
     done: string,
+    origin: SaveOrigin,
   ) => {
+    // A result belongs to the opening that submitted it, even after cancel/reopen.
+    const closeSubmittedOpening = () => {
+      if (origin.kind === "editor")
+        setEditor((current) =>
+          current === origin.opening ? { kind: "closed" } : current,
+        );
+      else if (origin.kind === "delete")
+        setPendingDelete((current) =>
+          current === origin.opening ? null : current,
+        );
+    };
     setSaveError(null);
     props.saveHooks.mutate(
       {
@@ -315,11 +339,11 @@ function HooksEditor(props: {
       },
       {
         onSuccess: () => {
-          setEditor({ kind: "closed" });
-          setPendingDelete(null);
+          closeSubmittedOpening();
           toast.success(done);
         },
         onError: (error) => {
+          const message = `${error.message} Review the refreshed hooks before saving again.`;
           if (error instanceof NotificationHooksAccountSaveError) {
             // This app wrote these exact hooks locally. A retry may quote
             // that answered revision, but never a revision from a later read.
@@ -327,30 +351,33 @@ function HooksEditor(props: {
               hooks,
               configurationRevision: error.savedConfigurationRevision,
             };
-            setEditor((current) =>
-              current.kind === "closed"
-                ? current
-                : {
-                    ...current,
-                    snapshot:
-                      current.kind === "add"
-                        ? {
-                            ...current.snapshot,
-                            configurationRevision: saved.configurationRevision,
-                          }
-                        : saved,
-                  },
-            );
-            setPendingDelete((current) =>
-              current === null ? null : { ...current, snapshot: saved },
-            );
+            if (origin.kind === "editor")
+              setEditor((current) =>
+                current.kind === "closed" || current !== origin.opening
+                  ? current
+                  : {
+                      ...current,
+                      saveError: message,
+                      snapshot:
+                        current.kind === "add"
+                          ? {
+                              ...current.snapshot,
+                              configurationRevision:
+                                saved.configurationRevision,
+                            }
+                          : saved,
+                    },
+              );
+            else if (origin.kind === "delete")
+              setPendingDelete((current) =>
+                current === origin.opening
+                  ? { ...current, snapshot: saved }
+                  : current,
+              );
           } else {
-            setEditor({ kind: "closed" });
-            setPendingDelete(null);
+            closeSubmittedOpening();
           }
-          setSaveError(
-            `${error.message} Review the refreshed hooks before saving again.`,
-          );
+          setSaveError(message);
           props.onRefresh();
         },
       },
@@ -364,7 +391,7 @@ function HooksEditor(props: {
       addDisabled={props.saveHooks.isPending}
       onRefresh={props.onRefresh}
       onAdd={() => {
-        setEditor({ kind: "add", snapshot });
+        setEditor({ kind: "add", snapshot, saveError: null });
       }}
     >
       {saveError === null ? null : (
@@ -395,7 +422,7 @@ function HooksEditor(props: {
               variant="outline"
               size="sm"
               onClick={() => {
-                setEditor({ kind: "add", snapshot });
+                setEditor({ kind: "add", snapshot, saveError: null });
               }}
             >
               <Plus aria-hidden className="size-3.5" />
@@ -411,7 +438,7 @@ function HooksEditor(props: {
                 testHook={props.testHook}
                 saving={props.saveHooks.isPending}
                 onEdit={() => {
-                  setEditor({ kind: "edit", hook, snapshot });
+                  setEditor({ kind: "edit", hook, snapshot, saveError: null });
                 }}
                 onToggleEnabled={(enabled) => {
                   saveAll(
@@ -420,6 +447,7 @@ function HooksEditor(props: {
                     ),
                     snapshot.configurationRevision,
                     enabled ? "Hook enabled" : "Hook disabled",
+                    { kind: "list" },
                   );
                 }}
                 onDelete={() => {
@@ -440,7 +468,7 @@ function HooksEditor(props: {
           }
           title={editor.kind === "add" ? "Add hook" : "Edit hook"}
           saving={props.saveHooks.isPending}
-          serverProblem={saveError}
+          serverProblem={props.saveHooks.isPending ? null : editor.saveError}
           onCancel={() => {
             setEditor({ kind: "closed" });
           }}
@@ -455,6 +483,7 @@ function HooksEditor(props: {
               next,
               editor.snapshot.configurationRevision,
               editor.kind === "add" ? "Hook added" : "Hook saved",
+              { kind: "editor", opening: editor },
             );
           }}
         />
@@ -479,6 +508,7 @@ function HooksEditor(props: {
               ),
               pendingDelete.snapshot.configurationRevision,
               "Hook deleted",
+              { kind: "delete", opening: pendingDelete },
             );
           }}
         />
