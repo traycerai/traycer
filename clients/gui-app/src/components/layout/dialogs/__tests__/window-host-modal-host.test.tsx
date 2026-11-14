@@ -452,6 +452,11 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
     expect(openSettings.getAttribute("data-emphasis")).toBe("button");
+    expect(buttonsOf(screen.getByTestId("window-host-modal"))).toEqual([
+      "Retry",
+      "Report issue",
+      "Open settings",
+    ]);
   });
 
   // `HostControllerStatus.lastEnsureFailure`'s settled read, surfaced
@@ -1581,7 +1586,37 @@ describe("<WindowHostModalHost />", () => {
     expect(within(surface).getByRole("heading").textContent).toBe(
       "This computer belongs to a team",
     );
+    expect(
+      within(surface).getByText(
+        "This account is not a member. Switch accounts to use Traycer here.",
+      ),
+    ).toBeTruthy();
     expect(buttonsOf(surface)).toEqual(["Switch account", "Open settings"]);
+  });
+
+  it("unknown refusal keeps the offline cover and adds only its reason line", async () => {
+    const surface = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "unrecognised-refusal",
+      detail: { code: "UNAUTHORIZED", doorReason: "some_future_reason" },
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "No host is available",
+    );
+    expect(
+      within(surface).getByText(
+        "Traycer can't reach any of this account's hosts right now. It will connect again on its own as soon as one comes back.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(surface).getByTestId("window-host-modal-refusal-detail")
+        .textContent,
+    ).toBe("Reason: UNAUTHORIZED");
+    expect(buttonsOf(surface)).toEqual([
+      "Retry",
+      "Report issue",
+      "Open settings",
+    ]);
   });
 
   /**
@@ -1591,6 +1626,237 @@ describe("<WindowHostModalHost />", () => {
    * reads before it reserves a touch. The gesture is the phone's only history
    * affordance, so the narration must not cost it.
    */
+  async function renderDoorCoverCard(
+    state: HostDoorState,
+    shell: "phone" | "launch",
+  ): Promise<HTMLElement> {
+    setMobileApp(shell === "phone");
+    noteHostDoorState(state);
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [],
+    });
+    renderHostWithGate(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        canManageHost: true,
+        provisioningError: new Error("install failed"),
+      },
+      false,
+      new MockTraycerCli(),
+      shell === "launch" ? GATE_BLOCKING : GATE_OPEN,
+    );
+    return screen.findByTestId("window-host-startup-card");
+  }
+
+  async function expectCardMessage(
+    shell: "phone" | "launch",
+    state: HostDoorState,
+    copy: {
+      readonly title: string;
+      readonly description: string;
+      readonly actions: readonly string[];
+    },
+  ): Promise<void> {
+    const surface = await renderDoorCoverCard(state, shell);
+    expect(
+      within(surface).getByTestId("window-host-startup-card-title").textContent,
+    ).toBe(copy.title);
+    expect(
+      within(surface).getByTestId("window-host-startup-card-description")
+        .textContent,
+    ).toBe(copy.description);
+    expect(buttonsOf(surface)).toEqual(copy.actions);
+    expect(
+      within(surface).queryByTestId("window-host-modal-progress"),
+    ).toBeNull();
+  }
+
+  describe("board C1 covers on the phone and launch cards", () => {
+    it("message 1 on the phone card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "token-unavailable", detail: null },
+        {
+          title: "We can't confirm access to this computer right now",
+          description: "We'll try again. Your draft is saved.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 3 on the phone card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "keys-unavailable", detail: null },
+        {
+          title:
+            "This computer needs to connect once before it can verify access",
+          description: "Check its connection, then retry.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 4 on the phone card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "clock-skew", detail: null },
+        {
+          title: "This computer's date or time appears incorrect",
+          description:
+            "Enable automatic date and time on that computer, then retry.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 5 on the phone card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "token-expired", detail: null },
+        {
+          title: "Access needs to be renewed before you can reconnect",
+          description:
+            "Connect to the internet and retry. Work already started remains on this computer.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 6 on the phone card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "enrolment-broken", detail: null },
+        {
+          title: "This computer's connection to the team needs repair",
+          description:
+            "Ask a team administrator to restore it. Work is still stored here.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 7 on the phone card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "membership-removed", detail: null },
+        {
+          title: "You no longer have access to this team's computer",
+          description:
+            "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 8 on the phone card keeps its words, Switch account and Open settings", async () => {
+      await expectCardMessage(
+        "phone",
+        { hostId: LOCAL_HOST_ID, kind: "not-a-member", detail: null },
+        {
+          title: "This computer belongs to a team",
+          description:
+            "This account is not a member. Switch accounts to use Traycer here.",
+          actions: ["Switch account", "Open settings"],
+        },
+      );
+    });
+
+    it("message 1 on the launch card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "token-unavailable", detail: null },
+        {
+          title: "We can't confirm access to this computer right now",
+          description: "We'll try again. Your draft is saved.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 3 on the launch card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "keys-unavailable", detail: null },
+        {
+          title:
+            "This computer needs to connect once before it can verify access",
+          description: "Check its connection, then retry.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 4 on the launch card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "clock-skew", detail: null },
+        {
+          title: "This computer's date or time appears incorrect",
+          description:
+            "Enable automatic date and time on that computer, then retry.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 5 on the launch card keeps its words, Retry and Open settings", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "token-expired", detail: null },
+        {
+          title: "Access needs to be renewed before you can reconnect",
+          description:
+            "Connect to the internet and retry. Work already started remains on this computer.",
+          actions: ["Retry", "Open settings"],
+        },
+      );
+    });
+
+    it("message 6 on the launch card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "enrolment-broken", detail: null },
+        {
+          title: "This computer's connection to the team needs repair",
+          description:
+            "Ask a team administrator to restore it. Work is still stored here.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 7 on the launch card keeps its words and Open settings only", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "membership-removed", detail: null },
+        {
+          title: "You no longer have access to this team's computer",
+          description:
+            "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+          actions: ["Open settings"],
+        },
+      );
+    });
+
+    it("message 8 on the launch card keeps its words, Switch account and Open settings", async () => {
+      await expectCardMessage(
+        "launch",
+        { hostId: LOCAL_HOST_ID, kind: "not-a-member", detail: null },
+        {
+          title: "This computer belongs to a team",
+          description:
+            "This account is not a member. Switch accounts to use Traycer here.",
+          actions: ["Switch account", "Open settings"],
+        },
+      );
+    });
+  });
+
   describe("on the mobile app", () => {
     beforeEach(() => {
       setMobileApp(true);
