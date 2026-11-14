@@ -175,7 +175,14 @@ async function awaitWithRecording(
     ...variables.request,
     recordedOperationId: recording.recordedOperationId,
   });
-  return { ...next, signInRecordingEnded: null };
+  // Asked again for the id just recorded: the computer ignored it, so the
+  // step ends here rather than recording or asking once more.
+  const askedAgain =
+    signInRequestToRecord(next)?.operationId === recording.recordedOperationId;
+  return {
+    ...next,
+    signInRecordingEnded: askedAgain ? "already-recorded" : null,
+  };
 }
 
 function awaitAnswerNamesProfile(data: AwaitLoginResponse): boolean {
