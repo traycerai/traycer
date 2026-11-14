@@ -441,7 +441,7 @@ describe("ordinary notification indicators over the same read", () => {
     );
   }
 
-  it("refreshes through the existing invalidation, though the read never goes stale on its own", async () => {
+  it("shows the host’s changed answer after the existing invalidation", async () => {
     render(
       <QueryClientProvider client={queryClient}>
         <Ordinary />

@@ -565,7 +565,7 @@ function windowedReplies(
   threadId: string,
   total: number,
   hydrated: number,
-): ChatSessionStoreHandle {
+): void {
   const handle = chatSessionWithThreadRows([]);
   const derived: NonNullable<ChatSessionState["transcriptDerived"]> = {
     latestAssistantUsage: null,
@@ -580,7 +580,6 @@ function windowedReplies(
   handle.store.setState({ transcriptDerived: derived });
   mocks.threadSessions[threadId] = handle;
   hydrateReplies(threadId, total, hydrated);
-  return handle;
 }
 
 /** Seats the first `hydrated` of the thread's `total` replies as hydrated rows. */
@@ -1096,22 +1095,6 @@ describe("<BotThreadsView />", () => {
     expect(screenReaderCount("team-new")).toBeNull();
   });
 
-  it("keeps the divider and its link while a short windowed card still has a placeholder among its hydrated replies", async () => {
-    withReplies(TEAM, "team-new", replyTexts(3), 3_000);
-    windowedReplies("team-new", 3, 2);
-    mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-
-    const full = within(await revealFull("team-new"));
-
-    await full.findByText("reply 2");
-    expect(full.getByTestId("bot-chat-transcript-row-loading")).toBeTruthy();
-    expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
-      "3 replies",
-    );
-    expect(screenReaderCount("team-new")).toBeNull();
-  });
-
   it("keeps the divider and its link on an unfolded long windowed card while a reply is still a placeholder", async () => {
     useBotThreadFoldStore.setState({ unfolded: { "team-new": true } });
     withReplies(TEAM, "team-new", replyTexts(8), 3_000);
@@ -1136,10 +1119,12 @@ describe("<BotThreadsView />", () => {
     mount();
     await waitFor(() => expect(listed()).toContain("team-new"));
     const full = within(await revealFull("team-new"));
+    await full.findByText("reply 2");
     await full.findByTestId("bot-chat-transcript-row-loading");
     expect(full.getByTestId("bot-thread-reply-count-open").textContent).toBe(
       "3 replies",
     );
+    expect(screenReaderCount("team-new")).toBeNull();
 
     hydrateReplies("team-new", 3, 3);
 

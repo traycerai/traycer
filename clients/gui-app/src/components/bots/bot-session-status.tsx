@@ -1,4 +1,4 @@
-import { useContext, useMemo, type ReactNode } from "react";
+import { useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Bell, ClipboardCheck } from "lucide-react";
 import { useStore } from "zustand";
@@ -11,6 +11,8 @@ import {
 } from "@/components/chat/chat-status-capabilities";
 import { selectContextUsage } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import { BotSessionStatusDataContext } from "@/components/bots/bot-session-status-context";
+import { BotShellOutputContext } from "@/components/bots/bot-shell-output-context";
+import { BotShellOutputModal } from "@/components/bots/bot-shell-output-modal";
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { describeSeconds } from "@/lib/bots/bot-trunk-model";
@@ -18,18 +20,44 @@ import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 
 const NO_STOPS: ReadonlySet<string> = new Set();
 const noStop = (): null => null;
 const noItem = (): void => {};
 
-export function BotSessionStatus(props: {
+interface BotSessionStatusProps {
   readonly handle: ChatSessionStoreHandle;
   readonly botId: string;
   readonly chatId: string;
   readonly threadId: string | null;
-}): ReactNode {
+}
+
+export function BotSessionStatus(props: BotSessionStatusProps): ReactNode {
+  const viewerId = useAuthStore((state) =>
+    admitsLocalPlane(state.status)
+      ? (state.contextMetadata?.userId ?? null)
+      : null,
+  );
+  return (
+    <BotSessionStatusForViewer
+      key={viewerId === null ? "none" : `viewer:${viewerId}`}
+      {...props}
+      viewerId={viewerId}
+    />
+  );
+}
+
+function BotSessionStatusForViewer(
+  props: BotSessionStatusProps & { readonly viewerId: string | null },
+): ReactNode {
   const data = useContext(BotSessionStatusDataContext);
+  const [output, setOutput] = useState<{
+    readonly commandId: string;
+    readonly hostId: string | null;
+  } | null>(null);
+  const outputTrigger = useRef<HTMLElement | null>(null);
+  const outputFallback = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
   const readingWidth = useReadingWidthStyle();
   const usage = useStore(props.handle.store, selectContextUsage);
@@ -131,36 +159,60 @@ export function BotSessionStatus(props: {
   return (
     <ChatStatusFreshContext value={fresh}>
       <ChatStatusExtraRowsContext value={rows}>
-        <div className="shrink-0 px-4 pt-4">
+        <div ref={outputFallback} tabIndex={-1} className="shrink-0 px-4 pt-4">
           <div
             className={cn("mx-auto w-full", readingWidth.className)}
             style={{ maxWidth: readingWidth.maxWidth }}
           >
             <div className="@container mx-3 overflow-hidden rounded-t-lg border border-border bg-foreground/3">
-              <BackgroundItemsPanel
-                items={fresh ? (items ?? []) : []}
-                epicId={props.botId}
-                chatId={props.chatId}
-                viewTabId={`bot:${props.botId}`}
-                canAct={false}
-                readOnly
-                pendingStopTaskIds={NO_STOPS}
-                stopAllPending={false}
-                sessionStopPending={false}
-                turnActive={false}
-                scrollRegionMaxHeightClass="max-h-60"
-                separated={false}
-                onItemClick={noItem}
-                onStopItem={noStop}
-                onStopAll={noStop}
-                onStopSession={noStop}
-              />
+              <BotShellOutputContext
+                value={
+                  props.viewerId === null
+                    ? null
+                    : (commandId, trigger) => {
+                        outputTrigger.current = trigger;
+                        setOutput({ commandId, hostId: data.boundHostId });
+                      }
+                }
+              >
+                <BackgroundItemsPanel
+                  items={fresh ? (items ?? []) : []}
+                  epicId={props.botId}
+                  chatId={props.chatId}
+                  viewTabId={`bot:${props.botId}`}
+                  canAct={false}
+                  readOnly
+                  pendingStopTaskIds={NO_STOPS}
+                  stopAllPending={false}
+                  sessionStopPending={false}
+                  turnActive={false}
+                  scrollRegionMaxHeightClass="max-h-60"
+                  separated={false}
+                  onItemClick={noItem}
+                  onStopItem={noStop}
+                  onStopAll={noStop}
+                  onStopSession={noStop}
+                />
+              </BotShellOutputContext>
             </div>
             <div className="flex justify-end px-4 py-1">
               <ContextUsageChip usage={fresh ? usage : null} onCompact={null} />
             </div>
           </div>
         </div>
+        <BotShellOutputModal
+          botId={props.botId}
+          sessionChatId={props.chatId}
+          hostId={output?.hostId ?? null}
+          boundHostId={data.boundHostId}
+          commandId={output?.commandId ?? null}
+          onClose={() => setOutput(null)}
+          restoreFocus={() => {
+            const trigger = outputTrigger.current;
+            if (trigger?.isConnected) trigger.focus();
+            else outputFallback.current?.focus();
+          }}
+        />
       </ChatStatusExtraRowsContext>
     </ChatStatusFreshContext>
   );

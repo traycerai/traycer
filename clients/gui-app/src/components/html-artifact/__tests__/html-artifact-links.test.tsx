@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FetchResolveArtifactByPathArgs } from "@/lib/host/resolve-artifact-by-path";
 import type { ProjectedSidebarNodeOpenArgs } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -129,6 +129,8 @@ const IN_EPIC_TAB = {
   tileHost: "tab-host",
   epicSession: true,
 } as const;
+
+afterEach(cleanup);
 
 beforeEach(() => {
   mocks.worktrees.mockReset();

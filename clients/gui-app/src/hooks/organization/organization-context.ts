@@ -33,6 +33,11 @@ export interface OrganizationContextValue {
   readonly view: OrganizationView | undefined;
   readonly register: (key: string, taskIds: readonly string[]) => () => void;
   readonly openDialog: (dialog: OrganizationDialog) => void;
+  /**
+   * Sends one edit. An appearance edit is drawn in {@link view} at once and
+   * sent one at a time per task: one made while another is out waits for it,
+   * and the promise settles with the command that carried it.
+   */
   readonly command: (action: OrganizationAction) => Promise<void>;
   readonly refresh: () => Promise<void>;
 }

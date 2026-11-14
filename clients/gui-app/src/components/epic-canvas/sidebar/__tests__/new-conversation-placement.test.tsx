@@ -171,7 +171,12 @@ const testState = vi.hoisted(() => ({
   workspaceControlsElements: [] as unknown[],
   /** The pin the latest-conversation seed was read for. */
   latestSeedPins: [] as unknown[],
+  /** The `pathsReachTarget` the modal handed `useComposerHashPaste`. */
+  pastePathsReachTarget: null as boolean | null,
 }));
+
+/** This renderer's own host id, which the modal compares its placement host with. */
+const localHost = vi.hoisted(() => ({ id: null as string | null }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
@@ -356,6 +361,9 @@ vi.mock("@/providers/use-runner-host", () => ({
     },
   }),
 }));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => localHost.id,
+}));
 vi.mock("@/hooks/composer/use-composer-paste", async () => {
   const actual = await vi.importActual<
     typeof import("@/hooks/composer/use-composer-paste")
@@ -378,7 +386,13 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
     useComposerPaste: stubPasteResult,
     // The modal calls `useComposerHashPaste` (the hash-only adapter), not
     // `useComposerPaste` above - without this the real hook ran underneath.
-    useComposerHashPaste: stubPasteResult,
+    useComposerHashPaste: (
+      _editorRef: unknown,
+      options: { readonly pathsReachTarget: boolean },
+    ) => {
+      testState.pastePathsReachTarget = options.pathsReachTarget;
+      return stubPasteResult();
+    },
   };
 });
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
@@ -514,6 +528,8 @@ beforeEach(() => {
   testState.followsEffective.current = true;
   testState.workspaceControlsElements = [];
   testState.latestSeedPins = [];
+  testState.pastePathsReachTarget = null;
+  localHost.id = null;
   testState.recordPlacement.mockClear();
   testState.placementInputs.length = 0;
 });
@@ -911,5 +927,40 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     });
     expect(testState.createChat).not.toHaveBeenCalled();
     expect(testState.recordPlacement).not.toHaveBeenCalled();
+  });
+});
+
+// A typed path means something only where the placement host's files are the
+// ones the path names. The paste hook decides from this one flag; what it does
+// with each answer is pinned in `use-composer-file-attach`.
+describe("new-conversation modal: do typed paths reach the placement host", () => {
+  it.each([
+    { local: "host-a", reaches: true, machine: "this machine" },
+    { local: "host-elsewhere", reaches: false, machine: "another machine" },
+    { local: null, reaches: false, machine: "no local host known" },
+  ])(
+    "hands its paste $reaches when the placement host is host-a and this renderer is on $machine",
+    ({ local, reaches }) => {
+      localHost.id = local;
+
+      renderModal();
+
+      expect(testState.pastePathsReachTarget).toBe(reaches);
+    },
+  );
+
+  it("hands its paste false when the placement has no host, even where this renderer knows none either", () => {
+    localHost.id = null;
+    testState.placement.current = {
+      resolvedHostId: null,
+      client: null,
+      hostLabel: "No host",
+      isPinned: false,
+      namedHostDead: false,
+    };
+
+    renderModal();
+
+    expect(testState.pastePathsReachTarget).toBe(false);
   });
 });
