@@ -29,6 +29,7 @@ import {
   vi,
 } from "vitest";
 import { createStore } from "zustand/vanilla";
+import type { ModelOption } from "@/components/home/data/landing-options";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
@@ -304,64 +305,146 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 });
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
-  const toolbarStore = createStore(() => ({
-    accountChosen: false,
-    defaultAccount: null,
-    setAccountChosen: vi.fn(),
-    setDefaultAccount: vi.fn(),
-    ultracode: false,
-    selectedModel: null,
-    selection: {
-      get harnessId() {
-        return testState.displayedHarness;
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => {
+    const replaceStatePreservingCatalog = (
+      state: ToolbarMockState,
+      patch: Partial<
+        Pick<ToolbarMockState, "accountChosen" | "defaultAccount">
+      >,
+    ): void => {
+      const catalogDescriptor = Object.getOwnPropertyDescriptor(
+        state,
+        "catalog",
+      );
+      const nextState: ToolbarMockState = { ...state, ...patch };
+      if (
+        catalogDescriptor !== undefined &&
+        (typeof catalogDescriptor.get === "function" ||
+          typeof catalogDescriptor.set === "function")
+      ) {
+        Object.defineProperty(nextState, "catalog", catalogDescriptor);
+      }
+      set(nextState, true);
+    };
+
+    return {
+      accountChosen: false,
+      defaultAccount: emptyDefaultAccount,
+      setAccountChosen: (chosen: boolean) => {
+        replaceStatePreservingCatalog(get(), { accountChosen: chosen });
       },
-      get modelSlug() {
-        return testState.modelSlug;
+      setDefaultAccount: (
+        account: {
+          readonly harnessId: string;
+          readonly profileId: string;
+        } | null,
+      ) => {
+        replaceStatePreservingCatalog(get(), { defaultAccount: account });
       },
-      profileId: null,
-    },
-    get catalog() {
-      return testState.catalogHostId === null
-        ? {
-            hostId: null,
-            harnesses: undefined,
-            modelsHarnessId: testState.displayedHarness,
-            modelsProfileId: null,
-            models: [],
-            modelsLoaded: false,
-            modelsFailed: false,
-          }
-        : {
-            hostId: testState.catalogHostId,
-            harnesses: [],
-            modelsHarnessId: testState.displayedHarness,
-            modelsProfileId: null,
-            models: [],
-            modelsLoaded: true,
-            modelsFailed: false,
-          };
-    },
-    // The raw pick; `selection` above is what this host's catalog shows.
-    values: {
       ultracode: false,
+      selectedModel: null,
       selection: {
         get harnessId() {
-          return testState.pickHarness;
+          return testState.displayedHarness;
         },
         get modelSlug() {
-          return testState.pickModel;
+          return testState.modelSlug;
         },
-        profileId: null,
+        get profileId() {
+          const state = get();
+          const rawSelection = state.values.selection;
+          const account = state.defaultAccount;
+          return !state.accountChosen &&
+            account !== null &&
+            rawSelection.profileId === null &&
+            rawSelection.harnessId === account.harnessId &&
+            testState.displayedHarness === account.harnessId
+            ? account.profileId
+            : rawSelection.profileId;
+        },
+      },
+      get catalog() {
+        return testState.catalogHostId === null
+          ? {
+              hostId: null,
+              harnesses: undefined,
+              modelsHarnessId: testState.displayedHarness,
+              modelsProfileId: null,
+              models: [],
+              modelsLoaded: false,
+              modelsFailed: false,
+            }
+          : {
+              hostId: testState.catalogHostId,
+              harnesses: [],
+              modelsHarnessId: testState.displayedHarness,
+              modelsProfileId: null,
+              models: [],
+              modelsLoaded: true,
+              modelsFailed: false,
+            };
+      },
+      // The raw pick; `selection` above is what this host's catalog shows.
+      values: {
+        ultracode: false,
+        selection: {
+          get harnessId() {
+            return testState.pickHarness;
+          },
+          get modelSlug() {
+            return testState.pickModel;
+          },
+          profileId: null,
+        },
+        permission: "supervised",
+        reasoning: "high",
+        serviceTier: "",
       },
       permission: "supervised",
-      reasoning: "high",
+      reasoning: "medium",
       serviceTier: "",
-    },
-    permission: "supervised",
-    reasoning: "medium",
-    serviceTier: "",
-    agentMode: "regular",
-  }));
+      agentMode: "regular",
+    };
+  });
   testState.toolbarStore = toolbarStore;
   return { useComposerToolbarStore: () => toolbarStore };
 });

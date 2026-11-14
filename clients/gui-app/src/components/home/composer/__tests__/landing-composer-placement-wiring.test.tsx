@@ -301,9 +301,17 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   interface ToolbarMockState {
     readonly accountChosen: boolean;
-    readonly defaultAccount: null;
-    readonly setAccountChosen: () => void;
-    readonly setDefaultAccount: () => void;
+    readonly defaultAccount: {
+      readonly harnessId: string;
+      readonly profileId: string;
+    } | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (
+      account: {
+        readonly harnessId: string;
+        readonly profileId: string;
+      } | null,
+    ) => void;
     readonly selectedModel: null;
     readonly values: {
       readonly selection: {
@@ -327,11 +335,47 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       readonly modelsLoaded: boolean;
     };
   }
-  const toolbarStore = createStore<ToolbarMockState>(() => ({
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => ({
     accountChosen: false,
     defaultAccount: null,
-    setAccountChosen: vi.fn(),
-    setDefaultAccount: vi.fn(),
+    setAccountChosen: (chosen) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const account = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      set({
+        accountChosen: chosen,
+        selection: defaultApplies
+          ? { ...state.selection, profileId: account.profileId }
+          : account !== null && state.selection.profileId === account.profileId
+            ? { ...state.selection, profileId: rawSelection.profileId }
+            : state.selection,
+      });
+    },
+    setDefaultAccount: (account) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      set({
+        defaultAccount: account,
+        selection: defaultApplies
+          ? { ...state.selection, profileId: account.profileId }
+          : state.defaultAccount !== null &&
+              state.selection.profileId === state.defaultAccount.profileId
+            ? { ...state.selection, profileId: rawSelection.profileId }
+            : state.selection,
+      });
+    },
     ultracode: false,
     selectedModel: null,
     selection: {
