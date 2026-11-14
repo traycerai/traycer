@@ -218,7 +218,6 @@ export function SecretsPage(props: {
           // configuration it was started in.
           key={configurationKey}
           open={adding}
-          prefill={null}
           client={configurationClient}
           onOpenChange={setAdding}
         />

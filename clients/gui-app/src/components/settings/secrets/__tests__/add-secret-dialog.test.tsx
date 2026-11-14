@@ -44,7 +44,6 @@ describe("Add a secret's custody sentence", () => {
       <AddSecretDialog
         open
         initialKind="api_key"
-        prefill={null}
         client={requireTeamHostClient()}
         onOpenChange={() => undefined}
       />,
@@ -63,7 +62,6 @@ describe("Add a secret's custody sentence", () => {
       <AddSecretDialog
         open
         initialKind="api_key"
-        prefill={null}
         client={requireTeamHostClient()}
         onOpenChange={() => undefined}
       />,
@@ -84,7 +82,6 @@ describe("Add a secret's custody sentence", () => {
         <AddSecretDialog
           open
           initialKind="api_key"
-          prefill={null}
           client={requireTeamHostClient()}
           onOpenChange={() => undefined}
         />

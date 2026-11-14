@@ -107,10 +107,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import type { EnvOverrideValue } from "../env-override-editor";
-import {
-  ProviderEnvOverridesSection,
-  type ProviderKeyHome,
-} from "../provider-env-overrides-section";
+import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -195,7 +192,6 @@ function renderSection(input: {
     withQueryClient(
       <ProviderEnvOverridesSection
         providerId={input.providerId}
-        keyHome={null}
         overrides={[]}
         envOverrideScope={input.envOverrideScope}
       />,
@@ -282,7 +278,6 @@ describe("ProviderEnvOverridesSection on a host that takes no credentials", () =
       withQueryClient(
         <ProviderEnvOverridesSection
           providerId="cursor"
-          keyHome={null}
           overrides={[
             { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
           ]}
@@ -450,7 +445,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   /** A provider's Env tab on the Personal page, with or without a key tab. */
   function renderProviderEnvTab(
     providerId: ProviderCliState["providerId"],
-    keyHome: ProviderKeyHome | null,
     overrides: readonly EnvOverrideValue[],
   ): RenderResult {
     return mountOnPersonalPage(
@@ -458,7 +452,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       NO_FACTS,
       <ProviderEnvOverridesSection
         providerId={providerId}
-        keyHome={keyHome}
         overrides={overrides}
         envOverrideScope="harness-and-native-config"
       />,
@@ -495,7 +488,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     "refuses $name's own key variable with a pointer to $label, clears the value and stores nothing",
     async ({ providerId, name, variable, label }) => {
       const open = vi.fn<() => void>();
-      renderProviderEnvTab(providerId, { label, open }, []);
+      renderProviderEnvTab(providerId, []);
 
       await typeVariable(variable, HELD_VALUE);
 
@@ -522,7 +515,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   it("still sends any other key-shaped name to Add a secret, with the value kept", async () => {
     const open = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", { label: "Account", open }, []);
+    renderProviderEnvTab("kiro", []);
 
     await typeVariable("NOTES", HELD_VALUE);
 
@@ -535,7 +528,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("uses the generic line for the provider's own key variable when it has no key tab", async () => {
-    renderProviderEnvTab("kiro", null, []);
+    renderProviderEnvTab("kiro", []);
 
     await typeVariable("KIRO_API_KEY", HELD_VALUE);
 
@@ -548,7 +541,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
 
   it("masks a saved key-shaped own key variable, points it at the key tab, and leaves it saved", async () => {
     const open = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", { label: "Account", open }, [
+    renderProviderEnvTab("kiro", [
       { key: "KIRO_API_KEY", value: HELD_VALUE },
     ]);
 
@@ -576,7 +569,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("masks a saved key-shaped value on a provider with no key tab and carries it into Add a secret, deleting nothing", async () => {
-    renderProviderEnvTab("claude-code", null, [
+    renderProviderEnvTab("claude-code", [
       { key: "ANTHROPIC_API_KEY", value: HELD_VALUE },
     ]);
 
@@ -602,7 +595,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("keeps an ordinary saved value editable, with no masked row", async () => {
-    renderProviderEnvTab("kiro", null, [
+    renderProviderEnvTab("kiro", [
       { key: "KIRO_BASE_URL", value: "https://example.invalid" },
     ]);
 
@@ -612,7 +605,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("removes a masked row by its key", async () => {
-    renderProviderEnvTab("kiro", null, [
+    renderProviderEnvTab("kiro", [
       { key: "KIRO_API_KEY", value: HELD_VALUE },
     ]);
 
@@ -630,7 +623,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("refuses a key-shaped value typed on the provider's Env tab, stores nothing, and hands it to Add a secret", async () => {
-    renderProviderEnvTab("cursor", null, []);
+    renderProviderEnvTab("cursor", []);
     fireEvent.click(
       await screen.findByRole("button", { name: "Add a variable" }),
     );
@@ -685,7 +678,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       facts,
       <ProviderEnvOverridesSection
         providerId="claude-code"
-        keyHome={null}
         overrides={overrides}
         envOverrideScope="harness-and-native-config"
       />,
@@ -805,7 +797,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           resolveSave = resolve;
         }),
     );
-    const view = renderProviderEnvTab("cursor", null, [
+    const view = renderProviderEnvTab("cursor", [
       { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
     ]);
     const nameField = await screen.findByLabelText("Name for CURSOR_BASE_URL");
@@ -954,7 +946,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           state: "ready",
         };
         pendingSetOverride();
-        renderProviderEnvTab("cursor", null, []);
+        renderProviderEnvTab("cursor", []);
         await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
 
         expect(screen.getByRole("status").textContent).toBe(
@@ -971,7 +963,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         async ({ state }) => {
           hostsRunningPersonalMock.current = { hosts: [], state };
           pendingSetOverride();
-          renderProviderEnvTab("cursor", null, []);
+          renderProviderEnvTab("cursor", []);
           await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
 
           expect(screen.getByRole("status").textContent).toBe(
@@ -988,7 +980,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           thisComputerUnread: true,
         };
         pendingSetOverride();
-        renderProviderEnvTab("cursor", null, []);
+        renderProviderEnvTab("cursor", []);
         await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
 
         expect(screen.getByRole("status").textContent).toBe(
@@ -1002,14 +994,14 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       useSettingsEnvironmentPickStore.setState({
         pick: { kind: "local", hostId: "host-a", hostName: "dev-box" },
       });
-      renderProviderEnvTab("cursor", null, []);
+      renderProviderEnvTab("cursor", []);
       await screen.findByRole("button", { name: "Add a variable" });
 
       expect(useHostsRunningPersonalSpy).toHaveBeenLastCalledWith(false);
     });
 
     it("control: a configuration row (not Local) does ask for the read", async () => {
-      renderProviderEnvTab("cursor", null, []);
+      renderProviderEnvTab("cursor", []);
       await screen.findByRole("button", { name: "Add a variable" });
 
       expect(useHostsRunningPersonalSpy).toHaveBeenLastCalledWith(true);

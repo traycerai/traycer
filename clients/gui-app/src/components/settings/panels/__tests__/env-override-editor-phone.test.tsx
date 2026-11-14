@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EnvOverrideEditor,
   type EnvStaleRefusal,
-  type KeyRefusalFor,
 } from "@/components/settings/panels/env-override-editor";
 import { PhoneTheme } from "@/components/settings/__tests__/phone-theme";
 import {
@@ -44,7 +43,6 @@ interface EditorInput {
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
   readonly credentialRefusal: string | null;
-  readonly keyRefusal: KeyRefusalFor;
   readonly applyingHostsCount: number | null;
   readonly staleRefusal: EnvStaleRefusal | null;
   readonly rowNotes: ReadonlyMap<string, ReactNode>;
@@ -53,7 +51,6 @@ interface EditorInput {
 
 const NO_REFUSAL = {
   credentialRefusal: null,
-  keyRefusal: null,
   applyingHostsCount: null,
   staleRefusal: null,
   rowNotes: NO_NOTES,
@@ -61,7 +58,6 @@ const NO_REFUSAL = {
 } satisfies Pick<
   EditorInput,
   | "credentialRefusal"
-  | "keyRefusal"
   | "applyingHostsCount"
   | "staleRefusal"
   | "rowNotes"
@@ -83,10 +79,8 @@ function editorElement(input: EditorInput): ReactNode {
       <EnvOverrideEditor
         overrides={input.overrides}
         disabled={false}
-        credentialRefusal={input.credentialRefusal}
         rowNotes={input.rowNotes}
         claimedBy={NOT_CLAIMED}
-        keyRefusal={input.keyRefusal}
         staleRefusal={input.staleRefusal}
         namePlaceholder="NODE_ENV"
         emptyLabel="No environment variables."
@@ -354,17 +348,9 @@ describe("EnvOverrideEditor on a phone", () => {
   });
 
   it("shows the saved key refusal under a masked phone row", () => {
-    const keyRefusal: KeyRefusalFor = () => ({
-      before: "This looks like a key. ",
-      link: "Add it as a secret.",
-      after: "",
-      clearsValue: false,
-      onLink: vi.fn<(name: string, value: string) => void>(),
-    });
     renderEditor({
       ...NO_REFUSAL,
       overrides: [{ key: "ANTHROPIC_API_KEY", value: KEY_VALUE }],
-      keyRefusal,
       onCommit: vi.fn<EnvCommit>(),
       onDelete: vi.fn<EnvDelete>(),
     });
@@ -582,17 +568,9 @@ describe("EnvOverrideEditor on a phone", () => {
   it("refuses a key-shaped draft in the sheet and hands it to Add a secret", async () => {
     const onCommit = vi.fn<EnvCommit>();
     const onLink = vi.fn<(name: string, value: string) => void>();
-    const keyRefusal: KeyRefusalFor = () => ({
-      before: "This looks like a key. ",
-      link: "Add it as a secret.",
-      after: "",
-      clearsValue: false,
-      onLink,
-    });
     renderEditor({
       ...NO_REFUSAL,
       overrides: [{ key: "NODE_ENV", value: "development" }],
-      keyRefusal,
       onCommit,
       onDelete: vi.fn<EnvDelete>(),
     });
@@ -718,17 +696,9 @@ describe("EnvOverrideEditor on a phone", () => {
   it("keeps a saved key masked and remove-only", async () => {
     const onDelete = vi.fn<EnvDelete>();
     const onLink = vi.fn<(name: string, value: string) => void>();
-    const keyRefusal: KeyRefusalFor = () => ({
-      before: "This looks like a key. ",
-      link: "Add it as a secret.",
-      after: "",
-      clearsValue: false,
-      onLink,
-    });
     renderEditor({
       ...NO_REFUSAL,
       overrides: [{ key: "ANTHROPIC_API_KEY", value: KEY_VALUE }],
-      keyRefusal,
       onCommit: vi.fn<EnvCommit>(),
       onDelete,
     });

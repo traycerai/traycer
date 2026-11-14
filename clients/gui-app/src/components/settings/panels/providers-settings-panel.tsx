@@ -124,7 +124,6 @@ import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
-  providerKeyTab,
   providerTabInputs,
   supportedTabsFor as resolveSupportedTabs,
   tabsForView,
@@ -1823,16 +1822,10 @@ function AccountManagedCredentialsLine(): ReactNode {
   );
 }
 
-/** The Env tab: a provider with a key sends its own key variable to that key's tab. */
-function ProviderEnvTab(props: {
-  readonly state: ProviderCliState;
-  readonly onActiveTabChange: (tab: ProviderTabKey) => void;
-}): ReactNode {
-  const { state, onActiveTabChange } = props;
+/** The Env tab: the provider's variables. */
+function ProviderEnvTab(props: { readonly state: ProviderCliState }): ReactNode {
+  const { state } = props;
   const configurationKey = useConfigurationKey();
-  const keyTab = providerKeyTab({
-    apiKeySupported: state.apiKey.supported,
-  });
   return (
     <ProviderEnvOverridesSection
       // Keyed by configuration and provider: a row's draft stays with the
@@ -1841,14 +1834,6 @@ function ProviderEnvTab(props: {
       providerId={state.providerId}
       overrides={state.envOverrides}
       envOverrideScope={state.nativeCapabilities.envOverrideScope}
-      keyHome={
-        keyTab === null
-          ? null
-          : {
-              label: keyTab.label,
-              open: () => onActiveTabChange(keyTab.tab),
-            }
-      }
     />
   );
 }
@@ -1934,7 +1919,7 @@ function ProviderTabBody({
       return <ProviderAutoJudgeSection key={state.providerId} state={state} />;
     case "env":
       return (
-        <ProviderEnvTab state={state} onActiveTabChange={onActiveTabChange} />
+        <ProviderEnvTab state={state} />
       );
     // Account is the key's place. The draft is threaded in because this
     // body unmounts with the tab (Radix `TabsContent`).
