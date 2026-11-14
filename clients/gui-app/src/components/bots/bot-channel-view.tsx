@@ -61,6 +61,7 @@ import {
   type BotComposerEdit,
   type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
+import type { QuoteTextSnapshot } from "@/components/chat/quote/append-quote-to-draft";
 import { clearBrowserSelection } from "@/components/chat/quote/quote-snapshot-into-draft";
 import {
   QuoteSinkContext,
@@ -709,7 +710,8 @@ export function BotChannelView(props: {
     openThreadPostId === null
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
-  const { quoteIntoOpenBox, quoteFor } = useBoxQuotes(railThreadPostId);
+  const { quoteIntoChannelBox, quoteIntoThreadBox, quoteFor } =
+    useBoxQuotes(railThreadPostId);
   // The bot's messages with other bots: lines between the channel's rows and
   // the open thread's, and a pair's log in the rail.
   const exchangeLines = useExchangeLines({
@@ -841,7 +843,7 @@ export function BotChannelView(props: {
   }
   return (
     <BotSurfaceCardsContext.Provider value={surfaceCards}>
-      <QuoteSinkContext value={quoteIntoOpenBox}>
+      <QuoteSinkContext value={quoteIntoChannelBox}>
         <div className="@container flex min-h-0 flex-1">
           <div className="flex min-h-0 w-full">
             <section
@@ -970,33 +972,35 @@ export function BotChannelView(props: {
               }
               render={(postId) => (
                 <BotExchangeLinesContext value={exchangeLines.thread}>
-                  <BotThreadPanel
-                    key={postId}
-                    botId={botId}
-                    hostId={hostId}
-                    boundHostId={boundHostId}
-                    botTitle={botTitle}
-                    imageReach={imageReach}
-                    answerReach={answerReach}
-                    conversationId={channel.conversationId}
-                    originMessageId={postId}
-                    sent={open?.sent ?? null}
-                    thread={panelThread}
-                    tasks={tasks}
-                    anchorSenderLabel={anchorSenderLabel}
-                    resolveMember={resolveMember}
-                    landOn={
-                      threadLanding.landing ?? search.threadLandingOn(postId)
-                    }
-                    onClose={() => {
-                      threadLanding.spend();
-                      onOpenThread(null);
-                    }}
-                    onEditPost={editPostFromThread}
-                    onOpenTurn={onOpenTurn}
-                    onOpenSession={onOpenSession}
-                    quote={quoteFor(postId)}
-                  />
+                  <QuoteSinkContext value={quoteIntoThreadBox}>
+                    <BotThreadPanel
+                      key={postId}
+                      botId={botId}
+                      hostId={hostId}
+                      boundHostId={boundHostId}
+                      botTitle={botTitle}
+                      imageReach={imageReach}
+                      answerReach={answerReach}
+                      conversationId={channel.conversationId}
+                      originMessageId={postId}
+                      sent={open?.sent ?? null}
+                      thread={panelThread}
+                      tasks={tasks}
+                      anchorSenderLabel={anchorSenderLabel}
+                      resolveMember={resolveMember}
+                      landOn={
+                        threadLanding.landing ?? search.threadLandingOn(postId)
+                      }
+                      onClose={() => {
+                        threadLanding.spend();
+                        onOpenThread(null);
+                      }}
+                      onEditPost={editPostFromThread}
+                      onOpenTurn={onOpenTurn}
+                      onOpenSession={onOpenSession}
+                      quote={quoteFor(postId)}
+                    />
+                  </QuoteSinkContext>
                 </BotExchangeLinesContext>
               )}
             />
@@ -1337,8 +1341,13 @@ function useChannelSearch(args: {
   return {
     railOpen: args.railHeld || showing === "results",
     showing,
+    // A result's landing belongs to the search that opened its thread: once
+    // anything else holds the rail (a step back or forward, the memory, a
+    // thread opened by hand), the same thread shown again opens where it opens.
     threadLandingOn: (postId) =>
-      threadLanding?.postId === postId ? threadLanding.landing : null,
+      showing === "thread" && threadLanding?.postId === postId
+        ? threadLanding.landing
+        : null,
   };
 }
 
@@ -1592,14 +1601,15 @@ function useReadThreadWhilePresented(args: {
 type PendingQuotes = ReadonlyMap<string | null, BotComposerQuote>;
 
 /**
- * A quote, from the channel or the thread beside it, goes into the box that
- * is open: the thread's while a thread is open (`openPostId`), else the
- * channel's. The box adds it after what it shows and hands it back once it
- * has. Quotes wait per box: a thread's box not drawn yet, or closed, takes
- * its quotes, in order, once it is drawn.
+ * A quote goes into the box of the conversation it was selected in: the
+ * channel's for a selection of the channel, the thread's for a selection of
+ * the thread beside it, whichever box holds the caret. The box adds it after
+ * what it shows and hands it back once it has.
  */
 function useBoxQuotes(openPostId: string | null): {
-  readonly quoteIntoOpenBox: QuoteSink;
+  readonly quoteIntoChannelBox: QuoteSink;
+  /** The sink of the open thread's transcript, drawn only while one is open. */
+  readonly quoteIntoThreadBox: QuoteSink;
   /** The quotes waiting for the box of the thread `postId`; `null` for the channel's. */
   readonly quoteFor: (postId: string | null) => BotComposerQuote | null;
 } {
@@ -1607,11 +1617,10 @@ function useBoxQuotes(openPostId: string | null): {
   const [pendingQuotes, setPendingQuotes] = useState<PendingQuotes>(
     () => new Map(),
   );
-  const quoteIntoOpenBox = useCallback<QuoteSink>(
-    (_chatId, snapshot) => {
+  const quoteInto = useCallback(
+    (postId: string | null, snapshot: QuoteTextSnapshot): void => {
       quoteCount.current += 1;
       const id = quoteCount.current;
-      const postId = openPostId;
       const taken = (): void =>
         setPendingQuotes((current) => {
           if (current.get(postId)?.id !== id) return current;
@@ -1629,10 +1638,19 @@ function useBoxQuotes(openPostId: string | null): {
       });
       clearBrowserSelection();
     },
-    [openPostId],
+    [],
+  );
+  const quoteIntoChannelBox = useCallback<QuoteSink>(
+    (_chatId, snapshot) => quoteInto(null, snapshot),
+    [quoteInto],
+  );
+  const quoteIntoThreadBox = useCallback<QuoteSink>(
+    (_chatId, snapshot) => quoteInto(openPostId, snapshot),
+    [quoteInto, openPostId],
   );
   return {
-    quoteIntoOpenBox,
+    quoteIntoChannelBox,
+    quoteIntoThreadBox,
     quoteFor: (postId) => pendingQuotes.get(postId) ?? null,
   };
 }

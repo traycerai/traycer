@@ -36,7 +36,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => mocks.state.effectiveHostId,
 }));
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
-  useBotSubscription: () => ({
+  useBotSubscriptionForHost: () => ({
     snapshot: mocks.state.snapshot,
     deleted: false,
     error: null,

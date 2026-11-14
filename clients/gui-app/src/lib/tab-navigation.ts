@@ -2001,6 +2001,22 @@ export class TabNavigationController {
     location: TabNavigationLocation,
     navigate: NavigateFn,
   ): void {
+    const intent: TabNavigationIntent = {
+      kind: "tracy",
+      botId: readBotIdFromPath(location.pathname),
+    };
+    // The surface already holds the focus, so there is nothing to activate:
+    // this is the surface committing its own place, or a step between two of
+    // its entries. As for a task's tab (`resolveExternalEpic`), taking it
+    // through the command coordinator would refuse it while a transaction is
+    // open and correct the URL away from a good route.
+    if (
+      isTracySurfaceOpen() &&
+      refsEqual(focusedRefOfLayout(currentLayout()), TRACY_TAB_REF)
+    ) {
+      this.rememberRoute(TRACY_TAB_REF, intent, location.search);
+      return;
+    }
     if (!isTracySurfaceOpen()) {
       const hostId = activeHostIdOrNull();
       if (hostId === null) {
@@ -2017,11 +2033,7 @@ export class TabNavigationController {
       this.issueLandingCorrection(location, navigate);
       return;
     }
-    this.rememberRoute(
-      TRACY_TAB_REF,
-      { kind: "tracy", botId: readBotIdFromPath(location.pathname) },
-      location.search,
-    );
+    this.rememberRoute(TRACY_TAB_REF, intent, location.search);
   }
 
   private resolveExternalSystem(

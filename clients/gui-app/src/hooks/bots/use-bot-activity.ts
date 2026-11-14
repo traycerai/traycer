@@ -7,6 +7,7 @@ import {
   type BotSubscriptionResult,
 } from "@/hooks/bots/use-bot-subscription";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import type { MascotExpression } from "@/lib/bots/mascot-mark";
 
 export type { BotActivity, BotSessionActivity };
 
@@ -120,6 +121,27 @@ export function replyingSessionOf(
 export function botWorkingOf(activity: BotActivity | null): boolean | null {
   if (replyingSessionOf(activity) !== null) return true;
   return activity === null || activity.trunk === null ? null : false;
+}
+
+/**
+ * What the bot's mascot shows of it, by where it is drawn. This is the one
+ * place that decides it.
+ *
+ * - `row`, a channel's row in the sidebar, which stands for the whole bot:
+ *   `working` while it is answering anywhere, its trunk or a thread.
+ * - `title`, the open channel's title: never moving, and `away` (eyes shut)
+ *   while its trunk's queue is paused.
+ *
+ * `idle` otherwise, with no reading included.
+ */
+export function botExpressionOn(
+  surface: "row" | "title",
+  activity: BotActivity | null,
+): MascotExpression {
+  if (surface === "row") {
+    return replyingSessionOf(activity) === null ? "idle" : "working";
+  }
+  return activity?.trunk?.state === "parked" ? "away" : "idle";
 }
 
 /** A session with no start time sorts after every one that has one. */

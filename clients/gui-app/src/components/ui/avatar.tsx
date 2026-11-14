@@ -14,10 +14,11 @@ const SQUIRCLE_PATH =
 
 /**
  * The shape of an avatar's picture, as the clip of its picture layer (the
- * image and the initials): a person is a circle and a bot a squircle, so a
- * glance at a row says which wrote it. The root carries the clip as
- * `--avatar-clip` and is not clipped itself, so a corner badge and a
- * group's ring outside the picture are not cut.
+ * image and the initials): a person is a circle. A bot draws its own figure
+ * with no picture layer, and its squircle shapes only the plate a group puts
+ * behind it. The root carries the clip as `--avatar-clip` and is not clipped
+ * itself, so a corner badge and a group's ring outside the picture are not
+ * cut.
  */
 function Avatar({
   className,

@@ -436,7 +436,7 @@ export function ChatBotAppPost(props: {
   return (
     <BotMessageFrame
       replyBadge={null}
-      avatar={<BotAvatar size="lg" />}
+      avatar={<MessageBotAvatar />}
       name={props.name}
       bot={false}
       sentAt={null}
@@ -559,7 +559,7 @@ function BotRow(props: {
   return (
     <BotMessageFrame
       replyBadge={replyBadgeOf(message, hoverActions)}
-      avatar={<BotAvatar size="lg" />}
+      avatar={<MessageBotAvatar />}
       name={presentation.botTitle}
       bot
       sentAt={sentAt}
@@ -953,6 +953,19 @@ function botRowThread(
         ? null
         : presentation.threadLine(anchorId),
   };
+}
+
+/**
+ * The bot's picture beside its message: its mascot a size under a person's
+ * picture, in the middle of the same box, so a bot's rows and a person's
+ * keep one text column.
+ */
+function MessageBotAvatar(): ReactElement {
+  return (
+    <span className="flex size-10 shrink-0 items-center justify-center">
+      <BotAvatar size="default" />
+    </span>
+  );
 }
 
 /**
