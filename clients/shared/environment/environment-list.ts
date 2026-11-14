@@ -34,7 +34,7 @@ const hostReportsSchema = z.object({
 
 const viewerRoleSchema = z.object({
   viewer: z.object({
-    effectiveRole: z.enum(["admin", "editor", "viewer"]).nullable(),
+    effectiveRole: z.enum(["admin", "editor", "viewer"]),
   }),
 });
 
