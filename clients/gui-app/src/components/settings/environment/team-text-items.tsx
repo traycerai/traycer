@@ -791,8 +791,11 @@ interface SavedTextCommit {
 }
 
 /**
- * A saved row's value, on blur and when the row unmounts. A revision change
- * remounts the row without a blur, so the unmount writes a dirty value.
+ * A saved row's value, on blur (`snapName`) and when the row unmounts. A
+ * revision change remounts the row without a blur, so the unmount writes a
+ * dirty value that was never submitted. A held draft was submitted already
+ * and is kept for the remounted row, so the unmount sends nothing for it:
+ * only the person's own blur or Save sends a draft again.
  * The name snap stays on blur: a saved name is not a rename.
  */
 function commitSavedText(snap: SavedTextCommit, snapName: boolean): void {
@@ -800,6 +803,7 @@ function commitSavedText(snap: SavedTextCommit, snapName: boolean): void {
   if (snapName && snap.name.trim() !== snap.displayName) {
     snap.snapName(snap.displayName);
   }
+  if (!snapName && snap.draft !== null) return;
   if (snap.busy || snap.value === snap.saved) return;
   putText({
     kind: snap.kind,
