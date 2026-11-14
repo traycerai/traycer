@@ -31,10 +31,14 @@ import {
 export async function readProviderStates(): Promise<
   readonly ProviderListState[]
 > {
-  const response = await toAgentCliError(
+  return (await readProvidersList()).providers;
+}
+
+/** The envelope includes whether this computer offers sign-ins. */
+export async function readProvidersList(): Promise<ProvidersListResponse> {
+  return await toAgentCliError(
     callHostRpcWithDispatch("providers.list", { native: null }, PLAIN_DISPATCH),
   );
-  return response.providers;
 }
 
 /** One provider as `providers.list` answers it, its rows with every list key. */

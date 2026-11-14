@@ -3,8 +3,13 @@ import type { Chat, Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type {
+  ChatAccountWait,
   PendingFallback,
   PendingReturn,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  chatAccountWaitSchema,
+  readChatAccountWait,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   ChatLoadRangeRequest,
@@ -55,6 +60,11 @@ const RETURN = pendingReturn({
   queuedItemsMoving: 1,
   traversalId: "traversal-return-store",
   revision: 6,
+});
+
+const ACCOUNT_WAIT: ChatAccountWait = chatAccountWaitSchema.parse({
+  reason: "needs-sign-in",
+  source: { providerId: "claude-code", profileId: "profile-waiting" },
 });
 
 function userMessage(messageId: string, timestamp: number): Message {
@@ -180,6 +190,7 @@ function emitLegacySnapshot(
   callbacks: ChatStreamCallbacks,
   pending: PendingFallback | undefined,
   returning: PendingReturn | undefined,
+  accountWait: ChatAccountWait | null | undefined,
 ): void {
   callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
@@ -204,6 +215,7 @@ function emitLegacySnapshot(
       portForwards: [],
       pendingFallback: pending,
       pendingReturn: returning,
+      ...(accountWait === undefined ? {} : { accountWait }),
     },
   });
 }
@@ -212,6 +224,7 @@ function emitTurnState(
   callbacks: ChatStreamCallbacks,
   pending: PendingFallback | undefined,
   returning: PendingReturn | undefined,
+  accountWait: ChatAccountWait | null,
 ): void {
   callbacks.onTurnStateChanged({
     kind: "turnStateChanged",
@@ -222,6 +235,7 @@ function emitTurnState(
     activeTurn: null,
     pendingFallback: pending,
     pendingReturn: returning,
+    accountWait,
   });
 }
 
@@ -239,6 +253,7 @@ const WINDOWED_DERIVED: ChatTranscriptDerived = {
 function deferredWindowedSnapshot(
   pending: PendingFallback | undefined,
   returning: PendingReturn | undefined,
+  accountWait: ChatAccountWait | null,
 ): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
   return {
     kind: "snapshot",
@@ -282,6 +297,7 @@ function deferredWindowedSnapshot(
       derived: WINDOWED_DERIVED,
       pendingFallback: pending,
       pendingReturn: returning,
+      accountWait,
     },
   };
 }
@@ -291,14 +307,39 @@ describe("chat-session-store pendingFallback / pendingReturn D115", () => {
     const harness = createLegacyHarness();
     try {
       const callbacks = harness.callbacks();
-      emitLegacySnapshot(callbacks, HOLD, RETURN);
+      emitLegacySnapshot(callbacks, HOLD, RETURN, null);
       expect(harness.handle.store.getState().pendingFallback).toEqual(HOLD);
       expect(harness.handle.store.getState().pendingReturn).toEqual(RETURN);
 
-      emitLegacySnapshot(callbacks, undefined, undefined);
+      emitLegacySnapshot(callbacks, undefined, undefined, undefined);
       // Falsification: add "?? current.pendingFallback" to the applyAuthoritativeSnapshot write in chat-session-store.ts and THIS assertion must go red.
       expect(harness.handle.store.getState().pendingFallback).toBeUndefined();
       expect(harness.handle.store.getState().pendingReturn).toBeUndefined();
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("replaces accountWait from snapshots and turn state, clearing missing and unreadable values", () => {
+    const harness = createLegacyHarness();
+    try {
+      const callbacks = harness.callbacks();
+      emitLegacySnapshot(callbacks, undefined, undefined, ACCOUNT_WAIT);
+      expect(harness.handle.store.getState().accountWait).toEqual(ACCOUNT_WAIT);
+
+      emitTurnState(callbacks, undefined, undefined, null);
+      expect(harness.handle.store.getState().accountWait).toBeNull();
+
+      emitLegacySnapshot(callbacks, undefined, undefined, ACCOUNT_WAIT);
+      emitLegacySnapshot(callbacks, undefined, undefined, undefined);
+      expect(harness.handle.store.getState().accountWait).toBeNull();
+
+      const unreadable = readChatAccountWait({
+        accountWait: { reason: "unknown", source: null },
+      });
+      expect(unreadable).toBeNull();
+      emitLegacySnapshot(callbacks, undefined, undefined, unreadable);
+      expect(harness.handle.store.getState().accountWait).toBeNull();
     } finally {
       harness.handle.dispose();
     }
@@ -308,12 +349,12 @@ describe("chat-session-store pendingFallback / pendingReturn D115", () => {
     const harness = createLegacyHarness();
     try {
       const callbacks = harness.callbacks();
-      emitLegacySnapshot(callbacks, undefined, undefined);
-      emitTurnState(callbacks, HOLD, RETURN);
+      emitLegacySnapshot(callbacks, undefined, undefined, null);
+      emitTurnState(callbacks, HOLD, RETURN, null);
       expect(harness.handle.store.getState().pendingFallback).toEqual(HOLD);
       expect(harness.handle.store.getState().pendingReturn).toEqual(RETURN);
 
-      emitTurnState(callbacks, undefined, undefined);
+      emitTurnState(callbacks, undefined, undefined, null);
       // Falsification: add "?? current.pendingFallback" to the turnStateChanged write in chat-session-store.ts and THIS assertion must go red.
       expect(harness.handle.store.getState().pendingFallback).toBeUndefined();
       expect(harness.handle.store.getState().pendingReturn).toBeUndefined();
@@ -326,12 +367,14 @@ describe("chat-session-store pendingFallback / pendingReturn D115", () => {
     const harness = createWindowedHarness();
     try {
       const callbacks = harness.callbacks();
-      callbacks.onWindowedSnapshot(deferredWindowedSnapshot(HOLD, RETURN));
+      callbacks.onWindowedSnapshot(
+        deferredWindowedSnapshot(HOLD, RETURN, null),
+      );
       expect(
         isTailHydrated(harness.handle.store.getState().transcriptWindow),
       ).toBe(false);
 
-      emitTurnState(callbacks, undefined, undefined);
+      emitTurnState(callbacks, undefined, undefined, null);
       expect(harness.handle.store.getState().pendingFallback).toBeUndefined();
       expect(harness.handle.store.getState().pendingReturn).toBeUndefined();
 
@@ -356,6 +399,44 @@ describe("chat-session-store pendingFallback / pendingReturn D115", () => {
       // Falsification: add "?? held.pendingFallback" to the turnStateChanged deferred-aux write in chat-session-store.ts and THIS assertion must go red.
       expect(harness.handle.store.getState().pendingFallback).toBeUndefined();
       expect(harness.handle.store.getState().pendingReturn).toBeUndefined();
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not replay accountWait from a deferred snapshot after turnStateChanged clears it", () => {
+    const harness = createWindowedHarness();
+    try {
+      const callbacks = harness.callbacks();
+      callbacks.onWindowedSnapshot(
+        deferredWindowedSnapshot(HOLD, RETURN, ACCOUNT_WAIT),
+      );
+      expect(
+        isTailHydrated(harness.handle.store.getState().transcriptWindow),
+      ).toBe(false);
+
+      emitTurnState(callbacks, undefined, undefined, null);
+      expect(harness.handle.store.getState().accountWait).toBeNull();
+
+      callbacks.onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId: harness.lastRangeRequestId(),
+          epoch: 4,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+          rowContext: {},
+          reachedStart: true,
+          reachedEnd: true,
+        },
+      });
+
+      expect(harness.handle.store.getState().accountWait).toBeNull();
     } finally {
       harness.handle.dispose();
     }

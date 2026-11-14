@@ -664,6 +664,20 @@ vi.mock(
         const mockedMutation = useProvidersAwaitLogin();
         return providerMocks.liveList ? liveMutation : mockedMutation;
       },
+      useProvidersDestinationAwaitLoginForClient: (
+        args: {
+          readonly client: HostClient<HostRpcRegistry> | null;
+          readonly getCacheHostId: () => string | null;
+        },
+        targeted: boolean,
+      ) => {
+        const liveMutation = actual.useProvidersDestinationAwaitLoginForClient(
+          args,
+          targeted,
+        );
+        const mockedMutation = useProvidersAwaitLogin();
+        return providerMocks.liveList ? liveMutation : mockedMutation;
+      },
     };
   },
 );

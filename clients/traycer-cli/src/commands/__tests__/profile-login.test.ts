@@ -14,6 +14,7 @@ import {
   providerMutationCliStateSchemaV21,
   providersAwaitLoginResponseSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV1011Preimage,
   providersListResponseSchemaV1010Preimage,
   providersStartLoginResponseSchemaV13,
   type ProviderCliState,
@@ -317,6 +318,16 @@ function defaultScenario(): Scenario {
   };
 }
 
+function listEnvelopeFor(
+  provider: ListedProvider,
+  offersSignIns: boolean | null,
+): ProvidersListResponse {
+  const response = { providers: [provider], native: null };
+  return providersListResponseSchema.parse(
+    offersSignIns === null ? response : { ...response, offersSignIns },
+  );
+}
+
 function nextStartAnswer(): ProvidersStartLoginResponseV13 {
   const index = Math.min(startIndex, scenario.startAnswers.length - 1);
   startIndex += 1;
@@ -535,6 +546,10 @@ function create(label: string | null): ProfileLoginTarget {
 
 function existing(profile: string): ProfileLoginTarget {
   return { kind: "existing", profile };
+}
+
+function switchAccount(profile: string): ProfileLoginTarget {
+  return { kind: "switch", profile };
 }
 
 function runLogin(
@@ -2614,6 +2629,416 @@ describe("alias look-up on login", () => {
     expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
     expect(error.message).toContain("shared-id");
     expect(callsTo("providers.startLogin")).toHaveLength(0);
+  });
+});
+
+describe("profile login with --switch-account", () => {
+  it("creates a separate profile and reports that no work moved", async () => {
+    const personal: ProfileSpec = {
+      profileId: "prof_personal",
+      kind: "managed",
+      label: "Personal",
+      email: "Personal@example.test",
+      authStatus: "authenticated",
+    };
+    const work = listState({ ...NO_PROFILES, profiles: [WORK_PROFILE] });
+    scenario.listState = work;
+    scenario.listEnvelope = listEnvelopeFor(work, true);
+    scenario.startAnswers = [startAnswer({ profileId: personal.profileId })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([personal]),
+          profileOutcome: {
+            kind: "signed-in",
+            profileId: personal.profileId,
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      switchAccount("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(onlyCallTo("providers.startLogin")[1]).toEqual({
+      providerId: "claude-code",
+      holderId: HOLDER_ID,
+      target: null,
+      profileId: null,
+      createProfile: { label: "", shareSkillsAndPlugins: false },
+    });
+    expect(onlyCallTo("providers.awaitLogin")[1]).toEqual({
+      providerId: "claude-code",
+      profileId: "prof_personal",
+    });
+    expect(dispatchMock.mock.calls.map((call) => call[0])).toEqual([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+    expect(result.human).toBe(
+      "Signed in as Personal\nNothing was moved from Work.",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: rowOf(personal, "Personal"),
+      created: true,
+    });
+  });
+
+  it("selects an existing other account without creating a third row", async () => {
+    const personal: ProfileSpec = {
+      profileId: "prof_personal",
+      kind: "managed",
+      label: "Personal",
+      email: "Personal@example.test",
+      authStatus: "authenticated",
+    };
+    const state = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE, personal],
+    });
+    scenario.listState = state;
+    scenario.listEnvelope = listEnvelopeFor(state, true);
+    scenario.startAnswers = [startAnswer({ profileId: personal.profileId })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([personal]),
+          profileOutcome: {
+            kind: "already-signed-in",
+            profileId: personal.profileId,
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      switchAccount("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(onlyCallTo("providers.startLogin")[1]).toEqual(
+      expect.objectContaining({
+        profileId: null,
+        createProfile: { label: "", shareSkillsAndPlugins: false },
+      }),
+    );
+    expect(dispatchMock.mock.calls.map((call) => call[0])).toEqual([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+    expect(result.human).toBe(
+      "Already signed in as Personal\nNothing was moved from Work.",
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "already-exists",
+      profile: rowOf(personal, "Personal"),
+      created: false,
+    });
+  });
+
+  it("does not add a no-move line when the switch sign-in is the source account", async () => {
+    const state = listState({ ...NO_PROFILES, profiles: [WORK_PROFILE] });
+    scenario.listState = state;
+    scenario.listEnvelope = listEnvelopeFor(state, true);
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([WORK_PROFILE]),
+          profileOutcome: {
+            kind: "already-signed-in",
+            profileId: "prof_work",
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      switchAccount("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(dispatchMock.mock.calls.map((call) => call[0])).toEqual([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+    expect(result.human).toBe("Already signed in as Work");
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "already-exists",
+      profile: rowOf(WORK_PROFILE, "Work"),
+      created: false,
+    });
+  });
+
+  it("resolves a source alias to its row before starting the separate sign-in", async () => {
+    const personal: ProfileSpec = {
+      profileId: "prof_personal",
+      kind: "managed",
+      label: "Personal",
+      email: "Personal@example.test",
+      authStatus: "authenticated",
+    };
+    const work = deviceList(
+      [workRow("prof_work", ["work-old"], "Work", WORK_EMAIL)],
+      [],
+    );
+    scenario.listState = work;
+    scenario.listEnvelope = listEnvelopeFor(work, true);
+    scenario.startAnswers = [startAnswer({ profileId: personal.profileId })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([personal]),
+          profileOutcome: {
+            kind: "signed-in",
+            profileId: personal.profileId,
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      switchAccount("work-old"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(onlyCallTo("providers.startLogin")[1]).toEqual(
+      expect.objectContaining({ profileId: null }),
+    );
+    expect(result.human).toBe(
+      "Signed in as Personal\nNothing was moved from Work.",
+    );
+  });
+
+  it("uses the ambient row as the switch source", async () => {
+    const personal: ProfileSpec = {
+      profileId: "prof_personal",
+      kind: "managed",
+      label: "Personal",
+      email: "Personal@example.test",
+      authStatus: "authenticated",
+    };
+    const state = deviceList(accountRows(null, false), []);
+    scenario.listState = state;
+    scenario.listEnvelope = listEnvelopeFor(state, true);
+    scenario.startAnswers = [startAnswer({ profileId: personal.profileId })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([personal]),
+          profileOutcome: {
+            kind: "signed-in",
+            profileId: personal.profileId,
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      switchAccount("ambient"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(onlyCallTo("providers.startLogin")[1]).toEqual(
+      expect.objectContaining({ profileId: null }),
+    );
+    expect(result.human).toBe(
+      "Signed in as Personal\nNothing was moved from Terminal login.",
+    );
+  });
+
+  it("does not append the no-move line when sign-in fails", async () => {
+    const work = listState({ ...NO_PROFILES, profiles: [WORK_PROFILE] });
+    scenario.listState = work;
+    scenario.listEnvelope = listEnvelopeFor(work, true);
+    scenario.startFailure = new Error("fake sign-in failure");
+
+    await expect(
+      runLogin(
+        switchAccount("prof_work"),
+        makeIo(false),
+        makeCtx(false, false),
+      ),
+    ).rejects.toBe(scenario.startFailure);
+    expect(dispatchMock.mock.calls.map((call) => call[0])).toEqual([
+      "providers.list",
+      "providers.startLogin",
+      "providers.cancelLogin",
+    ]);
+    expect(onlyCallTo("providers.startLogin")[1]).toEqual(
+      expect.objectContaining({
+        profileId: null,
+        createProfile: { label: "", shareSkillsAndPlugins: false },
+      }),
+    );
+  });
+
+  it("offers the switch command after a proven account mismatch", async () => {
+    const work = deviceList(
+      [workRow("prof_work", ["work-old"], "Work", WORK_EMAIL)],
+      [],
+    );
+    scenario.listState = work;
+    scenario.listEnvelope = listEnvelopeFor(work, true);
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([WORK_PROFILE]),
+          profileOutcome: { kind: "account-mismatch" },
+        }),
+      );
+
+    const result = await runLogin(
+      existing("work-old"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe(
+      "That sign-in is a different account. Work was not changed.\n" +
+        "To add it as its own profile, run: traycer profile login claude work-old --switch-account",
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "account-mismatch",
+    });
+    expect(onlyCallTo("providers.startLogin")[1]).toEqual(
+      expect.objectContaining({
+        profileId: "prof_work",
+        createProfile: null,
+      }),
+    );
+  });
+
+  it("does not label an unproven sign-in as a different account", async () => {
+    const work = listState({ ...NO_PROFILES, profiles: [WORK_PROFILE] });
+    scenario.listState = work;
+    scenario.listEnvelope = listEnvelopeFor(work, true);
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([WORK_PROFILE]),
+          profileOutcome: { kind: "account-unproven" },
+        }),
+      );
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe(
+      "This sign-in can't be matched to the account this profile uses.\n" +
+        "Work was not changed.",
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "account-unproven",
+    });
+  });
+
+  it("keeps the switch flag inert when offersSignIns is false or absent", async () => {
+    const work = listState({ ...NO_PROFILES, profiles: [WORK_PROFILE] });
+    for (const offer of [false, null] as const) {
+      scenario.listState = work;
+      scenario.listEnvelope = listEnvelopeFor(work, offer);
+      scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+      scenario.awaitLogin = () =>
+        Promise.resolve(awaitResult({ state: signedInState([WORK_PROFILE]) }));
+
+      const ordinary = await runLogin(
+        existing("prof_work"),
+        makeIo(false),
+        makeCtx(false, false),
+      );
+      const ordinaryCalls = dispatchMock.mock.calls.map(([method, params]) => ({
+        method,
+        params,
+      }));
+
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+      const flagged = await runLogin(
+        switchAccount("prof_work"),
+        makeIo(false),
+        makeCtx(false, false),
+      );
+      const flaggedCalls = dispatchMock.mock.calls.map(([method, params]) => ({
+        method,
+        params,
+      }));
+
+      expect(flagged.human).toBe(ordinary.human);
+      expect(flagged.exitCode).toBe(ordinary.exitCode);
+      expect(flagged.data).toEqual(ordinary.data);
+      expect(flaggedCalls).toEqual(ordinaryCalls);
+
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+    }
+  });
+
+  it("matches ordinary login byte for byte against a negotiated 10.11 answer", async () => {
+    const work = deviceList([workRow("prof_work", [], "Work", WORK_EMAIL)], []);
+    const legacy = providersListResponseSchemaV1011Preimage.parse({
+      providers: [work],
+      native: null,
+    });
+    const legacyProvider = legacy.providers[0];
+    if (legacyProvider === undefined)
+      throw new Error("unreachable: no provider");
+    scenario.listState = legacyProvider;
+    scenario.listEnvelope = legacy;
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(awaitResult({ state: signedInState([WORK_PROFILE]) }));
+
+    const ordinary = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+    const ordinaryCalls = dispatchMock.mock.calls.map(([method, params]) => ({
+      method,
+      params,
+    }));
+
+    dispatchMock.mockClear();
+    startIndex = 0;
+    listReads = 0;
+    const flagged = await runLogin(
+      switchAccount("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+    const flaggedCalls = dispatchMock.mock.calls.map(([method, params]) => ({
+      method,
+      params,
+    }));
+
+    expect(flagged.human).toBe(ordinary.human);
+    expect(flagged.exitCode).toBe(ordinary.exitCode);
+    expect(flagged.data).toEqual(ordinary.data);
+    expect(flaggedCalls).toEqual(ordinaryCalls);
   });
 });
 

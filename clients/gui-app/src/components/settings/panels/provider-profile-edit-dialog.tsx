@@ -420,6 +420,7 @@ function ProfileEditAccountSection(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly switchingAccount: boolean;
+  readonly offersSignIns: boolean;
   readonly startInReauth: boolean;
   readonly isLocalHost: boolean;
   readonly canOauth: boolean;
@@ -464,7 +465,9 @@ function ProfileEditAccountSection(props: {
           props.canOauth
             ? null
             : (props.oauthUnavailableHint ??
-              "Switch account requires a local host with browser sign-in available.")
+              (props.offersSignIns
+                ? "Switch account requires a local computer with browser sign-in available."
+                : "Switch account requires a local host with browser sign-in available."))
         }
         side="top"
         sideOffset={6}
@@ -475,7 +478,11 @@ function ProfileEditAccountSection(props: {
             type="button"
             aria-label="Switch account"
             className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!props.canOauth || props.savePending || props.invalid}
+            disabled={
+              !props.canOauth ||
+              props.savePending ||
+              (!props.offersSignIns && props.invalid)
+            }
             onClick={props.onStartSwitchingAccount}
           >
             <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
@@ -485,9 +492,11 @@ function ProfileEditAccountSection(props: {
               <span className="block text-ui-sm font-medium text-foreground">
                 Switch account
               </span>
-              <span className="block text-ui-xs text-muted-foreground">
-                Sign in with a different account for this profile.
-              </span>
+              {props.offersSignIns ? null : (
+                <span className="block text-ui-xs text-muted-foreground">
+                  Sign in with a different account for this profile.
+                </span>
+              )}
             </span>
             <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </button>
@@ -610,24 +619,41 @@ function useProfileRename(profile: ProviderProfile): ProfileRename {
  * provider on the same host, selecting the new profile here once it exists.
  */
 function useReauthSignInOutcomes(
-  providerId: ProviderId,
+  source: {
+    readonly providerId: ProviderId;
+    readonly profile: ProviderProfile;
+  },
   closeDialog: () => void,
   selectProfile: (profileId: string | null) => void,
   onSettledChange: (settled: boolean) => void,
 ): ReauthSignInOutcomes | null {
+  const { providerId, profile } = source;
   const hostClient = useHostClient();
   const offersSignIns = listOffersSignIns(
     useProvidersList({ enabled: false, subscribed: false }).data,
   );
   const reader = useCachedProviderProfilesReader(hostClient, providerId);
+  const openSwitchFlow = useProviderProfileAddFlowStore(
+    (state) => state.openForSwitch,
+  );
   const openAddFlow = useProviderProfileAddFlowStore(
     (state) => state.openForHarness,
   );
   if (!offersSignIns) return null;
   return {
     reader,
-    onAddAsNewProfile: () => {
+    onAddAsNewProfile: (reason) => {
       closeDialog();
+      const hostId = hostClient.getActiveHostId();
+      if (reason === "account-mismatch" && hostId !== null) {
+        openSwitchFlow(
+          providerIdToGuiHarnessId(providerId),
+          hostId,
+          { profileId: profile.profileId, label: profile.label },
+          selectProfile,
+        );
+        return;
+      }
       openAddFlow(
         providerIdToGuiHarnessId(providerId),
         hostClient.getActiveHostId(),
@@ -661,11 +687,30 @@ export function ProfileEditDialog(props: {
   const providerId = props.state.providerId;
   const [signInSettled, setSignInSettled] = useState(false);
   const signInOutcomes = useReauthSignInOutcomes(
-    providerId,
+    { providerId, profile: props.profile },
     () => props.onOpenChange(false),
     props.onSelectedProfileIdChange,
     setSignInSettled,
   );
+  const hostClient = useHostClient();
+  const openSwitchFlow = useProviderProfileAddFlowStore(
+    (state) => state.openForSwitch,
+  );
+  const startSwitch = (): void => {
+    const hostId = hostClient.getActiveHostId();
+    if (signInOutcomes === null) {
+      setSwitchingAccount(true);
+      return;
+    }
+    if (hostId === null) return;
+    props.onOpenChange(false);
+    openSwitchFlow(
+      providerIdToGuiHarnessId(providerId),
+      hostId,
+      { profileId: props.profile.profileId, label: props.profile.label },
+      props.onSelectedProfileIdChange,
+    );
+  };
   const removeProfile = useRemoveProviderProfile();
   const renameProfile = useProfileRename(props.profile);
   const recolorProfile = useRecolorProviderProfile();
@@ -843,7 +888,8 @@ export function ProfileEditDialog(props: {
         oauthUnavailableHint={props.oauthUnavailableHint}
         savePending={savePending}
         invalid={invalid}
-        onStartSwitchingAccount={() => setSwitchingAccount(true)}
+        offersSignIns={signInOutcomes !== null}
+        onStartSwitchingAccount={startSwitch}
         onCancelSwitchingAccount={() => setSwitchingAccount(false)}
         onCloseAfterSignIn={closeAfterSignIn}
         onFinishSignIn={finishSignIn}
