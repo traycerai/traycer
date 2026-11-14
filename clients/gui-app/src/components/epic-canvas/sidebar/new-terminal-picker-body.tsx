@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 /**
  * Host+folder selection for terminal creation from the sidebar "+" popover:
  * host section, folder list, and Launch action. CMD-T's in-pane opener uses
@@ -136,6 +137,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   const launchOnce = useCallback(
     (target: TerminalLaunchTarget) => {
       if (hasLaunchedRef.current) return;
+      if (showHostUpdateNeededForGesture(target.hostId)) return;
       hasLaunchedRef.current = true;
       onLaunch(target);
     },
@@ -235,6 +237,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
               size="sm"
               disabled={bindingsQuery.isFetching}
               onClick={() => {
+                if (showHostUpdateNeededForGesture(pin.resolvedHostId)) return;
                 void bindingsQuery.refetch({ cancelRefetch: false });
               }}
             >

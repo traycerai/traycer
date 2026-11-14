@@ -488,11 +488,25 @@ export function hostDirectoryEntryEquals(
     // this module cannot see.
     remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
     remoteOwnerKeyOf(a) === remoteOwnerKeyOf(b) &&
+    remoteAppVersionOf(a) === remoteAppVersionOf(b) &&
+    remoteUpdateStateOf(a) === remoteUpdateStateOf(b) &&
     // A sandbox's lifecycle moves with its connectivity mostly, not always (a
     // frozen flag set on an already-suspended row moves nothing else), and a
     // tab deciding whether its open wakes the sandbox must hear the move.
     sandboxStateKeyOf(a) === sandboxStateKeyOf(b)
   );
+}
+
+function remoteAppVersionOf(entry: HostDirectoryEntry): string | null {
+  return isRemoteHostDirectoryEntry(entry)
+    ? entry.remoteStatus.appVersion
+    : null;
+}
+
+function remoteUpdateStateOf(entry: HostDirectoryEntry): string | null {
+  return isRemoteHostDirectoryEntry(entry)
+    ? entry.remoteStatus.updateState
+    : null;
 }
 
 function remoteOwnerKeyOf(entry: HostDirectoryEntry): string | null {

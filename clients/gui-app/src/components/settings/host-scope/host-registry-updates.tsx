@@ -85,10 +85,7 @@ export function HostAutoUpdateRow(props: {
               cannot tell from this row which case they are in, so the copy
               promises the slower one and lets the faster one be a pleasant
               surprise. */}
-        <p className="text-ui-xs text-muted-foreground">
-          Applied on this host&apos;s next check-in — within ~10 minutes, and
-          only when no sessions are running.
-        </p>
+        <HostUpdateCheckInLine />
       </div>
       {updatePending ? (
         <span
@@ -99,6 +96,15 @@ export function HostAutoUpdateRow(props: {
         </span>
       ) : null}
     </div>
+  );
+}
+
+export function HostUpdateCheckInLine(): ReactNode {
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      Applied on this host&apos;s next check-in — within ~10 minutes, and only
+      when no sessions are running.
+    </p>
   );
 }
 

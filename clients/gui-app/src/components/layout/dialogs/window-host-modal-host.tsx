@@ -25,12 +25,10 @@ import { BootOpenSettingsButton } from "@/components/host/host-boot-surface";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
-import { getClientAppVersion } from "@/lib/app-version";
 import { isMobileApp } from "@/lib/mobile-app";
 import { appLogger } from "@/lib/logger";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
-  hostUpdateActionApplies,
   type WindowNarrationCause,
   type WindowNarrationState,
   type WindowNarrationVariant,
@@ -224,7 +222,6 @@ function NarratingWindowHostModal(props: {
   if (gateDrawn !== null || signOutQuestionOpen) {
     return null;
   }
-  const updateHost = resolveUpdateHost(narration.variant, presentation);
   // WHETHER `Open settings` IS THE ONLY ACTION. Computed once, read twice - by
   // the body (which hosts it inline on the footer row) and by the card (which
   // then draws no action row of its own). Two derivations of this would let a
@@ -241,7 +238,6 @@ function NarratingWindowHostModal(props: {
     blocking &&
     narration.variant.kind === "offline" &&
     retry.onRetry === null &&
-    updateHost === null &&
     !settled.failed;
   const narrationProps: WindowHostModalProps = {
     onSwitchAccount:
@@ -270,7 +266,6 @@ function NarratingWindowHostModal(props: {
     }),
     onRetry: retry.onRetry,
     retryPending: retry.pending,
-    onUpdateHost: updateHost,
     onOpenSettings: presentation.openSettings,
     // Report issue is offered only once something has actually failed. It is
     // the affordance that converts a false impression of breakage into
@@ -416,29 +411,6 @@ function resolveRetry(
     };
   }
   return { onRetry: presentation.refreshDirectory, pending: false };
-}
-
-function resolveUpdateHost(
-  variant: WindowNarrationVariant,
-  presentation: DefaultHostReadinessPresentation,
-): (() => void) | null {
-  if (variant.kind !== "update-host") return null;
-  // `canManageHost` asks "is the TARGET this machine"; the card asks "which
-  // host is incompatible". Arm 1 of `deriveNoHostVariant` makes those the same
-  // host, arm 2 does not - so `canManageHost` alone is a guard argued against
-  // only the population it can see. Without this line the button offers to
-  // update the host the card names and re-provisions THIS machine instead.
-  //
-  // Fail closed rather than re-point: `forceProvisioning` is the local
-  // lifecycle's own action and there is no host-scoped equivalent to aim
-  // elsewhere. A wrong action is worse than no action, and the copy says why
-  // it is missing rather than leaving an unexplained gap.
-  if (!variant.isTargetHost) return null;
-  if (!presentation.canManageHost) return null;
-  if (!hostUpdateActionApplies(variant.detail, getClientAppVersion())) {
-    return null;
-  }
-  return presentation.forceProvisioning;
 }
 
 /**

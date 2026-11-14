@@ -1,3 +1,4 @@
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   useMutation,
   useQueryClient,
@@ -26,7 +27,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import type { PlainTerminalAuthorityResult } from "@/hooks/terminal/use-plain-terminal-authority";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { terminalMutationKeys } from "@/lib/query-keys/terminal-mutation-keys";
 import {
@@ -178,8 +179,10 @@ export function usePlainTerminalMutations(args: {
           barrier: captured.barrier,
         });
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't create the terminal."),
+      onError: (error) => {
+        if (error instanceof HostBelowMinimumError) return;
+        toastFromHostError(error, "Couldn't create the terminal.");
+      },
     },
   });
 
@@ -194,7 +197,7 @@ export function usePlainTerminalMutations(args: {
         args.authority.hostId,
       ),
       mutationFn: (request) =>
-        withHostQueryErrorBoundary("terminal.plain.ensureRunning", () => {
+        withHostMutationErrorBoundary("terminal.plain.ensureRunning", () => {
           requireOwnerRow(
             "terminal.plain.ensureRunning",
             request.hostId,
@@ -219,8 +222,10 @@ export function usePlainTerminalMutations(args: {
           barrier: captured.barrier,
         });
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't start the terminal."),
+      onError: (error) => {
+        if (error instanceof HostBelowMinimumError) return;
+        toastFromHostError(error, "Couldn't start the terminal.");
+      },
     }),
   );
 
@@ -233,7 +238,7 @@ export function usePlainTerminalMutations(args: {
     withHostMutationLifecycleBoundary("terminal.plain.rename", {
       mutationKey: terminalMutationKeys.plainRename(args.authority.hostId),
       mutationFn: (request) =>
-        withHostQueryErrorBoundary("terminal.plain.rename", () => {
+        withHostMutationErrorBoundary("terminal.plain.rename", () => {
           requireOwnerRow(
             "terminal.plain.rename",
             request.hostId,
@@ -271,7 +276,7 @@ export function usePlainTerminalMutations(args: {
     withHostMutationLifecycleBoundary("terminal.plain.close", {
       mutationKey: terminalMutationKeys.plainClose(args.authority.hostId),
       mutationFn: (request) =>
-        withHostQueryErrorBoundary("terminal.plain.close", () => {
+        withHostMutationErrorBoundary("terminal.plain.close", () => {
           requireOwnerRow(
             "terminal.plain.close",
             request.hostId,
@@ -303,8 +308,10 @@ export function usePlainTerminalMutations(args: {
           deferPresentation: false,
         });
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't close the terminal."),
+      onError: (error) => {
+        if (error instanceof HostBelowMinimumError) return;
+        toastFromHostError(error, "Couldn't close the terminal.");
+      },
     }),
   );
 
@@ -348,8 +355,10 @@ export function usePlainTerminalMutations(args: {
           barrier: captured.barrier,
         });
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't import the legacy terminal."),
+      onError: (error) => {
+        if (error instanceof HostBelowMinimumError) return;
+        toastFromHostError(error, "Couldn't import the legacy terminal.");
+      },
     },
   });
 

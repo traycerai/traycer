@@ -231,7 +231,7 @@ export function useCreateTuiAgentForClient(
   readonly create: (input: CreateTuiAgentInput) => Promise<string | null>;
   readonly isPending: boolean;
 } {
-  const startSession = useAgentStartTerminalSession(hostClient);
+  const startSession = useAgentStartTerminalSession(hostClient, "gesture");
   const createTuiAgent = useEpicCreateTuiAgentForClient(hostClient);
   const worktreeCreate = useWorktreeCreateForClient(hostClient, undefined);
   const validateForkProfile = useValidateTuiForkProfile(hostClient);

@@ -470,7 +470,7 @@ function TuiAgentTileLive(
     instanceId,
   );
   const hostClient = useHostClientFor(hostEntry);
-  const prepareLaunch = useAgentStartTerminalSession(hostClient);
+  const prepareLaunch = useAgentStartTerminalSession(hostClient, "automatic");
   // A data relocation held this agent: offer the explicit new-agent path (the
   // same modal the palette's "New agent (Terminal)" opens) on this agent's
   // host, leaving this agent and its native files untouched.

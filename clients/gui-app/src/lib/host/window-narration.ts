@@ -4,8 +4,10 @@ import type {
   SelectionIncompatibility,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import {
   describeVersionSkew,
+  HOST_UPDATE_SKEW_COPY,
   type VersionSkewCopy,
 } from "@/lib/host/version-skew-copy";
 
@@ -336,11 +338,31 @@ export function hostUpdateSkew(
   detail: SelectionIncompatibility,
   clientAppVersion: string | null,
 ): VersionSkewCopy {
+  if (detail.code === "older-host") return HOST_UPDATE_SKEW_COPY;
   return describeVersionSkew({
     hostAppVersion: detail.hostVersion,
     clientAppVersion,
     guidance: null,
   });
+}
+
+/** Shared by the version preflight and an older host's untyped refusal. */
+export function olderHostUpdateVariant(
+  hostId: string,
+  isTargetHost: boolean,
+  hostVersion: string | null,
+): Extract<WindowNarrationVariant, { readonly kind: "update-host" }> {
+  return {
+    kind: "update-host",
+    hostId,
+    isTargetHost,
+    detail: {
+      code: "older-host",
+      hostVersion,
+      minSupportedVersion: MINIMUM_HOST_VERSION,
+      clientCompatibility: null,
+    },
+  };
 }
 
 /**

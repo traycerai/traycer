@@ -3,7 +3,17 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import {
+  hostScopeNeedsUpdate,
+  isHostScopeUsable,
+} from "@/components/settings/host-scope/host-scope-status";
+import { HOST_UPDATE_REQUIRED_DETAIL } from "@/components/settings/host-scope/host-health";
+import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
+import {
+  HOST_UPDATE_SKEW_COPY,
+  hostAppVersionFromDirectoryEntry,
+} from "@/lib/host/version-skew-copy";
+import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { cn } from "@/lib/utils";
 import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
@@ -130,9 +140,12 @@ export function HostScopeGate(props: {
 
   if (scope.host === null) return <EmptyHostNotice scope={scope} />;
 
-  const usable = isHostScopeUsable(scope.status);
+  const needsUpdate = hostScopeNeedsUpdate(scope.host);
+  const usable = !needsUpdate && isHostScopeUsable(scope.status);
   let notice: ReactNode = null;
-  if (scope.status === "unreachable") {
+  if (needsUpdate) {
+    notice = <HostUpdateNeededNotice host={scope.host} />;
+  } else if (scope.status === "unreachable") {
     notice = <UnreachableNotice scope={scope} host={scope.host} />;
   } else if (scope.status === "connecting") {
     notice = <>{props.skeleton}</>;
@@ -141,18 +154,71 @@ export function HostScopeGate(props: {
   return (
     <>
       {notice}
-      <Activity key={scope.host.hostId} mode={usable ? "visible" : "hidden"}>
-        {/* The provider sits INSIDE the Activity but OUTSIDE the freeze:
-            context, unlike props, must keep flowing while the subtree is
-            frozen, so portal surfaces learn they are concealed (their DOM
-            escapes the Activity's own styling — see the context's docs). */}
-        <PortalConcealmentProvider value={!usable}>
-          <FrozenWhileConcealed usable={usable}>
-            {props.children}
-          </FrozenWhileConcealed>
-        </PortalConcealmentProvider>
-      </Activity>
+      <HostScopeBody hostId={scope.host.hostId} usable={usable}>
+        {props.children}
+      </HostScopeBody>
     </>
+  );
+}
+
+/** Local-row pages retain their drafts while their host needs an update. */
+export function HostMinimumVersionGate(props: {
+  readonly host: HostScopeOption | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  const blocked = hostScopeNeedsUpdate(props.host);
+  return (
+    <>
+      {blocked && props.host !== null ? (
+        <HostUpdateNeededNotice host={props.host} />
+      ) : null}
+      <HostScopeBody hostId={props.host?.hostId ?? null} usable={!blocked}>
+        {props.children}
+      </HostScopeBody>
+    </>
+  );
+}
+
+function HostScopeBody(props: {
+  readonly hostId: string | null;
+  readonly usable: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <Activity key={props.hostId} mode={props.usable ? "visible" : "hidden"}>
+      <PortalConcealmentProvider value={!props.usable}>
+        <FrozenWhileConcealed usable={props.usable}>
+          {props.children}
+        </FrozenWhileConcealed>
+      </PortalConcealmentProvider>
+    </Activity>
+  );
+}
+
+function HostUpdateNeededNotice(props: {
+  readonly host: HostScopeOption;
+}): ReactNode {
+  return (
+    <HostScopeNotice
+      tone="warn"
+      title={HOST_UPDATE_SKEW_COPY.title}
+      detail={HOST_UPDATE_REQUIRED_DETAIL}
+      action={
+        <HostUpdateRequiredAction
+          hostId={props.host.hostId}
+          buttonVariant="outline"
+          detail={
+            olderHostUpdateVariant(
+              props.host.hostId,
+              props.host.isActive,
+              hostAppVersionFromDirectoryEntry(props.host.entry),
+            ).detail
+          }
+          testId="host-scope-update-host"
+        />
+      }
+      testId="host-scope-update-needed"
+    />
   );
 }
 

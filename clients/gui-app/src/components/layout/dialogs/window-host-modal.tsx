@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -75,13 +76,6 @@ export interface WindowHostModalProps {
   readonly bootBody: ReactNode | null;
   readonly onRetry: (() => void) | null;
   readonly retryPending: boolean;
-  /**
-   * Re-runs the host install onto this build. `null` when this app cannot
-   * manage the host, or when the handshake says THIS APP is the outdated leg -
-   * forcing a host update can never fix an outdated client, so offering it
-   * there is an action that could only fail.
-   */
-  readonly onUpdateHost: (() => void) | null;
   readonly onOpenSettings: () => void;
   /**
    * Whether anything has failed yet. `Report issue` is the affordance that
@@ -315,17 +309,13 @@ function NarrationActions(
       {props.variant.kind === "update-client" ? (
         <ClientUpdateRequiredAction requirement={props.variant.requirement} />
       ) : null}
-      {props.onUpdateHost === null ? null : (
-        <Button
-          type="button"
-          size="sm"
-          variant="default"
-          onClick={props.onUpdateHost}
-          data-testid="window-host-modal-update-host"
-        >
-          Update host
-        </Button>
-      )}
+      {props.variant.kind === "update-host" ? (
+        <HostUpdateRequiredAction
+          hostId={props.variant.hostId}
+          detail={props.variant.detail}
+          testId="window-host-modal-update-host"
+        />
+      ) : null}
       {props.variant.kind === "team-membership-required" &&
       props.onSwitchAccount !== undefined ? (
         <Button
@@ -617,10 +607,6 @@ function modalCopy(
       // incompatibility is a bug rather than routine drift, and the copy names
       // the leg the handshake says is behind rather than a generic fatal.
       title: hostUpdateSkew(variant.detail, getClientAppVersion()).title,
-      // Two descriptions, because on the fallback arm the first one's advice
-      // is something the reader cannot act on from here. "Update the host to
-      // continue" beside no button is an unexplained gap; naming the machine
-      // and saying where it can be updated is an honest absence.
       description: variant.isTargetHost
         ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
         : "Another host on this account is running a version this app can't talk to, and it can't be updated from here. Update Traycer on that computer, or switch to a host this one can reach.",

@@ -1,4 +1,8 @@
 import { appLocalOpenAuthFor } from "@/lib/host/app-local-open-auth";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { v4 as uuidv4 } from "uuid";
 import type {
   BearerSourceProvider,
@@ -118,6 +122,8 @@ export function buildRawHostMessengerForTarget<
 >(
   params: BuildRawHostMessengerForTargetParams<Registry>,
 ): BuiltHostMessenger<Registry> | null {
+  if (hostDirectoryEntryNeedsUpdate(params.target, MINIMUM_HOST_VERSION))
+    return null;
   if (isPoolHostDirectoryEntry(params.target)) {
     // The server pool: the same session as a host's, on a direct leg. What
     // `open` presents (the user bearer, `authz: null`, no member credential)

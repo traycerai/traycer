@@ -1,6 +1,10 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 
 /**
  * Whether the host a panel is showing is the host its client actually talks to.
@@ -53,6 +57,14 @@ export type HostScopeStatus =
  */
 export function isHostScopeUsable(status: HostScopeStatus): boolean {
   return status === "following" || status === "ready";
+}
+
+export function hostScopeNeedsUpdate(host: HostScopeOption | null): boolean {
+  return (
+    host !== null &&
+    host.entry !== null &&
+    hostDirectoryEntryNeedsUpdate(host.entry, MINIMUM_HOST_VERSION)
+  );
 }
 
 /** One host list's outcome, reduced to what the scope needs from it. */
@@ -166,6 +178,7 @@ export function deriveHostScopeStatus(input: {
   if (input.host === null) {
     return input.listsResolved ? "unreachable" : "connecting";
   }
+  if (hostScopeNeedsUpdate(input.host)) return "unreachable";
   // No route exists and none is being built — this is terminal, not pending,
   // and must not render as a spinner that never resolves.
   //
