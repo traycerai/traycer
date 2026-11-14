@@ -174,6 +174,7 @@ describe("TerminalStreamClient", () => {
         onExit: () => undefined,
         onActionAck: () => undefined,
         onSessionUpdated: () => undefined,
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -205,6 +206,7 @@ describe("TerminalStreamClient", () => {
         onExit: () => undefined,
         onActionAck: () => undefined,
         onSessionUpdated: () => undefined,
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -245,6 +247,7 @@ describe("TerminalStreamClient", () => {
             updates.push(frame.session.scope.kind);
           }
         },
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -295,6 +298,7 @@ describe("TerminalStreamClient", () => {
             currentDirectories.push(frame.session.currentCwd);
           }
         },
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -339,6 +343,7 @@ describe("TerminalStreamClient", () => {
             updates.push(frame.session.epicId);
           }
         },
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -402,6 +407,7 @@ function terminalCallbacks(
     onExit: () => undefined,
     onActionAck: () => undefined,
     onSessionUpdated: () => undefined,
+    onViewers: () => undefined,
     onConnectionStatus,
   };
 }
@@ -672,6 +678,7 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
         onSessionUpdated: () => {
           otherKinds.push("sessionUpdated");
         },
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     };
