@@ -474,15 +474,14 @@ describe("@legendapp/list web patch", () => {
 
     // The chat cancels a restore's or navigation's command the list still
     // holds when the reader scrolls: left alone, it lands after the reader's
-    // own scroll and undoes it. The cancel also drops the data change's anchor
-    // lock and lets the adjusts a scroll in flight deferred land, and reports
-    // false when nothing was held. It keeps the runner later `scrollToEnd`
-    // commands need: the unmount's cancel drops it, and without it every
-    // later one never ran.
+    // own scroll and undoes it. The cancel lets the adjusts a scroll in flight
+    // deferred land, and reports false when nothing was held. It keeps the
+    // runner later `scrollToEnd` commands need: the unmount's cancel drops it,
+    // and without it every later one never ran.
     it(`${file} lets a held scroll command be cancelled and settled`, () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain(
-        'cancelPendingScroll: () => {\n      state.mvcpAnchorLock = void 0;\n      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {\n        return false;\n      }\n      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      const runPendingScrollToEnd = state.runPendingScrollToEnd;\n      cancelImperativeScroll(state);\n      state.runPendingScrollToEnd = runPendingScrollToEnd;\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n',
+        'if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {\n        return false;\n      }\n      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      const runPendingScrollToEnd = state.runPendingScrollToEnd;\n      cancelImperativeScroll(state);\n      state.runPendingScrollToEnd = runPendingScrollToEnd;\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n',
       );
       expect(source).toContain(
         "      return true;\n    },\n    setScrollProcessingEnabled:",
@@ -768,6 +767,19 @@ describe("@legendapp/list web patch", () => {
       const source = readFileSync(join(packageDir, file), "utf8");
       expect(source).toContain(
         "touchScroll.momentum = false;\n    const scrollingTo = state.scrollingTo;\n    if (!(scrollingTo && scrollingTo.animated && !scrollingTo.isInitialScroll)) {\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n    }",
+      );
+    });
+  }
+
+  // Only the `react.*` entries hold the anchor lock for a size pass deferred to
+  // a frame: the cancel leaves such a lock for that pass to release once it has
+  // compensated, and drops any other. The `react-native.web.*` pair lacks the
+  // size-only data pass this relies on.
+  for (const file of ["react.js", "react.mjs"]) {
+    it(`${file} leaves a lock a deferred size pass waits on to that pass`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'cancelPendingScroll: () => {\n      // Patched: a lock that a deferred size pass waits on is released by that\n      // pass, once it has compensated (`resolveAnchorLock`), rather than here\n      // with the size change still uncompensated.\n      if (state.mvcpAnchorLock !== void 0 && deferredSizePassWaits(state)) {\n        state.mvcpAnchorLock.releaseRequested = true;\n      } else {\n        state.mvcpAnchorLock = void 0;\n      }\n      if (!state.scheduledWork.has("imperativeScrollReady")',
       );
     });
   }

@@ -281,7 +281,7 @@ function mountSession(): void {
           <TooltipProvider>
             <BotIdentityContext value={IDENTITY}>
               <BotSessionStatusDataContext
-                value={{ tasks: [], subscriptions: null }}
+                value={{ tasks: [], subscriptions: null, boundHostId: null }}
               >
                 <BotSessionView
                   botId={BOT_ID}

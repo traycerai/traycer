@@ -41,6 +41,8 @@ import {
   type MockInstance,
 } from "vitest";
 import type {
+  BotActivity,
+  BotSessionActivity,
   BotReadCursorReadResponse,
   BotRecord,
   BotThreadFollow,
@@ -52,6 +54,7 @@ import type {
   BotOnboardingSetup,
 } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 
 interface IndicatorState {
   unreadDone: boolean;
@@ -86,6 +89,7 @@ const mocks = vi.hoisted(() => {
    * `bot.readCursor.read` answer; a bot not named has no threads.
    */
   const threadReads: Record<string, ThreadReads> = {};
+  const activity: Record<string, BotActivity | undefined> = {};
   return {
     client: { stub: "tab-host-client" },
     navigate: vi.fn(),
@@ -118,6 +122,8 @@ const mocks = vi.hoisted(() => {
       /** Methods the host does not advertise, whatever `support` says. */
       unsupported: new Set<string>(),
       threadReads,
+      /** What each bot's `bot.subscribe` activity reads; a bot not named has no snapshot yet. */
+      activity,
     },
     readRequests,
   };
@@ -245,6 +251,37 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
       return { data: mocks.state.readCursor };
     }
     return { data: undefined };
+  },
+}));
+// The channel row's mascot reads the bot's activity from its `bot.subscribe`
+// snapshot, which is all this stands in for.
+vi.mock("@/hooks/bots/use-bot-subscription", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-subscription")
+  >()),
+  useBotSubscriptionForHost: (args: { botId: string }) => {
+    const activity = mocks.state.activity[args.botId];
+    return {
+      snapshot:
+        activity === undefined
+          ? null
+          : ({
+              bot: mocks.state.bots[0],
+              tasks: [],
+              openRequestCount: 0,
+              conversationsRevision: null,
+              notificationSubscriptions: null,
+              surfaceActions: null,
+              stoppedNotificationWatches: null,
+              boundHost: { hostId: "host-tab", epoch: 1, isThisHost: true },
+              activity,
+            } satisfies BotSubscriptionSnapshot),
+      snapshotFresh: activity !== undefined,
+      deleted: false,
+      error: null,
+      isPending: activity === undefined,
+      resubscribe: () => undefined,
+    };
   },
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
@@ -377,6 +414,14 @@ function row(botId: string): HTMLElement {
   return found;
 }
 
+function mascotPaths(botId: string): string[] {
+  const mascot = row(botId).querySelector('[data-slot="bot-mascot"]');
+  if (mascot === null) throw new Error(`no mascot in the row for ${botId}`);
+  return [...mascot.querySelectorAll("path")].map(
+    (path) => path.getAttribute("d") ?? "",
+  );
+}
+
 const channelOpened = vi.fn<() => void>();
 
 function mount(
@@ -428,6 +473,7 @@ beforeEach(() => {
   mocks.state.readCursor = undefined;
   mocks.state.unsupported.clear();
   mocks.state.threadReads = {};
+  mocks.state.activity = {};
   for (const key of Object.keys(mocks.state.reads)) {
     delete mocks.state.reads[key];
   }
@@ -909,7 +955,10 @@ describe("<BotChannelSidebar /> Threads", () => {
         follows: { "release-new": FOLLOWING, "release-read": FOLLOWING },
         cursors: {
           cursors: { "release-read": { messageId: "m-1", seq: 2_000 } },
-          latest: {},
+          latest: {
+            "release-new": { messageId: "m-2", seq: 2_000 },
+            "release-read": { messageId: "m-1", seq: 2_000 },
+          },
         },
       },
       "bot-notes": {
@@ -918,7 +967,13 @@ describe("<BotChannelSidebar /> Threads", () => {
           "notes-new": FOLLOWING,
           "notes-other": { state: "unfollowed", reason: "manual" },
         },
-        cursors: { cursors: {}, latest: {} },
+        cursors: {
+          cursors: {},
+          latest: {
+            "notes-new": { messageId: "m-3", seq: 3_000 },
+            "notes-other": { messageId: "m-4", seq: 3_000 },
+          },
+        },
       },
     };
     mount("bot-release", view(false));
@@ -931,6 +986,20 @@ describe("<BotChannelSidebar /> Threads", () => {
     expect(threadsRow().textContent).toBe("Threads2 with new replies");
     expect(threadsRow().getAttribute("aria-current")).toBeNull();
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
+  });
+
+  it("counts nothing for a followed thread the host reports no newest row for, however new its summary says it is", () => {
+    mocks.state.threadReads = {
+      "bot-release": {
+        threads: [thread("release-new", 9_000)],
+        follows: { "release-new": FOLLOWING },
+        cursors: { cursors: {}, latest: {} },
+      },
+    };
+    mount("bot-release", view(false));
+
+    expect(threadsRow().textContent).toBe("Threads");
+    expect(screen.queryByTestId("bot-channel-threads-count")).toBeNull();
   });
 
   it("is the current row while Threads shows, the tab's channel row is not, and that row goes back to the channel", async () => {
@@ -971,7 +1040,10 @@ describe("<BotChannelSidebar /> Threads", () => {
       "bot-release": {
         threads: [thread("release-new", 2_000)],
         follows: { "release-new": FOLLOWING },
-        cursors: { cursors: {}, latest: {} },
+        cursors: {
+          cursors: {},
+          latest: { "release-new": { messageId: "m-2", seq: 2_000 } },
+        },
       },
     };
     mount("bot-release", view(false));
@@ -1589,5 +1661,75 @@ describe("<BotChannelSidebar /> putting a section away", () => {
     expect(state.collapsed).toEqual(["env-team"]);
     expect(state.sectionOrder).toEqual(["env-team"]);
     expect(state.channelOrder).toEqual({ "env-team": ["bot-triage"] });
+  });
+});
+
+describe("<BotChannelSidebar /> a channel's mascot", () => {
+  const SESSION: BotSessionActivity = {
+    state: "idle",
+    startedAt: null,
+    step: null,
+    requestId: null,
+    reason: null,
+  };
+  const REPLYING: BotSessionActivity = {
+    ...SESSION,
+    state: "replying",
+    startedAt: 1_000,
+    requestId: "req-1",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** A row's mascot paths at the start and after the 1500 ms that reach a working blink. */
+  function acrossBlink(botId: string): { before: string[]; after: string[] } {
+    const before = mascotPaths(botId);
+    act(() => {
+      vi.advanceTimersByTime(1_500);
+    });
+    return { before, after: mascotPaths(botId) };
+  }
+
+  it("moves while its bot replies in a thread with the trunk idle, and holds still for a bot that is idle", () => {
+    mocks.state.activity = {
+      "bot-release": { trunk: SESSION, threads: { "thread-1": REPLYING } },
+      "bot-triage": { trunk: SESSION, threads: {} },
+    };
+    mount("bot-notes", null);
+
+    const replying = acrossBlink("bot-release");
+    const idle = acrossBlink("bot-triage");
+
+    expect(replying.after).not.toEqual(replying.before);
+    expect(idle.after).toEqual(idle.before);
+  });
+
+  it("is drawn as an idle bot's is while the bot's trunk is parked, with no eyes shut", () => {
+    mocks.state.activity = {
+      "bot-release": { trunk: { ...SESSION, state: "parked" }, threads: {} },
+    };
+    mount("bot-notes", null);
+    const parked = acrossBlink("bot-release");
+    cleanup();
+    mocks.state.activity = { "bot-release": { trunk: SESSION, threads: {} } };
+    mount("bot-notes", null);
+
+    expect(parked.after).toEqual(parked.before);
+    expect(parked.before).toEqual(mascotPaths("bot-release"));
   });
 });
