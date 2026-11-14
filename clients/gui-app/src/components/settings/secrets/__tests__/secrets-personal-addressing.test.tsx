@@ -13,6 +13,7 @@ vi.mock(
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -32,6 +33,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import {
   mountTeamPage,
   mountTeamPageNegotiating,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -199,7 +201,7 @@ describe("Personal's secrets on a computer whose settings have not moved", () =>
     expect(screen.queryByTestId("secret-row")).toBeNull();
   });
 
-  it("says the host needs an update when it cannot take a call that names Personal", async () => {
+  it("reads Personal's secrets without a computer's version in the way", async () => {
     const harness = mountTeamPageNegotiating(
       { kind: "host" },
       unsetHostHandlers(),
@@ -207,11 +209,17 @@ describe("Personal's secrets on a computer whose settings have not moved", () =>
     );
     renderSecrets(harness);
 
-    const error = await screen.findByTestId("secrets-page-error");
-    expect(error.textContent).toContain("These secrets need an updated host.");
-    expect(error.textContent).not.toContain(
-      "Couldn't read Personal's secrets.",
-    );
-    expect(sentTo(harness, "environment.secrets.list")).toEqual([]);
+    expect(await screen.findByTestId("secret-row")).toBeTruthy();
+    expect(sentTo(harness, "environment.secrets.list")).toEqual([
+      { environmentId: PERSONAL_ENV },
+    ]);
+    expect(
+      screen.queryByText("These secrets need an updated host."),
+    ).toBeNull();
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
   });
 });

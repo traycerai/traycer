@@ -11,7 +11,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 const windowHost = vi.hoisted(
-  (): { client: HostClient<HostRpcRegistry> | null } => ({ client: null }),
+  (): {
+    client: HostClient<HostRpcRegistry> | null;
+    auth: { environmentCloud: () => EnvironmentCloud } | null;
+    fakeAuthn: FakeEnvironmentAuthn | null;
+  } => ({ client: null, auth: null, fakeAuthn: null }),
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -21,7 +25,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
       if (windowHost.client === null) throw new Error("no window host");
       return windowHost.client;
     },
-    useHostBinding: () => ({ hostClient: windowHost.client }),
+    useHostBinding: () => ({
+      hostClient: windowHost.client,
+      auth: windowHost.auth,
+    }),
   };
 });
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
@@ -46,6 +53,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { act, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   MockHostMessenger,
   type MockHandlerMap,
@@ -72,6 +80,10 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  createFakeEnvironmentAuthn,
+  type FakeEnvironmentAuthn,
+} from "@/components/settings/environment/__tests__/environment-authn-test-support";
 
 const HOST_ID = "host-a";
 /** The window host's scope status; a case sets it before it mounts. */
@@ -99,7 +111,10 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   windowScopeStatus = "ready";
+  windowHost.fakeAuthn?.restore();
   windowHost.client = null;
+  windowHost.auth = null;
+  windowHost.fakeAuthn = null;
   useAuthStore.setState({ status: "signed-out" });
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
@@ -183,6 +198,7 @@ function mountSection(options: {
       legacyMembers: [],
     }),
   };
+  const fakeAuthn = createFakeEnvironmentAuthn(handlers);
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "req-source",
@@ -200,6 +216,8 @@ function mountSection(options: {
   );
   const client = spine.createRequester(entry);
   windowHost.client = client;
+  windowHost.auth = { environmentCloud: () => fakeAuthn.cloud };
+  windowHost.fakeAuthn = fakeAuthn;
   if (options.methods !== null) {
     recordNegotiatedHostManifest(
       HOST_ID,
@@ -242,10 +260,12 @@ function mountSection(options: {
   );
   return {
     messenger,
-    sent: (method) =>
-      messenger.calls
+    sent: (method) => [
+      ...fakeAuthn.paramsOf(method),
+      ...messenger.calls
         .filter((call) => call.method === method)
         .map((call) => call.params),
+    ],
   };
 }
 

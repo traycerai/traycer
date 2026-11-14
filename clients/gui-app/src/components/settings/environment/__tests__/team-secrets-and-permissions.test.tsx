@@ -20,6 +20,7 @@ import {
   mountTeamPageNegotiating,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -45,6 +46,7 @@ vi.mock(
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -77,7 +79,7 @@ function namedSecret(
     secretId: id,
     name,
     kind,
-    protocol: null,
+    protocol: "https",
     destinations: ["api.example.com"],
     currentVersionId: "ver-1",
     revoked,
@@ -88,6 +90,19 @@ function namedSecret(
 
 function secret(name: string, revoked: boolean): EnvironmentSecretV12 {
   return namedSecret(`sec-${name}`, name, "api_key", revoked);
+}
+
+function removedSecret(id: string, name: string) {
+  return {
+    id,
+    name,
+    removal: {
+      outcome: "revoked" as const,
+      revokedAt: 1,
+      destroyedAt: null,
+      targets: [],
+    },
+  };
 }
 
 const environments = {
@@ -123,31 +138,36 @@ describe("SecretsPage on a team", () => {
   function teamHandlers() {
     return {
       "environment.secrets.list": () => ({
-        secrets: [secret("OPENAI_API_KEY", false), secret("OLD_TOKEN", true)],
-        removed: [],
+        secrets: [secret("OPENAI_API_KEY", false)],
+        removed: [removedSecret("sec-OLD_TOKEN", "OLD_TOKEN")],
       }),
       "environment.list": () => environments,
     } as const;
   }
 
-  it("reads the team's secret names by environment id behind the 1.1 floor", async () => {
+  it("reads a team's secret names without a computer's version in the way", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
-    const harness = mountTeamPage(poolSource("viewer"), teamHandlers());
+    const harness = mountTeamPageNegotiating(
+      poolSource("viewer"),
+      teamHandlers(),
+      { "environment.secrets.list": { major: 1, minor: 0 } },
+    );
     renderSecrets(harness);
 
     expect(await screen.findByText("OPENAI_API_KEY")).toBeTruthy();
     expect(harness.paramsOf("environment.secrets.list")).toEqual([
       { environmentId: "env-a" },
     ]);
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.list",
-    );
-    expect(call?.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.list",
-      version: { major: 1, minor: 1 },
-    });
+    expect(
+      screen.queryByText("These secrets need an updated host."),
+    ).toBeNull();
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
   });
 
   it("gives a viewer the names but no secret verbs or credential fields", async () => {
@@ -184,9 +204,11 @@ describe("SecretsPage on a team", () => {
         expect.stringContaining(
           "OPENAI_API_KEY · Set · sent to api.example.com",
         ),
-        expect.stringContaining("OLD_TOKEN · Set · sent to api.example.com"),
       ]),
     );
+    const removed = within(list).getByTestId("removed-secret-row");
+    expect(removed.getAttribute("data-secret-name")).toBe("OLD_TOKEN");
+    expect(removed.textContent).toContain("Removing · no longer usable");
     expect(screen.getByRole("button", { name: "Add a secret" })).toBeTruthy();
     // Verify lives in a secret's Details, with Replace and Remove on the row.
     expect(
@@ -237,22 +259,25 @@ describe("SecretsPage on a team", () => {
     expect(screen.queryByText(/Acme/)).toBeNull();
   });
 
-  it("names Personal's own environment on the Personal pick, behind the 1.1 floor, and reads nothing before it is known", async () => {
+  it("reads Personal's secrets without a computer's version in the way, and waits for its id", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
-    const harness = mountTeamPage({ kind: "host" }, teamHandlers());
+    const harness = mountTeamPageNegotiating({ kind: "host" }, teamHandlers(), {
+      "environment.secrets.list": { major: 1, minor: 0 },
+    });
     renderSecrets(harness);
 
     expect(await screen.findByTestId("secrets-list")).toBeTruthy();
     expect(harness.paramsOf("environment.secrets.list")).toEqual([
       { environmentId: "env-personal" },
     ]);
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.list",
-    );
-    expect(call?.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.list",
-      version: { major: 1, minor: 1 },
-    });
+    expect(
+      screen.queryByText("These secrets need an updated host."),
+    ).toBeNull();
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
   });
 
   it("keeps a Local pick on the host's own environment: no environment id and no floor", async () => {
@@ -311,7 +336,7 @@ describe("TeamProviderKeys", () => {
     );
   });
 
-  it("lists every provider-kind key once, including a revoked one", async () => {
+  it("does not list a provider key that is in the removed response", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
@@ -319,12 +344,11 @@ describe("TeamProviderKeys", () => {
       "environment.secrets.list": () => ({
         secrets: [
           namedSecret("sec-live", "CURSOR_API_KEY", "provider", false),
-          namedSecret("sec-revoked", "CURSOR_API_KEY", "provider", true),
           namedSecret("sec-other-kind", "CURSOR_API_KEY", "api_key", false),
           namedSecret("sec-router", "OPENROUTER_API_KEY", "provider", false),
           namedSecret("sec-openai", "OPENAI_API_KEY", "api_key", false),
         ],
-        removed: [],
+        removed: [removedSecret("sec-revoked", "CURSOR_API_KEY")],
       }),
       "environment.list": () => environments,
     });
@@ -337,21 +361,10 @@ describe("TeamProviderKeys", () => {
     const rows = await within(key).findAllByTestId("secret-row");
     expect(rows.map((row) => row.getAttribute("data-secret-name"))).toEqual([
       "CURSOR_API_KEY",
-      "CURSOR_API_KEY",
       "OPENROUTER_API_KEY",
     ]);
-    // SecretRow keeps Replace and Remove on a live key, and withholds both
-    // once the secret is revoked. The revoked key stays in the list.
-    const revoked = rows[1];
-    expect(within(revoked).getByText("Revoked")).toBeTruthy();
-    expect(
-      within(revoked).queryByRole("button", { name: "Replace" }),
-    ).toBeNull();
-    expect(
-      within(revoked).queryByRole("button", { name: "Remove" }),
-    ).toBeNull();
-    for (const live of [rows[0], rows[2]]) {
-      expect(within(live).queryByText("Revoked")).toBeNull();
+    expect(key.textContent).not.toContain("Revoked");
+    for (const live of rows) {
       expect(
         within(live).getByRole("button", { name: "Replace" }),
       ).toBeTruthy();
@@ -360,7 +373,7 @@ describe("TeamProviderKeys", () => {
     expect(key.textContent).not.toContain("OPENAI_API_KEY");
   });
 
-  it("shows a viewer the same names and withholds Replace and Remove", async () => {
+  it("shows a viewer live key names and withholds Replace and Remove", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
@@ -368,7 +381,6 @@ describe("TeamProviderKeys", () => {
       "environment.secrets.list": () => ({
         secrets: [
           namedSecret("sec-live", "HF_TOKEN", "provider", false),
-          namedSecret("sec-revoked", "HF_TOKEN", "provider", true),
           namedSecret("sec-other", "CURSOR_API_KEY", "provider", false),
         ],
         removed: [],
@@ -381,15 +393,11 @@ describe("TeamProviderKeys", () => {
 
     const key = await screen.findByRole("region", { name: "Key" });
     const items = await within(key).findAllByRole("listitem");
-    expect(items).toHaveLength(3);
+    expect(items).toHaveLength(2);
     expect(within(items[0]).getByText("HF_TOKEN")).toBeTruthy();
     expect(within(items[0]).getByText("Set")).toBeTruthy();
-    expect(within(items[1]).getByText("HF_TOKEN")).toBeTruthy();
-    expect(
-      within(items[1]).getByText("Removing · no longer usable"),
-    ).toBeTruthy();
-    expect(within(items[2]).getByText("CURSOR_API_KEY")).toBeTruthy();
-    expect(within(items[2]).getByText("Set")).toBeTruthy();
+    expect(within(items[1]).getByText("CURSOR_API_KEY")).toBeTruthy();
+    expect(within(items[1]).getByText("Set")).toBeTruthy();
     expect(within(key).queryByRole("button", { name: "Replace" })).toBeNull();
     expect(within(key).queryByRole("button", { name: "Remove" })).toBeNull();
     expect(within(key).queryByRole("button", { name: "Add a key" })).toBeNull();
@@ -448,14 +456,19 @@ describe("TeamProviderKeys", () => {
     ).toBeTruthy();
   });
 
-  it("says a version-unsatisfied key read needs an updated host", async () => {
+  it("reads a provider key without a computer's version in the way", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
     const harness = mountTeamPageNegotiating(
       poolSource("editor"),
       {
-        "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+        "environment.secrets.list": () => ({
+          secrets: [
+            namedSecret("sec-droid", "DROID_API_KEY", "provider", false),
+          ],
+          removed: [],
+        }),
         "environment.list": () => environments,
       },
       { "environment.secrets.list": { major: 1, minor: 0 } },
@@ -465,12 +478,19 @@ describe("TeamProviderKeys", () => {
     });
 
     const key = await screen.findByRole("region", { name: "Key" });
-    expect((await within(key).findByRole("status")).textContent).toBe(
-      "These keys need an updated host.",
-    );
-    expect(within(key).queryByText(/Couldn't read .*keys\./)).toBeNull();
-    expect(within(key).queryByTestId("secrets-none")).toBeNull();
-    expect(within(key).queryByRole("button", { name: "Add a key" })).toBeNull();
+    expect(await within(key).findByTestId("secret-row")).toBeTruthy();
+    expect(within(key).getByText("DROID_API_KEY")).toBeTruthy();
+    expect(
+      within(key).queryByText("These keys need an updated host."),
+    ).toBeNull();
+    expect(harness.paramsOf("environment.secrets.list")).toEqual([
+      { environmentId: "env-a" },
+    ]);
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
   });
 
   // "No secrets." is a claim about the configuration, and a read that failed

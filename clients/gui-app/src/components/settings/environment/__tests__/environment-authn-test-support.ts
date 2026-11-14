@@ -2,6 +2,7 @@ import {
   environmentConfigurationMcpServerPutRequestSchemaV11,
   environmentConfigurationItemDeleteRequestSchema,
   environmentConfigurationItemPutRequestSchema,
+  environmentConfigurationPolicyPutRequestSchema,
   type EnvironmentConfigurationMcpServerPutRequestV11,
   type EnvironmentMcpServerDeclaration,
   type EnvironmentConfigurationItemWriteResponse,
@@ -115,10 +116,6 @@ function legacyMcpServers(
       context.mcpServerLists.delete(environmentId);
       throw error;
     });
-  context.calls.push({
-    method: "environment.configuration.mcpServers.list",
-    params: { environmentId },
-  });
   context.mcpServerLists.set(environmentId, pending);
   return pending;
 }
@@ -373,7 +370,40 @@ async function routeItemDelete(
   });
   const handler = context.handlers["environment.configuration.items.delete"];
   if (handler === undefined) return { status: 204, text: null };
-  return writeAnswer(await handler(parsed.data));
+  const result = await handler(parsed.data);
+  if (result.outcome === "conflict" && result.current !== null) {
+    const subject = `${kind}:${parsed.data.key}`;
+    context.historyActors.set(subject, {
+      at: result.current.changedAt,
+      label: result.current.changedBy,
+    });
+    const listed = await itemsFor(context.handlers, environmentId);
+    const current = listed.items.find(
+      (item) =>
+        item.kind === kind &&
+        item.key === parsed.data.key &&
+        item.os === parsed.data.os,
+    );
+    return answer(
+      {
+        code: "revision_conflict",
+        current:
+          current === undefined
+            ? null
+            : {
+                kind,
+                key: parsed.data.key,
+                os: parsed.data.os,
+                value: current.value,
+                revision: result.current.revision,
+                updatedAt: result.current.changedAt,
+                writtenBy: { source: "test", hostId: null, hostName: null },
+              },
+      },
+      409,
+    );
+  }
+  return writeAnswer(result);
 }
 
 async function routeItems(
@@ -529,7 +559,13 @@ async function routeMcpServers(
   context: RouteContext,
 ): Promise<EnvironmentTransportAnswer> {
   const serverId = path.at(6);
-  if (request.method === "GET") return listMcpServers(environmentId, context);
+  if (request.method === "GET") {
+    context.calls.push({
+      method: "environment.configuration.mcpServers.list",
+      params: { environmentId },
+    });
+    return listMcpServers(environmentId, context);
+  }
   if (request.method === "POST" && serverId === undefined) {
     return putMcpServer(request, environmentId, null, context);
   }
@@ -574,13 +610,70 @@ async function routeRevision(
   );
 }
 
-async function routeSecrets(
-  path: readonly string[],
+async function routePolicy(
   request: EnvironmentTransportRequest,
   environmentId: string,
   context: RouteContext,
 ): Promise<EnvironmentTransportAnswer> {
-  if (path.at(6) === "harness-connections") {
+  if (request.method !== "PUT")
+    return answer({ error: "Unknown policy route." }, 405);
+  const parsed = environmentConfigurationPolicyPutRequestSchema.safeParse({
+    ...objectBody(request.body),
+    environmentId,
+  });
+  if (!parsed.success) return answer({ error: "Invalid policy request." }, 400);
+  const method = "environment.configuration.policy.put";
+  context.calls.push({ method, params: parsed.data });
+  const handler = context.handlers[method];
+  const result =
+    handler === undefined
+      ? { outcome: "saved" as const, reason: null }
+      : await handler(parsed.data);
+  if (result.outcome !== "saved") {
+    return answer(
+      { code: result.reason ?? "policy_refused" },
+      statusForWrite(result.outcome),
+    );
+  }
+  return answer({ outcome: "saved", reason: null }, 200);
+}
+
+async function routeHarnessConnections(
+  path: readonly string[],
+  request: EnvironmentTransportRequest,
+  environmentId: string,
+  context: RouteContext,
+): Promise<EnvironmentTransportAnswer | null> {
+  if (path.at(6) !== "harness-connections") return null;
+  if (request.method === "DELETE") {
+    const profileId = path.at(7);
+    const expectedBindingVersion = objectBody(
+      request.body,
+    )?.expectedBindingVersion;
+    if (
+      profileId === undefined ||
+      (typeof expectedBindingVersion !== "number" &&
+        expectedBindingVersion !== null)
+    ) {
+      return answer({ error: "Invalid harness connection request." }, 400);
+    }
+    const params = { environmentId, profileId, expectedBindingVersion };
+    context.calls.push({ method: "environment.plans.unlink", params });
+    const handler = context.handlers["environment.plans.unlink"];
+    if (handler === undefined) return answer({ disconnected: false }, 200);
+    const result = await handler(params);
+    if (result.outcome === "forbidden") {
+      return answer({ error: "This change needs permission." }, 403);
+    }
+    if (result.outcome === "not_linked") {
+      return answer(
+        { error: "This provider connection is no longer linked." },
+        404,
+      );
+    }
+    return answer({ disconnected: true }, 200);
+  }
+  if (request.method === "GET") {
     context.calls.push({
       method: "environment.plans.list",
       params: { environmentId },
@@ -608,6 +701,80 @@ async function routeSecrets(
       200,
     );
   }
+  return null;
+}
+
+async function routeSecretVersionMutation(
+  path: readonly string[],
+  request: EnvironmentTransportRequest,
+  environmentId: string,
+  context: RouteContext,
+): Promise<EnvironmentTransportAnswer | null> {
+  if (request.method !== "POST" || path.at(7) !== "versions") return null;
+  const secretId = path.at(6);
+  const versionId = path.at(8);
+  if (path.at(9) === "destroy") {
+    if (secretId === undefined || versionId === undefined) {
+      return answer({ error: "Unknown secret version route." }, 404);
+    }
+    const allowCurrent = objectBody(request.body)?.allowCurrent === true;
+    context.calls.push({
+      method: "environment.secrets.destroy",
+      params: { environmentId, secretId, versionId, allowCurrent },
+    });
+    const handler = context.handlers["environment.secrets.destroy"];
+    return answer(
+      handler === undefined
+        ? { outcome: "revoked" }
+        : await handler({ environmentId, secretId, versionId }),
+      200,
+    );
+  }
+  if (path.at(9) === "undo") {
+    const regrant = objectBody(request.body)?.regrant;
+    if (
+      secretId === undefined ||
+      versionId === undefined ||
+      typeof regrant !== "boolean"
+    ) {
+      return answer({ error: "Unknown secret version route." }, 404);
+    }
+    const params = { environmentId, secretId, versionId, regrant };
+    context.calls.push({ method: "environment.secrets.undo", params });
+    const handler = context.handlers["environment.secrets.undo"];
+    const result =
+      handler === undefined
+        ? {
+            outcome: "accepted" as const,
+            rotationId: "test-rotation",
+            versionId,
+          }
+        : await handler(params);
+    return answer(result, result.outcome === "accepted" ? 200 : 422);
+  }
+  return null;
+}
+
+async function routeSecrets(
+  path: readonly string[],
+  request: EnvironmentTransportRequest,
+  environmentId: string,
+  context: RouteContext,
+): Promise<EnvironmentTransportAnswer> {
+  const connectionAnswer = await routeHarnessConnections(
+    path,
+    request,
+    environmentId,
+    context,
+  );
+  if (connectionAnswer !== null) return connectionAnswer;
+  const versionMutationAnswer = await routeSecretVersionMutation(
+    path,
+    request,
+    environmentId,
+    context,
+  );
+  if (versionMutationAnswer !== null) return versionMutationAnswer;
   if (request.method !== "GET")
     return answer({ error: "Unknown secret route." }, 404);
   const secretId = path.at(6);
@@ -703,6 +870,9 @@ async function routeRequest(
   }
   if (resource === "revision" && request.method === "GET") {
     return routeRevision(environmentId, context);
+  }
+  if (resource === "policy") {
+    return routePolicy(request, environmentId, context);
   }
   if (resource === "history" && request.method === "GET") {
     const subject = url.searchParams.get("subject");

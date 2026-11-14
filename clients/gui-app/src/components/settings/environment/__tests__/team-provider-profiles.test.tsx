@@ -16,6 +16,7 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -33,6 +34,7 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
@@ -592,6 +594,145 @@ describe("TeamProviders profiles", () => {
       await screen.findByText("Changed by Nora a moment ago"),
     ).toBeTruthy();
     expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeTruthy();
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "Desk",
+    );
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "managed_profile",
+        key: "claude:work",
+        os: null,
+        value: {
+          name: "Desk",
+          color: null,
+          harnessId: "claude",
+          accountIdentity: "Work label",
+          needsLink: false,
+          enabled: true,
+          mergedInto: "kept-work",
+        },
+        revision: 4,
+      },
+    ]);
+    expect(harness.paramsOf("environment.configuration.items.delete")).toEqual(
+      [],
+    );
+  });
+
+  it("drops a typed name when a conflicting reread shows a teammate renamed the profile", async () => {
+    const stored = teamProfile({
+      key: "claude:work",
+      name: "Work",
+      revision: 4,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+    });
+    const renamed = teamProfile({
+      key: "claude:work",
+      name: "Teammate name",
+      revision: 5,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+    });
+    let current = stored;
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [current]),
+      "environment.configuration.items.put": () => ({
+        outcome: "conflict",
+        current: { revision: 5, changedBy: "Nora", changedAt: 2 },
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    fireEvent.change(within(dialog).getByLabelText("Profile name"), {
+      target: { value: "Desk" },
+    });
+    current = renamed;
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+
+    expect(
+      await screen.findByText("Changed by Nora a moment ago"),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "Teammate name",
+    );
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+      {
+        environmentId: "env-a",
+        kind: "managed_profile",
+        key: "claude:work",
+        os: null,
+        value: {
+          name: "Desk",
+          color: null,
+          harnessId: "claude",
+          accountIdentity: "Work label",
+          needsLink: false,
+          enabled: true,
+          mergedInto: "kept-work",
+        },
+        revision: 4,
+      },
+    ]);
+    expect(harness.paramsOf("environment.configuration.items.delete")).toEqual(
+      [],
+    );
+  });
+
+  it("keeps a typed name when a conflicting reread changes only the profile color", async () => {
+    const stored = teamProfile({
+      key: "claude:work",
+      name: "Work",
+      revision: 4,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+    });
+    const recolored = teamProfile({
+      key: "claude:work",
+      name: "Work",
+      revision: 5,
+      enabled: true,
+      mergedInto: "kept-work",
+      accountIdentity: "Work label",
+      color: "#3b82f6",
+    });
+    let current = stored;
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers(() => [current]),
+      "environment.configuration.items.put": () => ({
+        outcome: "conflict",
+        current: { revision: 5, changedBy: "Nora", changedAt: 2 },
+      }),
+    });
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    await screen.findByRole("button", {
+      name: profileTriggerName("Work", false),
+    });
+    const dialog = await openProfileEditor();
+    fireEvent.change(within(dialog).getByLabelText("Profile name"), {
+      target: { value: "Desk" },
+    });
+    current = recolored;
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+
+    expect(
+      await screen.findByText("Changed by Nora a moment ago"),
+    ).toBeTruthy();
     expect(screen.getByLabelText("Profile name")).toHaveProperty(
       "value",
       "Desk",

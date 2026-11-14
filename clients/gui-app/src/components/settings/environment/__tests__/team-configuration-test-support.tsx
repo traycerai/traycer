@@ -64,6 +64,8 @@ const AUTHN_METHODS = new Set([
   "environment.configuration.items",
   "environment.configuration.items.put",
   "environment.configuration.items.delete",
+  "environment.configuration.revision",
+  "environment.configuration.policy.put",
   "environment.configuration.mcpServers.list",
   "environment.configuration.mcpServers.put",
   "environment.configuration.mcpServers.delete",
@@ -71,6 +73,8 @@ const AUTHN_METHODS = new Set([
   "environment.plans.list",
   "environment.plans.unlink",
   "environment.secrets.list",
+  "environment.secrets.undo",
+  "environment.secrets.destroy",
   "environment.secrets.versions",
   "environment.secrets.rotation",
 ]);
@@ -159,7 +163,7 @@ export interface TeamPageHarness {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
-  /** The params of every request the host received for `method`, in order. */
+  /** Params for authn calls moved from the host and for remaining host calls. */
   readonly paramsOf: (method: string) => unknown[];
 }
 
