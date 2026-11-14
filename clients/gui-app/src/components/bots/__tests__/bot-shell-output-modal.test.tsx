@@ -25,6 +25,8 @@ import {
   type FakeStreamSession,
 } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import type { StreamMethodSupport } from "@traycer/protocol/host-transport/stream-session";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostReachability } from "@/hooks/agent/use-host-reachability";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
   installManagedCommandChatSession,
@@ -50,12 +52,19 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
   navigateToTabIntent: mocks.navigateToTabIntent,
 }));
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: (hostId: string) => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
+  useHostReachability: (hostId: string): HostReachability => ({
     status:
       mocks.reachable && !mocks.unreachableHosts.has(hostId)
         ? "reachable"
         : "unreachable",
+    hostLabel: hostId,
+    unavailability: null,
+    basis: "directory",
+    hostKind: "remote",
   }),
 }));
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
@@ -68,7 +77,17 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
     },
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
+  useHostDirectoryEntry: (hostId: string | null): HostDirectoryEntry | null =>
+    hostId === null
+      ? null
+      : {
+          hostId,
+          label: hostId,
+          kind: "remote",
+          websocketUrl: `wss://${hostId}.example/rpc`,
+          version: null,
+          transportDialability: "dialable",
+        },
 }));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<

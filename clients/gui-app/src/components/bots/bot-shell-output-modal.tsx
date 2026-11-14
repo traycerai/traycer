@@ -8,6 +8,7 @@ import {
 import { ManagedCommandOutputBody } from "@/components/epic-canvas/renderers/managed-command-output-tile";
 import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 
 export function BotShellOutputModal(props: {
@@ -49,6 +50,7 @@ export function BotShellOutputModal(props: {
         ) : null}
         {props.commandId !== null && props.hostId !== null ? (
           <BotShellOutput
+            key={`${props.hostId}:${props.botId}:${props.sessionChatId}:${props.commandId}`}
             botId={props.botId}
             sessionChatId={props.sessionChatId}
             hostId={props.hostId}
@@ -72,6 +74,46 @@ function BotShellOutput(props: {
 }) {
   const viewId = useId();
   const reachability = useHostReachability(props.hostId);
+  const hostEntry = useHostDirectoryEntry(props.hostId);
+  const [opened, setOpened] = useState(false);
+  if (!opened && hostEntry !== null) {
+    setOpened(true);
+  }
+  const [retired, setRetired] = useState(false);
+  const bindingMoved = props.boundHostId !== props.hostId;
+  if (bindingMoved && !retired) setRetired(true);
+  const frozen = retired || bindingMoved;
+  if (!opened) {
+    return (
+      <div
+        role="status"
+        data-testid="bot-shell-output-unavailable"
+        className="px-3 py-2 text-ui-sm text-muted-foreground"
+      >
+        Output unavailable
+      </div>
+    );
+  }
+  return (
+    <BotShellOutputLive
+      {...props}
+      viewId={viewId}
+      frozen={frozen}
+      hostReachable={reachability.status === "reachable"}
+    />
+  );
+}
+
+function BotShellOutputLive(props: {
+  readonly botId: string;
+  readonly sessionChatId: string;
+  readonly hostId: string;
+  readonly commandId: string;
+  readonly onClose: () => void;
+  readonly viewId: string;
+  readonly frozen: boolean;
+  readonly hostReachable: boolean;
+}) {
   const { session, reopen } = useManagedCommandOutputSession({
     target: {
       kind: "bot",
@@ -81,14 +123,10 @@ function BotShellOutput(props: {
     hostId: props.hostId,
     commandId: props.commandId,
   });
-  const [retired, setRetired] = useState(false);
-  const bindingMoved = props.boundHostId !== props.hostId;
-  if (bindingMoved && !retired) setRetired(true);
-  const frozen = retired || bindingMoved;
   useLayoutEffect(() => {
-    if (!frozen) return;
+    if (!props.frozen) return;
     session?.freeze();
-  }, [frozen, session]);
+  }, [props.frozen, session]);
   if (session === null) {
     return (
       <div role="status" className="p-4 text-ui-sm text-muted-foreground">
@@ -100,11 +138,11 @@ function BotShellOutput(props: {
     <div className="min-h-0 min-w-0 flex-1">
       <TileFindContext value={null}>
         <ManagedCommandOutputBody
-          instanceId={`bot-output:${props.hostId}:${props.botId}:${props.sessionChatId}:${props.commandId}:${viewId}`}
+          instanceId={`bot-output:${props.hostId}:${props.botId}:${props.sessionChatId}:${props.commandId}:${props.viewId}`}
           mode={{
             kind: "bot",
-            hostReachable: !frozen && reachability.status === "reachable",
-            frozen,
+            hostReachable: !props.frozen && props.hostReachable,
+            frozen: props.frozen,
           }}
           onClose={props.onClose}
           onReopen={reopen}
