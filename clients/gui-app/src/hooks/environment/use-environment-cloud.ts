@@ -26,6 +26,7 @@ import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -168,6 +169,9 @@ export function useEnvironmentCloudQuery<
       ...tablePolling,
       queryKey,
       queryFn: async () => mapResponse(await send(method, params)),
+      // Keyed where a host read of `method` would be, so the poll coordinator
+      // reads its method from the same stamp `useHostQuery` writes.
+      meta: stampHostRpcMethod(undefined, method),
       enabled:
         args.enabled && cloud !== null && viewerId.length > 0 && authorized,
     }),
@@ -206,6 +210,7 @@ export function useEnvironmentCloudOwnRead<
         params,
         viewerId,
       ],
+      meta: stampHostRpcMethod(undefined, method),
       queryFn: () =>
         withHostQueryErrorBoundary(method, async () => {
           cloudVerdictPreflight(method)();
