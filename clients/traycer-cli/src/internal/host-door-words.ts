@@ -13,9 +13,9 @@ import type { CliHostTokenFailure } from "./cli-host-tokens";
  * Every line the CLI prints when a host's door, or authn's mint of a host-only
  * token, refuses it. One place, so a ruling on any of them changes one line.
  *
- * Only words already in the CLI or ruled for it are here. A refusal the owner
- * has not yet worded prints its command's generic line, with no server text
- * from authn and never sign-in advice for a person who is signed in.
+ * Only words already in the CLI, ruled for it, or board C30's Proposal
+ * (rule 172) are here; none is empty. Nothing authn sent is printed, and a
+ * person who is signed in is never told to sign in.
  */
 
 /** Printed only when this machine holds no usable sign-in. */
@@ -27,34 +27,48 @@ export const OLDER_HOST_MESSAGE =
   "The host is out of date. Reinstall the latest host with 'traycer host update'.";
 
 /**
- * Board C30, rows 9 to 11, built to its Proposal and waiting on the board.
+ * Board C30, rows 9 to 11, built to its Proposal and waiting on the board:
+ * each line is the sentence the app shows for the same state, prefixed
+ * `traycer: `.
  *
- * Row 9: a command refused by a host's door, by the door's reason: board
- * C1's sentence for that reason. `host_claimed` prints the computer's own
- * short reason, because a refusal never names who claimed the computer or
- * for which team (row 14 of the board).
+ * Row 9: a command refused by a host's door, by the door's reason. Board C1's
+ * sentences: none but `not_admitted`'s is in the app's code yet, so they are
+ * written here. `host_claimed` prints the computer's own short reason: the
+ * refusal carries no claimer or team for "<name> claimed this computer. It
+ * no longer belongs to <team>." (row 14 of the board).
  */
 const DOOR_REASON_MESSAGES = {
+  // provisional: board C30 row 9
   keys_unavailable:
     "traycer: This computer needs to connect once before it can verify access. Check its connection, then retry.",
+  // provisional: board C30 row 9
   clock_skew:
     "traycer: This computer's date or time appears incorrect. Enable automatic date and time on that computer, then retry.",
+  // provisional: board C30 row 9
   enrolment_broken:
     "traycer: This computer's connection to the team needs repair. Ask a team administrator to restore it.",
+  // provisional: board C30 row 9
   membership_removed:
     "traycer: You no longer have access to this team's computer. Ask a team administrator if this is unexpected.",
+  // provisional: board C30 row 9. The app's sentence, unexported in
+  // clients/shared/host-transport/remote/grant-client.ts:448.
   not_admitted:
     "traycer: This account cannot access this computer. Switch accounts to use it.",
 } as const satisfies Partial<Record<HostDoorReason, string>>;
 
-/** Row 10: access cannot be confirmed because Traycer's servers did not answer. */
+/**
+ * provisional: board C30 row 10. Access cannot be confirmed because Traycer's
+ * servers did not answer: board C1's first sentence with the CLI's "Try the
+ * command again."
+ */
 export const ACCESS_UNCONFIRMED_MESSAGE =
   "traycer: We can't confirm access to this computer right now. Try the command again.";
 
 /**
- * Row 11: a team sandbox paused for credits. The row ends "<team>'s bundle
- * is out."; authn's refusal does not name the team, so that clause waits on
- * the board.
+ * provisional: board C30 row 11. A team sandbox paused for credits: the app's
+ * first sentence (clients/gui-app/src/lib/sandboxes/sandbox-wake.ts:236). The
+ * row ends "<team>'s bundle is out."; authn's refusal names no team, so that
+ * clause waits on the board.
  */
 export const SANDBOX_OUT_OF_CREDITS_MESSAGE =
   "traycer: This sandbox is out of credits.";
@@ -93,9 +107,12 @@ export type HostDoorCredential = "host-token" | "agent-capability";
  *   this case gives sign-in advice.
  * - `older-host`: no reason, on a non-retryable refusal of the token itself.
  * - `worded`: a reason of board C30's row 9, on a host-only token.
- * - `unworded`: every other reason, and every reason on an agent's
- *   capability. The command prints its own line for an unexpected host error,
- *   never sign-in advice and never the epic-access line.
+ * - `unworded`: a reason not on that row (the recovery's own `token_expired`
+ *   and `session_revoked` while signed in, or one newer than this CLI), a
+ *   `host_claimed` with no short reason of the host's (row 14), and every
+ *   reason on an agent's capability. The command prints its own line for an
+ *   unexpected host error, never sign-in advice and never the epic-access
+ *   line.
  *
  * `null`: not the door's refusal; the command's own arms decide. A reason
  * decides ahead of the code that carries it.
