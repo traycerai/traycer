@@ -5,6 +5,15 @@
  * permanent one, and the bot list re-read once per settled open.
  */
 import {
+  doorbellHostDirectoryEntryMock,
+  doorbellHosts,
+  doorbellStreamAuthRevalidatorMock,
+  doorbellStreamClientForMock,
+  liveDoorbellsOf,
+  resetDoorbellHosts,
+  ringDoorbell,
+} from "@/providers/__tests__/cloud-recovery-doorbell-test-support";
+import {
   botListChangedMock,
   botListQueryMock,
   botMemoryMock,
@@ -39,7 +48,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import type { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   ScriptedRead,
@@ -70,40 +78,18 @@ const openHost = vi.hoisted(
   (): { client: HostRequester<HostRpcRegistry> | null } => ({ client: null }),
 );
 
-const doorbellHosts = vi.hoisted(
-  (): {
-    readonly clients: Map<string, FakeStreamClient>;
-    readonly unsupportedHosts: Set<string>;
-  } => ({
-    clients: new Map(),
-    unsupportedHosts: new Set(),
-  }),
+vi.mock(
+  "@/hooks/host/use-host-directory-entry",
+  () => doorbellHostDirectoryEntryMock,
 );
-
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string | null) =>
-    hostId === null ? null : { ...mockRemoteHostEntry, hostId },
-}));
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
-vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
-  const { FakeStreamClient: Fake } =
-    await import("@traycer-clients/shared/host-transport/__testing__/fake-stream-client");
-  return {
-    useHostStreamClientFor: (target: { readonly hostId: string } | null) => {
-      if (target === null) return null;
-      const existing = doorbellHosts.clients.get(target.hostId);
-      if (existing !== undefined) return existing;
-      const created = new Fake(true);
-      if (doorbellHosts.unsupportedHosts.has(target.hostId)) {
-        created.methodSupport = "unsupported";
-      }
-      doorbellHosts.clients.set(target.hostId, created);
-      return created;
-    },
-  };
-});
+vi.mock(
+  "@/lib/host/stream-auth-revalidator",
+  () => doorbellStreamAuthRevalidatorMock,
+);
+vi.mock(
+  "@/hooks/host/use-host-stream-client-for",
+  () => doorbellStreamClientForMock,
+);
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
@@ -203,7 +189,6 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
   BotChannelSettingsPanel: () => <div data-testid="stub-settings" />,
 }));
 
-const METHOD = "cloud.recovered.subscribe";
 const TRANSIENT = hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.open");
 const PERMANENT = hostFailure("RPC_ERROR", "bot.open");
 const SERVING: BotOpenResponse = {
@@ -283,23 +268,6 @@ function tree(): ReactNode {
   );
 }
 
-function liveDoorbells() {
-  const client = doorbellHosts.clients.get(TAB_HOST);
-  if (client === undefined) return [];
-  return client.sessions.filter(
-    (session, index) =>
-      client.subscribes[index]?.method === METHOD && !session.closed,
-  );
-}
-
-function ring(): void {
-  const session = liveDoorbells().at(-1);
-  if (session === undefined) throw new Error("no doorbell open");
-  act(() => {
-    session.emit({ kind: "recovered", hasBinaryPayload: false }, null);
-  });
-}
-
 async function settle(held: HeldOpen, settle: (held: HeldOpen) => void) {
   await act(async () => {
     settle(held);
@@ -323,13 +291,13 @@ async function failMountOpens(error: Error): Promise<number> {
     for (const held of opens.filter((open) => !open.settled)) {
       await settle(held, (open) => open.reject(error));
     }
-    expect(liveDoorbells()).toHaveLength(1);
+    expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
   });
   return opens.length;
 }
 
 async function ringAsking(expected: number): Promise<void> {
-  ring();
+  ringDoorbell(TAB_HOST);
   await waitFor(() => expect(opens).toHaveLength(expected));
 }
 
@@ -383,8 +351,7 @@ afterEach(() => {
   cleanup();
   openHost.client = null;
   resetHostConnectionRegistryForTest();
-  doorbellHosts.clients.clear();
-  doorbellHosts.unsupportedHosts.clear();
+  resetDoorbellHosts();
 });
 
 describe("<BotTabSurface /> a ring while a re-open is in flight", () => {
@@ -399,7 +366,7 @@ describe("<BotTabSurface /> a ring while a re-open is in flight", () => {
       await ringAsking(mounted + 1);
 
       const submitted = openSubmissions;
-      ring();
+      ringDoorbell(TAB_HOST);
       await waitFor(() => expect(openSubmissions).toBe(submitted + 1));
       expect(opens).toHaveLength(mounted + 1);
 
@@ -407,11 +374,11 @@ describe("<BotTabSurface /> a ring while a re-open is in flight", () => {
       await waitFor(() => expect(opens).toHaveLength(mounted + 2));
       expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy();
       expect(screen.queryByTestId("bot-tab-error")).toBeNull();
-      expect(liveDoorbells()).toHaveLength(1);
+      expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
 
       await settle(heldOpen(mounted + 1), (open) => open.resolve(SERVING));
       await waitFor(() => expectChannelOnly());
-      await waitFor(() => expect(liveDoorbells()).toHaveLength(0));
+      await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(0));
     },
   );
 });
@@ -424,7 +391,7 @@ describe("<BotTabSurface /> when a re-open fails for another reason", () => {
 
     await settle(heldOpen(mounted), (open) => open.reject(PERMANENT));
 
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(0));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(0));
     const alert = screen.getByTestId("bot-tab-error");
     expect(alert.textContent).toContain(
       `Couldn't open this bot: ${PERMANENT.message}`,

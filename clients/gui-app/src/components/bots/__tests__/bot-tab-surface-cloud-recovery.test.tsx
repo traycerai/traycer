@@ -40,14 +40,22 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
-import type { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
-import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
   ScriptedRead,
   hostFailure,
   hostReadKey,
   rejects,
 } from "@/lib/host/test-support/cloud-failure-reads";
+import {
+  doorbellHostDirectoryEntryMock,
+  doorbellHosts,
+  doorbellsOf,
+  doorbellStreamAuthRevalidatorMock,
+  doorbellStreamClientForMock,
+  liveDoorbellsOf,
+  resetDoorbellHosts,
+  ringDoorbell,
+} from "@/providers/__tests__/cloud-recovery-doorbell-test-support";
 import { createAppQueryClient } from "@/lib/query-client";
 import { CloudRecoveryDoorbellMount } from "@/providers/cloud-recovery-doorbell-mount";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
@@ -59,40 +67,18 @@ import {
   TAB_HOST,
 } from "./bot-tab-surface-harness";
 
-const doorbellHosts = vi.hoisted(
-  (): {
-    readonly clients: Map<string, FakeStreamClient>;
-    readonly unsupportedHosts: Set<string>;
-  } => ({
-    clients: new Map(),
-    unsupportedHosts: new Set(),
-  }),
+vi.mock(
+  "@/hooks/host/use-host-directory-entry",
+  () => doorbellHostDirectoryEntryMock,
 );
-
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string | null) =>
-    hostId === null ? null : { ...mockRemoteHostEntry, hostId },
-}));
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
-vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
-  const { FakeStreamClient: Fake } =
-    await import("@traycer-clients/shared/host-transport/__testing__/fake-stream-client");
-  return {
-    useHostStreamClientFor: (target: { readonly hostId: string } | null) => {
-      if (target === null) return null;
-      const existing = doorbellHosts.clients.get(target.hostId);
-      if (existing !== undefined) return existing;
-      const created = new Fake(true);
-      if (doorbellHosts.unsupportedHosts.has(target.hostId)) {
-        created.methodSupport = "unsupported";
-      }
-      doorbellHosts.clients.set(target.hostId, created);
-      return created;
-    },
-  };
-});
+vi.mock(
+  "@/lib/host/stream-auth-revalidator",
+  () => doorbellStreamAuthRevalidatorMock,
+);
+vi.mock(
+  "@/hooks/host/use-host-stream-client-for",
+  () => doorbellStreamClientForMock,
+);
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
@@ -191,7 +177,6 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
   BotChannelSettingsPanel: () => <div data-testid="stub-settings" />,
 }));
 
-const METHOD = "cloud.recovered.subscribe";
 const OPEN_FAILURE = hostFailure("E_CLOUD_UNREACHABLE", "bot.open");
 const RAW_TEXT = OPEN_FAILURE.message;
 
@@ -208,26 +193,6 @@ function tree(showSurface: boolean): ReactNode {
       </QueryClientProvider>
     </StrictMode>
   );
-}
-
-function doorbells() {
-  const client = doorbellHosts.clients.get(TAB_HOST);
-  if (client === undefined) return [];
-  return client.sessions.filter(
-    (_session, index) => client.subscribes[index]?.method === METHOD,
-  );
-}
-
-function liveDoorbells() {
-  return doorbells().filter((session) => !session.closed);
-}
-
-function ring(): void {
-  const session = liveDoorbells().at(-1);
-  if (session === undefined) throw new Error("no doorbell open");
-  act(() => {
-    session.emit({ kind: "recovered", hasBinaryPayload: false }, null);
-  });
 }
 
 const opens = (): number => mocks.open.mock.calls.length;
@@ -273,8 +238,7 @@ afterEach(() => {
   endBotTabSurfaceCase(queryClient);
   cleanup();
   resetHostConnectionRegistryForTest();
-  doorbellHosts.clients.clear();
-  doorbellHosts.unsupportedHosts.clear();
+  resetDoorbellHosts();
 });
 
 describe("<BotTabSurface /> when bot.open fails on a cloud failure", () => {
@@ -282,20 +246,20 @@ describe("<BotTabSurface /> when bot.open fails on a cloud failure", () => {
     failTransiently();
     render(tree(true));
 
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(1));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
     expectReconnecting();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
 
     mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
     const before = opens();
-    ring();
+    ringDoorbell(TAB_HOST);
 
     await waitFor(() => expect(opens()).toBe(before + 1));
     await waitFor(() =>
       expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull(),
     );
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(0));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(0));
   });
 
   it("shows Reconnecting above the held channel when a re-open fails after an answer", async () => {
@@ -315,64 +279,64 @@ describe("<BotTabSurface /> when bot.open fails on a cloud failure", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(1));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
     const before = opens();
-    ring();
+    ringDoorbell(TAB_HOST);
     await waitFor(() => expect(opens()).toBe(before + 1));
   });
 
   it("keeps the same doorbell subscription when a ring's re-open fails again", async () => {
     failTransiently();
     render(tree(true));
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(1));
-    const held = liveDoorbells().at(0);
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
+    const held = liveDoorbellsOf(TAB_HOST).at(0);
 
     const first = opens();
-    ring();
+    ringDoorbell(TAB_HOST);
     await waitFor(() => expect(opens()).toBe(first + 1));
 
-    expect(liveDoorbells()).toHaveLength(1);
-    expect(liveDoorbells().at(0)).toBe(held);
+    expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
+    expect(liveDoorbellsOf(TAB_HOST).at(0)).toBe(held);
     expectReconnecting();
 
-    ring();
+    ringDoorbell(TAB_HOST);
     await waitFor(() => expect(opens()).toBe(first + 2));
   });
 
   it("keeps its one doorbell subscription when the host's support goes from unknown to supported, and closes it when unsupported", async () => {
     failTransiently();
     render(tree(true));
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(1));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
     const client = doorbellHosts.clients.get(TAB_HOST);
     if (client === undefined) throw new Error("no stream client for the host");
-    const held = liveDoorbells().at(0);
-    const dialed = doorbells().length;
+    const held = liveDoorbellsOf(TAB_HOST).at(0);
+    const dialed = doorbellsOf(TAB_HOST).length;
     const before = opens();
 
     act(() => {
       client.setMethodSupport("supported");
     });
 
-    expect(liveDoorbells()).toHaveLength(1);
-    expect(liveDoorbells().at(0)).toBe(held);
-    expect(doorbells()).toHaveLength(dialed);
+    expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
+    expect(liveDoorbellsOf(TAB_HOST).at(0)).toBe(held);
+    expect(doorbellsOf(TAB_HOST)).toHaveLength(dialed);
     expect(opens()).toBe(before);
 
     act(() => {
       client.setMethodSupport("unsupported");
     });
 
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(0));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(0));
   });
 
   it("releases the doorbell when the tab unmounts", async () => {
     failTransiently();
     const view = render(tree(true));
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(1));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
 
     view.rerender(tree(false));
 
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(0));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(0));
   });
 
   it("offers a Retry that opens again on a host without the doorbell", async () => {
@@ -382,7 +346,7 @@ describe("<BotTabSurface /> when bot.open fails on a cloud failure", () => {
     render(tree(true));
 
     const status = expectReconnecting();
-    expect(doorbells()).toHaveLength(0);
+    expect(doorbellsOf(TAB_HOST)).toHaveLength(0);
 
     mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
     const before = opens();
@@ -405,12 +369,12 @@ describe("<BotTabSurface /> doorbell rings that must not open the bot", () => {
     expect(alert.textContent).toContain("Couldn't open this bot:");
     expect(within(alert).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
-    expect(doorbells()).toHaveLength(0);
+    expect(doorbellsOf(TAB_HOST)).toHaveLength(0);
 
     const read = await strandedRead();
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(1));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
     const before = opens();
-    ring();
+    ringDoorbell(TAB_HOST);
     await waitFor(() => expect(read.calls).toBe(2));
 
     expect(opens()).toBe(before);
@@ -422,9 +386,9 @@ describe("<BotTabSurface /> doorbell rings that must not open the bot", () => {
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
 
     const read = await strandedRead();
-    await waitFor(() => expect(liveDoorbells()).toHaveLength(1));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
     const before = opens();
-    ring();
+    ringDoorbell(TAB_HOST);
     await waitFor(() => expect(read.calls).toBe(2));
 
     expect(opens()).toBe(before);
