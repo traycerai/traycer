@@ -3,7 +3,7 @@ import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-m
 import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 
 /**
- * Settings → Agent memories, as the person opens it after the tour: the real
+ * Settings → Memories, as the person opens it after the tour: the real
  * panel, bound to the host a test names, mounted and unmounted on demand.
  */
 export function SettingsPanelSlot(props: {
