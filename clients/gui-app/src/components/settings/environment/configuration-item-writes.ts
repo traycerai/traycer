@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
@@ -42,21 +42,33 @@ interface ItemWriteState {
   readonly pending: PendingItemWrite | null;
   readonly changedAgain: ConfigurationItemWrite | null;
   readonly failure: ConfigurationItemWriteFailure | null;
-  readonly drafts: readonly ConfigurationItemWrite[];
-  /**
-   * Out-of-date refusals the person was told about, each with the revision
-   * its "Changed by" line named, until a write at that address is saved or
-   * its draft is discarded.
-   */
-  readonly answered: readonly AnsweredConflict[];
+  readonly drafts: readonly HeldDraft[];
 }
 
-interface AnsweredConflict extends Pick<
-  ConfigurationItem,
-  "kind" | "key" | "os"
-> {
-  readonly revision: number | null;
+/**
+ * A submitted draft, held from its first write until a write at its address
+ * is saved or it is discarded, with what its writes are measured against.
+ */
+interface HeldDraft {
+  /** Its text, kept current as the person types. */
+  readonly write: ConfigurationItemWrite;
+  /**
+   * The revision the person was last told about: the one the draft was first
+   * typed over, then each out-of-date refusal's own revision.
+   */
+  readonly told: number | null;
+  /** `told` as it stood when the person last typed. */
+  readonly typedAt: number | null;
+  /** The value last sent. */
+  readonly submitted: ConfigurationItem["value"];
 }
+
+/**
+ * Who a write is for. The person's own write (a blur, a Save, a Remove) sends
+ * at the revision they were last told about. A row's unmount sends only text
+ * never submitted, at the revision in force when it was typed.
+ */
+export type ConfigurationWriteTrigger = "person" | "unmount";
 
 export interface ConfigurationItemWrites {
   readonly pending: PendingItemWrite | null;
@@ -64,7 +76,10 @@ export interface ConfigurationItemWrites {
   readonly failure: ConfigurationItemWriteFailure | null;
   readonly drafts: readonly ConfigurationItemWrite[];
   readonly checking: boolean;
+  /** The person's own write. */
   readonly write: (write: ConfigurationItemWrite) => Promise<void>;
+  /** A row's write as it unmounts, which the person did not make. */
+  readonly writeOnUnmount: (write: ConfigurationItemWrite) => Promise<void>;
   readonly retry: () => void;
   readonly updateDraft: (draft: ConfigurationItemWrite) => void;
   readonly discardDraft: (
@@ -142,43 +157,64 @@ export function configurationItemDraft(
   );
 }
 
-function retainDraft(
-  drafts: readonly ConfigurationItemWrite[],
+function heldAt(
+  drafts: readonly HeldDraft[],
+  address: Pick<ConfigurationItem, "kind" | "key" | "os">,
+): HeldDraft | undefined {
+  return drafts.find((held) =>
+    sameConfigurationItemAddress(held.write, address),
+  );
+}
+
+function withoutHeld(
+  drafts: readonly HeldDraft[],
+  address: Pick<ConfigurationItem, "kind" | "key" | "os">,
+): readonly HeldDraft[] {
+  return drafts.filter(
+    (held) => !sameConfigurationItemAddress(held.write, address),
+  );
+}
+
+/** The draft a put submits: held from its first write, its text now `write`'s. */
+function submitDraft(
+  drafts: readonly HeldDraft[],
   write: ConfigurationItemWrite,
-): readonly ConfigurationItemWrite[] {
+  revision: number | null,
+): readonly HeldDraft[] {
   if (write.action === "remove") return drafts;
+  const held = heldAt(drafts, write);
   return [
-    ...drafts.filter((draft) => !sameConfigurationItemAddress(draft, write)),
-    write,
+    ...withoutHeld(drafts, write),
+    held === undefined
+      ? { write, told: revision, typedAt: revision, submitted: write.value }
+      : { ...held, write, submitted: write.value },
   ];
 }
 
 /**
- * A held draft's save names the revision the person was last told about,
- * never one a newer read put in the row unseen: the revision its draft was
- * typed over, or, once an out-of-date refusal has been shown, the revision
- * that refusal's line named. A change since then is refused again.
+ * What a write sends, or null for nothing. With no draft held, the row's
+ * item is what the person was shown. With one:
+ * - the person's write names the revision they were last told about, never
+ *   one a newer read put in the row unseen, so a change since is refused;
+ * - an unmount sends only text never submitted, at the revision in force
+ *   when it was last typed, never one a refusal named after that typing.
  */
 function writeBasis(
   asked: ConfigurationItemWrite,
-  state: Pick<ItemWriteState, "drafts" | "answered">,
+  trigger: ConfigurationWriteTrigger,
+  drafts: readonly HeldDraft[],
 ): {
   readonly write: ConfigurationItemWrite;
   readonly revision: number | null;
-} {
-  const held = state.drafts.find((draft) =>
-    sameConfigurationItemAddress(draft, asked),
-  );
+} | null {
+  const held = heldAt(drafts, asked);
   if (held === undefined)
     return { write: asked, revision: asked.original?.revision ?? null };
-  const told = state.answered.find((conflict) =>
-    sameConfigurationItemAddress(conflict, asked),
-  );
-  if (told !== undefined) return { write: asked, revision: told.revision };
-  return {
-    write: { ...asked, original: held.original },
-    revision: held.original?.revision ?? null,
-  };
+  const write = { ...asked, original: held.write.original };
+  if (trigger === "person") return { write, revision: held.told };
+  if (JSON.stringify(asked.value) === JSON.stringify(held.submitted))
+    return null;
+  return { write, revision: held.typedAt };
 }
 
 function acceptedValueMatches(
@@ -241,7 +277,6 @@ export function useConfigurationItemWrites(
     changedAgain: null,
     failure: null,
     drafts: [],
-    answered: [],
   });
   const active = useRef<ConfigurationItemWrite | null>(null);
   const attempt = useRef(0);
@@ -252,7 +287,6 @@ export function useConfigurationItemWrites(
       changedAgain: null,
       failure: null,
       drafts: [],
-      answered: [],
     });
   }
   const pending = state.scope === scope ? state.pending : null;
@@ -326,12 +360,20 @@ export function useConfigurationItemWrites(
       return Promise.resolve();
     },
   });
+  // Typing keeps a held draft's text current, and records the revision the
+  // person had been told about when they typed it.
   const updateDraft = (draft: ConfigurationItemWrite): void => {
-    setState((current) =>
-      current.scope !== scope
-        ? current
-        : { ...current, drafts: retainDraft(current.drafts, draft) },
-    );
+    setState((current) => {
+      const held = heldAt(current.drafts, draft);
+      if (current.scope !== scope || held === undefined) return current;
+      return {
+        ...current,
+        drafts: [
+          ...withoutHeld(current.drafts, draft),
+          { ...held, write: draft, typedAt: held.told },
+        ],
+      };
+    });
   };
   const discardDraft = (
     address: Pick<ConfigurationItem, "kind" | "key" | "os">,
@@ -341,12 +383,7 @@ export function useConfigurationItemWrites(
         ? current
         : {
             ...current,
-            drafts: current.drafts.filter(
-              (draft) => !sameConfigurationItemAddress(draft, address),
-            ),
-            answered: current.answered.filter(
-              (told) => !sameConfigurationItemAddress(told, address),
-            ),
+            drafts: withoutHeld(current.drafts, address),
             failure:
               current.failure !== null &&
               sameConfigurationItemAddress(current.failure.write, address)
@@ -355,9 +392,14 @@ export function useConfigurationItemWrites(
           },
     );
   };
-  const write = async (asked: ConfigurationItemWrite): Promise<void> => {
+  const send = async (
+    asked: ConfigurationItemWrite,
+    trigger: ConfigurationWriteTrigger,
+  ): Promise<void> => {
     if (source.kind !== "pool" || active.current !== null) return;
-    const { write, revision } = writeBasis(asked, state);
+    const basis = writeBasis(asked, trigger, state.drafts);
+    if (basis === null) return;
+    const { write, revision } = basis;
     active.current = write;
     // Submitted drafts survive a failed or refused write and any read that
     // remounts its editor.
@@ -367,7 +409,7 @@ export function useConfigurationItemWrites(
       pending: { write, accepted: null },
       changedAgain: null,
       failure: null,
-      drafts: retainDraft(current.drafts, write),
+      drafts: submitDraft(current.drafts, write, revision),
     }));
     const request = {
       environmentId: source.environmentId,
@@ -401,32 +443,23 @@ export function useConfigurationItemWrites(
     onOutcome(result);
     if (result.outcome !== "saved") {
       active.current = null;
-      const conflict =
+      // An out-of-date refusal tells the person the current revision.
+      const told =
         result.outcome === "conflict"
-          ? {
-              kind: write.kind,
-              key: write.key,
-              os: write.os,
-              revision: result.current?.revision ?? null,
-            }
-          : null;
-      setState((current) =>
-        current.scope !== scope
-          ? current
-          : {
-              ...current,
-              pending: null,
-              answered:
-                conflict === null
-                  ? current.answered
-                  : [
-                      ...current.answered.filter(
-                        (told) => !sameConfigurationItemAddress(told, write),
-                      ),
-                      conflict,
-                    ],
-            },
-      );
+          ? (result.current?.revision ?? null)
+          : undefined;
+      setState((current) => {
+        if (current.scope !== scope) return current;
+        const held = heldAt(current.drafts, write);
+        return {
+          ...current,
+          pending: null,
+          drafts:
+            held === undefined || told === undefined
+              ? current.drafts
+              : [...withoutHeld(current.drafts, write), { ...held, told }],
+        };
+      });
       return;
     }
     setState((current) => ({
@@ -442,24 +475,24 @@ export function useConfigurationItemWrites(
       },
       changedAgain: null,
       failure: null,
-      drafts: current.drafts.filter(
-        (draft) => !sameConfigurationItemAddress(draft, write),
-      ),
-      answered: current.answered.filter(
-        (told) => !sameConfigurationItemAddress(told, write),
-      ),
+      drafts: withoutHeld(current.drafts, write),
     }));
     void readLatest(write, false);
   };
+  const drafts = useMemo(
+    () => state.drafts.map((held) => held.write),
+    [state.drafts],
+  );
   return {
     pending,
     changedAgain: state.changedAgain,
     failure: state.failure,
-    drafts: state.drafts,
+    drafts,
     updateDraft,
     discardDraft,
     checking: bounded.pending,
-    write,
+    write: (write) => send(write, "person"),
+    writeOnUnmount: (write) => send(write, "unmount"),
     retry: bounded.retry,
   };
 }

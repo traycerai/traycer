@@ -24,6 +24,7 @@ import {
   type ConfigurationItemWrite,
   type ConfigurationItemWriteFailure,
   type ConfigurationItemWrites,
+  type ConfigurationWriteTrigger,
 } from "./configuration-item-writes";
 
 import {
@@ -348,6 +349,7 @@ function SavedTextRow(props: {
         pending={props.pending}
         busy={props.busy}
         onWrite={props.writes.write}
+        onUnmountWrite={props.writes.writeOnUnmount}
         onDraftChange={props.writes.updateDraft}
         onDiscardDraft={props.writes.discardDraft}
         saving={!props.accepted && written}
@@ -386,6 +388,7 @@ function NewTextRow(props: {
       pending={props.pending}
       busy={props.busy}
       onWrite={props.writes.write}
+      onUnmountWrite={props.writes.writeOnUnmount}
       onDraftChange={props.writes.updateDraft}
       onDiscardDraft={props.writes.discardDraft}
       saving={written ? props.pending?.original === null : false}
@@ -411,6 +414,7 @@ interface TeamTextEditorProps {
   readonly pending: ConfigurationItemWrite | null;
   readonly busy: boolean;
   readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
+  readonly onUnmountWrite: (write: ConfigurationItemWrite) => Promise<void>;
   readonly saving: boolean;
   readonly accepted: boolean;
   readonly kind: "variable" | "env_override";
@@ -462,7 +466,7 @@ function PhoneTeamTextEditor(props: TeamTextEditorProps): ReactNode {
     if (props.item !== null) {
       commitSavedText(
         { ...props, name, value, saved, displayName, snapName: setName },
-        true,
+        "person",
       );
       if (value === saved) dismiss();
       return;
@@ -686,6 +690,7 @@ function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
     kind: props.kind,
     onDiscardDraft: props.onDiscardDraft,
     onWrite: props.onWrite,
+    onUnmountWrite: props.onUnmountWrite,
     snapName: setName,
   };
   const snapRef = useRef(snapshot);
@@ -693,11 +698,11 @@ function InlineTeamTextEditor(props: TeamTextEditorProps): ReactNode {
     snapRef.current = snapshot;
   });
   const commitSaved = (): void => {
-    commitSavedText(snapshot, true);
+    commitSavedText(snapshot, "person");
   };
   useEffect(
     () => () => {
-      commitSavedText(snapRef.current, false);
+      commitSavedText(snapRef.current, "unmount");
     },
     [],
   );
@@ -787,17 +792,23 @@ interface SavedTextCommit {
   readonly kind: "variable" | "env_override";
   readonly onDiscardDraft: ConfigurationItemWrites["discardDraft"];
   readonly onWrite: (write: ConfigurationItemWrite) => Promise<void>;
+  readonly onUnmountWrite: (write: ConfigurationItemWrite) => Promise<void>;
   readonly snapName: (name: string) => void;
 }
 
 /**
- * A saved row's value, on blur and when the row unmounts. A revision change
- * remounts the row without a blur, so the unmount writes a dirty value.
- * The name snap stays on blur: a saved name is not a rename.
+ * A saved row's value, written by the person (a blur, the phone's Save) or by
+ * the row as it unmounts. A revision change, or leaving the page, unmounts the
+ * row without a blur, so the unmount writes a dirty value; the hook decides
+ * what an unmount may send (`ConfigurationWriteTrigger`).
+ * The name snap stays on the person's write: a saved name is not a rename.
  */
-function commitSavedText(snap: SavedTextCommit, snapName: boolean): void {
+function commitSavedText(
+  snap: SavedTextCommit,
+  trigger: ConfigurationWriteTrigger,
+): void {
   if (snap.item === null) return;
-  if (snapName && snap.name.trim() !== snap.displayName) {
+  if (trigger === "person" && snap.name.trim() !== snap.displayName) {
     snap.snapName(snap.displayName);
   }
   if (snap.busy || snap.value === snap.saved) return;
@@ -805,7 +816,7 @@ function commitSavedText(snap: SavedTextCommit, snapName: boolean): void {
     kind: snap.kind,
     draft: snap.draft,
     onDiscardDraft: snap.onDiscardDraft,
-    onWrite: snap.onWrite,
+    onWrite: trigger === "person" ? snap.onWrite : snap.onUnmountWrite,
     key: snap.item.key,
     os: snap.item.os,
     value: snap.value,

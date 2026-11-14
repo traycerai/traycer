@@ -13,7 +13,6 @@ import { TeamProviders } from "@/components/settings/environment/team-providers"
 import { TeamSkillsPage } from "@/components/settings/environment/team-skills";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
-import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
@@ -878,124 +877,6 @@ describe("TeamVariablesAndShells", () => {
   });
 });
 
-describe("TeamMcpServers", () => {
-  const server = (
-    revision: number,
-    enabled: boolean,
-  ): EnvironmentConfigurationItem =>
-    configurationItem({
-      kind: "mcp_server",
-      key: "github",
-      value: {
-        mcpServerId: "srv-1",
-        toolToggles: { claude: { search: enabled } },
-      },
-      revision,
-    });
-
-  it("names the team in the subtitle", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [] }),
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: "env-a",
-            ownerKind: "organization" as const,
-            ownerId: "team-a",
-            roomId: "room-a",
-            label: "Acme",
-            effectiveRole: "editor" as const,
-            kind: "team" as const,
-            hostCount: 1,
-            providerHandle: "handle-a",
-          },
-        ],
-      }),
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    await expectSentence(
-      "Tools agents can call. Acme's servers reach every provider on its hosts.",
-      "Acme",
-      true,
-    );
-  });
-
-  it("toggles a tool against the displayed revision for an editor", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [server(5, true)] }),
-      "environment.configuration.items.put": () => ({
-        outcome: "saved",
-        revision: 6,
-      }),
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    await userEvent.click(
-      await screen.findByRole("switch", { name: "github claude search" }),
-    );
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "mcp_server",
-        key: "github",
-        os: null,
-        value: {
-          mcpServerId: "srv-1",
-          toolToggles: { claude: { search: false } },
-        },
-        revision: 5,
-      },
-    ]);
-  });
-
-  it("says the team has no MCP servers when the read lists none", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [] }),
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("No MCP servers.")).toBeTruthy();
-  });
-
-  it("shows a viewer On/Off with no switches", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
-      "environment.configuration.items": () => ({ items: [server(5, true)] }),
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("On")).toBeTruthy();
-    expect(screen.queryByRole("switch")).toBeNull();
-  });
-
-  it("rereads the current toggle and shows who changed it after a conflict", async () => {
-    let current = server(5, true);
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [current] }),
-      "environment.configuration.items.put": () => {
-        current = server(6, false);
-        return {
-          outcome: "conflict",
-          current: { revision: 6, changedBy: "Grace", changedAt: 2 },
-        };
-      },
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    await userEvent.click(
-      await screen.findByRole("switch", { name: "github claude search" }),
-    );
-    expect(
-      await screen.findByText("Changed by Grace a moment ago"),
-    ).toBeTruthy();
-    await waitFor(() => {
-      expect(
-        screen.getByRole("switch", { name: "github claude search" }),
-      ).toHaveProperty("ariaChecked", "false");
-    });
-  });
-});
-
 describe("Environment page subtitles", () => {
   const environments = {
     environments: [
@@ -1046,15 +927,6 @@ describe("Environment page subtitles", () => {
       personalSplit: false,
     },
     {
-      pageName: "MCP servers",
-      page: <TeamMcpServers key="m" />,
-      team: "Tools agents can call. Acme's servers reach every provider on its hosts.",
-      personal:
-        "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
-      teamSplit: true,
-      personalSplit: false,
-    },
-    {
       pageName: "Skills",
       page: <TeamSkillsPage key="s" />,
       team: "Instructions agents follow for a kind of task. Acme's skills reach every provider on its hosts.",
@@ -1096,28 +968,6 @@ describe("Environment page subtitles", () => {
   );
 
   it.each([
-    {
-      pageTitle: "MCP servers",
-      section: "mcp-servers",
-      page: <TeamMcpServers key="mcp" />,
-      source: poolSource("editor"),
-      pick: { kind: "team", environmentId: "env-a" },
-      environmentName: "Acme",
-      sentence:
-        "Tools agents can call. Acme's servers reach every provider on its hosts.",
-      split: true,
-    },
-    {
-      pageTitle: "MCP servers",
-      section: "mcp-servers",
-      page: <TeamMcpServers key="mcp-personal" />,
-      source: personalPoolSource(),
-      pick: { kind: "personal" },
-      environmentName: "Personal",
-      sentence:
-        "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
-      split: false,
-    },
     {
       pageTitle: "Skills",
       section: "skills",
