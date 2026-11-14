@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, renderHook } from "@testing-library/react";
 
 vi.mock("sonner", () => {
   // `toast` is CALLABLE as well as a namespace: the transport-class notice
@@ -17,6 +18,12 @@ vi.mock("sonner", () => {
 
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  clearHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
+import { noteHostTokenRefusal } from "@/lib/host/host-door-observer";
+import { useMarkDrawnDoorCover } from "@/stores/host/drawn-door-cover-store";
 import {
   batchRefusalAdvice,
   isSilentHostError,
@@ -39,6 +46,15 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  fatalDoorRefusal,
+  POOL_DOOR_HOST_ID,
+  signInForUnaryTest,
+  UNARY_DOOR_HOST_ID,
+  UNARY_DOOR_SIGN_IN,
+  UNARY_DOOR_USER_ID,
+  unaryDoorHarness,
+} from "./fixtures/unary-door-harness";
 
 function makeError(code: HostRpcError["code"], message: string): HostRpcError {
   return new HostRpcError({
@@ -886,10 +902,12 @@ describe("recognized non-credential door reasons in batch advice", () => {
     },
   );
 
-  it("keeps sign-in advice for token_expired", () => {
+  it("gives no sign-in advice for token_expired while signed in", () => {
     signIn();
     const refusal = doorReasonUnauthorized("token_expired");
 
+    expect(batchRefusalAdvice([refusal], "fallback")).toEqual([]);
+    useAuthStore.getState().setSignedOut();
     expect(batchRefusalAdvice([refusal], "fallback")).toEqual([
       "Please sign in again.",
     ]);
@@ -911,11 +929,11 @@ describe("recognized non-credential door reasons in batch advice", () => {
     expect(toast.error).toHaveBeenCalledWith(fallback);
   });
 
-  it("treats token_expired under FORBIDDEN as credential advice", () => {
+  it("does not silence token_expired under FORBIDDEN without a cover", () => {
     signIn();
     const refusal = doorReasonError("FORBIDDEN", "token_expired");
 
-    expect(isSilentHostError(refusal)).toBe(true);
+    expect(isSilentHostError(refusal)).toBe(false);
     useAuthStore.getState().setSignedOut();
     expect(batchRefusalAdvice([refusal], "fallback")).toEqual([
       "Please sign in again.",
@@ -1048,7 +1066,7 @@ describe("classifySendRefusal", () => {
     ).toEqual({ kind: "failed" });
   });
 
-  it("is silent for a recoverable terminal sign-in while the session is signed in", () => {
+  it("fails a terminal sign-in without a cover while signed in", () => {
     signIn();
     expect(
       classifySendRefusal(
@@ -1059,7 +1077,7 @@ describe("classifySendRefusal", () => {
           false,
         ),
       ),
-    ).toEqual({ kind: "silent" });
+    ).toEqual({ kind: "failed" });
   });
 
   it("asks to sign in again for a terminal sign-in while signed out", () => {
@@ -1268,5 +1286,170 @@ describe("reasoned door refusal dispatch", () => {
         description: "The retry was refused: Please sign in again.",
       }),
     );
+  });
+});
+
+describe("unary credential refusals through the renderer messenger chain", () => {
+  afterEach(() => {
+    cleanup();
+    clearHostDoorState(UNARY_DOOR_HOST_ID);
+    clearHostDoorState(POOL_DOOR_HOST_ID);
+    useAuthStore.getState().setSignedOut();
+    vi.mocked(toast.error).mockClear();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it("records a repeated not_admitted refusal and suppresses the caller toast while its cover is drawn", async () => {
+    signInForUnaryTest();
+    const harness = await unaryDoorHarness({
+      hostId: UNARY_DOOR_HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+      ],
+    });
+
+    const error = await harness.call();
+    expect(harness.sentBearers).toEqual([
+      "held-host-token",
+      "fresh-host-token-1",
+    ]);
+    expect(harness.mintCalls).toEqual([UNARY_DOOR_HOST_ID]);
+    expect(
+      useHostDoorStateStore.getState().byHost.get(UNARY_DOOR_HOST_ID),
+    ).toMatchObject({ kind: "not-admitted" });
+
+    renderHook(() => useMarkDrawnDoorCover(UNARY_DOOR_HOST_ID));
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("does not mint twice while the token_expired replacement is still usable, then mints after expiry", async () => {
+    signInForUnaryTest();
+    const harness = await unaryDoorHarness({
+      hostId: UNARY_DOOR_HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "token_expired"),
+        fatalDoorRefusal("UNAUTHORIZED", "token_expired"),
+        fatalDoorRefusal("UNAUTHORIZED", "token_expired"),
+        fatalDoorRefusal("UNAUTHORIZED", "token_expired"),
+      ],
+    });
+
+    const error = await harness.call();
+    expect(harness.sentBearers).toHaveLength(2);
+    expect(harness.mintCalls).toEqual([UNARY_DOOR_HOST_ID]);
+    expect(
+      useHostDoorStateStore.getState().byHost.has(UNARY_DOOR_HOST_ID),
+    ).toBe(false);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't update this task.", {
+      id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
+      cancel: null,
+    });
+
+    const replacement = harness.tokens.current(
+      UNARY_DOOR_USER_ID,
+      UNARY_DOOR_HOST_ID,
+    );
+    if (replacement === null) throw new Error("expected the replacement token");
+    harness.setNow(replacement.expiresAtMs + 1);
+    await harness.call();
+
+    expect(harness.sentBearers).toHaveLength(4);
+    expect(harness.mintCalls).toEqual([UNARY_DOOR_HOST_ID, UNARY_DOOR_HOST_ID]);
+    expect(
+      useHostDoorStateStore.getState().byHost.has(UNARY_DOOR_HOST_ID),
+    ).toBe(false);
+  });
+
+  it("routes session_revoked through sign-in recovery without minting a host token", async () => {
+    signInForUnaryTest();
+    const harness = await unaryDoorHarness({
+      hostId: UNARY_DOOR_HOST_ID,
+      refusals: [fatalDoorRefusal("UNAUTHORIZED", "session_revoked")],
+    });
+
+    const error = await harness.call();
+
+    expect(harness.sentBearers).toHaveLength(1);
+    expect(harness.mintCalls).toEqual([]);
+    expect(harness.signInRevalidationCalls).toEqual(["stream"]);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't update this task.", {
+      id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
+      cancel: null,
+    });
+  });
+
+  it("uses the caller's line while signed in and sign-in advice while signed out for a reasonless refusal", async () => {
+    signInForUnaryTest();
+    const harness = await unaryDoorHarness({
+      hostId: UNARY_DOOR_HOST_ID,
+      refusals: [
+        makeError("UNAUTHORIZED", "the request's credential was refused"),
+      ],
+    });
+
+    const signedInError = await harness.call();
+    toastFromHostError(signedInError, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't update this task.");
+
+    useAuthStore.getState().setSignedOut();
+    vi.mocked(toast.error).mockClear();
+    toastFromHostError(signedInError, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
+    expect(harness.sentBearers).toHaveLength(1);
+    expect(harness.mintCalls).toEqual([]);
+  });
+
+  it("revalidates the pool's reasonless refusal once across its two sends", async () => {
+    signInForUnaryTest();
+    const harness = await unaryDoorHarness({
+      hostId: POOL_DOOR_HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", undefined),
+        fatalDoorRefusal("UNAUTHORIZED", undefined),
+      ],
+    });
+
+    const error = await harness.call();
+
+    expect(harness.sentBearers).toEqual([
+      UNARY_DOOR_SIGN_IN,
+      `${UNARY_DOOR_SIGN_IN}-1`,
+    ]);
+    expect(harness.signInRevalidationCalls).toEqual(["unary"]);
+    expect(harness.mintCalls).toEqual([]);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't update this task.", {
+      id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
+      cancel: null,
+    });
+  });
+
+  it("does not let access-check-delayed cover a refused host-only token call", async () => {
+    signInForUnaryTest();
+    noteHostTokenRefusal(UNARY_DOOR_HOST_ID, "access-check-delayed");
+    const harness = await unaryDoorHarness({
+      hostId: UNARY_DOOR_HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "token_expired"),
+        fatalDoorRefusal("UNAUTHORIZED", "token_expired"),
+      ],
+    });
+
+    const error = await harness.call();
+
+    expect(harness.sentBearers).toHaveLength(2);
+    expect(harness.mintCalls).toEqual([UNARY_DOOR_HOST_ID]);
+    expect(
+      useHostDoorStateStore.getState().byHost.get(UNARY_DOOR_HOST_ID),
+    ).toMatchObject({ kind: "access-check-delayed" });
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't update this task.", {
+      id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
+      cancel: null,
+    });
   });
 });

@@ -32,6 +32,10 @@ import type {
   IpcWindowRegistry,
 } from "../runner-ipc-bridge";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+} from "@traycer-clients/shared/auth/host-token-source";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import {
   createEmptyPerWindowSnapshot,
@@ -1119,6 +1123,129 @@ describe("RunnerIpcBridge", () => {
       bridge.dispose();
     },
   );
+
+  it("drops an adopt request from a window's prior era", async () => {
+    const mod = await import("../register-runner-ipc");
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      authTokenStore: undefined,
+      hostTokens,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const forget = ipcMainState.handlers.get(
+      RunnerHostInvoke.hostTokensForgetUser,
+    );
+    const adopt = ipcMainState.handlers.get(RunnerHostInvoke.hostTokensAdopt);
+    if (forget === undefined || adopt === undefined)
+      throw new Error("host-token IPC handlers are missing");
+
+    await expect(forget(bareEvent(), "user-a")).resolves.toEqual({ era: 1 });
+    await expect(
+      adopt(
+        bareEvent(),
+        "user-a",
+        "computer-a",
+        { token: "old-window-token", expiresAtMs: Date.now() + 60_000 },
+        0,
+      ),
+    ).resolves.toEqual({ era: 1 });
+    expect(hostTokens.current("user-a", "computer-a")).toBeNull();
+    expect(hostTokens.era("user-a")).toBe(1);
+    bridge.dispose();
+  });
+
+  it("supersedes a waiting renewal after its era is forgotten", async () => {
+    const mod = await import("../register-runner-ipc");
+    let mintCalls = 0;
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve({ kind: "no-sign-in" });
+      },
+      signIn: () => "sign-in-a",
+      now: () => Date.now(),
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      authTokenStore: undefined,
+      hostTokens,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const renew = ipcMainState.handlers.get(RunnerHostInvoke.hostTokensRenew);
+    if (renew === undefined)
+      throw new Error("host-token renew handler missing");
+    const changeRegistered = vi.spyOn(bridge.authSession, "on");
+    const initialChangeHandlers = changeRegistered.mock.calls.length;
+
+    const pending = renew(bareEvent(), "user-a", [], 0);
+    await vi.waitFor(() =>
+      expect(changeRegistered.mock.calls.length).toBe(
+        initialChangeHandlers + 1,
+      ),
+    );
+    await hostTokens.forgetUser("user-a");
+    bridge.authSession.set({
+      status: "signed-in",
+      token: "new-sign-in-token",
+      profile: { userId: "user-a", email: "a@example.invalid" },
+    });
+
+    await expect(pending).resolves.toEqual({
+      renewal: { kind: "superseded" },
+      era: 1,
+    });
+    expect(mintCalls).toBe(0);
+    bridge.dispose();
+  });
+
+  it("answers null when the main era read throws", async () => {
+    const mod = await import("../register-runner-ipc");
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      authTokenStore: undefined,
+      hostTokens,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    vi.spyOn(hostTokens, "era").mockImplementation(() => {
+      throw new Error("era source unavailable");
+    });
+
+    expect(
+      invokeSyncWithSenderAndArgs(RunnerHostSync.hostTokensEra, 0, "user-a"),
+    ).toBeNull();
+    bridge.dispose();
+  });
 
   it("gets and sets agent roles through typed IPC, rejecting non-boolean payloads", async () => {
     const mod = await import("../register-runner-ipc");

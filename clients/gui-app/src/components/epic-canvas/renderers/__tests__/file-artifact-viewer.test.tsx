@@ -675,8 +675,8 @@ function mediaBridge(holdRegistration: boolean): MediaBridge {
   if (!holdRegistration) gate.resolve();
   return {
     policySource: "traycer-sandbox:",
-    artifactOrigin: ({ artifactId, mountId }) =>
-      `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+    artifactOrigin: ({ artifactId }) =>
+      `traycer-sandbox://artifact-${artifactId}`,
     registered,
     unregistered,
     responses,
@@ -770,7 +770,7 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
       await waitFor(() => expect(container.querySelector(tag)).not.toBeNull());
       expect(bridge.registered).toHaveLength(1);
       expect(container.querySelector(tag)?.getAttribute("src")).toBe(
-        `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
+        `traycer-sandbox://artifact-media-${MEDIA_SHA}/m/${bridge.registered[0]}/media`,
       );
       // This machine's host was asked for one byte, which proved the file
       // is on its disk; a five-gigabyte recording must cost nothing more
@@ -947,7 +947,7 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
 
     await waitFor(() =>
       expect(view.container.querySelector("video")?.getAttribute("src")).toBe(
-        `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
+        `traycer-sandbox://artifact-media-${MEDIA_SHA}/m/${bridge.registered[0]}/media`,
       ),
     );
     expect(mocks.probeRequests).toHaveLength(1);
@@ -1042,7 +1042,7 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
 
     await waitFor(() =>
       expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
-        `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
+        `traycer-sandbox://artifact-media-${MEDIA_SHA}/m/${bridge.registered[0]}/media`,
       ),
     );
     expect(mocks.probeRequests).toHaveLength(2);
@@ -1082,7 +1082,7 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
       readSpan,
     );
     const hostSource = () =>
-      `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`;
+      `traycer-sandbox://artifact-media-${MEDIA_SHA}/m/${bridge.registered[0]}/media`;
     await waitFor(() =>
       expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
         hostSource(),

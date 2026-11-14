@@ -57,9 +57,7 @@ function Wrapper(props: { readonly children: ReactNode }): ReactNode {
 /** What the notification indicator hook derives from a result set. */
 type Seen = {
   readonly hasAnswer: boolean;
-  readonly isFetching: boolean;
   readonly isStale: boolean;
-  readonly hasData: boolean;
 };
 
 const BASE = { enabled: true, retry: false } as const;
@@ -84,9 +82,7 @@ function useObserved(options: typeof BASE | typeof ACTIVITY): Seen {
           !result.isFetching &&
           !result.isStale,
       ),
-      isFetching: results.some((result) => result.isFetching),
       isStale: results.some((result) => result.isStale),
-      hasData: results.every((result) => result.data !== undefined),
     }),
   });
 }

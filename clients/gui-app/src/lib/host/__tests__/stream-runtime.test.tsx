@@ -178,6 +178,8 @@ vi.mock(
 );
 
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
+import { retryHostDoor } from "@/lib/host/host-door-retry";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useStreamHostId,
@@ -806,6 +808,51 @@ describe("HostStreamProvider", () => {
     expect(result.current).toBeInstanceOf(WsStreamClient);
     expect(result.current).not.toBe(first);
     expect(result.current?.isClosed()).toBe(false);
+  });
+
+  it("retries this app stream now and keeps its quick-close streak", async () => {
+    vi.useFakeTimers();
+    mountLocalHost();
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const first = result.current;
+    expect(first).toBeInstanceOf(WsStreamClient);
+
+    act(() => {
+      first?.close("test-terminal-close");
+    });
+    const second = result.current;
+    expect(second).not.toBe(first);
+
+    act(() => {
+      second?.close("test-terminal-close");
+    });
+    expect(result.current).toBeNull();
+
+    await act(async () => {
+      await retryHostDoor(OTHER_HOST_ID, inertHostTokenSource());
+    });
+    expect(result.current).toBeNull();
+
+    await act(async () => {
+      await retryHostDoor(mockLocalHostEntry.hostId, inertHostTokenSource());
+    });
+    const third = result.current;
+    expect(third).toBeInstanceOf(WsStreamClient);
+    expect(third).not.toBe(second);
+
+    act(() => {
+      third?.close("test-terminal-close");
+    });
+    expect(result.current).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_999);
+    });
+    expect(result.current).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(result.current).toBeInstanceOf(WsStreamClient);
   });
 
   it("backs off consecutive quick underneath-closes instead of hot-looping the rebuild", () => {

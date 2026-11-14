@@ -46,10 +46,15 @@ describe("desktop main local streams open with host tokens", () => {
       signIn: null,
       now: () => Date.now(),
     });
-    await hostTokens.adopt(USER_A, mockLocalHostEntry.hostId, {
-      token: HOST_TOKEN,
-      expiresAtMs: Date.now() + 60_000,
-    });
+    await hostTokens.adopt(
+      USER_A,
+      mockLocalHostEntry.hostId,
+      {
+        token: HOST_TOKEN,
+        expiresAtMs: Date.now() + 60_000,
+      },
+      hostTokens.era(USER_A),
+    );
 
     const websocketUrl = mockLocalHostEntry.websocketUrl;
     if (websocketUrl === null)

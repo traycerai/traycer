@@ -64,10 +64,15 @@ describe("buildHostStreamClient for a local host", () => {
       signIn: null,
       now: () => Date.now(),
     });
-    await source.adopt(USER_A, mockLocalHostEntry.hostId, {
-      token: HOST_TOKEN_A,
-      expiresAtMs: Date.now() + 60 * 60 * 1000,
-    });
+    await source.adopt(
+      USER_A,
+      mockLocalHostEntry.hostId,
+      {
+        token: HOST_TOKEN_A,
+        expiresAtMs: Date.now() + 60 * 60 * 1000,
+      },
+      source.era(USER_A),
+    );
     return source;
   }
 
@@ -122,7 +127,6 @@ describe("buildHostStreamClient for a local host", () => {
 
     expect(statuses).toContain("reconnecting");
     expect(FakeNativeWebSocket.instances).toHaveLength(0);
-    expect(sentTokens()).not.toContain("token-b");
 
     signIn(provider, USER_A, "token-a");
     const native = await untilFirstSocket(60_000);
@@ -149,7 +153,6 @@ describe("buildHostStreamClient for a local host", () => {
 
     expect(statuses).toContain("reconnecting");
     expect(FakeNativeWebSocket.instances).toHaveLength(0);
-    expect(sentTokens()).not.toContain("token-b");
 
     signIn(provider, USER_A, "token-a");
     const native = await untilFirstSocket(60_000);

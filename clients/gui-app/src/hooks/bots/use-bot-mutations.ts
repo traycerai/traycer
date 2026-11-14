@@ -156,8 +156,9 @@ export function useBotUpdateReplyModeMutation(
 }
 
 /**
- * The bot's icon, colour or channel background, each key left out kept and
- * each `null` cleared. No toast: the panel states a refusal under the control.
+ * The bot's icon, colour, what it wears or its channel background, each key
+ * left out kept and each `null` cleared. No toast, and no list read of its
+ * own: `useBotLookSaver` sends these in order and keeps the lists.
  */
 export function useBotUpdateAppearanceMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -166,17 +167,11 @@ export function useBotUpdateAppearanceMutation(
   HostRpcError,
   BotUpdateAppearanceRequest
 > {
-  const queryClient = useQueryClient();
   return useHostMutation<HostRpcRegistry, "bot.updateAppearance">({
     client,
     method: "bot.updateAppearance",
     mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.updateAppearance(),
-      onSuccess: () => {
-        invalidateBotLists(queryClient);
-      },
-    },
+    options: { mutationKey: botMutationKeys.updateAppearance() },
   });
 }
 

@@ -35,7 +35,7 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
-  hostTokenRevalidator,
+  hostTokenSessionAuth,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
@@ -58,6 +58,7 @@ import {
 } from "@/stores/auth/auth-store";
 import { useHostBinding } from "@/lib/host/runtime";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
@@ -411,15 +412,17 @@ export function buildHostStreamClient(params: {
     // Every client recovers its host-only token, a one-shot included: a
     // refused open ran nothing. `params.auth === null` keeps a one-shot from
     // starting the sign-in's recovery.
-    auth: hostTokenRevalidator({
-      tokens: localTokens,
-      currentUserId: () => params.bearer()?.identity.userId ?? null,
-      hostId,
-      signInRecovery: params.auth,
-      onState: noteHostTokenRefusal,
-      now: Date.now,
-    }),
-    door: appHostDoorObserver(hostId),
+    ...hostTokenSessionAuth(
+      {
+        tokens: localTokens,
+        currentUserId: () => params.bearer()?.identity.userId ?? null,
+        hostId,
+        signInRecovery: params.auth,
+        onState: noteHostTokenRefusal,
+        now: Date.now,
+      },
+      appHostDoorObserver(hostId),
+    ),
     // App-wide for the same reason the mint flow below is: the wall clock is a
     // property of the machine, so every stream in the renderer parks and
     // resumes on ONE verdict. Without it, a bearer that reads "expired" only
@@ -769,16 +772,30 @@ export function useHostStreamClientBindingFor(
         setRebuildNonce((nonce) => nonce + 1);
       }, delayMs);
     };
+    // The person's Retry runs a waiting rebuild now; the streak it earned
+    // stays, so a rebuild refused again waits as long as it would have.
+    const stopRetry =
+      endpointHostId === null
+        ? () => undefined
+        : onHostDoorRetry(endpointHostId, () => {
+            if (backoffTimer === null) return;
+            clearBackoffTimer();
+            setRebuildNonce((nonce) => nonce + 1);
+          });
     if (client.isClosed()) {
       rebuild();
-      return clearBackoffTimer;
+      return () => {
+        stopRetry();
+        clearBackoffTimer();
+      };
     }
     const unsubscribe = client.onClosed(rebuild);
     return () => {
       unsubscribe();
+      stopRetry();
       clearBackoffTimer();
     };
-  }, [client, rebuildBackoff, parkIfFrozen]);
+  }, [client, endpointHostId, rebuildBackoff, parkIfFrozen]);
 
   // Wake a binding whose backoff was earned entirely under a cloud capability
   // that has since come back. Both halves are needed and neither is sufficient:

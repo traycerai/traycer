@@ -672,6 +672,9 @@ export const RunnerHostSync = {
   // same pattern that serves `windowId`). No preload-local counter exists, so
   // a reloaded preload can never repeat or reset the sequence.
   selectionAttachSeq: "runnerHost:sync:selectionAttachSeq",
+  // A person's host-token era, held by main alone: the renderer reads it at
+  // the moment work begins, so it never holds one main did not issue.
+  hostTokensEra: "runnerHost:sync:hostTokensEra",
   // `"managed"` or `"none"`: whether this app instance runs the local-host
   // lanes, pinned at boot from the lifecycle policy (restart-to-apply).
   localHostCapability: "runnerHost:sync:localHostCapability",

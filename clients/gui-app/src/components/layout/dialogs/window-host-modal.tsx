@@ -13,6 +13,8 @@ import { usePressStartActivation } from "@/lib/host/press-start-activation";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   hostUpdateSkew,
+  isDoorCoverVariant,
+  type DoorCoverKind,
   type WindowNarrationCause,
   type WindowNarrationVariant,
 } from "@/lib/host/window-narration";
@@ -166,6 +168,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
             {copy.description}
           </p>
           <WindowHostModalBody
+            cause={props.cause}
             variant={props.variant}
             progress={props.progress}
             bootBody={props.bootBody}
@@ -269,6 +272,7 @@ export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
           </div>
         )}
         <WindowHostModalBody
+          cause={props.cause}
           variant={props.variant}
           progress={props.progress}
           bootBody={props.bootBody}
@@ -397,6 +401,7 @@ function NarrationActions(
 }
 
 function WindowHostModalBody(props: {
+  readonly cause: WindowNarrationCause;
   readonly variant: WindowNarrationVariant;
   readonly progress: HostProgressView | null;
   readonly bootBody: ReactNode | null;
@@ -410,9 +415,9 @@ function WindowHostModalBody(props: {
   if (props.variant.kind === "unrecognised-refusal") {
     return <RefusalDetail code={props.variant.code} />;
   }
-  // The refused computer's cover is its title, its line and Open settings: a
-  // lane running on this machine is not part of it.
-  if (props.variant.kind === "not-admitted") return null;
+  // A door state's cover is its title, its line and its buttons: a lane
+  // running on this machine is not part of it.
+  if (props.cause === "door-state") return null;
   if (props.bootBody !== null) return props.bootBody;
   if (props.progress === null) return null;
   return <LaneProgressLine progress={props.progress} />;
@@ -562,6 +567,41 @@ interface WindowHostModalCopy {
   } | null;
 }
 
+const DOOR_COVER_COPY: Readonly<
+  Record<
+    DoorCoverKind,
+    { readonly title: string; readonly description: string }
+  >
+> = {
+  "token-unavailable": {
+    title: "We can't confirm access to this computer right now",
+    description: "We'll try again. Your draft is saved.",
+  },
+  "keys-unavailable": {
+    title: "This computer needs to connect once before it can verify access",
+    description: "Check its connection, then retry.",
+  },
+  "clock-skew": {
+    title: "This computer's date or time appears incorrect",
+    description: "Enable automatic date and time on that computer, then retry.",
+  },
+  "token-expired": {
+    title: "Access needs to be renewed before you can reconnect",
+    description:
+      "Connect to the internet and retry. Work already started remains on this computer.",
+  },
+  "enrolment-broken": {
+    title: "This computer's connection to the team needs repair",
+    description:
+      "Ask a team administrator to restore it. Work is still stored here.",
+  },
+  "membership-removed": {
+    title: "You no longer have access to this team's computer",
+    description:
+      "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+  },
+};
+
 /**
  * One wording per state, and the report family chosen with it.
  *
@@ -601,6 +641,9 @@ function modalCopy(
       description: "Switch accounts to use it.",
       report: null,
     };
+  }
+  if (isDoorCoverVariant(variant)) {
+    return { ...DOOR_COVER_COPY[variant.kind], report: null };
   }
   if (variant.kind === "update-client") {
     const { requirement } = variant;

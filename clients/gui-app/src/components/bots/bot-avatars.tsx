@@ -1,6 +1,5 @@
 import {
-  useEffect,
-  useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactElement,
   type ReactNode,
@@ -25,6 +24,10 @@ import {
   botMascot,
   drawMascotMark,
 } from "@/lib/bots/mascot-mark";
+import {
+  botExpressionOn,
+  useBotActivityForHost,
+} from "@/hooks/bots/use-bot-activity";
 import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
 
 type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
@@ -121,35 +124,62 @@ function BotIdentityAvatar(props: {
 const WORKING_BEAT_MS = 500;
 
 /**
- * The beat a working mascot's eyes are on, moving while `working`. It stays
- * on the first for a person who asks for reduced motion, from the moment
- * they ask.
+ * The one beat every working mascot on the page is on, so they move
+ * together off a single timer, which runs only while one is drawn. It stays
+ * on the first beat for a person who asks for reduced motion, from the
+ * moment they ask.
  */
+const workingBeat = {
+  beat: 0,
+  readers: new Set<() => void>(),
+  timer: null as number | null,
+  reduced: null as MediaQueryList | null,
+};
+
+function moveWorkingBeat(beat: number): void {
+  workingBeat.beat = beat;
+  for (const reader of workingBeat.readers) reader();
+}
+
+function followReducedMotion(): void {
+  if (workingBeat.timer !== null) window.clearInterval(workingBeat.timer);
+  workingBeat.timer = null;
+  if (workingBeat.reduced?.matches === true) {
+    moveWorkingBeat(0);
+    return;
+  }
+  workingBeat.timer = window.setInterval(() => {
+    moveWorkingBeat((workingBeat.beat + 1) % MASCOT_WORKING_BEATS);
+  }, WORKING_BEAT_MS);
+}
+
+function readWorkingBeat(onBeat: () => void): () => void {
+  workingBeat.readers.add(onBeat);
+  if (workingBeat.readers.size === 1) {
+    workingBeat.reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+    workingBeat.reduced.addEventListener("change", followReducedMotion);
+    followReducedMotion();
+  }
+  return () => {
+    workingBeat.readers.delete(onBeat);
+    if (workingBeat.readers.size > 0) return;
+    workingBeat.reduced?.removeEventListener("change", followReducedMotion);
+    workingBeat.reduced = null;
+    if (workingBeat.timer !== null) window.clearInterval(workingBeat.timer);
+    workingBeat.timer = null;
+    workingBeat.beat = 0;
+  };
+}
+
+const readNoBeat = (): (() => void) => () => undefined;
+
+/** The beat a mascot's eyes are on: the shared one while `working`. */
 function useWorkingBeat(working: boolean): number {
-  const [beat, setBeat] = useState(0);
-  useEffect(() => {
-    if (!working) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-    let timer: number | null = null;
-    const follow = (): void => {
-      if (timer !== null) window.clearInterval(timer);
-      timer = null;
-      if (reduced.matches) {
-        setBeat(0);
-        return;
-      }
-      timer = window.setInterval(() => {
-        setBeat((current) => (current + 1) % MASCOT_WORKING_BEATS);
-      }, WORKING_BEAT_MS);
-    };
-    follow();
-    reduced.addEventListener("change", follow);
-    return () => {
-      reduced.removeEventListener("change", follow);
-      if (timer !== null) window.clearInterval(timer);
-    };
-  }, [working]);
-  return working ? beat : 0;
+  return useSyncExternalStore(
+    working ? readWorkingBeat : readNoBeat,
+    () => (working ? workingBeat.beat : 0),
+    () => 0,
+  );
 }
 
 /**
@@ -285,8 +315,30 @@ export function ExpressiveBotAvatar(props: {
 }
 
 /**
- * A named bot's picture outside that bot's own surface, as a channel row in
- * the sidebar draws each bot it lists.
+ * A listed bot's picture with its eyes on what the bot is doing, as a
+ * channel's row in the sidebar draws it. It reads the bot through `hostId`
+ * on the subscription every other reader of that bot there shares.
+ */
+export function LiveBotAvatar(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly size: IdentityAvatarSize;
+}): ReactElement {
+  const activity = useBotActivityForHost(props.botId, props.hostId);
+  return (
+    <IdentityAvatar
+      kind="bot"
+      botId={props.botId}
+      expression={botExpressionOn("row", activity)}
+      size={props.size}
+      testId="bot-avatar"
+    />
+  );
+}
+
+/**
+ * A named bot's picture without a live activity reading, for mentions and
+ * search results.
  */
 export function NamedBotAvatar(props: {
   readonly botId: string;

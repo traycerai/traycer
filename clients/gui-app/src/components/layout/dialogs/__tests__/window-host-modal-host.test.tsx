@@ -15,6 +15,7 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HOST_BOOT_CARD_SURFACE } from "@/components/centered-card";
@@ -35,6 +36,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 
 const signOutRound2Harness = vi.hoisted(() => ({
   signOut: vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
@@ -58,14 +60,17 @@ vi.mock("@/hooks/host/use-window-narration", async (load) => {
   return {
     ...actual,
     useWindowNarration: () => {
-      const narration = actual.useWindowNarration();
+      const reading = actual.useWindowNarration();
       return narrationRound2Harness.teamMembershipRequired
         ? {
-            kind: "narrating" as const,
-            cause: "no-usable-host" as const,
-            variant: { kind: "team-membership-required" as const },
+            ...reading,
+            narration: {
+              kind: "narrating" as const,
+              cause: "no-usable-host" as const,
+              variant: { kind: "team-membership-required" as const },
+            },
           }
-        : narration;
+        : reading;
     },
   };
 });
@@ -248,6 +253,12 @@ function renderHost(
   traycerCli: ITraycerCli | null | undefined,
 ) {
   return renderHostWithGate(presentation, bypassed, traycerCli, GATE_OPEN);
+}
+
+function buttonsOf(surface: HTMLElement): readonly (string | null)[] {
+  return within(surface)
+    .getAllByRole("button")
+    .map((button) => button.textContent);
 }
 
 /**
@@ -1018,7 +1029,7 @@ describe("<WindowHostModalHost />", () => {
     ).toContain("Restarting Traycer Host…");
   });
 
-  it("update-host: offers Update host when the HOST is the outdated leg", async () => {
+  it("update-host: offers Update host and Open settings, and no Report issue, when the HOST is the outdated leg", async () => {
     applySnapshot({
       attached: true,
       effectiveHostId: null,
@@ -1053,7 +1064,10 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-variant"),
     ).toBe("update-host");
-    expect(screen.getByTestId("window-host-modal-update-host")).toBeTruthy();
+    expect(buttonsOf(screen.getByTestId("window-host-modal"))).toEqual([
+      "Update host",
+      "Open settings",
+    ]);
   });
 
   it("arm 2: a non-target incompatible host is named, and no local action is offered for it", async () => {
@@ -1342,13 +1356,6 @@ describe("<WindowHostModalHost />", () => {
     });
   });
 
-  /**
-   * The mobile app's post-latch narration, whose subject is the DOCUMENT rather
-   * than the copy: a modal layer over a mounted shell raises the pointer
-   * barrier, and on that shell the barrier is what the edge-swipe recognizer
-   * reads before it reserves a touch. The gesture is the phone's only history
-   * affordance, so the narration must not cost it.
-   */
   it("a computer that does not admit this account draws board C1's 'No reason known' state and nothing else, on every shell", async () => {
     // A lane running on this machine, so the cover's silence about it is a
     // decision rather than an absence of progress.
@@ -1433,6 +1440,157 @@ describe("<WindowHostModalHost />", () => {
     }
   });
 
+  /**
+   * Draws the desktop dialog for one door state on the window's host and
+   * returns it. The presentation has failed and can manage the host, so every
+   * generic recovery (Retry, Report issue, diagnostics) would be offered if the
+   * door cover did not choose its own actions.
+   */
+  async function renderDoorCover(state: HostDoorState): Promise<HTMLElement> {
+    noteHostDoorState(state);
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [],
+    });
+    renderHostWithGate(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        canManageHost: true,
+        provisioningError: new Error("install failed"),
+      },
+      false,
+      new MockTraycerCli(),
+      GATE_OPEN,
+    );
+    return screen.findByTestId("window-host-modal");
+  }
+
+  it("message 1, a token that cannot be had: its words and Open settings only", async () => {
+    const surface = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "token-unavailable",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "We can't confirm access to this computer right now",
+    );
+    expect(
+      within(surface).getByText("We'll try again. Your draft is saved."),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Open settings"]);
+  });
+
+  it("message 3, keys never fetched: its words, Retry and Open settings; Retry reconnects to that computer", async () => {
+    const surface = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "keys-unavailable",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "This computer needs to connect once before it can verify access",
+    );
+    expect(
+      within(surface).getByText("Check its connection, then retry."),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Retry", "Open settings"]);
+
+    const rebuildNow = vi.fn();
+    const stopHearing = onHostDoorRetry(LOCAL_HOST_ID, rebuildNow);
+    fireEvent.click(within(surface).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(rebuildNow).toHaveBeenCalledTimes(1));
+    stopHearing();
+  });
+
+  it("message 4, a wrong clock: its words, Retry and Open settings", async () => {
+    const surface = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "clock-skew",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "This computer's date or time appears incorrect",
+    );
+    expect(
+      within(surface).getByText(
+        "Enable automatic date and time on that computer, then retry.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Retry", "Open settings"]);
+  });
+
+  it("message 5, an expired token: its words, Retry and Open settings", async () => {
+    const surface = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "token-expired",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "Access needs to be renewed before you can reconnect",
+    );
+    expect(
+      within(surface).getByText(
+        "Connect to the internet and retry. Work already started remains on this computer.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Retry", "Open settings"]);
+  });
+
+  it("message 6, a broken enrolment: its words and Open settings only", async () => {
+    const surface = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "enrolment-broken",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "This computer's connection to the team needs repair",
+    );
+    expect(
+      within(surface).getByText(
+        "Ask a team administrator to restore it. Work is still stored here.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Open settings"]);
+  });
+
+  it("message 7, a removed membership: its words and Open settings only", async () => {
+    const surface = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "membership-removed",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "You no longer have access to this team's computer",
+    );
+    expect(
+      within(surface).getByText(
+        "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+      ),
+    ).toBeTruthy();
+    expect(buttonsOf(surface)).toEqual(["Open settings"]);
+  });
+
+  it("message 8, not a member: Switch account and Open settings only", async () => {
+    const surface = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "not-a-member",
+      detail: null,
+    });
+    expect(within(surface).getByRole("heading").textContent).toBe(
+      "This computer belongs to a team",
+    );
+    expect(buttonsOf(surface)).toEqual(["Switch account", "Open settings"]);
+  });
+
+  /**
+   * The mobile app's post-latch narration, whose subject is the DOCUMENT rather
+   * than the copy: a modal layer over a mounted shell raises the pointer
+   * barrier, and on that shell the barrier is what the edge-swipe recognizer
+   * reads before it reserves a touch. The gesture is the phone's only history
+   * affordance, so the narration must not cost it.
+   */
   describe("on the mobile app", () => {
     beforeEach(() => {
       setMobileApp(true);

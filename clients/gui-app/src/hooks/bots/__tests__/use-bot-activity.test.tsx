@@ -17,7 +17,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import {
-  botExpressionOf,
+  botExpressionOn,
   botWorkingOf,
   failedOn,
   failedOnRequest,
@@ -310,7 +310,7 @@ describe("replyingSessionOf and botWorkingOf", () => {
   });
 });
 
-describe("botExpressionOf", () => {
+describe("botExpressionOn", () => {
   const IDLE: BotSessionActivity = {
     state: "idle",
     startedAt: null,
@@ -320,31 +320,39 @@ describe("botExpressionOf", () => {
   };
   const PARKED: BotSessionActivity = { ...IDLE, state: "parked" };
 
-  it("is working while the trunk or any thread replies, even with the trunk parked", () => {
-    expect(botExpressionOf({ trunk: REPLYING, threads: {} })).toBe("working");
-    expect(botExpressionOf({ trunk: IDLE, threads: { a: REPLYING } })).toBe(
+  it.each([
+    ["a replying trunk", { trunk: REPLYING, threads: {} }, "working", "idle"],
+    [
+      "a replying thread under an idle trunk",
+      { trunk: IDLE, threads: { a: REPLYING } },
       "working",
-    );
-    expect(botExpressionOf({ trunk: PARKED, threads: { a: REPLYING } })).toBe(
-      "working",
-    );
-  });
-
-  it("is away while the trunk is parked and nothing replies", () => {
-    expect(botExpressionOf({ trunk: PARKED, threads: { a: IDLE } })).toBe(
-      "away",
-    );
-  });
-
-  it("is idle with no activity, an idle or failed trunk, or a parked thread alone", () => {
-    expect(botExpressionOf(null)).toBe("idle");
-    expect(botExpressionOf({ trunk: null, threads: {} })).toBe("idle");
-    expect(botExpressionOf({ trunk: IDLE, threads: { a: IDLE } })).toBe("idle");
-    expect(botExpressionOf({ trunk: FAILED, threads: {} })).toBe("idle");
-    expect(botExpressionOf({ trunk: IDLE, threads: { a: PARKED } })).toBe(
       "idle",
-    );
-  });
+    ],
+    ["a parked trunk", { trunk: PARKED, threads: { a: IDLE } }, "idle", "away"],
+    [
+      "a parked trunk with a replying thread",
+      { trunk: PARKED, threads: { a: REPLYING } },
+      "working",
+      "away",
+    ],
+    ["an idle trunk", { trunk: IDLE, threads: { a: IDLE } }, "idle", "idle"],
+    ["a failed trunk", { trunk: FAILED, threads: {} }, "idle", "idle"],
+    [
+      "a trunk no host has written",
+      { trunk: null, threads: {} },
+      "idle",
+      "idle",
+    ],
+    ["no activity", null, "idle", "idle"],
+  ] satisfies ReadonlyArray<
+    readonly [string, BotActivity | null, string, string]
+  >)(
+    "shows %s as %s on a row and %s on the title",
+    (_name, activity, row, title) => {
+      expect(botExpressionOn("row", activity)).toBe(row);
+      expect(botExpressionOn("title", activity)).toBe(title);
+    },
+  );
 });
 
 describe("failedOn and failedOnRequest", () => {
