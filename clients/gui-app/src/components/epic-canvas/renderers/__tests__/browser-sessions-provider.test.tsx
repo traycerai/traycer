@@ -566,7 +566,8 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
   });
 
   it("keeps an unknown local owner on the bridge until team ownership is learned", async () => {
-    hookState.browserView = new FakeBrowserViewBridge({});
+    const bridge = new FakeBrowserViewBridge({});
+    hookState.browserView = bridge;
     hookState.hostEntry = {
       ...hookState.hostEntry,
       websocketUrl: INITIAL_ENDPOINT,
@@ -576,15 +577,12 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         <Probe />
       </BrowserSessionsProvider>,
     );
-    const firstTransport = hookState.durableTransport;
-    if (firstTransport === null)
-      throw new Error("expected the unknown-owner local stream");
 
     await waitFor(() => {
       expect(screen.getByTestId("can-materialize-electron").textContent).toBe(
         "yes",
       );
-      expect(firstTransport.wsStreamClient.subscribes).toHaveLength(1);
+      expect(bridge.openSessionsStreamCalls).toHaveLength(1);
     });
 
     const replacement = new FakeDurableTransport({
@@ -603,7 +601,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     );
 
     await waitFor(() => {
-      expect(firstTransport.closed).toBe(true);
+      expect(bridge.closeSessionsStreamCalls).toHaveLength(1);
       expect(replacement.wsStreamClient.subscribes).toHaveLength(1);
       expect(screen.getByTestId("can-materialize-electron").textContent).toBe(
         "no",

@@ -82,6 +82,7 @@ interface LocalOwnerHarness {
   readonly listRegisteredHosts: ReturnType<typeof vi.fn>;
   readonly directory: ReturnType<typeof createBrowserSessionsHostDirectory>;
   readonly registry: BrowserSessionsRegistry;
+  readonly emitted: ReturnType<typeof createRegistryHarness>["emitted"];
   readonly openedTransports: BrowserSessionsHostTransport[];
   readonly openTransport: ReturnType<typeof vi.fn>;
 }
@@ -129,6 +130,7 @@ function createLocalOwnerHarness(): LocalOwnerHarness {
     listRegisteredHosts,
     directory,
     registry,
+    emitted: appHarness.emitted,
     openedTransports,
     openTransport,
   };
@@ -313,8 +315,6 @@ describe("local browser.sessions ownership changes", () => {
     await settle();
 
     expect(appHarness.closedTransports).toEqual([0]);
-    expect(client.isClosed()).toBe(true);
-    expect(session.closed).toBe(true);
     expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
   });
 });

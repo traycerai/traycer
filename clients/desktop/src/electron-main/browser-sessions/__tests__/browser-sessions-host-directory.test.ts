@@ -71,7 +71,7 @@ describe("main resolves the browser.sessions host itself", () => {
     const entry = await directory.resolve("host-1");
 
     expect(entry?.kind).toBe("local");
-    expect(entry?.owner).toEqual(owner);
+    await expect.poll(() => directory.peek("host-1")?.owner).toEqual(owner);
     expect(entry?.websocketUrl).toBe("ws://127.0.0.1:1111");
     expect(listRegisteredHosts).toHaveBeenCalledTimes(1);
 
