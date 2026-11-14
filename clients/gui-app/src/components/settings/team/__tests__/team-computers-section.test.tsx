@@ -362,6 +362,20 @@ describe("TeamComputersSection", () => {
     expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
   });
 
+  it("says one chat will stop when the computer counts exactly one", async () => {
+    runningChatsAnswer.value = { kind: "counted", chats: 1 };
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+
+    const dialog = await openClaimDialog(user);
+
+    expect(
+      within(dialog).getByText("1 chat is running and will stop."),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
+  });
+
   it("draws no running-chats line when the computer has none running", async () => {
     runningChatsAnswer.value = { kind: "counted", chats: 0 };
     mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);

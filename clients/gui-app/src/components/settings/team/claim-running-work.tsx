@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 import { useClaimRunningChats } from "./claim-running-chats";
 
 /**
- * The claim confirm's line for the team work it stops, board C13's Proposal
- * character for character. Only the board's plural form exists; a count of
- * one keeps it until the owner rules (board C30).
+ * The claim confirm's line for the team work it stops: board C13's Proposal,
+ * and board C30's Proposal (row 5) for exactly one chat, built while that
+ * board waits.
  */
 function claimRunningChatsLine(chats: number): string {
-  return `${chats} chats are running and will stop.`;
+  return chats === 1
+    ? "1 chat is running and will stop."
+    : `${chats} chats are running and will stop.`;
 }
 
 /**
