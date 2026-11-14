@@ -160,6 +160,10 @@ export function useProvidersPromoteToPersonal(
             },
             client,
           );
+          // The grant reads the host's status and may mint, so the sign-in
+          // can change while it is out; the upload goes only on the click's.
+          if (intent !== null && !intent.operation.onOriginSignIn())
+            return intentOutcome(null, environmentName);
           const { result } = await client.request(METHOD, request);
           if (!result.ok) {
             return {
