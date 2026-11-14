@@ -521,7 +521,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(result.current.getState().selectionCatalogConfirmed).toBe(false);
     expect(onSettingsChange).not.toHaveBeenCalledWith(
       expect.objectContaining({ model: "hidden-model" }),
-      expect.any(Boolean),
+      false,
     );
     expect(
       useComposerHarnessMemoryStore
