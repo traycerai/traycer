@@ -57,6 +57,17 @@ import {
   uniqueFile,
 } from "@/lib/composer/__tests__/file-attachment-fixtures";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  REMOTE_REFUSAL_DESCRIPTION,
+  REMOTE_REFUSAL_TITLE,
+  emptyTransfer,
+  fileTransfer,
+  folderFile,
+  pdfFile,
+  perform,
+  performWithEntries,
+  uriOnlyTransfer,
+} from "@/lib/composer/__tests__/file-drop-fixtures";
 
 const toasts = vi.hoisted(() => ({ error: vi.fn() }));
 
@@ -98,94 +109,6 @@ function filePaths(
   };
 }
 
-interface FakeTransferItem {
-  readonly kind: string;
-  readonly type: string;
-  readonly getAsFile?: () => File | null;
-  readonly webkitGetAsEntry?: () => {
-    readonly name: string;
-    readonly isDirectory: boolean;
-    readonly isFile: boolean;
-  } | null;
-}
-
-interface FakeTransfer {
-  readonly files: ReadonlyArray<File>;
-  readonly types: ReadonlyArray<string>;
-  readonly items: ReadonlyArray<FakeTransferItem>;
-  readonly getData: (type: string) => string;
-}
-
-/** A transfer from a browser with no `webkitGetAsEntry`: files, nothing more. */
-function fileTransfer(files: ReadonlyArray<File>): FakeTransfer {
-  return {
-    files,
-    types: ["Files"],
-    items: files.map((file) => ({
-      kind: "file",
-      type: file.type,
-      getAsFile: () => file,
-    })),
-    getData: () => "",
-  };
-}
-
-/** What the DOM clipboard holds when only the native clipboard has the files. */
-function emptyTransfer(): FakeTransfer {
-  return { files: [], types: [], items: [], getData: () => "" };
-}
-
-/** A file reference with no `File` behind it: only a URI flavor. */
-function uriOnlyTransfer(uri: string): FakeTransfer {
-  return {
-    files: [],
-    types: ["text/uri-list"],
-    items: [],
-    getData: (type) => (type === "text/uri-list" ? uri : ""),
-  };
-}
-
-type Gesture = "paste" | "drop";
-
-function perform(
-  gesture: Gesture,
-  zone: HTMLElement,
-  transfer: FakeTransfer,
-): void {
-  if (gesture === "paste") fireEvent.paste(zone, { clipboardData: transfer });
-  else fireEvent.drop(zone, { dataTransfer: transfer });
-}
-
-/**
- * A gesture whose items carry `webkitGetAsEntry`, answering only while the
- * gesture's own handlers run: a browser empties the transfer once they return.
- */
-function performWithEntries(
-  gesture: Gesture,
-  zone: HTMLElement,
-  files: ReadonlyArray<File>,
-  directoryNames: ReadonlySet<string>,
-): void {
-  let live = true;
-  perform(gesture, zone, {
-    ...fileTransfer(files),
-    items: files.map((file) => ({
-      kind: "file",
-      type: file.type,
-      getAsFile: () => file,
-      webkitGetAsEntry: () =>
-        live
-          ? {
-              name: file.name,
-              isDirectory: directoryNames.has(file.name),
-              isFile: !directoryNames.has(file.name),
-            }
-          : null,
-    })),
-  });
-  live = false;
-}
-
 /** What a browser exposes while a drag is still over the zone. */
 function dragOf(itemTypes: ReadonlyArray<string>) {
   return {
@@ -208,30 +131,8 @@ function uriDrag() {
   };
 }
 
-function pdfFile(name: string): File {
-  return new File([crypto.randomUUID()], name, { type: "application/pdf" });
-}
-
 function pngFile(name: string): File {
   return new File(["png-bytes"], name, { type: "image/png" });
-}
-
-/**
- * What a folder is to the page in Electron: an empty type and a `File` whose
- * bytes cannot be read.
- */
-function folderFile(name: string): File {
-  const folder = new File([], name, { type: "" });
-  Object.defineProperty(folder, "arrayBuffer", {
-    value: () =>
-      Promise.reject(
-        new DOMException(
-          "A requested file or directory could not be found.",
-          "NotFoundError",
-        ),
-      ),
-  });
-  return folder;
 }
 
 /** The editor handle a surface passes, over a plain document. */
@@ -841,9 +742,6 @@ describe("paste and drop of a non-image file on this machine", () => {
   });
 });
 
-const REMOTE_REFUSAL_TITLE = "Could not attach to a chat on another computer";
-const REMOTE_REFUSAL_DESCRIPTION =
-  "This chat runs on another computer. Use the attach button.";
 const INLINE_EDIT_DESCRIPTION =
   "Files can't be added while editing. Send them in a new message.";
 
@@ -938,6 +836,33 @@ describe("paste and drop on another machine", () => {
         mediaType: "application/pdf",
       });
       await settled(zone);
+      expect(rig.insertedPaths.flat()).toEqual([]);
+      expect(toasts.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["paste", "drop"] as const)(
+    "a %s of a non-image file is uploaded without waiting on a path resolution that never answers",
+    async (gesture) => {
+      resolveDroppedFilePaths.mockImplementation(
+        () => new Promise<string[]>(() => undefined),
+      );
+      const rig = makeRig({ seed: [] });
+      render(<Zone rig={rig} route={rig.route} pathsReachTarget={false} />);
+
+      perform(
+        gesture,
+        screen.getByTestId("zone"),
+        fileTransfer([pdfFile("report.pdf")]),
+      );
+
+      await waitFor(() => expect(attachedNames(rig)).toEqual(["report.pdf"]));
+      await waitFor(() => expect(rig.put).toHaveBeenCalledTimes(1));
+      expect(rig.put.mock.calls[0][0].request).toMatchObject({
+        kind: "file",
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+      });
       expect(rig.insertedPaths.flat()).toEqual([]);
       expect(toasts.error).not.toHaveBeenCalled();
     },

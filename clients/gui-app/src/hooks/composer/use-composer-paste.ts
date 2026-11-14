@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -699,6 +700,10 @@ async function resolveAndInsertFilePaths(input: {
   readonly filePaths: ComposerFilePathIngestArgs;
   readonly commit: PathInsertionCommit;
   readonly attachUnresolved: ((files: ReadonlyArray<File>) => void) | null;
+  /** Whether the composer's target is still this machine when paths answer. */
+  readonly stillReaches: () => boolean;
+  /** Takes the drop as a target on another machine does, typing nothing. */
+  readonly reroute: () => void;
 }): Promise<void> {
   const { files, fileUrlPaths, filePaths, commit, attachUnresolved } = input;
   const { resolvedPaths, unresolved } = await resolveFilePaths(
@@ -718,11 +723,16 @@ async function resolveAndInsertFilePaths(input: {
   const displayPaths = resolvedPaths.map((path) =>
     displayPathForInsertion(path, filePaths.mentionRoots),
   );
+  const reaches = input.stillReaches();
   // `commit` returns `false` when the editor was torn down (unmounted or
   // replaced) while this resolution was in flight - skip both the insertion
   // it already skipped internally and the toast, since there's no longer a
   // composer surface for either to land on.
-  if (!commit(displayPaths)) return;
+  if (!commit(reaches ? displayPaths : [])) return;
+  if (!reaches) {
+    input.reroute();
+    return;
+  }
   if (attachUnresolved !== null && uploadable.length > 0) {
     attachUnresolved(uploadable);
   }
@@ -765,15 +775,21 @@ function attachedOverlayVariant(
   return variant;
 }
 
-async function resolveAndInsertNativeClipboardFilePaths(
-  filePaths: ComposerFilePathIngestArgs,
-  commit: PathInsertionCommit,
-): Promise<void> {
+async function resolveAndInsertNativeClipboardFilePaths(input: {
+  readonly filePaths: ComposerFilePathIngestArgs;
+  readonly commit: PathInsertionCommit;
+  readonly stillReaches: () => boolean;
+  readonly refuse: (names: ReadonlyArray<string>) => void;
+}): Promise<void> {
+  const { filePaths, commit } = input;
   const resolvedPaths = await readNativeClipboardFilePaths(filePaths.fileDrops);
+  const reaches = input.stillReaches();
   const displayPaths = resolvedPaths.map((path) =>
     displayPathForInsertion(path, filePaths.mentionRoots),
   );
-  commit(displayPaths);
+  if (!commit(reaches ? displayPaths : [])) return;
+  // These paths have no bytes to send to a target that moved meanwhile.
+  if (!reaches) input.refuse(resolvedPaths.map(pathDisplayName));
 }
 
 /**
@@ -809,6 +825,13 @@ export function useComposerPasteEvents<Attrs>(args: {
   const [pendingFileCount, setPendingFileCount] = useState(0);
   const activeRef = useRef(true);
   const controllersRef = useRef(new Set<AbortController>());
+  // Read when a path resolution answers: the placement or a staged sandbox may
+  // have moved the target to another machine meanwhile. Written in the commit,
+  // so no answer lands between a render and the write.
+  const pathsReachRef = useRef(filePaths.pathsReachTarget);
+  useLayoutEffect(() => {
+    pathsReachRef.current = filePaths.pathsReachTarget;
+  }, [filePaths.pathsReachTarget]);
 
   useEffect(() => {
     activeRef.current = true;
@@ -917,8 +940,49 @@ export function useComposerPasteEvents<Attrs>(args: {
     [attachFencedFiles, fileAttach],
   );
 
+  // What a surface whose paths would name nothing cannot take. An inline edit
+  // attaches nothing at all, so it says so in its own words.
+  const refuseUntypedEntries = useCallback(
+    (names: ReadonlyArray<string>) => {
+      if (fileAttach === null) showEditAttachRefusedToast(names);
+      else showRemoteAttachRefusedToast(names);
+    },
+    [fileAttach],
+  );
+
+  // A surface whose typed paths would name nothing: its files go through its
+  // file route, as a pick does, into the draft `fence` names; a folder and a
+  // URI-only entry have no bytes to send and are refused. Nothing is typed.
+  const attachWithoutPaths = useCallback(
+    (
+      files: ReadonlyArray<File>,
+      fileUrlPaths: ReadonlyArray<string>,
+      folders: ReadonlySet<File>,
+      fence: () => FileInsertion | null,
+    ) => {
+      if (files.length === 0 && fileUrlPaths.length === 0) return;
+      const sendable =
+        fileAttach === null ? [] : files.filter((file) => !folders.has(file));
+      if (sendable.length > 0) {
+        const insert = fence();
+        if (insert !== null) attachFencedFiles(sendable, insert);
+      }
+      refuseUntypedEntries([
+        ...files
+          .filter((file) => !sendable.includes(file))
+          .map(fileDisplayName),
+        ...fileUrlPaths.map(pathDisplayName),
+      ]);
+    },
+    [attachFencedFiles, fileAttach, refuseUntypedEntries],
+  );
+
   const attachFilePaths = useCallback(
-    (files: ReadonlyArray<File>, fileUrlPaths: ReadonlyArray<string>) => {
+    (
+      files: ReadonlyArray<File>,
+      fileUrlPaths: ReadonlyArray<string>,
+      folders: ReadonlySet<File>,
+    ) => {
       if (files.length === 0 && fileUrlPaths.length === 0) return;
       const commit = filePaths.beginPathInsertion();
       if (commit === null) return;
@@ -938,74 +1002,34 @@ export function useComposerPasteEvents<Attrs>(args: {
             : (unresolved) => {
                 attachFencedFiles(unresolved, fileInsert);
               },
+        stillReaches: () => pathsReachRef.current,
+        // The target moved to another machine while the paths resolved: the
+        // drop is taken as that target takes it, into the draft it was made in.
+        reroute: () => {
+          attachWithoutPaths(files, fileUrlPaths, folders, () => fileInsert);
+        },
       }).finally(() => {
         if (!activeRef.current) return;
         setPendingPathCount((count) => Math.max(0, count - 1));
       });
     },
-    [attachFencedFiles, fileAttach, filePaths],
+    [attachFencedFiles, attachWithoutPaths, fileAttach, filePaths],
   );
 
   const attachNativeClipboardFilePaths = useCallback(() => {
     const commit = filePaths.beginPathInsertion();
     if (commit === null) return;
     setPendingPathCount((count) => count + 1);
-    void resolveAndInsertNativeClipboardFilePaths(filePaths, commit).finally(
-      () => {
-        if (!activeRef.current) return;
-        setPendingPathCount((count) => Math.max(0, count - 1));
-      },
-    );
-  }, [filePaths]);
-
-  // What a surface whose paths would name nothing cannot take. An inline edit
-  // attaches nothing at all, so it says so in its own words.
-  const refuseUntypedEntries = useCallback(
-    (names: ReadonlyArray<string>) => {
-      if (fileAttach === null) showEditAttachRefusedToast(names);
-      else showRemoteAttachRefusedToast(names);
-    },
-    [fileAttach],
-  );
-
-  // A surface whose typed paths would name nothing: its files go through its
-  // file route, as a pick does; a folder and a URI-only entry have no bytes to
-  // send and are refused. Nothing is typed.
-  const attachWithoutPaths = useCallback(
-    (
-      files: ReadonlyArray<File>,
-      fileUrlPaths: ReadonlyArray<string>,
-      folders: ReadonlySet<File>,
-    ) => {
-      if (files.length === 0 && fileUrlPaths.length === 0) return;
-      const sendable =
-        fileAttach === null ? [] : files.filter((file) => !folders.has(file));
-      if (sendable.length > 0) {
-        const insert = fileAttach?.beginInsertion() ?? null;
-        if (insert !== null) attachFencedFiles(sendable, insert);
-      }
-      refuseUntypedEntries([
-        ...files
-          .filter((file) => !sendable.includes(file))
-          .map(fileDisplayName),
-        ...fileUrlPaths.map(pathDisplayName),
-      ]);
-    },
-    [attachFencedFiles, fileAttach, refuseUntypedEntries],
-  );
-
-  const refuseNativeClipboardFilePaths = useCallback(() => {
-    setPendingPathCount((count) => count + 1);
-    void readNativeClipboardFilePaths(filePaths.fileDrops)
-      .then((paths) => {
-        if (!activeRef.current) return;
-        refuseUntypedEntries(paths.map(pathDisplayName));
-      })
-      .finally(() => {
-        if (!activeRef.current) return;
-        setPendingPathCount((count) => Math.max(0, count - 1));
-      });
-  }, [filePaths.fileDrops, refuseUntypedEntries]);
+    void resolveAndInsertNativeClipboardFilePaths({
+      filePaths,
+      commit,
+      stillReaches: () => pathsReachRef.current,
+      refuse: refuseUntypedEntries,
+    }).finally(() => {
+      if (!activeRef.current) return;
+      setPendingPathCount((count) => Math.max(0, count - 1));
+    });
+  }, [filePaths, refuseUntypedEntries]);
 
   const dispatchFileTransfer = useCallback(
     (
@@ -1017,15 +1041,21 @@ export function useComposerPasteEvents<Attrs>(args: {
       const nonImageFiles = files.filter(isNonImageFile);
       if (imageFiles.length > 0) attachImageFiles(imageFiles);
       if (filePaths.pathsReachTarget) {
-        attachFilePaths(nonImageFiles, fileUrlPaths);
+        attachFilePaths(nonImageFiles, fileUrlPaths, folders);
       } else {
-        attachWithoutPaths(nonImageFiles, fileUrlPaths, folders);
+        attachWithoutPaths(
+          nonImageFiles,
+          fileUrlPaths,
+          folders,
+          () => fileAttach?.beginInsertion() ?? null,
+        );
       }
     },
     [
       attachFilePaths,
       attachImageFiles,
       attachWithoutPaths,
+      fileAttach,
       filePaths.pathsReachTarget,
     ],
   );
@@ -1045,15 +1075,10 @@ export function useComposerPasteEvents<Attrs>(args: {
         return;
       }
       if (dataTransferHasUsableClipboardData(event.clipboardData)) return;
-      if (filePaths.pathsReachTarget) attachNativeClipboardFilePaths();
-      else refuseNativeClipboardFilePaths();
+      // Typed or refused once the paths answer, by where the target is then.
+      attachNativeClipboardFilePaths();
     },
-    [
-      attachNativeClipboardFilePaths,
-      dispatchFileTransfer,
-      filePaths.pathsReachTarget,
-      refuseNativeClipboardFilePaths,
-    ],
+    [attachNativeClipboardFilePaths, dispatchFileTransfer],
   );
 
   const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {

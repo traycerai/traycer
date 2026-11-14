@@ -52,7 +52,7 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
-import { useTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
+import { useStagedTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
 import {
   composerAttachmentsHoldSend,
   useComposerFileRoute,
@@ -595,7 +595,10 @@ export function LandingComposer(props: LandingComposerProps) {
     putFileBlob,
     settleDraft: settleDraftFile,
   });
-  const pathsReachTarget = useTypedPathsReach(resolvedHostId);
+  const pathsReachTarget = useStagedTypedPathsReach(
+    composerSurfaceKey,
+    resolvedHostId,
+  );
   const paste = useLandingComposerPaste({
     editorRef,
     draftId,

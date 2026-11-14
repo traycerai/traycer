@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { useRef, useState, type ReactElement } from "react";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   act,
   cleanup,
@@ -23,9 +23,23 @@ import {
 } from "../picker/composer-picker-store";
 import {
   useComposerHashPaste,
+  type ComposerFileRoute,
   type ComposerPasteEditorHandle,
 } from "@/hooks/composer/use-composer-paste";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
+import type { PutFileBlob } from "@/lib/composer/file-attachment-upload";
+import {
+  freshHostId,
+  okPut,
+  targetFor,
+} from "@/lib/composer/__tests__/file-attachment-fixtures";
+import {
+  REMOTE_REFUSAL_DESCRIPTION,
+  attachedFileNames,
+  folderFile,
+  pdfFile,
+  performWithEntries,
+} from "@/lib/composer/__tests__/file-drop-fixtures";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -437,6 +451,124 @@ describe("composer path paste/drop integration (real editor)", () => {
       expect(toast.error).not.toHaveBeenCalled();
     });
   });
+
+  // A placement change keeps the editor but can move the composer's target to
+  // another machine while a path is still resolving. A path typed after that
+  // names a file the agent cannot read, so the answer is read against the
+  // target as it is when the resolution lands, not as it was at the gesture.
+  describe("a path resolution in flight when the composer's target changes", () => {
+    it("uploads a dropped file instead of typing its path", async () => {
+      const resolution = Promise.withResolvers<readonly string[]>();
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () => resolution.promise,
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const route = observableFileRoute();
+      const composer = await mountedComposer(fileDrops, { fileRoute: route });
+      const editor = screen.getByTestId("composer-editor");
+
+      fireEvent.drop(editor, {
+        dataTransfer: makeFileTransfer([pdfFile("report.pdf")]),
+      });
+      expect(pasteBusy()).toBe("true");
+      composer.setPathsReachTarget(false);
+      resolution.resolve(["/repo/report.pdf"]);
+      await waitFor(() => expect(pasteBusy()).toBe("false"));
+
+      expect(pathSpanTexts(composer.handleRef.current)).toEqual([]);
+      await waitFor(() => expect(route.put).toHaveBeenCalledTimes(1));
+      expect(route.put.mock.calls[0][0].request).toMatchObject({
+        kind: "file",
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+      });
+      expect(attachedFileNames(composer.document())).toEqual(["report.pdf"]);
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(screen.getByTestId("composer-editor")).toBe(editor);
+    });
+
+    it("uploads the file of a drop and refuses its folder, typing no path", async () => {
+      const resolution = Promise.withResolvers<void>();
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: async (files) => {
+          await resolution.promise;
+          return files.map((file) => `/repo/${file.name}`);
+        },
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const route = observableFileRoute();
+      const composer = await mountedComposer(fileDrops, { fileRoute: route });
+
+      performWithEntries(
+        "drop",
+        screen.getByTestId("composer-editor"),
+        [pdfFile("report.pdf"), folderFile("my-folder")],
+        new Set(["my-folder"]),
+      );
+      expect(pasteBusy()).toBe("true");
+      composer.setPathsReachTarget(false);
+      resolution.resolve();
+      await waitFor(() => expect(pasteBusy()).toBe("false"));
+
+      expect(pathSpanTexts(composer.handleRef.current)).toEqual([]);
+      await waitFor(() => expect(route.put).toHaveBeenCalledTimes(1));
+      expect(attachedFileNames(composer.document())).toEqual(["report.pdf"]);
+      expect(toast.error).toHaveBeenCalledTimes(1);
+      expect(toast.error).toHaveBeenCalledWith("Couldn't attach my-folder.", {
+        description: REMOTE_REFUSAL_DESCRIPTION,
+      });
+    });
+
+    it("refuses a native-clipboard path by name, typing nothing", async () => {
+      const resolution = Promise.withResolvers<readonly string[]>();
+      const fileDrops: IFileDropHost = {
+        resolveDroppedFilePaths: () => Promise.resolve([]),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+        readNativeClipboardFilePaths: () => resolution.promise,
+      };
+      const route = observableFileRoute();
+      const composer = await mountedComposer(fileDrops, { fileRoute: route });
+
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeEmptyTransfer([]),
+      });
+      expect(pasteBusy()).toBe("true");
+      composer.setPathsReachTarget(false);
+      resolution.resolve(["/repo/from-vscode.txt"]);
+      await waitFor(() => expect(pasteBusy()).toBe("false"));
+
+      expect(pathSpanTexts(composer.handleRef.current)).toEqual([]);
+      expect(toast.error).toHaveBeenCalledTimes(1);
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't attach from-vscode.txt.",
+        { description: REMOTE_REFUSAL_DESCRIPTION },
+      );
+      expect(route.put).not.toHaveBeenCalled();
+    });
+
+    it("still types the path when the target is back on this machine by the time it resolves", async () => {
+      const resolution = Promise.withResolvers<readonly string[]>();
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () => resolution.promise,
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const route = observableFileRoute();
+      const composer = await mountedComposer(fileDrops, { fileRoute: route });
+
+      fireEvent.drop(screen.getByTestId("composer-editor"), {
+        dataTransfer: makeFileTransfer([pdfFile("report.pdf")]),
+      });
+      composer.setPathsReachTarget(false);
+      composer.setPathsReachTarget(true);
+      resolution.resolve(["/repo/report.pdf"]);
+      await waitFor(() => expect(pasteBusy()).toBe("false"));
+
+      expect(pathSpanTexts(composer.handleRef.current)).toEqual(["report.pdf"]);
+      expect(attachedFileNames(composer.document())).toEqual([]);
+      expect(route.put).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -450,19 +582,21 @@ interface MountOptions {
     readonly from: number;
     readonly to: number;
   } | null;
+  readonly fileRoute: ComposerFileRoute | null;
 }
 
 const DEFAULT_MOUNT: MountOptions = {
   mentionRoots: ["/repo"],
   initialContent: { type: "doc", content: [{ type: "paragraph" }] },
   initialSelection: null,
+  fileRoute: null,
 };
 
 async function mountedHandle(
   fileDrops: IFileDropHost,
   options: Partial<MountOptions> | undefined,
 ): Promise<{ current: ComposerPromptEditorHandle | null }> {
-  const { handleRef } = await mountedHandleWithUnmount(fileDrops, options);
+  const { handleRef } = await mountedComposer(fileDrops, options);
   return handleRef;
 }
 
@@ -473,25 +607,70 @@ async function mountedHandleWithUnmount(
   readonly handleRef: { current: ComposerPromptEditorHandle | null };
   readonly unmount: () => void;
 }> {
+  const { handleRef, unmount } = await mountedComposer(fileDrops, options);
+  return { handleRef, unmount };
+}
+
+/**
+ * The editor mounted with paths typed (`pathsReachTarget`), as on this
+ * machine. `setPathsReachTarget` re-renders the SAME mounted editor with
+ * another answer, which is what a placement change does to a composer.
+ */
+async function mountedComposer(
+  fileDrops: IFileDropHost,
+  options: Partial<MountOptions> | undefined,
+): Promise<{
+  readonly handleRef: { current: ComposerPromptEditorHandle | null };
+  readonly unmount: () => void;
+  readonly setPathsReachTarget: (pathsReachTarget: boolean) => void;
+  readonly document: () => JsonContent;
+}> {
   const opts = { ...DEFAULT_MOUNT, ...(options ?? {}) };
   const handleRef: { current: ComposerPromptEditorHandle | null } = {
     current: null,
   };
-  const view = render(
+  const harness = (pathsReachTarget: boolean): ReactElement => (
     <Harness
       handleRef={handleRef}
       fileDrops={fileDrops}
       mentionRoots={opts.mentionRoots}
       initialContent={opts.initialContent}
       initialSelection={opts.initialSelection}
-    />,
+      fileRoute={opts.fileRoute}
+      pathsReachTarget={pathsReachTarget}
+    />
   );
+  const view = render(harness(true));
   await act(async () => {
     await flushMicrotasksRaw();
   });
   expect(handleRef.current).not.toBeNull();
   expect(handleRef.current?.isReady()).toBe(true);
-  return { handleRef, unmount: view.unmount };
+  return {
+    handleRef,
+    unmount: view.unmount,
+    setPathsReachTarget: (pathsReachTarget) => {
+      view.rerender(harness(pathsReachTarget));
+    },
+    document: () => {
+      const handle = handleRef.current;
+      if (handle === null) throw new Error("the editor is not mounted");
+      return handle.getJSON();
+    },
+  };
+}
+
+interface ObservableFileRoute extends ComposerFileRoute {
+  readonly put: Mock<PutFileBlob>;
+}
+
+/** A file route whose host takes every upload, so a put can be observed. */
+function observableFileRoute(): ObservableFileRoute {
+  return {
+    target: targetFor(freshHostId("composer-host")),
+    put: okPut(),
+    settleDraft: () => undefined,
+  };
 }
 
 function Harness({
@@ -500,6 +679,8 @@ function Harness({
   mentionRoots,
   initialContent,
   initialSelection,
+  fileRoute,
+  pathsReachTarget,
 }: {
   readonly handleRef: { current: ComposerPromptEditorHandle | null };
   readonly fileDrops: IFileDropHost;
@@ -509,6 +690,8 @@ function Harness({
     readonly from: number;
     readonly to: number;
   } | null;
+  readonly fileRoute: ComposerFileRoute | null;
+  readonly pathsReachTarget: boolean;
 }) {
   const [pickerStore] = useState<ComposerPickerStore>(() =>
     createComposerPickerStore(),
@@ -523,40 +706,45 @@ function Harness({
   const paste = useComposerHashPaste(editorRef, {
     fileDrops,
     mentionRoots,
-    fileRoute: null,
-    pathsReachTarget: true,
+    fileRoute,
+    pathsReachTarget,
   });
   const setHandle = (instance: ComposerPromptEditorHandle | null): void => {
     handleRef.current = instance;
     editorRef.current = instance;
   };
   return (
-    <ComposerPromptEditor
-      ref={setHandle}
-      initialContent={initialContent}
-      initialSelection={initialSelection}
-      pickerStore={pickerStore}
-      placeholder="test"
-      editorClassName={undefined}
-      isActive={false}
-      disabled={false}
-      slashProviderId="claude"
-      hasPastedImageBytes={null}
-      ingestPastedComposerImages={null}
-      stabilizeImageAttachmentCaret={false}
-      onDocumentChange={() => undefined}
-
-      onSelectionChange={() => undefined}
-      onSubmit={() => undefined}
-      onPaste={paste.onPaste}
-      onDragOver={paste.onDragOver}
-      onDrop={paste.onDrop}
-      onKeyDown={undefined}
-      interceptKeyDown={null}
-      onFocus={() => undefined}
-      onBlur={() => undefined}
-      onEditorReady={null}
-    />
+    <>
+      <ComposerPromptEditor
+        ref={setHandle}
+        initialContent={initialContent}
+        initialSelection={initialSelection}
+        pickerStore={pickerStore}
+        placeholder="test"
+        editorClassName={undefined}
+        isActive={false}
+        disabled={false}
+        slashProviderId="claude"
+        hasPastedImageBytes={null}
+        ingestPastedComposerImages={null}
+        stabilizeImageAttachmentCaret={false}
+        onDocumentChange={() => undefined}
+        onSelectionChange={() => undefined}
+        onSubmit={() => undefined}
+        onPaste={paste.onPaste}
+        onDragOver={paste.onDragOver}
+        onDrop={paste.onDrop}
+        onKeyDown={undefined}
+        interceptKeyDown={null}
+        onFocus={() => undefined}
+        onBlur={() => undefined}
+        onEditorReady={null}
+      />
+      <span
+        data-testid="paste-busy"
+        data-busy={String(paste.isResolvingFilePaths || paste.isAttachingFiles)}
+      />
+    </>
   );
 }
 
@@ -676,6 +864,11 @@ function pathSpanTexts(handle: ComposerPromptEditorHandle | null): string[] {
   return textRuns(handle)
     .filter((run) => run.code)
     .map((run) => run.text);
+}
+
+/** Whether a path resolution or a file upload hand-off is still running. */
+function pasteBusy(): string | null {
+  return screen.getByTestId("paste-busy").getAttribute("data-busy");
 }
 
 function plainTextOutsideCode(
