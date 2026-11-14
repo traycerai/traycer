@@ -3,10 +3,7 @@ import {
   AUTH_ERROR_DISK_FULL,
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
-import type {
-  TeamComputersResult,
-  SetEnvironmentBotHostResult,
-} from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
@@ -3185,20 +3182,6 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.listTeamComputers(bearer, environmentId);
-  }
-  async setEnvironmentBotHost(
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult> {
-    const bearer = this.cloudBearer();
-    if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.setEnvironmentBotHost(
-      bearer,
-      environmentId,
-      hostId,
-      sharingGeneration,
-    );
   }
   async mintTeamComputerInstallToken(
     environmentId: string,

@@ -1,6 +1,4 @@
 export const authMutationKeys = {
-  setEnvironmentBotHost: (environmentId: string) =>
-    ["auth", "setEnvironmentBotHost", environmentId] as const,
   claimTeamComputer: (environmentId: string) =>
     ["auth", "claimTeamComputer", environmentId] as const,
   revalidateContextAfterInvalidation: (userId: string | null) =>
