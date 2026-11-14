@@ -1858,6 +1858,52 @@ export const providerProfileActionSchema = lazySchema(() =>
 );
 export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
 
+/**
+ * The environment profile a rename or recolor is for, as `providers.list`
+ * names it (`environmentProfileId`), so the app can state the
+ * `managed_profile` item it expects: the environment's copy with the new name
+ * or colour laid over it, every other field, `enabled` included, kept. Null
+ * when `providers.list` names none (the profile is this computer's own) and
+ * from a caller older than 2.2, whose request the upgrade fills with null;
+ * either way the app expects no proposal.
+ *
+ * The host never writes it over the profile it finds in its own store. That
+ * is the truth and is what the host proposes; when the two differ, the app's
+ * remembered value matches no hold and the change waits in the review list.
+ * No error is raised for it.
+ */
+const environmentProfileIdStatementSchema = lazySchema(() =>
+  z.string().min(1).nullable(),
+);
+
+/** `providers.setEnabled@2.2`'s profile action: rename and recolor name the environment profile. */
+export const providerProfileActionSchemaV22 = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("rename"),
+      profileId: z.string(),
+      label: z.string().min(1).max(64),
+      environmentProfileId: environmentProfileIdStatementSchema,
+    }),
+    z.object({
+      type: z.literal("remove"),
+      profileId: z.string(),
+    }),
+    z.object({
+      type: z.literal("recolor"),
+      profileId: z.string(),
+      accentColor: providerProfileAccentColorSchema,
+      environmentProfileId: environmentProfileIdStatementSchema,
+    }),
+    z.object({
+      type: z.literal("acknowledgeAmbientDrift"),
+    }),
+  ]),
+);
+export type ProviderProfileActionV22 = z.infer<
+  typeof providerProfileActionSchemaV22
+>;
+
 /** macOS versions are display-only facts supplied by the executing host. */
 export const providerMacosVersionSchema = lazySchema(() =>
   z
@@ -3669,11 +3715,21 @@ export type ProvidersSetEnabledRequestV21 = z.infer<
   typeof providersSetEnabledRequestSchemaV21
 >;
 
-// THERE IS NO `providers.setEnabled@2.2`. One was opened to carry an optional
-// tri-state `mode` for a three-way Auto/On/Off settings control; that control
-// is gone, and `mode` was the minor's entire delta over 2.1. `enabled` - a
-// required boolean since 2.0 - is once again the whole request, which is what
-// the method's name has always promised.
+/** `providers.setEnabled@2.2`: the profile action of {@link providerProfileActionSchemaV22}. */
+export const providersSetEnabledRequestSchemaV22 = lazySchema(() =>
+  providersSetEnabledRequestSchema.extend({
+    profileAction: providerProfileActionSchemaV22.nullable().default(null),
+  }),
+);
+export type ProvidersSetEnabledRequestV22 = z.infer<
+  typeof providersSetEnabledRequestSchemaV22
+>;
+
+// A `providers.setEnabled@2.2` was once opened to carry an optional tri-state
+// `mode` for a three-way Auto/On/Off settings control, and withdrawn before
+// any release; no released baseline carries it. `enabled` - a required
+// boolean since 2.0 - stays the whole enable request. The 2.2 above adds
+// only the environment profile a rename or recolor is for.
 
 export const providersSetApiKeyRequestSchema = lazySchema(() =>
   z.object({
@@ -5133,6 +5189,42 @@ export type ProvidersUsePackVersionRequest = z.infer<
   typeof providersUsePackVersionRequestSchema
 >;
 
+/**
+ * The whole pack policy a pack save leaves, as the app states it (T11c): the
+ * `pack_policy` item the app expects the host to propose, so it can remember
+ * its edit and recognise its hold among the environment's held changes. The
+ * app reads the other half from the pack's managed versions
+ * (`pinnedVersion`, `autoDownload`). Null when the caller does not state it:
+ * the upgrade from the previous minor fills null, and the app expects no
+ * proposal.
+ *
+ * The host never writes it over the policy it keeps itself. That policy is
+ * the truth and is what the host proposes; when the two differ, the app's
+ * remembered value matches no hold and the change waits in the review list.
+ * No error is raised for it.
+ */
+export const providersPackPolicyStatementSchema = lazySchema(() =>
+  z
+    .object({
+      pinnedVersion: z.string().min(1).nullable(),
+      autoDownload: z.boolean(),
+    })
+    .nullable(),
+);
+export type ProvidersPackPolicyStatement = z.infer<
+  typeof providersPackPolicyStatementSchema
+>;
+
+/** v1.2 adds `policy`: `{ pinnedVersion: version, autoDownload }`. */
+export const providersUsePackVersionRequestSchemaV12 = lazySchema(() =>
+  providersUsePackVersionRequestSchema.extend({
+    policy: providersPackPolicyStatementSchema,
+  }),
+);
+export type ProvidersUsePackVersionRequestV12 = z.infer<
+  typeof providersUsePackVersionRequestSchemaV12
+>;
+
 export const providersUsePackVersionResultSchemaV10 = lazySchema(() =>
   z.union([
     z.object({
@@ -5219,6 +5311,16 @@ export const providersSetPackPolicyRequestSchema = lazySchema(() =>
 );
 export type ProvidersSetPackPolicyRequest = z.infer<
   typeof providersSetPackPolicyRequestSchema
+>;
+
+/** v1.1 adds `policy`: `{ pinnedVersion, autoDownload }`, the pin unchanged. */
+export const providersSetPackPolicyRequestSchemaV11 = lazySchema(() =>
+  providersSetPackPolicyRequestSchema.extend({
+    policy: providersPackPolicyStatementSchema,
+  }),
+);
+export type ProvidersSetPackPolicyRequestV11 = z.infer<
+  typeof providersSetPackPolicyRequestSchemaV11
 >;
 
 export const providersSetPackPolicyResponseSchema = lazySchema(() =>

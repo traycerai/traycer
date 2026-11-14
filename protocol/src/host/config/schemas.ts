@@ -36,6 +36,49 @@ export type ConfigShellGetResponse = z.infer<
   typeof configShellGetResponseSchema
 >;
 
+/**
+ * v1.1 adds `entries`: the shells this computer has configured, each with the
+ * arguments it remembers for it. `args: null` means none are remembered and
+ * the default applies, so an app states a shell save's selection with one
+ * rule: the remembered arguments when present, otherwise
+ * `defaultShellArgs(path)` (`@traycer/protocol/config/shell-family`).
+ */
+export const configShellGetResponseSchemaV11 = lazySchema(() =>
+  configShellGetResponseSchema.extend({
+    entries: z.array(configShellEntrySchema),
+  }),
+);
+export type ConfigShellGetResponseV11 = z.infer<
+  typeof configShellGetResponseSchemaV11
+>;
+
+/**
+ * What the app states the `shell` item will be once a shell save is made, so
+ * it can remember its edit and recognise its hold among the environment's
+ * held changes (`settingsSaveItemEdit`):
+ * - `shell`: this path with these arguments is selected;
+ * - `system_default`: no shell is selected, and the item is deleted;
+ * - `not_stated`: the caller predates this field (the upgrade from 1.1 fills
+ *   it); the app expects no proposal.
+ *
+ * The host never writes it over what it computes from its own config. That
+ * computation is the truth and is what the host proposes; when the two
+ * differ, the app's remembered value matches no hold and the change waits in
+ * the review list. No error is raised for it.
+ */
+export const configShellSelectionSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("shell"),
+      path: shellPathSchema,
+      args: z.array(z.string()),
+    }),
+    z.object({ kind: z.literal("system_default") }),
+    z.object({ kind: z.literal("not_stated") }),
+  ]),
+);
+export type ConfigShellSelection = z.infer<typeof configShellSelectionSchema>;
+
 // A shell-set operation must change either the selected program or its args;
 // accepting `{ path: null, args: null }` would turn an RPC typo into a silent
 // config-file rewrite instead of matching the CLI command's validation.
@@ -69,6 +112,31 @@ export const configShellSetRequestSchema = lazySchema(() =>
   ]),
 );
 export type ConfigShellSetRequest = z.infer<typeof configShellSetRequestSchema>;
+
+/**
+ * v1.2 adds `selection`. A switch that names no arguments takes the shell's
+ * remembered ones (`config.shell.get@1.1`'s `entries`), else
+ * `defaultShellArgs(path)`; "System default" is `system_default`.
+ */
+export const configShellSetRequestSchemaV12 = lazySchema(() =>
+  z.union([
+    z.object({
+      path: shellPathSchema,
+      args: shellArgsSchema,
+      executableWriteGrant: executableWriteGrantSchema,
+      selection: configShellSelectionSchema,
+    }),
+    z.object({
+      path: z.null(),
+      args: z.array(z.string()),
+      executableWriteGrant: executableWriteGrantSchema,
+      selection: configShellSelectionSchema,
+    }),
+  ]),
+);
+export type ConfigShellSetRequestV12 = z.infer<
+  typeof configShellSetRequestSchemaV12
+>;
 /**
  * The shell choice itself, without the transport's grant: what the Settings
  * editor produces and what the desktop's local CLI bridge writes.
@@ -121,6 +189,17 @@ export const configShellAddRequestSchema = lazySchema(() =>
 );
 export type ConfigShellAddRequest = z.infer<typeof configShellAddRequestSchema>;
 
+/**
+ * v1.2 adds `selection`. Add selects the shell it adds, so the app states
+ * `{ path, args: defaultShellArgs(path) }`.
+ */
+export const configShellAddRequestSchemaV12 = lazySchema(() =>
+  configShellAddRequestSchema.extend({ selection: configShellSelectionSchema }),
+);
+export type ConfigShellAddRequestV12 = z.infer<
+  typeof configShellAddRequestSchemaV12
+>;
+
 export const configShellEntrySchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
@@ -157,6 +236,21 @@ export type ConfigShellRemoveRequest = z.infer<
   typeof configShellRemoveRequestSchema
 >;
 
+/**
+ * v1.2 adds `selection`: `system_default` when `path` is the current shell
+ * (`config.shell.get`), else the current selection unchanged. Removing a
+ * shell that is not the current one changes no item: the host answers
+ * `proposal: null`, and the app remembers nothing.
+ */
+export const configShellRemoveRequestSchemaV12 = lazySchema(() =>
+  configShellRemoveRequestSchema.extend({
+    selection: configShellSelectionSchema,
+  }),
+);
+export type ConfigShellRemoveRequestV12 = z.infer<
+  typeof configShellRemoveRequestSchemaV12
+>;
+
 export const configShellRemoveResponseSchema = lazySchema(() =>
   z.object({
     removed: z.boolean(),
@@ -183,6 +277,21 @@ export const configShellRevertArgsRequestSchema = lazySchema(() =>
 );
 export type ConfigShellRevertArgsRequest = z.infer<
   typeof configShellRevertArgsRequestSchema
+>;
+
+/**
+ * v1.2 adds `selection`: `{ path, args: defaultShellArgs(path) }` when `path`
+ * is the current shell, else the current selection unchanged. Reverting a
+ * shell that is not the current one changes no item: the host answers
+ * `proposal: null`, and the app remembers nothing.
+ */
+export const configShellRevertArgsRequestSchemaV12 = lazySchema(() =>
+  configShellRevertArgsRequestSchema.extend({
+    selection: configShellSelectionSchema,
+  }),
+);
+export type ConfigShellRevertArgsRequestV12 = z.infer<
+  typeof configShellRevertArgsRequestSchemaV12
 >;
 
 export const configShellRevertArgsResponseSchema = lazySchema(() =>

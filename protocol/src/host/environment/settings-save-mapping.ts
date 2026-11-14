@@ -1,11 +1,17 @@
 /**
  * Which environment item a save made in a host's settings becomes.
  *
- * The host builds its proposal from this, and the app remembers its edit
- * from this; the app compares what it remembers with the value authn holds
- * through {@link canonicalSettingValue}. The function reads its two
- * arguments and nothing else: the request, and the rows of the item the save
- * is built over ({@link SettingsSaveBase}).
+ * The app remembers its edit from this and compares what it remembers with
+ * the value authn holds through {@link canonicalSettingValue}. The function
+ * reads its two arguments and nothing else: the request, and the rows of the
+ * item the save is built over ({@link SettingsSaveBase}).
+ *
+ * The host proposes what it computes itself, never a value read from the
+ * request. For the shell, pack policy and profile name or colour, the request
+ * states the item the app expects (`selection`, `policy`,
+ * `environmentProfileId`); the host never writes that statement over what it
+ * computes. When the two differ, the app's remembered value matches no hold
+ * and the change waits in the review list. No error is raised for it.
  *
  * A save whose item a host can only build from what it alone holds is
  * `unmapped`, with the reason, and nothing may fill it from host state: the
@@ -23,11 +29,12 @@ import type {
   ConfigBrowserSetRequest,
   ConfigEnvDeleteRequest,
   ConfigEnvSetRequest,
-  ConfigShellAddRequest,
-  ConfigShellRemoveRequest,
+  ConfigShellAddRequestV12,
+  ConfigShellRemoveRequestV12,
   ConfigShellResetRequest,
-  ConfigShellRevertArgsRequest,
-  ConfigShellSetRequest,
+  ConfigShellRevertArgsRequestV12,
+  ConfigShellSelection,
+  ConfigShellSetRequestV12,
 } from "@traycer/protocol/host/config";
 import {
   environmentItemKindSchema,
@@ -39,12 +46,14 @@ import {
 } from "@traycer/protocol/host/environment-schemas";
 import type { ProvidersFallbackPolicySetRequest } from "@traycer/protocol/host/fallback-policy";
 import type {
+  ProviderProfileActionV22,
   ProvidersDeleteEnvOverrideRequest,
   ProvidersNativeMutateRequestV14,
-  ProvidersSetEnabledRequestV21,
+  ProvidersPackPolicyStatement,
+  ProvidersSetEnabledRequestV22,
   ProvidersSetEnvOverrideRequest,
-  ProvidersSetPackPolicyRequest,
-  ProvidersUsePackVersionRequest,
+  ProvidersSetPackPolicyRequestV11,
+  ProvidersUsePackVersionRequestV12,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   harnessIdOfProvider,
@@ -62,7 +71,7 @@ import {
 export type SettingsSave =
   | {
       readonly method: "config.shell.set";
-      readonly request: ConfigShellSetRequest;
+      readonly request: ConfigShellSetRequestV12;
     }
   | {
       readonly method: "config.shell.reset";
@@ -70,15 +79,15 @@ export type SettingsSave =
     }
   | {
       readonly method: "config.shell.add";
-      readonly request: ConfigShellAddRequest;
+      readonly request: ConfigShellAddRequestV12;
     }
   | {
       readonly method: "config.shell.remove";
-      readonly request: ConfigShellRemoveRequest;
+      readonly request: ConfigShellRemoveRequestV12;
     }
   | {
       readonly method: "config.shell.revertArgs";
-      readonly request: ConfigShellRevertArgsRequest;
+      readonly request: ConfigShellRevertArgsRequestV12;
     }
   | { readonly method: "config.env.set"; readonly request: ConfigEnvSetRequest }
   | {
@@ -103,15 +112,15 @@ export type SettingsSave =
     }
   | {
       readonly method: "providers.usePackVersion";
-      readonly request: ProvidersUsePackVersionRequest;
+      readonly request: ProvidersUsePackVersionRequestV12;
     }
   | {
       readonly method: "providers.setPackPolicy";
-      readonly request: ProvidersSetPackPolicyRequest;
+      readonly request: ProvidersSetPackPolicyRequestV11;
     }
   | {
       readonly method: "providers.setEnabled";
-      readonly request: ProvidersSetEnabledRequestV21;
+      readonly request: ProvidersSetEnabledRequestV22;
     }
   | {
       readonly method: "providers.fallbackPolicy.set";
@@ -170,15 +179,12 @@ export type SettingsItemEdit = z.infer<typeof settingsItemEditSchema>;
  * Why a save has no mapping. Closed: every method maps to a proposal, to
  * nothing, or to one of these.
  *
- * - `merges_host_state`: the item's value is the request merged into what
- *   only the host holds (its own config or policy file).
  * - `key_from_host_state`: the item's key is found only in the host's own
  *   records (its managed entries, its profile store).
  * - `host_os_unknown`: the item has per-OS rows and the OS of the host the
  *   save is made on is not known.
  */
 export const SETTINGS_SAVE_UNMAPPED_REASONS = [
-  "merges_host_state",
   "key_from_host_state",
   "host_os_unknown",
 ] as const;
@@ -187,7 +193,10 @@ export type SettingsSaveUnmappedReason =
 
 export type SettingsSaveMapping =
   | { readonly kind: "proposal"; readonly edit: SettingsItemEdit }
-  /** The save proposes nothing (it changes this host only, or is refused). */
+  /**
+   * The app expects no proposal: the save changes this host only, or is
+   * refused, or its request states no item (a caller older than the field).
+   */
   | { readonly kind: "local_only" }
   /**
    * A skill removed from this host's global settings. The host's managed
@@ -334,6 +343,85 @@ function perOsRemove(
   return os === null ? unmapped("host_os_unknown") : remove(address, os);
 }
 
+const SHELL: SettingsItemAddress = { kind: "shell", key: "shell" };
+
+/** The shell item a shell save leaves, as the app states it. */
+function shellEdit(
+  selection: ConfigShellSelection,
+  base: SettingsSaveBase,
+): SettingsSaveMapping {
+  switch (selection.kind) {
+    case "shell":
+      return perOsPut(SHELL, base, {
+        path: selection.path,
+        args: selection.args,
+      });
+    case "system_default":
+      return perOsRemove(SHELL, base);
+    case "not_stated":
+      return LOCAL_ONLY;
+  }
+}
+
+/** The pack policy a pack save leaves, as the app states it. */
+function packPolicyEdit(
+  packId: string,
+  policy: ProvidersPackPolicyStatement,
+): SettingsSaveMapping {
+  if (policy === null) return LOCAL_ONLY;
+  return put({ kind: "pack_policy", key: packId }, null, {
+    pinnedVersion: policy.pinnedVersion,
+    autoDownload: policy.autoDownload,
+  });
+}
+
+/**
+ * The `managed_profile` item a rename or recolor is for, keyed by the
+ * harness id and the environment profile the request names; null for a
+ * removal (its key is the host's alone), an acknowledgement, or a profile the
+ * request names no environment profile for.
+ */
+function profileAddress(
+  request: ProvidersSetEnabledRequestV22,
+  action: ProviderProfileActionV22,
+): SettingsItemAddress | null {
+  if (action.type !== "rename" && action.type !== "recolor") return null;
+  if (action.environmentProfileId === null) return null;
+  return {
+    kind: "managed_profile",
+    key: `${harnessIdOfProvider(request.providerId)}:${action.environmentProfileId}`,
+  };
+}
+
+/**
+ * A rename or recolor: the environment's copy of the profile with the new
+ * name or colour laid over it, every other field kept, `enabled` and the
+ * broker's own fields included.
+ */
+function profileEdit(
+  request: ProvidersSetEnabledRequestV22,
+  base: SettingsSaveBase,
+): SettingsSaveMapping {
+  const action = request.profileAction;
+  if (action === null || action.type === "acknowledgeAmbientDrift") {
+    return LOCAL_ONLY;
+  }
+  if (action.type === "remove") return unmapped("key_from_host_state");
+  const address = profileAddress(request, action);
+  // With no environment profile named, the profile is this computer's own.
+  if (address === null) return LOCAL_ONLY;
+  const row = singleRow(base);
+  const item = row === null ? null : objectOf(row.value);
+  if (item === null) return LOCAL_ONLY;
+  return put(
+    address,
+    null,
+    action.type === "rename"
+      ? { ...item, name: action.label }
+      : { ...item, color: action.accentColor },
+  );
+}
+
 /**
  * The item whose rows a save is built over, which the caller reads and
  * passes as {@link SettingsSaveBase.rows}; null when the save needs none.
@@ -342,8 +430,12 @@ export function settingsSaveBaseAddress(
   save: SettingsSave,
 ): SettingsItemAddress | null {
   switch (save.method) {
+    case "config.shell.set":
     case "config.shell.reset":
-      return { kind: "shell", key: "shell" };
+    case "config.shell.add":
+    case "config.shell.remove":
+    case "config.shell.revertArgs":
+      return SHELL;
     case "config.env.set":
     case "config.env.delete":
       return { kind: "variable", key: save.request.key };
@@ -363,15 +455,14 @@ export function settingsSaveBaseAddress(
         return { kind: "mcp_server", key: action.name };
       return null;
     }
-    case "config.shell.set":
-    case "config.shell.add":
-    case "config.shell.remove":
-    case "config.shell.revertArgs":
+    case "providers.setEnabled": {
+      const action = save.request.profileAction;
+      return action === null ? null : profileAddress(save.request, action);
+    }
     case "config.browser.set":
     case "config.agentMemories.set":
     case "providers.usePackVersion":
     case "providers.setPackPolicy":
-    case "providers.setEnabled":
     case "providers.fallbackPolicy.set":
     case "environment.setup.put":
     case "environment.agentDefinitions.put":
@@ -439,11 +530,12 @@ export function settingsSaveItemEdit(
     case "config.shell.add":
     case "config.shell.remove":
     case "config.shell.revertArgs":
+      return shellEdit(save.request.selection, base);
+    case "config.shell.reset":
+      return perOsRemove(SHELL, base);
     case "providers.usePackVersion":
     case "providers.setPackPolicy":
-      return unmapped("merges_host_state");
-    case "config.shell.reset":
-      return perOsRemove({ kind: "shell", key: "shell" }, base);
+      return packPolicyEdit(save.request.packId, save.request.policy);
     case "config.env.set":
       // A null value masks an inherited variable on this host only.
       return save.request.value === null
@@ -480,14 +572,8 @@ export function settingsSaveItemEdit(
       return put({ kind: "agent_memory", key: "memory" }, null, {
         enabled: save.request.enabled,
       });
-    case "providers.setEnabled": {
-      const action = save.request.profileAction;
-      if (action === null || action.type === "acknowledgeAmbientDrift")
-        return LOCAL_ONLY;
-      return unmapped(
-        action.type === "remove" ? "key_from_host_state" : "merges_host_state",
-      );
-    }
+    case "providers.setEnabled":
+      return profileEdit(save.request, base);
     case "providers.fallbackPolicy.set":
       return put(
         { kind: "fallback_policy", key: "fallback" },

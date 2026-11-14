@@ -31,6 +31,7 @@ import {
   configLogLevelsSetResponseSchema,
   configShellAddRequestSchema,
   configShellAddRequestSchemaV10,
+  configShellAddRequestSchemaV12,
   configWorktreesGetRequestSchema,
   configWorktreesResponseSchema,
   configWorktreesSetRequestSchema,
@@ -46,6 +47,7 @@ import {
   configShellAddResponseSchema,
   configShellGetRequestSchema,
   configShellGetResponseSchema,
+  configShellGetResponseSchemaV11,
   configShellListDetectedRequestSchema,
   configShellListDetectedResponseSchema,
   configShellListDetectedResponseSchemaV10,
@@ -53,15 +55,18 @@ import {
   configShellProbeResponseSchema,
   configShellRemoveRequestSchema,
   configShellRemoveRequestSchemaV10,
+  configShellRemoveRequestSchemaV12,
   configShellRemoveResponseSchema,
   configShellResetRequestSchema,
   configShellResetRequestSchemaV10,
   configShellResetResponseSchema,
   configShellRevertArgsRequestSchema,
   configShellRevertArgsRequestSchemaV10,
+  configShellRevertArgsRequestSchemaV12,
   configShellRevertArgsResponseSchema,
   configShellSetRequestSchema,
   configShellSetRequestSchemaV10,
+  configShellSetRequestSchemaV12,
   configShellSetResponseSchema,
 } from "./schemas";
 
@@ -444,5 +449,107 @@ export const configEnvSetUpgradeV10ToV11 = defineUpgradePath<
   from: configEnvSetV10.schemaVersion,
   to: configEnvSetV11.schemaVersion,
   upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+// ── v1.2 (`config.shell.get` v1.1): the item a shell save becomes ───────────
+//
+// A save made in a host's settings is proposed to the host's environment, and
+// the app recognises its own hold by the item it states it expects
+// (`selection`, read by `settingsSaveItemEdit`). `config.shell.get@1.1` gives
+// the app the remembered arguments it needs to state it. Defined here and
+// registered with the host that serves them and the app that sends them.
+//
+// A 1.1 caller states no selection, so its request is upgraded with
+// `not_stated`; a 1.2 request to a 1.1 host is re-parsed onto the 1.1
+// request, whose non-strict object strips the key. A 1.0 `config.shell.get`
+// host answers with no remembered arguments, so the app falls back to
+// `defaultShellArgs(path)`; when that differs from what the host computes,
+// the change waits in the review list.
+
+const NOT_STATED = { kind: "not_stated" } as const;
+
+export const configShellGetV11 = defineRpcContract({
+  method: "config.shell.get",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configShellGetRequestSchema,
+  responseSchema: configShellGetResponseSchemaV11,
+});
+
+export const configShellGetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configShellGetV10,
+  typeof configShellGetV11
+>({
+  from: configShellGetV10.schemaVersion,
+  to: configShellGetV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, entries: [] }),
+});
+
+export const configShellSetV12 = defineRpcContract({
+  method: "config.shell.set",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: configShellSetRequestSchemaV12,
+  responseSchema: configShellSetResponseSchema,
+});
+
+export const configShellSetUpgradeV11ToV12 = defineUpgradePath<
+  typeof configShellSetV11,
+  typeof configShellSetV12
+>({
+  from: configShellSetV11.schemaVersion,
+  to: configShellSetV12.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, selection: NOT_STATED }),
+  upgradeResponse: (response) => response,
+});
+
+export const configShellAddV12 = defineRpcContract({
+  method: "config.shell.add",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: configShellAddRequestSchemaV12,
+  responseSchema: configShellAddResponseSchema,
+});
+
+export const configShellAddUpgradeV11ToV12 = defineUpgradePath<
+  typeof configShellAddV11,
+  typeof configShellAddV12
+>({
+  from: configShellAddV11.schemaVersion,
+  to: configShellAddV12.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, selection: NOT_STATED }),
+  upgradeResponse: (response) => response,
+});
+
+export const configShellRemoveV12 = defineRpcContract({
+  method: "config.shell.remove",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: configShellRemoveRequestSchemaV12,
+  responseSchema: configShellRemoveResponseSchema,
+});
+
+export const configShellRemoveUpgradeV11ToV12 = defineUpgradePath<
+  typeof configShellRemoveV11,
+  typeof configShellRemoveV12
+>({
+  from: configShellRemoveV11.schemaVersion,
+  to: configShellRemoveV12.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, selection: NOT_STATED }),
+  upgradeResponse: (response) => response,
+});
+
+export const configShellRevertArgsV12 = defineRpcContract({
+  method: "config.shell.revertArgs",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: configShellRevertArgsRequestSchemaV12,
+  responseSchema: configShellRevertArgsResponseSchema,
+});
+
+export const configShellRevertArgsUpgradeV11ToV12 = defineUpgradePath<
+  typeof configShellRevertArgsV11,
+  typeof configShellRevertArgsV12
+>({
+  from: configShellRevertArgsV11.schemaVersion,
+  to: configShellRevertArgsV12.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, selection: NOT_STATED }),
   upgradeResponse: (response) => response,
 });
