@@ -90,8 +90,8 @@ function createFakeBridge(): FakeBridge {
   let onCancelCalls = 0;
   return {
     policySource: "traycer-sandbox:",
-    artifactOrigin: ({ artifactId, mountId }) =>
-      `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+    artifactOrigin: ({ artifactId }) =>
+      `traycer-sandbox://artifact-${artifactId}`,
     registered,
     unregistered,
     responses,
@@ -273,8 +273,8 @@ describe("mountArtifact", () => {
     const unregistered: string[] = [];
     const bridge: SandboxArtifactBridge = {
       policySource: "traycer-sandbox:",
-      artifactOrigin: ({ artifactId, mountId }) =>
-        `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+      artifactOrigin: ({ artifactId }) =>
+        `traycer-sandbox://artifact-${artifactId}`,
       register: (mountId) =>
         new Promise((resolve) => {
           registered.push(mountId);
