@@ -9,12 +9,12 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
 import {
   ACCESS_HOST_ID,
@@ -22,6 +22,7 @@ import {
   buildAccessHost,
   buildAccessHostOn,
   fakeEnvironmentCloud,
+  resetAccessHostDirectoryEntry,
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
@@ -29,19 +30,9 @@ import { environmentStatusFixture } from "@/lib/environment/__tests__/environmen
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-const hostMock = vi.hoisted(() => {
-  let directoryEntry: HostDirectoryEntry | null = null;
-  return {
-    binding: null as { readonly auth: unknown } | null,
-    setDirectoryEntry: (entry: HostDirectoryEntry | null): void => {
-      directoryEntry = entry;
-    },
-    entryFor: (hostId: string | null): HostDirectoryEntry | null =>
-      hostId !== null && directoryEntry?.hostId === hostId
-        ? directoryEntry
-        : null,
-  };
-});
+const hostMock = vi.hoisted(
+  (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
+);
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostMock.binding };
@@ -51,9 +42,11 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
     await importOriginal<
       typeof import("@/hooks/host/use-host-directory-entry")
     >();
+  const { accessHostDirectoryEntryFor } =
+    await import("@/components/settings/host-scope/__tests__/host-access-test-support");
   return {
     ...actual,
-    useHostDirectoryEntry: (hostId: string | null) => hostMock.entryFor(hostId),
+    useHostDirectoryEntry: accessHostDirectoryEntryFor,
   };
 });
 
@@ -69,6 +62,10 @@ afterEach(() => {
     remoteAccessAnswered: {},
     movedNoticeDismissed: {},
   });
+});
+
+beforeEach(() => {
+  resetAccessHostDirectoryEntry();
 });
 
 const WITHOUT_REMOTE_ACCESS_SET = ACCESS_METHODS.filter(
@@ -91,18 +88,6 @@ function renderQuestion(options: {
   readonly enabled: boolean;
   readonly methods: readonly string[];
 }): { readonly unmount: () => void } {
-  hostMock.setDirectoryEntry(
-    options.hostId === null
-      ? null
-      : {
-          hostId: options.hostId,
-          label: options.hostId,
-          kind: "local",
-          websocketUrl: "ws://127.0.0.1:0",
-          version: "1.5.0",
-          transportDialability: "dialable",
-        },
-  );
   for (const hostId of [ACCESS_HOST_ID, OTHER_HOST_ID]) {
     recordNegotiatedHostMethods(hostId, options.methods);
   }
@@ -198,7 +183,14 @@ describe("<RemoteAccessQuestion />", () => {
       status: "signed-in",
       contextMetadata: { userId: "remote-access-test", username: "remote" },
     });
-    host.state.statusRefreshError = new Error("host is offline");
+    host.state.statusRefreshError = new RetryableTransportError({
+      replaySafetyFromKey: false,
+      code: "RPC_ERROR",
+      message: "the host is offline",
+      requestId: "local-refresh",
+      method: "host.status.refresh",
+      fatalDetails: null,
+    });
     hostMock.binding = {
       auth: { environmentCloud: () => cloud },
     };

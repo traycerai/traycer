@@ -2,19 +2,9 @@
 // that boundary, as the other Personal suites do; the client itself is a REAL
 // `HostClient` over an in-memory messenger (`buildAccessHost`), so a switch
 // travels the request path the app uses and only the host is faked.
-const hostMock = vi.hoisted(() => {
-  let directoryEntry: HostDirectoryEntry | null = null;
-  return {
-    binding: null as { readonly auth: unknown } | null,
-    setDirectoryEntry: (entry: HostDirectoryEntry | null): void => {
-      directoryEntry = entry;
-    },
-    entryFor: (hostId: string | null): HostDirectoryEntry | null =>
-      hostId !== null && directoryEntry?.hostId === hostId
-        ? directoryEntry
-        : null,
-  };
-});
+const hostMock = vi.hoisted(
+  (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
+);
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -27,9 +17,11 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
     await importOriginal<
       typeof import("@/hooks/host/use-host-directory-entry")
     >();
+  const { accessHostDirectoryEntryFor } =
+    await import("@/components/settings/host-scope/__tests__/host-access-test-support");
   return {
     ...actual,
-    useHostDirectoryEntry: (hostId: string | null) => hostMock.entryFor(hostId),
+    useHostDirectoryEntry: accessHostDirectoryEntryFor,
   };
 });
 
@@ -43,7 +35,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
@@ -66,8 +58,11 @@ import {
   ACCESS_HOST_ID,
   ACCESS_HOST_NAME,
   ACCESS_METHODS,
+  accessHostDirectoryEntryFor,
   buildAccessHost,
   fakeEnvironmentCloud,
+  resetAccessHostDirectoryEntry,
+  setAccessHostDirectoryEntry,
   type FakeEnvironmentCloud,
   type FakeEnvironmentCloudAnswer,
   type FakeEnvironmentCloudResponder,
@@ -94,13 +89,16 @@ afterEach(() => {
   retireAllRemoteSessions();
   resetRemoteSessionReadinessListenersForTest();
   hostMock.binding = null;
-  hostMock.setDirectoryEntry(null);
   useAuthStore.getState().setSignedOut();
   window.localStorage.clear();
   useHostAccessPromptsStore.setState({
     remoteAccessAnswered: {},
     movedNoticeDismissed: {},
   });
+});
+
+beforeEach(() => {
+  resetAccessHostDirectoryEntry();
 });
 
 const WITHOUT_REMOTE_ACCESS_SET = ACCESS_METHODS.filter(
@@ -150,15 +148,9 @@ function renderTab(
   methods: readonly string[],
   promptAnswered: boolean,
 ): QueryClient {
-  hostMock.setDirectoryEntry({
-    hostId: ACCESS_HOST_ID,
-    label: ACCESS_HOST_NAME,
-    kind: "local",
-    websocketUrl: "ws://127.0.0.1:0",
-    version: "1.5.0",
-    transportDialability: "dialable",
-  });
-  return renderTabWithDirectory(host, methods, promptAnswered);
+  const entry = accessHostDirectoryEntryFor(ACCESS_HOST_ID);
+  if (entry === null) throw new Error("The local test entry was not set");
+  return renderTabWithDirectory(host, methods, promptAnswered, entry);
 }
 
 function renderTabWithDirectory(
@@ -167,7 +159,7 @@ function renderTabWithDirectory(
   promptAnswered: boolean,
   entry: HostDirectoryEntry,
 ): QueryClient {
-  hostMock.setDirectoryEntry(entry);
+  setAccessHostDirectoryEntry(entry);
   recordNegotiatedHostMethods(ACCESS_HOST_ID, methods);
   useHostAccessPromptsStore.setState({
     remoteAccessAnswered: promptAnswered ? { [ACCESS_HOST_ID]: true } : {},
@@ -605,7 +597,6 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
   it("Turn on sends enabled: true and shows what the host reads next", async () => {
     const host = hostWithRemoteAccess("off", "on");
-    host.state.statusRefreshError = new Error("the host did not refresh");
     const { requests } = signInWithEnvironmentCloud({
       status: 200,
       body: { remoteAccess: { enabled: true, epoch: 1 } },
