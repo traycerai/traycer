@@ -67,6 +67,17 @@ const emptyStreamRegistry: VersionedStreamRpcRegistry =
 // test is what decides the outcome, not key parsing.
 const VALID_PUBLIC_KEY = "ab".repeat(32);
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve = (_value: T): void => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function doorOptions() {
   return {
     hostTokens: createHostTokenSource({
@@ -830,5 +841,115 @@ describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close"
     expect(closedEvents).toBe(1);
     expect(built.session.terminalFatal()).toBeNull();
     expect(reported).not.toHaveBeenCalled();
+  });
+});
+
+describe("createRemoteHostTransport grant mint across a user-era change", () => {
+  afterEach(() => {
+    retireAllRemoteSessions();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function assertLateGrantAnswerIsDropped(
+    hostId: string,
+    response: Response,
+  ): Promise<void> {
+    const answer = deferred<Response>();
+    const started = deferred<void>();
+    const warnings: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>(() => {
+      started.resolve();
+      return answer.promise;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation((message: unknown) => {
+      warnings.push(String(message));
+    });
+
+    const userId = `user-${hostId}`;
+    const bearerSource: OpenFrameBearerSource = {
+      getBearerToken: () => "sign-in-token",
+      identity: { userId },
+    };
+    const states: string[] = [];
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: (): Promise<HostTokenMintOutcome> =>
+        Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const adopt = vi.spyOn(tokens, "adopt");
+    const built = createRemoteHostTransport<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      hostId,
+      userId,
+      relayAttachUrl: "wss://relay.invalid/attach",
+      authnBaseUrl: "https://authn.invalid",
+      hostPublicKey: VALID_PUBLIC_KEY,
+      bearer: () => bearerSource,
+      hostTokens: tokens,
+      door: null,
+      onState: (_refusedHostId, state) => states.push(state),
+      cloudAuthorized: () => true,
+      auth: null,
+      clock: null,
+      rpcRegistry: emptyRpcRegistry,
+      streamRegistry: emptyStreamRegistry,
+      webSocketFactory: { create: () => new InertFakeSocket() },
+      requestId: () => `req-${hostId}`,
+      proactiveWakeEligible: true,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    if (built === null) throw new Error("expected a built remote transport");
+
+    try {
+      built.session.start();
+      await started.promise;
+      await tokens.forgetUser(userId);
+      answer.resolve(response);
+
+      await vi.waitFor(() => {
+        expect(
+          warnings.some((message) =>
+            message.includes("signed out while the relay pass was minted"),
+          ),
+        ).toBe(true);
+      }, WAIT);
+      expect(built.session.isClosed()).toBe(false);
+      expect(built.session.terminalFatal()).toBeNull();
+      expect(adopt).not.toHaveBeenCalled();
+      expect(tokens.current(userId, hostId)).toBeNull();
+      expect(states).toEqual([]);
+    } finally {
+      closeAndRetire(built.session);
+    }
+  }
+
+  it("drops a successful relay-pass answer that arrives after forgetUser", async () => {
+    await assertLateGrantAnswerIsDropped(
+      "era-late-ok",
+      new Response(
+        JSON.stringify({
+          grant: "late-relay-pass",
+          role: "client",
+          expires_in: 300,
+          session_grant: "late-host-token",
+          session_grant_expires_in: 3_600,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  });
+
+  it("drops a not-admitted relay-pass answer that arrives after forgetUser", async () => {
+    await assertLateGrantAnswerIsDropped(
+      "era-late-not-admitted",
+      new Response("", { status: 404 }),
+    );
   });
 });

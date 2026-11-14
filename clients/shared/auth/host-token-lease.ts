@@ -32,7 +32,10 @@ export type HostTokenStateSink = (
   kind: HostDoorStateKind,
 ) => void;
 
-/** The state a failed mint raises; `null` for one that raises none here. */
+/**
+ * The state a failed mint raises; `null` for one that raises none here, a
+ * `superseded` mint among them: it belonged to a person no longer signed in.
+ */
 function stateOfFailedMint(
   outcome: Exclude<HostTokenMintOutcome, { readonly kind: "ok" }>,
   heldTokenExpired: boolean,
@@ -154,6 +157,9 @@ export function hostTokenRevalidator(deps: {
     const outcome = await deps.tokens.obtain(userId, deps.hostId, true, null);
     if (outcome.kind === "ok") return "rotated";
     if (outcome.kind === "no-sign-in") return "network-error";
+    // The person signed out or was replaced meanwhile: nothing of theirs is
+    // raised, and their connection is ended with them.
+    if (outcome.kind === "superseded") return "rejected";
     if (outcome.kind === "sign-in-rejected") {
       if (signInRetried || deps.signInRecovery === null) return "rejected";
       const recovered = await deps.signInRecovery.revalidateForReconnect();

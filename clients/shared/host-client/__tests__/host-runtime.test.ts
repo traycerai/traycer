@@ -5,6 +5,7 @@ import {
   defineRpcContract,
   defineVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
+import type { HostTokenRenewal } from "../../auth/host-token-source";
 import {
   DefaultRequestContextProvider,
   type AuthEra,
@@ -162,6 +163,10 @@ function buildRuntime(options: {
   directory: FakeDirectoryService;
   invalidator: RecordingInvalidator;
   runnerHost: MockRunnerHost;
+  hostTokenRenewals: Array<{
+    readonly hostId: string;
+    readonly delayed: boolean;
+  }>;
 } {
   const provider = new DefaultRequestContextProvider({ origin: "renderer" });
   if (options.initialSignedIn !== null) {
@@ -189,9 +194,15 @@ function buildRuntime(options: {
     handlers: { "host.ping": () => ({ pong: true }) },
     requestId: () => "req-1",
   });
+  const hostTokenRenewals: Array<{
+    readonly hostId: string;
+    readonly delayed: boolean;
+  }> = [];
   const runtime = new HostRuntime({
     runnerHost,
-    onHostTokenRenewal: () => undefined,
+    onHostTokenRenewal: (hostId, delayed) => {
+      hostTokenRenewals.push({ hostId, delayed });
+    },
     registry,
     messenger,
     requestContextProvider: provider,
@@ -210,6 +221,7 @@ function buildRuntime(options: {
     directory,
     invalidator,
     runnerHost,
+    hostTokenRenewals,
   };
 }
 
@@ -607,5 +619,73 @@ describe("HostRuntime session-verified wiring", () => {
       invalidateBaseline,
     );
     expect(directory.refreshForEraCalls.length).toBe(refreshForEraBaseline);
+  });
+});
+
+describe("HostRuntime host-token era lifecycle", () => {
+  function deferred<T>(): {
+    readonly promise: Promise<T>;
+    readonly resolve: (value: T) => void;
+  } {
+    let resolve = (_value: T): void => undefined;
+    const promise = new Promise<T>((resolvePromise) => {
+      resolve = resolvePromise;
+    });
+    return { promise, resolve };
+  }
+
+  it("does not report a renewal that answers after sign-out", async () => {
+    const { runtime, provider, runnerHost, hostTokenRenewals } = buildRuntime({
+      initialSignedIn: { userId: "user-1", bearer: "tok-1" },
+    });
+    const renewal = deferred<HostTokenRenewal>();
+    const renew = vi
+      .spyOn(runnerHost.hostTokens, "renew")
+      .mockReturnValue(renewal.promise);
+    const forgetUser = vi.spyOn(runnerHost.hostTokens, "forgetUser");
+
+    try {
+      runtime.start();
+      runnerHost.setLocalHost({
+        hostId: "era-runtime-local",
+        websocketUrl: "ws://127.0.0.1:4917/rpc",
+        version: "0.0.0-mock",
+        pid: 123,
+        systemHostName: "era-runtime-local",
+        displayName: "era-runtime-local",
+        availability: "available",
+      });
+      provider.rotateCurrentBearer({
+        userId: "user-1",
+        bearerToken: "tok-2",
+      });
+      expect(renew).toHaveBeenCalledWith("user-1", ["era-runtime-local"]);
+
+      provider.signOut();
+      await vi.waitFor(() => expect(forgetUser).toHaveBeenCalledWith("user-1"));
+      renewal.resolve({ kind: "renewed", delayed: [] });
+      await renewal.promise;
+
+      expect(hostTokenRenewals).toEqual([]);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it("forgets the current user's host tokens from the request-context sign-out", async () => {
+    const { runtime, provider, runnerHost } = buildRuntime({
+      initialSignedIn: { userId: "user-1", bearer: "tok-1" },
+    });
+    const forgetUser = vi.spyOn(runnerHost.hostTokens, "forgetUser");
+
+    try {
+      runtime.start();
+      provider.signOut();
+
+      await vi.waitFor(() => expect(forgetUser).toHaveBeenCalledTimes(1));
+      expect(forgetUser).toHaveBeenCalledWith("user-1");
+    } finally {
+      runtime.dispose();
+    }
   });
 });

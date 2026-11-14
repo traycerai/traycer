@@ -1,5 +1,6 @@
 import type { Disposable } from "../platform/uri-callback";
 import { liveRemoteSessionHostIds } from "../host-transport/remote/active-remote-sessions";
+import { forgetHostTokensOnSignOut } from "../auth/host-token-sign-out";
 import type { IRunnerHost } from "../platform/runner-host";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type {
@@ -283,6 +284,22 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
       this.hostClient.notifyBearerRotated();
     });
     this.disposables.push({ dispose: stopHostTokenChanges });
+    // The person's era advances the moment this app sees them sign out or be
+    // replaced, so a mint, an adoption or a state write for them that began
+    // before is dropped here, whichever process answers it.
+    const provider = this.requestContextProvider;
+    const stopForgetting = forgetHostTokensOnSignOut(
+      {
+        current: () =>
+          Promise.resolve(provider.current()?.identity.userId ?? null),
+        onChange: (listener) =>
+          provider.onChange((ctx) => {
+            listener(ctx?.identity.userId ?? null);
+          }),
+      },
+      this.runnerHost.hostTokens,
+    );
+    this.disposables.push({ dispose: stopForgetting });
   }
 
   /**
@@ -296,9 +313,13 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     const hostIds = [...liveRemoteSessionHostIds(userId)];
     if (this.localHostId !== null) hostIds.push(this.localHostId);
     if (hostIds.length === 0) return;
-    void this.runnerHost.hostTokens.renew(userId, hostIds).then(
+    const tokens = this.runnerHost.hostTokens;
+    const era = tokens.era(userId);
+    void tokens.renew(userId, hostIds).then(
       (renewal) => {
-        if (renewal.kind !== "renewed") return;
+        // A renewal answered after this person left raises nothing for the
+        // next one.
+        if (renewal.kind !== "renewed" || tokens.era(userId) !== era) return;
         for (const hostId of new Set(hostIds))
           this.onHostTokenRenewal(hostId, renewal.delayed.includes(hostId));
       },

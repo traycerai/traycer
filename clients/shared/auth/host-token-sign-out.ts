@@ -10,6 +10,10 @@ export interface SignedInWatch {
  * Removes a person's host-only tokens once the sign-in store no longer holds
  * them: a sign-out, from this app or any other writer of the same store, and
  * the account a switch replaced. Driven by the store's own change event.
+ *
+ * The first read can settle after a change. It names who the store held
+ * before that change, so that person is forgotten unless they are the one
+ * held now.
  */
 export function forgetHostTokensOnSignOut(
   signedIn: SignedInWatch,
@@ -17,9 +21,13 @@ export function forgetHostTokensOnSignOut(
 ): () => void {
   let held: string | null = null;
   let changed = false;
+  const forget = (userId: string): void => {
+    void hostTokens.forgetUser(userId).catch(() => undefined);
+  };
   void signedIn.current().then(
     (userId) => {
       if (!changed) held = userId;
+      else if (userId !== null && userId !== held) forget(userId);
     },
     () => undefined,
   );
@@ -27,7 +35,6 @@ export function forgetHostTokensOnSignOut(
     changed = true;
     const previous = held;
     held = userId;
-    if (previous !== null && previous !== userId)
-      void hostTokens.forgetUser(previous).catch(() => undefined);
+    if (previous !== null && previous !== userId) forget(previous);
   });
 }

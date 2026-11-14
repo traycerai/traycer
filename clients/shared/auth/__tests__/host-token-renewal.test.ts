@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BearerSourceProvider } from "../bearer-source";
-import { hostTokenBearer } from "../host-token-lease";
+import { hostTokenBearer, hostTokenBearerFor } from "../host-token-lease";
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
@@ -49,6 +49,17 @@ function jsonResponse(value: unknown): Response {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve = (_value: T): void => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe("host-token renewal", () => {
@@ -330,5 +341,72 @@ describe("host-token renewal", () => {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
     }
+  });
+});
+
+describe("host-token lease after a user era changes", () => {
+  it("does not raise state when hostTokenBearer's pending refusal is superseded", async () => {
+    const answer = deferred<HostTokenMintOutcome>();
+    const started = deferred<void>();
+    const hostId = "era-stream-computer";
+    const states: string[] = [];
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        started.resolve();
+        return answer.promise;
+      },
+      signIn: (userId) => (userId === USER_A ? "sign-in-a" : null),
+      now: () => 0,
+    });
+    const signInLease = {
+      identity: { userId: USER_A },
+      getBearerToken: () => "sign-in-a",
+    };
+    const bearer = hostTokenBearer(
+      tokens,
+      () => signInLease,
+      hostId,
+      (_refusedHostId, state) => states.push(state),
+    );
+
+    expect(bearer()).toBeNull();
+    await started.promise;
+    const observed = tokens.obtain(USER_A, hostId, false, null);
+    await tokens.forgetUser(USER_A);
+    answer.resolve({ kind: "not-a-member" });
+
+    await expect(observed).resolves.toEqual({ kind: "superseded" });
+    expect(states).toEqual([]);
+  });
+
+  it("does not raise state when hostTokenBearerFor's pending refusal is superseded", async () => {
+    const answer = deferred<HostTokenMintOutcome>();
+    const started = deferred<void>();
+    const hostId = "era-unary-computer";
+    const states: string[] = [];
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        started.resolve();
+        return answer.promise;
+      },
+      signIn: (userId) => (userId === USER_A ? "sign-in-a" : null),
+      now: () => 0,
+    });
+    const signInLease = {
+      identity: { userId: USER_A },
+      getBearerToken: () => "sign-in-a",
+    };
+    const bearerFor = hostTokenBearerFor(tokens, (_refusedHostId, state) =>
+      states.push(state),
+    );
+    const pending = bearerFor(hostId, signInLease);
+    await started.promise;
+    await tokens.forgetUser(USER_A);
+    answer.resolve({ kind: "not-a-member" });
+
+    await expect(pending).resolves.toBeNull();
+    expect(states).toEqual([]);
   });
 });

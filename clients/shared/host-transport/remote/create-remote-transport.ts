@@ -288,11 +288,20 @@ export function createRemoteHostTransport<
             detail: "no user bearer available (signed out?)",
             context: "",
           };
+        const era = options.hostTokens.era(options.userId);
         const minted = await mintRelayPassWithHostTokenViaHttp(
           options.authnBaseUrl,
           options.hostId,
           signInToken,
         );
+        // The person signed out or was replaced while authn answered: keep
+        // nothing of theirs and raise nothing.
+        if (options.hostTokens.era(options.userId) !== era)
+          return {
+            kind: "unavailable",
+            detail: "signed out while the relay pass was minted",
+            context: "",
+          };
         if (minted.kind === "ok") {
           await options.hostTokens.adopt(
             options.userId,
