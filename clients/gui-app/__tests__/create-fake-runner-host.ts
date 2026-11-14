@@ -1,3 +1,4 @@
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   createInProcessSelectionAuthority,
@@ -57,6 +58,7 @@ export function createFakeRunnerHost(
     sandboxArtifacts: null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
+    environmentTransport: fetchEnvironmentTransport,
     relayBaseUrl: "wss://relay.example.invalid/attach",
     poolBaseUrl: "",
     hasLocalHost: true,

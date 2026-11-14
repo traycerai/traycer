@@ -88,7 +88,48 @@ const MAX_BODY_CHARS = 256 * 1024;
 export interface EnvironmentCloud {
   readonly authnBaseUrl: string;
   readonly bearer: CloudBearerSource;
+  readonly transport: EnvironmentTransport;
 }
+
+/** One request as the transport sends it; `body` is the JSON value, or null. */
+export interface EnvironmentTransportRequest {
+  readonly url: string;
+  readonly method: EnvironmentHttpMethod;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: unknown;
+  readonly signal: AbortSignal;
+}
+
+/** The answer as received: its status and its body's text. */
+export interface EnvironmentTransportAnswer {
+  readonly status: number;
+  readonly text: string;
+}
+
+/**
+ * Sends one request exactly once and never follows a redirect: a 3xx would
+ * resend the bearer, and a body that may hold a credential, to wherever it
+ * points. A 3xx (or a browser's opaque redirect, status 0) is returned as the
+ * answer, which every caller reads as a non-success. It rejects only when
+ * nothing answered, and its rejection carries nothing of the request.
+ */
+export type EnvironmentTransport = (
+  request: EnvironmentTransportRequest,
+) => Promise<EnvironmentTransportAnswer>;
+
+/** The platform `fetch`, with `redirect: "manual"`: desktop and the browser. */
+export const fetchEnvironmentTransport: EnvironmentTransport = async (
+  request,
+) => {
+  const response = await fetch(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body === null ? undefined : JSON.stringify(request.body),
+    redirect: "manual",
+    signal: request.signal,
+  });
+  return { status: response.status, text: await response.text() };
+};
 
 export function environmentPath(environmentId: string): string {
   return `api/v3/environments/${encodeURIComponent(environmentId)}`;
@@ -132,25 +173,21 @@ export async function sendEnvironmentRequest(
     : `${cloud.authnBaseUrl}/`;
   const abort = composeRequestAbort(null, ENVIRONMENT_REQUEST_TIMEOUT_MS);
   try {
-    const response = await untilAborted(
-      fetch(new URL(path, base).toString(), {
+    const answer = await untilAborted(
+      cloud.transport({
+        url: new URL(path, base).toString(),
         method,
         headers: {
           Authorization: `Bearer ${bearer}`,
           Accept: "application/json",
           ...(body === null ? {} : { "Content-Type": "application/json" }),
         },
-        body: body === null ? undefined : JSON.stringify(body),
-        // Never followed: a 3xx would resend the bearer, and a body that may
-        // hold a credential, to wherever it points. A 3xx (or a browser's
-        // opaque redirect, status 0) is an answered non-success.
-        redirect: "manual",
+        body,
         signal: abort.signal,
       }),
       abort.signal,
     );
-    const text = await untilAborted(response.text(), abort.signal);
-    return { status: response.status, body: bodyOf(text) };
+    return { status: answer.status, body: bodyOf(answer.text) };
   } catch {
     throw new EnvironmentCloudError(
       "no_response",

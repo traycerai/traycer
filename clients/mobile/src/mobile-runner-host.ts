@@ -1,3 +1,4 @@
+import { nativeEnvironmentTransport } from "./native-environment-transport";
 import {
   readHostOwnershipViaHttp,
   type HostOwnershipResult,
@@ -363,6 +364,7 @@ interface RetainedStepUpCredential {
 export class MobileRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly environmentTransport = nativeEnvironmentTransport;
   private readonly serverBaseUrl: string;
   readonly sandboxControlUnavailableReason: string | null;
   readonly relayBaseUrl: string;
