@@ -69,7 +69,8 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
   const state = catalog.data?.providers.find(
     (provider) => provider.providerId === props.providerId,
   );
-  const teamName = usePickedTeamLabel(props.environmentId) ?? "this team";
+  const teamName = usePickedTeamLabel(props.environmentId);
+  if (teamName === null) return null;
   if (state === undefined)
     return (
       <Dialog

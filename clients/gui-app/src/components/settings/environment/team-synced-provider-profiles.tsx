@@ -281,7 +281,8 @@ function TeamProviderSwitchMove(props: {
   readonly onDone: () => void;
 }): ReactNode {
   const scope = useTeamViewingHost();
-  const teamName = usePickedTeamLabel(props.environmentId) ?? "this team";
+  const teamName = usePickedTeamLabel(props.environmentId);
+  if (teamName === null) return null;
   return (
     <SwitchAccountMoveDialog
       providerId={props.providerId}

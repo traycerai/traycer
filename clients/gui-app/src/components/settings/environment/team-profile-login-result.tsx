@@ -331,7 +331,7 @@ function TeamNamedLoginResult(props: {
       <DialogFooter>
         <div className="flex w-full flex-wrap items-center justify-end gap-2">
           <p role="status" className="min-w-0 flex-1 text-ui-sm">
-            The account was linked, but the profile color could not be saved.
+            The account was signed in, but the profile color could not be saved.
           </p>
           <Button
             type="button"
