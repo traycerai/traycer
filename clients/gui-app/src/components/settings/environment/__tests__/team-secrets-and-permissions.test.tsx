@@ -618,18 +618,31 @@ describe("TeamPermissions", () => {
     },
   );
 
-  it("shows a viewer the policy read-only and names the admins who change it", async () => {
+  it("shows a viewer the policy read-only and names the admins and editors who change it", async () => {
+    const ada = members.members[0];
     const harness = mountTeamPage(poolSource("viewer"), {
       "environment.configuration.items": () => ({
         items: [policy(3, "Allow reads")],
       }),
-      "environment.members": () => members,
+      "environment.members": () => ({
+        ...members,
+        members: [
+          ada,
+          {
+            ...ada,
+            userId: "u-2",
+            displayName: "Sam",
+            effectiveRole: "editor",
+          },
+          { ...ada, userId: "u-3", displayName: "Kit", inviteState: "pending" },
+        ],
+      }),
     });
     render(<TeamPermissions>{null}</TeamPermissions>, {
       wrapper: harness.Wrapper,
     });
 
-    expect(await screen.findByText("Admins change this: Ada.")).toBeTruthy();
+    expect(await screen.findByText("Ada, Sam can change this.")).toBeTruthy();
     expect(
       screen.getByRole("textbox", { name: "Approval policy" }).textContent,
     ).toContain("Allow reads");
@@ -839,7 +852,9 @@ describe("TeamPermissions", () => {
       wrapper: harness.Wrapper,
     });
 
-    expect(await screen.findByText("Admins change this.")).toBeTruthy();
+    expect(
+      await screen.findByText("Editors and admins can change this."),
+    ).toBeTruthy();
     expect(
       screen.getByRole("textbox", { name: "Approval policy" }).textContent,
     ).toContain("Allow reads");
