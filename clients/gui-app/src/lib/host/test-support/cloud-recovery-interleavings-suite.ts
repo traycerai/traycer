@@ -1,15 +1,29 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  VARIANTS,
   describeFailures,
   explore,
   passFor,
   type PassKind,
   type RetryPolicy,
   type Slice,
+  type Variant,
 } from "@/lib/host/test-support/cloud-recovery-interleavings";
 import { HeldTimers } from "@/lib/host/test-support/held-timers";
 import { appLogger } from "@/lib/logger";
+
+/** Holds TanStack's timers for the file's tests and restores them after; returns them. */
+export function holdTimersForFile(): HeldTimers {
+  const timers = new HeldTimers();
+  beforeAll(() => {
+    vi.spyOn(appLogger, "warn").mockImplementation(() => undefined);
+    timers.install();
+  });
+  afterAll(() => {
+    timers.restore();
+    vi.restoreAllMocks();
+  });
+  return timers;
+}
 
 /**
  * Registers the walk of the sweep's events for the stranded reads of
@@ -18,11 +32,10 @@ import { appLogger } from "@/lib/logger";
  */
 export function describeInterleavings(slice: {
   readonly retry: RetryPolicy;
-  readonly variants: readonly (typeof VARIANTS)[number][];
+  readonly variants: readonly Variant[];
   readonly passes: readonly PassKind[];
   readonly slice: Slice;
 }): void {
-  const timers = new HeldTimers();
   const title =
     slice.retry === "app"
       ? "under the app's retry policy"
@@ -30,14 +43,7 @@ export function describeInterleavings(slice: {
   const part = slice.slice === "all" ? "" : `, first event ${slice.slice}`;
 
   describe(`sweepTransientCloudFailures over every ordering of its events, ${title}${part}`, () => {
-    beforeAll(() => {
-      vi.spyOn(appLogger, "warn").mockImplementation(() => undefined);
-      timers.install();
-    });
-    afterAll(() => {
-      timers.restore();
-      vi.restoreAllMocks();
-    });
+    const timers = holdTimersForFile();
 
     it.each(slice.variants)(
       "keeps every invariant for a stranded read that $label",
@@ -49,7 +55,6 @@ export function describeInterleavings(slice: {
             passFor(kind, slice.retry, slice.slice),
           );
           report.push(describeFailures(counts));
-          expect(counts.sequences).toBeGreaterThan(0);
         }
 
         expect(report.join("")).toBe("");

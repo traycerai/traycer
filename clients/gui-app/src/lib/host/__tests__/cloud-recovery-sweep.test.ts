@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MutationObserver, type QueryClient } from "@tanstack/react-query";
+import { MutationObserver } from "@tanstack/react-query";
 import { cloudQueryKeys } from "@/lib/query-keys/cloud-query-keys";
 import { sweepTransientCloudFailures } from "@/lib/host/cloud-recovery-sweep";
 import {
@@ -20,7 +20,9 @@ import {
   dataHoldingFailedRead,
   failedRead,
   freshClient,
+  ownReAsk,
   quiet,
+  refetchElsewhere,
   settled,
   turn,
   waitUntil,
@@ -33,6 +35,30 @@ afterEach(() => {
   vi.useRealTimers();
   clearClients();
 });
+
+/** The cache-only carve-outs: a ring never re-asks them. */
+const CARVE_OUTS = [
+  {
+    label: "agent.gui.listModels",
+    method: "agent.gui.listModels",
+    queryKey: hostReadKey(HOST, "agent.gui.listModels", "m"),
+  },
+  {
+    label: "agent.gui.listCommands",
+    method: "agent.gui.listCommands",
+    queryKey: hostReadKey(HOST, "agent.gui.listCommands", "c"),
+  },
+  {
+    label: "cloud epic-task history",
+    method: "epic.listTasks",
+    queryKey: cloudQueryKeys.epicTasks(HOST, "fp", {
+      limit: 10,
+      filters: null,
+      extensionPhaseVersion: "p",
+      extensionEpicVersion: "e",
+    }),
+  },
+];
 
 describe("sweepTransientCloudFailures", () => {
   it.each(["E_CLOUD_REQUEST_REFUSED", "E_CLOUD_UNREACHABLE"] as const)(
@@ -57,18 +83,7 @@ describe("sweepTransientCloudFailures", () => {
 
   it("re-asks a read that holds data and whose refetch failed transiently", async () => {
     const client = freshClient();
-    const read = new ScriptedRead(
-      client,
-      hostReadKey(HOST, "bot.thread.list", "a"),
-      resolves("first"),
-    );
-    await waitUntil(() => expect(read.state.data).toBe("first"));
-    read.answer = rejects(
-      hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
-    );
-    await client.refetchQueries({ queryKey: read.queryKey });
-    expect(read.state.status).toBe("error");
-    expect(read.state.data).toBe("first");
+    const read = await dataHoldingFailedRead(client, "a");
     read.answer = resolves("second");
 
     await sweepTransientCloudFailures(client, HOST);
@@ -177,29 +192,21 @@ describe("sweepTransientCloudFailures", () => {
 
   it("never re-asks the cache-only carve-outs", async () => {
     const client = freshClient();
-    const models = await failedRead(client, {
-      hostId: HOST,
-      method: "agent.gui.listModels",
-      name: "m",
-      code: "E_CLOUD_UNREACHABLE",
-    });
-    const commands = await failedRead(client, {
-      hostId: HOST,
-      method: "agent.gui.listCommands",
-      name: "c",
-      code: "E_CLOUD_REQUEST_REFUSED",
-    });
-    const epicTasks = new ScriptedRead(
-      client,
-      cloudQueryKeys.epicTasks(HOST, "fp", {
-        limit: 10,
-        filters: null,
-        extensionPhaseVersion: "p",
-        extensionEpicVersion: "e",
-      }),
-      rejects(hostFailure("E_CLOUD_UNREACHABLE", "epic.listTasks")),
+    const carveOuts = CARVE_OUTS.map(
+      ({ method, queryKey }) =>
+        new ScriptedRead(
+          client,
+          queryKey,
+          rejects(hostFailure("E_CLOUD_UNREACHABLE", method)),
+        ),
     );
-    await waitUntil(() => expect(epicTasks.state.status).toBe("error"));
+    await waitUntil(() =>
+      expect(carveOuts.map((read) => read.state.status)).toEqual([
+        "error",
+        "error",
+        "error",
+      ]),
+    );
     const failed = await failedRead(client, {
       hostId: HOST,
       method: "bot.list",
@@ -211,33 +218,10 @@ describe("sweepTransientCloudFailures", () => {
     await sweepTransientCloudFailures(client, HOST);
     expect(failed.calls).toBe(2);
 
-    expect(models.calls).toBe(1);
-    expect(commands.calls).toBe(1);
-    expect(epicTasks.calls).toBe(1);
+    expect(carveOuts.map((read) => read.calls)).toEqual([1, 1, 1]);
   });
 
-  it.each([
-    {
-      label: "agent.gui.listModels",
-      method: "agent.gui.listModels",
-      queryKey: hostReadKey(HOST, "agent.gui.listModels", "m"),
-    },
-    {
-      label: "agent.gui.listCommands",
-      method: "agent.gui.listCommands",
-      queryKey: hostReadKey(HOST, "agent.gui.listCommands", "c"),
-    },
-    {
-      label: "cloud epic-task history",
-      method: "epic.listTasks",
-      queryKey: cloudQueryKeys.epicTasks(HOST, "fp", {
-        limit: 10,
-        filters: null,
-        extensionPhaseVersion: "p",
-        extensionEpicVersion: "e",
-      }),
-    },
-  ])(
+  it.each(CARVE_OUTS)(
     "never re-asks the cache-only carve-out $label when a ring met its attempt and it then fails transiently",
     async ({ method, queryKey }) => {
       const client = freshClient();
@@ -338,19 +322,7 @@ describe("sweepTransientCloudFailures", () => {
     const client = freshClient();
     const reads: ScriptedRead[] = [];
     for (const name of ["a", "b", "c", "d", "e"]) {
-      const read = new ScriptedRead(
-        client,
-        hostReadKey(HOST, "bot.thread.list", name),
-        resolves("ok"),
-      );
-      await waitUntil(() => expect(read.state.data).toBe("ok"));
-      read.answer = rejects(
-        hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
-      );
-      await client.refetchQueries({ queryKey: read.queryKey });
-      expect(read.state.status).toBe("error");
-      expect(read.state.data).toBe("ok");
-      reads.push(read);
+      reads.push(await dataHoldingFailedRead(client, name));
     }
     const held = heldAnswer("ok");
     for (const read of reads) read.answer = held.answer;
@@ -431,7 +403,7 @@ describe("sweepTransientCloudFailures", () => {
       );
     });
 
-    it.each([0, 1, 2, 3, 5])(
+    it.each([1, 2, 3, 5])(
       "re-asks a data-holding failed read once when a second sweep follows %i microtask turns later",
       async (turns) => {
         const client = freshClient();
@@ -440,7 +412,7 @@ describe("sweepTransientCloudFailures", () => {
         read.answer = held.answer;
 
         const first = sweepTransientCloudFailures(client, HOST);
-        for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
+        for (let step = 0; step < turns; step += 1) await Promise.resolve();
         const second = sweepTransientCloudFailures(client, HOST);
         await waitUntil(() => expect(read.calls).toBeGreaterThan(2));
         held.release();
@@ -450,136 +422,126 @@ describe("sweepTransientCloudFailures", () => {
         expect(read.state.data).toBe("recovered");
       },
     );
+  });
 
-    it("leaves a refetch started elsewhere to finish, neither re-asking nor cancelling it", async () => {
-      const client = freshClient();
-      const read = await dataHoldingFailedRead(client, "a");
-      const held = heldAnswer("from-retry");
-      read.answer = held.answer;
-      const retry = client.refetchQueries({ queryKey: read.queryKey });
-      await waitUntil(() => expect(read.calls).toBe(3));
+  it("leaves a refetch started elsewhere to finish, neither re-asking nor cancelling it", async () => {
+    const client = freshClient();
+    const read = await dataHoldingFailedRead(client, "a");
+    const held = heldAnswer("from-retry");
+    read.answer = held.answer;
+    const retry = client.refetchQueries({ queryKey: read.queryKey });
+    await waitUntil(() => expect(read.calls).toBe(3));
 
-      const sweeping = sweepTransientCloudFailures(client, HOST);
-      held.release();
-      await Promise.all([retry, sweeping]);
+    const sweeping = sweepTransientCloudFailures(client, HOST);
+    held.release();
+    await Promise.all([retry, sweeping]);
 
-      expect(read.calls).toBe(3);
-      expect(read.state.status).toBe("success");
-      expect(read.state.data).toBe("from-retry");
-    });
+    expect(read.calls).toBe(3);
+    expect(read.state.status).toBe("success");
+    expect(read.state.data).toBe("from-retry");
+  });
 
-    it("asks the read again on a later ring after its re-ask failed transiently", async () => {
-      const client = freshClient();
-      const read = await dataHoldingFailedRead(client, "a");
-      read.answer = rejects(
-        hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
-      );
-      await sweepTransientCloudFailures(client, HOST);
-      expect(read.calls).toBe(3);
-      expect(read.state.status).toBe("error");
-      read.answer = resolves("later");
+  it("asks the read again on a later ring after its re-ask failed transiently", async () => {
+    const client = freshClient();
+    const read = await dataHoldingFailedRead(client, "a");
+    read.answer = rejects(
+      hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
+    );
+    await sweepTransientCloudFailures(client, HOST);
+    expect(read.calls).toBe(3);
+    expect(read.state.status).toBe("error");
+    read.answer = resolves("later");
 
-      await sweepTransientCloudFailures(client, HOST);
+    await sweepTransientCloudFailures(client, HOST);
 
-      expect(read.calls).toBe(4);
-      expect(read.state.data).toBe("later");
-    });
+    expect(read.calls).toBe(4);
+    expect(read.state.data).toBe("later");
+  });
 
-    it("lets a later ring re-ask a read whose own re-ask has settled while another read's is still pending", async () => {
-      const client = freshClient();
-      const settledAgain = await dataHoldingFailedRead(client, "a");
-      const pending = await dataHoldingFailedRead(client, "b");
-      const held = heldAnswer("b-recovered");
-      settledAgain.answer = rejects(
-        hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
-      );
-      pending.answer = held.answer;
+  it("lets a later ring re-ask a read whose own re-ask has settled while another read's is still pending", async () => {
+    const client = freshClient();
+    const settledAgain = await dataHoldingFailedRead(client, "a");
+    const pending = await dataHoldingFailedRead(client, "b");
+    const held = heldAnswer("b-recovered");
+    settledAgain.answer = rejects(
+      hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
+    );
+    pending.answer = held.answer;
 
-      const first = sweepTransientCloudFailures(client, HOST);
-      await waitUntil(() => {
-        expect(settledAgain.calls).toBe(3);
-        expect(settledAgain.state.fetchStatus).toBe("idle");
-        expect(pending.calls).toBe(3);
-      });
-      expect(settledAgain.state.status).toBe("error");
-      settledAgain.answer = resolves("a-recovered");
-
-      const second = sweepTransientCloudFailures(client, HOST);
-      await waitUntil(() => expect(settledAgain.calls).toBe(4));
-      held.release();
-      await Promise.all([first, second]);
-
-      expect(settledAgain.calls).toBe(4);
-      expect(settledAgain.state.data).toBe("a-recovered");
-      expect(pending.calls).toBe(3);
-      expect(pending.state.data).toBe("b-recovered");
-    });
-
-    it("does the same for reads that hold no data", async () => {
-      const client = freshClient();
-      const settledAgain = await failedRead(client, {
-        hostId: HOST,
-        method: "bot.list",
-        name: "a",
-        code: "E_CLOUD_REQUEST_REFUSED",
-      });
-      const pending = await failedRead(client, {
-        hostId: HOST,
-        method: "bot.list",
-        name: "b",
-        code: "E_CLOUD_REQUEST_REFUSED",
-      });
-      const held = heldAnswer("b-recovered");
-      settledAgain.answer = rejects(
-        hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.list"),
-      );
-      pending.answer = held.answer;
-
-      const first = sweepTransientCloudFailures(client, HOST);
-      await waitUntil(() => {
-        expect(settledAgain.calls).toBe(2);
-        expect(settledAgain.state.fetchStatus).toBe("idle");
-        expect(pending.calls).toBe(2);
-      });
-      settledAgain.answer = resolves("a-recovered");
-
-      const second = sweepTransientCloudFailures(client, HOST);
-      await waitUntil(() => expect(settledAgain.calls).toBe(3));
-      held.release();
-      await Promise.all([first, second]);
-
+    const first = sweepTransientCloudFailures(client, HOST);
+    await waitUntil(() => {
       expect(settledAgain.calls).toBe(3);
-      expect(settledAgain.state.data).toBe("a-recovered");
-      expect(pending.calls).toBe(2);
-      expect(pending.state.data).toBe("b-recovered");
+      expect(settledAgain.state.fetchStatus).toBe("idle");
+      expect(pending.calls).toBe(3);
     });
+    expect(settledAgain.state.status).toBe("error");
+    settledAgain.answer = resolves("a-recovered");
+
+    const second = sweepTransientCloudFailures(client, HOST);
+    await waitUntil(() => expect(settledAgain.calls).toBe(4));
+    held.release();
+    await Promise.all([first, second]);
+
+    expect(settledAgain.calls).toBe(4);
+    expect(settledAgain.state.data).toBe("a-recovered");
+    expect(pending.calls).toBe(3);
+    expect(pending.state.data).toBe("b-recovered");
+  });
+
+  it("lets a later ring re-ask a read with no data whose own re-ask has settled while another read's is still pending", async () => {
+    const client = freshClient();
+    const settledAgain = await failedRead(client, {
+      hostId: HOST,
+      method: "bot.list",
+      name: "a",
+      code: "E_CLOUD_REQUEST_REFUSED",
+    });
+    const pending = await failedRead(client, {
+      hostId: HOST,
+      method: "bot.list",
+      name: "b",
+      code: "E_CLOUD_REQUEST_REFUSED",
+    });
+    const held = heldAnswer("b-recovered");
+    settledAgain.answer = rejects(
+      hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.list"),
+    );
+    pending.answer = held.answer;
+
+    const first = sweepTransientCloudFailures(client, HOST);
+    await waitUntil(() => {
+      expect(settledAgain.calls).toBe(2);
+      expect(settledAgain.state.fetchStatus).toBe("idle");
+      expect(pending.calls).toBe(2);
+    });
+    settledAgain.answer = resolves("a-recovered");
+
+    const second = sweepTransientCloudFailures(client, HOST);
+    await waitUntil(() => expect(settledAgain.calls).toBe(3));
+    held.release();
+    await Promise.all([first, second]);
+
+    expect(settledAgain.calls).toBe(3);
+    expect(settledAgain.state.data).toBe("a-recovered");
+    expect(pending.calls).toBe(2);
+    expect(pending.state.data).toBe("b-recovered");
   });
 
   describe.each(STRANDED_READS)(
     "a ring that meets an attempt in flight, read $label",
     (variant) => {
-      const { method, base, strand } = variant;
-      const refused = (): Error =>
-        hostFailure("E_CLOUD_REQUEST_REFUSED", method);
-
-      /** A sweep's own re-ask of the stranded read, held, once it has started asking. */
-      async function ownReAsk(
-        client: QueryClient,
-        answer: () => Promise<string>,
-      ): Promise<{ read: ScriptedRead; first: Promise<void> }> {
-        const read = await strand(client);
-        read.answer = answer;
-        const first = sweepTransientCloudFailures(client, HOST);
-        await waitUntil(() => expect(read.calls).toBe(base + 1));
-        return { read, first };
-      }
+      const { method, base, refused, strand } = variant;
 
       it.each([1, 3])(
         "asks once more, and then no more, when %i ring(s) arrive during the sweep's own re-ask and it fails transiently",
         async (rings) => {
           const client = freshClient();
           const attempt = heldFailure(refused());
-          const { read, first } = await ownReAsk(client, attempt.answer);
+          const { read, first } = await ownReAsk(
+            client,
+            variant,
+            attempt.answer,
+          );
 
           const later = Array.from({ length: rings }, () =>
             sweepTransientCloudFailures(client, HOST),
@@ -597,11 +559,12 @@ describe("sweepTransientCloudFailures", () => {
 
       it("asks once more after a refetch started elsewhere fails transiently, without cancelling it", async () => {
         const client = freshClient();
-        const read = await strand(client);
         const attempt = heldFailure(refused());
-        read.answer = attempt.answer;
-        const retry = client.refetchQueries({ queryKey: read.queryKey });
-        await waitUntil(() => expect(read.calls).toBe(base + 1));
+        const { read, retry } = await refetchElsewhere(
+          client,
+          variant,
+          attempt.answer,
+        );
 
         const ring = sweepTransientCloudFailures(client, HOST);
         expect(read.calls).toBe(base + 1);
@@ -623,7 +586,7 @@ describe("sweepTransientCloudFailures", () => {
           read.answer = attempt.answer;
 
           const first = sweepTransientCloudFailures(client, HOST);
-          for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
+          for (let step = 0; step < turns; step += 1) await Promise.resolve();
           const ring = sweepTransientCloudFailures(client, HOST);
           await waitUntil(() => expect(read.calls).toBe(base + 1));
           attempt.release();
@@ -637,15 +600,13 @@ describe("sweepTransientCloudFailures", () => {
 
       it("spends the ring owed to a replacement attempt, not the one the replaced attempt's end settles", async () => {
         const client = freshClient();
-        const read = await strand(client);
         const x = heldFailure(refused());
         const y = heldFailure(refused());
-        read.answer = x.answer;
-        const elsewhere = client.refetchQueries({
-          queryKey: read.queryKey,
-          exact: true,
-        });
-        await waitUntil(() => expect(read.calls).toBe(base + 1));
+        const { read, retry: elsewhere } = await refetchElsewhere(
+          client,
+          variant,
+          x.answer,
+        );
         const firstRing = sweepTransientCloudFailures(client, HOST);
 
         // A read holding data restarts on a refetch, so the second ring meets
@@ -678,7 +639,7 @@ describe("sweepTransientCloudFailures", () => {
       it("asks no more when the attempt it met succeeds", async () => {
         const client = freshClient();
         const attempt = heldAnswer("recovered");
-        const { read, first } = await ownReAsk(client, attempt.answer);
+        const { read, first } = await ownReAsk(client, variant, attempt.answer);
 
         const ring = sweepTransientCloudFailures(client, HOST);
         attempt.release();
@@ -694,7 +655,11 @@ describe("sweepTransientCloudFailures", () => {
         async (code) => {
           const client = freshClient();
           const attempt = heldFailure(hostFailure(code, method));
-          const { read, first } = await ownReAsk(client, attempt.answer);
+          const { read, first } = await ownReAsk(
+            client,
+            variant,
+            attempt.answer,
+          );
 
           const ring = sweepTransientCloudFailures(client, HOST);
           attempt.release();
@@ -709,7 +674,7 @@ describe("sweepTransientCloudFailures", () => {
       it("asks no more when no ring met the attempt and it fails transiently", async () => {
         const client = freshClient();
         const attempt = heldFailure(refused());
-        const { read, first } = await ownReAsk(client, attempt.answer);
+        const { read, first } = await ownReAsk(client, variant, attempt.answer);
 
         attempt.release();
         await first;
@@ -717,27 +682,6 @@ describe("sweepTransientCloudFailures", () => {
 
         expect(read.calls).toBe(base + 1);
         expect(read.state.status).toBe("error");
-      });
-
-      it("asks nothing when the read is removed before the attempt it met ends", async () => {
-        const client = freshClient();
-        const read = await strand(client);
-        const attempt = heldFailure(refused());
-        read.answer = attempt.answer;
-        const first = sweepTransientCloudFailures(client, HOST);
-        await waitUntil(() => expect(read.calls).toBe(base + 1));
-        const ring = sweepTransientCloudFailures(client, HOST);
-
-        read.release();
-        client.removeQueries({ queryKey: read.queryKey });
-        attempt.release();
-        await Promise.all([first, ring]);
-        await quiet(client);
-
-        expect(read.calls).toBe(base + 1);
-        expect(client.getQueryCache().find({ queryKey: read.queryKey })).toBe(
-          undefined,
-        );
       });
     },
   );

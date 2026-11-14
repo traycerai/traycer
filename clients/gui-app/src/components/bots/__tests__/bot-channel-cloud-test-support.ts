@@ -9,12 +9,15 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type {
   BotConversationListResponse,
   BotThreadListResponse,
-  BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
-import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import {
+  BOT_ID,
+  CHANNEL_ID,
+  postThread,
+} from "@/components/bots/__tests__/bot-turn-test-support";
 
 /**
  * The REAL `bot.conversation.list` and `bot.thread.list` reads under a bot's
@@ -23,39 +26,10 @@ import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
  * in the app.
  */
 
-export const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 /** The host the tab's client serves; every read of the view is keyed under it. */
 export const TAB_HOST_ID = mockRemoteHostEntry.hostId;
-export const CHANNEL_ID = "conversation-channel";
-export const THREAD_ID = "thread-1";
-export const POST_ID = "post-1";
 
 export const CHANNEL_FAILURE_COPY = "Couldn't load this bot's channel.";
-
-export const LISTED_THREAD: BotThreadSummary = {
-  threadId: THREAD_ID,
-  conversationId: CHANNEL_ID,
-  sessionChatId: "session-1",
-  anchor: {
-    messageId: POST_ID,
-    requestId: "req-thread",
-    senderUserId: "user-teammate",
-    sentAt: 1_000,
-    resolvedAt: null,
-    excerpt: null,
-  },
-  replyCount: 1,
-  lastReplyAt: 2_000,
-  openRequestCount: 1,
-  costUsd: null,
-};
-
-export const OPEN_LISTED_THREAD: BotOpenThread = {
-  anchorMessageId: POST_ID,
-  announcement: false,
-  anchorKind: null,
-  sent: null,
-};
 
 export const CHANNEL_LIST: BotConversationListResponse = {
   conversations: [
@@ -69,8 +43,8 @@ export const CHANNEL_LIST: BotConversationListResponse = {
   ],
 };
 
-export const THREAD_LIST: BotThreadListResponse = {
-  threads: [LISTED_THREAD],
+const THREAD_LIST: BotThreadListResponse = {
+  threads: [postThread()],
   trunkCostUsd: null,
   threadAnchors: null,
   nextCursor: null,

@@ -6,6 +6,14 @@
  * host's doorbell rings `recovered`, and the channel loads without Retry.
  */
 import {
+  doorbellHostDirectoryEntryMock,
+  doorbellStreamAuthRevalidatorMock,
+  doorbellStreamClientForMock,
+  liveDoorbellsOf,
+  resetDoorbellHosts,
+  ringDoorbell,
+} from "@/providers/__tests__/cloud-recovery-doorbell-test-support";
+import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
@@ -25,15 +33,15 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
-import type { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import {
   BOT_ID,
-  CHANNEL_FAILURE_COPY,
   CHANNEL_ID,
+  THREAD_OPEN,
+} from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  CHANNEL_FAILURE_COPY,
   CHANNEL_LIST,
-  OPEN_LISTED_THREAD,
   TAB_HOST_ID,
   appClientWithoutRetries,
   freshScript,
@@ -57,7 +65,6 @@ import { CloudRecoveryDoorbellMount } from "@/providers/cloud-recovery-doorbell-
 
 const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
-  streamClients: new Map<string, FakeStreamClient>(),
 }));
 
 vi.mock(
@@ -69,27 +76,18 @@ vi.mock(
   () => emptyBotMentionHostListsMock,
 );
 // The doorbell dials the entry of the host whose read failed.
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: (hostId: string | null) =>
-    hostId === null ? null : { ...mockRemoteHostEntry, hostId },
-}));
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
-vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
-  const { FakeStreamClient: Fake } =
-    await import("@traycer-clients/shared/host-transport/__testing__/fake-stream-client");
-  return {
-    useHostStreamClientFor: (target: { readonly hostId: string } | null) => {
-      if (target === null) return null;
-      const existing = mocks.streamClients.get(target.hostId);
-      if (existing !== undefined) return existing;
-      const created = new Fake(true);
-      mocks.streamClients.set(target.hostId, created);
-      return created;
-    },
-  };
-});
+vi.mock(
+  "@/hooks/host/use-host-directory-entry",
+  () => doorbellHostDirectoryEntryMock,
+);
+vi.mock(
+  "@/lib/host/stream-auth-revalidator",
+  () => doorbellStreamAuthRevalidatorMock,
+);
+vi.mock(
+  "@/hooks/host/use-host-stream-client-for",
+  () => doorbellStreamClientForMock,
+);
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
@@ -144,6 +142,7 @@ function mountRealChannel(args: {
   readonly openThread: BotOpenThread | null;
   readonly extra: ReactElement | null;
 }): void {
+  mocks.client = hostClientAnswering(script, args.queryClient);
   render(
     <QueryClientProvider client={args.queryClient}>
       {args.extra}
@@ -186,7 +185,6 @@ function mountRealChannel(args: {
 
 function mountWithDoorbell(): void {
   queryClient = appClientWithoutRetries();
-  mocks.client = hostClientAnswering(script, queryClient);
   mountRealChannel({
     queryClient,
     openThread: null,
@@ -205,27 +203,10 @@ function mountWithDoorbellAndAppRetries(): void {
     ...defaults,
     queries: { ...defaults.queries, retryDelay: 0 },
   });
-  mocks.client = hostClientAnswering(script, queryClient);
   mountRealChannel({
     queryClient,
     openThread: null,
     extra: <CloudRecoveryDoorbellMount />,
-  });
-}
-
-/** The doorbell `TAB_HOST_ID`'s host holds open for the channel's failed read. */
-function liveDoorbell() {
-  return mocks.streamClients
-    .get(TAB_HOST_ID)
-    ?.sessions.filter((session) => !session.closed)
-    .at(-1);
-}
-
-function ringTabHost(): void {
-  const session = liveDoorbell();
-  if (session === undefined) throw new Error("no doorbell open to the host");
-  act(() => {
-    session.emit({ kind: "recovered", hasBinaryPayload: false }, null);
   });
 }
 
@@ -238,7 +219,7 @@ afterEach(() => {
   cleanup();
   queryClient.clear();
   resetHostConnectionRegistryForTest();
-  mocks.streamClients.clear();
+  resetDoorbellHosts();
   mocks.client = null;
   vi.restoreAllMocks();
 });
@@ -252,34 +233,32 @@ describe("<BotChannelView /> after the host's cloud read failed", () => {
     mountWithDoorbell();
     const panel = await screen.findByTestId("bot-channel-error");
     expect(panel.textContent).toContain(CHANNEL_FAILURE_COPY);
-    await waitFor(() => expect(liveDoorbell()).toBeDefined());
+    await waitFor(() =>
+      expect(liveDoorbellsOf(TAB_HOST_ID).at(-1)).toBeDefined(),
+    );
     script.conversationList = () => Promise.resolve(CHANNEL_LIST);
 
-    ringTabHost();
+    ringDoorbell(TAB_HOST_ID);
 
     expect(await screen.findByTestId("bot-channel")).toBeDefined();
     expect(screen.queryByTestId("bot-channel-error")).toBeNull();
     expect(script.conversationListCalls).toBe(2);
   });
 
-  it("does not ask again for a permanent failure, whatever the host rings", async () => {
+  it("opens no doorbell for a permanent failure and asks once", async () => {
     script.conversationList = () =>
       Promise.reject(hostFailure("FORBIDDEN", "bot.conversation.list"));
     mountWithDoorbell();
     await screen.findByTestId("bot-channel-error");
 
-    expect(liveDoorbell()).toBeUndefined();
+    expect(liveDoorbellsOf(TAB_HOST_ID)).toHaveLength(0);
     expect(script.conversationListCalls).toBe(1);
-    expect(screen.getByTestId("bot-channel-error")).toBeDefined();
   });
 });
 
 /** The channel with no doorbell, so only what the view itself does with a failed refetch shows. */
-function mountPlain(
-  openThread: Parameters<typeof mountRealChannel>[0]["openThread"],
-): void {
+function mountPlain(openThread: BotOpenThread | null): void {
   queryClient = appClientWithoutRetries();
-  mocks.client = hostClientAnswering(script, queryClient);
   mountRealChannel({ queryClient, openThread, extra: null });
 }
 
@@ -343,7 +322,7 @@ describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
   });
 
   it("keeps an open thread when the thread list refetch is refused", async () => {
-    mountPlain(OPEN_LISTED_THREAD);
+    mountPlain(THREAD_OPEN);
     await screen.findByTestId("bot-channel");
     await waitFor(() => expect(script.threadListCalls).toBe(1));
     script.threadList = () =>
@@ -356,7 +335,7 @@ describe("<BotChannelView /> keeps what it loaded when a refetch fails", () => {
   });
 
   it("still says the thread could not load when the thread list refetch fails permanently", async () => {
-    mountPlain(OPEN_LISTED_THREAD);
+    mountPlain(THREAD_OPEN);
     await screen.findByTestId("bot-channel");
     await waitFor(() => expect(script.threadListCalls).toBe(1));
     script.threadList = () =>
@@ -380,7 +359,9 @@ describe("<BotChannelView /> when Retry is pressed while the host still refuses 
     mountWithDoorbellAndAppRetries();
     const panel = await screen.findByTestId("bot-channel-error");
     expect(panel.textContent).toBe(PANEL_TEXT);
-    await waitFor(() => expect(liveDoorbell()).toBeDefined());
+    await waitFor(() =>
+      expect(liveDoorbellsOf(TAB_HOST_ID).at(-1)).toBeDefined(),
+    );
     const asksBeforeRetry = script.conversationListCalls;
 
     // The press's own ask is held, so the screen between press and answer can
@@ -413,7 +394,7 @@ describe("<BotChannelView /> when Retry is pressed while the host still refuses 
     ).toBe(false);
 
     script.conversationList = () => Promise.resolve(CHANNEL_LIST);
-    ringTabHost();
+    ringDoorbell(TAB_HOST_ID);
 
     expect(await screen.findByTestId("bot-channel")).toBeDefined();
     expect(screen.queryByTestId("bot-channel-error")).toBeNull();
@@ -430,7 +411,9 @@ describe("<BotChannelView /> when the host rings while a read's attempt is still
       );
     mountWithDoorbellAndAppRetries();
     await screen.findByTestId("bot-channel-error");
-    await waitFor(() => expect(liveDoorbell()).toBeDefined());
+    await waitFor(() =>
+      expect(liveDoorbellsOf(TAB_HOST_ID).at(-1)).toBeDefined(),
+    );
     return script.conversationListCalls;
   }
 
@@ -445,12 +428,12 @@ describe("<BotChannelView /> when the host rings while a read's attempt is still
       script.conversationListCalls === before + 2
         ? finalRefusal.answer().then(() => CHANNEL_LIST)
         : Promise.reject(refusal());
-    ringTabHost();
+    ringDoorbell(TAB_HOST_ID);
     await waitFor(() => expect(script.conversationListCalls).toBe(before + 2));
 
     // The floor passes while the final refusal is still in flight.
     script.conversationList = () => Promise.resolve(CHANNEL_LIST);
-    ringTabHost();
+    ringDoorbell(TAB_HOST_ID);
     act(() => {
       finalRefusal.release();
     });
@@ -463,7 +446,7 @@ describe("<BotChannelView /> when the host rings while a read's attempt is still
   it("loads when the ring arrives after the final refusal has settled", async () => {
     const before = await strandedChannel();
     script.conversationList = () => Promise.reject(refusal());
-    ringTabHost();
+    ringDoorbell(TAB_HOST_ID);
     await waitFor(() => expect(script.conversationListCalls).toBe(before + 2));
     await waitFor(() =>
       expect(screen.queryByTestId("bot-channel-loading")).toBeNull(),
@@ -471,7 +454,7 @@ describe("<BotChannelView /> when the host rings while a read's attempt is still
     expect(screen.getByTestId("bot-channel-error")).toBeDefined();
 
     script.conversationList = () => Promise.resolve(CHANNEL_LIST);
-    ringTabHost();
+    ringDoorbell(TAB_HOST_ID);
 
     expect(await screen.findByTestId("bot-channel")).toBeDefined();
     expect(script.conversationListCalls).toBe(before + 3);

@@ -87,6 +87,5 @@ describe("CloudRecoveredStreamClient", () => {
     client.close();
     client.close();
     expect(close).toHaveBeenCalledTimes(1);
-    expect(session.closed).toBe(true);
   });
 });

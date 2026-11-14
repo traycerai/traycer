@@ -15,7 +15,7 @@ describe("E_CLOUD_REQUEST_REFUSED on the wire", () => {
       result: null,
       error: { code: CODE, message: "egress budget refused" },
     });
-    if (frame.error === undefined || frame.error === null) {
+    if (frame.error === null) {
       throw new Error("the envelope lost its error");
     }
     const error = HostRpcError.fromWireEnvelope(
@@ -34,7 +34,7 @@ describe("E_CLOUD_REQUEST_REFUSED on the wire", () => {
       result: null,
       error: { code: CODE, message: "egress budget refused" },
     });
-    if (payload.error === undefined || payload.error === null) {
+    if (payload.error === null) {
       throw new Error("the envelope lost its error");
     }
     const error = HostRpcError.fromWireEnvelope(

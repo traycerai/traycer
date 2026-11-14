@@ -33,7 +33,6 @@ export function hostReadKey(
  */
 export class ScriptedRead {
   calls = 0;
-  private readonly observer: QueryObserver<string>;
   private unsubscribe: (() => void) | null;
 
   /** What the next ask answers. Swap it between asks. */
@@ -45,7 +44,7 @@ export class ScriptedRead {
     firstAnswer: () => Promise<string>,
   ) {
     this.answer = firstAnswer;
-    this.observer = new QueryObserver<string>(client, {
+    const observer = new QueryObserver<string>(client, {
       queryKey: this.queryKey,
       ...this.retryOptions(),
       queryFn: () => {
@@ -53,10 +52,9 @@ export class ScriptedRead {
         return this.answer();
       },
     });
-    this.unsubscribe = this.observer.subscribe(() => undefined);
+    this.unsubscribe = observer.subscribe(() => undefined);
   }
 
-  /** Retries are off, so one ask is one call. */
   protected retryOptions(): Pick<QueryObserverOptions<string>, "retry"> {
     return { retry: false };
   }
@@ -84,16 +82,24 @@ export const rejects =
   () =>
     Promise.reject(error);
 
+/** An answer that stays open until `release` is called, then gives what `open` returns. */
+function held(open: () => string | Promise<string>): {
+  readonly answer: () => Promise<string>;
+  readonly release: () => void;
+} {
+  const gate = Promise.withResolvers<void>();
+  return {
+    answer: () => gate.promise.then(open),
+    release: () => gate.resolve(),
+  };
+}
+
 /** An answer that stays open until `release` is called. */
 export function heldAnswer(value: string): {
   readonly answer: () => Promise<string>;
   readonly release: () => void;
 } {
-  let release: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { answer: () => gate.then(() => value), release };
+  return held(() => value);
 }
 
 /** An answer that fails with `error` once `release` is called. */
@@ -101,11 +107,7 @@ export function heldFailure(error: Error): {
   readonly answer: () => Promise<string>;
   readonly release: () => void;
 } {
-  let release: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { answer: () => gate.then(() => Promise.reject(error)), release };
+  return held(() => Promise.reject(error));
 }
 
 /**
