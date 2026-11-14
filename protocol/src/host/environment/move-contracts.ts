@@ -4,6 +4,8 @@
  *
  * `environment.move.plan` - the sheet the person reads, row by row.
  * `environment.move.accept` - the person's acceptance of that exact sheet.
+ * `environment.move.stage` / `.start` / `.outcome` - the move through authn's
+ * acceptance, with `plan@2.0` naming its target.
  * `environment.move.stopPreview` / `environment.move.stop` - what stopping
  * sharing from this computer touches, and stopping it.
  *
@@ -11,6 +13,8 @@
  * value, and a row that looks like a key carries only its name. Optional
  * capabilities with `degrade: { kind: "unsupported" }`, off the released
  * floor, like every environment method (`environment/contracts.ts`).
+ * `plan@2.0`, `stage`, `start` and `outcome` are defined and not registered:
+ * each registers with the host slice that serves it and its first caller.
  */
 import { z } from "zod";
 import {
@@ -20,6 +24,7 @@ import {
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   environmentItemKindSchema,
+  environmentMoveAttemptOutcomeSchema,
   environmentOsSchema,
 } from "@traycer/protocol/host/environment-schemas";
 import { RETIRED_SAME_NAME_IN_PERSONAL_ROWS } from "@traycer/protocol/host/released-wire-rows";
@@ -202,6 +207,75 @@ export const environmentMovePlanUpgradeV11ToV12 = defineUpgradePath<
   }),
 });
 
+/**
+ * The configuration a move or another environment operation addresses: the
+ * person's Personal one, or a team's. Nested in a request; the stage
+ * evidence carries the same facts flat (`targetKind`).
+ */
+export const environmentOperationTargetSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("personal"),
+      environmentId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("team"),
+      environmentId: z.string().min(1),
+      teamId: z.uuid(),
+    }),
+  ]),
+);
+export type EnvironmentOperationTarget = z.infer<
+  typeof environmentOperationTargetSchema
+>;
+
+/**
+ * `@2.0` names the configuration the move is for (`target`). A target that is
+ * not the move's own is refused with `E_MOVE_NOT_AWAITING`, as a host whose
+ * move is not waiting is.
+ */
+export const environmentMovePlanRequestSchemaV20 = lazySchema(() =>
+  z.object({ target: environmentOperationTargetSchema }),
+);
+export type EnvironmentMovePlanRequestV20 = z.infer<
+  typeof environmentMovePlanRequestSchemaV20
+>;
+
+/**
+ * `@1.2`'s answer without `itemChoices`: a `@2.0` host always honours a
+ * `stays` choice on a `moves` row, so there is nothing to advertise. A new
+ * major has no older sender, so no row list or flag defaults. Reading a plan
+ * never stages, never ends an attempt and never touches a staged file.
+ */
+export const environmentMovePlanResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    planHash: z.string().min(1),
+    planRevision: z.number().int().nonnegative(),
+    hostVersion: z.string().min(1).max(64),
+    disclosureVersion: z.number().int().nonnegative(),
+    rows: z.object({
+      moves: z.array(environmentMoveRowSchema),
+      staysOnThisComputer: z.array(environmentMoveRowSchema),
+      alreadyInPersonal: z.array(environmentMoveRowSchema),
+      differsMasked: z.array(environmentMoveRowSchema),
+      looksLikeAKey: z.array(environmentMoveRowSchema),
+      sameNameInPersonal: z.array(environmentMoveRowSchema),
+    }),
+    guideDiffers: z.boolean(),
+    personalHoldsSecrets: z.boolean(),
+  }),
+);
+export type EnvironmentMovePlanResponseV20 = z.infer<
+  typeof environmentMovePlanResponseSchemaV20
+>;
+
+export const environmentMovePlanV20 = defineRpcContract({
+  method: "environment.move.plan",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: environmentMovePlanRequestSchemaV20,
+  responseSchema: environmentMovePlanResponseSchemaV20,
+});
+
 /** What every `environmentMoveItemChoiceKey` starts with. */
 const ITEM_CHOICE_PREFIX = "item:";
 
@@ -275,6 +349,171 @@ export const environmentMoveAcceptV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMoveAcceptRequestSchema,
   responseSchema: environmentMoveAcceptResponseSchema,
+});
+
+// ── stage, start and outcome ───────────────────────────────────────────────
+//
+// The move in three calls: `stage` records the person's choices and answers
+// the evidence the app sends authn as its acceptance; `start` hands the host
+// that acceptance; `outcome` (and `environment.status@1.3`'s `move`) reads
+// where the started attempt stands. `plan@2.0`, `stage` and `start` refuse
+// with `E_MOVE_NOT_AWAITING` when this computer has no move waiting.
+
+const sha256HexSchema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/u));
+
+/** The person's `stays` on one `moves` row, by the row's key. */
+export const environmentMoveStaysChoiceSchema = lazySchema(() =>
+  z.object({
+    key: z.string().min(1).max(3072),
+    choice: z.literal("stays"),
+  }),
+);
+export type EnvironmentMoveStaysChoice = z.infer<
+  typeof environmentMoveStaysChoiceSchema
+>;
+
+/** At most 4096 choices, and none at all is a valid answer. */
+const environmentMoveStaysChoicesSchema = lazySchema(() =>
+  z.array(environmentMoveStaysChoiceSchema).max(4096),
+);
+
+export const environmentMoveStageRequestSchema = lazySchema(() =>
+  z.object({
+    target: environmentOperationTargetSchema,
+    keyChoices: environmentMoveStaysChoicesSchema,
+  }),
+);
+export type EnvironmentMoveStageRequest = z.infer<
+  typeof environmentMoveStageRequestSchema
+>;
+
+/**
+ * The fields both evidence arms share. `attemptId` is minted by this stage.
+ *
+ * `keyChoices` is the request's, kept only for a key of a `moves` row whose
+ * kind is `variable`, `env_override` or `secret`: one entry per key (the last
+ * when a key repeats), ordered by the `moves` rows, every other key dropped.
+ * An app that sends only choices on those rows, one per key, in the drawn
+ * `moves` order, gets its request back exactly.
+ */
+function environmentMoveEvidenceCommonShape() {
+  return {
+    attemptId: z.uuid(),
+    planHash: sha256HexSchema,
+    planRevision: z.number().int().nonnegative(),
+    hostVersion: z.string().min(1).max(128),
+    itemCount: z.number().int().nonnegative(),
+    keyChoices: environmentMoveStaysChoicesSchema,
+    sourceHostId: z.uuid(),
+    sharingGeneration: z.number().int().nonnegative(),
+  };
+}
+
+/**
+ * `{ ...evidence, ...authorization }` is authn's acceptance request for that
+ * arm, flat, with nothing to rename; `disclosureVersion` appears once. The
+ * objects strip unknown keys, so a parsed answer holds exactly these. Staging
+ * again ends the earlier attempt, whose id then answers `not_found`; a staged
+ * attempt that is never started leaves `environment.status`'s `move` null,
+ * survives a restart, and ends at the next stage, at Stop sharing or at the
+ * personal purge. Refused with `E_MOVE_NOT_AWAITING` once a start has begun.
+ */
+export const environmentMoveStageResponseSchema = lazySchema(() =>
+  z.union([
+    z.object({
+      evidence: z.object({
+        ...environmentMoveEvidenceCommonShape(),
+        targetKind: z.literal("personal"),
+        environmentId: z.string().min(1),
+        disclosureVersion: z.number().int().nonnegative(),
+      }),
+      authorization: z.object({ manifestHash: sha256HexSchema }),
+    }),
+    z.object({
+      evidence: z.object({
+        ...environmentMoveEvidenceCommonShape(),
+        targetKind: z.literal("team"),
+        environmentId: z.string().min(1),
+        teamId: z.uuid(),
+        disclosureVersion: z.literal(2),
+      }),
+      authorization: z.object({ disclosureHash: sha256HexSchema }),
+    }),
+  ]),
+);
+export type EnvironmentMoveStageResponse = z.infer<
+  typeof environmentMoveStageResponseSchema
+>;
+
+export const environmentMoveStageV10 = defineRpcContract({
+  method: "environment.move.stage",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentMoveStageRequestSchema,
+  responseSchema: environmentMoveStageResponseSchema,
+});
+
+/**
+ * `start`'s and `outcome`'s answer: the attempt's outcome, or `not_found` for
+ * an attempt this host does not hold (never staged, or ended).
+ */
+export const environmentMoveOutcomeAnswerSchema = lazySchema(() =>
+  z.discriminatedUnion("state", [
+    environmentMoveAttemptOutcomeSchema,
+    z.object({ state: z.literal("not_found"), attemptId: z.string().min(1) }),
+  ]),
+);
+export type EnvironmentMoveOutcomeAnswer = z.infer<
+  typeof environmentMoveOutcomeAnswerSchema
+>;
+
+/**
+ * `planHash` is bounded loosely so that one differing from the staged hash
+ * reaches the host and is answered `needs_person` `plan_hash_mismatch`.
+ */
+export const environmentMoveStartRequestSchema = lazySchema(() =>
+  z.object({
+    attemptId: z.uuid(),
+    planHash: z.string().min(1),
+    acceptanceId: z.uuid(),
+  }),
+);
+export type EnvironmentMoveStartRequest = z.infer<
+  typeof environmentMoveStartRequestSchema
+>;
+
+/**
+ * Starts a staged attempt with authn's acceptance and answers at once what
+ * `outcome` would. An unknown or ended attempt answers `not_found`; a
+ * `planHash` other than the staged one, `needs_person` `plan_hash_mismatch`;
+ * a started attempt named with another `acceptanceId`, `needs_person`
+ * `move_acceptance_conflict`. The same triple again answers the recorded
+ * outcome and restarts nothing. A staged attempt while no move awaits is
+ * refused with `E_MOVE_NOT_AWAITING`.
+ */
+export const environmentMoveStartV10 = defineRpcContract({
+  method: "environment.move.start",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentMoveStartRequestSchema,
+  responseSchema: environmentMoveOutcomeAnswerSchema,
+});
+
+/**
+ * `attemptId` is bounded loosely, not as a uuid, so that any id the host does
+ * not hold reaches it and is answered `not_found`.
+ */
+export const environmentMoveOutcomeRequestSchema = lazySchema(() =>
+  z.object({ attemptId: z.string().min(1) }),
+);
+export type EnvironmentMoveOutcomeRequest = z.infer<
+  typeof environmentMoveOutcomeRequestSchema
+>;
+
+/** Kept across a host restart until the next stage. */
+export const environmentMoveOutcomeV10 = defineRpcContract({
+  method: "environment.move.outcome",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentMoveOutcomeRequestSchema,
+  responseSchema: environmentMoveOutcomeAnswerSchema,
 });
 
 export const environmentMoveStopPreviewRequestSchema = emptyRequestSchema;
