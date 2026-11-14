@@ -22,7 +22,7 @@ const DUPLICATE_OPERATION_CODE = "move_acceptance_conflict";
 /** What the record call answered. */
 export type SignInRequestRecordAnswer =
   | { readonly kind: "recorded" }
-  /** The operation id names a request already; read it back once. */
+  /** The operation id names a request already: it was recorded. */
   | { readonly kind: "duplicate" }
   /** 401: the session that sent it has ended. */
   | { readonly kind: "unauthorized" }
@@ -31,17 +31,8 @@ export type SignInRequestRecordAnswer =
   /** 404, any other answer, or no answer. */
   | { readonly kind: "failed" };
 
-/** What the recorder's read of its own request answered. */
-export type SignInRequestReadAnswer =
-  | { readonly kind: "pending" }
-  /** An upload under this id already committed against it. */
-  | { readonly kind: "consumed" }
-  | { readonly kind: "ended" }
-  /** Any other answer, or no answer. */
-  | { readonly kind: "failed" };
-
 /**
- * The two calls on the person's own session. The app's auth service and the
+ * The record call on the person's own session. The app's auth service and the
  * CLI's own sign-in implement it, so no bearer passes anywhere else.
  */
 export interface SignInRequestClient {
@@ -49,10 +40,6 @@ export interface SignInRequestClient {
     request: ProviderLoginSignInRequest,
     signal: AbortSignal,
   ): Promise<SignInRequestRecordAnswer>;
-  readSignInRequest(
-    request: ProviderLoginSignInRequest,
-    signal: AbortSignal,
-  ): Promise<SignInRequestReadAnswer>;
 }
 
 /**
@@ -78,11 +65,10 @@ export type SignInRecording =
  * Records `request` once. `recorded` holds every operation id this caller
  * has already recorded and sent back: a computer that answers the same id
  * again has ignored it, so the step ends instead of recording again. A
- * duplicate-id refusal is followed by one read of the request, never more.
- * A duplicate id proves a request under it exists, so every answer but
- * `ended` goes on to the next await: `consumed` is answered with the
- * computer's kept final outcome, and a failed read with whatever authn tells
- * the computer's upload.
+ * duplicate-id refusal proves a request under that id exists, so it goes on
+ * to the next await like a recording: the computer's upload then gets the
+ * true answer from authn. The step ends by itself only where the recording
+ * was refused outright or could not be sent.
  */
 export async function recordSignInRequestOnce(
   client: SignInRequestClient,
@@ -97,13 +83,8 @@ export async function recordSignInRequestOnce(
   const answer = await client.recordSignInRequest(request, signal);
   switch (answer.kind) {
     case "recorded":
+    case "duplicate":
       return { kind: "recorded", recordedOperationId: request.operationId };
-    case "duplicate": {
-      const state = await client.readSignInRequest(request, signal);
-      return state.kind === "ended"
-        ? { kind: "ended", reason: "unavailable" }
-        : { kind: "recorded", recordedOperationId: request.operationId };
-    }
     case "unauthorized":
       return { kind: "ended", reason: "session-ended" };
     case "forbidden":
@@ -118,7 +99,6 @@ const recordAnswerSchema = z.object({
   endsAt: z.number(),
 });
 const codedBodySchema = z.object({ code: z.string() });
-const intentStateSchema = z.object({ state: z.string() });
 
 type RawCall =
   | {
@@ -227,34 +207,4 @@ export async function recordSignInRequestViaHttp(
     answer.data.operationId === request.operationId
     ? { kind: "recorded" }
     : { kind: "failed" };
-}
-
-/** The recorder's read of its own request on `bearerToken`'s session. */
-export async function readSignInRequestViaHttp(
-  authnBaseUrl: string,
-  bearerToken: string,
-  request: ProviderLoginSignInRequest,
-  signal: AbortSignal,
-): Promise<SignInRequestReadAnswer> {
-  if (!isPathSafe(request)) return { kind: "failed" };
-  const raw = await call(
-    `${intentsUrl(authnBaseUrl, request.environmentId)}/${encodeURIComponent(request.operationId)}`,
-    "GET",
-    null,
-    bearerToken,
-    signal,
-  );
-  if (raw.kind === "no-answer" || raw.status !== 200) return { kind: "failed" };
-  const state = intentStateSchema.safeParse(raw.body);
-  if (!state.success) return { kind: "failed" };
-  switch (state.data.state) {
-    case "pending":
-      return { kind: "pending" };
-    case "consumed":
-      return { kind: "consumed" };
-    case "ended":
-      return { kind: "ended" };
-    default:
-      return { kind: "failed" };
-  }
 }

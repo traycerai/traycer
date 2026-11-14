@@ -1,8 +1,6 @@
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
-  readSignInRequestViaHttp,
   recordSignInRequestViaHttp,
-  type SignInRequestReadAnswer,
   type SignInRequestRecordAnswer,
 } from "@traycer-clients/shared/host-client/provider-sign-in-request";
 import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
@@ -3611,21 +3609,6 @@ export class AuthService {
     );
     if (answer.kind === "unauthorized") void this.revalidateCurrentContext();
     return answer;
-  }
-
-  /** The person's read of a sign-in request they recorded, on a verified session. */
-  async readSignInRequest(
-    request: ProviderLoginSignInRequest,
-    signal: AbortSignal,
-  ): Promise<SignInRequestReadAnswer> {
-    const bearer = this.cloudBearer();
-    if (bearer === null) return { kind: "failed" };
-    return readSignInRequestViaHttp(
-      this.runnerHost.authnBaseUrl,
-      bearer,
-      request,
-      signal,
-    );
   }
 
   /** The user's answer to an agent's grant request. */

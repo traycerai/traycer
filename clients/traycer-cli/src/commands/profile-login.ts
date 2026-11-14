@@ -14,7 +14,6 @@ import type {
   ResponseOfMethod,
 } from "../../../shared/host-transport/host-messenger";
 import {
-  readSignInRequestViaHttp,
   recordSignInRequestOnce,
   recordSignInRequestViaHttp,
   type SignInRequestClient,
@@ -149,16 +148,6 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
       const auth = await resolveHostAuth();
       if (auth === null) return { kind: "unauthorized" };
       return recordSignInRequestViaHttp(
-        auth.authnBaseUrl,
-        auth.token,
-        request,
-        signal,
-      );
-    },
-    readSignInRequest: async (request, signal) => {
-      const auth = await resolveHostAuth();
-      if (auth === null) return { kind: "failed" };
-      return readSignInRequestViaHttp(
         auth.authnBaseUrl,
         auth.token,
         request,

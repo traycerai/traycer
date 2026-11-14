@@ -23,6 +23,7 @@ import {
   useProviderSignInRecording,
   type SignInRequestRecorder,
 } from "@/hooks/providers/use-provider-sign-in-recording";
+import type { SignInRecording } from "@traycer-clients/shared/host-client/provider-sign-in-request";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
@@ -38,6 +39,28 @@ type AwaitLoginResponse = ResponseOfMethod<
   "providers.awaitLogin"
 >;
 type AwaitLoginContext = { readonly hostId: string | null };
+
+/**
+ * Why the recording step ended the sign-in, as `SignInRecording` names it:
+ * `forbidden` (the record route answered 403), `unavailable` (404, or the
+ * call failed or was not answered), `session-ended` (401), `already-recorded`
+ * (the computer asked again for an id already recorded and sent back).
+ */
+export type SignInRecordingEnd = Extract<
+  SignInRecording,
+  { readonly kind: "ended" }
+>["reason"];
+
+/**
+ * The await's answer, plus how the recording step went. `signInRecordingEnded`
+ * is null when there was nothing to record or the recording went through and
+ * the answer is the computer's to the next await; otherwise the answer is the
+ * unfinished one, which every caller reads as its own "did not finish", and a
+ * team's dialog chooses its sentence by the reason. Never on the wire.
+ */
+export type AwaitLoginAnswer = AwaitLoginResponse & {
+  readonly signInRecordingEnded: SignInRecordingEnd | null;
+};
 
 /**
  * One wait for a login: the wire request, and the caller's way to stop
@@ -116,15 +139,15 @@ function signInRequestToRecord(
  * One wait, with the recording step every caller shares: an unfinished answer
  * that carries `signInRequest` is recorded at authn on the person's own
  * session, and the same handle is asked once more with `recordedOperationId`.
- * A recording that ends returns that unfinished answer, which every caller
- * already reads as "the sign-in did not complete". A computer that never asks
- * for a recording is asked exactly as before.
+ * A recording that ends returns that unfinished answer with the reason, which
+ * every caller already reads as "the sign-in did not complete". A computer
+ * that never asks for a recording is asked exactly as before.
  */
 async function awaitWithRecording(
   client: HostClient<HostRpcRegistry>,
   variables: AwaitLoginVariables,
   recordSignInRequest: SignInRequestRecorder,
-): Promise<AwaitLoginResponse> {
+): Promise<AwaitLoginAnswer> {
   const ask = (request: AwaitLoginRequest): Promise<AwaitLoginResponse> =>
     variables.signal === undefined
       ? client.requestWithResponseTimeout(
@@ -140,16 +163,19 @@ async function awaitWithRecording(
         });
   const answer = await ask(variables.request);
   const signInRequest = signInRequestToRecord(answer);
-  if (signInRequest === null) return answer;
+  if (signInRequest === null) return { ...answer, signInRecordingEnded: null };
   const recording = await recordSignInRequest(
     signInRequest,
     variables.signal ?? new AbortController().signal,
   );
-  if (recording.kind !== "recorded") return answer;
-  return ask({
+  if (recording.kind === "ended") {
+    return { ...answer, signInRecordingEnded: recording.reason };
+  }
+  const next = await ask({
     ...variables.request,
     recordedOperationId: recording.recordedOperationId,
   });
+  return { ...next, signInRecordingEnded: null };
 }
 
 function awaitAnswerNamesProfile(data: AwaitLoginResponse): boolean {
@@ -173,7 +199,7 @@ function awaitAnswerNamesProfile(data: AwaitLoginResponse): boolean {
  * the list read again.
  */
 export function useProvidersAwaitLogin(): UseMutationResult<
-  AwaitLoginResponse,
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   AwaitLoginContext
@@ -191,7 +217,7 @@ export function useProvidersAwaitLogin(): UseMutationResult<
  * `HostRuntimeContext`, not a tab-bound host.
  */
 export function useHostScopedProvidersAwaitLogin(): UseMutationResult<
-  AwaitLoginResponse,
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   AwaitLoginContext
@@ -214,7 +240,7 @@ export function useProvidersAwaitLoginForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly getCacheHostId: () => string | null;
 }): UseMutationResult<
-  AwaitLoginResponse,
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   AwaitLoginContext
@@ -223,7 +249,7 @@ export function useProvidersAwaitLoginForClient(args: {
   const recordSignInRequest = useProviderSignInRecording();
   const client = args.client;
   return useMutation<
-    AwaitLoginResponse,
+    AwaitLoginAnswer,
     HostRpcError,
     AwaitLoginVariables,
     AwaitLoginContext
@@ -235,20 +261,20 @@ export function useProvidersAwaitLoginForClient(args: {
     mutationFn: (variables) =>
       withHostQueryErrorBoundary("providers.awaitLogin", async () => {
         if (client === null) {
-          return Promise.reject<AwaitLoginResponse>(
+          return Promise.reject<AwaitLoginAnswer>(
             hostClientUnavailableError("providers.awaitLogin"),
           );
         }
         return awaitWithRecording(client, variables, recordSignInRequest);
       }),
     ...withHostMutationLifecycleBoundary<
-      AwaitLoginResponse,
+      AwaitLoginAnswer,
       AwaitLoginVariables,
       AwaitLoginContext
     >("providers.awaitLogin", {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
-      onSuccess: async (data: AwaitLoginResponse, variables, context) => {
+      onSuccess: async (data: AwaitLoginAnswer, variables, context) => {
         if (context.hostId === null) return;
         const next = data.state;
         if (next === null) {
