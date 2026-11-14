@@ -25,6 +25,7 @@ import { TAB_COLORS } from "@/stores/tabs/tab-groups";
  * commands one burst of edits sends.
  */
 interface SentCommand {
+  readonly commandId: string;
   readonly action: OrganizationAction;
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
@@ -45,6 +46,7 @@ const state = vi.hoisted(() => {
   }): Promise<unknown> =>
     new Promise((resolve, reject) => {
       sent.push({
+        commandId: variables.command.commandId,
         action: variables.command.action,
         resolve: () =>
           resolve({
@@ -198,6 +200,8 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   state.sent.length = 0;
+  state.identity.hostId = "host-1";
+  state.identity.userId = "user-1";
   state.view.current = viewWith({});
   tabId = openTask("task-1");
 });
@@ -257,6 +261,35 @@ describe("task appearance edits in flight", () => {
     await flush();
 
     await waitFor(() => expect(pressed("Default")).toBe(true));
+    expect(tabColor()).toBeNull();
+  });
+
+  it("drops an accepted edit the host later reports as failed", async () => {
+    const ui = render(tree(true));
+    await flush();
+    fireEvent.click(swatch(BLUE.name));
+    expect(pressed(BLUE.name)).toBe(true);
+    await flush();
+
+    const { commandId } = state.sent[0];
+    act(() => state.sent[0].resolve());
+    await flush();
+
+    state.view.current = {
+      ...viewWith({}),
+      failures: [
+        {
+          commandIds: [commandId],
+          scope: "appearance:task-1",
+          reason: "forbidden",
+          message: "Task organization access denied",
+        },
+      ],
+    };
+    ui.rerender(tree(true));
+    await flush();
+
+    expect(pressed("Default")).toBe(true);
     expect(tabColor()).toBeNull();
   });
 
@@ -343,5 +376,114 @@ describe("task appearance edits in flight", () => {
     await waitFor(() => expect(state.sent).toHaveLength(2));
     await flush();
     expect(state.sent[1].action).toEqual(appearanceAction(BLUE.value));
+  });
+
+  it("clears an unsaved custom preview when Reset runs", async () => {
+    state.view.current = viewWith({ color: BLUE.value });
+    const ui = render(tree(true));
+    await flush();
+
+    fireEvent.input(screen.getByLabelText("Custom tab color"), {
+      target: { value: "#112233" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    await flush();
+    act(() => state.sent[0].resolve());
+    await flush();
+
+    expect(pressed("Default")).toBe(true);
+
+    ui.rerender(tree(false));
+    await flush();
+    expect(state.sent.map((sent) => sent.action)).toEqual([
+      { kind: "appearance", taskId: "task-1", color: null, icon: null },
+    ]);
+  });
+
+  it("rolls back only the refused edit while a later one is queued", async () => {
+    render(tree(true));
+    await flush();
+    fireEvent.click(swatch(BLUE.name));
+    await flush();
+    const icon = screen.getByLabelText("Icon");
+    fireEvent.change(icon, { target: { value: "API" } });
+    fireEvent.blur(icon);
+    await flush();
+    expect(state.sent).toHaveLength(1);
+
+    act(() => state.sent[0].reject(new Error("refused")));
+    await flush();
+
+    expect(pressed("Default")).toBe(true);
+    await waitFor(() => expect(state.sent).toHaveLength(2));
+    expect(state.sent[1].action).toEqual({
+      kind: "appearance",
+      taskId: "task-1",
+      icon: "API",
+    });
+  });
+
+  it("keeps an acknowledged edit when a later queued edit is refused", async () => {
+    render(tree(true));
+    await flush();
+    fireEvent.click(swatch(BLUE.name));
+    await flush();
+    const icon = screen.getByLabelText("Icon");
+    fireEvent.change(icon, { target: { value: "API" } });
+    fireEvent.blur(icon);
+    await flush();
+
+    act(() => state.sent[0].resolve());
+    await flush();
+    await waitFor(() => expect(state.sent).toHaveLength(2));
+    act(() => state.sent[1].reject(new Error("refused")));
+    await flush();
+
+    expect(pressed(BLUE.name)).toBe(true);
+    expect(tabColor()).toBe(BLUE.value);
+  });
+
+  it("does not adopt an unrelated later version as the edit's baseline", async () => {
+    const ui = render(tree(true));
+    await flush();
+    fireEvent.click(swatch(BLUE.name));
+    await flush();
+
+    state.view.current = viewWith({ version: "4", color: BLUE.value });
+    ui.rerender(tree(true));
+    await flush();
+    state.view.current = viewWith({ version: "5", color: RED.value });
+    ui.rerender(tree(true));
+    await flush();
+
+    act(() => state.sent[0].resolve());
+    await flush();
+
+    expect(pressed(RED.name)).toBe(true);
+    expect(tabColor()).toBe(RED.value);
+  });
+
+  it("ignores a stale completion after the host or account changes and changes back", async () => {
+    const ui = render(tree(true));
+    await flush();
+    fireEvent.click(swatch(BLUE.name));
+    await flush();
+
+    state.identity.hostId = "host-2";
+    ui.rerender(tree(true));
+    await flush();
+    state.identity.hostId = "host-1";
+    ui.rerender(tree(true));
+    await flush();
+
+    fireEvent.click(swatch(RED.name));
+    await flush();
+    expect(state.sent).toHaveLength(2);
+    expect(state.sent[1].action).toEqual(appearanceAction(RED.value));
+
+    act(() => state.sent[0].reject(new Error("refused")));
+    await flush();
+
+    expect(pressed(RED.name)).toBe(true);
   });
 });

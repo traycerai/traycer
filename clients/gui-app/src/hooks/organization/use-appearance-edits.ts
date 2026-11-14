@@ -18,32 +18,34 @@ interface AppearancePatch {
   icon?: string | null;
 }
 
-interface PendingAppearance {
+/** One command's edit, drawn over the view until the view has caught up. */
+interface Layer {
+  readonly id: number;
   readonly patch: AppearancePatch;
   /**
-   * The row version the view held when the last send for this task was
-   * acknowledged, `null` for no row, and `undefined` while a send is out.
-   * The patch is drawn until the view's row moves past that version: the
-   * snapshot carrying the edit, or a later change made elsewhere.
+   * Set once the host acknowledged the command that carried this layer:
+   * its id, and the row version the view held when it was sent (`null` for
+   * no row). `null` while the command is queued or out.
    */
-  readonly settledVersion: string | null | undefined;
+  readonly acknowledged: {
+    readonly commandId: string;
+    readonly baseVersion: string | null;
+  } | null;
 }
 
-interface PendingAppearances {
-  readonly scope: string;
-  readonly rows: ReadonlyMap<string, PendingAppearance>;
-}
+type Layers = ReadonlyMap<string, readonly Layer[]>;
 
 /** One task's sends: the command that is out, and the edits merged behind it. */
 interface AppearanceSends {
-  sending: Promise<void>;
+  sending: Promise<unknown>;
   queued: {
+    readonly layerId: number;
     readonly patch: AppearancePatch;
     readonly sent: Promise<void>;
   } | null;
 }
 
-const NO_ROWS: ReadonlyMap<string, PendingAppearance> = new Map();
+const NO_LAYERS: Layers = new Map();
 
 function patchOf(action: AppearanceAction): AppearancePatch {
   const patch: AppearancePatch = {};
@@ -52,34 +54,88 @@ function patchOf(action: AppearanceAction): AppearancePatch {
   return patch;
 }
 
-function rowVersion(
+function rowOf(
   view: OrganizationView | undefined,
   taskId: string,
-): string | null {
+): OrganizationView["appearances"][number] | undefined {
+  return view?.appearances.find((row) => row.taskId === taskId);
+}
+
+/**
+ * Whether the view has caught up with an acknowledged layer, so that drawing
+ * it is the view's job from now on: the view names its command as pending or
+ * failed, shows the edit, or has moved the row on from the version it was
+ * sent against. The host's own projection then draws a queued edit, a
+ * delivered one, a refusal rolled back, or a later change made elsewhere.
+ */
+function caughtUp(
+  taskId: string,
+  layer: Layer,
+  view: OrganizationView | undefined,
+): boolean {
+  const acknowledged = layer.acknowledged;
+  if (acknowledged === null || view === undefined) return false;
+  if (
+    [...view.pending, ...view.failures].some((item) =>
+      item.commandIds.includes(acknowledged.commandId),
+    )
+  )
+    return true;
+  const row = rowOf(view, taskId);
+  if ((row?.version ?? null) !== acknowledged.baseVersion) return true;
   return (
-    view?.appearances.find((row) => row.taskId === taskId)?.version ?? null
+    row !== undefined &&
+    (layer.patch.color === undefined || layer.patch.color === row.color) &&
+    (layer.patch.icon === undefined || layer.patch.icon === row.icon)
   );
 }
 
-function superseded(entry: PendingAppearance, version: string | null): boolean {
-  return entry.settledVersion !== undefined && entry.settledVersion !== version;
+function withLayer(
+  current: Layers,
+  taskId: string,
+  update: (layers: readonly Layer[]) => readonly Layer[],
+): Layers {
+  const before = current.get(taskId) ?? [];
+  const after = update(before);
+  if (after === before) return current;
+  const next = new Map(current);
+  if (after.length === 0) next.delete(taskId);
+  else next.set(taskId, after);
+  return next;
+}
+
+function withoutCaughtUp(
+  current: Layers,
+  view: OrganizationView | undefined,
+): Layers {
+  let next = current;
+  for (const [taskId, layers] of current) {
+    const kept = layers.filter((layer) => !caughtUp(taskId, layer, view));
+    if (kept.length !== layers.length)
+      next = withLayer(next, taskId, () => kept);
+  }
+  return next;
 }
 
 function withPendingAppearances(
   view: OrganizationView,
-  rows: ReadonlyMap<string, PendingAppearance>,
+  layers: Layers,
 ): OrganizationView {
-  const drawn = (taskId: string, version: string): PendingAppearance | null => {
-    const entry = rows.get(taskId);
-    return entry === undefined || superseded(entry, version) ? null : entry;
+  const drawn = (taskId: string): AppearancePatch | null => {
+    const patches = (layers.get(taskId) ?? [])
+      .filter((layer) => !caughtUp(taskId, layer, view))
+      .map((layer) => layer.patch);
+    if (patches.length === 0) return null;
+    const merged: AppearancePatch = {};
+    for (const patch of patches) Object.assign(merged, patch);
+    return merged;
   };
-  if (!view.appearances.some((row) => drawn(row.taskId, row.version)))
-    return view;
+  if (!view.appearances.some((row) => drawn(row.taskId) !== null)) return view;
   return {
     ...view,
     appearances: view.appearances.map((row) => ({
       ...row,
-      ...drawn(row.taskId, row.version)?.patch,
+      ...drawn(row.taskId),
     })),
   };
 }
@@ -92,21 +148,23 @@ function withPendingAppearances(
  * to one task that are out together cannot both land: the second is refused
  * as a conflict. An edit made while another is out therefore waits for it,
  * and edits that pile up behind the same send merge into one command that
- * carries the latest value of each field.
+ * carries the latest value of each field. Each command's edit is its own
+ * layer, so a refusal rolls back that command's fields and nothing else.
+ *
+ * `send` resolves with the id of the command it sent. A host or account
+ * change discards every layer; a command from before it settles nothing.
  */
 export function useAppearanceEdits(args: {
   readonly scope: string;
   readonly view: OrganizationView | undefined;
-  readonly send: (action: OrganizationAction) => Promise<void>;
+  readonly send: (action: OrganizationAction) => Promise<string>;
 }): {
   readonly view: OrganizationView | undefined;
   readonly edit: (action: AppearanceAction) => Promise<void>;
 } {
   const { scope, view, send } = args;
-  const [pending, setPending] = useState<PendingAppearances>({
-    scope,
-    rows: NO_ROWS,
-  });
+  const [layers, setLayers] = useState<Layers>(NO_LAYERS);
+  const nextLayerId = useRef(0);
   const sends = useRef(new Map<string, AppearanceSends>());
   useEffect(() => {
     sends.current = new Map();
@@ -115,54 +173,89 @@ export function useAppearanceEdits(args: {
   useLayoutEffect(() => {
     latestView.current = view;
   }, [view]);
+  // Once the view has caught up with a layer it stays the view's: a later
+  // frame that rolls the row back to the version it was sent against must
+  // not bring the layer back.
+  const [checked, setChecked] = useState({ scope, view });
+  if (checked.scope !== scope || checked.view !== view) {
+    setChecked({ scope, view });
+    setLayers((current) =>
+      checked.scope === scope ? withoutCaughtUp(current, view) : NO_LAYERS,
+    );
+  }
 
   const edit = useCallback(
     (action: AppearanceAction): Promise<void> => {
       const { taskId } = action;
       const patch = patchOf(action);
-      setPending((current) => {
-        const rows = new Map(current.scope === scope ? current.rows : NO_ROWS);
-        const prior = rows.get(taskId);
-        const carried =
-          prior !== undefined &&
-          !superseded(prior, rowVersion(latestView.current, taskId))
-            ? prior.patch
-            : {};
-        rows.set(taskId, {
-          patch: { ...carried, ...patch },
-          settledVersion: undefined,
-        });
-        return { scope, rows };
-      });
-
       const tasks = sends.current;
-      const start = (slot: AppearanceSends, next: AppearancePatch) => {
+      const slot = tasks.get(taskId);
+      const queued = slot?.queued ?? null;
+      if (queued !== null) {
+        Object.assign(queued.patch, patch);
+        const merged = { ...queued.patch };
+        setLayers((current) =>
+          withLayer(current, taskId, (taskLayers) =>
+            taskLayers.map((layer) =>
+              layer.id === queued.layerId ? { ...layer, patch: merged } : layer,
+            ),
+          ),
+        );
+        return queued.sent;
+      }
+
+      const layerId = nextLayerId.current++;
+      setLayers((current) =>
+        withLayer(current, taskId, (taskLayers) => [
+          ...taskLayers,
+          { id: layerId, patch, acknowledged: null },
+        ]),
+      );
+      const settle = (
+        acknowledged: { commandId: string; baseVersion: string | null } | null,
+      ): void =>
+        setLayers((current) =>
+          withLayer(current, taskId, (taskLayers) => {
+            if (!taskLayers.some((layer) => layer.id === layerId))
+              return taskLayers;
+            return taskLayers.flatMap((layer) => {
+              if (layer.id !== layerId) return [layer];
+              if (acknowledged === null) return [];
+              const settled = { ...layer, acknowledged };
+              return caughtUp(taskId, settled, latestView.current)
+                ? []
+                : [settled];
+            });
+          }),
+        );
+      const start = (
+        owner: AppearanceSends,
+        next: AppearancePatch,
+      ): Promise<void> => {
+        const baseVersion = rowOf(latestView.current, taskId)?.version ?? null;
         const sent = send({ kind: "appearance", taskId, ...next });
-        slot.sending = sent;
-        const finish = (refused: boolean): void => {
-          if (slot.sending !== sent || slot.queued !== null) return;
-          if (tasks.get(taskId) === slot) tasks.delete(taskId);
-          setPending((current) => {
-            const entry = current.rows.get(taskId);
-            if (current.scope !== scope || entry === undefined) return current;
-            const rows = new Map(current.rows);
-            if (refused) rows.delete(taskId);
-            else
-              rows.set(taskId, {
-                patch: entry.patch,
-                settledVersion: rowVersion(latestView.current, taskId),
-              });
-            return { scope, rows };
-          });
+        owner.sending = sent;
+        const release = (): void => {
+          if (
+            owner.sending === sent &&
+            owner.queued === null &&
+            tasks.get(taskId) === owner
+          )
+            tasks.delete(taskId);
         };
         sent.then(
-          () => finish(false),
-          () => finish(true),
+          (commandId) => {
+            release();
+            settle({ commandId, baseVersion });
+          },
+          () => {
+            release();
+            settle(null);
+          },
         );
-        return sent;
+        return sent.then(() => undefined);
       };
 
-      const slot = tasks.get(taskId);
       if (slot === undefined) {
         const opened: AppearanceSends = {
           sending: Promise.resolve(),
@@ -171,26 +264,22 @@ export function useAppearanceEdits(args: {
         tasks.set(taskId, opened);
         return start(opened, patch);
       }
-      if (slot.queued !== null) {
-        Object.assign(slot.queued.patch, patch);
-        return slot.queued.sent;
-      }
       const merged = { ...patch };
-      const settled = (): void => undefined;
-      const sent = slot.sending.then(settled, settled).then(() => {
+      const done = (): void => undefined;
+      const sent = slot.sending.then(done, done).then(() => {
         slot.queued = null;
         return start(slot, merged);
       });
-      slot.queued = { patch: merged, sent };
+      slot.queued = { layerId, patch: merged, sent };
       return sent;
     },
-    [scope, send],
+    [send],
   );
 
-  const rows = pending.scope === scope ? pending.rows : NO_ROWS;
   const drawn = useMemo(
-    () => (view === undefined ? undefined : withPendingAppearances(view, rows)),
-    [view, rows],
+    () =>
+      view === undefined ? undefined : withPendingAppearances(view, layers),
+    [view, layers],
   );
   return { view: drawn, edit };
 }

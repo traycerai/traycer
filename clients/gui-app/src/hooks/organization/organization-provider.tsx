@@ -288,7 +288,7 @@ export function OrganizationProvider({
   });
   const { mutateAsync } = mutation;
   const send = useCallback(
-    async (action: OrganizationAction) => {
+    async (action: OrganizationAction): Promise<string> => {
       const commandId = crypto.randomUUID();
       const current = lifecycle.current;
       if (current !== null && !current.failuresInitialized)
@@ -304,14 +304,17 @@ export function OrganizationProvider({
       )
         throw new Error("Organization account changed.");
       retireSupersededDraftIntents(action);
+      return commandId;
     },
     [mutateAsync, client, userId, hostId],
   );
   const appearance = useAppearanceEdits({ scope, view: query.data, send });
   const { edit: editAppearance } = appearance;
   const command = useCallback(
-    (action: OrganizationAction) =>
-      action.kind === "appearance" ? editAppearance(action) : send(action),
+    async (action: OrganizationAction): Promise<void> => {
+      if (action.kind === "appearance") return editAppearance(action);
+      await send(action);
+    },
     [editAppearance, send],
   );
   // How many times this provider has tried each tab's draft group intent,
