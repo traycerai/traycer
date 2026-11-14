@@ -244,9 +244,11 @@ export type ConfigShellRemoveRequest = z.infer<
 /**
  * v1.2 adds `selection`: `system_default` when `path` is the current shell
  * (`config.shell.get`), else the current selection unchanged. Removing a
- * shell that is not the current one changes no item: the stated selection
- * equals the base the app read, so the mapping answers `local_only` and the
- * app remembers nothing.
+ * shell that is not the current one changes no item. When the computer's
+ * current selection also equals the environment's `shell` item the app read
+ * from authn, the stated selection equals that base, so the mapping answers
+ * `local_only` and the app remembers nothing; when the two differ, the
+ * stated selection is a proposal like any other.
  */
 export const configShellRemoveRequestSchemaV12 = lazySchema(() =>
   configShellRemoveRequestSchema.extend({
@@ -288,9 +290,11 @@ export type ConfigShellRevertArgsRequest = z.infer<
 /**
  * v1.2 adds `selection`: `{ path, args: defaultShellArgs(path) }` when `path`
  * is the current shell, else the current selection unchanged. Reverting a
- * shell that is not the current one changes no item: the stated selection
- * equals the base the app read, so the mapping answers `local_only` and the
- * app remembers nothing.
+ * shell that is not the current one changes no item. When the computer's
+ * current selection also equals the environment's `shell` item the app read
+ * from authn, the stated selection equals that base, so the mapping answers
+ * `local_only` and the app remembers nothing; when the two differ, the
+ * stated selection is a proposal like any other.
  */
 export const configShellRevertArgsRequestSchemaV12 = lazySchema(() =>
   configShellRevertArgsRequestSchema.extend({
