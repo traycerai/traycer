@@ -5349,6 +5349,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-1",
       createProfile: null,
       holderId: null,
+      target: null,
     });
   });
 
@@ -6013,6 +6014,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
       holderId: null,
+      target: null,
     });
     expect(typeof startOptions.onSuccess).toBe("function");
 
@@ -6678,6 +6680,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "ambient",
       createProfile: null,
       holderId: null,
+      target: null,
     });
     // From here on the re-poll's timer is the only thing being waited on -
     // drive it deterministically instead of sleeping out the real delay.
@@ -7629,6 +7632,7 @@ describe("<ProvidersSettingsPanel />", () => {
           profileId: "work-profile",
           createProfile: null,
           holderId: null,
+          target: null,
         },
         expect.anything(),
       );
@@ -7735,6 +7739,7 @@ describe("<ProvidersSettingsPanel />", () => {
           profileId: "ambient",
           createProfile: null,
           holderId: null,
+          target: null,
         },
         expect.anything(),
       );
@@ -7892,6 +7897,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-1",
       createProfile: null,
       holderId: null,
+      target: null,
     });
 
     await act(() => {
@@ -7963,6 +7969,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-1",
       createProfile: null,
       holderId: null,
+      target: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -8585,6 +8592,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
       holderId: null,
+      target: null,
     });
   });
 
@@ -8647,6 +8655,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: true },
       holderId: null,
+      target: null,
     });
   });
 
@@ -8758,6 +8767,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
       holderId: null,
+      target: null,
     });
   });
 
@@ -9352,6 +9362,7 @@ describe("<ProvidersSettingsPanel />", () => {
         shareSkillsAndPlugins: false,
       },
       holderId: null,
+      target: null,
     });
 
     const [, startOptions] = firstStartLoginCall();
