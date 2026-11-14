@@ -1,5 +1,5 @@
 /**
- * `terminal.subscribe@1.3` - versioned streaming-RPC contract for a single
+ * `terminal.subscribe@1.8` - versioned streaming-RPC contract for a single
  * host-owned terminal (PTY) session. `terminal.subscribe@1.0`/`@1.1`/`@1.2`
  * (frozen, near the bottom of this file) are the exact shapes shipped before
  * ack-credit, binary framing, and live session metadata respectively; each
@@ -87,6 +87,16 @@
  * evidence for both. Fire-and-forget, no `actionAck`. Degrade: a client on a
  * 1.6-or-older connection must not send it (that host's frame schema cannot
  * parse it) and keeps the intent its open request carried.
+ *
+ * `terminal.subscribe@1.8`: adds the server frame `viewers`, the people who
+ * have the terminal on screen: the distinct people holding at least one
+ * `presentation` attachment, the receiver included, sorted by `userId`, `[]`
+ * when nobody does. A `cache` attachment never counts, and an agent or a
+ * host-to-host session is never in it. The host sends it to every 1.8
+ * subscriber, `presentation` or `cache`, once after its first snapshot and
+ * again whenever the set changes. No frame (an older host, or none yet) means
+ * unknown, never nobody; each frame replaces the last whole, so the latest
+ * frame is the set. Degrade: a 1.7-or-older connection never receives it.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -461,6 +471,30 @@ export const terminalSubscribeServerFrameSchemaV15 = lazySchema(() =>
 export type TerminalSubscribeServerFrameV15 = z.infer<
   typeof terminalSubscribeServerFrameSchemaV15
 >;
+
+// `terminal.subscribe@1.8`: every 1.5 frame plus `viewers` (see the header).
+export const terminalSubscribeServerFrameSchemaV18 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...terminalSubscribeServerFrameSchemaV15.options,
+    z.object({
+      kind: z.literal("viewers"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      viewers: z.array(z.object({ userId: z.string() }).readonly()).readonly(),
+    }),
+  ]),
+);
+export type TerminalSubscribeServerFrameV18 = z.infer<
+  typeof terminalSubscribeServerFrameSchemaV18
+>;
+
+export const terminalSubscribeV18 = defineStreamRpcContract({
+  method: "terminal.subscribe",
+  schemaVersion: { major: 1, minor: 8 } as const,
+  openRequestSchema: terminalSubscribeOpenRequestSchemaV16,
+  serverFrameSchema: terminalSubscribeServerFrameSchemaV18,
+  clientFrameSchema: terminalSubscribeClientFrameSchemaV17,
+});
 
 export const terminalSubscribeV17 = defineStreamRpcContract({
   method: "terminal.subscribe",
