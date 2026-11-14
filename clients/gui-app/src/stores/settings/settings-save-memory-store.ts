@@ -15,6 +15,12 @@ const SETTINGS_SAVE_MEMORY_CAP = 200;
  * text: a put is matched by {@link valueDigest} alone.
  */
 export interface SettingsSaveMemoryRecord {
+  /**
+   * This edit's own identity. A later save of the same item replaces the
+   * record under the same id; work begun for the earlier edit acts only while
+   * the record still carries its edit id.
+   */
+  readonly editId: string;
   readonly environmentId: string;
   readonly hostId: string;
   /** The host's sharing generation when the save was made. */
@@ -48,7 +54,14 @@ interface SettingsSaveMemoryState {
   /** Remembers `record`, forgetting every earlier save of the same item on the same host. */
   readonly remember: (record: SettingsSaveMemoryRecord) => string;
   readonly forget: (id: string) => void;
-  readonly noteUnanswered: (id: string, holdRevision: number) => void;
+  /** Forgets `id` only while it is still the edit `editId`. */
+  readonly forgetEdit: (id: string, editId: string) => void;
+  /** Counts an unanswered apply, only while `id` is still the edit `editId`. */
+  readonly noteUnanswered: (
+    id: string,
+    editId: string,
+    holdRevision: number,
+  ) => void;
   readonly markSent: (id: string) => void;
   readonly markAnswered: (id: string) => void;
 }
@@ -149,10 +162,18 @@ export const useSettingsSaveMemoryStore = create<SettingsSaveMemoryState>()(
           const { [id]: _forgotten, ...records } = state.records;
           return { records };
         }),
-      noteUnanswered: (id, holdRevision) =>
+      forgetEdit: (id, editId) =>
+        set((state) => {
+          if (settingsSaveMemoryRecord(state.records, id)?.editId !== editId) {
+            return state;
+          }
+          const { [id]: _forgotten, ...records } = state.records;
+          return { records };
+        }),
+      noteUnanswered: (id, editId, holdRevision) =>
         set((state) => {
           const record = settingsSaveMemoryRecord(state.records, id);
-          if (record === null) return state;
+          if (record?.editId !== editId) return state;
           const tries =
             record.unanswered?.revision === holdRevision
               ? record.unanswered.tries + 1
