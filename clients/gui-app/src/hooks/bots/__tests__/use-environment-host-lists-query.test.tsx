@@ -105,14 +105,13 @@ function mountLists(flakyAnswersFromStart: boolean): {
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  const client = spine.createRequester(mockLocalHostEntry);
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}
     </QueryClientProvider>
   );
   const { result } = renderHook(
-    () => useEnvironmentHostLists(client, [FLAKY, STEADY], true),
+    () => useEnvironmentHostLists([FLAKY, STEADY], true),
     { wrapper },
   );
   return {

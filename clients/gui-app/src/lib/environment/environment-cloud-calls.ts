@@ -15,6 +15,7 @@ import {
   setConfigurationMcpServerEnabled,
   unlinkConfigurationPlan,
 } from "@traycer-clients/shared/environment/configuration-settings";
+import { listConfigurationHosts } from "@traycer-clients/shared/environment/configuration-hosts";
 import {
   consentToSecret,
   createSecret,
@@ -48,6 +49,7 @@ export type EnvironmentCloudMethod =
   | "environment.configuration.mcpServers.delete"
   | "environment.configuration.mcpServers.setEnabled"
   | "environment.configuration.policy.put"
+  | "environment.host.list"
   | "environment.plans.list"
   | "environment.plans.unlink"
   | "environment.secrets.list"
@@ -95,6 +97,8 @@ const CALLS: {
   "environment.configuration.mcpServers.setEnabled":
     setConfigurationMcpServerEnabled,
   "environment.configuration.policy.put": putConfigurationPolicy,
+  "environment.host.list": (cloud, request) =>
+    listConfigurationHosts(cloud, request.environmentId),
   "environment.plans.list": (cloud, request) =>
     listConfigurationPlans(cloud, request.environmentId),
   "environment.plans.unlink": (cloud, request) =>

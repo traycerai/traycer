@@ -6,6 +6,7 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { authQueryKeys, environmentMutationKeys } from "@/lib/query-keys";
 
 /** A legacy bind acknowledgement alone cannot establish team ownership. */
@@ -25,11 +26,10 @@ export function useTeamComputerTransfer(
     }),
     mutationKey: environmentMutationKeys.hostBind(),
     errorMessage: null,
-    invalidateMethods: [
-      "environment.host.read",
-      "environment.status",
-      "environment.host.list",
-    ],
+    invalidateMethods: ["environment.host.read", "environment.status"],
+    // The host list is the app's own read of authn, not this host's.
+    onSettled: () =>
+      void invalidateEnvironmentReads(queryClient, ["environment.host.list"]),
   });
   return useMutation({
     mutationKey: environmentMutationKeys.hostBindConfirmedOwner(hostId, userId),

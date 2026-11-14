@@ -7,8 +7,6 @@ import {
 } from "@/hooks/agent/use-host-reachability";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useOptionalHostClient } from "@/lib/host";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -42,29 +40,22 @@ function environmentHostLabel(
  *
  * Every environment is asked, Personal and each team: a personal machine
  * bound to a team is listed there, to the member who bound it, and not in
- * Personal's list. The reads go through the app-wide client, because the tab's
- * own host is the one that is offline, and only for a host the directory
- * cannot name; an older host without `environment.host.list` is not asked.
+ * Personal's list. The reads are the app's own, from authn, so the tab's own
+ * host being offline does not stop them, and are made only for a host the
+ * directory cannot name.
  */
 export function useChatTileHostLabel(
   reachability: HostReachability,
   hostId: string,
 ): string | null {
   const directoryLabel = resolvedHostLabel(reachability);
-  const client = useOptionalHostClient();
-  const appHostId = client?.getActiveHostId() ?? null;
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
-  );
-  const hostListSupport = useHostMethodSupport(
-    appHostId,
-    "environment.host.list",
   );
   const enabled =
     directoryLabel === null &&
     reachability.status === "unreachable" &&
-    authorized &&
-    hostListSupport === true;
+    authorized;
   const environments = useEnvironmentListQuery(enabled);
   // Fresh each render is fine: the lists key their requests by the ids' text.
   const environmentIds = enabled
@@ -72,7 +63,7 @@ export function useChatTileHostLabel(
         (environment) => environment.environmentId,
       )
     : [];
-  const lists = useEnvironmentHostLists(client, environmentIds, enabled);
+  const lists = useEnvironmentHostLists(environmentIds, enabled);
   // Off whenever the directory names the host, so this returns its label.
   if (!enabled) return directoryLabel;
   return environmentHostLabel(lists.hostsByEnvironmentId, hostId);

@@ -1,9 +1,6 @@
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback } from "react";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
 import { localPickerRow } from "@/components/settings/environment/environment-picker-model";
 import {
   hostsRunningConfiguration,
@@ -29,9 +26,8 @@ function firsthandHost(host: HostScopeOption): FirsthandHost {
 }
 
 /**
- * THE hosts running a configuration: its host list from the cloud
- * (`environment.host.list`, the binding records), read through the serving
- * tier on the viewer's session. Presence never decides membership: a
+ * THE hosts running a configuration: its host list, the app's own read of
+ * authn (`environment.host.list`) on the viewer's session. Presence never decides membership: a
  * computer with remote access off reports only when its revision moves, so
  * the cloud calls it offline minutes later while it still runs the
  * configuration. For Personal, a host with a Local row is left out, by its
@@ -54,21 +50,17 @@ export function useHostsRunningConfiguration(
     | { readonly kind: "team"; readonly environmentId: string },
   enabled: boolean,
 ): HostsRunningConfiguration {
-  const client = usePoolTierHostClient(useHostClient());
   const personalTarget = target.kind === "personal";
   const personal = usePersonalEnvironment(personalTarget);
   const environmentId =
     target.kind === "team" ? target.environmentId : personal.environmentId;
-  const viewerUserId = useCloudChatViewerId();
-  const list = useHostQuery<HostRpcRegistry, "environment.host.list">({
-    client,
+  const list = useEnvironmentCloudQuery({
     method: "environment.host.list",
     params: { environmentId: environmentId ?? "" },
-    cacheKeyIdentity: [viewerUserId],
-    options: {
-      enabled: enabled && environmentId !== null && viewerUserId.length > 0,
-      poll: true,
-    },
+    cacheKeyIdentity: [],
+    mapResponse: (response) => response,
+    enabled: enabled && environmentId !== null,
+    poll: true,
   });
   const scope = useHostScopeFor(WINDOW_HOST_SELECTION);
   const computers = usePersonalComputers(personalTarget);
