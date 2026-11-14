@@ -1,10 +1,10 @@
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
-import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
 import { TeamGiveDialog } from "@/components/settings/panels/team-give-dialog";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { mayChangeTeamComputer } from "@/lib/environment/team-computer-role";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
@@ -404,12 +404,10 @@ function TeamEnvironmentSourceControl(
   },
 ): ReactNode {
   const environments = useEnvironmentListQuery(true);
-  // A computer is given only to a team the person may change: Admin or
-  // Editor. A Viewer, or a role not known, is not offered the team.
   const teams = (environments.data?.environments ?? []).filter(
     (environment) =>
       environment.ownerKind === "organization" &&
-      configurationRoleOf(environment) !== null,
+      mayChangeTeamComputer(environment),
   );
   const [selected, setSelected] = useState<EnvironmentDescriptorV11 | null>(
     null,
