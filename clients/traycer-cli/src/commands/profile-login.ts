@@ -13,7 +13,14 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "../../../shared/host-transport/host-messenger";
+import {
+  readSignInRequestViaHttp,
+  recordSignInRequestOnce,
+  recordSignInRequestViaHttp,
+  type SignInRequestClient,
+} from "../../../shared/host-client/provider-sign-in-request";
 import { openInBrowser } from "../auth/login-flow";
+import { resolveHostAuth } from "../internal/host-auth";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
@@ -90,6 +97,8 @@ export interface ProfileLoginIo {
     onLine: (line: string) => void,
     onInterrupt: () => void,
   ) => (() => void) | null;
+  /** Records a sign-in request at authn on this CLI's own sign-in. */
+  readonly signInRequests: SignInRequestClient;
 }
 
 export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
@@ -134,6 +143,28 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
       stopped = true;
       lines.close();
     };
+  },
+  signInRequests: {
+    recordSignInRequest: async (request, signal) => {
+      const auth = await resolveHostAuth();
+      if (auth === null) return { kind: "unauthorized" };
+      return recordSignInRequestViaHttp(
+        auth.authnBaseUrl,
+        auth.token,
+        request,
+        signal,
+      );
+    },
+    readSignInRequest: async (request, signal) => {
+      const auth = await resolveHostAuth();
+      if (auth === null) return { kind: "failed" };
+      return readSignInRequestViaHttp(
+        auth.authnBaseUrl,
+        auth.token,
+        request,
+        signal,
+      );
+    },
   },
 };
 
@@ -694,7 +725,10 @@ function acceptPastedCode(
 /**
  * Waits for the host to say how the sign-in ended. Null when the wait was
  * interrupted. An ambient verdict the host reports as still in flight is
- * asked for again a few times rather than read as a failure.
+ * asked for again a few times rather than read as a failure. An unfinished
+ * answer carrying `signInRequest` is recorded at authn and asked again with
+ * `recordedOperationId`; a recording that ends returns that answer, which
+ * reads as today's "did not complete".
  */
 async function awaitUntilSettled(
   io: ProfileLoginIo,
@@ -703,13 +737,18 @@ async function awaitUntilSettled(
   creatingProfile: boolean,
   signal: AbortSignal,
 ): Promise<AwaitLoginResult | null> {
-  for (let repolls = 0; ; repolls += 1) {
+  const recorded = new Set<string>();
+  let recordedOperationId: string | null = null;
+  let repolls = 0;
+  for (;;) {
     let result: AwaitLoginResult;
     try {
       result = await toAgentCliError(
         callHostRpcWithDispatch(
           "providers.awaitLogin",
-          { providerId, profileId },
+          recordedOperationId === null
+            ? { providerId, profileId }
+            : { providerId, profileId, recordedOperationId },
           { ...AWAIT_LOGIN_DISPATCH, signal },
         ),
       );
@@ -720,6 +759,19 @@ async function awaitUntilSettled(
     if (signal.aborted) return null;
     if (readProfileOutcome(result.profileOutcome, creatingProfile) !== null)
       return result;
+    const signInRequest = result.signInRequest ?? null;
+    if (signInRequest !== null) {
+      const recording = await recordSignInRequestOnce(
+        io.signInRequests,
+        recorded,
+        signInRequest,
+        signal,
+      );
+      if (signal.aborted) return null;
+      if (recording.kind !== "recorded") return result;
+      recordedOperationId = recording.recordedOperationId;
+      continue;
+    }
     // Not settled only while neither ambient source has answered: a verdict
     // on the ambient row counts even while the provider's summary lags.
     const pending =
@@ -730,6 +782,7 @@ async function awaitUntilSettled(
       !isProviderAmbientAuthenticated(result.state) &&
       !isProviderAmbientSignedOut(result.state);
     if (!pending || repolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) return result;
+    repolls += 1;
     await io.wait(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS, signal);
     if (signal.aborted) return null;
   }

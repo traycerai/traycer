@@ -1,4 +1,5 @@
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
+import { useProviderSignInRecording } from "@/hooks/providers/use-provider-sign-in-recording";
 import {
   useCallback,
   useEffect,
@@ -125,6 +126,7 @@ export function ProviderProfileReauthPanel({
   const hostBlock = providerHostBlock(state, "sign-in");
   const profileOutcomes =
     signInOutcomes === null ? null : signInOutcomes.reader;
+  const recordSignInRequest = useProviderSignInRecording();
   const flow = useProviderProfileOutcomeLoginFlow(
     {
       hostBlock,
@@ -146,6 +148,7 @@ export function ProviderProfileReauthPanel({
       onFailed: noop,
     },
     profileOutcomes,
+    recordSignInRequest,
   );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const startedRef = useRef(false);
