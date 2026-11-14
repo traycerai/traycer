@@ -2004,6 +2004,33 @@ function projectProviderSelectionFrame(
   return { ...frame, snapshot };
 }
 
+const CHAT_SUBSCRIBE_ACCOUNT_WAIT_MINOR = 45;
+
+function projectAccountWaitFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_ACCOUNT_WAIT_MINOR
+  )
+    return frame;
+  if (frame.kind === "turnStateChanged" && "accountWait" in frame) {
+    const { accountWait: _accountWait, ...rest } = frame;
+    return rest;
+  }
+  if (
+    frame.kind === "snapshot" &&
+    isRecord(frame.snapshot) &&
+    "accountWait" in frame.snapshot
+  ) {
+    const { accountWait: _accountWait, ...snapshot } = frame.snapshot;
+    return { ...frame, snapshot };
+  }
+  return frame;
+}
+
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
@@ -2011,7 +2038,10 @@ export function projectChatServerFrameForVersion(
   const projected = projectChatServerFrameBeforeUltracode(
     projectDeliveryWorktreeIntent(
       projectFeedbackDraftFrame(
-        projectProviderSelectionFrame(frame, negotiated),
+        projectAccountWaitFrame(
+          projectProviderSelectionFrame(frame, negotiated),
+          negotiated,
+        ),
         negotiated,
       ),
       negotiated,

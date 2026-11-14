@@ -29,6 +29,7 @@ import {
   chatSubscribeV142,
   chatSubscribeV143,
   chatSubscribeV144,
+  chatSubscribeV145,
 } from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
@@ -16814,7 +16815,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 44,
+      latestMinor: 45,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -17037,6 +17038,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         43: { contract: chatSubscribeV143 },
         // @1.44 adds dispatch provenance; older subscribers receive the frozen event.
         44: { contract: chatSubscribeV144 },
+        45: { contract: chatSubscribeV145 },
       },
     },
   },
