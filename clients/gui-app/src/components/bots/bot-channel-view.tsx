@@ -1462,7 +1462,6 @@ function useChannelThreads(args: {
         ? threadHasNewReplies(
             readCursors,
             thread.threadId,
-            thread.lastReplyAt,
             followingOf(follows, thread.threadId) !== null &&
               !channelMuted(levels, thread.conversationId),
           )

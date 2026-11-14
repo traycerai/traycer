@@ -504,6 +504,15 @@ function intersectTarget(
   });
 }
 
+/**
+ * Reading needs a window the person is in; jsdom's own answer depends on which
+ * cases ran before, so a case that reads says so itself.
+ */
+function foregroundWindow(): void {
+  const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  onTestFinished(() => hasFocus.mockRestore());
+}
+
 /** The mark under the reply a full card's reading would acknowledge. */
 function readMark(threadId: string): HTMLElement {
   return within(card(threadId)).getByTestId("bot-chat-transcript-mark");
@@ -1263,6 +1272,7 @@ describe("<BotThreadsView />", () => {
   });
 
   it("reads a card's replies only once its newest reply has stayed in view, never for the card's line or post in view", async () => {
+    foregroundWindow();
     mocks.hosted[TRACY] = script([], {});
     mocks.hosted[TEAM] = script(
       [thread(TEAM, "team-a", 5_000), thread(TEAM, "team-b", 4_000)],
@@ -1324,6 +1334,7 @@ describe("<BotThreadsView />", () => {
   });
 
   it("acknowledges a newer reply only once it is drawn and has stayed in view itself, not on the strength of the reply seen before it", async () => {
+    foregroundWindow();
     mocks.hosted[TEAM].cursors = {
       cursors: { "team-new": { messageId: "team-new-reply-1", seq: 2_000 } },
       latest: { "team-new": { messageId: "team-new-reply-2", seq: 3_000 } },
@@ -1394,6 +1405,70 @@ describe("<BotThreadsView />", () => {
       }),
     );
     expect(mocks.advances).toHaveLength(2);
+  });
+
+  it("clears a thread's new-replies mark once its newest row is read, though the list's lastReplyAt is ahead of that row, and marks a genuinely newer row again", async () => {
+    foregroundWindow();
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([thread(TEAM, "team-new", 9_000)], {
+      "team-new": FOLLOWING,
+    });
+    mocks.hosted[TEAM].cursors = {
+      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 2_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-2", seq: 3_000 } },
+    };
+    withReplies(TEAM, "team-new", replyTexts(2), 9_000);
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new"]));
+    expect(
+      await within(card("team-new")).findByTestId("bot-thread-row-new-replies"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("bot-threads-unread-pill").textContent).toBe(
+      "1 unread thread",
+    );
+    await within(await revealFull("team-new")).findByText("reply 2");
+    expect(readMark("team-new").getAttribute("data-mark-message-id")).toBe(
+      "team-new-reply-2",
+    );
+
+    // The whole read runs on the fake clock: the cache write's notification
+    // to the list is a zero-delay timer, lost if the clock is restored first.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readMark("team-new"), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await vi.waitFor(() =>
+      expect(mocks.advances).toEqual([
+        {
+          botId: TEAM,
+          conversationId: "team-new",
+          messageId: "team-new-reply-2",
+          seq: 3_000,
+        },
+      ]),
+    );
+    // The advance landed in the cache the card reads: reading cleared it.
+    await vi.waitFor(() => {
+      expect(
+        within(card("team-new")).queryByTestId("bot-thread-row-new-replies"),
+      ).toBeNull();
+    });
+    expect(screen.queryByTestId("bot-threads-unread-pill")).toBeNull();
+    vi.useRealTimers();
+
+    // A row the host later names past that cursor is unread again.
+    mocks.hosted[TEAM].cursors = {
+      ...mocks.hosted[TEAM].cursors,
+      latest: { "team-new": { messageId: "team-new-reply-3", seq: 4_000 } },
+    };
+    await act(() => queryClient.invalidateQueries());
+    expect(
+      await within(card("team-new")).findByTestId("bot-thread-row-new-replies"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("bot-threads-unread-pill").textContent).toBe(
+      "1 unread thread",
+    );
   });
 
   it("opens a reply's turn from its receipt in a card, landed on the send that wrote the reply", async () => {
