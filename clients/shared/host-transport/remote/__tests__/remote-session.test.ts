@@ -82,7 +82,9 @@ import {
   HostTransportFailureError,
   mayHaveReachedHost,
   RetryableTransportError,
+  type HostRequestOptions,
 } from "../../host-messenger";
+import { createRetryingMessenger } from "../../retrying-messenger";
 import {
   getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
@@ -122,8 +124,16 @@ import {
   type RemoteSessionOptions,
 } from "../remote-session";
 import { RemoteSession as ProtocolRemoteSession } from "@traycer/protocol/host-transport/remote/session";
-import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
+import type {
+  RemoteSessionAuth,
+  SessionDoorObserver,
+} from "@traycer/protocol/host-transport/remote/auth";
 import { RemoteStreamClient } from "../remote-stream-client";
+import { RemoteHostMessenger } from "../remote-host-messenger";
+import {
+  hostDoorStateOfRefusal,
+  type HostDoorStateKind,
+} from "../../host-door-state";
 import {
   getNegotiatedStreamMethodVersion,
   resetNegotiatedStreamVersions,
@@ -337,6 +347,14 @@ function presentedGrant(authz: unknown): string {
   return typeof grant === "string" ? grant : "";
 }
 
+type FakeUnaryError = {
+  readonly code: string;
+  readonly message: string;
+  readonly holders?: unknown;
+  readonly retryable?: boolean;
+  readonly doorReason?: string;
+};
+
 class FakeRelayHost {
   private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
   private readonly connections: FakeConnection[] = [];
@@ -413,11 +431,12 @@ class FakeRelayHost {
    * When set, auto-RESPONSE carries this error envelope (and a null result)
    * instead of `unaryResult`. Used to pin `WORKTREE_BUSY` holder preservation.
    */
-  unaryError: {
-    readonly code: string;
-    readonly message: string;
-    readonly holders?: unknown;
-  } | null = null;
+  unaryError: FakeUnaryError | null = null;
+  /** Per-request replies for a real retrying-messenger integration. */
+  readonly unaryResponseQueue: Array<{
+    readonly error: FakeUnaryError | null;
+    readonly result: unknown;
+  }> = [];
   /**
    * When true, a REQUEST is recorded in `unaryRequests` but NOT auto-answered
    * with a RESPONSE - lets a test inject its own terminal frame (e.g. a
@@ -842,6 +861,11 @@ class FakeRelayHost {
         streamId: message.streamId,
       });
       const method = typeof json.method === "string" ? json.method : "";
+      const queuedResponse = this.unaryResponseQueue.shift();
+      const error =
+        queuedResponse === undefined ? this.unaryError : queuedResponse.error;
+      const result =
+        queuedResponse === undefined ? this.unaryResult : queuedResponse.result;
       if (
         this.skipUnaryAutoRespond ||
         this.silentConnections.has(connection) ||
@@ -857,8 +881,8 @@ class FakeRelayHost {
           json: {
             requestId: typeof json.requestId === "string" ? json.requestId : "",
             method,
-            result: this.unaryError === null ? this.unaryResult : null,
-            error: this.unaryError,
+            result: error === null ? result : null,
+            error,
           },
           binary: null,
         });
@@ -881,7 +905,7 @@ class FakeRelayHost {
       // manufactures the very silence drop it exists to disprove.
       this.unaryResponses.push({
         method,
-        error: this.unaryError,
+        error,
       });
       return;
     }
@@ -2058,24 +2082,305 @@ describe("RemoteSession unary in flight at a connection drop", () => {
 describe("RemoteSession pending unary dispatch provenance", () => {
   async function readySession(
     relay: FakeRelayHost,
+    door: SessionDoorObserver | null,
+    auth: StreamAuthRevalidator | null,
   ): Promise<RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>> {
     applySilenceFloor(relay, ["worktree.getBinding"]);
     const lease = new MutableBearerLease("valid-token", "user-1");
     const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
+      ...buildSessionOptions(relay, lease, auth),
       rpcRegistry: bindingOnlyRegistry(),
+      door,
     });
     session.start();
     await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
     return session;
   }
 
+  it.each([
+    {
+      reason: "keys_unavailable",
+      code: "NETWORK_ERROR",
+      retryable: true,
+      state: "keys-unavailable",
+    },
+    {
+      reason: "membership_removed",
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      retryable: false,
+      state: "membership-removed",
+    },
+    {
+      reason: "clock_skew",
+      code: "UNAUTHORIZED",
+      retryable: false,
+      state: "clock-skew",
+    },
+    {
+      reason: "enrolment_broken",
+      code: "UNAUTHORIZED",
+      retryable: false,
+      state: "enrolment-broken",
+    },
+    {
+      reason: "host_claimed",
+      code: "UNAUTHORIZED",
+      retryable: false,
+      state: "host-claimed",
+    },
+    {
+      reason: "future_door_reason",
+      code: "UNAUTHORIZED",
+      retryable: false,
+      state: "unrecognised-refusal",
+    },
+  ] as const)(
+    "records $reason from a relay unary error envelope",
+    async (testCase) => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = {
+        code: testCase.code,
+        message: "host refused the request",
+        retryable: testCase.retryable,
+        doorReason: testCase.reason,
+      };
+      const states: HostDoorStateKind[] = [];
+      const door: SessionDoorObserver = {
+        refused: (details) => {
+          const state = hostDoorStateOfRefusal(details);
+          if (state !== null) states.push(state);
+        },
+        admitted: () => undefined,
+      };
+      const session = await readySession(relay, door, null);
+      try {
+        const error = await sendBindingUnary(session);
+        expect(error).toBeInstanceOf(HostRpcError);
+        if (!(error instanceof HostRpcError))
+          throw new Error("expected the host's unary refusal");
+        expect(error.doorRefusal?.doorReason).toBe(testCase.reason);
+        expect(states).toEqual([testCase.state]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
+  it("keeps retryable TEAM_MEMBERSHIP_UNAVAILABLE out of door state", async () => {
+    const relay = new FakeRelayHost();
+    relay.unaryError = {
+      code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+      message: "membership check unavailable",
+      retryable: true,
+    };
+    const states: HostDoorStateKind[] = [];
+    const door: SessionDoorObserver = {
+      refused: (details) => {
+        const state = hostDoorStateOfRefusal(details);
+        if (state !== null) states.push(state);
+      },
+      admitted: () => undefined,
+    };
+    const revalidateForReconnect = vi.fn(() =>
+      Promise.resolve("rejected" as const),
+    );
+    const session = await readySession(relay, door, {
+      revalidateForReconnect,
+    });
+    try {
+      const error = await sendBindingUnary(session);
+      expect(error).toBeInstanceOf(RetryableTransportError);
+      if (!(error instanceof RetryableTransportError))
+        throw new Error("expected a retryable, pre-dispatch refusal");
+      expect(error.fatalDetails?.code).toBe("TEAM_MEMBERSHIP_UNAVAILABLE");
+      expect(error.fatalDetails?.retryable).toBe(true);
+      expect(states).toEqual([]);
+      expect(revalidateForReconnect).not.toHaveBeenCalled();
+      expect(session.isClosed()).toBe(false);
+      expect(session.terminalFatal()).toBeNull();
+    } finally {
+      session.close();
+    }
+  });
+
+  it("retries a retryable membership reply through the real session messenger", async () => {
+    const relay = new FakeRelayHost();
+    relay.unaryResponseQueue.push(
+      {
+        error: {
+          code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+          message: "membership check unavailable",
+          retryable: true,
+        },
+        result: null,
+      },
+      {
+        error: null,
+        result: { binding: null, missingWorktreePaths: [] },
+      },
+    );
+    const states: HostDoorStateKind[] = [];
+    const door: SessionDoorObserver = {
+      refused: (details) => {
+        const state = hostDoorStateOfRefusal(details);
+        if (state !== null) states.push(state);
+      },
+      admitted: () => undefined,
+    };
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const session = await readySession(relay, door, null);
+    const messenger = createRetryingMessenger(
+      new RemoteHostMessenger(session),
+      {
+        maxRetries: 1,
+        initialDelayMs: 0,
+        maxDelayMs: 0,
+        sleep: async () => undefined,
+        random: () => 0,
+      },
+    );
+    const options: HostRequestOptions = {
+      idempotencyKey: null,
+      authority: {
+        endpoint: { hostId: "host-1", websocketUrl: "wss://relay.test/attach" },
+        bearer: lease,
+        abortSignal: new AbortController().signal,
+      },
+      replayMustBeKeyed: false,
+      requiredHostMethodVersion: null,
+    };
+    try {
+      await expect(
+        messenger.request("worktree.getBinding", BINDING_PARAMS, options),
+      ).resolves.toEqual({ binding: null, missingWorktreePaths: [] });
+      await vi.waitFor(
+        () => expect(relay.unaryResponses).toHaveLength(2),
+        WAIT,
+      );
+      expect(relay.unaryRequests).toHaveLength(2);
+      expect(
+        relay.unaryResponses.map((response) => response.error?.code ?? null),
+      ).toEqual(["TEAM_MEMBERSHIP_UNAVAILABLE", null]);
+      expect(states).toEqual([]);
+      expect(session.isReady()).toBe(true);
+      expect(session.isClosed()).toBe(false);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("keeps an unmarked membership refusal a plain HostRpcError", async () => {
+    const relay = new FakeRelayHost();
+    relay.unaryError = {
+      code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+      message: "membership check unavailable",
+    };
+    const states: HostDoorStateKind[] = [];
+    const door: SessionDoorObserver = {
+      refused: (details) => {
+        const state = hostDoorStateOfRefusal(details);
+        if (state !== null) states.push(state);
+      },
+      admitted: () => undefined,
+    };
+    const session = await readySession(relay, door, null);
+    try {
+      const error = await sendBindingUnary(session);
+      expect(error).toBeInstanceOf(HostRpcError);
+      expect(error).not.toBeInstanceOf(RetryableTransportError);
+      if (!(error instanceof HostRpcError))
+        throw new Error("expected the host's unary refusal");
+      expect(error.fatalDetails?.retryable).toBeUndefined();
+      expect(states).toEqual([]);
+      expect(session.isClosed()).toBe(false);
+    } finally {
+      session.close();
+    }
+  });
+
+  it.each([
+    { reason: "clock_skew", state: "clock-skew" },
+    { reason: "enrolment_broken", state: "enrolment-broken" },
+    { reason: "host_claimed", state: "host-claimed" },
+  ])(
+    "ends the relay session for $reason without revalidation",
+    async ({ reason, state }) => {
+      const relay = new FakeRelayHost();
+      const states: HostDoorStateKind[] = [];
+      const door: SessionDoorObserver = {
+        refused: (details) => {
+          const kind = hostDoorStateOfRefusal(details);
+          if (kind !== null) states.push(kind);
+        },
+        admitted: () => undefined,
+      };
+      const revalidateRefused = vi.fn(() =>
+        Promise.resolve("rejected" as const),
+      );
+      const auth: StreamAuthRevalidator & {
+        readonly revalidateRefused: typeof revalidateRefused;
+      } = {
+        revalidateForReconnect: revalidateRefused,
+        revalidateRefused,
+      };
+      const session = await readySession(relay, door, auth);
+      try {
+        await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, {
+          code: "UNAUTHORIZED",
+          reason: "host refusal",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason: reason,
+        });
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(revalidateRefused).not.toHaveBeenCalled();
+        expect(states).toEqual([state]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
+  it.each([
+    { code: "FORBIDDEN", state: null },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", state: "older-host" },
+    { code: "INCOMPATIBLE", state: null },
+    { code: "REMOTE_ACCESS_OFF", state: null },
+    { code: "HOST_RESTARTING", state: null },
+  ])(
+    "records the expected state for a reasonless relay fatal $code",
+    async ({ code, state }) => {
+      const relay = new FakeRelayHost();
+      const states: HostDoorStateKind[] = [];
+      const door: SessionDoorObserver = {
+        refused: (details) => {
+          const kind = hostDoorStateOfRefusal(details);
+          if (kind !== null) states.push(kind);
+        },
+        admitted: () => undefined,
+      };
+      const session = await readySession(relay, door, null);
+      try {
+        await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, {
+          code,
+          reason: "host refusal without a door reason",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(states).toEqual(state === null ? [] : [state]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
   it(
     "marks the UNAUTHORIZED rejection a revoked peer gives a pending unary",
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const settled = sendBindingUnary(session);
         await vi.waitFor(
@@ -2102,7 +2407,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const settled = sendBindingUnary(session);
         await vi.waitFor(
@@ -2210,7 +2515,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const settled = sendBindingUnary(session);
         await vi.waitFor(
@@ -2260,7 +2565,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const settled = sendBindingUnary(session);
         await vi.waitFor(
@@ -2295,7 +2600,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.unaryError = { code: "FORBIDDEN", message: "not yours" };
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const error = await sendBindingUnary(session);
 

@@ -6,6 +6,7 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
+import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import { staleWriteOfHostError } from "@/lib/environment/stale-write";
 import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
@@ -419,7 +420,7 @@ export function classifySendRefusal(error: unknown): SendRefusal {
     isTransportClassFailure(error) ||
     staleWriteOfHostError(error) !== null ||
     error.code === "FORBIDDEN" ||
-    (error.code === "UNAUTHORIZED" && error.fatalDetails?.retryable === true)
+    (error.code === "UNAUTHORIZED" && hostRefusalOf(error)?.retryable === true)
   ) {
     return { kind: "failed" };
   }
@@ -610,7 +611,7 @@ export function toastFromHostErrorWithDetail(
  */
 function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
   if (error.code !== "UNAUTHORIZED") return false;
-  if (error.fatalDetails?.retryable === true) return false;
+  if (hostRefusalOf(error)?.retryable === true) return false;
   return useAuthStore.getState().status !== "signed-out";
 }
 
@@ -772,7 +773,7 @@ function codeKeyedMessage(error: HostRpcError, fallback: string): string {
     return forbiddenToastMessage(error.message);
   }
   if (error.code === "UNAUTHORIZED") {
-    if (error.fatalDetails?.retryable === true) {
+    if (hostRefusalOf(error)?.retryable === true) {
       return "The host couldn't verify your session. Try again in a moment.";
     }
     return "Please sign in again.";

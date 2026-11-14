@@ -1,11 +1,13 @@
 /**
  * Why a host refused a person at its door, or closed their connection after
- * admitting them. It rides `doorReason` on two carriers:
+ * admitting them. It rides `doorReason` on three carriers:
  *
  *   - `FatalErrorDetails`, the one payload of the `/rpc` `fatalError` frame,
  *     the `/stream` `fatalError` frame and the relay `FATAL`;
  *   - a persistent `/rpc` session's per-request error answer, where a refused
- *     call answers on its own and the socket stays up.
+ *     call answers on its own and the socket stays up;
+ *   - a relay session's unary error answer (`UnaryResponsePayload.error`),
+ *     where the call is refused and the session stays up.
  *
  * The reason is what a client acts on. The envelope's `code` stays the one an
  * older client already handles, so a client that predates the field still

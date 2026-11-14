@@ -107,12 +107,12 @@ function tokenOutcome(token: string): HostTokenMintOutcome {
 }
 
 describe("host-token refusal recovery", () => {
-  it("silently mints a replacement for token_expired regardless of the code", async () => {
+  it("silently mints a replacement for token_expired", async () => {
     const test = await harness([tokenOutcome("fresh-token")], null);
 
     await expect(
       test.recover.revalidateRefused(
-        refusal("FORBIDDEN", "token_expired", false),
+        refusal("UNAUTHORIZED", "token_expired", false),
       ),
     ).resolves.toBe("rotated");
 
@@ -124,7 +124,7 @@ describe("host-token refusal recovery", () => {
 
   it("mints once for not_admitted and raises state only when that fresh token is refused again", async () => {
     const test = await harness([tokenOutcome("fresh-token")], null);
-    const refusalDetails = refusal("FORBIDDEN", "not_admitted", false);
+    const refusalDetails = refusal("UNAUTHORIZED", "not_admitted", false);
 
     await expect(test.recover.revalidateRefused(refusalDetails)).resolves.toBe(
       "rotated",
@@ -150,7 +150,7 @@ describe("host-token refusal recovery", () => {
 
     await expect(
       test.recover.revalidateRefused(
-        refusal("FORBIDDEN", "session_revoked", false),
+        refusal("UNAUTHORIZED", "session_revoked", false),
       ),
     ).resolves.toBe("rejected");
 
@@ -202,10 +202,10 @@ describe("host-token refusal recovery", () => {
     );
   });
 
-  it("retries retryable FORBIDDEN not_admitted on plain backoff without mint or state", async () => {
+  it("retries retryable not_admitted on plain backoff without mint or state", async () => {
     vi.useFakeTimers();
     const relayPeer = new RemoteMuxTestPeer();
-    relayPeer.refuseFirstOpen(refusal("FORBIDDEN", "not_admitted", true));
+    relayPeer.refuseFirstOpen(refusal("UNAUTHORIZED", "not_admitted", true));
     const mintCalls: string[] = [];
     const stateCalls: HostDoorStateKind[] = [];
     const tokens = createHostTokenSource({

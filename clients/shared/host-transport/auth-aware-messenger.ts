@@ -6,6 +6,7 @@ import {
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import { hostRefusalOf } from "./host-door-state";
 import {
   HostRpcError,
   HostAuthoritySupersededError,
@@ -105,15 +106,14 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (!(cause instanceof HostRpcError)) throw cause;
       // The host's refusal, at the door or of this one request on a
       // persistent session.
-      const refusal = cause.fatalDetails ?? cause.doorRefusal;
-      // A host-only token's recovery also takes a door refusal carried as
-      // `FORBIDDEN` (`not_admitted`, `session_revoked`); the sign-in's takes
-      // `UNAUTHORIZED` alone, as it always has.
+      const refusal = hostRefusalOf(cause);
+      // A host-only token's recovery decides by the refusal's `doorReason`
+      // whatever its code; the sign-in's takes `UNAUTHORIZED` alone, as it
+      // always has.
       const refused =
-        cause.code === "UNAUTHORIZED" ||
-        (readsHostRefusal(auth) &&
-          refusal !== null &&
-          isCredentialRefusal(refusal));
+        readsHostRefusal(auth) && refusal !== null
+          ? isCredentialRefusal(refusal)
+          : cause.code === "UNAUTHORIZED";
       if (!refused) throw cause;
       // A transient, host-side rejection (e.g. a JWKS fetch timeout) rides in
       // as `code: "UNAUTHORIZED"` with `retryable === true`. Our bearer is

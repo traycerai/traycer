@@ -2,6 +2,7 @@ import {
   isRpcErrorCode,
   type ClientFrame,
   type ConnectionManifest,
+  type FatalErrorDetails,
   type HostFatalErrorFrame,
   type HostFrame,
   type MethodVersionRegistry,
@@ -609,6 +610,16 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
         const code = isRpcErrorCode(frame.error.code)
           ? frame.error.code
           : "RPC_ERROR";
+        const doorReason = frame.error.doorReason;
+        // The host's own code and reason: `keys_unavailable` keeps its state.
+        const refusal: FatalErrorDetails = {
+          code: frame.error.code,
+          reason: frame.error.message,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: true,
+          ...(doorReason === undefined ? {} : { doorReason }),
+        };
         this.rejectInFlight(
           entry,
           new RetryableTransportError({
@@ -616,13 +627,8 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
             message: frame.error.message,
             requestId: entry.requestId,
             method: entry.method,
-            fatalDetails: {
-              code: "UNAUTHORIZED",
-              reason: frame.error.message,
-              incompatibleMethods: null,
-              upgradeGuidance: null,
-              retryable: true,
-            },
+            fatalDetails: refusal,
+            doorRefusal: doorReason === undefined ? null : refusal,
             replaySafetyFromKey: false,
           }),
         );

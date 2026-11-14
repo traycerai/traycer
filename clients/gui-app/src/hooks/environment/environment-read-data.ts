@@ -1,4 +1,5 @@
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 
 const AUTHORITY_REFUSALS = new Set([
   "UNAUTHORIZED",
@@ -15,10 +16,11 @@ export function environmentReadData<T>(query: {
   readonly error: HostRpcError | null;
 }): T | undefined {
   const error = query.error;
+  const refusal = error === null ? null : hostRefusalOf(error);
   if (
-    error?.fatalDetails?.retryable !== true &&
+    refusal?.retryable !== true &&
     (AUTHORITY_REFUSALS.has(error?.code ?? "") ||
-      AUTHORITY_REFUSALS.has(error?.fatalDetails?.code ?? ""))
+      AUTHORITY_REFUSALS.has(refusal?.code ?? ""))
   )
     return undefined;
   return query.data;

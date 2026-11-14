@@ -22,6 +22,7 @@ import { StandaloneBotsBridge } from "@/components/layout/bridges/standalone-bot
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
+import { signInRecoveryForStream } from "@/lib/host/stream-presents-sign-in";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   openNotificationsStream,
@@ -124,6 +125,14 @@ import {
   rememberNotificationFeed,
   type NotificationFeedReplicaPage,
 } from "@/lib/view-replica/notification-feed-replica";
+
+/**
+ * The host the cloud feed's stream is opened on: the pool's in a build with
+ * a server pool, else the serving host's (`usePoolTierStreamClient`).
+ */
+function cloudFeedHostId(servingHostId: string): string {
+  return readProcessHostRpcTierPlan().pool?.hostId ?? servingHostId;
+}
 
 /**
  * The cloud lane a build with a server pool reads from the pool, as the
@@ -890,7 +899,7 @@ function NotificationsSessionBody(
         hostId: streamHostId,
         reconnectEngine: lease.reconnect,
         wsStreamClient: servingStreamClient,
-        onAuthError: onStreamAuthError,
+        onAuthError: signInRecoveryForStream(streamHostId, onStreamAuthError),
         plane: cloudAuthorized ? null : "local-only",
       });
       activityStreamHostIdRef.current = streamHostId;
@@ -1212,11 +1221,19 @@ function NotificationsSessionBody(
       ) {
         return;
       }
-      // The shared recovery contract, hoisted to `onStreamAuthError` so the
-      // activity lane's two openers hand their stream the same handler.
-      const onAuthError = onStreamAuthError;
       if (servingHostId === null) return;
       const streamHostId = servingHostId;
+      // The shared recovery contract, `onStreamAuthError`, for a stream that
+      // presented the sign-in only: the serving host's lanes present a
+      // host-only token, and the cloud feed rides the pool when there is one.
+      const onAuthError = signInRecoveryForStream(
+        streamHostId,
+        onStreamAuthError,
+      );
+      const cloudFeedOnAuthError = signInRecoveryForStream(
+        cloudFeedHostId(streamHostId),
+        onStreamAuthError,
+      );
       // ONE reconnect policy for this host, handed to every stream opened
       // below (redesign P4.1). This is the single
       // wiring point for all of them, which is exactly why the acquisition
@@ -1298,7 +1315,7 @@ function NotificationsSessionBody(
           reconnect,
           cloudFeedStreamClient,
           openedAccountId,
-          onAuthError,
+          cloudFeedOnAuthError,
           ({ rows, arrivals }) => {
             const accountId =
               useAuthStore.getState().contextMetadata?.userId ?? null;

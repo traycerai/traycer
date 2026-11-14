@@ -26,6 +26,7 @@ import {
   markMayHaveReachedHost,
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
@@ -2380,15 +2381,17 @@ function openSession(options: SessionOptions): Session {
 /**
  * The host rejected this discovery's own open-frame credential. That refusal
  * is not a property of the connection: another call on the same account can
- * hold a different lease and has to dial for itself.
+ * hold a different lease and has to dial for itself. The `doorReason` says
+ * which refusals those are; a host-wide one (`enrolment_broken`,
+ * `host_claimed`, `clock_skew`) refuses every caller alike.
  */
 function isCallerSpecificAuthRefusal(cause: unknown): cause is HostRpcError {
   return (
     cause instanceof HostRpcError &&
     !(cause instanceof RetryableTransportError) &&
-    cause.code === "UNAUTHORIZED" &&
     cause.fatalDetails !== null &&
-    cause.fatalDetails.retryable !== true
+    cause.fatalDetails.retryable !== true &&
+    isCredentialRefusal(cause.fatalDetails)
   );
 }
 

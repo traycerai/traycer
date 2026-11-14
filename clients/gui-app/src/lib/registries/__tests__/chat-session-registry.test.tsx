@@ -5,7 +5,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostListItemToDirectoryEntry,
   type RemoteHostDirectoryEntry,
@@ -14,7 +17,10 @@ import type {
   HostConnectivity,
   HostListItem,
 } from "@traycer/protocol/host/host-status";
-import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type {
+  IStreamSession,
+  StreamCloseReason,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostRpcRegistry,
@@ -24,6 +30,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type {
   ChatSessionState,
@@ -73,7 +80,9 @@ const globalClientRef = vi.hoisted(
   (): { value: HostClient<HostRpcRegistry> | null } => ({ value: null }),
 );
 const authServiceStub = vi.hoisted(() => ({
-  revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
+  revalidateCurrentContext: vi.fn(() =>
+    Promise.resolve({ kind: "valid" as const }),
+  ),
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => {
@@ -303,6 +312,19 @@ function signIn(): void {
       email: `${CHAT_PROFILE_USER_ID}@example.com`,
     },
   });
+}
+
+function unauthorizedClose(doorReason: string | null): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "test host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      ...(doorReason === null ? {} : { doorReason }),
+    },
+  };
 }
 
 /**
@@ -1001,7 +1023,11 @@ describe("the production chat stream client factory forwards every probe", () =>
     useAuthStore.setState({ profile: null, status: "signed-out" });
   });
 
-  async function openChat(chatId: string, fake: FakeStreamClient) {
+  async function openChatAtHost(
+    chatId: string,
+    hostId: string,
+    fake: FakeStreamClient,
+  ) {
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -1017,9 +1043,12 @@ describe("the production chat stream client factory forwards every probe", () =>
       },
     });
     globalClientRef.value = buildGlobalClient();
-    hostEntryRef.value = remoteTarget("pubkey-a");
+    hostEntryRef.value =
+      hostId === POOL_HOST_ID
+        ? poolEntry
+        : { ...remoteTarget("pubkey-a"), hostId };
     const { result } = renderHook(
-      () => useChatSessionHandle(chatId, REMOTE_HOST_ID, true),
+      () => useChatSessionHandle(chatId, hostId, true),
       { wrapper },
     );
     await waitFor(() => {
@@ -1031,6 +1060,39 @@ describe("the production chat stream client factory forwards every probe", () =>
     }
     return handle;
   }
+
+  async function openChat(chatId: string, fake: FakeStreamClient) {
+    return openChatAtHost(chatId, REMOTE_HOST_ID, fake);
+  }
+
+  it.each(["enrolment_broken", "host_claimed", null] as const)(
+    "does not revalidate sign-in for a host-token stream close (%s)",
+    async (doorReason) => {
+      const fake = new FakeStreamClient(true);
+      authServiceStub.revalidateCurrentContext.mockClear();
+      await openChatAtHost("chat-host-token-close", REMOTE_HOST_ID, fake);
+      await waitFor(() => expect(fake.sessions).toHaveLength(1));
+
+      act(() => {
+        fake.sessions[0]?.emitClosed(unauthorizedClose(doorReason));
+      });
+
+      expect(authServiceStub.revalidateCurrentContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still revalidates sign-in for the pool stream", async () => {
+    const fake = new FakeStreamClient(true);
+    authServiceStub.revalidateCurrentContext.mockClear();
+    await openChatAtHost("chat-pool-close", POOL_HOST_ID, fake);
+    await waitFor(() => expect(fake.sessions).toHaveLength(1));
+
+    act(() => {
+      fake.sessions[0]?.emitClosed(unauthorizedClose(null));
+    });
+
+    expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+  });
 
   it.each(FORWARDED_PROBES)(
     "%s reaches the store from the real ChatStreamClient",

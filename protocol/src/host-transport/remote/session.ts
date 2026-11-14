@@ -292,7 +292,8 @@ type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
  * timed out) and terminal (our bearer is genuinely bad), and neither is host
  * evidence. A refusal that carries a `doorReason` is the host's door answering
  * about the person, so it is credential plane too, whatever its code
- * (`not_admitted` rides `FORBIDDEN`).
+ * (`keys_unavailable` rides `NETWORK_ERROR`, `membership_removed` a
+ * team-membership code).
  *
  * Deliberately narrow rather than a guessed "credential family": every other
  * fatal on this path - a relay policy close, a malformed frame, a phase
@@ -4736,12 +4737,37 @@ export class RemoteSession<
           parsed.data.error.message,
         );
       }
+      const wireError = parsed.data.error;
+      const answered = HostRpcError.fromWireEnvelope(
+        wireError,
+        entry.requestId,
+        entry.method,
+      );
+      // This one request refused at the door: the door's state, exactly as a
+      // refused open raises it.
+      if (answered.doorRefusal !== null)
+        this.options.auth.door?.refused(answered.doorRefusal);
+      // A transient refusal (a team member's admission the host cannot check
+      // now) is this call's no-dispatch attestation, as on a local `/rpc`
+      // reply: the caller may send it again, and nothing is minted for it.
       entry.reject(
-        HostRpcError.fromWireEnvelope(
-          parsed.data.error,
-          entry.requestId,
-          entry.method,
-        ),
+        wireError.retryable === true
+          ? new RetryableTransportError({
+              code: answered.code,
+              message: answered.message,
+              requestId: entry.requestId,
+              method: entry.method,
+              fatalDetails: answered.doorRefusal ?? {
+                code: wireError.code,
+                reason: wireError.message,
+                incompatibleMethods: null,
+                upgradeGuidance: null,
+                retryable: true,
+              },
+              doorRefusal: answered.doorRefusal,
+              replaySafetyFromKey: false,
+            })
+          : answered,
       );
       return;
     }

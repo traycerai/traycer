@@ -79,6 +79,29 @@ describe("toastFromHostError", () => {
     );
   });
 
+  it("uses transient verification copy for a retryable persistent door refusal", () => {
+    const error = new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "the host did not admit this token",
+      requestId: "req-persistent-door",
+      method: "host.echo",
+      fatalDetails: null,
+      doorRefusal: {
+        code: "UNAUTHORIZED",
+        reason: "the host did not admit this token",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+        doorReason: "not_admitted",
+      },
+    });
+
+    toastFromHostError(error, "fallback");
+    expect(toast.error).toHaveBeenCalledWith(
+      "The host couldn't verify your session. Try again in a moment.",
+    );
+  });
+
   it("shows last-owner copy when the host message preserves that reason", () => {
     toastFromHostError(
       makeError("RPC_ERROR", "Cannot revoke the last owner"),

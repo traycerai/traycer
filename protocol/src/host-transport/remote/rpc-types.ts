@@ -273,6 +273,7 @@ export class HostTransportFailureError extends HostRpcError {
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    doorRefusal?: FatalErrorDetails | null;
   }) {
     super(details);
     this.name = "HostTransportFailureError";
@@ -303,6 +304,7 @@ export class RetryableTransportError extends HostTransportFailureError {
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    doorRefusal?: FatalErrorDetails | null;
     replaySafetyFromKey: boolean;
   }) {
     super(details);

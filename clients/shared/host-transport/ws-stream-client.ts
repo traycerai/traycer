@@ -3271,12 +3271,13 @@ class StreamSession<
       this.dropAndReconnect(details);
       return;
     }
-    // `UNAUTHORIZED` is recoverable when an auth revalidator is wired: the
-    // host rejected our bearer (e.g. it expired during an overnight sleep),
+    // A credential refusal is recoverable when an auth revalidator is wired:
+    // the host rejected our token (e.g. it expired during an overnight sleep),
     // but a single-flight revalidation may rotate a fresh one that the next
-    // dial carries. Every other fatalError (e.g. `INCOMPATIBLE` or a stream
-    // domain code such as `CHAT_INVALID`), and the no-revalidator case, stays
-    // terminal exactly as before.
+    // dial carries. `isCredentialRefusal` decides by the `doorReason`, or by
+    // `UNAUTHORIZED` from a host that sends none. Every other fatalError (e.g.
+    // `INCOMPATIBLE` or a stream domain code such as `CHAT_INVALID`), and the
+    // no-revalidator case, stays terminal exactly as before.
     if (
       isCredentialRefusal(details) &&
       !this.usesSessionGrant &&

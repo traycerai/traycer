@@ -1,4 +1,5 @@
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { HostRpcError } from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   readDoorReason,
   type HostDoorReason,
@@ -34,7 +35,7 @@ export type HostDoorStateKind =
   | "not-admitted"
   /** `host_claimed`: a member claimed the computer. */
   | "host-claimed"
-  /** An `UNAUTHORIZED` or `FORBIDDEN` refusal with no `doorReason`. */
+  /** A host-only token refused with no `doorReason`: `UNAUTHORIZED` or a team-membership code. */
   | "older-host"
   /** A `doorReason` this app does not know: a newer host, never an older one. */
   | "unrecognised-refusal";
@@ -175,21 +176,42 @@ const DOOR_REASON_STATES: Readonly<
 };
 
 /**
+ * The host's refusal an error carries, read one way: at the door
+ * (`fatalDetails`), or of this one request on a persistent session
+ * (`doorRefusal`).
+ */
+export function hostRefusalOf(error: HostRpcError): FatalErrorDetails | null {
+  return error.fatalDetails ?? error.doorRefusal;
+}
+
+/** The codes an older host refuses a host-only token with, carrying no reason. */
+const OLDER_HOST_TOKEN_REFUSALS: ReadonlySet<string> = new Set([
+  "UNAUTHORIZED",
+  "TEAM_MEMBERSHIP_REQUIRED",
+  "TEAM_MEMBERSHIP_UNAVAILABLE",
+]);
+
+/**
  * The state a refusal the HOST sent raises, or `null` for one that raises
  * none here (it is recovered by a fresh token, or is not a door refusal at
- * all). An `UNAUTHORIZED` or `FORBIDDEN` with no reason is an older host.
+ * all). A recognised reason decides alone, whatever its code.
  *
- * Only for a host's own frames: a relay's session kill is not a host's
- * refusal and never reaches this.
+ * With no reason, only a refusal of the token itself means an older host.
+ * Every other code keeps its own meaning: a refusal before the token step
+ * (`INCOMPATIBLE`, `REMOTE_ACCESS_OFF`), a fatal that is not about the
+ * credential (`HOST_RESTARTING`), or a stream's own refusal (`FORBIDDEN`
+ * when access to an epic is lost).
+ *
+ * Only for a host's own frames on a connection that presented a host-only
+ * token: those are the only connections given a door observer. A relay's
+ * session kill, and the server pool, never reach this.
  */
 export function hostDoorStateOfRefusal(
   details: FatalErrorDetails,
 ): HostDoorStateKind | null {
   const reason = readDoorReason(details.doorReason);
   if (reason === "absent")
-    return details.code === "UNAUTHORIZED" || details.code === "FORBIDDEN"
-      ? "older-host"
-      : null;
+    return OLDER_HOST_TOKEN_REFUSALS.has(details.code) ? "older-host" : null;
   if (reason === "unrecognised") return "unrecognised-refusal";
   return DOOR_REASON_STATES[reason];
 }

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostTokenRevalidator } from "@traycer-clients/shared/auth/host-token-lease";
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
@@ -30,6 +31,39 @@ import { noteHostTokenRenewal } from "@/lib/host/host-door-observer";
 import { deriveWindowNarration } from "@/lib/host/window-narration";
 import { DEFAULT_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-transport/transport-config";
 
+type HostTokenRevalidatorDependencies = Parameters<
+  typeof import("@traycer-clients/shared/auth/host-token-lease").hostTokenRevalidator
+>[0];
+
+const { revalidateRefusedSpy } = vi.hoisted(() => ({
+  revalidateRefusedSpy: vi.fn<HostTokenRevalidator["revalidateRefused"]>(),
+}));
+
+vi.mock(
+  "@traycer-clients/shared/auth/host-token-lease",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/auth/host-token-lease")
+      >();
+    return {
+      ...actual,
+      hostTokenRevalidator: (deps: HostTokenRevalidatorDependencies) => {
+        const real = actual.hostTokenRevalidator(deps);
+        const revalidateRefused: HostTokenRevalidator["revalidateRefused"] =
+          async (refusal) => {
+            await revalidateRefusedSpy(refusal);
+            return real.revalidateRefused(refusal);
+          };
+        return {
+          ...real,
+          revalidateRefused,
+        };
+      },
+    };
+  },
+);
+
 const SIGN_IN_TOKEN = "sign-in-token";
 
 const LOCAL_DOOR_CASES: ReadonlyArray<{
@@ -56,6 +90,7 @@ const LOCAL_DOOR_CASES: ReadonlyArray<{
 
 describe("local stream host-token open frame", () => {
   beforeEach(() => {
+    revalidateRefusedSpy.mockClear();
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeNativeWebSocket);
     FakeNativeWebSocket.instances.length = 0;
@@ -399,4 +434,97 @@ describe("local stream host-token open frame", () => {
     client.close("test complete");
     clearHostDoorState(hostId);
   });
+
+  it.each([
+    { reason: "clock_skew", state: "clock-skew" },
+    { reason: "enrolment_broken", state: "enrolment-broken" },
+    { reason: "host_claimed", state: "host-claimed" },
+  ])(
+    "ends a stream on $reason without host-token revalidation",
+    async ({ reason, state }) => {
+      const hostId = `local-${reason}`;
+      clearHostDoorState(hostId);
+      const provider = newProvider();
+      signIn(provider, USER_A, SIGN_IN_TOKEN);
+      const tokens = await tokensWithLocalCredential(hostId, `${hostId}-token`);
+      const target = { ...mockLocalHostEntry, hostId };
+      const { client, session, socket } = await connectLocalStream(
+        target,
+        provider,
+        tokens,
+      );
+      let closed = false;
+      session.onStatusChange((status) => {
+        closed = status === "closed";
+      });
+      await vi.waitFor(() =>
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+      );
+      socket.fireMessage(openAckFrame([], null));
+      await settle();
+      socket.fireMessage(
+        JSON.stringify({
+          kind: "fatalError",
+          details: {
+            code: "UNAUTHORIZED",
+            reason: "host refused the session",
+            doorReason: reason,
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        }),
+      );
+      await settle();
+
+      expect(hostDoorStateFor(hostId)?.kind).toBe(state);
+      expect(revalidateRefusedSpy).not.toHaveBeenCalled();
+      expect(closed).toBe(true);
+      session.close();
+      client.close("test complete");
+      clearHostDoorState(hostId);
+    },
+  );
+
+  it.each([
+    { code: "FORBIDDEN", state: null },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", state: "older-host" },
+    { code: "INCOMPATIBLE", state: null },
+    { code: "REMOTE_ACCESS_OFF", state: null },
+    { code: "HOST_RESTARTING", state: null },
+  ])(
+    "records the expected state for a reasonless local fatal $code",
+    async ({ code, state }) => {
+      const hostId = `local-no-reason-${code}`;
+      clearHostDoorState(hostId);
+      const provider = newProvider();
+      signIn(provider, USER_A, SIGN_IN_TOKEN);
+      const { client, session, socket } = await connectLocalStream(
+        { ...mockLocalHostEntry, hostId },
+        provider,
+        await tokensWithLocalCredential(hostId, `${hostId}-token`),
+      );
+      await vi.waitFor(() =>
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+      );
+      socket.fireMessage(openAckFrame([], null));
+      await settle();
+      socket.fireMessage(
+        JSON.stringify({
+          kind: "fatalError",
+          details: {
+            code,
+            reason: "host refusal without a door reason",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        }),
+      );
+      await settle();
+
+      expect(hostDoorStateFor(hostId)?.kind ?? null).toBe(state);
+      session.close();
+      client.close("test complete");
+      clearHostDoorState(hostId);
+    },
+  );
 });
