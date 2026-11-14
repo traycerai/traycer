@@ -18,14 +18,13 @@ const TONE: Readonly<Record<SecretRotationLine["tone"], string>> = {
 
 /**
  * A secret's current rotation on Settings ▸ Personal ▸ Secrets: "New value
- * accepted, closing old sessions." until every class and host has proved the
+ * accepted, closing old sessions." until every worker class has proved the
  * old value out of use, then "New value enforced." with each one's proof.
  * Re-read every few seconds only while it is still moving.
  */
 export function SecretRotationStatus(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly secretId: string;
-  readonly hostName: (hostId: string) => string;
 }): ReactNode {
   const { environmentId, resolved } = useAddressedEnvironment();
   const [moving, setMoving] = useState(true);
@@ -52,7 +51,7 @@ export function SecretRotationStatus(props: {
   const stillMoving = current === undefined || !secretRotationSettled(current);
   if (stillMoving !== moving) setMoving(stillMoving);
   if (current === undefined) return null;
-  const status = secretRotationStatus(current, props.hostName);
+  const status = secretRotationStatus(current);
   if (status === null) return null;
   return (
     <div

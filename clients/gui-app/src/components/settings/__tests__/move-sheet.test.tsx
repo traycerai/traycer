@@ -399,7 +399,7 @@ describe("<MoveSheet />", () => {
     expect(useMoveSheetStore.getState().target).toBeNull();
   });
 
-  it("shows Personal's existing secrets when an empty move reaches them", async () => {
+  it("shows no disclosure on an empty move even when Personal already has secrets", async () => {
     mount({
       plans: [
         planWith(
@@ -415,9 +415,7 @@ describe("<MoveSheet />", () => {
     });
     await settle();
 
-    expect(screen.getByTestId("move-sheet-disclosure").textContent).toBe(
-      "Nothing new is stored as a secret. Once Old laptop runs Personal, it receives Personal's existing keys and secrets as values its tools and agents can read.",
-    );
+    expect(screen.queryByTestId("move-sheet-disclosure")).toBeNull();
   });
 
   it("names a one-of-a-kind row by its page, and leaves other rows their label", async () => {
@@ -461,7 +459,13 @@ describe("<MoveSheet />", () => {
     const options = { plans: [secretPlan], acceptAnswers: [ACCEPTED] };
 
     mount({
-      plans: [plan("hash-v", { moves: [row("EDITOR", "EDITOR", null)] })],
+      plans: [
+        planWith(
+          "hash-v",
+          { moves: [row("EDITOR", "EDITOR", null)] },
+          { personalHoldsSecrets: true, itemChoices: false },
+        ),
+      ],
       acceptAnswers: [ACCEPTED],
     });
     await settle();
@@ -475,14 +479,14 @@ describe("<MoveSheet />", () => {
     ]);
     await settle();
     expect(disclosure()).toBe(
-      `${custody} Today that is MacBook Pro and dev-box, and any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read. ${accepts}`,
+      `${custody} Today that is MacBook Pro and dev-box, and any computer that starts running Personal later receives these keys as values its tools and agents can read. ${accepts}`,
     );
     cleanup();
 
     mount(options);
     await settle();
     expect(disclosure()).toBe(
-      `${custody} No other computer runs Personal yet. Any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read. ${accepts}`,
+      `${custody} No other computer runs Personal yet. Any computer that starts running Personal later receives these keys as values its tools and agents can read. ${accepts}`,
     );
   });
 
@@ -711,14 +715,14 @@ describe("<MoveSheet />", () => {
       moves: [rowOfKind("TOKEN", "secret", "TOKEN")],
     });
     const later =
-      "any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read.";
+      "any computer that starts running Personal later receives these keys as values its tools and agents can read.";
     const disclosure = () =>
       screen.getByTestId("move-sheet-disclosure").textContent;
 
     mount({ plans: [secretPlan], acceptAnswers: [ACCEPTED] });
     await settle();
     expect(disclosure()).toContain(
-      `No other computer runs Personal yet. Any computer that starts running Personal later receives these keys and secrets as values its tools and agents can read.`,
+      `No other computer runs Personal yet. Any computer that starts running Personal later receives these keys as values its tools and agents can read.`,
     );
     cleanup();
 
@@ -729,32 +733,6 @@ describe("<MoveSheet />", () => {
     ]);
     await settle();
     expect(disclosure()).toContain(`Today that is A and B, and ${later}`);
-  });
-
-  it("tells a second computer that Personal's existing keys and secrets arrive, when it stores none itself", async () => {
-    const arrives =
-      "Nothing new is stored as a secret. Once Old laptop runs Personal, it receives Personal's existing keys and secrets as values its tools and agents can read.";
-    const accepts =
-      "Move accepts this list as shown; if it changes before the upload finishes, you are asked again.";
-    const variablePlan = (holds: boolean) =>
-      planWith(
-        "hash-h",
-        { moves: [row("EDITOR", "EDITOR", null)] },
-        { personalHoldsSecrets: holds, itemChoices: false },
-      );
-
-    mount({ plans: [variablePlan(true)], acceptAnswers: [ACCEPTED] });
-    await settle();
-    expect(screen.getByTestId("move-sheet-disclosure").textContent).toBe(
-      `${arrives} ${accepts}`,
-    );
-    cleanup();
-
-    mount({ plans: [variablePlan(false)], acceptAnswers: [ACCEPTED] });
-    await settle();
-    expect(screen.getByTestId("move-sheet-disclosure").textContent).toBe(
-      accepts,
-    );
   });
 
   describe("choices on a Moves row (itemChoices)", () => {

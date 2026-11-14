@@ -16,7 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
-import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -210,11 +209,6 @@ export function EnvOverrideEditor(props: {
    * everywhere"). An empty map for a list with nothing to say.
    */
   readonly rowNotes: ReadonlyMap<string, ReactNode>;
-  /**
-   * Rows a secret sets, by key, each with the secret's name: "NAME · from
-   * the secret NAME · Secrets", with no value and nothing to edit here.
-   */
-  readonly claimedBy: ReadonlyMap<string, string>;
   /** The latest stale refusal of a row's save, or `null` for none. */
   readonly staleRefusal: EnvStaleRefusal | null;
   /**
@@ -342,16 +336,6 @@ export function EnvOverrideEditor(props: {
       {overrides.length > 0 ? (
         <ul className="divide-y divide-border/40">
           {overrides.map((entry) => {
-            const secretName = props.claimedBy.get(entry.key);
-            if (secretName !== undefined) {
-              return (
-                <EnvClaimedRow
-                  key={entry.key}
-                  name={entry.key}
-                  secretName={secretName}
-                />
-              );
-            }
             if (savedKeyShaped(entry)) {
               return (
                 <EnvMaskedRow
@@ -392,7 +376,6 @@ export function EnvOverrideEditor(props: {
           phone={phone}
           feedback={feedback}
           existingKeys={keys}
-          claimedBy={props.claimedBy}
           disabled={disabled}
           namePlaceholder={namePlaceholder}
           onAdd={(key, value) => {
@@ -778,49 +761,10 @@ function RemoveVariableButton(props: {
   );
 }
 
-/** A variable a secret sets: the secret's, read and changed on Secrets. */
-function EnvClaimedRow(props: {
-  readonly name: string;
-  readonly secretName: string;
-}) {
-  return (
-    <li
-      className="px-3 py-2.5 text-ui-sm text-muted-foreground"
-      data-testid="env-claimed-row"
-    >
-      <EnvSecretClaim name={props.name} secretName={props.secretName} />
-    </li>
-  );
-}
-
-/** The secret that owns this variable, shared by saved rows and Add drafts. */
-function EnvSecretClaim(props: {
-  readonly name: string;
-  readonly secretName: string;
-}): ReactNode {
-  return (
-    <>
-      <span className="font-mono text-foreground">{props.name}</span>
-      {" · from the secret "}
-      <span className="font-mono">{props.secretName}</span>
-      {" · "}
-      <Button
-        type="button"
-        variant="link"
-        size="inline-xs"
-        onClick={() => navigateToSettingsSection("secrets")}
-      >
-        Secrets
-      </Button>
-    </>
-  );
-}
-
 function EnvOverrideAddRow(props: {
   readonly phone: boolean;
   readonly feedback: ReactNode;
   readonly existingKeys: readonly string[];
-  readonly claimedBy: ReadonlyMap<string, string>;
   readonly disabled: boolean;
   readonly namePlaceholder: string;
   readonly onAdd: (key: string, value: string | null) => void;
@@ -833,22 +777,9 @@ function EnvOverrideAddRow(props: {
     mode: "set",
     error: null,
   }));
-  const [showClaim, setShowClaim] = useState(false);
-  const secretName = showClaim
-    ? (props.claimedBy.get(draft.key.trim()) ?? null)
-    : null;
-  const edit = (update: (current: Draft) => Draft): void => {
-    setDraft(update);
-    setShowClaim(false);
-  };
 
   const add = (): void => {
     const nextKey = draft.key.trim();
-    if (props.claimedBy.has(nextKey)) {
-      setShowClaim(true);
-      setDraft((current) => ({ ...current, error: null }));
-      return;
-    }
     const nextValue = draft.mode === "unset" ? null : draft.value;
     const error = draftError(nextKey, existingKeys);
     if (error !== null) {
@@ -875,46 +806,32 @@ function EnvOverrideAddRow(props: {
             aria-label="New variable name"
             className="h-8"
             onChange={(event) =>
-              edit((current) => ({ ...current, key: event.target.value }))
+              setDraft((current) => ({ ...current, key: event.target.value }))
             }
             font="mono"
             size="xs"
           />
         </label>
-        {secretName === null ? (
-          <EnvValueField
-            multiline={props.phone}
-            value={draft.value}
-            mode={draft.mode}
-            disabled={disabled}
-            ariaLabel="New variable value"
-            className={VALUE_FIELD_PLACEMENT}
-            onModeChange={(mode) => edit((current) => ({ ...current, mode }))}
-            onValueChange={(value) =>
-              edit((current) => ({ ...current, value }))
-            }
-            onBlur={() => undefined}
-          />
-        ) : (
-          <div
-            className={cn(
-              VALUE_FIELD_PLACEMENT,
-              "text-ui-sm text-muted-foreground",
-            )}
-            data-testid="env-draft-claimed-row"
-          >
-            <EnvSecretClaim name={draft.key.trim()} secretName={secretName} />
-          </div>
-        )}
+        <EnvValueField
+          multiline={props.phone}
+          value={draft.value}
+          mode={draft.mode}
+          disabled={disabled}
+          ariaLabel="New variable value"
+          className={VALUE_FIELD_PLACEMENT}
+          onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
+          onValueChange={(value) =>
+            setDraft((current) => ({ ...current, value }))
+          }
+          onBlur={() => undefined}
+        />
         {props.phone ? null : (
           <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
             <Button
               type="button"
               size="icon-sm"
               variant="ghost"
-              disabled={
-                disabled || draft.key.trim().length === 0 || secretName !== null
-              }
+              disabled={disabled || draft.key.trim().length === 0}
               aria-label="Apply variable"
               onClick={add}
             >
@@ -933,15 +850,13 @@ function EnvOverrideAddRow(props: {
           </div>
         )}
       </div>
-      {secretName === null ? (
-        <EnvRowFooter
-          draft={draft}
-          disabled={disabled}
-          onTrim={() =>
-            edit((current) => ({ ...current, value: current.value.trim() }))
-          }
-        />
-      ) : null}
+      <EnvRowFooter
+        draft={draft}
+        disabled={disabled}
+        onTrim={() =>
+          setDraft((current) => ({ ...current, value: current.value.trim() }))
+        }
+      />
     </>
   );
   if (!props.phone)
@@ -955,7 +870,7 @@ function EnvOverrideAddRow(props: {
       open
       title="Add a variable"
       busy={disabled}
-      saveDisabled={draft.key.trim().length === 0 || secretName !== null}
+      saveDisabled={draft.key.trim().length === 0}
       removeLabel="Remove"
       onRemove={null}
       onSave={add}

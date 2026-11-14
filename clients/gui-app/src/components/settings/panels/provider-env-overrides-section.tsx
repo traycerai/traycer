@@ -5,7 +5,6 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
 import {
@@ -13,11 +12,9 @@ import {
   usePersonalRowNotes,
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalRowNoteText } from "@/components/settings/personal/personal-row-note";
-import { useSecretClaimedNames } from "@/components/settings/personal/use-secret-claimed-names";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { environmentMutationKeys, queryKeys } from "@/lib/query-keys";
 import { useHostBinding } from "@/lib/host";
-import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "./provider-env-subtitle";
@@ -27,14 +24,6 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 
 type ProviderId = ProviderCliState["providerId"];
-
-/**
- * No name in a provider's env is a secret's own: a secret reaches a provider
- * only through the variables of Variables & shells, which every provider's
- * env inherits, so this tab has no claim row of its own and an override of
- * such a name gets the shadow note instead.
- */
-const NO_PROVIDER_CLAIMS: ReadonlyMap<string, string> = new Map();
 
 export function ProviderEnvOverridesSection(props: {
   readonly providerId: ProviderId;
@@ -121,12 +110,6 @@ export function ProviderEnvOverridesSection(props: {
     providerId,
     keyPrefix: `${providerIdToGuiHarnessId(providerId)}:`,
   });
-  // Every name a Personal secret is set under in Variables & shells, which
-  // every provider's env inherits: a plain override of the same name shadows
-  // that secret rather than reading from it, and the row says so. Nothing
-  // binds a secret to a name in one provider's env, so no binding of this
-  // provider's own can claim the name first.
-  const globalClaims = useSecretClaimedNames();
   // The hosts this save propagates to, for the pending row's own label; a
   // Local row's save reaches only this computer, so it keeps the plain
   // Adding/Saving/Removing text instead. Only once the list has actually
@@ -159,7 +142,6 @@ export function ProviderEnvOverridesSection(props: {
       />,
     );
   }
-  addShadowedSecretNotes({ rowNotes, overrides, globalClaims, providerName });
 
   // A rename is set-new → delete-old so a failed delete leaves a harmless
   // duplicate rather than a lost value.
@@ -194,7 +176,6 @@ export function ProviderEnvOverridesSection(props: {
       <EnvOverrideEditor
         key={JSON.stringify([viewerId, configurationKey, providerId])}
         rowNotes={rowNotes}
-        claimedBy={NO_PROVIDER_CLAIMS}
         overrides={overrides}
         disabled={disabled}
         namePlaceholder={envNamePlaceholder(providerId)}
@@ -221,68 +202,5 @@ function ProviderEnvSubtitleLine(): ReactNode {
     <p className="text-ui-xs text-muted-foreground">
       {PROVIDER_ENV_TAB_SUBTITLE}
     </p>
-  );
-}
-
-/**
- * Adds a {@link ShadowedSecretNote} for every SET override whose key is a
- * name some Personal secret is set under in Variables & shells - which every
- * provider's env inherits - without this provider's own binding claiming it,
- * skipping a key that already carries a note (a host's own value, say), that
- * this provider's own binding does claim (`EnvClaimedRow` already says so),
- * or an explicit Unset (`value === null`): it receives no value from
- * anything, so there is nothing to say the provider gets "instead of the
- * secret".
- */
-function addShadowedSecretNotes(props: {
-  readonly rowNotes: Map<string, ReactNode>;
-  readonly overrides: readonly {
-    readonly key: string;
-    readonly value: string | null;
-  }[];
-  readonly globalClaims: ReadonlyMap<string, string>;
-  readonly providerName: string;
-}): void {
-  const { rowNotes, globalClaims, providerName } = props;
-  for (const entry of props.overrides) {
-    if (entry.value === null) continue;
-    if (rowNotes.has(entry.key)) continue;
-    const secretName = globalClaims.get(entry.key);
-    if (secretName === undefined) continue;
-    rowNotes.set(
-      entry.key,
-      <ShadowedSecretNote
-        providerName={providerName}
-        secretName={secretName}
-      />,
-    );
-  }
-}
-
-/**
- * A row note for a plain override whose key is a name some Personal secret
- * is set under in Variables & shells, which every provider's env inherits,
- * without this provider's own binding claiming it: accepted as an ordinary
- * variable, but worth saying so, since the person may expect the secret's
- * value here instead.
- */
-function ShadowedSecretNote(props: {
-  readonly providerName: string;
-  readonly secretName: string;
-}): ReactNode {
-  return (
-    <>
-      {props.providerName} gets this value instead of the secret{" "}
-      <span className="font-mono">{props.secretName}</span>
-      {" · "}
-      <Button
-        type="button"
-        variant="link"
-        size="inline-xs"
-        onClick={() => navigateToSettingsSection("secrets")}
-      >
-        Secrets
-      </Button>
-    </>
   );
 }

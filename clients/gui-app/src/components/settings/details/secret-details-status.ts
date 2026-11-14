@@ -4,6 +4,7 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { removalLabel } from "@/components/settings/details/details-copy";
+import { hostListEnvironmentId } from "@/hooks/environment/environment-host-list-key";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -28,10 +29,12 @@ type SecretsList = ResponseOfMethod<
   "environment.secrets.list"
 >;
 
+type HostList = ResponseOfMethod<HostRpcRegistry, "environment.host.list">;
+
 const FAILED_STATES = new Set(["failed", "not_applied"]);
 
 /**
- * The page's "Now": where the configuration's secrets stand on the hosts
+ * The page's "Now": where the configuration's secrets stand on the sandboxes
  * running it. "Applied on 2 hosts" when every host applied them, "Not
  * applied on dev-box" when a host could not, "Applying on dev-box…" while a
  * host has not reported the latest change.
@@ -252,6 +255,39 @@ async function readSecretsList(
   });
 }
 
+/**
+ * The ids of the configuration's sandboxes, from the host list the page
+ * already holds for this viewer; `null` while that list is not loaded or its
+ * last read failed. Nothing is read for it: a secret is used on sandboxes
+ * only, and the history's host rows carry no kind.
+ */
+function cachedSandboxIds(
+  environmentId: string,
+  context: DetailsProviderContext,
+): ReadonlySet<string> | null {
+  const viewerId = useAuthStore.getState().contextMetadata?.userId ?? "";
+  const list = context.queryClient
+    .getQueriesData<HostList>({
+      predicate: (query) =>
+        hostListEnvironmentId(query.queryKey) === environmentId &&
+        query.queryKey.at(-1) === viewerId,
+    })
+    .flatMap(([queryKey, data]) => {
+      const state = context.queryClient.getQueryState(queryKey);
+      return data === undefined || state?.status !== "success"
+        ? []
+        : [{ data, at: state.dataUpdatedAt }];
+    })
+    .toSorted((a, b) => b.at - a.at)
+    .at(0)?.data;
+  if (list === undefined) return null;
+  return new Set(
+    list.hosts
+      .filter((host) => host.kind === "sandbox")
+      .map((host) => host.hostId),
+  );
+}
+
 export async function loadSecretDetails(
   subject: DetailsSubject,
   context: DetailsProviderContext,
@@ -260,11 +296,17 @@ export async function loadSecretDetails(
   const list = await readSecretsList(subject.environmentId, context);
   if (subject.key.length > 0)
     return singleSecretDetails(subject, context, status, list);
+  const sandboxIds = cachedSandboxIds(subject.environmentId, context);
+  const sandboxes =
+    sandboxIds === null
+      ? []
+      : status.hosts.filter((host) => sandboxIds.has(host.hostId));
   return {
     title: "Secrets",
     status: {
       ...status,
-      summary: secretsHostSummary(status.hosts),
+      summary: sandboxIds === null ? "" : secretsHostSummary(sandboxes),
+      hosts: sandboxes,
       items: secretInventory(subject, list, status.hosts),
     },
   };

@@ -79,7 +79,6 @@ function Parent(props: {
       overrides={rows}
       disabled={false}
       rowNotes={new Map()}
-      claimedBy={new Map()}
       staleRefusal={null}
       namePlaceholder="OPENAI_API_KEY"
       emptyLabel={EMPTY_LABEL}

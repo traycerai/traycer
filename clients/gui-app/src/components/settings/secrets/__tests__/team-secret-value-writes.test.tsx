@@ -4,8 +4,6 @@ const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLinkMock,
 }));
-// The computers holding a copy are covered by `secret-remove-preview-computers`;
-// a team page names none.
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",
   () => ({
@@ -42,6 +40,8 @@ import type {
   EnvironmentSecretV12,
   EnvironmentSecretsCreateResponse,
   EnvironmentSecretsReplaceValueResponse,
+  EnvironmentSecretsRotationRequestV11,
+  EnvironmentSecretsRotationResponse,
   SecretVerifyResult,
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
@@ -127,10 +127,18 @@ interface TeamSecretsHost {
   readonly create: Held<EnvironmentSecretsCreateResponse>;
   readonly verify: Held<SecretVerifyResult>;
   readonly replace: Held<EnvironmentSecretsReplaceValueResponse>;
+  rotation: EnvironmentSecretsRotationResponse["rotation"];
+  readonly rotationRequests: EnvironmentSecretsRotationRequestV11[];
 }
 
 function teamSecretsHost(): TeamSecretsHost {
-  return { create: held(), verify: held(), replace: held() };
+  return {
+    create: held(),
+    verify: held(),
+    replace: held(),
+    rotation: null,
+    rotationRequests: [],
+  };
 }
 
 function handlersFor(host: TeamSecretsHost): MockHandlerMap<HostRpcRegistry> {
@@ -144,10 +152,10 @@ function handlersFor(host: TeamSecretsHost): MockHandlerMap<HostRpcRegistry> {
       versions: versionsFixture(),
       removal: null,
     }),
-    "environment.secrets.rotation": () => ({
-      rotation: null,
-      lastVerify: null,
-    }),
+    "environment.secrets.rotation": (request) => {
+      host.rotationRequests.push(request);
+      return { rotation: host.rotation, lastVerify: null };
+    },
     "environment.secrets.create": () => host.create.promise,
     "environment.secrets.verify": () => host.verify.promise,
     "environment.secrets.replaceValue": () => host.replace.promise,
@@ -256,6 +264,57 @@ afterEach(() => {
 });
 
 describe("a team secret's writes go through the host mutations", () => {
+  it("shows a team's rotation from its selected environment read", async () => {
+    const host = teamSecretsHost();
+    host.rotation = {
+      rotationId: "rot-team",
+      fromVersionId: "ver-1",
+      toVersionId: "ver-2",
+      state: "enforcing",
+      issuedAt: 1,
+      producers: [
+        {
+          producer: "worker",
+          workerClass: "https",
+          incarnation: "worker-1",
+          status: "missing",
+          evidence: null,
+        },
+      ],
+    };
+    const harness = mountTeam(host);
+    await openReplaceWithValue();
+    fireEvent.click(buttonOf("replace-secret-confirm"));
+    await waitFor(() => {
+      expect(callsOf(harness, "environment.secrets.replaceValue")).toHaveLength(
+        1,
+      );
+    });
+    host.replace.release({
+      outcome: "accepted",
+      rotationId: "rot-team",
+      versionId: "ver-3",
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
+    });
+
+    expect(
+      (await screen.findByTestId("secret-rotation-headline")).textContent,
+    ).toBe("New value accepted, closing old sessions.");
+    expect(
+      screen
+        .getAllByTestId("secret-rotation-producer")
+        .map((line) => line.textContent),
+    ).toEqual(["https: not confirmed yet"]);
+    expect(harness.paramsOf("environment.secrets.rotation")).toEqual([
+      { secretId: "sec-1", environmentId: "env-a" },
+    ]);
+    expect(host.rotationRequests).toEqual([
+      { secretId: "sec-1", environmentId: "env-a" },
+    ]);
+  });
+
   it("saves through the create mutation, disabled while in flight, then re-reads the team's secrets", async () => {
     const host = teamSecretsHost();
     const harness = mountTeam(host);

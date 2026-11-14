@@ -176,7 +176,8 @@ desktop in its own flag (`moveInvitationAnswered`), not the reminder's, so
 someone who dismissed the reminder long ago is still asked once; it settles
 the reminder too. Afterwards the checklist's move card is the only place the
 move waits. A computer that runs a team's settings, or has moved, is never
-asked (`useThisComputersMove` answers `team` or `moved`). One ask at a time:
+asked (`useThisComputersMove` answers `team` or `moved`); a computer whose
+move waits for consent is asked again whatever its planes read. One ask at a time:
 while the invitation is owed, or the move sheet is open, the session-import
 and login-import announcements are held, unclaimed, and show once it is
 answered (`useMoveAskHoldsAnnouncements`); otherwise following the invitation
@@ -1219,8 +1220,8 @@ read by `secretChangeRefusalLine`) and the recovery order for a leaked secret,
 open beside the versions: "If this secret leaked", four steps, and "If Traycer
 can't be reached, finish or stop running agent turns and shells before stopping
 the sandbox to end its sessions." Empty, it reads
-"Values and logins your agents use. On your computers they are set as values; on
-sandboxes agents use them without seeing them." with Add a secret, and the page
+"Values and logins your agents use on sandboxes, without seeing them." with Add
+a secret, and the page
 has no subtitle, which would say it twice. A failed read shows only "Couldn't
 read Personal's secrets." with Retry, never the empty state. A team's empty
 state reads "Values and logins Acme's agents use, on its sandboxes without being
@@ -1234,8 +1235,11 @@ immediately; a completed cleanup publishes nothing. The delta also retries the
 environment's other failed items, just as any configuration change does. It
 never rewrites a declaration, so a replacement secret using the same name
 survives. The page's own `Details` sits beside its chip: its Now reads "Applied
-on 2 hosts" (or "Not applied on dev-box", "Applying on dev-box…"), and a removal
-under way reads "Cleanup requested · waiting for dev-box · Retry". A Details
+on 2 hosts" (or "Not applied on dev-box", "Applying on dev-box…"), counting and
+listing only the hosts the page's cached `environment.host.list` calls a
+sandbox; while that list is not loaded or its read failed, the drawer shows no
+count and no host rows, only its secrets. A removal under way reads "Cleanup
+requested · waiting for dev-box · Retry". A Details
 that cannot load reads "Couldn't load details." with Retry. **Add a secret**
 offers API key and database login, with "Provider keys are set on each
 provider's page, under Providers." where Providers opens that page
@@ -1246,8 +1250,7 @@ e.g. api.stripe.com. Separate several with commas."; the mode is "Agents use it
 without seeing it (recommended)" or "Agents can read it", the second with its
 warning. A kind none of whose protocols is brokered is greyed with the
 catalogue's own line. The form and Save's confirmation carry "Stored encrypted
-in Traycer's cloud. Computers running Personal receive the value, readable by
-their tools and agents; sandboxes use it without seeing it." and How Traycer
+in Traycer's cloud. Sandboxes use it without seeing it." and How Traycer
 handles this, and nothing else before Save. A team's provider key opens it
 with the key's name filled in (`prefill`). The typed value is sent by a direct `client.request`, never through
 a query or mutation, so it reaches no cache, and closing the dialog drops it. A
@@ -1257,19 +1260,14 @@ this computer) or the `secretChangeRefusalLine` for a create refusal's code;
 address, then save again." On a team's host the page is the team line, no list;
 on a host whose version predates the page, "Update this host to use your secrets
 here." **Replace** (`environment.secrets.replaceValue`, compare-and-set on the
-version the list showed; a stale answer asks to look again) adds "Tools already
-running keep the old value until they restart.", and the row then reads the
-rotation (`environment.secrets.rotation`, polled every 3 s only while it moves):
-"New value accepted, closing old sessions." until every worker class and host
-has proved the old value out of use, then "New value enforced." with each one's
-proof (`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox card's
-per-grant line). **Remove** confirms with "Added by you on 24 Oct. Version 1. On
-dev-box and laptop. Tools already running keep it until they restart."
-(`secretRemovePreview`), each of the first three clauses only when it is known.
-On Personal the hosts are the computers running Personal, as the page chip
-counts and names them (`useHostsRunningPersonal`, `namedHosts`: "<A> and <B>",
-"<A>, <B> and 1 more", "<n> computers"), and the clause is left out when none
-does; a team's computers and every sandbox hold no copy. A secret MCP servers
+version the list showed; a stale answer asks to look again) carries the same
+custody sentence, and the row then reads the rotation
+(`environment.secrets.rotation`, polled every 3 s only while it moves): "New
+value accepted, closing old sessions." until every worker class has proved the
+old value out of use, then "New value enforced." with each one's proof; a host
+owes no acknowledgement and is not listed (`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox card's
+per-grant line). **Remove** confirms with "Added by you on 24 Oct. Version 1."
+(`secretRemovePreview`), each clause only when it is known. A secret MCP servers
 use (`environment.configuration.mcpServers.list`, each server's
 `credential.secretId`, read once Remove opens, never on a Local row) leads the
 preview with "Used by github. Removing it leaves github without a credential; if
@@ -1313,13 +1311,8 @@ with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 runs a command / was changed without your confirmation.") with Review, which
 opens Secrets. A variable is saved as typed, whatever its name or value, on
-Variables and on a provider's Env tab, on every host a sandbox included. A
-name one
-of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
-`variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
-ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to
-edit there. A provider's Env has no such name: nothing binds a secret to a
-name in one provider's env. A value
+Variables and on a provider's Env tab, on every host a sandbox included,
+whether or not a secret declares the same name. A value
 already saved that looks like a key (`classifyCredential`) shows as dots with
 Remove, never in a field, on every Variables and Env list (Personal, a team, a
 Local row). On the host a variable or

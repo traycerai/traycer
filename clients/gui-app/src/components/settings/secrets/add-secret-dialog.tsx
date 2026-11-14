@@ -4,7 +4,6 @@ import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-
 import type { EnvironmentSecretsCreateResponse } from "@traycer/protocol/host/environment-schemas";
 import { SecretIntakeFields } from "@/components/settings/secrets/secret-intake-fields";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
-import { custodySentence } from "@/components/settings/environment/mcp-skills-copy";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -48,6 +47,7 @@ import {
 import {
   PROVIDER_KEYS_LINE,
   SECRET_SAVED_OFFLINE,
+  secretCustodySentence,
   SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
@@ -204,7 +204,7 @@ function Custody(): ReactNode {
         className="max-w-[72ch] text-ui-xs text-muted-foreground"
         data-testid="secret-custody-sentence"
       >
-        {custodySentence(personal, name)}
+        {secretCustodySentence(personal, name)}
       </p>
       <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
     </div>

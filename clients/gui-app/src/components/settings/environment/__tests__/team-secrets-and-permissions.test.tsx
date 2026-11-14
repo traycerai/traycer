@@ -30,7 +30,6 @@ import {
   RETIRED_SECRET_ROW_FIELDS,
 } from "@traycer/protocol/host/released-wire-rows";
 
-// The computers holding a copy are covered by `secret-remove-preview-computers`.
 vi.mock(
   "@/components/settings/environment/use-hosts-running-configuration",
   () => ({

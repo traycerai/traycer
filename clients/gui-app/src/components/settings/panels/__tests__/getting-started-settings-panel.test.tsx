@@ -1,8 +1,13 @@
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentSecretV12,
+  EnvironmentStatusResponseV12,
+} from "@traycer/protocol/host/environment-schemas";
 import type { RunningHost } from "@/components/settings/environment/hosts-running-configuration-model";
+import type { ThisComputer } from "@/components/settings/move/this-computer";
 import type { ThisComputersMove } from "@/components/settings/move/use-this-computers-move";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -15,12 +20,14 @@ import {
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
   secrets: [] as EnvironmentSecretV12[],
   tasks: [] as readonly { readonly id: string }[],
   hosts: [] as RunningHost[],
+  status: null as EnvironmentStatusResponseV12 | null,
   user: null as AuthenticatedUser | null,
   staged: null as { readonly target: { readonly kind: string } } | null,
   openLink: vi.fn(() => Promise.resolve()),
@@ -30,6 +37,7 @@ const mocks = vi.hoisted(() => ({
     client: null,
   },
   thisComputersMove: "unknown" as ThisComputersMove,
+  useRealMove: false,
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -43,7 +51,12 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: { secrets: mocks.secrets } }),
+  useHostQuery: (args: { readonly method: string }) => ({
+    data:
+      args.method === "environment.status"
+        ? mocks.status
+        : { secrets: mocks.secrets },
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -61,9 +74,25 @@ vi.mock("@/hooks/host/use-requester-host-id", () => ({
 vi.mock("@/components/settings/move/this-computer", () => ({
   useThisComputer: () => mocks.thisComputer,
 }));
-vi.mock("@/components/settings/move/use-this-computers-move", () => ({
-  useThisComputersMove: () => mocks.thisComputersMove,
-}));
+vi.mock(
+  "@/components/settings/move/use-this-computers-move",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/move/use-this-computers-move")
+      >();
+    return {
+      ...actual,
+      useThisComputersMove: (
+        computer: ThisComputer,
+        enabled: boolean,
+      ): ThisComputersMove =>
+        mocks.useRealMove
+          ? actual.useThisComputersMove(computer, enabled)
+          : mocks.thisComputersMove,
+    };
+  },
+);
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: mocks.tasks }),
@@ -212,6 +241,7 @@ describe("GettingStartedSettingsPanel", () => {
     mocks.secrets = [];
     mocks.tasks = [];
     mocks.hosts = [];
+    mocks.status = null;
     mocks.user = zeroUser();
     mocks.staged = null;
     mocks.thisComputer = {
@@ -220,6 +250,7 @@ describe("GettingStartedSettingsPanel", () => {
       client: null,
     };
     mocks.thisComputersMove = "unknown";
+    mocks.useRealMove = false;
     mocks.openLink.mockClear();
     navigateMock.mockReset();
     activateTabIntentMock.mockClear();
@@ -420,6 +451,38 @@ describe("GettingStartedSettingsPanel", () => {
     expect(card.textContent).toContain(
       "So your settings follow you to every computer and sandbox.",
     );
+    expect(card.textContent).toContain("Move to Personal");
+
+    fireEvent.click(card);
+
+    expect(useMoveSheetStore.getState().target).toEqual({
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+  });
+
+  it("shows the move item when consent is awaited after all planes moved", () => {
+    mocks.useRealMove = true;
+    mocks.thisComputer = {
+      hostId: "old",
+      hostName: "Old laptop",
+      client: null,
+    };
+    mocks.status = environmentStatusFixture({
+      principal: null,
+      planes: { records: "moved", broker: "moved", room: "moved" },
+      consent: null,
+      setup: { stage: "moving_settings", state: "awaiting_consent" },
+    });
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <GettingStartedSettingsPanel />
+      </QueryClientProvider>,
+    );
+
+    const card = screen.getByTestId("getting-started-card-move");
+    expect(card.textContent).toContain("Move this computer to Personal");
     expect(card.textContent).toContain("Move to Personal");
 
     fireEvent.click(card);

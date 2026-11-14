@@ -11,8 +11,8 @@ import {
 } from "@/components/settings/personal/personal-page-context";
 import type { PersonalHostState } from "@/components/settings/personal/personal-page-status";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import { PROVIDER_KEY_CUSTODY_SENTENCE } from "@/lib/providers/provider-key-custody";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
-import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 
 const mocks = vi.hoisted(() => ({
   openLink: vi.fn(),
@@ -385,7 +385,7 @@ describe("ProviderApiKeySection custody sentence", () => {
   it("states Personal's custody and links how Traycer handles it for a provider whose key becomes Personal's secret", () => {
     renderOn("cursor", READY);
 
-    expect(screen.getByText(SECRET_CUSTODY_SENTENCE)).toBeDefined();
+    expect(screen.getByText(PROVIDER_KEY_CUSTODY_SENTENCE)).toBeDefined();
     expect(screen.getByText("How Traycer handles this")).toBeDefined();
     expect(screen.queryByText(/^Stored encrypted on /)).toBeNull();
   });
@@ -415,7 +415,7 @@ describe("ProviderApiKeySection custody sentence", () => {
       renderOn(id, host);
 
       expect(screen.getByText(sentence)).toBeDefined();
-      expect(screen.queryByText(SECRET_CUSTODY_SENTENCE)).toBeNull();
+      expect(screen.queryByText(PROVIDER_KEY_CUSTODY_SENTENCE)).toBeNull();
       expect(screen.queryByText("How Traycer handles this")).toBeNull();
     },
   );
