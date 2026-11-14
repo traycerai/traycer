@@ -571,6 +571,15 @@ function modalCopy(
       reportCode: "TEAM_MEMBERSHIP_REQUIRED",
     };
   }
+  if (variant.kind === "not-admitted") {
+    return {
+      title: "This account cannot access this computer",
+      description: "Switch accounts to use it.",
+      reportTitle: "No Traycer Host is reachable",
+      reportMessage: "No host on this account could be reached.",
+      reportCode: "HOST_NONE_USABLE",
+    };
+  }
   if (variant.kind === "update-client") {
     const { requirement } = variant;
     return {

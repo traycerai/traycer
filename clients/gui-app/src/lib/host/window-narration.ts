@@ -56,6 +56,7 @@ export type WindowNarrationCause = "no-usable-host" | "cold-start";
 export type WindowNarrationVariant =
   | { readonly kind: "offline" }
   | { readonly kind: "team-membership-required" }
+  | { readonly kind: "not-admitted" }
   | {
       readonly kind: "update-host";
       readonly hostId: string;
@@ -364,7 +365,8 @@ export function hostUpdateActionApplies(
 
 /**
  * The cover a blocking door state draws. Not being a member of the computer's
- * team owns the window outright; every other blocking state only while
+ * team, or not being admitted to it, owns the window outright: only switching
+ * accounts clears either. Every other blocking state covers only while
  * nothing is serving it, and draws the "no host" cover.
  */
 function doorStateVariant(
@@ -375,6 +377,7 @@ function doorStateVariant(
   if (state.kind === "not-a-member") {
     return { kind: "team-membership-required" };
   }
+  if (state.kind === "not-admitted") return { kind: "not-admitted" };
   const alreadyServing =
     input.hasBeenServed &&
     isServingLease(findLease(input.leases, input.effectiveHostId));
