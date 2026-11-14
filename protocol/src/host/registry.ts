@@ -1154,6 +1154,7 @@ import {
   terminalSubscribeV15,
   terminalSubscribeV16,
   terminalSubscribeV17,
+  terminalSubscribeV18,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   browserSavedLoginSitesV10,
@@ -15990,7 +15991,7 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -16015,6 +16016,9 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         },
         7: {
           contract: terminalSubscribeV17,
+        },
+        8: {
+          contract: terminalSubscribeV18,
         },
       },
     },

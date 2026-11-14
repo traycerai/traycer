@@ -13,6 +13,7 @@ import {
 } from "@/components/settings/personal/personal-page-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useMayChangeServedEnvironment } from "@/hooks/environment/use-served-environment-row";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useProvidersPromoteToPersonal } from "@/hooks/providers/use-providers-promote-to-personal-mutation";
 import { useHostClient } from "@/lib/host";
@@ -83,7 +84,8 @@ export function PersonalEntryMark(props: {
 /**
  * "Add to <name>", for the environment this host serves. Shown only where the
  * host takes `promoteToPersonal` (`PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`,
- * nativeMutate 1.3). A host on 1.2 or older refuses it.
+ * nativeMutate 1.3), and only to someone who may change that environment. A
+ * host on 1.2 or older refuses it.
  */
 export function AddToPersonalButton(props: {
   readonly entryKind: "mcp" | "skills";
@@ -96,6 +98,7 @@ export function AddToPersonalButton(props: {
     "providers.nativeMutate",
   );
   const promote = useProvidersPromoteToPersonal(props.environmentName);
+  const mayChange = useMayChangeServedEnvironment();
   const [refusal, setRefusal] = useState<string | null>(null);
   const supported =
     version !== null &&
@@ -104,7 +107,7 @@ export function AddToPersonalButton(props: {
       version,
       PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
     );
-  if (!supported) return null;
+  if (!supported || !mayChange) return null;
   return (
     <>
       {refusal === null ? null : (
