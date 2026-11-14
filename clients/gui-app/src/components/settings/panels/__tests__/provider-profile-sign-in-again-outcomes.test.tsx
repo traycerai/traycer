@@ -71,10 +71,8 @@ let releaseHeldAwait: ((value: AwaitResponse) => void) | null = null;
 
 const REAUTH_DEFAULTS = {
   echoedSignedIn: false,
-  ownership: false,
 } satisfies {
   readonly echoedSignedIn: boolean;
-  readonly ownership: boolean;
 };
 
 afterEach(() => {
@@ -171,8 +169,6 @@ function renderReauth(input: {
   readonly holdAwait: boolean;
   /** The await answer's rows include this profile, authenticated. */
   readonly echoedSignedIn: boolean;
-  /** Record the login-ownership manifest before the dialog mounts. */
-  readonly ownership: boolean;
 }) {
   const calls: RecordedCall[] = [];
   const { client, messenger } = buildEnvironmentClient({
@@ -203,13 +199,13 @@ function renderReauth(input: {
       },
     },
   });
-  if (input.ownership) {
-    recordNegotiatedHostManifest(HOST_ID, {
-      "providers.startLogin": { major: 1, minor: 4 },
-      "providers.cancelLogin": { major: 1, minor: 2 },
-    });
-  }
   clientMock.current = client;
+  recordNegotiatedHostManifest(HOST_ID, {
+    "providers.list": { major: 10, minor: 12 },
+    "providers.startLogin": { major: 1, minor: 5 },
+    "providers.awaitLogin": { major: 2, minor: 4 },
+    "providers.cancelLogin": { major: 1, minor: 2 },
+  });
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -468,7 +464,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
         offers: true,
         outcome,
         holdAwait: false,
-        ownership: true,
       });
       expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
       expect(
@@ -500,7 +495,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
         outcome,
         holdAwait: false,
         echoedSignedIn: true,
-        ownership: true,
       });
       expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
       expect(

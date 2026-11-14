@@ -1,4 +1,3 @@
-import type { CredentialStanding } from "@traycer/protocol/host/provider-credential-home-schemas";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -82,6 +81,8 @@ vi.mock("@/components/settings/panels/provider-profile-edit-dialog", () => ({
 }));
 
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { profile } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
+import { profileWithStanding } from "@/components/settings/panels/__tests__/provider-profile-standing-fixture";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 
 const RAW_EMAIL = "worker@example.com";
@@ -92,24 +93,9 @@ const REDACTED_EMAIL = "w•••@e…";
 
 function managedProfile(): ProviderCliState["profiles"][number] {
   return {
-    profileId: "profile-managed",
-    enabled: true,
-    kind: "managed",
-    authType: "oauth",
+    ...profile("profile-managed", "managed"),
     label: "Work account",
-    auth: {
-      status: "authenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
     identity: { email: RAW_EMAIL, tier: null, accountUuid: null },
-    usageUpdatedAt: null,
-    rateLimitStatus: "unknown",
-    rateLimitLimitedScopes: null,
-    duplicateOfProfileId: null,
-    accentColor: null,
-    ambientDriftNotice: null,
   };
 }
 
@@ -138,37 +124,6 @@ function opencodeState(): ProviderCliState {
     loginCapability: null,
     availabilityPending: false,
     profiles: [managedProfile()],
-  };
-}
-
-function profileWithStanding(
-  standing: Partial<CredentialStanding>,
-  overrides: Partial<ProviderProfile>,
-): ProviderProfile {
-  return {
-    ...managedProfile(),
-    credentialHome: {
-      homeAddress: "synthetic-home",
-      bindingVersion: 1,
-      materialRevision: 1,
-      custodyVersion: 1,
-      custodyClass: "self-sufficient",
-      environmentPresence: null,
-      handoffEnvironmentId: null,
-      materialFingerprint: "synthetic-material",
-      observation: null,
-      materialMatchesBinding: "yes",
-      standing: {
-        material: "usable",
-        repairDeadline: null,
-        familyVersion: null,
-        authority: null,
-        cause: null,
-        observation: { source: "custodian", status: "answered", capturedAt: 1 },
-        ...standing,
-      },
-    },
-    ...overrides,
   };
 }
 
