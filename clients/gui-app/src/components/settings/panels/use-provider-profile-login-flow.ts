@@ -1,9 +1,12 @@
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { readHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
-import type {
-  HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
+import {
+  HostMethodVersionUnsatisfiedError,
+  type HostRpcError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
@@ -12,6 +15,8 @@ import {
   type ProviderCliState,
   type ProviderLoginCapability,
   type ProviderLoginProfileOutcome,
+  type ProviderLoginTarget,
+  type ProviderLoginTargetRefusal,
   type ProviderLoginRefusal,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
@@ -92,6 +97,17 @@ export type EnsurePackMutation = UseMutationResult<
 
 export type ProviderProfileLoginFlowMode = "create" | "reauth";
 
+export type ProviderTargetLoginResult =
+  | {
+      readonly kind: "target-refused";
+      readonly targetRefusal: ProviderLoginTargetRefusal;
+    }
+  | (AwaitLoginResult & {
+      readonly kind: "target-outcome";
+      readonly profileOutcome: ProviderLoginProfileOutcome | null;
+      readonly admissionId: string | null;
+    });
+
 export type ProviderProfileLoginFlowState =
   | { readonly kind: "start" }
   | {
@@ -136,7 +152,8 @@ export type ProviderProfileLoginFlowState =
     }
   /** The sign-in finished and named a profile the list could not be read
    *  for; `retryListRead` reads the list again. */
-  | { readonly kind: "list-unread" };
+  | { readonly kind: "list-unread" }
+  | ProviderTargetLoginResult;
 
 /** A completed sign-in that names its profile, looked up before it is shown. */
 interface ListedOutcome {
@@ -607,6 +624,15 @@ export function useProviderProfileOutcomeLoginFlow(
   input: UseProviderProfileLoginFlowInput,
   profileOutcomes: CachedProviderProfilesReader | null,
 ): ProviderProfileLoginFlow {
+  return useProviderDestinationLoginFlow(input, profileOutcomes, null, null);
+}
+
+export function useProviderDestinationLoginFlow(
+  input: UseProviderProfileLoginFlowInput,
+  profileOutcomes: CachedProviderProfilesReader | null,
+  target: ProviderLoginTarget | null,
+  targetClient: HostClient<HostRpcRegistry> | null,
+): ProviderProfileLoginFlow {
   const {
     hostBlock,
     supportsLoginOwnership,
@@ -623,9 +649,11 @@ export function useProviderProfileOutcomeLoginFlow(
     failureMessages,
     onFailed,
   } = input;
-  const [state, setState] = useState<ProviderProfileLoginFlowState>({
-    kind: "start",
-  });
+  const [state, setState] = useState<ProviderProfileLoginFlowState>(() =>
+    target !== null && !destinationSupported(targetClient)
+      ? { kind: "target-refused", targetRefusal: "unsupported-computer" }
+      : { kind: "start" },
+  );
   const [restartNotice, setRestartNotice] = useState<string | null>(null);
   // Mirrors `attemptIdRef` for render-safe reads (`codePaste.attemptId` is
   // read during render, where refs must not be touched). `attemptIdRef`
@@ -739,6 +767,7 @@ export function useProviderProfileOutcomeLoginFlow(
   // it without depending on it, or the mutation's own state changes would
   // re-run that effect and drain the owed releases mid-flow.
   const settleOwedReleasesRef = useRef<() => void>(() => {});
+  const releaseLeaveOnUnmountRef = useRef<() => void>(() => {});
   // The named outcome a `list-unread` attempt waits to show, and whether its
   // list read is in flight: Retry reads the list again and nothing else.
   const listedOutcomeRef = useRef<ListedOutcome | null>(null);
@@ -765,6 +794,7 @@ export function useProviderProfileOutcomeLoginFlow(
     return () => {
       unmountedRef.current = true;
       clearRepollTimer();
+      releaseLeaveOnUnmountRef.current();
       settleOwedReleasesRef.current();
     };
   }, [clearRepollTimer]);
@@ -1176,10 +1206,10 @@ export function useProviderProfileOutcomeLoginFlow(
         request: {
           providerId,
           holderId,
-          target: null,
-          profileId: existingProfileId,
+          target,
+          profileId: target === null ? existingProfileId : null,
           createProfile:
-            mode === "create"
+            mode === "create" && target?.kind !== "leave-to-local"
               ? {
                   label: options.label ?? "",
                   shareSkillsAndPlugins: options.shareSkillsAndPlugins,
@@ -1193,8 +1223,12 @@ export function useProviderProfileOutcomeLoginFlow(
           if (startAbandoned()) return;
           if (progress.kind === "launching") {
             liveLoginRef.current = {
-              profileId:
-                mode === "reauth" ? existingProfileId : answer.profileId,
+              profileId: loginHandle(
+                mode,
+                existingProfileId,
+                answer.profileId,
+                target,
+              ),
             };
             attemptProfileRef.current = liveLoginRef.current.profileId;
           }
@@ -1211,11 +1245,14 @@ export function useProviderProfileOutcomeLoginFlow(
           // A newer attempt asks the same question and attaches to the same
           // login, so whatever this answer holds is that attempt's now.
           if (attemptIdRef.current !== thisAttemptId) return;
-          // Reauth always awaits the profile it was invoked for - the
-          // response never mints a different id for an existing profile.
-          // Create has no id until this response supplies one.
-          const nextProfileId =
-            mode === "reauth" ? existingProfileId : data.profileId;
+          // Untargeted reauth keeps its existing handle. A destination's
+          // scratch sign-in is addressed by the handle the start returns.
+          const nextProfileId = loginHandle(
+            mode,
+            existingProfileId,
+            data.profileId,
+            target,
+          );
           attemptProfileRef.current = nextProfileId;
           // Ahead of the unmount check: a Cancel pressed while the pack was
           // downloading ends the flow at once (`cancel`), and the dialog can
@@ -1237,20 +1274,23 @@ export function useProviderProfileOutcomeLoginFlow(
             // Nobody will open this login's page or wait for it. Only a
             // provider that opens its own page keeps its login: that page may
             // be open in a browser, where the user can still finish.
-            if (providerLoginAnswerHeldForNobody(data, loginCapability)) {
+            if (abandonedStartHoldsLogin(data, target, loginCapability)) {
               cancelProfile(nextProfileId);
             }
             return;
           }
           lastAnswerRef.current = data;
-          // Create mode must have a minted profile id to proceed; reauth
-          // mode never derives `nextProfileId` from this response (it is
-          // always the caller's own `existingProfileId`, including the
-          // ambient `null`), so there is nothing to validate there beyond
-          // `data.started`.
+          // A create or a destination needs the returned handle. Untargeted
+          // reauth may use null for the Terminal account.
+          const targetRefusal =
+            target === null ? null : (data.targetRefusal ?? null);
+          if (targetRefusal !== null) {
+            setState({ kind: "target-refused", targetRefusal });
+            return;
+          }
           const refusal = startAnswerRefusal(
             data,
-            mode === "create" && nextProfileId === null,
+            (mode === "create" || target !== null) && nextProfileId === null,
           );
           if (refusal !== null) {
             if (refusal.releaseHostLogin) cancelProfile(nextProfileId);
@@ -1310,6 +1350,15 @@ export function useProviderProfileOutcomeLoginFlow(
           };
           const handleAwaitSuccess = (result: AwaitLoginResult): void => {
             if (attemptAbandoned()) return;
+            if (target !== null) {
+              setState({
+                ...result,
+                kind: "target-outcome",
+                profileOutcome: result.profileOutcome ?? null,
+                admissionId: nextProfileId,
+              });
+              return;
+            }
             const outcome =
               profileOutcomes === null
                 ? null
@@ -1377,6 +1426,16 @@ export function useProviderProfileOutcomeLoginFlow(
           };
           const handleAwaitError = (error: unknown): void => {
             if (attemptAbandoned()) return;
+            if (
+              target !== null &&
+              error instanceof HostMethodVersionUnsatisfiedError
+            ) {
+              setState({
+                kind: "target-refused",
+                targetRefusal: "unsupported-computer",
+              });
+              return;
+            }
             // The await rejected without a host verdict, so the attempt ends
             // on the "did not finish" copy; the reason is the only record of
             // why. A closed word set: the coordinator's control-flow reason,
@@ -1398,7 +1457,8 @@ export function useProviderProfileOutcomeLoginFlow(
                   lastSeenReaderCount,
                 },
                 signal: awaitAbort.signal,
-                readsProfileOutcome: profileOutcomes !== null,
+                readsProfileOutcome:
+                  profileOutcomes !== null || target !== null,
               },
               { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
             );
@@ -1416,6 +1476,16 @@ export function useProviderProfileOutcomeLoginFlow(
             // already released their claim at the press; legacy callers
             // must not turn this failure into an ambient scope cancel.
             reportCancellation();
+            return;
+          }
+          if (
+            target !== null &&
+            error instanceof HostMethodVersionUnsatisfiedError
+          ) {
+            setState({
+              kind: "target-refused",
+              targetRefusal: "unsupported-computer",
+            });
             return;
           }
           fail(
@@ -1438,6 +1508,7 @@ export function useProviderProfileOutcomeLoginFlow(
       mode,
       providerId,
       profileOutcomes,
+      target,
       reportCancellation,
       restart,
       settleAttempt,
@@ -1454,6 +1525,13 @@ export function useProviderProfileOutcomeLoginFlow(
   useEffect(() => {
     beginLoginRef.current = beginLogin;
     settleOwedReleasesRef.current = settleOwedReleases;
+    releaseLeaveOnUnmountRef.current = () => {
+      if (
+        target?.kind === "leave-to-local" &&
+        (state.kind === "starting" || state.kind === "waiting")
+      )
+        cancelProfile(attemptProfileRef.current);
+    };
   });
 
   const start = useCallback(
@@ -1461,6 +1539,13 @@ export function useProviderProfileOutcomeLoginFlow(
       readonly label: string | null;
       readonly shareSkillsAndPlugins: boolean;
     }): void => {
+      if (target !== null && !destinationSupported(targetClient)) {
+        setState({
+          kind: "target-refused",
+          targetRefusal: "unsupported-computer",
+        });
+        return;
+      }
       // Guard every caller, including reauth's automatic mount-effect start.
       if (hostBlock?.kind === "macos") {
         const message = providerHostBlockLabel(
@@ -1506,6 +1591,8 @@ export function useProviderProfileOutcomeLoginFlow(
       awaitLogin.isPending,
       beginLogin,
       hostBlock,
+      target,
+      targetClient,
       mode,
       onFailed,
       providerId,
@@ -1714,4 +1801,43 @@ export function useProviderProfileOutcomeLoginFlow(
       touch,
     },
   };
+}
+
+function destinationSupported(
+  client: HostClient<HostRpcRegistry> | null,
+): boolean {
+  const hostId = client?.getActiveHostId() ?? null;
+  const start = readHostMethodSchemaVersion(hostId, "providers.startLogin");
+  const awaitLogin = readHostMethodSchemaVersion(
+    hostId,
+    "providers.awaitLogin",
+  );
+  return (
+    start?.major === 1 &&
+    start.minor >= 5 &&
+    awaitLogin?.major === 2 &&
+    awaitLogin.minor >= 4
+  );
+}
+
+function abandonedStartHoldsLogin(
+  data: ProviderStartLoginAnswer,
+  target: ProviderLoginTarget | null,
+  capability: ProviderLoginCapability | null,
+): boolean {
+  return target?.kind === "leave-to-local"
+    ? providerLoginAnswerHoldsLogin(data)
+    : providerLoginAnswerHeldForNobody(data, capability);
+}
+
+/** A targeted start returns a scratch handle; the destination is never a login handle. */
+function loginHandle(
+  mode: ProviderProfileLoginFlowMode,
+  existingProfileId: string | null,
+  returnedProfileId: string | null,
+  target: ProviderLoginTarget | null,
+): string | null {
+  return target === null && mode === "reauth"
+    ? existingProfileId
+    : returnedProfileId;
 }
