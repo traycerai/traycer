@@ -60,6 +60,12 @@ import {
 } from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "@/components/settings/panels/provider-env-subtitle";
+import {
+  useCanEditConfiguration,
+  useConfigurationSource,
+} from "./configuration-source";
+import { usePickedTeamLabel } from "./team-pick-label";
+import { TeamProviderApiKeySection } from "./team-provider-api-key-section";
 
 type RailClass = "configured" | "unconfigured" | "unknown";
 
@@ -209,6 +215,7 @@ function TeamProvidersView(props: {
     onOutcome,
   } = props;
   const records = useTeamProviderRecords();
+  const source = useConfigurationSource();
   return (
     <SettingsPanelShell
       title="Providers"
@@ -281,6 +288,12 @@ function TeamProvidersView(props: {
                     onOutcome={onOutcome}
                   />
                 )}
+                {source.kind === "pool" && source.configuration === "team" ? (
+                  <TeamProviderKey
+                    providerId={providerId}
+                    environmentId={source.environmentId}
+                  />
+                ) : null}
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">
@@ -327,6 +340,22 @@ function TeamProvidersView(props: {
         </>
       ) : null}
     </SettingsPanelShell>
+  );
+}
+
+function TeamProviderKey(props: {
+  readonly providerId: ProviderId;
+  readonly environmentId: string;
+}): ReactNode {
+  const environmentName = usePickedTeamLabel(props.environmentId);
+  const canManage = useCanEditConfiguration();
+  return (
+    <TeamProviderApiKeySection
+      providerId={props.providerId}
+      environmentId={props.environmentId}
+      environmentName={environmentName}
+      canManage={canManage}
+    />
   );
 }
 

@@ -1984,6 +1984,8 @@ function ProviderTabBody({
             state={state}
             draft={apiKeyDraft}
             onDraftChange={onApiKeyDraftChange}
+            expectedEnvironmentId={null}
+            environmentName={null}
           />
         </CredentialsManagedInAccountOr>
       );

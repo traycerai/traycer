@@ -27,6 +27,12 @@ export const HOST_UPDATE_SKEW_COPY: VersionSkewCopy = {
   direction: "host-outdated",
 };
 
+export const CLIENT_UPDATE_SKEW_COPY: VersionSkewCopy = {
+  title: "Your app is too old",
+  action: "Update the app",
+  direction: "client-outdated",
+};
+
 export interface VersionSkewInput {
   readonly hostAppVersion: string | null;
   readonly clientAppVersion: string | null;
@@ -58,11 +64,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
     return HOST_UPDATE_SKEW_COPY;
   }
   if (comparison === "client-behind") {
-    return {
-      title: "Your app is too old",
-      action: "Update the app",
-      direction: "client-outdated",
-    };
+    return CLIENT_UPDATE_SKEW_COPY;
   }
   if (
     input.guidance !== null &&
@@ -76,11 +78,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
     input.guidance.clientShouldUpgrade &&
     !input.guidance.hostShouldUpgrade
   ) {
-    return {
-      title: "Your app is too old",
-      action: "Update the app",
-      direction: "client-outdated",
-    };
+    return CLIENT_UPDATE_SKEW_COPY;
   }
   // Reached only when `guidance` doesn't single out one leg — either both
   // flags are set (multiple incompatible methods diverging in opposite
