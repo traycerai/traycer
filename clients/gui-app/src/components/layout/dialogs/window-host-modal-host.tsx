@@ -24,6 +24,9 @@ import {
 import { BootOpenSettingsButton } from "@/components/host/host-boot-surface";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import { retryHostDoor } from "@/lib/host/host-door-retry";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import { useMarkDrawnDoorCover } from "@/stores/host/drawn-door-cover-store";
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { getClientAppVersion } from "@/lib/app-version";
@@ -166,15 +169,17 @@ function NarratingWindowHostModal(props: {
   const progress = useHostProvisioningProgress();
   const controller = useHostReadinessController();
   const shellAdmission = useShellLocalPlaneAdmission();
+  const { hostTokens } = useRunnerHost();
   const presentation = controller.defaultHostPresentation;
   const localLifecycle = presentsLocalHostLifecycle(presentation);
   const settled = hasSettledFailure(narration.cause, presentation);
-  const retry = resolveRetry(
-    narration.variant,
+  const retry = resolveRetry({
+    variant: narration.variant,
+    hostTokens,
     presentation,
     localLifecycle,
     settled,
-  );
+  });
   // ONE NARRATOR PER SCOPE, enforced from this side too.
   //
   // The gate draws its own full-screen card for the kinds the narrator does not
@@ -293,8 +298,9 @@ function NarratingWindowHostModal(props: {
     // report to be about. Not folded into `onRetry`'s gate: Retry is also
     // right on the slow arm, where nothing has failed yet but the wait has
     // outrun the healthy band, and a report there would still describe a
-    // start that is merely taking its time.
-    showReportIssue: settled.failed,
+    // start that is merely taking its time. And only on a state whose board
+    // draws it: see `REPORTED_VARIANTS`.
+    showReportIssue: showsReportIssue(narration.variant, settled),
     // With no Retry and no Report issue on a healthy start, `Open settings`
     // is the only control on screen - and as an equal-weight button it still
     // reads as "something is wrong, pick one". Quiet link while nothing has
@@ -426,16 +432,20 @@ interface ResolvedRetry {
  * converge's retirement). When it does not - a fleet of remote machines this
  * app cannot start - the only honest retry is re-reading the registry.
  */
-function resolveRetry(
-  variant: WindowNarrationVariant,
-  presentation: DefaultHostReadinessPresentation,
-  localLifecycle: boolean,
-  settled: SettledFailure,
-): ResolvedRetry {
+function resolveRetry(args: {
+  readonly variant: WindowNarrationVariant;
+  readonly hostTokens: HostTokenSource;
+  readonly presentation: DefaultHostReadinessPresentation;
+  readonly localLifecycle: boolean;
+  readonly settled: SettledFailure;
+}): ResolvedRetry {
+  const { variant, hostTokens, presentation, localLifecycle, settled } = args;
   if (isDoorCoverVariant(variant)) {
     return DOOR_COVERS_WITH_RETRY.has(variant.kind)
       ? {
-          onRetry: () => retryDoorCover(variant.hostId, presentation),
+          onRetry: () => {
+            void retryHostDoor(variant.hostId, hostTokens);
+          },
           pending: false,
         }
       : { onRetry: null, pending: false };
@@ -462,23 +472,26 @@ function resolveRetry(
   return { onRetry: presentation.refreshDirectory, pending: false };
 }
 
+/**
+ * The covers that offer Report issue once something has failed: the ordinary
+ * offline cover, the same cover over a refusal this app does not know (ruling
+ * 188), and the app-update cover, which no board redraws. Every door cover
+ * (C1) and the host-update cover (C5) draws its own buttons without it.
+ */
+const REPORTED_VARIANTS: ReadonlySet<WindowNarrationVariant["kind"]> = new Set<
+  WindowNarrationVariant["kind"]
+>(["offline", "unrecognised-refusal", "update-client"]);
+
+function showsReportIssue(
+  variant: WindowNarrationVariant,
+  settled: SettledFailure,
+): boolean {
+  return settled.failed && REPORTED_VARIANTS.has(variant.kind);
+}
+
 /** The door covers board C1 draws with a Retry: each says "then retry". */
 const DOOR_COVERS_WITH_RETRY: ReadonlySet<DoorCoverKind> =
   new Set<DoorCoverKind>(["keys-unavailable", "clock-skew", "token-expired"]);
-
-/**
- * Retry on a door cover: open the refused computer again now.
- *
- * The one call site for the door's per-host re-open (`retryHostDoor`, not yet
- * on this branch); until it arrives this re-reads the host registry. `hostId`
- * is the computer the re-open is aimed at.
- */
-function retryDoorCover(
-  _hostId: string,
-  presentation: DefaultHostReadinessPresentation,
-): void {
-  presentation.refreshDirectory();
-}
 
 function resolveUpdateHost(
   variant: WindowNarrationVariant,

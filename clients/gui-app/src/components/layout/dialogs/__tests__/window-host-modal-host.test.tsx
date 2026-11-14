@@ -36,6 +36,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 
 const signOutRound2Harness = vi.hoisted(() => ({
   signOut: vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
@@ -252,6 +253,12 @@ function renderHost(
   traycerCli: ITraycerCli | null | undefined,
 ) {
   return renderHostWithGate(presentation, bypassed, traycerCli, GATE_OPEN);
+}
+
+function buttonsOf(surface: HTMLElement): readonly (string | null)[] {
+  return within(surface)
+    .getAllByRole("button")
+    .map((button) => button.textContent);
 }
 
 /**
@@ -1022,7 +1029,7 @@ describe("<WindowHostModalHost />", () => {
     ).toContain("Restarting Traycer Host…");
   });
 
-  it("update-host: offers Update host when the HOST is the outdated leg", async () => {
+  it("update-host: offers Update host and Open settings, and no Report issue, when the HOST is the outdated leg", async () => {
     applySnapshot({
       attached: true,
       effectiveHostId: null,
@@ -1057,7 +1064,10 @@ describe("<WindowHostModalHost />", () => {
     expect(
       screen.getByTestId("window-host-modal").getAttribute("data-variant"),
     ).toBe("update-host");
-    expect(screen.getByTestId("window-host-modal-update-host")).toBeTruthy();
+    expect(buttonsOf(screen.getByTestId("window-host-modal"))).toEqual([
+      "Update host",
+      "Open settings",
+    ]);
   });
 
   it("arm 2: a non-target incompatible host is named, and no local action is offered for it", async () => {
@@ -1458,12 +1468,6 @@ describe("<WindowHostModalHost />", () => {
     return screen.findByTestId("window-host-modal");
   }
 
-  function buttonsOf(surface: HTMLElement): readonly (string | null)[] {
-    return within(surface)
-      .getAllByRole("button")
-      .map((button) => button.textContent);
-  }
-
   it("message 1, a token that cannot be had: its words and Open settings only", async () => {
     const surface = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
@@ -1479,7 +1483,7 @@ describe("<WindowHostModalHost />", () => {
     expect(buttonsOf(surface)).toEqual(["Open settings"]);
   });
 
-  it("message 3, keys never fetched: its words, Retry and Open settings", async () => {
+  it("message 3, keys never fetched: its words, Retry and Open settings; Retry reconnects to that computer", async () => {
     const surface = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "keys-unavailable",
@@ -1492,6 +1496,12 @@ describe("<WindowHostModalHost />", () => {
       within(surface).getByText("Check its connection, then retry."),
     ).toBeTruthy();
     expect(buttonsOf(surface)).toEqual(["Retry", "Open settings"]);
+
+    const rebuildNow = vi.fn();
+    const stopHearing = onHostDoorRetry(LOCAL_HOST_ID, rebuildNow);
+    fireEvent.click(within(surface).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(rebuildNow).toHaveBeenCalledTimes(1));
+    stopHearing();
   });
 
   it("message 4, a wrong clock: its words, Retry and Open settings", async () => {
