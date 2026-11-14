@@ -383,6 +383,16 @@ function doorStateVariant(
 }
 
 /**
+ * The host whose door cover this narration draws, or `null` when it draws
+ * none. The narration's first arm, and the one fact the toast needs: a
+ * refusal it stays silent about must be one whose cover is on screen.
+ */
+export function doorCoverHostOf(input: WindowNarrationInput): string | null {
+  if (!input.attached || doorStateVariant(input) === null) return null;
+  return input.effectiveHostId ?? input.targetHostId;
+}
+
+/**
  * The whole window-narrator verdict.
  *
  * Note there is no dismissal input, and that is the design: visibility is
