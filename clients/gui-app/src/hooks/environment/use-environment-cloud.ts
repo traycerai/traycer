@@ -24,6 +24,7 @@ import {
   callEnvironmentCloud,
   environmentCloudHostError,
   type EnvironmentCloudMethod,
+  type EnvironmentCloudSend,
 } from "@/lib/environment/environment-cloud-calls";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
@@ -94,38 +95,31 @@ export function invalidateEnvironmentReads(
 }
 
 /**
- * One moved method, sent now on the person's sign-in, outside React (a
- * Details provider) or from a hook. Failures are the `HostRpcError` a host
- * gave; with no session service it fails as a host with no client does.
+ * Begins one operation outside React (a Details provider) or in a hook's
+ * query or mutation function: call it once, at the operation's start, and
+ * send every request of the operation through its answer.
  */
-export function requestEnvironmentCloud<Method extends EnvironmentCloudMethod>(
-  cloud: EnvironmentCloudSource | null,
-  method: Method,
-  request: RequestOfMethod<HostRpcRegistry, Method>,
-): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-  return withHostQueryErrorBoundary(method, async () => {
-    cloudVerdictPreflight(method)();
-    if (cloud === null) throw hostClientUnavailableError(method);
-    return callEnvironmentCloud(cloud(), method, request);
-  });
+export function beginEnvironmentCloudOperation(
+  source: EnvironmentCloudSource | null,
+): EnvironmentCloudSend {
+  const cloud = source === null ? null : source();
+  return (method, request) =>
+    withHostQueryErrorBoundary(method, async () => {
+      cloudVerdictPreflight(method)();
+      if (cloud === null) throw hostClientUnavailableError(method);
+      return callEnvironmentCloud(cloud, method, request);
+    });
 }
 
 /**
- * Sends one moved method at the moment it is called, for a write that builds
- * its request at dispatch (a typed secret value read then, so it never becomes
- * a mutation's variables).
+ * {@link beginEnvironmentCloudOperation} for this window's session service:
+ * call the answer at an operation's start, including a write that builds its
+ * request at dispatch (a typed secret value read then, so it never becomes a
+ * mutation's variables).
  */
-export function useEnvironmentCloudSender(): <
-  Method extends EnvironmentCloudMethod,
->(
-  method: Method,
-  request: RequestOfMethod<HostRpcRegistry, Method>,
-) => Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-  const cloud = useEnvironmentCloud();
-  return useCallback(
-    (method, request) => requestEnvironmentCloud(cloud, method, request),
-    [cloud],
-  );
+export function useEnvironmentCloudOperation(): () => EnvironmentCloudSend {
+  const source = useEnvironmentCloud();
+  return useCallback(() => beginEnvironmentCloudOperation(source), [source]);
 }
 
 interface UseEnvironmentCloudQueryArgs<
@@ -158,7 +152,7 @@ export function useEnvironmentCloudQuery<
 ): UseQueryResult<TData, HostRpcError> {
   const { method, params, mapResponse } = args;
   const cloud = useEnvironmentCloud();
-  const send = useEnvironmentCloudSender();
+  const begin = useEnvironmentCloudOperation();
   const viewerId = useCloudChatViewerId();
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -177,7 +171,7 @@ export function useEnvironmentCloudQuery<
     queryOptions<TData, HostRpcError, TData>({
       ...tablePolling,
       queryKey,
-      queryFn: async () => mapResponse(await send(method, params)),
+      queryFn: async () => mapResponse(await begin()(method, params)),
       // Keyed where a host read of `method` would be, so the poll coordinator
       // reads its method from the same stamp `useHostQuery` writes.
       meta: stampHostRpcMethod(undefined, method),
@@ -281,7 +275,7 @@ export function useEnvironmentCloudMutation<
   HostScopedMutationContext<Captured>
 > {
   const { method } = args;
-  const send = useEnvironmentCloudSender();
+  const begin = useEnvironmentCloudOperation();
   const queryClient = useQueryClient();
   return useMutation<
     ResponseOfMethod<HostRpcRegistry, Method>,
@@ -290,7 +284,7 @@ export function useEnvironmentCloudMutation<
     HostScopedMutationContext<Captured>
   >({
     mutationKey: args.mutationKey,
-    mutationFn: (request) => send(method, request),
+    mutationFn: (request) => begin()(method, request),
     onMutate: (variables) => ({
       hostId: null,
       // `undefined` is what `Captured` IS when no capture was asked for; the

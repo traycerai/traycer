@@ -16,7 +16,7 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
   environmentCloudQueryKey,
-  requestEnvironmentCloud,
+  beginEnvironmentCloudOperation,
   useEnvironmentCloud,
 } from "@/hooks/environment/use-environment-cloud";
 import { useHostClient } from "@/lib/host";
@@ -134,8 +134,11 @@ export function useSandboxDefaults(
         ),
         queryFn: async (): Promise<ConfigurationSandboxDefaults> =>
           sandboxDefaultsOf(
-            (await requestEnvironmentCloud(cloud, METHOD, { environmentId }))
-              .items,
+            (
+              await beginEnvironmentCloudOperation(cloud)(METHOD, {
+                environmentId,
+              })
+            ).items,
           ),
         enabled: cloud !== null && viewerId.length > 0 && authorized,
       }),

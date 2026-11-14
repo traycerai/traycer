@@ -1,5 +1,8 @@
 import "@/components/settings/details/environment-details-providers";
-import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
+import {
+  beginEnvironmentCloudOperation,
+  useEnvironmentCloud,
+} from "@/hooks/environment/use-environment-cloud";
 import { useState, type ReactNode } from "react";
 import {
   queryOptions,
@@ -60,7 +63,12 @@ function DetailsSession(props: {
     const provider = getDetailsProvider(subject.kind);
     if (provider === null)
       throw new Error("Details are unavailable. Update Traycer and try again.");
-    return provider(subject, { client, hostId, environmentCloud, queryClient });
+    return provider(subject, {
+      client,
+      hostId,
+      environmentCloud: beginEnvironmentCloudOperation(environmentCloud),
+      queryClient,
+    });
   };
   const entry = useQuery(
     queryOptions({
