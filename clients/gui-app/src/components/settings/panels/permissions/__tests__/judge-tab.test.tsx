@@ -15,7 +15,10 @@ import type {
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   advanceLegendListTime,
   installLegendListTestClock,
@@ -302,6 +305,24 @@ function face(): HTMLElement {
   return screen.getByTestId("auto-judge-model-face");
 }
 
+/** The corner accent dot the picker button draws on the closed face. */
+function withAliases(
+  row: ProviderProfile,
+  aliases: readonly string[],
+): ProviderProfile {
+  return { ...row, aliases: [...aliases] };
+}
+
+function faceAccentDot(): HTMLSpanElement | null {
+  const dot = Array.from(face().querySelectorAll("span")).find(
+    (element) =>
+      element.getAttribute("aria-hidden") === "true" &&
+      element.className.includes("rounded-full") &&
+      element.className.includes("absolute"),
+  );
+  return dot ?? null;
+}
+
 function faceDimmed(): boolean {
   return face().closest(".opacity-45") !== null;
 }
@@ -479,7 +500,7 @@ describe("JudgeTab", () => {
       renderTab();
 
       expect(isChecked(automaticRadio())).toBe(true);
-      expect(face().textContent).toContain("GPT Mini · Signed out");
+      expect(face().textContent).toContain("GPT Mini · ambient · Signed out");
       expect(faceDimmed()).toBe(true);
       expect(faceInert()).toBe(false);
       expect(face().tabIndex).toBe(0);
@@ -887,11 +908,11 @@ describe("JudgeTab", () => {
       expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
         "Billed to your Claude Code account (work)",
       );
-      // The chip names it under the same rule.
-      expect(face().textContent).toContain("work");
+      // Two rows: the closed face and the billed line both name the account.
+      expect(face().textContent).toContain("Claude Sonnet · work");
     });
 
-    it("names no account when the provider has one", () => {
+    it("names the one account of a profile provider on the closed face, with its accent dot", () => {
       judgeRecord.current = {
         selection: CLAUDE_STORED,
         effective: {
@@ -902,7 +923,136 @@ describe("JudgeTab", () => {
       };
       renderTab();
 
+      expect(face().textContent).toContain("Claude Sonnet · ambient");
+      const dot = faceAccentDot();
+      expect(dot).not.toBeNull();
+      expect(dot?.textContent).toBe("A");
+      expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+        "Billed to your Claude Code account",
+      );
+    });
+
+    it("names no account and draws no accent dot for one account of a provider that cannot have profiles", () => {
+      judgeCatalog.harnesses = [
+        ...judgeCatalog.harnesses,
+        harness({ id: "copilot", label: "Copilot" }),
+      ];
+      setModels("copilot", {
+        kind: "ready",
+        models: [model("copilot", "gpt-5", "GPT 5", {})],
+      });
+      judgeCatalog.providers = [
+        ...(judgeCatalog.providers ?? []),
+        provider("copilot", [profile("desk-row", "ambient")]),
+      ];
+      judgeRecord.current = {
+        selection: {
+          harnessId: "copilot",
+          model: "gpt-5",
+          profileId: null,
+          reasoningEffort: null,
+        },
+        effective: {
+          source: "selection",
+          harnessId: "copilot",
+          model: "gpt-5",
+        },
+      };
+      renderTab();
+
+      expect(face().textContent).toContain("GPT 5");
+      expect(face().textContent).not.toContain("desk-row");
+      expect(faceAccentDot()).toBeNull();
+      expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
+        "Billed to your Copilot account",
+      );
+    });
+
+    it("names no account and draws no accent dot when the pin matches no row", () => {
+      judgeRecord.current = {
+        selection: { ...CLAUDE_STORED, profileId: "gone-row" },
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(face().textContent).toContain("Claude Sonnet");
       expect(face().textContent).not.toContain("ambient");
+      expect(face().textContent).not.toContain("gone-row");
+      expect(faceAccentDot()).toBeNull();
+      expect(screen.getByTestId("auto-judge-warning").textContent).toBe(
+        "The account this judge used was removed from Claude Code. Pick another account, or Auto mode asks you instead.",
+      );
+    });
+
+    it("a judge pinned to an unambiguous alias of a live account shows no removed warning", () => {
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          withAliases(profile("desk-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = {
+        selection: { ...CLAUDE_STORED, profileId: "pin-x" },
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(screen.queryByTestId("auto-judge-warning")).toBeNull();
+      expect(face().textContent).toContain("Claude Sonnet · desk-row");
+    });
+
+    it("a last pick pinned to an unambiguous alias restores on a click and is not last-broken", async () => {
+      const stored = { ...CLAUDE_STORED, profileId: "pin-x" };
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          withAliases(profile("desk-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = { selection: null, lastSelection: stored };
+      renderTab();
+
+      expect(isChecked(automaticRadio())).toBe(true);
+      expect(face().textContent).not.toContain("Account removed");
+      expect(faceDimmed()).toBe(true);
+      expect(faceInert()).toBe(true);
+      fireEvent.click(face());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(pickerPanel()).toBeNull();
+      expect(writes()).toEqual([stored]);
+    });
+
+    it("a pin that is one row's id and another's alias shows the removed warning", () => {
+      judgeCatalog.providers = [
+        provider("claude-code", [
+          profile("pin-x", "managed"),
+          withAliases(profile("second-row", "managed"), ["pin-x"]),
+        ]),
+        provider("codex", [profile("ambient", "ambient")]),
+      ];
+      judgeRecord.current = {
+        selection: { ...CLAUDE_STORED, profileId: "pin-x" },
+        effective: {
+          source: "selection",
+          harnessId: "claude",
+          model: "sonnet",
+        },
+      };
+      renderTab();
+
+      expect(screen.getByTestId("auto-judge-warning").textContent).toBe(
+        "The account this judge used was removed from Claude Code. Pick another account, or Auto mode asks you instead.",
+      );
     });
 
     it("shows the spinner alone while a pick saves", async () => {

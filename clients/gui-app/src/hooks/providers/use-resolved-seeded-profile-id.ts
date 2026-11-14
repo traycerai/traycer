@@ -4,6 +4,7 @@ import { providerCliIdForHarness } from "@/lib/provider-ordering";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
+import { removedProfilesForProvider } from "@/components/providers/provider-profile-model";
 
 const SEEDED_PROFILE_REFRESH_MS = 15 * 60 * 1000;
 
@@ -56,5 +57,10 @@ export function useResolvedSeededProfileId(
       : providersQuery.data?.providers.find(
           (provider) => provider.providerId === providerId,
         )?.profiles;
-  return resolveSeededProfileId(profileId, profiles, settled);
+  return resolveSeededProfileId(
+    profileId,
+    profiles,
+    removedProfilesForProvider(providersQuery.data, providerId),
+    settled,
+  );
 }

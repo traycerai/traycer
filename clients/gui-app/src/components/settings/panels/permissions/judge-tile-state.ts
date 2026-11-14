@@ -23,7 +23,12 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { HarnessModelSelection } from "@/components/home/data/landing-options";
-import { profileCommitId } from "@/components/providers/provider-profile-model";
+import {
+  profileCommitId,
+  profileDropdownShown,
+  resolvedProfileRow,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import {
   judgeProviderBlocker,
   judgeWarningCause,
@@ -300,11 +305,45 @@ export function judgeSeedSelection(input: {
 }
 
 /**
- * The account a pick names, when its provider has more than one on this
- * machine - the composer's chip names it under the same rule. `null` for one
- * account or none, or an account that is gone (the warning line says so).
+ * The account the judge tile's closed face names, with its dot. The face is
+ * the picker's own button, so it follows the composer button's rule
+ * (`profileDropdownShown`): from one account of a provider that can have
+ * profiles, from two of any other. `null` below that, or for an account that
+ * is gone (the warning line says so).
  */
-export function judgePickAccount(
+export function judgeFaceAccount(
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+  selection: AutoJudgeSelection,
+): ProviderProfile | null {
+  const provider = providerForHarness(providers, selection.harnessId);
+  if (provider === undefined) return null;
+  // A removed pin resolves to no row whether or not it is listed as removed,
+  // so the removed list cannot change what this names.
+  if (
+    !profileDropdownShown(
+      provider.providerId,
+      provider.profiles,
+      NO_REMOVED_PROFILES,
+      selection.profileId,
+    )
+  ) {
+    return null;
+  }
+  return resolvedProfileRow(
+    provider.profiles,
+    NO_REMOVED_PROFILES,
+    selection.profileId,
+  );
+}
+
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
+
+/**
+ * The account the "Billed to your ... account" line under a picked judge
+ * names: only when its provider has more than one on this machine. `null` for
+ * one account or none, or an account that is gone (the warning line says so).
+ */
+export function judgeBilledAccount(
   providers: ReadonlyArray<ProviderCliState> | undefined,
   selection: AutoJudgeSelection,
 ): ProviderProfile | null {

@@ -42,6 +42,10 @@ export const RPC_ERROR_CODES = [
   "host-left-environment",
   "profile-account-changed",
   "signed-out-by-person",
+  // A start named a profile whose account a person removed. Additive and
+  // degrade-safe: old peers narrow the unknown code to RPC_ERROR while
+  // preserving the response status and message.
+  "removed-by-person",
   "SENDER_TUI_UNSUPPORTED",
   // Caller-supplied input is structurally valid but semantically rejected
   // (e.g. minting the reserved `traycer:system` agent id). Additive and

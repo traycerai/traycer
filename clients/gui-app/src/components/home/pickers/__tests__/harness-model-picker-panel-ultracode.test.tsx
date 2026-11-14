@@ -55,6 +55,7 @@ import {
   HarnessModelPickerPanelBody,
   type HarnessModelPickerPanelBodyProps,
 } from "@/components/home/pickers/harness-model-picker-panel";
+import { EMPTY_REMOVED_PROFILES_BY_HARNESS_ID } from "@/components/home/pickers/harness-rail-providers";
 import type { UltracodeFooterConfig } from "@/components/home/pickers/ultracode-footer-button";
 import type { ReasoningFooterConfig } from "@/components/home/pickers/harness-model-picker-footers";
 import {
@@ -171,6 +172,7 @@ function renderPanel(input: {
       GuiHarnessId,
       ReadonlyArray<ProviderProfile>
     >(),
+    removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
     resolvedActiveProviderId: browsed,
     activeProfileId: null,
     activeProfileIdByHarnessId: new Map<GuiHarnessId, string | null>(),

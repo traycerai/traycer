@@ -22,6 +22,10 @@ import {
   providerDisplayName,
 } from "@/lib/provider-ordering";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import {
+  removedProfilesForProvider,
+  resolvedProfileRow,
+} from "@/components/providers/provider-profile-model";
 import { useGuiHarnessesQueryForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   catalogOpencodeLineParam,
@@ -244,7 +248,7 @@ export function useFallbackProfileLabels(
     () =>
       data === undefined
         ? new Map<string, string>()
-        : buildFallbackProfileLabels(data.providers),
+        : withAliasLabels(data, buildFallbackProfileLabels(data.providers)),
     [data],
   );
 
@@ -256,6 +260,38 @@ export function useFallbackProfileLabels(
           : resolveFallbackProfileLabel(byId, profileId),
     [byId],
   );
+}
+
+/**
+ * An alias (`aliases`, `providers.list@10.11`) names the account of the row it
+ * resolves to, so a chat pinned to a folded id shows that account's name and
+ * not a prefix of its old id. An id two rows list, as aliases or as one row's
+ * own id and another's alias, resolves to no row and keeps the prefix.
+ */
+function withAliasLabels(
+  list: ResponseOfMethod<HostRpcRegistry, "providers.list">,
+  labels: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const named = new Map(labels);
+  for (const provider of list.providers) {
+    const removed = removedProfilesForProvider(list, provider.providerId);
+    const ids = provider.profiles.flatMap((profile) =>
+      profile.kind === "ambient"
+        ? (profile.aliases ?? [])
+        : [profile.profileId, ...(profile.aliases ?? [])],
+    );
+    for (const id of ids) {
+      const row = resolvedProfileRow(provider.profiles, removed, id);
+      if (row === null) {
+        named.delete(id);
+      } else if (row.kind === "ambient") {
+        named.set(id, TERMINAL_ACCOUNT_LABEL);
+      } else if (row.profileId !== id) {
+        named.set(id, resolveFallbackProfileLabel(labels, row.profileId));
+      }
+    }
+  }
+  return named;
 }
 
 /**

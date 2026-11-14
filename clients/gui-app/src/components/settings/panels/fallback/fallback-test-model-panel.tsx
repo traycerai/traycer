@@ -30,6 +30,7 @@ import {
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
+import { removedProfilesForProvider } from "@/components/providers/provider-profile-model";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
   useGuiHarnessModelsWarmup,
@@ -676,6 +677,7 @@ function useTestAccount(
   const seeded = resolveSeededProfileId(
     lastProfiles[harnessId] ?? null,
     profiles,
+    removedProfilesForProvider(providersData, providerId),
     providersData !== undefined,
   );
   // A seed the picker does not offer is not a default: with nothing
