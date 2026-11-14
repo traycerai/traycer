@@ -1,8 +1,9 @@
 /**
  * The bot message box's Attach control through the REAL `BotMessageComposer`:
- * a pick lands where a paste does, a file that is no image is refused, and the
- * control follows what the box can take and send. Faked: the host's answer to
- * the send, the runner host (the shared bot-box one) and the toast library.
+ * a pick lands where a paste does, a file the box cannot carry is refused
+ * before anything reads it, and the control follows what the box can take and
+ * send. Faked: the host's answer to the send, the runner host (the shared
+ * bot-box one) and the toast library.
  */
 import {
   botMentionHostClientMock,
@@ -23,6 +24,7 @@ import {
 } from "@/components/bots/bot-message-composer";
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import type { BotImageReach } from "@/hooks/bots/use-bot-send-version";
+import { MAX_IMAGE_SOURCE_BYTES } from "@/hooks/composer/use-composer-paste";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -171,6 +173,17 @@ function pdfFile(name: string): File {
   return new File(["%PDF-1.7"], name, { type: "application/pdf" });
 }
 
+/** A file whose byte read is watched: the box refuses what it cannot carry before anything reads it. */
+function unreadable(name: string, type: string) {
+  const file = new File(["bytes"], name, { type });
+  return { file, read: vi.spyOn(file, "arrayBuffer") };
+}
+
+/** The titles of the error toasts raised so far. */
+function errorToasts(): ReadonlyArray<unknown> {
+  return vi.mocked(toast.error).mock.calls.map(([message]) => message);
+}
+
 async function pick(
   user: UserEvent,
   ...files: ReadonlyArray<File>
@@ -280,6 +293,56 @@ describe("<BotMessageComposer /> Attach", () => {
       .mock.calls.filter(([message]) => message === NOT_AN_IMAGE);
     expect(refusals).toHaveLength(1);
     expect(openButtons()).toHaveLength(1);
+  });
+
+  it("refuses a picked SVG with the box's sentence and never reads it", async () => {
+    const user = newUser();
+    mount("delivered");
+    const { file: logo, read } = unreadable("logo.svg", "image/svg+xml");
+
+    await pick(user, logo);
+
+    await waitFor(() => expect(errorToasts()).toEqual([NOT_AN_IMAGE]));
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(0);
+  });
+
+  it("refuses an oversized HEIC with the box's sentence, not the size refusal, and never reads it", async () => {
+    const user = newUser();
+    mount("delivered");
+    const { file: scan, read } = unreadable("scan.heic", "image/heic");
+    Object.defineProperty(scan, "size", { value: MAX_IMAGE_SOURCE_BYTES + 1 });
+
+    await pick(user, scan);
+
+    await waitFor(() => expect(errorToasts()).toEqual([NOT_AN_IMAGE]));
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(0);
+  });
+
+  it("attaches the PNG of a pick that also holds an SVG, and never reads the SVG", async () => {
+    const user = newUser();
+    mount("delivered");
+    const { file: logo, read } = unreadable("logo.svg", "image/svg+xml");
+
+    await pick(user, pngFile("shot.png"), logo);
+
+    await holdsImage("Image#1: shot.png");
+    expect(errorToasts()).toEqual([NOT_AN_IMAGE]);
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(1);
+  });
+
+  it("refuses a picked file with no type with the box's sentence and never reads it", async () => {
+    const user = newUser();
+    mount("delivered");
+    const { file: untyped, read } = unreadable("mystery", "");
+
+    await pick(user, untyped);
+
+    await waitFor(() => expect(errorToasts()).toEqual([NOT_AN_IMAGE]));
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(0);
   });
 
   it("is off while the box cannot send", () => {

@@ -134,6 +134,19 @@ function refuseFiles(files: ReadonlyArray<File>): void {
 }
 
 /**
+ * What a pick may hand the image adapter: the images a message can carry. Any
+ * other image is refused here, before a byte of it is read: the picker's
+ * `accept` is only a hint the person can lift.
+ */
+export function carriedPickedImages(
+  files: ReadonlyArray<File>,
+): ReadonlyArray<File> {
+  const carried = files.filter((file) => isCarriedType(file.type));
+  if (carried.length < files.length) refuseAsNoImage();
+  return carried;
+}
+
+/**
  * The editor's verdict on image nodes pasted whole (copied from another
  * composer): the box keeps what a message can carry, and none where it takes
  * no images.
