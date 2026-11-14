@@ -1,3 +1,4 @@
+import { useAccountProfileSetEnabledForClient } from "@/hooks/providers/use-account-profile-set-enabled";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import {
   createContext,
@@ -52,10 +53,7 @@ import {
   useHostSupportsMethod,
 } from "@/hooks/host/use-host-supports-method";
 import { catalogLineKnowsAutoMode } from "@/components/home/data/landing-options";
-import {
-  useProviderProfileEnablementPending,
-  useProvidersSetProfileEnabledForClient,
-} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useHostClient } from "@/lib/host";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
@@ -1495,7 +1493,7 @@ function ProviderDetail({
       ),
   );
   const setEnabled = useProvidersSetEnabled();
-  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+  const setProfileEnabled = useAccountProfileSetEnabledForClient(
     hostClient,
     providerId,
   );

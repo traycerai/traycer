@@ -1,4 +1,9 @@
 import {
+  setProfileRecordEnabledViaHttp,
+  type ProfileRecordEnablementClient,
+  type ProfileRecordEnablementResult,
+} from "@traycer-clients/shared/host-client/provider-profile-enablement";
+import {
   readProfileRecordsViaHttp,
   signOutProfileRecordViaHttp,
   removeProfileRecordViaHttp,
@@ -647,7 +652,9 @@ export interface RevokedCloudAuthorization {
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") without clearing persisted credentials.
  */
-export class AuthService implements ProfileRecordClient {
+export class AuthService
+  implements ProfileRecordClient, ProfileRecordEnablementClient
+{
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;
@@ -3704,6 +3711,26 @@ export class AuthService implements ProfileRecordClient {
       providerId,
       profileId,
       name,
+      callerSignal,
+    );
+  }
+
+  async setProfileRecordEnabled(
+    environmentId: string,
+    harnessId: string,
+    profileId: string,
+    enabled: boolean,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return setProfileRecordEnabledViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      harnessId,
+      profileId,
+      enabled,
       callerSignal,
     );
   }
