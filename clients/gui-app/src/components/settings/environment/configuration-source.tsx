@@ -1,8 +1,7 @@
 import { createContext, useContext } from "react";
-import {
-  grantedEnvironmentRole,
-  type EnvironmentDescriptorV11,
-  type GrantedEnvironmentRole,
+import type {
+  EnvironmentDescriptorV11,
+  GrantedEnvironmentRole,
 } from "@traycer/protocol/host/environment/contracts";
 
 /** A role a configuration answers: one that may change it, or a Viewer's. */
@@ -21,8 +20,9 @@ export type ConfigurationSource =
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
-      /** Read through `mayChangeConfiguration`, never by comparing with
-       *  `null`: a role that changes nothing is not always absent. */
+      /** `configurationRoleOf`'s answer. Read through
+       *  `mayChangeConfiguration`, never by comparing with `null`: a Viewer
+       *  changes nothing and is not absent. */
       readonly effectiveRole: ConfigurationRole | null;
       /** `personalReadOnlyOnTeamComputer`'s answer for this page. */
       readonly transportReadOnly?: boolean;
@@ -95,14 +95,22 @@ export function useCanAdministerConfiguration(): boolean {
 }
 
 /**
- * A Viewer answers `viewer`; a role this app does not know, and an older
- * inventory's, answer `null`. Read it through `mayChangeConfiguration`.
+ * Personal answers `owner`; a team answers the role the list names, Admin,
+ * Editor or Viewer, and `null` where it names none of them. Read it through
+ * `mayChangeConfiguration`.
  */
 export function configurationRoleOf(
   descriptor: EnvironmentDescriptorV11,
 ): ConfigurationRole | null {
   if (descriptor.ownerKind === "user") return "owner";
-  if (descriptor.effectiveRole === "viewer") return "viewer";
-  const role = grantedEnvironmentRole(descriptor.effectiveRole);
-  return role === "admin" || role === "editor" ? role : null;
+  switch (descriptor.effectiveRole) {
+    case "admin":
+      return "admin";
+    case "editor":
+      return "editor";
+    case "viewer":
+      return "viewer";
+    default:
+      return null;
+  }
 }
