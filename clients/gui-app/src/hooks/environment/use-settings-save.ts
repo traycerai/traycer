@@ -178,6 +178,40 @@ interface SaveScope {
   readonly viewerId: string;
   /** The editor session whose base reads a save is made over. */
   readonly session: string;
+  readonly ledger: SaveLedger;
+}
+
+/**
+ * The order of an editor session's saves, as the person made them, and per
+ * row the latest of them whose write moved the base. A delete is ordered the
+ * same way as a put: an absent row says nothing of which save removed it.
+ */
+interface SaveLedger {
+  /** The next save's place. */
+  readonly take: () => number;
+  /**
+   * Whether the save at `order` may move the base of `address`: no later save
+   * of the session moved it already. Records it when it may.
+   */
+  readonly publish: (address: string, order: number) => boolean;
+}
+
+function createSaveLedger(): SaveLedger {
+  let next = 0;
+  const published = new Map<string, number>();
+  return {
+    take: () => next++,
+    publish: (address, order) => {
+      if ((published.get(address) ?? -1) > order) return false;
+      published.set(address, order);
+      return true;
+    },
+  };
+}
+
+/** The row `edit` writes, as the ledger names it. */
+function rowAddress(edit: SettingsItemEdit): string {
+  return JSON.stringify([edit.kind, edit.key, edit.os]);
 }
 
 /** Whether `row`, authn's row at `edit`'s address, is what `edit` wrote. */
@@ -200,10 +234,6 @@ function withOwnWrite(
     rows.filter((candidate) => candidate.key === edit.key),
     edit.os,
   );
-  // A later save of this session already moved the base past this one.
-  if (held !== undefined && row !== null && row.revision <= held.revision) {
-    return rows;
-  }
   const others = rows.filter((candidate) => candidate !== held);
   return row === null ? others : [...others, row];
 }
@@ -215,14 +245,17 @@ function withOwnWrite(
  * made over it. Neither the send nor a reconcile that leaves the save queued
  * moves it. A row anyone else wrote leaves the base where the person last saw
  * it, whether the next edit began before this apply or after, so that edit
- * waits in the review list against the change instead of overwriting it.
+ * waits in the review list against the change instead of overwriting it. A
+ * save whose read answers after a later save of this session moved the base
+ * of the same row leaves it there.
  */
 async function keepOwnWrite(
   scope: SaveScope,
-  cloud: EnvironmentCloud,
+  operation: SaveOperation,
   edit: SettingsItemEdit,
 ): Promise<void> {
-  const { queryClient, environmentId } = scope;
+  const { queryClient, environmentId, ledger } = scope;
+  const { cloud, order } = operation;
   // `cloud` is the sign-in the save was made on: a read on any later one is
   // another person's view of the row.
   if (!cloud.onOriginSignIn()) return;
@@ -233,18 +266,27 @@ async function keepOwnWrite(
       edit.os,
     ) ?? null;
   if (!isOwnWrite(row, edit) || !cloud.onOriginSignIn()) return;
+  if (!ledger.publish(rowAddress(edit), order)) return;
   queryClient.setQueryData(saveItemsQuery(scope, edit.kind).queryKey, (held) =>
     held === undefined ? held : withOwnWrite(held, edit, row),
   );
 }
 
+/** One save of an editor session, from its preparation to its apply. */
+interface SaveOperation {
+  /** The sign-in the save is made on. */
+  readonly cloud: EnvironmentCloud;
+  /** Its place among the session's saves ({@link SaveLedger}). */
+  readonly order: number;
+}
+
 /**
- * Remembers `save`, made for `accountId` on the sign-in `cloud` is bound to,
- * if it maps to a proposal; answers how to follow it.
+ * Remembers `save`, made for `accountId`, if it maps to a proposal; answers
+ * how to follow it.
  */
 async function followSave(
   scope: SaveScope,
-  cloud: EnvironmentCloud,
+  operation: SaveOperation,
   save: SettingsSave,
   accountId: string,
 ): Promise<PendingSettingsSave> {
@@ -278,7 +320,7 @@ async function followSave(
       expectedLiveRevision: liveRowAt(editRows, edit.os)?.revision ?? null,
     },
     () => {
-      void keepOwnWrite(scope, cloud, edit).catch(() => undefined);
+      void keepOwnWrite(scope, operation, edit).catch(() => undefined);
     },
   );
   if (beginning.kind === "account_changed") {
@@ -306,6 +348,7 @@ function useSaveScope(
   kinds: readonly string[],
 ): SaveScope | null {
   const [session] = useState(() => crypto.randomUUID());
+  const [ledger] = useState(createSaveLedger);
   const coordinator = useSettingsSaveCoordinator();
   const hostId = useRequesterHostId(client);
   const environmentRead = useEnvironmentHostReadQuery(
@@ -336,6 +379,7 @@ function useSaveScope(
             hostId,
             viewerId,
             session,
+            ledger,
           },
     [
       coordinator,
@@ -345,6 +389,7 @@ function useSaveScope(
       hostId,
       viewerId,
       session,
+      ledger,
     ],
   );
 
@@ -397,10 +442,13 @@ export function useSettingsSave(
       if (sentOn !== scope.hostId) return NOTHING_TO_FOLLOW;
       const accountId = scope.coordinator.account();
       if (accountId === null) return NOTHING_TO_FOLLOW;
-      const cloud = scope.source();
+      const operation: SaveOperation = {
+        cloud: scope.source(),
+        order: scope.ledger.take(),
+      };
       let pending: PendingSettingsSave;
       try {
-        pending = await followSave(scope, cloud, save, accountId);
+        pending = await followSave(scope, operation, save, accountId);
       } catch {
         pending = NOTHING_TO_FOLLOW;
       }
