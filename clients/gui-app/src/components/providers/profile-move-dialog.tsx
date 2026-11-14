@@ -4,7 +4,10 @@ import {
   isHostTransportFailure,
   toastFromHostError,
 } from "@/lib/host-error-toast";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  classifyHostRequestFailure,
+  type HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useEffect, useState } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -326,10 +329,17 @@ function closeButtonText(
   return empty ? "Close" : "Cancel";
 }
 
+function isUnsupportedMove(error: HostRpcError): boolean {
+  return (
+    error.code === "E_HOST_UNSUPPORTED" ||
+    classifyHostRequestFailure(error).kind === "downgrade-unsupported"
+  );
+}
+
 function reportMoveError(error: HostRpcError | null, fallback: string): void {
   if (
     error === null ||
-    error.code === "E_HOST_UNSUPPORTED" ||
+    isUnsupportedMove(error) ||
     isHostTransportFailure(error)
   )
     return;
@@ -346,7 +356,7 @@ function MoveErrorNotice({
   readonly afterCommit: boolean;
 }) {
   if (error === null) return null;
-  if (error.code === "E_HOST_UNSUPPORTED")
+  if (isUnsupportedMove(error))
     return (
       <p role="status">{`${computer} is running an older version. Update it to move its agents.`}</p>
     );

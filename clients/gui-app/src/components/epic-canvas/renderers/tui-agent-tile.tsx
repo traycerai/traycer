@@ -43,6 +43,7 @@ import {
   useTerminalCrashNotification,
 } from "@/hooks/terminal/use-terminal-crash-notification";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
@@ -61,6 +62,10 @@ import {
   clearPreparedTerminalAgentLaunch,
   peekPreparedTerminalAgentLaunch,
 } from "@/stores/terminals/prepared-terminal-agent-launch-store";
+import {
+  consumeTerminalAgentContinueProfile,
+  useTerminalAgentContinueProfile,
+} from "@/stores/terminals/terminal-agent-continue-profile";
 import { TerminalLoadingSkeleton } from "./terminal-loading-skeleton";
 import { TerminalGridMeasureProbe } from "./terminal-grid-measure-probe";
 import { TerminalDeadTileBanner } from "./dead-tile-banner";
@@ -299,18 +304,29 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     props.tileId,
     props.viewTabId,
   ]);
+  const noContinueControl = (
+    <ClearUnavailableContinueProfileRequest
+      hostId={hostId}
+      epicId={epicId}
+      agentId={props.node.id}
+      isActive={props.isActive}
+    />
+  );
   if (reachability.status === "unreachable") {
     return (
-      <TerminalDeadTileBanner
-        reason={sandboxDeadTileReason(sandboxEnd)}
-        destroyedLine={
-          sandboxEnd?.kind === "destroyed" ? sandboxEnd.line : null
-        }
-        hostLabel={reachability.hostLabel}
-        ownerKind="agent"
-        onClose={() => closeCanvasTile("user")}
-        testId={`terminal-agent-tile-${props.tileId}`}
-      />
+      <>
+        {noContinueControl}
+        <TerminalDeadTileBanner
+          reason={sandboxDeadTileReason(sandboxEnd)}
+          destroyedLine={
+            sandboxEnd?.kind === "destroyed" ? sandboxEnd.line : null
+          }
+          hostLabel={reachability.hostLabel}
+          ownerKind="agent"
+          onClose={() => closeCanvasTile("user")}
+          testId={`terminal-agent-tile-${props.tileId}`}
+        />
+      </>
     );
   }
   // "host-starting": the local host has not published yet (boot/ensure/wake),
@@ -322,6 +338,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   if (hostLoad.kind !== "ready") {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
+        {noContinueControl}
         <TerminalAgentWorktreeNotice
           owningTileInstanceId={props.node.instanceId}
           hostId={hostId}
@@ -351,6 +368,27 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       {...props}
     />
   );
+}
+
+function ClearUnavailableContinueProfileRequest(props: {
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly agentId: string;
+  readonly isActive: boolean;
+}) {
+  const tabSelected = useTabBodySelected();
+  const request = useTerminalAgentContinueProfile(
+    props.hostId,
+    props.epicId,
+    props.agentId,
+  );
+  useActivePaneEffect(
+    useCallback(() => {
+      if (!props.isActive || !tabSelected || request === null) return;
+      consumeTerminalAgentContinueProfile(request.id);
+    }, [props.isActive, request, tabSelected]),
+  );
+  return null;
 }
 
 // Safety ceiling for restart-kill exit suppression: the normal path lifts it as
@@ -899,16 +937,27 @@ function TuiAgentTileLive(
   // whose refresh driver invalidates the list on mount - so a flip here fed
   // itself forever, and a restored sleeping tile never left the skeleton.
   const hostSessionSettled = bootstrap.hostSessionSettled;
+  const noContinueControl = (
+    <ClearUnavailableContinueProfileRequest
+      hostId={hostId}
+      epicId={epicId}
+      agentId={props.node.id}
+      isActive={props.isActive}
+    />
+  );
   if (isCloudReplica && hostSessionSettled === false) {
     return (
-      <TerminalDeadTileBanner
-        reason="not-running-remotely"
-        destroyedLine={null}
-        hostLabel={hostLabel}
-        ownerKind="agent"
-        onClose={() => closeTile("user")}
-        testId={`terminal-agent-tile-${props.tileId}`}
-      />
+      <>
+        {noContinueControl}
+        <TerminalDeadTileBanner
+          reason="not-running-remotely"
+          destroyedLine={null}
+          hostLabel={hostLabel}
+          ownerKind="agent"
+          onClose={() => closeTile("user")}
+          testId={`terminal-agent-tile-${props.tileId}`}
+        />
+      </>
     );
   }
 
@@ -925,6 +974,7 @@ function TuiAgentTileLive(
   if (isSleepingUnrequested && hostSessionSettled === false) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
+        {noContinueControl}
         <TerminalAgentWorktreeNotice
           owningTileInstanceId={props.node.instanceId}
           hostId={hostId}
@@ -942,14 +992,17 @@ function TuiAgentTileLive(
 
   if (agent === null) {
     return (
-      <TuiAgentAwaitingRecord
-        node={props.node}
-        tileId={props.tileId}
-        viewTabId={props.viewTabId}
-        hostId={hostId}
-        hostLabel={hostLabel}
-        onClose={() => closeTile("user")}
-      />
+      <>
+        {noContinueControl}
+        <TuiAgentAwaitingRecord
+          node={props.node}
+          tileId={props.tileId}
+          viewTabId={props.viewTabId}
+          hostId={hostId}
+          hostLabel={hostLabel}
+          onClose={() => closeTile("user")}
+        />
+      </>
     );
   }
 
@@ -970,6 +1023,7 @@ function TuiAgentTileLive(
         viewTabId={props.viewTabId}
         agent={agent}
         isOwnerActive={isOwnerActive}
+        isActive={props.isActive}
         onWorkspaceBindingCommitted={restartAfterWorkspaceBindingChange}
       />
       <div className="relative min-h-0 flex-1">
@@ -1247,6 +1301,7 @@ interface TerminalAgentPreLaunchToolbarProps {
   readonly viewTabId: string;
   readonly agent: TuiAgentProjection;
   readonly isOwnerActive: boolean;
+  readonly isActive: boolean;
   readonly onWorkspaceBindingCommitted: () => void;
 }
 
@@ -1284,6 +1339,12 @@ function TerminalAgentPreLaunchToolbar(
   props: TerminalAgentPreLaunchToolbarProps,
 ) {
   const paneVisible = usePaneVisible();
+  const tabSelected = useTabBodySelected();
+  const continueRequest = useTerminalAgentContinueProfile(
+    props.hostId,
+    props.epicId,
+    props.agent.id,
+  );
   const [forkDialogIntent, setForkDialogIntent] =
     useState<TerminalAgentForkIntent | null>(null);
   const continueUnderProfileSupported = useTuiForkProfileSupported(
@@ -1360,6 +1421,52 @@ function TerminalAgentPreLaunchToolbar(
   const handleForkDialogOpenChange = useCallback((nextOpen: boolean): void => {
     if (!nextOpen) setForkDialogIntent(null);
   }, []);
+  const continueUnderProfileDisabled =
+    forkDisabled || !continueUnderProfileSupported;
+  const continueRequestMounted = useRef(false);
+  const heldContinueRequestId = useRef<number | null>(null);
+  useEffect(() => {
+    continueRequestMounted.current = true;
+    return () => {
+      continueRequestMounted.current = false;
+      const requestId = heldContinueRequestId.current;
+      if (requestId === null) return;
+      // StrictMode reattaches before deferred cleanup; a replacement tile's
+      // queued delivery follows it and cannot reopen the abandoned request.
+      queueMicrotask(() => {
+        if (!continueRequestMounted.current)
+          consumeTerminalAgentContinueProfile(requestId);
+      });
+    };
+  }, []);
+  useActivePaneEffect(
+    useCallback(() => {
+      if (!props.isActive || !tabSelected || continueRequest === null) return;
+      heldContinueRequestId.current = continueRequest.id;
+      if (bindingQuery.isPending && props.hostClient !== null) return;
+      let live = true;
+      queueMicrotask(() => {
+        if (!live) return;
+        heldContinueRequestId.current = null;
+        if (!consumeTerminalAgentContinueProfile(continueRequest.id)) return;
+        if (props.agent.origin === "cloud" || continueUnderProfileDisabled)
+          return;
+        openForkDialog("continue");
+      });
+      return () => {
+        live = false;
+      };
+    }, [
+      bindingQuery.isPending,
+      continueRequest,
+      continueUnderProfileDisabled,
+      openForkDialog,
+      props.agent.origin,
+      props.hostClient,
+      props.isActive,
+      tabSelected,
+    ]),
+  );
   const continueUnderProfileDisabledReason =
     continueUnderProfileDisabledReasonFor(
       continueUnderProfileSupported,
@@ -1493,7 +1600,7 @@ function TerminalAgentPreLaunchToolbar(
             >
               <span className="flex w-full">
                 <DropdownMenuItem
-                  disabled={forkDisabled || !continueUnderProfileSupported}
+                  disabled={continueUnderProfileDisabled}
                   aria-label={
                     continueUnderProfileDisabledReason === undefined
                       ? undefined

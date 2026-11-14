@@ -1,3 +1,4 @@
+import { BOT_PROFILE_CHOICE_MESSAGE } from "@/lib/bots/bot-profile-choice";
 import {
   useContext,
   useEffect,
@@ -12,6 +13,7 @@ import { X } from "lucide-react";
 import type {
   BotNotificationLevel,
   BotRecord,
+  BotDirectoryRecord,
   BotReplyMode,
 } from "@traycer/protocol/host/bot/schemas";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/index";
@@ -88,7 +90,7 @@ const BOT_TITLE_MAX = 500;
  * the header re-renders from.
  */
 export function BotChannelSettingsPanel(props: {
-  readonly bot: BotRecord;
+  readonly bot: BotDirectoryRecord;
   /** Whether the bot is a personal environment's; a team's always answers in threads. */
   readonly personal: boolean;
   /** The bot's channel, whose notification level the panel sets; `null` from a host that names none. */
@@ -530,7 +532,9 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
   );
 }
 
-function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
+function BotRunSettingsForm(props: {
+  readonly bot: BotDirectoryRecord;
+}): ReactNode {
   const { bot } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
@@ -585,6 +589,11 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
     !unchanged && selection.modelSlug.length > 0 && !update.isPending;
   return (
     <SettingsGroup title="Model" testId="bot-settings-model">
+      <BotSettingsRefusal
+        message={
+          bot.profileChoice === "ambiguous" ? BOT_PROFILE_CHOICE_MESSAGE : null
+        }
+      />
       <p className="text-ui-xs text-muted-foreground">
         The next turn uses what you apply here.
       </p>

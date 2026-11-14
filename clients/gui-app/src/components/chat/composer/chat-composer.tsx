@@ -29,11 +29,15 @@ import type {
   HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type {
+  ChatAccountWait,
   ChatActiveTurn,
   ChatQueueDeliveryPolicy,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderId,
+  ProvidersListResponse,
+} from "@traycer/protocol/host/provider-schemas";
 
 import {
   composerAttachmentsHoldSend,
@@ -79,7 +83,10 @@ import {
   steerHintIsActive,
   type ChatComposerSubmitSource,
 } from "@/lib/chats/resolve-steer-submit";
-import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
+import {
+  resolveComposerTopBannerKind,
+  type ComposerTopBannerKind,
+} from "./chat-composer-top-banner";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
 import {
   fallbackComposerCardVisible,
@@ -493,6 +500,42 @@ function useChatComposerToolbar(input: ChatComposerToolbarInput): {
     },
   );
   return { seedSource, toolbarStore };
+}
+
+function useChatComposerTopBanner(input: {
+  readonly providerFallback: ChatProviderFallbackState;
+  readonly providersList: ProvidersListResponse | undefined;
+  readonly epicId: string | null;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly profileDisabled: boolean;
+  readonly reauthVisible: boolean;
+  readonly rateLimitVisible: boolean;
+}): {
+  readonly accountWait: ChatAccountWait | null;
+  readonly topBannerKind: ComposerTopBannerKind;
+} {
+  const traversalVisible = fallbackComposerCardVisible(
+    input.providerFallback.pending,
+  );
+  const accountWait = useChatAccountWait({
+    fallbackCardVisible: traversalVisible,
+    providersList: input.providersList,
+    epicId: input.epicId,
+    chatId: input.chatId,
+    hostId: input.hostId,
+  });
+  const topBannerKind = resolveComposerTopBannerKind({
+    // Account waits and timed routing share the fallback slot; a live
+    // traversal retains its own card and actions.
+    fallbackVisible: accountWait !== null || traversalVisible,
+    profileDisabled: input.profileDisabled,
+    reauthVisible: input.reauthVisible,
+    // A present key with an undefined value means there is no offer.
+    fallbackReturnVisible: input.providerFallback.pendingReturn !== undefined,
+    rateLimitVisible: input.rateLimitVisible,
+  });
+  return { accountWait, topBannerKind };
 }
 
 function ChatComposerImpl(props: ChatComposerProps) {
@@ -1006,25 +1049,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     steerProtocolSupported,
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
-  const accountWait = useChatAccountWait({
-    fallbackCardVisible: fallbackComposerCardVisible(providerFallback.pending),
+  const { accountWait, topBannerKind } = useChatComposerTopBanner({
+    providerFallback,
     providersList: profileEligibility.providersList,
     epicId: currentEpicId,
     chatId: taskId,
     hostId: tabHostId,
-  });
-  const topBannerKind = resolveComposerTopBannerKind({
-    // Account waits and timed routing share the fallback slot; a live
-    // traversal retains its own card and actions.
-    fallbackVisible:
-      accountWait !== null ||
-      fallbackComposerCardVisible(providerFallback.pending),
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
-    // BY VALUE. The key is present on every live `1.12` frame with `undefined`
-    // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
-    // banner open for the life of the chat.
-    fallbackReturnVisible: providerFallback.pendingReturn !== undefined,
     rateLimitVisible: rateLimitAdvisory !== null,
   });
 
