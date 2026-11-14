@@ -249,6 +249,9 @@ const providerMocks = vi.hoisted(() => {
     liveList: false,
     liveClient: null as HostClient<HostRpcRegistry> | null,
     realStartLogin: false,
+    signInRecordingService: {
+      recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+    },
     setSelectionMutate: vi.fn(),
     addCustomPathMutate: vi.fn(),
     removeCustomPathMutate: vi.fn(),
@@ -914,6 +917,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     useHostClient: () => providerMocks.liveClient,
     // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
+    useAuthService: () => providerMocks.signInRecordingService,
   };
 });
 
@@ -927,6 +931,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
     // one is what lets the provider actually wrap the shell, which is the only
     // way the wrong-host regression can observe anything at all.
     useHostBinding: () => providerMocks.ambientBinding,
+    useAuthService: () => providerMocks.signInRecordingService,
   };
 });
 
