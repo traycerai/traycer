@@ -1,5 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -25,6 +33,31 @@ import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/s
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { claudeChatSessionAnchorSchema } from "@traycer/protocol/persistence/epic/senders";
+import {
+  providersPreviewProfileMoveRequestSchema,
+  providersPreviewProfileMoveResponseSchema,
+  type ProvidersPreviewProfileMoveRequest,
+} from "@traycer/protocol/host/profile-move-schemas";
+import {
+  chatAccountWaitSchema,
+  type LastFailedAttempt,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  providersListResponseSchema,
+  type ProvidersListResponse,
+} from "@traycer/protocol/host/provider-schemas";
+import { AccountWaitSurface } from "@/components/chat/fallback/account-wait-card";
+import { useChatAccountWait } from "@/components/chat/fallback/use-chat-account-wait";
+import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  pinProfile,
+  providerState,
+  removedEntry,
+} from "@/components/providers/__tests__/profile-pin-fixtures";
 import type {
   ChatSessionState,
   ChatStreamClientHandle,
@@ -142,6 +175,39 @@ import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: (): boolean => true,
+}));
+vi.mock("@/hooks/providers/use-profile-move-computer-names", () => ({
+  useProfileMoveComputerNames:
+    () =>
+    (hostId: string | null): string =>
+      hostId === null ? "" : `Computer ${hostId}`,
+}));
+vi.mock("@/hooks/home-focus/use-focus-actions", () => ({
+  useFocusActions: () => ({ openAgent: () => undefined }),
+}));
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: () => undefined }),
+}));
+vi.mock("@/lib/layout-overrides", () => ({
+  useReadingWidthStyle: () => ({ className: "", maxWidth: undefined }),
+}));
+
+afterAll(() => {
+  vi.doUnmock("@/lib/epic-selectors");
+  vi.doUnmock("@/hooks/host/use-host-directory-entry");
+  vi.doUnmock("@traycer-clients/shared/host-transport/remote/index");
+  vi.doUnmock("@/lib/host");
+  vi.doUnmock("@/lib/host/use-durable-stream-transport");
+  vi.doUnmock("@/stores/chats/skeleton-resume-cache");
+  vi.doUnmock("@/hooks/host/use-host-supports-method");
+  vi.doUnmock("@/hooks/providers/use-profile-move-computer-names");
+  vi.doUnmock("@/hooks/home-focus/use-focus-actions");
+  vi.doUnmock("@/stores/tabs/use-system-tab-modal");
+  vi.doUnmock("@/lib/layout-overrides");
+});
 
 /** Matches `createRequestContextFixture`'s default identity. */
 const FIXTURE_USER_ID = "user-fixture-1";
@@ -262,6 +328,71 @@ function wrapper(props: { readonly children: ReactNode }): ReactNode {
 }
 
 const LOCAL_HOST_ID = "chat-registry-local-host";
+const ACCOUNT_WAIT_CHAT_ID = "chat-account-wait-removed-source";
+const ACCOUNT_WAIT_SOURCE: ProvidersPreviewProfileMoveRequest["source"] = {
+  providerId: "claude-code",
+  profileId: "removed-source",
+};
+const ACCOUNT_WAIT_REMOVED = chatAccountWaitSchema.parse({
+  reason: "removed",
+  source: ACCOUNT_WAIT_SOURCE,
+});
+const ACCOUNT_WAIT_LIST: ProvidersListResponse =
+  providersListResponseSchema.parse({
+    providers: [
+      providerState({
+        providerId: "claude-code",
+        authStatus: "authenticated",
+        profiles: [
+          pinProfile({
+            profileId: "destination-profile",
+            label: "Destination profile",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+            aliases: [],
+            personNotice: null,
+            terminalOnThisComputer: false,
+            otherNames: [],
+          }),
+        ],
+      }),
+    ],
+    native: null,
+    removedProfiles: [
+      removedEntry({
+        providerId: "claude-code",
+        profileId: ACCOUNT_WAIT_SOURCE.profileId,
+        aliases: ["legacy-source-alias"],
+      }),
+    ],
+    offersSignIns: true,
+  });
+const ACCOUNT_WAIT_PREVIEW = providersPreviewProfileMoveResponseSchema.parse({
+  extent: "fleet",
+  mode: "waiting",
+  targets: [
+    {
+      kind: "agent",
+      epicId: "epic-waiting",
+      agentId: "agent-waiting",
+      hostId: LOCAL_HOST_ID,
+      title: "Waiting agent",
+      standing: "waiting",
+    },
+  ],
+  terminals: [],
+  pendingComputers: [],
+});
+const ACCOUNT_WAIT_FAILURE: LastFailedAttempt = {
+  userMessageId: "user-account-wait",
+  turnId: "turn-account-wait",
+  failure: { reason: "rate_limit" },
+  eligibleRungs: ["retry"],
+  waitDisposition: "no_verified_reset",
+  switchDisposition: "unknown",
+  failedTuple: null,
+};
 
 /**
  * This machine's host as the directory lists it: dialable at `websocketUrl`,
@@ -280,6 +411,72 @@ function localEntry(
     version,
     transportDialability: websocketUrl === null ? "not-dialable" : "dialable",
   };
+}
+
+function accountWaitClient(): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
+} {
+  const previewRequests: ProvidersPreviewProfileMoveRequest[] = [];
+  const hostEntry = localEntry("ws://127.0.0.1:55300/rpc", "1.0.0");
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) => (hostId === LOCAL_HOST_ID ? hostEntry : null),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "account-wait-preview",
+      handlers: {
+        "providers.previewProfileMove": (params) => {
+          previewRequests.push(
+            providersPreviewProfileMoveRequestSchema.parse(params),
+          );
+          return ACCOUNT_WAIT_PREVIEW;
+        },
+      },
+    }),
+  });
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-account-wait",
+    }),
+  );
+  return {
+    client: client.createRequester(hostEntry),
+    previewRequests,
+  };
+}
+
+function RegisteredAccountWaitScene(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly chatId: string;
+  readonly toolbarStore: ComposerToolbarStore;
+  readonly providersList: ProvidersListResponse;
+}): ReactNode {
+  const wait = useChatAccountWait({
+    fallbackCardVisible: false,
+    providersList: props.providersList,
+    epicId: "epic-1",
+    chatId: props.chatId,
+    hostId: LOCAL_HOST_ID,
+  });
+  return (
+    <ChatComposerBannerPortalProvider hidden={false}>
+      <AccountWaitSurface
+        epicId="epic-1"
+        chatId={props.chatId}
+        providersList={props.providersList}
+        wait={wait}
+        client={props.client}
+        hostId={LOCAL_HOST_ID}
+        toolbarStore={props.toolbarStore}
+        canAct
+      >
+        {null}
+      </AccountWaitSurface>
+    </ChatComposerBannerPortalProvider>
+  );
 }
 
 /** Publishes one host's lease the way the selection bridge does. */
@@ -771,6 +968,47 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
   const FIRST_URL = "ws://127.0.0.1:55300/rpc";
   const RESPAWN_URL = "ws://127.0.0.1:61234/rpc";
 
+  async function openRegisteredAccountWaitSession() {
+    signIn();
+    openTransportRef.fn = createTrackedOpenTransport().openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+    const { result } = renderHook(
+      () => useChatSessionHandle(ACCOUNT_WAIT_CHAT_ID, LOCAL_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const handle = result.current;
+    if (handle === null) throw new Error("expected a registered chat handle");
+    return handle;
+  }
+
+  function accountWaitToolbarStore() {
+    return createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
+      seedKey: "account-wait-registered-session",
+      values: {
+        ultracode: false,
+        permission: "supervised",
+        selection: {
+          harnessId: "claude",
+          modelSlug: "claude-sonnet-4",
+          profileId: "destination-profile",
+        },
+        reasoning: "high",
+        serviceTier: "",
+      },
+      onSettingsChange: () => undefined,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
+      hostId: LOCAL_HOST_ID,
+    });
+  }
+
   it.each([
     ["the websocket URL", localEntry(RESPAWN_URL, "1.0.0")],
     ["the host version", localEntry(FIRST_URL, "1.1.0")],
@@ -834,6 +1072,114 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     expect(result.current).toBe(liveHandle);
     expect(tracked.records()).toHaveLength(1);
     expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  it("uses the failed turn's registered removed-profile snapshot to name and open the bulk count", async () => {
+    const user = userEvent.setup();
+    const handle = await openRegisteredAccountWaitSession();
+    const anchor = claudeChatSessionAnchorSchema.parse({
+      harnessId: "claude",
+      hostId: LOCAL_HOST_ID,
+      sessionId: "account-wait-session",
+      sessionWorkspaceSnapshot: {
+        workspaceKind: "session-snapshot",
+        primaryWorkspace: "/repo",
+        secondaryWorkspaces: [],
+      },
+      claudeMessageUuid: "account-wait-message",
+      createdAt: 1,
+      profileId: "legacy-source-alias",
+      labelSnapshot: "Source profile",
+      accountUuid: null,
+      accentColor: null,
+      turnTailUuid: null,
+      coveredUntilMessageId: null,
+    });
+    act(() => {
+      handle.store.setState({
+        accountWait: ACCOUNT_WAIT_REMOVED,
+        lastFailedAttempt: ACCOUNT_WAIT_FAILURE,
+        transcriptRowContext: {
+          [assistantRowId(ACCOUNT_WAIT_FAILURE.turnId)]: {
+            sessionAnchor: anchor,
+          },
+        },
+      });
+    });
+
+    const { client, previewRequests } = accountWaitClient();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RegisteredAccountWaitScene
+          client={client}
+          chatId={ACCOUNT_WAIT_CHAT_ID}
+          toolbarStore={accountWaitToolbarStore()}
+          providersList={ACCOUNT_WAIT_LIST}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Source profile")).toBeTruthy();
+    expect(screen.getByText("Was removed")).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Move all waiting agents" }),
+    );
+    expect(
+      await screen.findByText("1 agent is waiting on Source profile."),
+    ).toBeTruthy();
+    expect(previewRequests).toEqual([
+      {
+        extent: "fleet",
+        mode: "waiting",
+        source: ACCOUNT_WAIT_SOURCE,
+      },
+    ]);
+  });
+
+  it("shows only Was removed and Choose when the registered session has no name snapshot", async () => {
+    const handle = await openRegisteredAccountWaitSession();
+    act(() => {
+      handle.store.setState({
+        accountWait: ACCOUNT_WAIT_REMOVED,
+        lastFailedAttempt: undefined,
+        transcriptRowContext: {},
+      });
+    });
+    const { client, previewRequests } = accountWaitClient();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RegisteredAccountWaitScene
+          client={client}
+          chatId={ACCOUNT_WAIT_CHAT_ID}
+          toolbarStore={accountWaitToolbarStore()}
+          providersList={ACCOUNT_WAIT_LIST}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Was removed")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Choose another profile" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Move all waiting agents" }),
+    ).toBeNull();
+    expect(screen.queryByText("removed-source")).toBeNull();
+    expect(screen.queryByText("legacy-source-alias")).toBeNull();
+    expect(previewRequests).toEqual([]);
   });
 
   const losses: ReadonlyArray<
