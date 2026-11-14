@@ -1,5 +1,5 @@
 import { Profiler } from "react";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderId } from "@traycer/protocol/host/provider-ids";
 
 interface ProvidersChangedMockState {
@@ -130,23 +130,6 @@ interface PickerHarness {
   readonly commitCount: () => number;
 }
 
-const identicalPushCommitCounts: Record<
-  "true" | "false" | "absent",
-  number | undefined
-> = {
-  true: undefined,
-  false: undefined,
-  absent: undefined,
-};
-const changedDataPushCommitCounts: Record<
-  "true" | "false" | "absent",
-  number | undefined
-> = {
-  true: undefined,
-  false: undefined,
-  absent: undefined,
-};
-
 afterEach(() => {
   cleanup();
   useProviderProfileAddFlowStore.getState().close();
@@ -158,29 +141,8 @@ afterEach(() => {
   resetHostConnectionRegistryForTest();
 });
 
-afterAll(() => {
-  const trueCommits = identicalPushCommitCounts.true;
-  const falseCommits = identicalPushCommitCounts.false;
-  const absentCommits = identicalPushCommitCounts.absent;
-  expect(trueCommits).not.toBeUndefined();
-  expect(falseCommits).toBe(trueCommits);
-  expect(absentCommits).toBe(trueCommits);
-
-  const trueChangedDataCommits = changedDataPushCommitCounts.true;
-  const falseChangedDataCommits = changedDataPushCommitCounts.false;
-  const absentChangedDataCommits = changedDataPushCommitCounts.absent;
-  expect(trueChangedDataCommits).not.toBeUndefined();
-  expect(falseChangedDataCommits).toBe(trueChangedDataCommits);
-  expect(absentChangedDataCommits).toBe(trueChangedDataCommits);
-});
-
 function profileRow(label: string): ProviderProfile {
   return { ...profile(PROFILE_ID, "managed"), label };
-}
-
-function offerKey(offers: Offers): "true" | "false" | "absent" {
-  if (offers === "absent") return "absent";
-  return offers ? "true" : "false";
 }
 
 function listBody(
@@ -338,6 +300,7 @@ describe("provider list push stability while Add is open", () => {
       harness.setResponseAfterPush();
       emitChanged();
       await settleListRefetch(harness, initialListReads + 1);
+      expect(harness.commitCount() - commitsBeforePush).toBe(0);
 
       expect(methodCount(harness.messenger.calls, "providers.list")).toBe(
         initialListReads + 1,
@@ -347,8 +310,6 @@ describe("provider list push stability while Add is open", () => {
       expect(JSON.stringify(harness.queryClient.getQueryData(LIST_KEY))).toBe(
         initialBytes,
       );
-      identicalPushCommitCounts[offerKey(offers)] =
-        harness.commitCount() - commitsBeforePush;
     },
   );
 
@@ -384,6 +345,7 @@ describe("provider list push stability while Add is open", () => {
       harness.setResponseAfterPush();
       emitChanged();
       await settleListRefetch(harness, initialListReads + 1);
+      expect(harness.commitCount() - commitsBeforePush).toBe(1);
 
       expect(methodCount(harness.messenger.calls, "providers.list")).toBe(
         initialListReads + 1,
@@ -394,8 +356,6 @@ describe("provider list push stability while Add is open", () => {
       expect(JSON.stringify(harness.queryClient.getQueryData(LIST_KEY))).toBe(
         JSON.stringify(afterResponse),
       );
-      changedDataPushCommitCounts[offerKey(offers)] =
-        harness.commitCount() - commitsBeforePush;
     },
   );
 });

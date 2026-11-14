@@ -33,7 +33,10 @@ import type {
   ProviderMutationCliStateV21,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import { providersAwaitLoginResponseSchema } from "@traycer/protocol/host/provider-schemas";
+import {
+  PROVIDER_PROFILE_ACCENT_COLORS,
+  providersAwaitLoginResponseSchema,
+} from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -137,6 +140,37 @@ function workProfile(): ProviderProfile {
     ...profile(PROFILE_ID, "managed"),
     label: PROFILE_LABEL,
     accentColor: "#f97316",
+  };
+}
+
+function sameEmailRenameProfiles(): {
+  readonly existing: ProviderProfile;
+  readonly created: ProviderProfile;
+} {
+  return {
+    existing: {
+      ...workProfile(),
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal account",
+      identity: {
+        email: "shared@example.test",
+        tier: "Pro",
+        accountUuid: null,
+      },
+      accentColor: PROVIDER_PROFILE_ACCENT_COLORS[0],
+    },
+    created: {
+      ...workProfile(),
+      profileId: MINTED_PROFILE_ID,
+      label: "New profile",
+      identity: {
+        email: "shared@example.test",
+        tier: "Team",
+        accountUuid: null,
+      },
+      accentColor: PROVIDER_PROFILE_ACCENT_COLORS[1],
+    },
   };
 }
 
@@ -500,6 +534,31 @@ function renamedLabel(params: unknown): string | null {
   return action.label;
 }
 
+function setEnabledActionDetails(params: unknown): {
+  readonly label: string | null;
+  readonly accentColor: string | null;
+} | null {
+  if (
+    typeof params !== "object" ||
+    params === null ||
+    !("profileAction" in params)
+  ) {
+    return null;
+  }
+  const action = params.profileAction;
+  if (typeof action !== "object" || action === null) return null;
+  let label: string | null = null;
+  let accentColor: string | null = null;
+  if ("label" in action && typeof action.label === "string") {
+    label = action.label;
+  }
+  if ("accentColor" in action && typeof action.accentColor === "string") {
+    accentColor = action.accentColor;
+  }
+  if (label === null && accentColor === null) return null;
+  return { label, accentColor };
+}
+
 async function expectAddDidNotFinish(harness: AddFlowHarness): Promise<void> {
   useDesktopDialogStore.setState({ reportIssueAvailable: true });
   expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
@@ -655,29 +714,7 @@ describe("Add a profile around one sign-in", () => {
   });
 
   it("renames a same-email distinct profile with exactly two providers.list reads", async () => {
-    const existing: ProviderProfile = {
-      ...workProfile(),
-      profileId: "ambient",
-      kind: "ambient" as const,
-      label: "Terminal account",
-      identity: {
-        email: "shared@example.test",
-        tier: "Pro",
-        accountUuid: null,
-      },
-      accentColor: "#ef4444",
-    };
-    const created: ProviderProfile = {
-      ...workProfile(),
-      profileId: MINTED_PROFILE_ID,
-      label: "New profile",
-      identity: {
-        email: "shared@example.test",
-        tier: "Team",
-        accountUuid: null,
-      },
-      accentColor: "#f97316",
-    };
+    const { existing, created } = sameEmailRenameProfiles();
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -725,6 +762,73 @@ describe("Add a profile around one sign-in", () => {
     );
   });
 
+  it("renames and recolors a same-email distinct profile with exactly three providers.list reads", async () => {
+    const { existing, created } = sameEmailRenameProfiles();
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [existing],
+      profilesAfter: [existing, created],
+      outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
+      echoedProfiles: [existing, created],
+      seedCache: true,
+    });
+    await pressAccount(true);
+    expect(
+      await screen.findByText(
+        "Terminal account already uses this email. Name this profile so you can tell them apart.",
+      ),
+    ).toBeTruthy();
+    expect(harness.listsAfterAwait()).toBe(1);
+    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
+
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Personal" },
+    });
+    const pickedColor = PROVIDER_PROFILE_ACCENT_COLORS[2];
+    expect(pickedColor).not.toBe(existing.accentColor);
+    fireEvent.click(
+      screen.getByRole("button", { name: `Use color ${pickedColor}` }),
+    );
+    expect(harness.listsAfterAwait()).toBe(1);
+    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() => {
+      expect(methodCount(harness.calls, "providers.setEnabled")).toBe(2);
+      expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
+    });
+    expect(harness.listsAfterAwait()).toBe(2);
+    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
+    const setEnabledCalls = harness.calls.filter(
+      (call) => call.method === "providers.setEnabled",
+    );
+    expect(
+      setEnabledCalls.map((call) => setEnabledActionDetails(call.params)),
+    ).toEqual([
+      { label: "Personal", accentColor: null },
+      { label: null, accentColor: pickedColor },
+    ]);
+
+    harness.releaseRecolor();
+    await waitFor(() => {
+      expect(harness.created).toHaveBeenCalledWith(MINTED_PROFILE_ID);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(methodCount(harness.messenger.calls, "providers.list")).toBe(3);
+    });
+    expect(harness.listsAfterAwait()).toBe(3);
+    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(3);
+    expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
+      1,
+    );
+    expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+      1,
+    );
+    expect(methodCount(harness.messenger.calls, "providers.cancelLogin")).toBe(
+      0,
+    );
+  });
+
   it("waits, with Done, when the signed-in id is still absent after one re-read", async () => {
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
@@ -752,6 +856,8 @@ describe("Add a profile around one sign-in", () => {
     });
     await pressAccount(true);
     expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
+    expect(harness.listsAfterAwait()).toBe(1);
+    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
     expect(screen.queryByText("Account already linked")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
     expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
@@ -760,6 +866,8 @@ describe("Add a profile around one sign-in", () => {
       expect(harness.created).toHaveBeenCalledWith(PROFILE_ID);
     });
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(harness.listsAfterAwait()).toBe(1);
+    expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
     expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
   });
 
