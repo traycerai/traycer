@@ -816,8 +816,8 @@ function buildFakeBridge(
     },
     sandboxArtifacts: {
       policySource: "traycer-sandbox:",
-      artifactOrigin: ({ artifactId, mountId }) =>
-        `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+      artifactOrigin: ({ artifactId }) =>
+        `traycer-sandbox://artifact-${artifactId}`,
       register: async () => undefined,
       unregister: async () => undefined,
       onRequest: (_handler) => ({ dispose: () => undefined }),

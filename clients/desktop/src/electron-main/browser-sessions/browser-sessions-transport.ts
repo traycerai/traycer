@@ -245,8 +245,9 @@ export function createBrowserSessionsHostDirectory(
     resolve: async (hostId) => {
       const local = localEntryFor(hostId);
       if (local !== null) {
-        if (!cachedRemote.has(hostId)) await refreshOnce();
-        return localEntryFor(hostId);
+        // Registry discovery must not delay the browser on this machine.
+        if (!cachedRemote.has(hostId)) void refreshOnce();
+        return local;
       }
       const cached = cachedRemote.get(hostId);
       if (cached !== undefined) return cached;
@@ -256,11 +257,18 @@ export function createBrowserSessionsHostDirectory(
   };
 }
 
-/** Names the ownership snapshot, independently of display names and addresses. */
+/** Local eligibility and remote principal identity, independent of addresses. */
 export function browserSessionsOwnerKey(
   entry: HostDirectoryEntry | null,
 ): string | null {
   if (entry === null) return null;
+  if (entry.kind === "local") {
+    return JSON.stringify([
+      entry.kind,
+      entry.hostId,
+      allowsBrowserLoginSync(entry),
+    ]);
+  }
   return JSON.stringify([
     entry.kind,
     entry.hostId,

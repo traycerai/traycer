@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ManagedCommandOutputStreamClient } from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ManagedCommandOutputStreamClient,
+  type ManagedCommandOutputTarget,
+} from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
+import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { getManagedCommandOutputStreamClientFactoryOverride } from "@/providers/managed-command-output-stream-factory-override";
@@ -28,12 +32,25 @@ export interface ManagedCommandOutputSession {
  * reopening it re-reads the tail. The transport is owned by the stream client
  * (see `openOwnedDurableStreamClient`) and bound to the tab's host for life.
  */
-export function useManagedCommandOutputSession(args: {
-  readonly epicId: string;
-  readonly commandId: string;
-  readonly hostId: string;
-}): ManagedCommandOutputSession {
-  const { commandId, epicId, hostId } = args;
+export function useManagedCommandOutputSession(
+  args: {
+    readonly target: ManagedCommandOutputTarget;
+    readonly commandId: string;
+    readonly hostId: string;
+  },
+  directory: Pick<HostDirectoryService, "findById" | "onChange"> | null,
+): ManagedCommandOutputSession {
+  const { commandId, target, hostId } = args;
+  const targetId = target.kind === "epic" ? target.epicId : target.botId;
+  const targetKind = target.kind;
+  const sessionChatId = target.kind === "bot" ? target.sessionChatId : "";
+  const streamTarget = useMemo<ManagedCommandOutputTarget>(
+    () =>
+      targetKind === "epic"
+        ? { kind: "epic", epicId: targetId }
+        : { kind: "bot", botId: targetId, sessionChatId },
+    [targetKind, targetId, sessionChatId],
+  );
   const openTransport = useDurableStreamTransportFactory();
   // Read live rather than as an effect dependency: reopening the stream costs
   // the viewer their scroll position and re-reads the tail, so only the command
@@ -59,14 +76,14 @@ export function useManagedCommandOutputSession(args: {
     const override = getManagedCommandOutputStreamClientFactoryOverride();
     const streamClientFactory: ManagedCommandOutputStreamClientFactory =
       override ??
-      ((streamEpicId, streamCommandId, callbacks) => {
+      ((_scopeId, streamCommandId, callbacks) => {
         const owned = openOwnedDurableStreamClient(
           openTransportRef.current,
           hostId,
           (ws) => {
             const stream = new ManagedCommandOutputStreamClient({
               wsStreamClient: ws,
-              epicId: streamEpicId,
+              target: streamTarget,
               commandId: streamCommandId,
               callbacks,
             });
@@ -87,17 +104,30 @@ export function useManagedCommandOutputSession(args: {
           streamMethodSupport: owned.client.streamMethodSupport,
         };
       });
-    const next = createManagedCommandOutputStore({
-      epicId,
-      commandId,
-      streamClientFactory,
-    });
-    setHandle(next);
-    return () => {
-      setHandle(null);
-      next.dispose();
+    let next: ManagedCommandOutputStoreHandle | null = null;
+    let subscription: { dispose(): void } | null = null;
+    const acquire = () => {
+      if (next !== null) return;
+      if (directory !== null && directory.findById(hostId) === null) return;
+      next = createManagedCommandOutputStore({
+        target: streamTarget,
+        commandId,
+        streamClientFactory,
+      });
+      subscription?.dispose();
+      subscription = null;
+      setHandle(next);
     };
-  }, [commandId, epicId, hostId, generation]);
+    if (directory !== null) {
+      subscription = directory.onChange(acquire);
+    }
+    acquire();
+    return () => {
+      subscription?.dispose();
+      setHandle(null);
+      next?.dispose();
+    };
+  }, [commandId, streamTarget, hostId, generation, directory]);
 
   return { session: handle, reopen };
 }

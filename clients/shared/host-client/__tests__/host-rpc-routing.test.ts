@@ -349,3 +349,35 @@ describe("isMachineHostDirectoryEntry", () => {
     expect(isMachineHostDirectoryEntry(poolEntry)).toBe(false);
   });
 });
+
+describe("the bot shell output stream's route", () => {
+  const METHOD = "managedCommand.subscribeBotOutput";
+
+  it("is served by the host the tab is bound to, as the epic output stream is", () => {
+    expect(HOST_STREAM_RPC_ROUTES[METHOD]).toBe("target-host");
+    expect(HOST_STREAM_RPC_ROUTES[METHOD]).toBe(
+      HOST_STREAM_RPC_ROUTES["managedCommand.subscribeOutput"],
+    );
+  });
+
+  it("dispatches to the bound sandbox host, never to the pool, and refuses on the pool", () => {
+    expect(
+      decideHostRpcDispatch("target-host", teamSandboxEntry, POOL_PLAN, null),
+    ).toEqual({ kind: "dispatch", entry: teamSandboxEntry });
+    expect(
+      decideHostRpcDispatch(
+        "target-host",
+        personalSandboxEntry,
+        POOL_PLAN,
+        null,
+      ),
+    ).toEqual({ kind: "dispatch", entry: personalSandboxEntry });
+    const decision = decideHostRpcDispatch(
+      "target-host",
+      poolEntry,
+      POOL_PLAN,
+      null,
+    );
+    expect(decision.kind).toBe("refuse");
+  });
+});

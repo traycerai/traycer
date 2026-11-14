@@ -160,7 +160,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("<NotificationRow /> feedback draft rows", () => {
-  it("sends the draft without diagnostics and does not open the row", () => {
+  it("sends the draft without diagnostics using a fresh action id per click and does not open the row", () => {
     const onActivate = vi.fn<(row: MergedNotificationRow) => void>();
     renderRow(buildRow({}), onActivate);
 
@@ -176,7 +176,11 @@ describe("<NotificationRow /> feedback draft rows", () => {
       decision: "send",
       includeDiagnostics: false,
     });
-    expect(clientActionId.length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(mocks.mutate).toHaveBeenCalledTimes(2);
+    expect(mocks.mutate.mock.calls[1][0].clientActionId).not.toBe(
+      clientActionId,
+    );
     expect(onActivate).not.toHaveBeenCalled();
   });
 

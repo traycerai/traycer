@@ -41,6 +41,8 @@ import {
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
+import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
+import { useBotActivity } from "@/hooks/bots/use-bot-activity";
 
 import {
   useVoiceSessionStore,
@@ -87,6 +89,7 @@ import {
   resetBotTabSurfaceMocks,
   setUpNewTeam,
   SETUP_BOT_ID,
+  snapshot,
   TAB_HOST,
 } from "./bot-tab-surface-harness";
 
@@ -225,6 +228,21 @@ function MentionsProbe(): ReactNode {
   );
 }
 
+/** The channel's real typing line, over the bot's real activity reading. */
+function ReplyingStripProbe(props: {
+  botId: string;
+  botTitle: string;
+}): ReactNode {
+  return (
+    <BotReplyingStrip
+      botTitle={props.botTitle}
+      activity={useBotActivity(props.botId)?.trunk ?? null}
+      turn={null}
+      testId="stub-replying-strip"
+    />
+  );
+}
+
 vi.mock("@/components/bots/bot-channel-view", () => ({
   BotChannelView: (props: {
     botId: string;
@@ -285,6 +303,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       />
       {props.setupHistory}
       <MentionsProbe />
+      <ReplyingStripProbe botId={props.botId} botTitle={props.botTitle} />
       {/* The two boxes' places in the real view: the channel's own, and one
           inside the thread panel, which the header tells apart by its marker. */}
       <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
@@ -443,6 +462,15 @@ function surfaceFor(botId: string | null): ReactNode {
 
 function surface(): ReactNode {
   return surfaceFor(BOT_ID);
+}
+
+/** The surface outside StrictMode, for a case that counts its mount's opens. */
+function unstrictSurface(): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
+    </QueryClientProvider>
+  );
 }
 
 /** Nothing on a tab says where a bot runs or offers to move it. */
@@ -1003,7 +1031,7 @@ describe("<BotTabSurface /> bot.open", () => {
   });
 
   it("opens the bot once on mount, for this bot", () => {
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
 
     expect(mocks.open).toHaveBeenCalledTimes(1);
     expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
@@ -1608,7 +1636,7 @@ describe("<BotTabSurface /> paused", () => {
       kind: "paused",
       reason: "reachability-unknown",
     });
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
     expect(mocks.open).toHaveBeenCalledTimes(1);
 
     mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
@@ -1624,7 +1652,7 @@ describe("<BotTabSurface /> bot.open fails", () => {
   it("shows the error with a Retry, and no tab, when there is no earlier answer", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = { kind: "error", message: "the host is busy" };
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
 
     const alert = screen.getByTestId("bot-tab-error");
     expect(alert.textContent).toContain(
@@ -1926,5 +1954,100 @@ describe("<BotTabSurface /> channel background", () => {
     expect(header().classList.contains(TINT_CLASS)).toBe(false);
     expect(header().hasAttribute("data-channel-background")).toBe(false);
     expect(header().style.getPropertyValue("--channel-tint")).toBe("");
+  });
+});
+
+describe("<BotTabSurface /> header mascot while the bot replies", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function stubMotionAllowed(): void {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  }
+
+  function mascotPaths(root: HTMLElement): string[] {
+    const mascot = within(root)
+      .getByTestId("bot-avatar")
+      .querySelector('[data-slot="bot-mascot"]');
+    if (mascot === null) throw new Error("the avatar drew no mascot");
+    return [...mascot.querySelectorAll("path")].map(
+      (path) => path.getAttribute("d") ?? "",
+    );
+  }
+
+  it("keeps the title's eyes as they are at rest across beats while the typing line's mascot moves", () => {
+    vi.useFakeTimers();
+    stubMotionAllowed();
+    const headerAvatar = (): HTMLElement =>
+      screen.getByTestId("bot-tab-avatar");
+    const view = render(surface());
+    expect(screen.queryByTestId("stub-replying-strip")).toBeNull();
+    const idle = mascotPaths(headerAvatar());
+
+    mocks.state.snapshot = {
+      ...snapshot(),
+      activity: {
+        trunk: {
+          state: "replying",
+          startedAt: 1_000,
+          step: null,
+          requestId: "req-1",
+          reason: null,
+        },
+        threads: {},
+      },
+    };
+    view.rerender(surface());
+    const strip = screen.getByTestId("stub-replying-strip");
+    const stripBefore = mascotPaths(strip);
+
+    // Three beats of 500 ms put the working mascot's eyes on its blink.
+    act(() => {
+      vi.advanceTimersByTime(1_500);
+    });
+
+    expect(mascotPaths(strip)).not.toEqual(stripBefore);
+    expect(mascotPaths(headerAvatar())).toEqual(idle);
+  });
+
+  it("draws the title's eyes shut while the trunk is parked, and keeps them so across beats", () => {
+    vi.useFakeTimers();
+    stubMotionAllowed();
+    const headerAvatar = (): HTMLElement =>
+      screen.getByTestId("bot-tab-avatar");
+    const view = render(surface());
+    const idle = mascotPaths(headerAvatar());
+
+    mocks.state.snapshot = {
+      ...snapshot(),
+      activity: {
+        trunk: {
+          state: "parked",
+          startedAt: null,
+          step: null,
+          requestId: null,
+          reason: null,
+        },
+        threads: {},
+      },
+    };
+    view.rerender(surface());
+    const parked = mascotPaths(headerAvatar());
+
+    act(() => {
+      vi.advanceTimersByTime(1_500);
+    });
+
+    expect(parked).not.toEqual(idle);
+    expect(mascotPaths(headerAvatar())).toEqual(parked);
   });
 });

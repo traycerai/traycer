@@ -253,3 +253,38 @@ export const managedCommandSubscribeOutputV11 = defineStreamRpcContract({
   serverFrameSchema: managedCommandSubscribeOutputServerFrameSchema,
   clientFrameSchema: managedCommandSubscribeOutputClientFrameSchema,
 });
+
+/** The bot stream addresses a session separately from the command's container. */
+export const managedCommandSubscribeBotOutputOpenRequestSchema = lazySchema(
+  () =>
+    z.object({
+      botId: z.string(),
+      sessionChatId: z.string(),
+      commandId: z.string(),
+    }),
+);
+
+export const managedCommandSubscribeBotOutputServerFrameSchema = lazySchema(
+  () =>
+    z.discriminatedUnion("kind", [
+      ...managedCommandSubscribeOutputServerFrames(managedCommandSchema)
+        .options,
+      z.object({
+        kind: z.literal("liveness"),
+        ...textFrameFields,
+        state: z.enum(["live", "holding"]),
+      }),
+    ]),
+);
+
+export type ManagedCommandSubscribeBotOutputServerFrame = z.infer<
+  typeof managedCommandSubscribeBotOutputServerFrameSchema
+>;
+
+export const managedCommandSubscribeBotOutputV10 = defineStreamRpcContract({
+  method: "managedCommand.subscribeBotOutput",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: managedCommandSubscribeBotOutputOpenRequestSchema,
+  serverFrameSchema: managedCommandSubscribeBotOutputServerFrameSchema,
+  clientFrameSchema: managedCommandSubscribeOutputClientFrameSchema,
+});

@@ -5,6 +5,12 @@
  * host does not resolve). The subscription is a real `bot.subscribe` snapshot
  * through the real subscription hook, as in `bot-activity-from-stream`.
  */
+import {
+  BOT_ID,
+  HOST_ID,
+  wireTask,
+  snapshotWith,
+} from "./bot-activity-stream-fixture";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -16,15 +22,10 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  botSubscribeServerFrameSchema,
-  type BotSubscribeServerFrame,
-} from "@traycer/protocol/host/bot/schemas";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import {
   __resetBotSubscriptionsForTesting,
@@ -136,68 +137,6 @@ vi.mock("@/hooks/host/use-host-queries", async (importOriginal) => {
           ),
   };
 });
-
-const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const HOST_ID = mockLocalHostEntry.hostId;
-
-/** A task entry as a host sends it: every wire field, and no check-in history. */
-function wireTask(taskId: string, fields: Record<string, unknown>): object {
-  return {
-    taskId,
-    cadence: { kind: "on-completion" },
-    lastCheckinAt: null,
-    lastCheckin: null,
-    nextAt: null,
-    state: "tracking",
-    endedReason: null,
-    createdByUserId: null,
-    spun: true,
-    label: null,
-    originRequestId: null,
-    createdByChatId: null,
-    inputNeeded: null,
-    pause: null,
-    stop: null,
-    runRequest: null,
-    ...fields,
-  };
-}
-
-function snapshotWith(
-  tasks: ReadonlyArray<object>,
-  notificationSubscriptions: ReadonlyArray<object> | null,
-): BotSubscribeServerFrame {
-  return botSubscribeServerFrameSchema.parse({
-    kind: "snapshot",
-    bot: {
-      botId: BOT_ID,
-      environmentId: "env-1",
-      createdByUserId: "user-1",
-      title: "Tracy",
-      harness: "claude",
-      model: "claude-opus-5-5",
-      effort: null,
-      profile: null,
-      trunkChatId: "trunk-1",
-      boundHostId: HOST_ID,
-      hostEpoch: 0,
-      createdAt: 1,
-      archivedAt: null,
-      directive: null,
-      replyMode: "thread",
-      appConversationChatId: null,
-    },
-    tasks,
-    openRequestCount: 0,
-    conversationsRevision: 1,
-    notificationSubscriptions,
-    surfaceActions: null,
-    stoppedNotificationWatches: null,
-    boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
-    activity: null,
-    hasBinaryPayload: false,
-  });
-}
 
 function mountOver(session: StubSession): void {
   const streamClient = new StubHostStreamClient(session);

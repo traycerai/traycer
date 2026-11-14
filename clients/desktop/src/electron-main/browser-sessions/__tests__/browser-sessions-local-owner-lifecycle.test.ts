@@ -194,6 +194,13 @@ describe("local browser.sessions ownership changes", () => {
     expect(harness.openedTransports).toHaveLength(1);
     expect(client.isClosed()).toBe(false);
     expect(session.closed).toBe(false);
+    expect(
+      harness.emitted.some(
+        ({ envelope }) =>
+          envelope.event.kind === "status" &&
+          envelope.event.lifecycle === "failed",
+      ),
+    ).toBe(false);
   });
 
   it("retires the same live stream when unknown ownership becomes team", async () => {
@@ -209,6 +216,21 @@ describe("local browser.sessions ownership changes", () => {
     expect(harness.openedTransports).toHaveLength(1);
     expect(client.isClosed()).toBe(true);
     expect(session.closed).toBe(true);
+
+    // The next real registry open resolves the now-known team owner. The
+    // production jar selector refuses it before a second socket is born.
+    harness.registry.open(WINDOW_ID, OPEN_REQUEST);
+    await settle();
+    expect(harness.openTransport).toHaveBeenCalledTimes(2);
+    expect(harness.openedTransports).toHaveLength(1);
+    expect(localWsClients.clients).toHaveLength(1);
+    expect(
+      harness.emitted.some(
+        ({ envelope }) =>
+          envelope.event.kind === "status" &&
+          envelope.event.lifecycle === "failed",
+      ),
+    ).toBe(true);
   });
 
   it("retires a personal stream when its owner changes to team", async () => {
@@ -250,5 +272,49 @@ describe("local browser.sessions ownership changes", () => {
     expect(harness.openedTransports).toHaveLength(1);
     expect(client.isClosed()).toBe(false);
     expect(session.closed).toBe(false);
+  });
+
+  it("still retires a remote stream when its personal principal changes", async () => {
+    const appHarness = createRegistryHarness();
+    const remoteHostId = "host-remote";
+    let owner: HostOwnerPrincipal = { kind: "user", id: "user-1" };
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string) =>
+        Promise.resolve(hostListResultForOwner(remoteHostId, owner)),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "bearer-token",
+      listRegisteredHosts,
+      now: () => 1_000_000,
+    });
+    await directory.resolve(remoteHostId);
+
+    const registry = new BrowserSessionsRegistry({
+      ...appHarness.deps,
+      directory,
+    });
+    activeRegistries.push(registry);
+    const nextClient = appHarness.nextClient();
+    registry.open(WINDOW_ID, { ...OPEN_REQUEST, hostId: remoteHostId });
+    const client = await nextClient;
+    await settle();
+    const session = client.sessions[0];
+    if (session === undefined)
+      throw new Error("the remote browser.sessions stream was not subscribed");
+    session.emitStatus("open");
+    session.emit(SNAPSHOT, null);
+
+    owner = { kind: "user", id: "user-2" };
+    directory.invalidate(remoteHostId);
+    await directory.resolve(remoteHostId);
+    await settle();
+
+    expect(appHarness.closedTransports).toEqual([0]);
+    expect(client.isClosed()).toBe(true);
+    expect(session.closed).toBe(true);
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
   });
 });
