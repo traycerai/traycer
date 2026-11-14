@@ -64,6 +64,7 @@ vi.mock("@/lib/reportable-error-toast", () => ({
 }));
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { JSX } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
@@ -71,7 +72,10 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { SelectionIncompatibility } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { IHostManagement } from "@traycer-clients/shared/platform/runner-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
@@ -89,6 +93,7 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 
 /**
  * Real `useOlderHostUpdate` and real `useUpdateHostVersionPolicy`. The floor
@@ -123,11 +128,16 @@ interface OpenedRuntime {
 
 const opened: OpenedRuntime[] = [];
 
-function pendingRemote(): RemoteHostDirectoryEntry {
+function host154(updateState: "pending" | "current"): RemoteHostDirectoryEntry {
   const base = remoteEntry(HOST_ID, null);
   return {
     ...base,
-    remoteStatus: { ...base.remoteStatus, updateState: "pending" },
+    version: "1.5.4",
+    remoteStatus: {
+      ...base.remoteStatus,
+      updateState,
+      appVersion: "1.5.4",
+    },
   };
 }
 
@@ -220,17 +230,35 @@ function renderUpdate(
             detail={OLDER_HOST}
             testId="host-scope-update-host"
           />
+          <DirectoryAppVersion />
         </HostRuntimeContext.Provider>
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
 }
 
+function DirectoryAppVersion(): JSX.Element {
+  const entry = useHostDirectoryEntry(HOST_ID);
+  const appVersion =
+    entry !== null && isRemoteHostDirectoryEntry(entry)
+      ? (entry.remoteStatus.appVersion ?? "unknown")
+      : "missing";
+  return <span data-testid="directory-app-version">{appVersion}</span>;
+}
+
+interface SignedInHarness {
+  readonly directory: HostDirectoryService;
+  readonly rows: { current: readonly HostDirectoryEntry[] };
+}
+
 async function renderSignedIn(args: {
   readonly localHostId: string | null;
   readonly entry: HostDirectoryEntry | null;
   readonly applyStaged: IHostManagement["applyStaged"] | null;
-}): Promise<void> {
+}): Promise<SignedInHarness> {
+  const rows: SignedInHarness["rows"] = {
+    current: args.entry === null ? [] : [args.entry],
+  };
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: AUTHN,
@@ -254,7 +282,7 @@ async function renderSignedIn(args: {
     remoteFetcher: () =>
       Promise.resolve({
         kind: "hosts",
-        entries: args.entry === null ? [] : [args.entry],
+        entries: rows.current,
       }),
     localHostIdSeeder: () => Promise.resolve(args.localHostId),
     onRegistryPollTick: null,
@@ -292,6 +320,7 @@ async function renderSignedIn(args: {
     },
     runnerHost,
   );
+  return { directory, rows };
 }
 
 function updateButton(): HTMLButtonElement {
@@ -439,35 +468,93 @@ describe("useOlderHostUpdate remote write", () => {
     },
   );
 
-  it("shows Update pending after the registry accepts the write", async () => {
+  it("does not fabricate Update pending when the directory row is not pending", async () => {
     await renderSignedIn({
       localHostId: null,
-      entry: null,
+      entry: host154("current"),
       applyStaged: null,
     });
 
     updateButton().click();
 
     await waitFor(() => {
-      expect(screen.getByText("Update pending")).toBeTruthy();
+      expect(patchCalls).toHaveLength(1);
     });
-    expect(updateButton().disabled).toBe(true);
     expectFloorPatch();
+    await waitFor(() => {
+      expect(updateButton().disabled).toBe(false);
+    });
+    expect(screen.queryByText("Update pending")).toBeNull();
     expectNoDial();
   });
 
-  it("leaves a pending remote update disabled and does not dispatch", async () => {
-    await renderSignedIn({
+  it("patches the floor for a pending 1.5.4 host, then clears when the directory leaves pending", async () => {
+    const harness = await renderSignedIn({
       localHostId: null,
-      entry: pendingRemote(),
+      entry: host154("pending"),
       applyStaged: null,
     });
 
     const button = updateButton();
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
     expect(screen.getByText("Update pending")).toBeTruthy();
     button.click();
-    expect(patchCalls).toEqual([]);
+
+    await waitFor(() => {
+      expect(patchCalls).toHaveLength(1);
+    });
+    expectFloorPatch();
+    expectNoDial();
+
+    harness.rows.current = [host154("current")];
+    await harness.directory.refresh();
+    await waitFor(() => {
+      expect(screen.queryByText("Update pending")).toBeNull();
+    });
+    expect(updateButton().disabled).toBe(false);
+    updateButton().click();
+    await waitFor(() => {
+      expect(patchCalls).toHaveLength(2);
+    });
+    expect(patchCalls[1]).toEqual({
+      url: `${AUTHN}/api/v3/hosts/${HOST_ID}`,
+      body: FLOOR_PATCH_BODY,
+    });
+    expectNoDial();
+  });
+
+  it("publishes an appVersion-only change through the directory subscriber", async () => {
+    const harness = await renderSignedIn({
+      localHostId: null,
+      entry: host154("current"),
+      applyStaged: null,
+    });
+
+    expect(screen.getByTestId("directory-app-version").textContent).toBe(
+      "1.5.4",
+    );
+    const currentEntry = harness.rows.current[0];
+    if (!isRemoteHostDirectoryEntry(currentEntry)) {
+      throw new Error("expected the remote host directory entry");
+    }
+    const updatedEntry: RemoteHostDirectoryEntry = {
+      ...currentEntry,
+      remoteStatus: {
+        ...currentEntry.remoteStatus,
+        appVersion: "1.5.5",
+      },
+    };
+    harness.rows.current = [updatedEntry];
+    expect(updatedEntry.version).toBe("1.5.4");
+    expect(updatedEntry.remoteStatus.updateState).toBe("current");
+
+    await harness.directory.refresh();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("directory-app-version").textContent).toBe(
+        "1.5.5",
+      );
+    });
     expectNoDial();
   });
 

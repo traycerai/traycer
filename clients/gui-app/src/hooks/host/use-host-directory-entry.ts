@@ -44,17 +44,14 @@ export function useHostDirectoryEntry(
   const cacheRef = useRef<HostDirectoryEntry | null>(null);
   const subscribe = useCallback(
     (callback: () => void) => {
-      if (directory === null) return () => undefined;
+      if (directory === null || hostId === null) return () => undefined;
       // The registry's PER-HOST arm (redesign P4.1). It answers the question
       // this hook is actually asking - "did host X's row move" - and it is
       // the arm that survives P4.2. The directory arm below stays because
       // this hook's own `getSnapshot` reads the directory directly, so a
       // harness that supplies a directory without installing a registry
       // source keeps working unchanged.
-      const unsubscribeRegistry =
-        hostId === null
-          ? () => undefined
-          : subscribeHostRowChanged(hostId, callback);
+      const unsubscribeRegistry = subscribeHostRowChanged(hostId, callback);
       const subscription = directory.onChange(() => {
         callback();
       });

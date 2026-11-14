@@ -28,7 +28,7 @@ export function HostUpdateRequiredAction(props: {
         type="button"
         variant="default"
         size="sm"
-        disabled={update.pending || update.remotePending}
+        disabled={update.pending}
         onClick={update.update}
         data-testid={props.testId}
       >

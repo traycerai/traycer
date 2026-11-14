@@ -199,11 +199,7 @@ describe("<WindowHostModal />", () => {
     expect(olderHostUpdate.update).toHaveBeenCalledTimes(1);
   });
 
-  it("update-host: a NON-target incompatible host explains why it cannot be updated here", () => {
-    // Arm 2 of `deriveNoHostVariant`. The action is withheld upstream because
-    // this machine's provisioning cannot fix another machine's host - so the
-    // copy has to say that, or the card reads as "update the host" beside no
-    // button, which is an unexplained gap rather than an honest absence.
+  it("update-host: a NON-target incompatible host retains its existing description", () => {
     const detail: SelectionIncompatibility = {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
@@ -223,8 +219,7 @@ describe("<WindowHostModal />", () => {
     const description = screen.getByTestId("window-host-modal-description");
     expect(description.textContent).toContain("Another host on this account");
     expect(description.textContent).toContain("can't be updated from here");
-    // And it must NOT still tell the reader to do the thing there is no
-    // control for.
+    // The description must not also tell the reader to update the host.
     expect(description.textContent).not.toContain(
       "Update the host to continue",
     );

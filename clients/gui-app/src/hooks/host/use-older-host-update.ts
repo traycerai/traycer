@@ -35,10 +35,9 @@ export function useOlderHostUpdate(hostId: string): OlderHostUpdate {
   if (error !== null) failure = { message: error.message, code: null };
   const remotePending =
     !local &&
-    (remoteUpdate.isSuccess ||
-      (entry !== null &&
-        isRemoteHostDirectoryEntry(entry) &&
-        entry.remoteStatus.updateState === "pending"));
+    entry !== null &&
+    isRemoteHostDirectoryEntry(entry) &&
+    entry.remoteStatus.updateState === "pending";
   return {
     update: () => {
       if (local) {
