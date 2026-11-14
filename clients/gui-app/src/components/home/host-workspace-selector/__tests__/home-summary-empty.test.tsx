@@ -597,6 +597,8 @@ function DelayedBranchValidationHarness() {
               reasoning: "high",
               serviceTier: "",
               permission: "supervised",
+              accountChosen: false,
+              showsDefaultAccount: false,
             },
           });
         }}

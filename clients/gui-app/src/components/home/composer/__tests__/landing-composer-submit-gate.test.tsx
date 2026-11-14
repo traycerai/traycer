@@ -256,6 +256,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     },
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    setDraftAccountFollowsDefault: vi.fn(),
     seedUnseededDraft: vi.fn(() => false),
     createDraft: vi.fn(() => "draft-for-test"),
     // handleSnapshot's unbound-create branch now calls createDraftWithId
@@ -304,6 +305,10 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
+    accountChosen: false,
+    defaultAccount: null,
+    setAccountChosen: vi.fn(),
+    setDefaultAccount: vi.fn(),
     ultracode: false,
     selectedModel: null,
     selection: {

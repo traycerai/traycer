@@ -234,6 +234,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    setDraftAccountFollowsDefault: vi.fn(),
     seedUnseededDraft: vi.fn(() => false),
     createDraft: vi.fn(() => "draft-for-test"),
     // handleSnapshot's unbound-create branch now calls createDraftWithId
@@ -287,9 +288,22 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   interface ToolbarMockState {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: null;
+    readonly setAccountChosen: () => void;
+    readonly setDefaultAccount: () => void;
     readonly selectedModel: null;
     readonly values: {
       readonly selection: {
@@ -314,6 +328,10 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     };
   }
   const toolbarStore = createStore<ToolbarMockState>(() => ({
+    accountChosen: false,
+    defaultAccount: null,
+    setAccountChosen: vi.fn(),
+    setDefaultAccount: vi.fn(),
     ultracode: false,
     selectedModel: null,
     selection: {

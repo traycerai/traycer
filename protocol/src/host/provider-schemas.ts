@@ -1090,12 +1090,8 @@ export const providerDisabledBySchema = lazySchema(() =>
 export type ProviderDisabledBy = z.infer<typeof providerDisabledBySchema>;
 
 /**
- * API-key state for a provider. Only providers authenticated by an API key
- * (Cursor, whose `@cursor/sdk` runtime needs `CURSOR_API_KEY`) set
- * `supported: true`; the CLI-login providers leave it false and the GUI hides
- * the key field. The raw key is NEVER returned over RPC - only whether one is
- * resolvable and where it came from (`stored` = saved in Settings, `env` =
- * the user's login-shell `CURSOR_API_KEY`).
+ * Local API-key availability and source. The raw key is never returned over
+ * RPC: `stored` is the saved slot and `env` is the computer's shell.
  */
 export const providerApiKeyStateSchema = lazySchema(() =>
   z.object({
@@ -2257,13 +2253,9 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@10.8). Mutation echoes use their
- * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
- * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
- * builds that omit the field when an old-host response is parsed on a new
- * client.
+ * Provider list row through 10.12. Mutation echoes use their own frozen shape.
  */
-export const providerCliStateSchema = lazySchema(() =>
+const providerCliStateSchemaV1012Preimage = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     ...providerCliStateBaseShape,
@@ -2271,6 +2263,14 @@ export const providerCliStateSchema = lazySchema(() =>
     nativeCapabilities: providerNativeCapabilitiesSchema.catch(
       DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     ),
+  }),
+);
+/** List-only record routing; absent means the computer reports legacy key custody. */
+export const providerCliStateSchema = lazySchema(() =>
+  providerCliStateSchemaV1012Preimage.extend({
+    apiKey: providerApiKeyStateSchema.extend({
+      recordEnvironmentId: z.string().min(1).nullable().optional(),
+    }),
   }),
 );
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
@@ -2282,7 +2282,7 @@ export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
  * row derives from this one, so the key reaches no older reader.
  */
 const providerCliStateSchemaV109 = lazySchema(() =>
-  providerCliStateSchema.omit({ hiddenModelProviders: true }),
+  providerCliStateSchemaV1012Preimage.omit({ hiddenModelProviders: true }),
 );
 
 /**
@@ -2760,7 +2760,7 @@ export const providersListResponseSchemaV109Preimage = lazySchema(() =>
 export const providersListResponseSchemaV1010Preimage = lazySchema(() =>
   providersListResponseSchemaV108Preimage.extend({
     providers: z.array(
-      providerCliStateSchema.extend({
+      providerCliStateSchemaV1012Preimage.extend({
         usageReporting: z.boolean().optional(),
         profiles: z.array(providerProfileProjectionSchemaV1010).catch([]),
       }),
@@ -2775,7 +2775,7 @@ export const providersListResponseSchemaV1010Preimage = lazySchema(() =>
 export const providersListResponseSchemaV1011Preimage = lazySchema(() =>
   providersListResponseSchemaV108Preimage.extend({
     providers: z.array(
-      providerCliStateSchema.extend({
+      providerCliStateSchemaV1012Preimage.extend({
         // Older hosts omit the key; current hosts report adapter capability.
         usageReporting: z.boolean().optional(),
         profiles: z.array(providerProfileProjectionSchema).catch([]),
@@ -2800,12 +2800,8 @@ export const providersListResponseSchemaV1011Preimage = lazySchema(() =>
   }),
 );
 
-/**
- * Canonical `providers.list` response. Classic callers receive `native: null`;
- * a native query carries its list/discover result or typed error there.
- * Home facts are additive keys; earlier lines retain their frozen decoders.
- */
-export const providersListResponseSchema = lazySchema(() =>
+/** Frozen 10.12 envelope and rows, before key-record routing. */
+export const providersListResponseSchemaV1012Preimage = lazySchema(() =>
   providersListResponseSchemaV1011Preimage.extend({
     // True only when the computer that answered is in an environment whose
     // profile-sync switch is on and it offers sign-ins by itself. A reader
@@ -2813,6 +2809,20 @@ export const providersListResponseSchema = lazySchema(() =>
     // optional, like `onHostOnly` and `removedProfiles`, so construction sites
     // need not emit it and parsing does not insert a default.
     offersSignIns: z.boolean().optional(),
+  }),
+);
+/**
+ * Canonical `providers.list` response. Classic callers receive `native: null`;
+ * a native query carries its list/discover result or typed error there.
+ */
+export const providersListResponseSchema = lazySchema(() =>
+  providersListResponseSchemaV1012Preimage.extend({
+    providers: z.array(
+      providerCliStateSchema.extend({
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchema).catch([]),
+      }),
+    ),
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;

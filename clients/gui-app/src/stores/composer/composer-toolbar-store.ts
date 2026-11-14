@@ -215,6 +215,27 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * resolve so `model: ""` never reaches a draft.
    */
   readonly keptPickUnwritten: boolean;
+  /**
+   * The account an unchosen Terminal login is shown and run on: its
+   * provider's one signed-in profile while the Terminal login is signed out.
+   * `null` when there is none, and on every surface that never sets one. A
+   * presentation layer like a reroute: `values` keep the Terminal login, and
+   * no emit carries this account (`withoutDefaultAccount`).
+   */
+  readonly defaultAccount: DefaultAccount | null;
+  /**
+   * A person chose this composer's account, so `defaultAccount` no longer
+   * applies. Set by an account commit (`commitProfileSelection`, or a
+   * `commitSelection` that changes the account); the surface restores it per
+   * draft.
+   */
+  readonly accountChosen: boolean;
+}
+
+/** The profile an unchosen Terminal login of `harnessId` starts on. */
+export interface DefaultAccount {
+  readonly harnessId: ProviderId;
+  readonly profileId: string;
 }
 
 /**
@@ -252,6 +273,10 @@ export interface ComposerToolbarActions {
   readonly setOnSettingsChange: (
     onSettingsChange: ((settings: ChatRunSettings) => void) | null,
   ) => void;
+  /** Replace `defaultAccount`. Never emits: nobody edited anything. */
+  readonly setDefaultAccount: (account: DefaultAccount | null) => void;
+  /** Replace `accountChosen`. Never emits. */
+  readonly setAccountChosen: (chosen: boolean) => void;
 }
 
 export type ComposerToolbarStoreState = ComposerToolbarState &
@@ -358,7 +383,7 @@ export function createComposerToolbarStore(
       const state = get();
       const values = { ...state.values, ...patch };
       const derived = deriveToolbarState(
-        values,
+        presentedValues(values, state),
         state.catalog,
         state,
         policyFor(state),
@@ -413,13 +438,17 @@ export function createComposerToolbarStore(
           previous: state,
           policy: policyFor(state),
           release: state.pendingSettingsEmit,
+          account: presentedAccount(state),
         });
       set({
         values: releasedValues,
         ...releasedDerived,
         pendingSettingsEmit: false,
       });
-      const releasedSettings = settingsFromDerived(releasedDerived);
+      const releasedSettings = withoutDefaultAccount(
+        settingsFromDerived(releasedDerived),
+        get(),
+      );
       state.onSettingsChange?.(releasedSettings);
       state.onUserSettingsChange?.(releasedSettings);
     };
@@ -436,6 +465,8 @@ export function createComposerToolbarStore(
       modelHeld: false,
       stageKeepsShownPick: false,
       keptPickUnwritten: false,
+      defaultAccount: null,
+      accountChosen: false,
 
       setPermission: (next) => {
         update({ permission: next });
@@ -511,7 +542,7 @@ export function createComposerToolbarStore(
         const state = get();
         if (state.seedKey === seedKey) return;
         const derived = deriveToolbarState(
-          values,
+          presentedValues(values, state),
           state.catalog,
           state,
           policyFor(state),
@@ -531,7 +562,7 @@ export function createComposerToolbarStore(
         const { staged } = policyFor(state);
         if (settledOn(state, catalog, staged)) return;
         const keptDerived = deriveToolbarState(
-          state.values,
+          presentedValues(state.values, state),
           catalog,
           state,
           policyFor(state),
@@ -542,7 +573,12 @@ export function createComposerToolbarStore(
         const derived =
           kept === null
             ? keptDerived
-            : deriveToolbarState(kept, catalog, state, policyFor(state));
+            : deriveToolbarState(
+                presentedValues(kept, state),
+                catalog,
+                state,
+                policyFor(state),
+              );
         // The emit decision lives in one named, testable place. A kept pick
         // takes any deferred edit with it to the draft: its emit would carry
         // the kept pick to the host's settings too.
@@ -557,6 +593,7 @@ export function createComposerToolbarStore(
             previous: state,
             policy: policyFor(state),
             release: emit,
+            account: presentedAccount(state),
           });
         // Owed only while a stage keeps it: once one leaves, this host presents
         // the pick again and nothing here is the person's to write.
@@ -577,7 +614,10 @@ export function createComposerToolbarStore(
           keptPickUnwritten: keptPickOwed && keptSettings === null,
         });
         if (emit) {
-          const settings = settingsFromDerived(releasedDerived);
+          const settings = withoutDefaultAccount(
+            settingsFromDerived(releasedDerived),
+            get(),
+          );
           state.onSettingsChange?.(settings);
           state.onUserSettingsChange?.(settings);
         }
@@ -587,6 +627,36 @@ export function createComposerToolbarStore(
       setOnSettingsChange: (onSettingsChange) => {
         if (get().onSettingsChange === onSettingsChange) return;
         set({ onSettingsChange });
+      },
+
+      setDefaultAccount: (account) => {
+        const state = get();
+        if (sameDefaultAccount(state.defaultAccount, account)) return;
+        const next = { ...state, defaultAccount: account };
+        set({
+          defaultAccount: account,
+          ...deriveToolbarState(
+            presentedValues(state.values, next),
+            state.catalog,
+            state,
+            policyFor(state),
+          ),
+        });
+      },
+
+      setAccountChosen: (chosen) => {
+        const state = get();
+        if (state.accountChosen === chosen) return;
+        const next = { ...state, accountChosen: chosen };
+        set({
+          accountChosen: chosen,
+          ...deriveToolbarState(
+            presentedValues(state.values, next),
+            state.catalog,
+            state,
+            policyFor(state),
+          ),
+        });
       },
     };
   });
@@ -600,6 +670,7 @@ function resolveReleasedToolbarState(input: {
   readonly previous: ComposerToolbarDerived;
   readonly policy: ToolbarSurfacePolicy;
   readonly release: boolean;
+  readonly account: DefaultAccount | null;
 }): {
   readonly values: ComposerToolbarValues;
   readonly derived: ComposerToolbarDerived;
@@ -616,7 +687,7 @@ function resolveReleasedToolbarState(input: {
   return {
     values,
     derived: deriveToolbarState(
-      values,
+      withDefaultAccount(values, input.account),
       input.catalog,
       input.previous,
       input.policy,
@@ -632,6 +703,83 @@ function catalogMatchesSelection(
     catalog.modelsHarnessId === selection.harnessId &&
     catalog.modelsProfileId === selection.profileId
   );
+}
+
+/** The default account while it applies: nobody chose this composer's account. */
+function presentedAccount(
+  state: Pick<ComposerToolbarState, "defaultAccount" | "accountChosen">,
+): DefaultAccount | null {
+  return state.accountChosen ? null : state.defaultAccount;
+}
+
+/** `values` with an unchosen Terminal login shown as the default account. */
+function presentedValues(
+  values: ComposerToolbarValues,
+  state: Pick<ComposerToolbarState, "defaultAccount" | "accountChosen">,
+): ComposerToolbarValues {
+  return withDefaultAccount(values, presentedAccount(state));
+}
+
+function withDefaultAccount(
+  values: ComposerToolbarValues,
+  account: DefaultAccount | null,
+): ComposerToolbarValues {
+  if (
+    account === null ||
+    values.selection.profileId !== null ||
+    values.selection.harnessId !== account.harnessId
+  ) {
+    return values;
+  }
+  return {
+    ...values,
+    selection: { ...values.selection, profileId: account.profileId },
+  };
+}
+
+function sameDefaultAccount(
+  a: DefaultAccount | null,
+  b: DefaultAccount | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.harnessId === b.harnessId && a.profileId === b.profileId;
+}
+
+/**
+ * The selection shows the default account, not one a person chose
+ * (`withoutDefaultAccount`).
+ */
+export function showsDefaultAccount(
+  state: Pick<
+    ComposerToolbarState,
+    "values" | "selection" | "defaultAccount" | "accountChosen"
+  >,
+): boolean {
+  const account = presentedAccount(state);
+  return (
+    account !== null &&
+    state.values.selection.profileId === null &&
+    state.values.selection.harnessId === account.harnessId &&
+    state.selection.profileId === account.profileId
+  );
+}
+
+/**
+ * `settings` (the composer's shown selection) as a surface stores them: a
+ * default account is nobody's choice, so it is stored as the Terminal login
+ * it stands in for. Every emit goes through this, and so does a submit that
+ * records last-run settings.
+ */
+export function withoutDefaultAccount(
+  settings: ChatRunSettings,
+  state: Pick<
+    ComposerToolbarState,
+    "values" | "selection" | "defaultAccount" | "accountChosen"
+  >,
+): ChatRunSettings {
+  return showsDefaultAccount(state)
+    ? { ...settings, profileId: null }
+    : settings;
 }
 
 /** The model's name as the toolbar's chip shows it. */
@@ -864,7 +1012,10 @@ function shownPickValues(
     return null;
   return {
     ...state.values,
-    selection: shown,
+    // A default account shown is still nobody's pick.
+    selection: showsDefaultAccount(state)
+      ? { ...shown, profileId: state.values.selection.profileId }
+      : shown,
     reasoning: state.reasoning,
     serviceTier: state.serviceTier,
   };
@@ -880,10 +1031,11 @@ function keptPickSettings(
   derived: ComposerToolbarDerived,
 ): ChatRunSettings | null {
   if (derived.selection.harnessId !== values.selection.harnessId) return null;
+  // The pick's own account: a default account shown in its place is not it.
   const selection =
     values.selection.modelSlug.length > 0
       ? values.selection
-      : derived.selection;
+      : { ...derived.selection, profileId: values.selection.profileId };
   return selection.modelSlug.length > 0
     ? settingsFromDerived({ ...derived, selection })
     : null;
