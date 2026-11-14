@@ -6,11 +6,11 @@ import {
 } from "@tanstack/react-query";
 import { z } from "zod";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
-  EnvironmentDescriptorV11,
-  GrantedEnvironmentRole,
-} from "@traycer/protocol/host/environment/contracts";
-import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import {
+  configurationRoleOf,
+  type ConfigurationRole,
+} from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
@@ -149,8 +149,8 @@ export function useSandboxDefaults(
 /** A configuration's environment as the account's list names it, with the reader's role. */
 export interface SandboxDefaultsEnvironment {
   readonly environmentId: string;
-  /** `null` for a role that authorizes nothing. */
-  readonly role: GrantedEnvironmentRole | null;
+  /** `configurationRoleOf`'s answer; read through `mayChangeConfiguration`. */
+  readonly role: ConfigurationRole | null;
 }
 
 /**
@@ -167,12 +167,11 @@ export function useSandboxDefaultsEnvironments(
       new Map(
         (list.data?.environments ?? []).map(
           (descriptor: EnvironmentDescriptorV11) => {
-            const role = configurationRoleOf(descriptor);
             return [
               descriptor.ownerKind === "user" ? "personal" : descriptor.ownerId,
               {
                 environmentId: descriptor.environmentId,
-                role: role === "viewer" ? null : role,
+                role: configurationRoleOf(descriptor),
               },
             ];
           },
