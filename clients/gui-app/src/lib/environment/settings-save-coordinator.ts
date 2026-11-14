@@ -18,7 +18,6 @@ import {
 import type {
   EnvironmentProposalsResponse,
   SettingsProposalReceipt,
-  SettingsSaveAnswer,
 } from "@traycer/protocol/host/environment/settings-proposals";
 import type { SettingsSaveMapping } from "@traycer/protocol/host/environment/settings-save-mapping";
 import {
@@ -84,14 +83,14 @@ export interface SettingsSaveCoordinator {
     context: SettingsSaveContext,
   ) => Promise<SettingsSaveTicket | null>;
   /**
-   * The save's answer, or null when it failed or nothing answered. A save
-   * that proposes nothing, is refused, or answers for another generation or
-   * item is forgotten; otherwise its host is reconciled. A ticket whose edit
-   * a later save of the same item replaced settles nothing but its send.
+   * The save's send is over: `hostAnswered` when the host answered it, false
+   * when it failed or nothing answered. An answered save's host is
+   * reconciled, which finds its proposal in `environment.proposals`; no save
+   * answer carries one.
    */
   readonly settle: (
     ticket: SettingsSaveTicket,
-    answer: SettingsSaveAnswer | null,
+    hostAnswered: boolean,
   ) => Promise<void>;
   /**
    * Applies what `hostId` has proposed of this account's remembered saves.
@@ -323,20 +322,11 @@ export function createSettingsSaveCoordinator(
 
   const settle = async (
     ticket: SettingsSaveTicket,
-    answer: SettingsSaveAnswer | null,
+    hostAnswered: boolean,
   ): Promise<void> => {
     store().markAnswered(ticket.id);
     const record = settingsSaveMemoryRecord(store().records, ticket.id);
-    if (record?.editId !== ticket.editId || answer === null) return;
-    const receipt = answer.proposal;
-    if (
-      receipt === null ||
-      receipt.state === "refused" ||
-      !receiptMatches(record, receipt)
-    ) {
-      store().forgetEdit(ticket.id, ticket.editId);
-      return;
-    }
+    if (!hostAnswered || record === null) return;
     await reconcile(record.hostId);
   };
 
