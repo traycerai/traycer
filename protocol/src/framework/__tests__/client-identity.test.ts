@@ -107,16 +107,16 @@ describe("client handshake identity", () => {
     expect(
       toClientHandshakeIdentity({
         kind: "desktop",
-        compatibilityEpoch: 2,
+        compatibilityEpoch: 3,
         appVersion: "1.2.0",
       }),
-    ).toEqual({ kind: "desktop", compatibilityEpoch: 2, appVersion: "1.2.0" });
+    ).toEqual({ kind: "desktop", compatibilityEpoch: 3, appVersion: "1.2.0" });
     // The KEY is absent, not present-and-undefined: zod's only tolerant shape
     // is `.optional()`, and `JSON.stringify` drops an undefined value anyway -
     // asserting the key set is what pins that the wire frame has no hole in it.
     const withoutVersion = toClientHandshakeIdentity({
       kind: "cli",
-      compatibilityEpoch: 2,
+      compatibilityEpoch: 3,
       appVersion: null,
     });
     expect(Object.keys(withoutVersion).sort()).toEqual([

@@ -865,6 +865,43 @@ export const environmentMembersRemovePreviewV10 = defineRpcContract({
 });
 
 /**
+ * `environment.previewLocalFacts@1.0`: this computer's own counts for a plan
+ * (`plan`, by its profile) or a member (`member`) of an environment.
+ * `terminals` is always null for a `plan` subject. Defined and not
+ * registered: it registers with the host slice that serves it and its first
+ * caller. Not an agent capability.
+ */
+export const environmentPreviewLocalFactsRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: z.string().min(1),
+    subject: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("plan"), profileId: z.string().min(1) }),
+      z.object({ kind: z.literal("member"), userId: z.string().min(1) }),
+    ]),
+  }),
+);
+export type EnvironmentPreviewLocalFactsRequest = z.infer<
+  typeof environmentPreviewLocalFactsRequestSchema
+>;
+
+export const environmentPreviewLocalFactsResponseSchema = lazySchema(() =>
+  z.object({
+    activeTurns: z.number().int().nonnegative().nullable(),
+    terminals: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type EnvironmentPreviewLocalFactsResponse = z.infer<
+  typeof environmentPreviewLocalFactsResponseSchema
+>;
+
+export const environmentPreviewLocalFactsV10 = defineRpcContract({
+  method: "environment.previewLocalFacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentPreviewLocalFactsRequestSchema,
+  responseSchema: environmentPreviewLocalFactsResponseSchema,
+});
+
+/**
  * `environment.members.seats@1.0`: the seats a team holds (every membership
  * row, pending invitations included) of the quantity its paid plan bills,
  * read before an invite is sent; `seats` null for a team on no paid plan.
