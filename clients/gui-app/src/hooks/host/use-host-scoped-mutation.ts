@@ -89,7 +89,8 @@ interface UseHostScopedMutationArgs<
    * `Mutation.execute`. Anything whose omission would leave the HOST and the
    * UI disagreeing - a resource the host created that nothing else will ever
    * surface - belongs here, not in a `mutate(vars, { onSuccess })` at the call
-   * site.
+   * site. A returned promise keeps the save pending; its rejection fails the
+   * mutation, including required work after the host's answer.
    *
    * `hostId` is the one captured in `onMutate` - the host this request was
    * SENT on, which is not necessarily the one the client addresses by the time
@@ -103,7 +104,7 @@ interface UseHostScopedMutationArgs<
         variables: RequestOfMethod<HostRpcRegistry, Method>,
         hostId: string | null,
         captured: Captured,
-      ) => void)
+      ) => void | Promise<void>)
     | undefined;
   /** Settlement work tied to the captured request, including a lost reply. */
   readonly onSettled?:
@@ -215,9 +216,9 @@ export function useHostScopedMutationForClient<
       // The analytics event and the caller's own work are the SUCCESS half and
       // stay here: one reports a write that landed, the other files a response
       // this arm is the only one to receive.
-      onSuccess: (data, variables, ctx) => {
+      onSuccess: async (data, variables, ctx) => {
+        await args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
         trackScopedMutationSuccess(args.mutationKey, variables);
-        args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
       },
       // The sweep, on every settle - see `invalidateMethods`. `ctx` is
       // optional on this signature because `onMutate` need not have run (a

@@ -10,7 +10,10 @@ import {
   type HookDraft,
 } from "./notification-hook-draft";
 import { CloudNotificationHookEditorDialog } from "./notification-hook-editor-dialog";
-import { CLOUD_NOTIFICATION_LIST_COPY } from "./cloud-notification-copy";
+import {
+  CLOUD_NOTIFICATION_LIST_COPY,
+  TEAM_NOTIFICATION_HOOKS_COPY,
+} from "./cloud-notification-copy";
 import { HOST_NOTIFICATIONS } from "./notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { Badge } from "@/components/ui/badge";
@@ -122,7 +125,18 @@ export function CloudNotificationHooksSection(props: {
         </p>
       )}
       {props.snapshot.hooks.length === 0 ? (
-        CLOUD_NOTIFICATION_LIST_COPY.emptyState
+        props.scope === "team" ? (
+          <div className="space-y-1 px-4 py-6 text-center">
+            <p className="text-ui-sm font-medium">
+              {TEAM_NOTIFICATION_HOOKS_COPY.emptyTitle}
+            </p>
+            <p className="text-ui-sm text-muted-foreground">
+              {TEAM_NOTIFICATION_HOOKS_COPY.emptyDescription}
+            </p>
+          </div>
+        ) : (
+          CLOUD_NOTIFICATION_LIST_COPY.emptyState
+        )
       ) : (
         <div className="divide-y divide-border/40">
           {props.snapshot.hooks.map((hook) => (

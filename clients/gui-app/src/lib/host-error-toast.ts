@@ -6,6 +6,13 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import { readHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-connection-registry";
+import {
+  hostDirectoryEntryNeedsUpdate,
+  MINIMUM_HOST_VERSION,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { staleWriteOfHostError } from "@/lib/environment/stale-write";
 import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
@@ -310,6 +317,10 @@ export function toastFromHostError(
   // saying "couldn't do X" for something they themselves cancelled is no
   // better.
   if (isSilentHostError(error)) return;
+  if (error instanceof HostBelowMinimumError) {
+    hostUpdateNeededToast();
+    return;
+  }
   const staleWrite = staleWriteOfHostError(error);
   if (staleWrite !== null) {
     showStaleWriteNotice(staleWrite);
@@ -561,6 +572,7 @@ export function toastFromBackgroundHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (error instanceof HostBelowMinimumError) return;
   if (error.code === "E_HOST_UNSUPPORTED") return;
   if (isTransientHostRpcFailure(error)) return;
   toastFromHostError(error, fallback);
@@ -570,6 +582,10 @@ export function toastFromHostErrorWithDetail(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (error instanceof HostBelowMinimumError) {
+    hostUpdateNeededToast();
+    return;
+  }
   if (shouldSuppressRecoverableUnauthorized(error)) return;
   const staleWrite = staleWriteOfHostError(error);
   if (staleWrite !== null) {
@@ -990,4 +1006,22 @@ function emitHostFatalErrorNotification(
     detail: error.fatalDetails.reason,
     payload: null,
   });
+}
+
+function hostUpdateNeededToast(): void {
+  toast(HOST_UPDATE_SKEW_COPY.title, { id: TRANSPORT_NOTICE_TOAST_ID });
+}
+
+/** Check at a press, including presses that schedule work for a later effect. */
+export function showHostUpdateNeededForGesture(hostId: string | null): boolean {
+  if (hostId === null) return false;
+  const entry = readHostDirectoryEntry(hostId);
+  if (
+    entry === null ||
+    !hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION)
+  ) {
+    return false;
+  }
+  hostUpdateNeededToast();
+  return true;
 }

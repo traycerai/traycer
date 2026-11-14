@@ -8,6 +8,9 @@ export const TEAM_NOTIFICATION_HOOKS_COPY = {
   localOnly: (variable: string) =>
     `A team's hook can't read ${variable} from a computer. Type the value itself.`,
   headersExample: "authorization: Bearer your-token",
+  emptyTitle: "No notification hooks",
+  emptyDescription:
+    "Hooks send an HTTP request for enabled notification severities.",
 } as const;
 
 export const ACCOUNT_NOTIFICATIONS_COPY = {

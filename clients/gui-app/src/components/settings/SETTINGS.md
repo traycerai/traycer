@@ -4402,7 +4402,14 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   The computer's Overview has a **Notifications** tab for the long-turn alert
   and the hooks that live only on that computer, including Test, its result,
   file path and Refresh. A whole-file save retains the unshown account hooks
-  from the same snapshot.
+  from the same snapshot. A computer's save also waits for the account write:
+  `host.notificationHooks.save@4.0` returns the host-classified contribution,
+  and the app adds only `held: false`, reads the account revision itself and
+  writes that exact list through the fenced sender. Null writes nothing;
+  an empty list clears the account list. Authn judges the contribution's
+  bounds; the app does not truncate or pre-validate it. A failed account write
+  fails the save and retains the draft for another try against only the local
+  revision this app's own write answered, never a newer unrelated revision.
   Account hooks use an HTTP-only editor and replace only the hooks column.
   Legacy commands and interpolating headers are parsed but not drawn or sent
   back; their execution remains in the computers' files. Literal HTTP hooks

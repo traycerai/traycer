@@ -1245,6 +1245,11 @@ import {
   hostNotificationHooksSave,
   hostNotificationHooksSaveV20,
   hostNotificationHooksSaveV30,
+  hostNotificationHooksSaveV40,
+  hostNotificationHooksSaveUpgradeV3ToV4,
+  hostNotificationHooksSaveDowngradeV40ToV30,
+  hostNotificationHooksSaveDowngradeV40ToV20,
+  hostNotificationHooksSaveDowngradeV40ToV10,
   hostNotificationHooksSaveUpgradeV2ToV3,
   hostNotificationHooksSaveDowngradeV30ToV20,
   hostNotificationHooksSaveDowngradeV30ToV10,
@@ -7947,6 +7952,20 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {
         1: hostNotificationHooksSaveDowngradeV30ToV10,
         2: hostNotificationHooksSaveDowngradeV30ToV20,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksSaveV40,
+          upgradeFromPreviousVersion: hostNotificationHooksSaveUpgradeV3ToV4,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationHooksSaveDowngradeV40ToV10,
+        2: hostNotificationHooksSaveDowngradeV40ToV20,
+        3: hostNotificationHooksSaveDowngradeV40ToV30,
       },
     },
   },
