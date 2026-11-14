@@ -39,6 +39,7 @@ import {
   wireAvailabilityRecovery,
 } from "@/lib/host/availability-recovery";
 import { appLogger } from "@/lib/logger";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -314,18 +315,28 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         setRebuildNonce((nonce) => nonce + 1);
       }, delayMs);
     };
+    // The person's Retry runs a waiting rebuild now; the streak it earned
+    // stays, so a rebuild refused again waits as long as it would have.
+    const stopRetry = onHostDoorRetry(value.hostId, () => {
+      if (backoffTimer === null) return;
+      window.clearTimeout(backoffTimer);
+      backoffTimer = null;
+      setRebuildNonce((nonce) => nonce + 1);
+    });
     if (client.isClosed()) {
       rebuild();
     } else {
       const unsubscribe = client.onClosed(rebuild);
       return () => {
         unsubscribe();
+        stopRetry();
         if (backoffTimer !== null) {
           window.clearTimeout(backoffTimer);
         }
       };
     }
     return () => {
+      stopRetry();
       if (backoffTimer !== null) {
         window.clearTimeout(backoffTimer);
       }

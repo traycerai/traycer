@@ -99,6 +99,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { resetHostStreamClientCacheForTest } from "@/lib/host/host-stream-client-cache";
+import { retryHostDoor } from "@/lib/host/host-door-retry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 // The SPINE `useHostClient` hands back in this suite - never bound to any one
@@ -331,6 +332,59 @@ describe("useHostStreamClientFor", () => {
     });
 
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens this host's paced rebuild now and keeps the quick-close streak", async () => {
+    vi.useFakeTimers();
+    globalClientRef.value = buildGlobalClient(true);
+    const sessions: ControllableSession[] = [];
+    mocks.createRemoteHostTransport.mockImplementation(() => {
+      const session = controllableSession();
+      sessions.push(session);
+      return { session, streamClient: new RemoteStreamClient(session) };
+    });
+    const retryTarget: RemoteHostDirectoryEntry = {
+      ...FROZEN_SANDBOX_TARGET,
+      hostId: "host-retry-binding",
+      label: "Retry host",
+      sandbox: null,
+    };
+
+    renderHook(() => useHostStreamClientFor(retryTarget, null));
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      sessions[0].emitClosed();
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      sessions[1].emitClosed();
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await retryHostDoor("another-host", inertHostTokenSource());
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await retryHostDoor(retryTarget.hostId, inertHostTokenSource());
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(3);
+
+    act(() => {
+      sessions[2].emitClosed();
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_999);
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(4);
   });
 
   it("returns null when there is no target", () => {

@@ -248,6 +248,39 @@ describe("reopen lanes (R10)", () => {
     }
   });
 
+  it("reopens only armed lanes now and keeps each lane's earned backoff", () => {
+    const reopenArmed = vi.fn();
+    const reopenUnarmed = vi.fn();
+    const armed = engine.openReopenLane(
+      reopenArmed,
+      isReopenableHostStreamClose,
+    );
+    engine.openReopenLane(reopenUnarmed, isReopenableHostStreamClose);
+    armed.scheduleAfterClose(fatalClose("INTERNAL"));
+
+    engine.reopenNow();
+
+    expect(reopenArmed).toHaveBeenCalledTimes(1);
+    expect(reopenUnarmed).not.toHaveBeenCalled();
+
+    armed.scheduleAfterClose(fatalClose("INTERNAL"));
+    vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS * 2 - 1);
+    expect(reopenArmed).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(reopenArmed).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reopen an armed lane after the engine is disposed", () => {
+    const reopen = vi.fn();
+    const lane = engine.openReopenLane(reopen, isReopenableHostStreamClose);
+    lane.scheduleAfterClose(fatalClose("INTERNAL"));
+
+    engine.dispose();
+    engine.reopenNow();
+
+    expect(reopen).not.toHaveBeenCalled();
+  });
+
   it("resetBackoff returns the lane to the initial delay", () => {
     const reopen = vi.fn();
     const lane = engine.openReopenLane(reopen, isReopenableHostStreamClose);
