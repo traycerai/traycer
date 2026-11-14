@@ -24,6 +24,7 @@ import {
   Play,
   SendHorizontal,
   Trash2,
+  TriangleAlert,
   Undo2,
 } from "lucide-react";
 import {
@@ -65,7 +66,6 @@ import {
   queuePausedAfterError,
 } from "@/components/chat/chat-queue-utils";
 import {
-  QUEUE_PAUSED_AFTER_ERROR_LABEL,
   QUEUE_PAUSED_AFTER_ERROR_TOOLTIP,
   QUEUE_PAUSED_BY_ROUTING_TOOLTIP,
 } from "@/components/chat/fallback/fallback-copy";
@@ -90,10 +90,7 @@ import {
   isOptimisticQueuedItem,
   optimisticQueuedItemClientActionId,
 } from "@/stores/chats/optimistic-queue";
-import {
-  queueItemInFlightLabel,
-  type QueueItemInFlight,
-} from "@/stores/chats/queue-edit-custody";
+import type { QueueItemInFlight } from "@/stores/chats/queue-edit-custody";
 import { QueuedMessageStagesContext } from "@/components/chat/queued-message-stages";
 import { formatClockTime } from "@/lib/relative-time";
 import { isDrainingQueueItem } from "@/lib/chat/draining-queue-item";
@@ -384,9 +381,10 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
 }
 
 /**
- * The "Paused after an error" pill's tooltip, or `null` when the queue is not
- * held after a failed turn (`queuePausedAfterError`) and the pill says plain
- * "Paused".
+ * A Paused pill's tooltip when the queue is held after a failed turn
+ * (`queuePausedAfterError`), or `null` for any other pause. The transcript
+ * draws no separate card for such a hold on a line that sends the reason
+ * (`queuePausedNoticeHidden`), so this tooltip is where it is said.
  *
  * Read off the queue alone, like the pill. A routing pause gets one sentence
  * for all of its states (`QUEUE_PAUSED_BY_ROUTING_TOOLTIP`): whether routing
@@ -736,8 +734,8 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly orderKey: string;
   readonly queueStatus: ChatSessionState["queue"]["status"];
   /**
-   * The "Paused after an error" pill's tooltip, or `null` when the queue is not
-   * held because the last turn failed (`queuePausedAfterErrorTooltip`).
+   * A Paused pill's tooltip when the queue is held because the last turn
+   * failed, or `null` (`queuePausedAfterErrorTooltip`).
    */
   readonly pausedAfterErrorTooltip: string | null;
   readonly canReorder: boolean;
@@ -843,15 +841,22 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     onToggleExpanded(item.queueItemId);
   }, [onToggleExpanded, item.queueItemId]);
   const editActionCopy = queuedMessageEditActionCopy(item);
-  const statusLabel = queuedMessageStatusLabel(
-    item,
-    pausedAfterErrorTooltip !== null,
-    { inFlight, deliveryUnconfirmed, queuePaused: queueStatus === "paused" },
-  );
+  const statusLabel = queuedMessageStatusLabel(item);
+  const localMark = queuedMessageLocalMark(item, {
+    inFlight,
+    deliveryUnconfirmed,
+  });
   const statusTooltip = queuedMessageStatusTooltip(item, {
     inFlight,
     pausedAfterErrorTooltip,
   });
+  // The pill's tooltip says why the queue is held after a failed turn exactly
+  // when it shows `pausedAfterErrorTooltip`: a paused row with nothing of this
+  // device's own in flight.
+  const pauseReasonInTooltip =
+    item.status === "paused" &&
+    inFlight === null &&
+    pausedAfterErrorTooltip !== null;
   const showDropIndicatorBefore = dropPreview?.index === index;
   const showDropIndicatorAfter = shouldShowDropIndicatorAfter({
     dropPreview,
@@ -910,6 +915,8 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         item={item}
         statusLabel={statusLabel}
         statusTooltip={statusTooltip}
+        localMark={localMark}
+        pauseReasonInTooltip={pauseReasonInTooltip}
         actionState={actionState}
         showOwnerActions={chrome.showOwnerActions}
         showManagedCommandCancel={chrome.showManagedCommandCancel}
@@ -936,9 +943,12 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
 
 function QueuedMessageRowContent(props: {
   readonly item: OpenChatQueuedItem;
-  readonly statusLabel: string | null;
+  readonly statusLabel: QueuedMessageStatusLabel;
   /** Why the status is what it is, where the label alone does not say. */
   readonly statusTooltip: string | null;
+  readonly localMark: QueuedMessageLocalMark | null;
+  /** Whether the tooltip already says the queue is held after a failed turn. */
+  readonly pauseReasonInTooltip: boolean;
   readonly actionState: QueuedMessageRowActionState;
   readonly showOwnerActions: boolean;
   readonly showManagedCommandCancel: boolean;
@@ -961,7 +971,6 @@ function QueuedMessageRowContent(props: {
     props.showManagedCommandCancel || props.showSignInParkCancel;
   const framed =
     props.showOwnerActions || showCancelOnly || props.canAbortSteer;
-  const showFloatingChrome = framed || props.statusLabel !== null;
   const compact = agentFoldCompact(props.agentFold);
 
   return (
@@ -983,40 +992,37 @@ function QueuedMessageRowContent(props: {
         data-compact={String(compact)}
       >
         <QueuedMessageProvenanceChip item={item} />
-        {showFloatingChrome ? (
-          <QueuedMessageFloatingChrome framed={framed}>
-            {props.statusLabel !== null ? (
-              <QueuedMessageStatusBadge
-                label={props.statusLabel}
-                tooltip={props.statusTooltip}
-                pulsing={props.actionState.isSteering}
-                embedded={framed}
-              />
-            ) : null}
-            {props.showOwnerActions ? (
-              <QueuedMessageRowActions
-                actionsDisabled={props.actionState.actionsDisabled}
-                steerNowDisabled={props.actionState.steerNowDisabled}
-                editLabel={props.editActionCopy.label}
-                editTitle={props.editActionCopy.title}
-                onEdit={props.handleEdit}
-                onCancel={props.handleCancel}
-                onSteerNow={props.handleSteerNow}
-              />
-            ) : null}
-            {showCancelOnly ? (
-              <ManagedCommandCancelButton
-                kind={cancelOnlyKind(item)}
-                onCancel={props.handleCancel}
-              />
-            ) : null}
-            {props.canAbortSteer ? (
-              <QueuedMessageAbortSteerButton
-                onAbortSteer={props.handleAbortSteer}
-              />
-            ) : null}
-          </QueuedMessageFloatingChrome>
-        ) : null}
+        <QueuedMessageFloatingChrome framed={framed}>
+          <QueuedMessageStatusBadge
+            label={props.statusLabel}
+            tooltip={props.statusTooltip}
+            pulsing={props.actionState.isSteering}
+            localMark={props.localMark}
+            embedded={framed}
+          />
+          {props.showOwnerActions ? (
+            <QueuedMessageRowActions
+              actionsDisabled={props.actionState.actionsDisabled}
+              steerNowDisabled={props.actionState.steerNowDisabled}
+              editLabel={props.editActionCopy.label}
+              editTitle={props.editActionCopy.title}
+              onEdit={props.handleEdit}
+              onCancel={props.handleCancel}
+              onSteerNow={props.handleSteerNow}
+            />
+          ) : null}
+          {showCancelOnly ? (
+            <ManagedCommandCancelButton
+              kind={cancelOnlyKind(item)}
+              onCancel={props.handleCancel}
+            />
+          ) : null}
+          {props.canAbortSteer ? (
+            <QueuedMessageAbortSteerButton
+              onAbortSteer={props.handleAbortSteer}
+            />
+          ) : null}
+        </QueuedMessageFloatingChrome>
         <QueuedMessageRowText item={item} agentFold={props.agentFold} />
       </div>
       {/* A folded agent row is one line, its held reason included: the
@@ -1025,9 +1031,7 @@ function QueuedMessageRowContent(props: {
       {compact ? null : (
         <QueuedMessageFallbackReason
           item={item}
-          pillSaysPausedAfterError={
-            props.statusLabel === QUEUE_PAUSED_AFTER_ERROR_LABEL
-          }
+          pauseReasonInTooltip={props.pauseReasonInTooltip}
         />
       )}
     </div>
@@ -1159,8 +1163,8 @@ function QueuedMessageAgentFoldToggle(props: {
 
 /**
  * The host's queue-wide pause notes: the sentences a pause stamps on every held
- * row that has no reason of its own, and that the "Paused after an error" pill
- * or the routing card already say. The host's text, matched here to be LEFT
+ * row that has no reason of its own, and that the Paused pill's tooltip or the
+ * routing card already say. The host's text, matched here to be LEFT
  * OUT, never copy this client renders - which is why it lives beside the one
  * comparison rather than in the fallback vocabulary module. The GUI's own
  * copies, because the wire carries no kind for a row's `fallbackReason`: a
@@ -1184,8 +1188,8 @@ const QUEUE_WIDE_PAUSE_HOST_REASONS: ReadonlySet<string> = new Set([
 /**
  * The host's per-row note on why the row is held (`item.fallbackReason`).
  *
- * Omitted only when it says what the pill already says (clutter cuts,
- * 2026-09-27): under a "Paused after an error" pill, a queue-wide pause note -
+ * Omitted only when it says what the pill's tooltip already says (clutter
+ * cuts, 2026-09-27): on a row held after a failed turn, a queue-wide pause note -
  * the errored-turn sentence, or the routing hold's while the routing card is
  * on screen saying the same - is stamped on every held row, the same fact once
  * per row. Every other reason is drawn there too - a pause keeps a row's
@@ -1196,15 +1200,12 @@ const QUEUE_WIDE_PAUSE_HOST_REASONS: ReadonlySet<string> = new Set([
  */
 function QueuedMessageFallbackReason(props: {
   readonly item: OpenChatQueuedItem;
-  readonly pillSaysPausedAfterError: boolean;
+  readonly pauseReasonInTooltip: boolean;
 }) {
   if (props.item.kind !== "prompt") return null;
   const reason = props.item.fallbackReason?.trim();
   if (!reason) return null;
-  if (
-    props.pillSaysPausedAfterError &&
-    QUEUE_WIDE_PAUSE_HOST_REASONS.has(reason)
-  ) {
+  if (props.pauseReasonInTooltip && QUEUE_WIDE_PAUSE_HOST_REASONS.has(reason)) {
     return null;
   }
   return (
@@ -1626,8 +1627,8 @@ function shouldShowDropIndicatorAfter(input: {
  * and this control is the only place a person can stop it first. A host
  * below `1.28` never sends the mark, so its rows stay without one.
  *
- * Only a user-owned safe-point steer still "Waiting for steer" can be
- * un-staged: an interrupt_restart ("Restart pending") has already torn the turn
+ * Only a user-owned safe-point steer the agent has yet to take can be
+ * un-staged: an interrupt_restart steer has already torn the turn
  * down, and received-agent rows are system-owned. The host re-checks and rejects
  * if the harness began folding the steer in between render and click.
  */
@@ -1712,101 +1713,67 @@ function queuedMessageRowActionState(
 }
 
 /**
- * The row's status pill. A paused row says WHY when the queue is held after a
- * failed turn ("Paused after an error") - the transcript draws no separate
- * card for the held queue on a line that sends the reason
- * (`queuePausedNoticeHidden`), so this pill is where it is said (user ruling,
- * 2026-09-26). Any other pause keeps today's "Paused".
+ * The row's status pill: one of three words, for every kind of row.
+ *
+ * - "Steer": goes, or is going, into the running turn - aimed at it, a steer
+ *   the host has requested, one being handed to the agent, or one in the
+ *   conversation that the agent has yet to pick up.
+ * - "Queued": runs when the running turn ends - a steer that missed the turn
+ *   it was aimed at, and a row the host is taking out to start, included.
+ * - "Paused": runs only once the queue is resumed.
+ *
+ * The stage a word covers is the pill's tooltip (`queuedMessageStatusTooltip`).
+ * A request of this device's own that the host has not answered is a mark
+ * beside the word (`queuedMessageLocalMark`), never a word of its own.
  */
-export const QUEUED_MESSAGE_SENDING_LABEL = "Sending to host";
-export const QUEUED_MESSAGE_UNCONFIRMED_LABEL = "Delivery not confirmed";
-export const QUEUED_MESSAGE_NEXT_TURN_LABEL = "Queued for next turn";
-export const QUEUED_MESSAGE_WAITING_FOR_PROVIDER_LABEL = "Waiting for provider";
+export const QUEUED_MESSAGE_STEER_LABEL = "Steer";
+export const QUEUED_MESSAGE_QUEUED_LABEL = "Queued";
+export const QUEUED_MESSAGE_PAUSED_LABEL = "Paused";
 
-/**
- * The row's status pill, in three tiers that never borrow each other's words.
- *
- * LOCAL: an optimistic row is this client's own dispatch and nothing more -
- * "Sending to host", or "Delivery not confirmed" once it has gone unanswered
- * past the display deadline. Neither claims the host has it.
- *
- * IN FLIGHT: a host-confirmed row with a mutation of its own still unanswered
- * names that mutation, ahead of whatever status the host last reported, because
- * that status is the one the mutation is about to change.
- *
- * HOST-CONFIRMED: everything below, read off the host's item. A plain pending
- * prompt says "Queued for next turn" rather than nothing, so the absence of a
- * pill is never what distinguishes confirmed from local.
- */
+type QueuedMessageStatusLabel =
+  | typeof QUEUED_MESSAGE_STEER_LABEL
+  | typeof QUEUED_MESSAGE_QUEUED_LABEL
+  | typeof QUEUED_MESSAGE_PAUSED_LABEL;
+
 function queuedMessageStatusLabel(
   item: OpenChatQueuedItem,
-  pausedAfterError: boolean,
+): QueuedMessageStatusLabel {
+  if (isDrainingQueueItem(item)) return QUEUED_MESSAGE_QUEUED_LABEL;
+  if (item.status === "paused") return QUEUED_MESSAGE_PAUSED_LABEL;
+  if (
+    item.delivery === "same_turn" ||
+    item.status === "steer_requested" ||
+    item.status === "steering" ||
+    item.status === "injected"
+  ) {
+    return QUEUED_MESSAGE_STEER_LABEL;
+  }
+  return QUEUED_MESSAGE_QUEUED_LABEL;
+}
+
+/**
+ * This device's own request on the row that the host has not answered yet: a
+ * send, or an edit, steer or cancel (`in_flight`), or a send still unanswered
+ * past the display deadline (`unconfirmed`). Neither claims the host has it.
+ */
+type QueuedMessageLocalMark = "in_flight" | "unconfirmed";
+
+function queuedMessageLocalMark(
+  item: OpenChatQueuedItem,
   local: {
     readonly inFlight: QueueItemInFlight | null;
     readonly deliveryUnconfirmed: boolean;
-    readonly queuePaused: boolean;
   },
-): string | null {
-  if (isDrainingQueueItem(item)) return "Starting";
-  const pausedLabel = pausedAfterError
-    ? QUEUE_PAUSED_AFTER_ERROR_LABEL
-    : "Paused";
+): QueuedMessageLocalMark | null {
+  if (isDrainingQueueItem(item)) return null;
   if (isOptimisticQueuedItem(item)) {
-    return local.deliveryUnconfirmed
-      ? QUEUED_MESSAGE_UNCONFIRMED_LABEL
-      : QUEUED_MESSAGE_SENDING_LABEL;
+    return local.deliveryUnconfirmed ? "unconfirmed" : "in_flight";
   }
-  if (local.inFlight !== null) return queueItemInFlightLabel(local.inFlight);
-  return hostConfirmedStatusLabel(item, pausedLabel, local.queuePaused);
-}
-
-/** The host's own account of a row, read off its item and nothing else. */
-function hostConfirmedStatusLabel(
-  item: OpenChatQueuedItem,
-  pausedLabel: string,
-  queuePaused: boolean,
-): string | null {
-  if (item.kind !== "prompt") {
-    // Both host-authored kinds (a shell's output, a forward's interruption)
-    // speak the DELIVERY vocabulary: nobody steers them, they are delivered.
-    // The badge is the row's provenance marker, so an ordinary next-turn
-    // pending item needs no additional label. `steering` is the handover
-    // window: the digest is being delivered into the running turn, and the
-    // cancel lever has closed - the label is what tells the user why the
-    // row's controls went away. A pending SAME-TURN item is aimed at the
-    // running turn ("Will deliver", the delivery-vocabulary sibling of the
-    // received-agent rows' "Will steer"), so the user knows the cancel
-    // window is the current turn, not some later one.
-    if (item.status === "steering") return "Delivering";
-    if (item.status === "paused") return pausedLabel;
-    return item.delivery === "same_turn" ? "Will deliver" : null;
-  }
-  if (item.status === "steer_requested") {
-    // The host has taken the steer and is waiting on the provider's next safe
-    // point to admit it. Queue acceptance is not provider admission, and the
-    // pill says which of the two this row has.
-    return item.steerRequest?.mode === "interrupt_restart"
-      ? "Restart pending"
-      : QUEUED_MESSAGE_WAITING_FOR_PROVIDER_LABEL;
-  }
-  if (item.status === "steering") return "Steering";
-  if (item.status === "injected") return "Embedding";
-  if (item.status === "fallback") return "After turn";
-  if (item.status === "paused") return pausedLabel;
-  if (item.delivery === "same_turn") {
-    // Received A2A responses ride the same `same_turn` (steer) delivery as user
-    // follow-ups, but they are system-owned and read-only: the user can only
-    // reorder them, never hand-steer. "Can steer" reads as a user affordance, so
-    // name the automatic behavior instead for received responses.
-    return isReceivedAgentResponse(item) ? "Will steer" : "Can steer";
-  }
-  // A held queue runs nothing next turn, so a pending row in one makes no such
-  // promise: the paused rows beside it carry the reason the queue is held.
-  return queuePaused ? null : QUEUED_MESSAGE_NEXT_TURN_LABEL;
+  return local.inFlight === null ? null : "in_flight";
 }
 
 /**
- * When the row reached the stage its pill names, and whose clock says so.
+ * The stage the pill's word covers, and when the row reached it.
  *
  * A host-confirmed stage is dated from the host's own item (`createdAt`, or the
  * steer request's `requestedAt`). A local stage is dated from this client's
@@ -1823,30 +1790,42 @@ function queuedMessageStatusTooltip(
   if (isDrainingQueueItem(item)) {
     return "The host has taken this prompt out of the queue to start it.";
   }
-  // Ahead of the paused reason, to match the pill: a paused row with an
-  // unanswered save says "Saving", and its tooltip has to explain that.
+  // Ahead of the paused reason, to match the spinner beside the pill.
   if (input.inFlight !== null && !isOptimisticQueuedItem(item)) {
     return "Sent from this device. Waiting for the host to answer.";
   }
   if (item.status === "paused") return input.pausedAfterErrorTooltip;
-  if (item.kind !== "prompt") return null;
+  if (item.status === "steering") return "Being handed to the agent now.";
+  if (item.kind !== "prompt") {
+    return item.delivery === "same_turn" ? "Goes into the running turn." : null;
+  }
   if (isOptimisticQueuedItem(item)) {
     return `Sent from this device at ${formatClockTime(item.createdAt)}. The host has not confirmed it yet.`;
   }
   if (item.status === "steer_requested" && item.steerRequest !== null) {
-    return `The host requested the steer at ${formatClockTime(item.steerRequest.requestedAt)}.`;
+    const requestedAt = formatClockTime(item.steerRequest.requestedAt);
+    return item.steerRequest.mode === "interrupt_restart"
+      ? `The running turn restarts to take this message. Requested at ${requestedAt}.`
+      : `Waiting for the agent to take it. Requested at ${requestedAt}.`;
   }
-  if (item.status === "pending" && item.delivery === "next_turn") {
-    return `Queued on the host at ${formatClockTime(item.createdAt)}.`;
+  if (item.status === "injected") {
+    return "In the conversation. Waiting for the agent to pick it up.";
   }
-  return null;
+  if (item.status === "fallback") {
+    return "Missed the turn it was aimed at, so it waits for the next one.";
+  }
+  if (item.delivery === "same_turn") {
+    return "Goes into the running turn when the agent can take it.";
+  }
+  return `Queued on the host at ${formatClockTime(item.createdAt)}.`;
 }
 
 function QueuedMessageStatusBadge(props: {
-  readonly label: string;
+  readonly label: QueuedMessageStatusLabel;
   /** The reason behind the label, on hover and focus; `null` for none. */
   readonly tooltip: string | null;
   readonly pulsing: boolean;
+  readonly localMark: QueuedMessageLocalMark | null;
   readonly embedded: boolean;
 }) {
   // `TooltipWrapper` degrades to a plain Slot on a `null` label, so the badge
@@ -1864,10 +1843,9 @@ function QueuedMessageStatusBadge(props: {
         // reach the tooltip without every pill becoming a tab stop.
         tabIndex={props.tooltip === null ? undefined : 0}
         className={cn(
-          // `min-w-0` with the label's `truncate`: in a pane narrower than
-          // the label ("Queued for next turn" is about 127px, a 239px pane
-          // leaves the row about 117px) the pill ellipsizes inside the row
-          // instead of running past its edge (#2441).
+          // `min-w-0` with the label's `truncate`: in a pane narrow enough
+          // (a 239px pane leaves the row about 117px) the pill ellipsizes
+          // inside the row instead of running past its edge (#2441).
           "inline-flex min-w-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
           props.embedded ? null : "border border-border/60 bg-background/70",
         )}
@@ -1881,9 +1859,35 @@ function QueuedMessageStatusBadge(props: {
           />
         ) : null}
         <span className="min-w-0 truncate">{props.label}</span>
+        <QueuedMessageLocalMarkIcon mark={props.localMark} />
       </span>
     </TooltipWrapper>
   );
+}
+
+function QueuedMessageLocalMarkIcon(props: {
+  readonly mark: QueuedMessageLocalMark | null;
+}) {
+  if (props.mark === "in_flight") {
+    return (
+      <AgentSpinningDots
+        className={undefined}
+        testId="queued-message-in-flight-mark"
+        variant={undefined}
+      />
+    );
+  }
+  if (props.mark === "unconfirmed") {
+    return (
+      <TriangleAlert
+        aria-label="Delivery not confirmed"
+        role="img"
+        data-testid="queued-message-unconfirmed-mark"
+        className="size-3 shrink-0 text-warning-foreground"
+      />
+    );
+  }
+  return null;
 }
 
 /**
