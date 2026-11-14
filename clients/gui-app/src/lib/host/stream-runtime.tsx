@@ -317,12 +317,15 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     };
     // The person's Retry runs a waiting rebuild now; the streak it earned
     // stays, so a rebuild refused again waits as long as it would have.
-    const stopRetry = onHostDoorRetry(value.hostId, () => {
-      if (backoffTimer === null) return;
-      window.clearTimeout(backoffTimer);
-      backoffTimer = null;
-      setRebuildNonce((nonce) => nonce + 1);
-    });
+    const stopRetry =
+      value.hostId === null
+        ? () => undefined
+        : onHostDoorRetry(value.hostId, () => {
+            if (backoffTimer === null) return;
+            window.clearTimeout(backoffTimer);
+            backoffTimer = null;
+            setRebuildNonce((nonce) => nonce + 1);
+          });
     if (client.isClosed()) {
       rebuild();
     } else {
