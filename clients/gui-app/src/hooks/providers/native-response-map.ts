@@ -1,16 +1,18 @@
 import type {
   NativeAuthResult,
   NativeListResult,
-  NativeMutationResultV14,
+  NativeMutationResultV15,
   ProviderMcpServer,
   ProviderMcpNotice,
   ProviderMcpCoverage,
   ProviderNativeMutateErrorCode,
+  ProviderNativeMutateErrorCodeV15,
   ProviderPlugin,
   ProviderPluginIcon,
   ProviderSkill,
   ProviderSkillInspectCandidate,
 } from "@traycer/protocol/host/provider-native-schemas";
+import { providerNativeMutateErrorCodeSchema } from "@traycer/protocol/host/provider-native-schemas";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -100,18 +102,30 @@ export function isProviderNativeRpcError(
 }
 
 function throwIfNativeError<
-  Result extends NativeListResult | NativeMutationResultV14,
+  Result extends NativeListResult | NativeMutationResultV15,
 >(
   result: Result | null,
   method: string,
 ): asserts result is Exclude<Result, { readonly ok: false }> | null {
   if (result !== null && !result.ok) {
     throw new ProviderNativeRpcError({
-      code: result.code,
+      code: listOrMutateCode(result.code),
       detail: result.detail,
       method,
     });
   }
+}
+
+/**
+ * Only the promote arm answers the `@1.5` codes, and these readers never send
+ * it, so one here is a host off its contract and reads as an unsupported
+ * action.
+ */
+function listOrMutateCode(
+  code: ProviderNativeMutateErrorCodeV15,
+): ProviderNativeMutateErrorCode {
+  const known = providerNativeMutateErrorCodeSchema.safeParse(code);
+  return known.success ? known.data : "unsupported_action";
 }
 
 export function mapProvidersListToMcpServers(args: {

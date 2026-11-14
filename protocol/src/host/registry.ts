@@ -5223,10 +5223,9 @@ export const providersNativeMutateUpgradeV13ToV14 = defineUpgradePath<
 /**
  * `providers.nativeMutate@1.5`: the `promoteToPersonal` arm carries the app's
  * `intentOperationId`, and the result gains the seven codes only that arm
- * answers (`providerNativeMutateErrorCodeSchemaV15`). Defined and not
- * registered: it registers with the app's click that sends it, and its entry
- * then declares `responseGrowthProjectionGated`, since the host never answers
- * the seven to a `@1.4` caller. A `@1.5` request to a `@1.4` host is
+ * answers (`providerNativeMutateErrorCodeSchemaV15`). Its entry declares
+ * `responseGrowthProjectionGated`, since the host never answers the seven to
+ * a `@1.4` caller. A `@1.5` request to a `@1.4` host is
  * re-parsed onto `@1.4`, whose non-strict arm strips the key.
  */
 export const providersNativeMutateV15 = defineRpcContract({
@@ -13431,7 +13430,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.nativeMutate": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: providersNativeMutateV10,
@@ -13455,6 +13454,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         4: {
           contract: providersNativeMutateV14,
           upgradeFromPreviousVersion: providersNativeMutateUpgradeV13ToV14,
+          responseGrowthProjectionGated: true,
+        },
+        // The promote arm's seven codes are codes `@1.4` cannot carry: the
+        // host never answers them to a `@1.4` caller.
+        5: {
+          contract: providersNativeMutateV15,
+          upgradeFromPreviousVersion: providersNativeMutateUpgradeV14ToV15,
           responseGrowthProjectionGated: true,
         },
       },
