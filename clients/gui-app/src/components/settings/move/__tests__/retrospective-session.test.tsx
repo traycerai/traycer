@@ -491,7 +491,7 @@ describe("<RetrospectiveSession /> commands on hold", () => {
           kind: "variable",
           key: "PATH_EXTRA",
         }),
-        line: `PATH_EXTRA (variable) changes how programs start. Once approved, ${EVERYWHERE} starts programs with it.`,
+        line: `PATH_EXTRA (variable) changes how programs start: PATH_EXTRA=setting. Once approved, ${EVERYWHERE} starts programs with it.`,
       },
     ];
     renderSession(

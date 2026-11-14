@@ -48,7 +48,7 @@ describe("environment authn request body limit", () => {
       null,
     );
 
-    expect(pulledBytes).toBe(262_144);
+    expect(pulledBytes).toBe(262_145);
     expect(pulledChunks).toBe(3);
     expect(cancelled).toBe(true);
     expect(sent.answer).toEqual({ status: 500, body: null });

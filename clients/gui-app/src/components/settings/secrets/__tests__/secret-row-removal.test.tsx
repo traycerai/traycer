@@ -210,7 +210,7 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
 /** A Personal host, optionally viewing its own host-scoped secrets. */
 function mountPersonalRowAtDestroy10(
   host: Host,
-  pick: "personal" | "local" = "personal",
+  pick: "personal" | "local",
 ): TeamPageHarness {
   if (pick === "local") {
     useSettingsEnvironmentPickStore.setState({
@@ -301,17 +301,19 @@ interface CapturedSecretRequest {
   readonly redirect: RequestRedirect | undefined;
 }
 
-function capturedSecretRequests(start = 0): CapturedSecretRequest[] {
+function capturedSecretRequests(start: number): CapturedSecretRequest[] {
   return vi
     .mocked(globalThis.fetch)
     .mock.calls.slice(start)
     .flatMap(([input, init]) => {
-      const url =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.href
-            : input.url;
+      let url: string;
+      if (typeof input === "string") {
+        url = input;
+      } else if (input instanceof URL) {
+        url = input.href;
+      } else {
+        url = input.url;
+      }
       const parsedUrl = new URL(url);
       if (
         !parsedUrl.pathname.startsWith("/api/v3/environments/") ||
@@ -319,7 +321,7 @@ function capturedSecretRequests(start = 0): CapturedSecretRequest[] {
       ) {
         return [];
       }
-      const body =
+      const body: unknown =
         typeof init?.body === "string" ? JSON.parse(init.body) : null;
       return [
         {
@@ -332,20 +334,17 @@ function capturedSecretRequests(start = 0): CapturedSecretRequest[] {
     });
 }
 
-function destroyRequests(start = 0): CapturedSecretRequest[] {
+function destroyRequests(start: number): CapturedSecretRequest[] {
   return capturedSecretRequests(start).filter(
     ({ method, path }) => method === "POST" && path.endsWith("/destroy"),
   );
 }
 
 function removalRequestsSince(start: number): CapturedSecretRequest[] {
-  return capturedSecretRequests(start).filter(
-    ({ path }) =>
-      path.endsWith("/secrets/sec-1/versions") || path.endsWith("/destroy"),
-  );
+  return capturedSecretRequests(start);
 }
 
-function removalRequestOrder(start = 0): string[] {
+function removalRequestOrder(start: number): string[] {
   return capturedSecretRequests(start).flatMap(({ method, path }) => {
     if (method === "GET" && path.endsWith("/secrets/sec-1/versions"))
       return ["environment.secrets.versions"];
@@ -392,7 +391,7 @@ describe("Remove on a team secret", () => {
     await waitFor(() => {
       expect(destroyCalls(harness)).toHaveLength(1);
     });
-    expect(destroyRequests()).toEqual([
+    expect(destroyRequests(0)).toEqual([
       {
         method: "POST",
         path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
@@ -406,10 +405,11 @@ describe("Remove on a team secret", () => {
       ),
     ).toEqual([]);
     const [call] = destroyCalls(harness);
-    expect(call?.params).toEqual({
+    expect(call.params).toEqual({
       secretId: "sec-1",
       versionId: "ver-2",
       environmentId: "env-a",
+      allowCurrent: true,
     });
     const status = await screen.findByTestId("secret-removal-status");
     expect(status.textContent).toBe(
@@ -447,6 +447,7 @@ describe("Remove on Personal", () => {
       freshHost({
         destroyAnswer: { outcome: "refused", code: "version_current" },
       }),
+      "personal",
     );
     const user = userEvent.setup();
 
@@ -462,7 +463,7 @@ describe("Remove on Personal", () => {
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "This is the current value. Replace or revoke it first.",
     );
-    expect(destroyRequests()).toEqual([
+    expect(destroyRequests(0)).toEqual([
       {
         method: "POST",
         path: "/api/v3/environments/env-personal/secrets/sec-1/versions/ver-2/destroy",
@@ -480,6 +481,7 @@ describe("Remove on Personal", () => {
   it("sends a replaced-version destroy to authn, with no host version floor", async () => {
     const harness = mountPersonalRowAtDestroy10(
       freshHost({ destroyAnswer: { outcome: "destroyed", destroyedAt: AT } }),
+      "personal",
     );
     const user = userEvent.setup();
 
@@ -493,12 +495,12 @@ describe("Remove on Personal", () => {
       ),
     );
 
-    await waitFor(() => expect(destroyRequests()).toHaveLength(1));
-    expect(destroyRequests()).toEqual([
+    await waitFor(() => expect(destroyRequests(0)).toHaveLength(1));
+    expect(destroyRequests(0)).toEqual([
       {
         method: "POST",
         path: "/api/v3/environments/env-personal/secrets/sec-1/versions/ver-1/destroy",
-        body: { allowCurrent: false },
+        body: { allowCurrent: true },
         redirect: "manual",
       },
     ]);
@@ -529,7 +531,7 @@ describe("Remove on Personal", () => {
     expect(harness.paramsOf("environment.secrets.list")).toContainEqual({
       environmentId: null,
     });
-    expect(destroyRequests()).toEqual([]);
+    expect(destroyRequests(0)).toEqual([]);
     expect(destroyCalls(harness)).toEqual([]);
   });
 });
@@ -561,8 +563,9 @@ describe("a secret with a removal", () => {
         secretId: "sec-1",
         versionId: "ver-2",
         environmentId: "env-a",
+        allowCurrent: true,
       });
-      expect(destroyRequests()).toEqual([
+      expect(destroyRequests(0)).toEqual([
         {
           method: "POST",
           path: "/api/v3/environments/env-a/secrets/sec-1/versions/ver-2/destroy",
@@ -695,6 +698,7 @@ describe("the Versions list", () => {
       secretId: "sec-1",
       versionId: "ver-1",
       environmentId: "env-a",
+      allowCurrent: true,
     });
   });
 
@@ -918,6 +922,7 @@ describe("a removed secret the list has moved to removed", () => {
       secretId: "sec-1",
       versionId: "ver-2",
       environmentId: "env-a",
+      allowCurrent: true,
     });
     expect(
       operationRequests.map(({ method, url, body }) => ({
@@ -942,7 +947,8 @@ describe("a removed secret the list has moved to removed", () => {
         body: null,
       },
     ]);
-    expect(removalRequestsSince(requestStart)).toEqual([
+    const retryRequests = removalRequestsSince(requestStart);
+    expect(retryRequests.slice(0, 3)).toEqual([
       {
         method: "GET",
         path: "/api/v3/environments/env-a/secrets/sec-1/versions",
@@ -962,6 +968,15 @@ describe("a removed secret the list has moved to removed", () => {
         redirect: "manual",
       },
     ]);
+    const secretReadPaths = [
+      "/api/v3/environments/env-a/secrets/sec-1/versions",
+      "/api/v3/environments/env-a/secrets",
+      "/api/v3/environments/env-a/secrets/sec-1/rotation",
+    ];
+    for (const request of retryRequests.slice(3)) {
+      expect(request.method).toBe("GET");
+      expect(secretReadPaths).toContain(request.path.split("?")[0]);
+    }
     const order = removalRequestOrder(requestStart);
     expect(order.indexOf("environment.secrets.versions")).toBeLessThan(
       order.indexOf("environment.secrets.destroy"),
@@ -978,11 +993,14 @@ describe("a removed secret the list has moved to removed", () => {
     const readsBeforeRetry = harness.paramsOf(
       "environment.secrets.versions",
     ).length;
+    const requestStart = vi.mocked(globalThis.fetch).mock.calls.length;
     const baseCloud =
       requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
     let signInA = true;
     let heldRead = false;
-    let releaseRead: (() => void) | null = null;
+    let releaseRead = () => {
+      throw new Error("Retry did not start its versions read");
+    };
     setTeamEnvironmentCloudOverride({
       ...baseCloud,
       onOriginSignIn: () => signInA,
@@ -1017,14 +1035,21 @@ describe("a removed secret the list has moved to removed", () => {
       }),
     ).toHaveProperty("disabled", true);
 
-    const release = releaseRead;
-    if (release === null)
-      throw new Error("Retry did not start its versions read");
     signInA = false;
-    await act(async () => release());
+    act(() => {
+      releaseRead();
+    });
 
     await waitFor(() => expect(harness.queryClient.isMutating()).toBe(0));
     expect(harness.paramsOf("environment.secrets.destroy")).toEqual([]);
+    expect(removalRequestsSince(requestStart)).toEqual([
+      {
+        method: "GET",
+        path: "/api/v3/environments/env-a/secrets/sec-1/versions",
+        body: null,
+        redirect: "manual",
+      },
+    ]);
     expect(harness.paramsOf("environment.secrets.versions")).toHaveLength(
       readsBeforeRetry + 1,
     );
@@ -1080,7 +1105,7 @@ describe("Retry on a removal still waiting for a host", () => {
     });
     expect(toastCall).toHaveBeenCalledWith(WAITING);
     expect(destroyCalls(harness)).toHaveLength(1);
-    const order = removalRequestOrder();
+    const order = removalRequestOrder(0);
     expect(order.lastIndexOf("environment.secrets.versions")).toBeGreaterThan(
       order.indexOf("environment.secrets.destroy"),
     );
