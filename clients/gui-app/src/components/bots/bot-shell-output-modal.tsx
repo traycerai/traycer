@@ -8,7 +8,6 @@ import {
 import { ManagedCommandOutputBody } from "@/components/epic-canvas/renderers/managed-command-output-tile";
 import { useManagedCommandOutputSession } from "@/hooks/managed-command/use-managed-command-output-session";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 
 export function BotShellOutputModal(props: {
@@ -74,26 +73,10 @@ function BotShellOutput(props: {
 }) {
   const viewId = useId();
   const reachability = useHostReachability(props.hostId);
-  const hostEntry = useHostDirectoryEntry(props.hostId);
-  const [opened, setOpened] = useState(false);
-  if (!opened && hostEntry !== null) {
-    setOpened(true);
-  }
   const [retired, setRetired] = useState(false);
   const bindingMoved = props.boundHostId !== props.hostId;
   if (bindingMoved && !retired) setRetired(true);
   const frozen = retired || bindingMoved;
-  if (!opened) {
-    return (
-      <div
-        role="status"
-        data-testid="bot-shell-output-unavailable"
-        className="px-3 py-2 text-ui-sm text-muted-foreground"
-      >
-        Output unavailable
-      </div>
-    );
-  }
   return (
     <BotShellOutputLive
       {...props}
@@ -129,8 +112,12 @@ function BotShellOutputLive(props: {
   }, [props.frozen, session]);
   if (session === null) {
     return (
-      <div role="status" className="p-4 text-ui-sm text-muted-foreground">
-        Loading output…
+      <div
+        role="status"
+        data-testid="bot-shell-output-unavailable"
+        className="px-3 py-2 text-ui-sm text-muted-foreground"
+      >
+        Output unavailable
       </div>
     );
   }

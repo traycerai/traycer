@@ -10,6 +10,7 @@
  * must not ask it for one: an absent host opens no transport and creates no
  * stream, and the stream is created once the directory names the host.
  */
+import { Component, useLayoutEffect, type ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +49,7 @@ const harness = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   opens: [] as string[],
   closes: [] as string[],
+  withdrawOnMount: null as string | null,
 }));
 
 let hostClient = new SupportScriptedClient(true);
@@ -93,7 +95,19 @@ function directoryDrops(hostId: string): void {
 vi.unmock("@/lib/host/use-durable-stream-transport");
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
-  useHostDirectory: () => directory,
+  useHostDirectory: () => {
+    // The commit that first reads the directory with the host present
+    // withdraws it in its layout phase, which runs before every passive
+    // effect of that commit - the stream acquisition among them.
+    useLayoutEffect(() => {
+      const hostId = harness.withdrawOnMount;
+      if (hostId === null || !harness.entries.has(hostId)) return;
+      harness.withdrawOnMount = null;
+      harness.entries.delete(hostId);
+      for (const listener of [...harness.listeners]) listener();
+    });
+    return directory;
+  },
   useHostClient: () => ({
     getRequestContextUserId: () => "user-a",
     getRequestContext: () => null,
@@ -215,6 +229,24 @@ function mountModal() {
   return render(modalTree(BOUND_HOST));
 }
 
+/** Catches whatever escapes the window's effects, so a throw is a recorded failure. */
+class EscapedErrors extends Component<
+  { readonly children: ReactNode },
+  { readonly failed: boolean }
+> {
+  static escaped: string[] = [];
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: Error) {
+    EscapedErrors.escaped.push(error.message);
+  }
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
 beforeEach(() => {
   installLegendListTestClock();
   installLegendListViewportMetrics();
@@ -224,6 +256,8 @@ beforeEach(() => {
   harness.listeners.clear();
   harness.opens.length = 0;
   harness.closes.length = 0;
+  EscapedErrors.escaped = [];
+  harness.withdrawOnMount = null;
 });
 
 afterEach(() => {
@@ -252,19 +286,18 @@ describe("the read-only shell output modal over a host directory that does not n
 
     directoryNames(BOUND_HOST);
 
-    expect(harness.opens.length).toBeGreaterThan(0);
-    expect(harness.opens.every((hostId) => hostId === BOUND_HOST)).toBe(true);
-    expect(hostClient.subscribes.length).toBeGreaterThan(0);
-    for (const open of hostClient.subscribes) {
-      expect(open).toEqual({
+    expect(harness.opens).toEqual([BOUND_HOST]);
+    expect(hostClient.subscribes).toEqual([
+      {
         method: BOT_METHOD,
         params: {
           botId: BOT_ID,
           sessionChatId: SESSION_CHAT_ID,
           commandId: COMMAND_ID,
         },
-      });
-    }
+      },
+    ]);
+    expect(hostClient.sessions).toHaveLength(1);
     const streams = openStreams();
     expect(streams).toHaveLength(1);
     emitSnapshot(streams[0], ["listening on 3000"]);
@@ -325,5 +358,37 @@ describe("the read-only shell output modal over a host directory that does not n
     expect(dialog.queryByText(/stale-first/)).toBeNull();
     expect(dialog.queryByText(/Loading output/)).toBeNull();
     expect(dialog.queryByTestId("bot-shell-output-not-live")).not.toBeNull();
+  });
+  it("opens one stream and lets no error escape when the directory withdraws the host between the window's render and its stream acquisition, and names it again", () => {
+    directoryNames(BOUND_HOST);
+    harness.withdrawOnMount = BOUND_HOST;
+    render(
+      <EscapedErrors>
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <BotShellOutputModal
+              botId={BOT_ID}
+              sessionChatId={SESSION_CHAT_ID}
+              hostId={BOUND_HOST}
+              boundHostId={BOUND_HOST}
+              commandId={COMMAND_ID}
+              onClose={() => undefined}
+              restoreFocus={() => undefined}
+            />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </EscapedErrors>,
+    );
+
+    expect(EscapedErrors.escaped).toEqual([]);
+    expect(harness.opens).toEqual([]);
+    expect(hostClient.sessions).toEqual([]);
+
+    directoryNames(BOUND_HOST);
+
+    expect(EscapedErrors.escaped).toEqual([]);
+    expect(harness.opens).toEqual([BOUND_HOST]);
+    expect(hostClient.subscribes).toHaveLength(1);
+    expect(openStreams()).toHaveLength(1);
   });
 });

@@ -5,6 +5,7 @@ import {
 } from "@traycer-clients/shared/host-transport/managed-command-output-stream-client";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
+import { useHostDirectory } from "@/lib/host";
 import { getManagedCommandOutputStreamClientFactoryOverride } from "@/providers/managed-command-output-stream-factory-override";
 import {
   createManagedCommandOutputStore,
@@ -48,6 +49,7 @@ export function useManagedCommandOutputSession(args: {
     [targetKind, targetId, sessionChatId],
   );
   const openTransport = useDurableStreamTransportFactory();
+  const directory = useHostDirectory();
   // Read live rather than as an effect dependency: reopening the stream costs
   // the viewer their scroll position and re-reads the tail, so only the command
   // or host actually changing - or an explicit reopen - may do it.
@@ -100,17 +102,31 @@ export function useManagedCommandOutputSession(args: {
           streamMethodSupport: owned.client.streamMethodSupport,
         };
       });
-    const next = createManagedCommandOutputStore({
-      target: streamTarget,
-      commandId,
-      streamClientFactory,
-    });
-    setHandle(next);
-    return () => {
-      setHandle(null);
-      next.dispose();
+    let next: ManagedCommandOutputStoreHandle | null = null;
+    let subscription: { dispose(): void } | null = null;
+    const acquire = () => {
+      if (next !== null) return;
+      if (streamTarget.kind === "bot" && directory.findById(hostId) === null)
+        return;
+      next = createManagedCommandOutputStore({
+        target: streamTarget,
+        commandId,
+        streamClientFactory,
+      });
+      subscription?.dispose();
+      subscription = null;
+      setHandle(next);
     };
-  }, [commandId, streamTarget, hostId, generation]);
+    if (streamTarget.kind === "bot") {
+      subscription = directory.onChange(acquire);
+    }
+    acquire();
+    return () => {
+      subscription?.dispose();
+      setHandle(null);
+      next?.dispose();
+    };
+  }, [commandId, streamTarget, hostId, generation, directory]);
 
   return { session: handle, reopen };
 }

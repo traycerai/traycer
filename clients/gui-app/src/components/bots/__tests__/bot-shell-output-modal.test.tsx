@@ -76,6 +76,13 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
       return { wsStreamClient: hostClient, close: () => undefined };
     },
 }));
+// The output session reads the host directory itself (it waits for the bound
+// host's entry before it creates the stream), so the directory is a fixture:
+// every host is named, and nothing changes.
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostDirectory: () => namedHostDirectory,
+}));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string | null): HostDirectoryEntry | null =>
     hostId === null
@@ -182,6 +189,18 @@ const USAGE: TokenUsage = {
   totalTokens: 51_000,
   contextTokens: 50_000,
   contextWindow: 200_000,
+};
+
+const namedHostDirectory = {
+  findById: (hostId: string): HostDirectoryEntry => ({
+    hostId,
+    label: hostId,
+    kind: "remote",
+    websocketUrl: `wss://${hostId}.example/rpc`,
+    version: null,
+    transportDialability: "dialable",
+  }),
+  onChange: () => ({ dispose: () => undefined }),
 };
 
 const transportOpens: string[] = [];
