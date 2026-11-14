@@ -420,6 +420,83 @@ describe("HostDirectoryService", () => {
     });
   });
 
+  it("carries the registry twin's owner through every local directory read and refresh", async () => {
+    const host = makeHost(localSnapshot);
+    const registeredHost: HostListItem = {
+      hostId: localSnapshot.hostId,
+      displayName: "Registry twin",
+      platform: "macOS",
+      kind: "personal",
+      publicKey: "a".repeat(64),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity: "connectable",
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.5.0",
+        lastSeenAt: null,
+      },
+    };
+    let owner: HostOwnerPrincipal = { kind: "user", id: "user-a" };
+    const remoteFetcher: RemoteHostFetcher = () =>
+      Promise.resolve({
+        kind: "hosts",
+        entries: [
+          hostListItemToDirectoryEntry(
+            { ...registeredHost, owner },
+            "wss://relay.test/attach",
+          ),
+        ],
+      });
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher,
+    });
+    await directory.start();
+
+    const initial = directory.getLocalEntry();
+    if (initial === null) throw new Error("the local entry should be present");
+    expect(initial).toMatchObject({
+      kind: "local",
+      owner: { kind: "user", id: "user-a" },
+      websocketUrl: localSnapshot.websocketUrl,
+    });
+    expect(directory.findById(localSnapshot.hostId)).toEqual(initial);
+    expect(
+      (await directory.list()).find(
+        (entry) => entry.hostId === localSnapshot.hostId,
+      ),
+    ).toEqual(initial);
+    expect(directory.getDefaultEntry()).toEqual(initial);
+
+    const published: HostDirectoryEntry[][] = [];
+    directory.onChange((entries) => published.push([...entries]));
+    owner = { kind: "team", id: "team-a", name: "Alpha" };
+    await directory.refresh();
+
+    const updated = directory.getLocalEntry();
+    expect(updated).toEqual({
+      ...initial,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    });
+    expect(directory.findById(localSnapshot.hostId)).toEqual(updated);
+    expect(
+      (await directory.list()).find(
+        (entry) => entry.hostId === localSnapshot.hostId,
+      ),
+    ).toEqual(updated);
+    expect(directory.getDefaultEntry()).toEqual(updated);
+    expect(published).toHaveLength(1);
+    expect(
+      published[0]?.find((entry) => entry.hostId === localSnapshot.hostId),
+    ).toEqual(updated);
+  });
+
   it("deduplicates the registered remote copy of the local host", async () => {
     const host = makeHost(localSnapshot);
     const registeredLocalHostEntry: HostDirectoryEntry = {

@@ -54,8 +54,9 @@ describe("main resolves the browser.sessions host itself", () => {
   });
 
   it("answers this machine's own host from the live local snapshot", async () => {
+    const owner: HostOwnerPrincipal = { kind: "user", id: "user-1" };
     const listRegisteredHosts = vi.fn(() =>
-      Promise.resolve<HostListFetchResult>({ kind: "network-error" }),
+      Promise.resolve(hostListResultForOwner("host-1", owner)),
     );
     let websocketUrl = "ws://127.0.0.1:1111";
     const directory = createBrowserSessionsHostDirectory({
@@ -70,9 +71,9 @@ describe("main resolves the browser.sessions host itself", () => {
     const entry = await directory.resolve("host-1");
 
     expect(entry?.kind).toBe("local");
+    expect(entry?.owner).toEqual(owner);
     expect(entry?.websocketUrl).toBe("ws://127.0.0.1:1111");
-    // The registry is not consulted for this machine's own host.
-    expect(listRegisteredHosts).not.toHaveBeenCalled();
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(1);
 
     // The address is re-read on every dial: a host that respawns on a new port
     // is followed instead of retried forever at the dead one.
@@ -80,6 +81,103 @@ describe("main resolves the browser.sessions host itself", () => {
     expect(directory.endpoint("host-1")).toEqual({
       hostId: "host-1",
       websocketUrl: "ws://127.0.0.1:2222",
+    });
+  });
+
+  it("returns the local entry while its first registry listing remains unresolved", async () => {
+    let resolveRegistry!: (result: HostListFetchResult) => void;
+    const registryRead = new Promise<HostListFetchResult>((resolve) => {
+      resolveRegistry = resolve;
+    });
+    let resolveRefresh!: () => void;
+    const refreshCompleted = new Promise<void>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const listRegisteredHosts = vi.fn(() => registryRead);
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => ({
+        hostId: "host-1",
+        websocketUrl: "ws://127.0.0.1:1111",
+        version: "1.0.0",
+      }),
+      bearerToken: () => "bearer",
+      listRegisteredHosts,
+      now: () => now,
+    });
+    directory.subscribe(resolveRefresh);
+
+    const entry = await directory.resolve("host-1");
+
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(1);
+    expect(entry).toMatchObject({
+      kind: "local",
+      owner: null,
+      websocketUrl: "ws://127.0.0.1:1111",
+    });
+
+    resolveRegistry(
+      hostListResultForOwner("host-1", {
+        kind: "team",
+        id: "team-1",
+        name: "Team One",
+      }),
+    );
+    await refreshCompleted;
+    expect(await directory.resolve("host-1")).toMatchObject({
+      kind: "local",
+      owner: { kind: "team", id: "team-1", name: "Team One" },
+      websocketUrl: "ws://127.0.0.1:1111",
+    });
+  });
+
+  it("keeps the local host available with unknown ownership while signed out", async () => {
+    const listRegisteredHosts = vi.fn(() =>
+      Promise.resolve(remoteResponse("host-1")),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => ({
+        hostId: "host-1",
+        websocketUrl: "ws://127.0.0.1:1111",
+        version: "1.0.0",
+      }),
+      bearerToken: () => null,
+      listRegisteredHosts,
+      now: () => now,
+    });
+
+    expect(await directory.resolve("host-1")).toMatchObject({
+      kind: "local",
+      owner: null,
+      websocketUrl: "ws://127.0.0.1:1111",
+    });
+    expect(listRegisteredHosts).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the registry listing omits this computer", "other-host"],
+    ["the registry row omits its owner", "host-1"],
+  ])("keeps local ownership unknown when %s", async (_name, registryId) => {
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => ({
+        hostId: "host-1",
+        websocketUrl: "ws://127.0.0.1:1111",
+        version: "1.0.0",
+      }),
+      bearerToken: () => "bearer",
+      listRegisteredHosts: () => Promise.resolve(remoteResponse(registryId)),
+      now: () => now,
+    });
+
+    expect(await directory.resolve("host-1")).toMatchObject({
+      kind: "local",
+      owner: null,
+      websocketUrl: "ws://127.0.0.1:1111",
     });
   });
 
