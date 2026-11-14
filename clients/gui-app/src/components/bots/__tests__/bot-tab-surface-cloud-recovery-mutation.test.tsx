@@ -2,7 +2,8 @@
  * The Tracy tab's re-opens over the REAL `useBotOpenMutation` and a host
  * client whose `bot.open` the case holds and settles in the order it chooses:
  * a ring while an open is in flight, a transient failure followed by a
- * permanent one, and the bot list re-read once per settled open.
+ * permanent one, a ring that comes before the host or React has seen the open
+ * begin, and the bot list re-read once per settled open.
  */
 import {
   doorbellHostDirectoryEntryMock,
@@ -35,7 +36,12 @@ import {
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
 import { StrictMode, type ReactNode } from "react";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import {
+  QueryClientProvider,
+  defaultScheduler,
+  notifyManager,
+  type QueryClient,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -46,7 +52,15 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -208,6 +222,16 @@ interface HeldOpen {
 let queryClient: QueryClient;
 let opens: HeldOpen[];
 let openSubmissions: number;
+/** Runs in the step the host receives a `bot.open`, before the case can look. */
+let onOpenReachedHost: () => void;
+
+/** Rings the doorbell in the step the host receives the next `bot.open`. */
+function ringWhenNextOpenReachesHost(): void {
+  onOpenReachedHost = () => {
+    onOpenReachedHost = () => undefined;
+    ringDoorbell(TAB_HOST);
+  };
+}
 
 /** A real host client whose `bot.open` stays open until the case settles it. */
 function hostClientHoldingOpens(
@@ -220,6 +244,7 @@ function hostClientHoldingOpens(
     handlers: {
       "bot.open": () =>
         new Promise<BotOpenResponse>((resolve, reject) => {
+          onOpenReachedHost();
           const held: HeldOpen = {
             settled: false,
             resolve: (response) => {
@@ -275,8 +300,7 @@ function OtherHolder(props: { readonly onRing: () => void }): ReactNode {
   useCloudRecoveryRing({
     hostId: TAB_HOST,
     held: true,
-    pending: false,
-    onRing: props.onRing,
+    call: props.onRing,
   });
   return null;
 }
@@ -288,6 +312,18 @@ function treeWithOtherHolder(onRing: () => void): ReactNode {
         <CloudRecoveryDoorbellMount />
         <OtherHolder onRing={onRing} />
         <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
+      </QueryClientProvider>
+    </StrictMode>
+  );
+}
+
+/** The doorbell and its other holder alone, before any tab asks. */
+function otherHolderOnlyTree(onRing: () => void): ReactNode {
+  return (
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <CloudRecoveryDoorbellMount />
+        <OtherHolder onRing={onRing} />
       </QueryClientProvider>
     </StrictMode>
   );
@@ -363,15 +399,99 @@ function expectChannelOnly(): void {
   expect(screen.queryByTestId("bot-tab-error")).toBeNull();
 }
 
+/**
+ * TanStack dispatches a mutation's `pending` at once but tells React of it
+ * from a scheduled task, after the request has been sent. Holding that task
+ * keeps React on the state before the open began, as it is for a moment in
+ * the app. Every case restores the default scheduler in `afterEach`.
+ */
+const heldNotices: Array<() => void> = [];
+
+function holdNotices(): void {
+  notifyManager.setScheduler((notify) => {
+    heldNotices.push(notify);
+  });
+}
+
+function releaseNotices(): void {
+  notifyManager.setScheduler(defaultScheduler);
+  act(() => {
+    for (const notify of heldNotices.splice(0)) notify();
+  });
+}
+
+/** Brings the pane back into view, which opens the bot again. */
+function visibilityReopen(view: RenderResult, onRing: () => void): void {
+  mocks.state.paneVisible = false;
+  view.rerender(treeWithOtherHolder(onRing));
+  mocks.state.paneVisible = true;
+  view.rerender(treeWithOtherHolder(onRing));
+}
+
+/**
+ * Fails the mount's opens one at a time until the tab shows Reconnecting,
+ * then stops: whatever the tab asks after that is the re-open under test.
+ * Returns how many mount opens it failed.
+ */
+async function failMountOpensUntilReconnecting(): Promise<number> {
+  let failed = 0;
+  await waitFor(async () => {
+    const next = opens.find((open) => !open.settled);
+    if (next !== undefined) {
+      await settle(next, (open) => open.reject(TRANSIENT));
+      failed += 1;
+    }
+    expect(screen.queryByTestId("bot-tab-reconnecting")).not.toBeNull();
+  });
+  return failed;
+}
+
+async function settleMountOpensUntilIdle(
+  settleOpen: (open: HeldOpen) => void,
+): Promise<number> {
+  await waitFor(async () => {
+    for (const held of opens.filter((open) => !open.settled)) {
+      await settle(held, settleOpen);
+    }
+    expect(
+      queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
+    ).toBe(0);
+  });
+  return opens.length;
+}
+
+async function waitForOpenCount(count: number): Promise<void> {
+  await waitFor(() => expect(opens).toHaveLength(count));
+}
+
+async function waitForNoOpenInFlight(): Promise<void> {
+  await waitFor(() =>
+    expect(
+      queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
+    ).toBe(0),
+  );
+}
+
+/** One re-open follows `asked` opens, which it settles, and no other. */
+async function expectExactlyOneReopenAfter(asked: number): Promise<void> {
+  await waitForOpenCount(asked + 1);
+  await settle(heldOpen(asked), (open) => open.resolve(SERVING));
+  await waitForNoOpenInFlight();
+  expect(opens).toHaveLength(asked + 1);
+}
+
 beforeEach(() => {
   queryClient = createAppQueryClient();
   opens = [];
   openSubmissions = 0;
+  onOpenReachedHost = () => undefined;
   openHost.client = hostClientHoldingOpens(queryClient);
   resetBotTabSurfaceMocks();
 });
 
 afterEach(() => {
+  notifyManager.setScheduler(defaultScheduler);
+  heldNotices.length = 0;
   endBotTabSurfaceCase(queryClient);
   cleanup();
   openHost.client = null;
@@ -501,7 +621,7 @@ describe("<BotTabSurface /> Retry while a re-open is in flight", () => {
   });
 });
 
-describe("<BotTabSurface /> a ring while the first open is pending", () => {
+describe("<BotTabSurface /> a ring while the first open is in flight", () => {
   /**
    * Another holder keeps the doorbell open, the tab's first open is held at
    * the host, and the doorbell rings once per `rings` before that open settles.
@@ -517,38 +637,6 @@ describe("<BotTabSurface /> a ring while the first open is pending", () => {
     }
     expect(opens.every((open) => !open.settled)).toBe(true);
     return view;
-  }
-
-  /**
-   * Fails the mount's opens one at a time until the tab shows Reconnecting,
-   * then stops: whatever the tab asks after that is the re-open under test.
-   * Returns how many mount opens it failed.
-   */
-  async function failMountOpensUntilReconnecting(): Promise<number> {
-    let failed = 0;
-    await waitFor(async () => {
-      const next = opens.find((open) => !open.settled);
-      if (next !== undefined) {
-        await settle(next, (open) => open.reject(TRANSIENT));
-        failed += 1;
-      }
-      expect(screen.queryByTestId("bot-tab-reconnecting")).not.toBeNull();
-    });
-    return failed;
-  }
-
-  async function settleMountOpensUntilIdle(
-    settleOpen: (open: HeldOpen) => void,
-  ): Promise<number> {
-    await waitFor(async () => {
-      for (const held of opens.filter((open) => !open.settled)) {
-        await settle(held, settleOpen);
-      }
-      expect(
-        queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
-      ).toBe(0);
-    });
-    return opens.length;
   }
 
   it("asks again once when the first open then fails transiently", async () => {
@@ -599,10 +687,7 @@ describe("<BotTabSurface /> a ring while the first open is pending", () => {
     );
     await waitFor(() => expectChannelOnly());
 
-    mocks.state.paneVisible = false;
-    view.rerender(treeWithOtherHolder(vi.fn<() => void>()));
-    mocks.state.paneVisible = true;
-    view.rerender(treeWithOtherHolder(vi.fn<() => void>()));
+    visibilityReopen(view, vi.fn<() => void>());
     await waitFor(() => expect(opens.some((open) => !open.settled)).toBe(true));
     await rejectPendingOpens(TRANSIENT);
     await waitFor(() =>
@@ -613,11 +698,7 @@ describe("<BotTabSurface /> a ring while the first open is pending", () => {
 
     const reopened = opens.length;
     expect(reopened).toBeGreaterThan(mounted);
-    await waitFor(() =>
-      expect(
-        queryClient.isMutating({ mutationKey: botMutationKeys.open() }),
-      ).toBe(0),
-    );
+    await waitForNoOpenInFlight();
     expect(opens).toHaveLength(reopened);
   });
 
@@ -631,5 +712,130 @@ describe("<BotTabSurface /> a ring while the first open is pending", () => {
     expect(within(alert).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
     expect(opens).toHaveLength(mounted);
+  });
+});
+
+describe("<BotTabSurface /> a ring around the start of an open", () => {
+  /** A healthy tab beside another holder of the doorbell, every mount open served. */
+  async function mountHealthy(): Promise<{
+    view: RenderResult;
+    otherRings: Mock<() => void>;
+    served: number;
+  }> {
+    const otherRings = vi.fn<() => void>();
+    const view = render(treeWithOtherHolder(otherRings));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
+    const served = await settleMountOpensUntilIdle((open) =>
+      open.resolve(SERVING),
+    );
+    expectChannelOnly();
+    return { view, otherRings, served };
+  }
+
+  function ringHeardByOtherHolder(otherRings: Mock<() => void>): void {
+    const before = otherRings.mock.calls.length;
+    ringDoorbell(TAB_HOST);
+    expect(otherRings).toHaveBeenCalledTimes(before + 1);
+  }
+
+  /**
+   * After the `served` mount opens, an open A reaches the host and React
+   * renders it pending, the doorbell rings, and a second open B is handed to
+   * the lane behind A. `ringWhileQueued` rings once more after B was handed
+   * over. A fails first, which sends B; B then fails.
+   */
+  async function failQueuedOpen(
+    input: {
+      view: RenderResult;
+      otherRings: Mock<() => void>;
+      served: number;
+    },
+    ringWhileQueued: boolean,
+  ): Promise<void> {
+    const { view, otherRings, served } = input;
+    holdNotices();
+    visibilityReopen(view, otherRings);
+    await waitForOpenCount(served + 1);
+    releaseNotices();
+    ringHeardByOtherHolder(otherRings);
+
+    const submitted = openSubmissions;
+    visibilityReopen(view, otherRings);
+    await waitFor(() => expect(openSubmissions).toBe(submitted + 1));
+    expect(opens).toHaveLength(served + 1);
+    if (ringWhileQueued) ringHeardByOtherHolder(otherRings);
+
+    await settle(heldOpen(served), (open) => open.reject(TRANSIENT));
+    await waitForOpenCount(served + 2);
+    await settle(heldOpen(served + 1), (open) => open.reject(TRANSIENT));
+    await waitFor(() =>
+      expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy(),
+    );
+    expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
+  }
+
+  it("asks again once for a ring that came as the first open reached the host", async () => {
+    const otherRings = vi.fn<() => void>();
+    const view = render(otherHolderOnlyTree(otherRings));
+    await waitFor(() => expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1));
+
+    ringWhenNextOpenReachesHost();
+    view.rerender(treeWithOtherHolder(otherRings));
+    await waitFor(() => expect(opens.length).toBeGreaterThan(0));
+    expect(otherRings).toHaveBeenCalledTimes(1);
+
+    const mounted = await failMountOpensUntilReconnecting();
+    expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
+    await expectExactlyOneReopenAfter(mounted);
+  });
+
+  it("asks again once for a ring that came as the re-open reached the host, before React rendered it", async () => {
+    const { view, otherRings, served } = await mountHealthy();
+
+    holdNotices();
+    const heardBefore = otherRings.mock.calls.length;
+    ringWhenNextOpenReachesHost();
+    visibilityReopen(view, otherRings);
+    await waitForOpenCount(served + 1);
+    expect(otherRings).toHaveBeenCalledTimes(heardBefore + 1);
+    expect(heldNotices.length).toBeGreaterThan(0);
+    releaseNotices();
+
+    await settle(heldOpen(served), (open) => open.reject(TRANSIENT));
+    await waitFor(() =>
+      expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy(),
+    );
+    await expectExactlyOneReopenAfter(served + 1);
+  });
+
+  it("owes nothing for a ring that came before a later open began while an earlier one was in flight", async () => {
+    const mounted = await mountHealthy();
+    await failQueuedOpen(mounted, false);
+
+    await waitForNoOpenInFlight();
+    expect(opens).toHaveLength(mounted.served + 2);
+  });
+
+  it("asks again once for a ring that came after the later open began, while it waited behind the earlier one", async () => {
+    const mounted = await mountHealthy();
+    await failQueuedOpen(mounted, true);
+
+    await expectExactlyOneReopenAfter(mounted.served + 2);
+  });
+
+  it("forgets a ring that came while no open was in flight when the next open begins", async () => {
+    const { view, otherRings, served } = await mountHealthy();
+
+    ringHeardByOtherHolder(otherRings);
+    visibilityReopen(view, otherRings);
+    await waitForOpenCount(served + 1);
+    await settle(heldOpen(served), (open) => open.reject(TRANSIENT));
+    await waitFor(() =>
+      expect(screen.getByTestId("bot-tab-reconnecting")).toBeTruthy(),
+    );
+    expect(liveDoorbellsOf(TAB_HOST)).toHaveLength(1);
+
+    await waitForNoOpenInFlight();
+    expect(opens).toHaveLength(served + 1);
   });
 });

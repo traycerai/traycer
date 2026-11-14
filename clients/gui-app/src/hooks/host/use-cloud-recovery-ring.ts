@@ -1,48 +1,64 @@
-import { useEffect, useEffectEvent, useRef, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 /**
- * Holds `hostId`'s cloud-recovery doorbell (`CloudRecoveryDoorbellMount`)
- * while `held`, and calls `onRing` once on each of its rings meanwhile. It is
- * for a call outside the query cache that failed with a transient cloud
+ * Sends `call`, a call outside the query cache, each time the returned `ask`
+ * runs, and holds `hostId`'s cloud-recovery doorbell
+ * (`CloudRecoveryDoorbellMount`) while `held`, asking once on each of its
+ * rings meanwhile. `held` is for a call that failed with a transient cloud
  * failure, which the doorbell's sweep of failed reads cannot ask again.
  *
- * The holder keeps `held` true while the call a ring made is in flight, and
+ * The holder keeps `held` true while the call a ring asked is in flight, and
  * when that call fails transiently again: releasing in between would close
  * the doorbell and dial it anew, and the host rings on every open.
  *
- * While `pending` and not yet `held`, a ring of a doorbell another holder
- * keeps open is remembered without holding it. The call may then fail with
- * an answer from before the cloud came back, and that doorbell rings no more
- * for it, so the hold that failure takes spends the remembered ring once,
- * however many rang. Each new pending call starts owing nothing.
+ * A ring that comes after an `ask`, of a doorbell another holder keeps open,
+ * is remembered without holding it. The call may then fail with an answer
+ * from before the cloud came back, and that doorbell rings no more for it,
+ * so the hold that failure takes asks once more, however many rang. Each
+ * `ask` forgets the rings that came before it, so only a ring after the
+ * latest call began is owed; a send that bypassed `ask` would leave it an
+ * earlier call's ring.
  */
 export function useCloudRecoveryRing(input: {
   readonly hostId: string;
   readonly held: boolean;
-  readonly pending: boolean;
-  readonly onRing: () => void;
-}): void {
-  const { hostId, held, pending } = input;
+  readonly call: () => void;
+}): () => void {
+  const { hostId, held, call } = input;
   const holds = ringHoldsFor(useQueryClient());
-  const onRing = useEffectEvent(input.onRing);
   const ringOwed = useRef(false);
-  useEffect(() => {
-    if (!pending || held) return undefined;
+  const stopWatch = useRef<(() => void) | null>(null);
+  const ask = useCallback(() => {
     ringOwed.current = false;
-    return holds.watch(hostId, () => {
+    // Heard from the step that sends the call, so no ring after the call
+    // began can come before the watch does.
+    stopWatch.current ??= holds.watch(hostId, () => {
       ringOwed.current = true;
     });
-  }, [holds, hostId, pending, held]);
+    call();
+  }, [holds, hostId, call]);
+  useEffect(
+    () => () => {
+      stopWatch.current?.();
+      stopWatch.current = null;
+    },
+    [holds, hostId],
+  );
+  const askAgain = useEffectEvent(ask);
   useEffect(() => {
     if (!held) return undefined;
-    const release = holds.hold(hostId, () => onRing());
-    if (ringOwed.current) {
-      ringOwed.current = false;
-      onRing();
-    }
+    const release = holds.hold(hostId, () => askAgain());
+    if (ringOwed.current) askAgain();
     return release;
   }, [holds, hostId, held]);
+  return ask;
 }
 
 /** The hosts whose doorbell a `useCloudRecoveryRing` caller holds, sorted. */
