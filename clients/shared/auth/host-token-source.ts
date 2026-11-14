@@ -109,7 +109,8 @@ export interface HostTokenSource {
   /**
    * This person's era here. It advances each time {@link forgetUser} runs for
    * them. A mint, an adoption or a state write that began in an earlier era is
-   * dropped.
+   * dropped. A value {@link isIssuedHostTokenEra} refuses is no era: work
+   * that reads it starts nothing.
    */
   era(userId: string): number;
   /**
@@ -119,6 +120,11 @@ export interface HostTokenSource {
    */
   bindSignIn(signIn: VerifiedSignIn): void;
   subscribe(listener: (change: HostTokenChange) => void): () => void;
+}
+
+/** Whether `era` is one a source issues: a non-negative safe integer. */
+export function isIssuedHostTokenEra(era: number): boolean {
+  return Number.isSafeInteger(era) && era >= 0;
 }
 
 export function createHostTokenSource(deps: {

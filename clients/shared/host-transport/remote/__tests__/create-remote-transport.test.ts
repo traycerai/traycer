@@ -1021,4 +1021,91 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       closeAndRetire(built.session);
     }
   });
+
+  it("does not mint a relay pass when the host-token era is unissued", async () => {
+    const hostId = "era-unissued-relay";
+    const userId = "user-unissued-era";
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const era = vi.spyOn(tokens, "era").mockReturnValue(-1);
+    const adopt = vi.spyOn(tokens, "adopt");
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            grant: "unissued-era-relay-pass",
+            role: "client",
+            expires_in: 300,
+            session_grant: "unissued-era-host-token",
+            session_grant_expires_in: 3_600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const bearerSource: OpenFrameBearerSource = {
+      getBearerToken: () => "sign-in-token",
+      identity: { userId },
+    };
+    const states: string[] = [];
+    const createSocket = vi.fn(() => new InertFakeSocket());
+    const warnMessages: string[] = [];
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation((message: unknown) => {
+        warnMessages.push(String(message));
+      });
+    const built = createRemoteHostTransport<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      hostId,
+      userId,
+      relayAttachUrl: "wss://relay.invalid/attach",
+      authnBaseUrl: "https://authn.invalid",
+      hostPublicKey: VALID_PUBLIC_KEY,
+      bearer: () => bearerSource,
+      hostTokens: tokens,
+      door: null,
+      onState: (_refusedHostId, state) => states.push(state),
+      cloudAuthorized: () => true,
+      auth: null,
+      clock: null,
+      rpcRegistry: emptyRpcRegistry,
+      streamRegistry: emptyStreamRegistry,
+      webSocketFactory: { create: createSocket },
+      requestId: () => `req-${hostId}`,
+      proactiveWakeEligible: true,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    if (built === null) throw new Error("expected a built remote transport");
+
+    try {
+      built.session.start();
+      await vi.waitFor(
+        () =>
+          expect(
+            warnMessages.some((message) =>
+              message.includes("no host-token era for this person"),
+            ),
+          ).toBe(true),
+        WAIT,
+      );
+
+      expect(era).toHaveBeenCalledWith(userId);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(adopt).not.toHaveBeenCalled();
+      expect(tokens.current(userId, hostId)).toBeNull();
+      expect(states).toEqual([]);
+      expect(createSocket).not.toHaveBeenCalled();
+    } finally {
+      closeAndRetire(built.session);
+      warnSpy.mockRestore();
+    }
+  });
 });

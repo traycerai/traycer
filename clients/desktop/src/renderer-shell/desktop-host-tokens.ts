@@ -1,4 +1,7 @@
-import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import {
+  isIssuedHostTokenEra,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
 import type {
   HostToken,
   HostTokenChange,
@@ -45,7 +48,7 @@ export function createDesktopHostTokenSource(
   // Every era that crosses the bridge, whichever way it came: anything that
   // is not an era main issues reads as none, and is never taken in.
   const issued = (era: number): number =>
-    Number.isSafeInteger(era) && era >= 0 ? era : NO_ISSUED_HOST_TOKEN_ERA;
+    isIssuedHostTokenEra(era) ? era : NO_ISSUED_HOST_TOKEN_ERA;
   // Takes in an era main reported. A newer one means another window signed
   // this person out: what this window held of theirs goes with it.
   const learn = (userId: string, reportedEra: number): void => {
@@ -81,7 +84,9 @@ export function createDesktopHostTokenSource(
   // The answer belongs to the era the work began in, and this window is
   // still in it.
   const stillIn = (userId: string, began: number, answered: number): boolean =>
-    !forgetting.has(userId) && issued(answered) === began;
+    !forgetting.has(userId) &&
+    issued(answered) === began &&
+    reported.get(userId) === began;
   bridge.subscribe((change) => {
     apply(change.userId, change.hostId, change.token, change.era);
   });

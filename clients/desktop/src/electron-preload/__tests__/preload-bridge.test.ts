@@ -1582,17 +1582,23 @@ describe("preload host-token era reads", () => {
     expect(invoked).toEqual([]);
   });
 
-  it.each([-1, 1.5, Number.NaN, "0", null])(
-    "validates readSyncNumberFor like readSyncNumber for %s",
-    async (badValue) => {
-      fakeElectron.sendSyncFn = () => badValue;
+  it.each([
+    { value: -1, expected: -1 },
+    { value: 1.5, expected: 91 },
+    { value: Number.NaN, expected: 91 },
+    { value: "0", expected: 91 },
+    { value: null, expected: 91 },
+  ])(
+    "validates readSyncNumberFor like readSyncNumber for $value",
+    async ({ value, expected }) => {
+      fakeElectron.sendSyncFn = () => value;
       const { readSyncNumber, readSyncNumberFor } =
         await import("../sync-bootstrap");
 
-      expect(readSyncNumber(RunnerHostSync.hostTokensEra, 91)).toBe(91);
+      expect(readSyncNumber(RunnerHostSync.hostTokensEra, 91)).toBe(expected);
       expect(
         readSyncNumberFor(RunnerHostSync.hostTokensEra, "user-a", 91),
-      ).toBe(91);
+      ).toBe(expected);
       expect(fakeElectron.syncCalls).toHaveLength(2);
     },
   );

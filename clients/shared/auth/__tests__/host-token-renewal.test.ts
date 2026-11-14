@@ -363,7 +363,9 @@ describe("host-token lease after a user era changes", () => {
   it("does not raise state when hostTokenBearer's pending refusal is superseded", async () => {
     const answer = deferred<HostTokenMintOutcome>();
     const started = deferred<void>();
-    const bearerMint = deferred<Promise<HostTokenMintOutcome>>();
+    const bearerMint = deferred<{
+      readonly pending: Promise<HostTokenMintOutcome>;
+    }>();
     const hostId = "era-stream-computer";
     const states: string[] = [];
     const tokens = createHostTokenSource({
@@ -384,7 +386,7 @@ describe("host-token lease after a user era changes", () => {
         tokens.current(userId, requestedHostId),
       obtain: (userId, requestedHostId, fresh, signal) => {
         const pending = tokens.obtain(userId, requestedHostId, fresh, signal);
-        bearerMint.resolve(pending);
+        bearerMint.resolve({ pending });
         return pending;
       },
     };
@@ -397,7 +399,7 @@ describe("host-token lease after a user era changes", () => {
 
     expect(bearer()).toBeNull();
     await started.promise;
-    const mintChain = await bearerMint.promise;
+    const { pending: mintChain } = await bearerMint.promise;
     await tokens.forgetUser(USER_A);
     answer.resolve({ kind: "not-a-member" });
 

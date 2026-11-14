@@ -127,6 +127,61 @@ describe("desktop host-token source eras", () => {
     expect(tokens.era(USER_ID)).toBe(1);
   });
 
+  it("supersedes an unavailable obtain answer after a newer-era event", async () => {
+    const answer = deferred<{ outcome: HostTokenMintOutcome; era: number }>();
+    const { bridge, emit, setEra } = bridgeFixture();
+    setEra(1);
+    Reflect.set(bridge, "obtain", () => answer.promise);
+    const tokens = createDesktopHostTokenSource(bridge);
+
+    const pending = tokens.obtain(USER_ID, HOST_ID, true, null);
+    setEra(2);
+    emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 2 });
+    answer.resolve({
+      outcome: { kind: "unavailable", detail: "authn answered HTTP 503" },
+      era: 1,
+    });
+
+    await expect(pending).resolves.toEqual({ kind: "superseded" });
+  });
+
+  it("does not keep an ok obtain answer from a prior era", async () => {
+    const answer = deferred<{ outcome: HostTokenMintOutcome; era: number }>();
+    const { bridge, emit, setEra } = bridgeFixture();
+    setEra(1);
+    Reflect.set(bridge, "obtain", () => answer.promise);
+    const tokens = createDesktopHostTokenSource(bridge);
+
+    const pending = tokens.obtain(USER_ID, HOST_ID, true, null);
+    setEra(2);
+    emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 2 });
+    answer.resolve({
+      outcome: {
+        kind: "ok",
+        token: { token: "late-era-one-token", expiresAtMs: 10_000 },
+      },
+      era: 1,
+    });
+
+    await expect(pending).resolves.toEqual({ kind: "superseded" });
+    expect(tokens.current(USER_ID, HOST_ID)).toBeNull();
+  });
+
+  it("supersedes a renewal answer from a prior era", async () => {
+    const answer = deferred<{ renewal: HostTokenRenewal; era: number }>();
+    const { bridge, emit, setEra } = bridgeFixture();
+    setEra(1);
+    Reflect.set(bridge, "renew", () => answer.promise);
+    const tokens = createDesktopHostTokenSource(bridge);
+
+    const pending = tokens.renew(USER_ID, [HOST_ID]);
+    setEra(2);
+    emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 2 });
+    answer.resolve({ renewal: { kind: "renewed", delayed: [] }, era: 1 });
+
+    await expect(pending).resolves.toEqual({ kind: "superseded" });
+  });
+
   it("empties the copy immediately and ignores a pre-forget event", async () => {
     const { bridge, emit } = bridgeFixture();
     const tokens = createDesktopHostTokenSource(bridge);

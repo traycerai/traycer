@@ -128,19 +128,20 @@ export function hostTokenBearerFor(
 }
 
 /**
- * When a second `not_admitted` is final. A session's bound lasts until its
- * open is admitted: a relay's every dial adopts the token its attach grant
- * brings, so the token refused the second time is never the one minted after
- * the first. A unary call is retried over a connection that does not redial,
- * so its bound is the token minted after the first refusal.
+ * When a second refusal for the same reason (`token_expired` or
+ * `not_admitted`) is final, after one fresh token. A session's bound lasts
+ * until its open is admitted: a relay's every dial adopts the token its
+ * attach grant brings, so the token refused the second time is never the one
+ * minted after the first. A unary call is retried over a connection that does
+ * not redial, so its bound is the token minted after the first refusal.
  */
-interface NotAdmittedBound {
-  readonly final: (held: string | null) => boolean;
-  readonly retried: (minted: string | null) => void;
+interface ReplacementBound {
+  readonly final: (userId: string, held: string | null) => boolean;
+  readonly retried: (userId: string, minted: string | null) => void;
 }
 
 /** A session's bound. {@link hostTokenSessionAuth} wires its reset. */
-function untilAdmittedBound(): NotAdmittedBound & {
+function untilAdmittedBound(): ReplacementBound & {
   readonly admitted: () => void;
 } {
   let retried = false;
@@ -156,14 +157,21 @@ function untilAdmittedBound(): NotAdmittedBound & {
 }
 
 /** A unary call's bound, which no admitted open resets. */
-function sameTokenBound(): NotAdmittedBound {
-  let mintedAfterNotAdmitted: string | null = null;
+function sameTokenBound(): ReplacementBound {
+  let minted: { readonly userId: string; readonly token: string } | null = null;
   return {
-    final: (held) => held !== null && held === mintedAfterNotAdmitted,
-    retried: (minted) => {
-      mintedAfterNotAdmitted = minted;
+    final: (userId, held) =>
+      held !== null && minted?.userId === userId && held === minted.token,
+    retried: (userId, token) => {
+      minted = token === null ? null : { userId, token };
     },
   };
+}
+
+/** One bound per reason the host refuses a token it knows. */
+interface ReplacementBounds {
+  readonly expiry: ReplacementBound;
+  readonly notAdmitted: ReplacementBound;
 }
 
 type HostTokenRevalidatorDeps = {
@@ -210,8 +218,9 @@ export function hostTokenSessionAuth(
  * starts sign-in recovery:
  * - no refusal yet (a token already known to have run out): mint a fresh
  *   token and reconnect.
- * - `token_expired`: one fresh token; refused as expired again while this
- *   clock still calls it unexpired, terminal, with no state.
+ * - `token_expired`: one fresh token; refused as expired again before the
+ *   session's open is next admitted, while this clock still calls the held
+ *   token unexpired, terminal, with no state.
  * - `not_admitted`: one fresh token; refused again before the session's open
  *   is next admitted, `not-admitted`.
  * - `session_revoked`: the ordinary sign-out path, through the sign-in
@@ -223,30 +232,26 @@ export function hostTokenSessionAuth(
  * to `signInRecovery`.
  *
  * A session builds this through {@link hostTokenSessionAuth}, or nothing
- * tells it the open was admitted and its `not_admitted` bound never resets.
+ * tells it the open was admitted and its bounds never reset.
  */
 export function hostTokenRevalidator(
   deps: HostTokenRevalidatorDeps,
 ): HostTokenSessionRevalidator {
-  const bound = untilAdmittedBound();
+  const expiry = untilAdmittedBound();
+  const notAdmitted = untilAdmittedBound();
   return {
-    ...revalidatorWithBound(deps, bound),
-    admitted: bound.admitted,
+    ...revalidatorWithBounds(deps, { expiry, notAdmitted }),
+    admitted: () => {
+      expiry.admitted();
+      notAdmitted.admitted();
+    },
   };
 }
 
-function revalidatorWithBound(
+function revalidatorWithBounds(
   deps: HostTokenRevalidatorDeps,
-  notAdmitted: NotAdmittedBound,
+  bounds: ReplacementBounds,
 ): HostTokenRevalidator {
-  // The token minted for this person in answer to their last
-  // `token_expired`. Refused as expired again while this clock still calls it
-  // usable, another mint cannot help: the next would be refused the same way.
-  let mintedAfterExpiry: {
-    readonly userId: string;
-    readonly token: string;
-  } | null = null;
-
   const mintFresh = async (
     userId: string,
     signInRetried: boolean,
@@ -286,34 +291,38 @@ function revalidatorWithBound(
     if (refusal === null) return mintFresh(userId, false, false);
     const reason = readDoorReason(refusal.doorReason);
     if (reason === "token_expired") {
+      // Refused as expired again while this clock still calls the held token
+      // usable, another mint cannot help: the next would be refused the same
+      // way.
       const held = deps.tokens.current(userId, deps.hostId);
       if (
         held !== null &&
-        mintedAfterExpiry?.userId === userId &&
-        held.token === mintedAfterExpiry.token &&
-        isUsableHostToken(held, deps.now())
+        isUsableHostToken(held, deps.now()) &&
+        bounds.expiry.final(userId, held.token)
       )
         return "rejected";
       const outcome = await mintFresh(userId, false, false);
       // Only a token that was in fact minted becomes the replacement: after
       // a failed mint the old token is still the one held, and its next
       // refusal earns another try once authn answers.
-      if (outcome === "rotated") {
-        const minted = deps.tokens.current(userId, deps.hostId)?.token ?? null;
-        mintedAfterExpiry = minted === null ? null : { userId, token: minted };
-      }
+      if (outcome === "rotated")
+        bounds.expiry.retried(
+          userId,
+          deps.tokens.current(userId, deps.hostId)?.token ?? null,
+        );
       return outcome;
     }
     if (reason === "not_admitted") {
       const held = deps.tokens.current(userId, deps.hostId)?.token ?? null;
-      if (notAdmitted.final(held)) {
+      if (bounds.notAdmitted.final(userId, held)) {
         deps.onState(deps.hostId, "not-admitted");
         return "rejected";
       }
       const outcome = await mintFresh(userId, false, false);
       // Likewise: a failed mint spends nothing of the bound.
       if (outcome === "rotated")
-        notAdmitted.retried(
+        bounds.notAdmitted.retried(
+          userId,
           deps.tokens.current(userId, deps.hostId)?.token ?? null,
         );
       return outcome;
@@ -354,7 +363,10 @@ export function hostTokenUnaryRevalidator(deps: {
   const forHost = (hostId: string): HostTokenRevalidator => {
     let revalidator = byHost.get(hostId);
     if (revalidator === undefined) {
-      revalidator = revalidatorWithBound({ ...deps, hostId }, sameTokenBound());
+      revalidator = revalidatorWithBounds(
+        { ...deps, hostId },
+        { expiry: sameTokenBound(), notAdmitted: sameTokenBound() },
+      );
       byHost.set(hostId, revalidator);
     }
     return revalidator;

@@ -25,7 +25,10 @@ import {
   type AttachGrantProvider,
 } from "./grant-client";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
-import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import {
+  isIssuedHostTokenEra,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
 import {
   hostTokenSessionAuth,
   type HostTokenStateSink,
@@ -288,7 +291,15 @@ export function createRemoteHostTransport<
             detail: "no user bearer available (signed out?)",
             context: "",
           };
+        // No era, no mint: the sign-in is never sent for work that cannot
+        // keep what it brings.
         const era = options.hostTokens.era(options.userId);
+        if (!isIssuedHostTokenEra(era))
+          return {
+            kind: "unavailable",
+            detail: "no host-token era for this person",
+            context: "",
+          };
         const minted = await mintRelayPassWithHostTokenViaHttp(
           options.authnBaseUrl,
           options.hostId,
