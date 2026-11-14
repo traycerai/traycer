@@ -16,6 +16,7 @@ import {
   hostQueryKeys,
 } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useTeamComputersSeenStore } from "@/stores/hosts/claimed-computer-notice-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import { noteHostMembershipChanged } from "@/lib/host/local-admission-invalidation";
@@ -85,6 +86,9 @@ export function useTeamComputerClaim(
       const result = await auth.releaseTeamComputer(hostId, environmentId);
       if (result.kind === "ok") {
         noteHostMembershipChanged(hostId);
+        // This person made the claim: their own list losing the computer is
+        // not a teammate's claim to tell them about.
+        useTeamComputersSeenStore.getState().forgetComputer(userId, hostId);
         return;
       }
       if (result.kind === "not-computer")

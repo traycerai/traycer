@@ -1,5 +1,6 @@
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
+import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { useTeamComputerTransfer } from "@/hooks/environment/use-team-computer-transfer";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
@@ -299,6 +300,7 @@ function ClaimLocalTeamComputer(props: {
               This computer will become yours. The team will lose access to it.
             </DialogDescription>
           </DialogHeader>
+          <ClaimRunningWork hostId={props.hostId} />
           {mutation.isError ? (
             <p role="alert" className="text-ui-sm text-destructive">
               {mutation.error.message}
