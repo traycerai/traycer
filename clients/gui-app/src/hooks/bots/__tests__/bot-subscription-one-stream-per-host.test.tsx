@@ -5,7 +5,9 @@
  * so two readers share a stream only when they hold the same stream-client
  * OBJECT. Home's row and every other bot reader must therefore reach the same
  * object for the same host; a reader that dials its own client opens a second
- * `bot.subscribe` against a host that already serves one.
+ * `bot.subscribe` against a host that already serves one. The readers are
+ * Home's row, a per-host reader (the bot's open tab) and the sidebar row's
+ * `LiveBotAvatar`.
  *
  * The real `useHostStreamClientFor` + `host-stream-client-cache` (the per-host
  * client every bot reader reads, Home's row included) is mounted beside the
@@ -101,6 +103,7 @@ vi.mock(
 
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
 import { HomeBotRow } from "@/components/home/bots/home-bot-row";
+import { LiveBotAvatar } from "@/components/bots/bot-avatars";
 import {
   __resetBotSubscriptionsForTesting,
   useBotSubscriptionForHost,
@@ -275,6 +278,8 @@ interface Readers {
   readonly home: boolean;
   /** The host a per-host reader reads, or `null` for none mounted. */
   readonly perHostReaderOn: string | null;
+  /** The host the sidebar row's avatar reads, or `null` for none mounted. */
+  readonly sidebarAvatarOn: string | null;
 }
 
 function tree(queryClient: QueryClient, readers: Readers): ReactNode {
@@ -298,6 +303,13 @@ function tree(queryClient: QueryClient, readers: Readers): ReactNode {
         ) : null}
         {readers.perHostReaderOn === null ? null : (
           <PerHostReader hostId={readers.perHostReaderOn} />
+        )}
+        {readers.sidebarAvatarOn === null ? null : (
+          <LiveBotAvatar
+            botId={BOT_ID}
+            hostId={readers.sidebarAvatarOn}
+            size="sm"
+          />
         )}
       </HostStreamProvider>
     </QueryClientProvider>
@@ -347,30 +359,70 @@ describe("one bot.subscribe stream per bot per host", () => {
     await mountReaders({
       home: true,
       perHostReaderOn: EFFECTIVE_HOST.hostId,
+      sidebarAvatarOn: null,
     });
 
     expect(ledger.botStreams).toHaveLength(1);
   });
 
-  it("keeps the shared stream open until its last reader unmounts", async () => {
+  it("opens one stream when Home's row, a per-host reader and the sidebar avatar read the same bot on the same host", async () => {
+    await mountReaders({
+      home: true,
+      perHostReaderOn: EFFECTIVE_HOST.hostId,
+      sidebarAvatarOn: EFFECTIVE_HOST.hostId,
+    });
+
+    expect(ledger.botStreams).toHaveLength(1);
+  });
+
+  it("keeps the shared stream open until its last of three readers unmounts", async () => {
     const { setReaders } = await mountReaders({
       home: true,
       perHostReaderOn: EFFECTIVE_HOST.hostId,
+      sidebarAvatarOn: EFFECTIVE_HOST.hostId,
     });
     expect(ledger.botStreams).toHaveLength(1);
 
-    setReaders({ home: false, perHostReaderOn: EFFECTIVE_HOST.hostId });
+    setReaders({
+      home: false,
+      perHostReaderOn: EFFECTIVE_HOST.hostId,
+      sidebarAvatarOn: EFFECTIVE_HOST.hostId,
+    });
     await act(() => Promise.resolve());
     expect(closedBotStreams()).toBe(0);
     expect(liveBotStreams()).toBe(1);
 
-    setReaders({ home: false, perHostReaderOn: null });
+    setReaders({
+      home: false,
+      perHostReaderOn: null,
+      sidebarAvatarOn: EFFECTIVE_HOST.hostId,
+    });
+    await act(() => Promise.resolve());
+    expect(closedBotStreams()).toBe(0);
+    expect(liveBotStreams()).toBe(1);
+
+    setReaders({ home: false, perHostReaderOn: null, sidebarAvatarOn: null });
     await waitFor(() => expect(closedBotStreams()).toBe(1));
     expect(liveBotStreams()).toBe(0);
   });
 
   it("opens a stream per host when the readers read the bot on different hosts", async () => {
-    await mountReaders({ home: true, perHostReaderOn: OTHER_HOST.hostId });
+    await mountReaders({
+      home: true,
+      perHostReaderOn: OTHER_HOST.hostId,
+      sidebarAvatarOn: null,
+    });
+
+    await waitFor(() => expect(liveBotStreams()).toBe(2));
+    expect(new Set(ledger.botStreams.map((s) => s.clientId)).size).toBe(2);
+  });
+
+  it("opens a second stream when the sidebar avatar reads the other host while Home reads the effective host", async () => {
+    await mountReaders({
+      home: true,
+      perHostReaderOn: null,
+      sidebarAvatarOn: OTHER_HOST.hostId,
+    });
 
     await waitFor(() => expect(liveBotStreams()).toBe(2));
     expect(new Set(ledger.botStreams.map((s) => s.clientId)).size).toBe(2);
