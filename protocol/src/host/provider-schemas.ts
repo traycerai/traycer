@@ -4412,10 +4412,22 @@ export const providersAwaitLoginRequestSchemaV22 = lazySchema(() =>
     profileId: z.string().nullable().default(null),
   }),
 );
-export const providersAwaitLoginRequestSchema = lazySchema(() =>
+/** Frozen 2.3 and 2.4 request. */
+export const providersAwaitLoginRequestSchemaV23 = lazySchema(() =>
   z.object({
     ...providersAwaitLoginRequestSchemaV22.shape,
     lastSeenReaderCount: z.number().int().nonnegative().nullable().optional(),
+  }),
+);
+/**
+ * 2.5 request. `recordedOperationId` is the `signInRequest.operationId` the
+ * caller has recorded at authn on the person's own session; absent reads as
+ * null. A computer ignores an id that is not this sign-in's own.
+ */
+export const providersAwaitLoginRequestSchema = lazySchema(() =>
+  z.object({
+    ...providersAwaitLoginRequestSchemaV23.shape,
+    recordedOperationId: z.uuid().nullable().optional(),
   }),
 );
 export const providersAwaitLoginRequestSchemaV10 = lazySchema(() =>
@@ -4557,9 +4569,38 @@ export type ProviderLoginProfileOutcome = z.infer<
   typeof providerLoginProfileOutcomeSchema
 >;
 
-export const providersAwaitLoginResponseSchema = lazySchema(() =>
+/** Frozen 2.4 response. */
+export const providersAwaitLoginResponseSchemaV24 = lazySchema(() =>
   providersAwaitLoginResponseSchemaV23.extend({
     profileOutcome: providerLoginProfileOutcomeSchema
+      .nullable()
+      .optional()
+      .catch(null),
+  }),
+);
+
+/**
+ * What a caller records at authn before the computer uploads a completed
+ * sign-in: `operationId` is the offer's transfer id, minted by the computer.
+ * Carried only on an unfinished answer, never with a final `profileOutcome`.
+ * No email, account id, path or token.
+ */
+export const providerLoginSignInRequestSchema = lazySchema(() =>
+  z.object({
+    operationId: z.uuid(),
+    environmentId: z.string(),
+    sourceHostId: z.string(),
+    sourceSharingGeneration: z.number().int().nonnegative(),
+    harnessId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+  }),
+);
+export type ProviderLoginSignInRequest = z.infer<
+  typeof providerLoginSignInRequestSchema
+>;
+
+export const providersAwaitLoginResponseSchema = lazySchema(() =>
+  providersAwaitLoginResponseSchemaV24.extend({
+    signInRequest: providerLoginSignInRequestSchema
       .nullable()
       .optional()
       .catch(null),
