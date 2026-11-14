@@ -13,8 +13,7 @@ export interface ProfileRecordEnablementClient {
   setProfileRecordEnabled(
     environmentId: string,
     harnessId: string,
-    profileId: string,
-    enabled: boolean,
+    change: ProfileRecordEnabledChange,
     callerSignal: AbortSignal | null,
   ): Promise<ProfileRecordEnablementResult>;
 }
@@ -31,6 +30,11 @@ export interface ProfileRecordColorClient {
     change: ProfileRecordColorChange,
     callerSignal: AbortSignal | null,
   ): Promise<ProfileRecordEnablementResult>;
+}
+
+export interface ProfileRecordEnabledChange {
+  readonly profileId: string;
+  readonly enabled: boolean;
 }
 
 const itemsSchema = z.object({

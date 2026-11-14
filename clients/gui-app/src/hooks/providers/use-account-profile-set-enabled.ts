@@ -44,12 +44,12 @@ export function useAccountProfileSetEnabledForClient(
   );
   const list = useCachedProvidersList(client);
   const offersSignIns = listOffersSignIns(list);
+  const profiles = list?.providers.find(
+    (provider) => provider.providerId === providerId,
+  )?.profiles;
   const hasRecord =
-    list?.providers.some((provider) =>
-      provider.profiles.some((profile) =>
-        profileUsesRecord(profile, offersSignIns),
-      ),
-    ) === true;
+    profiles?.some((profile) => profileUsesRecord(profile, offersSignIns)) ===
+    true;
   const environmentId = useProfileRecordEnvironmentId(client, hasRecord);
   const reader = useCachedProviderProfilesReader(pinnedClient, providerId);
   const record = useMutation<void, HostRpcError, SetEnabledRequest>({
@@ -73,8 +73,7 @@ export function useAccountProfileSetEnabledForClient(
       const result = await auth.setProfileRecordEnabled(
         environmentId,
         harnessId,
-        variables.profileId,
-        variables.enabled,
+        { profileId: variables.profileId, enabled: variables.enabled },
         context.abortSignal,
       );
       if (
@@ -93,9 +92,9 @@ export function useAccountProfileSetEnabledForClient(
   });
   return {
     mutate: (variables) => {
-      const profile = list?.providers
-        .find((provider) => provider.providerId === variables.providerId)
-        ?.profiles.find((row) => row.profileId === variables.profileId);
+      const profile = profiles?.find(
+        (row) => row.profileId === variables.profileId,
+      );
       if (profile !== undefined && profileUsesRecord(profile, offersSignIns))
         record.mutate(variables);
       else local.mutate(variables);

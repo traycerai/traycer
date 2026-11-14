@@ -774,8 +774,7 @@ export function ProfileEditDialog(props: {
     props.state.enabled,
     PROVIDER_DISPLAY_NAMES[providerId],
     props.profile,
-    props.profiles,
-    signInOutcomes !== null,
+    { profiles: props.profiles, offersSignIns: signInOutcomes !== null },
   );
   const enablementPending = props.profileEnablementPending(
     profileCommitId(props.profile),

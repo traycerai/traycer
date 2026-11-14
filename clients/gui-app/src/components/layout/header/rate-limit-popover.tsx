@@ -2359,8 +2359,7 @@ function ProfileRateLimitProviderBlock({
                 true,
                 providerDisplayName(providerId),
                 target.profile,
-                profiles,
-                offersSignIns,
+                { profiles, offersSignIns },
               )}
               onSetProfileEnabled={(enabled) =>
                 setProfileEnabled.mutate({
