@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   queryOptions,
   skipToken,
@@ -86,9 +86,11 @@ const NOTHING_TO_FOLLOW: PendingSettingsSave = {
 };
 
 /**
- * Read once per open editor and kept: the revision the person edits over is
- * the one read when the editor opened, so a newer value from another device
- * makes the hold a conflict that waits in the review list.
+ * Read once per editor session and kept: the revision the person edits over
+ * is the one read when the session began, so a newer value from another
+ * device makes the hold a conflict that waits in the review list. A session
+ * begins when the editor opens, and again once a save it sent has settled,
+ * so the next edit is made over what that save left.
  */
 const EDIT_BASE_READ = {
   staleTime: Number.POSITIVE_INFINITY,
@@ -97,13 +99,17 @@ const EDIT_BASE_READ = {
   retry: false,
 } as const;
 
+/** Whose base reads, in which environment and editor session. */
+interface EditBaseScope {
+  readonly source: EnvironmentCloudSource | null;
+  readonly environmentId: string;
+  readonly viewerId: string;
+  readonly session: string;
+}
+
 /** authn's listing of the host a save is made on. */
-function saveHostQuery(
-  source: EnvironmentCloudSource | null,
-  environmentId: string,
-  hostId: string,
-  viewerId: string,
-) {
+function saveHostQuery(base: EditBaseScope, hostId: string) {
+  const { source, environmentId } = base;
   // `source` is the sign-in of the viewer the key already names; adding it
   // would refetch on its identity alone.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
@@ -112,7 +118,8 @@ function saveHostQuery(
     queryKey: environmentQueryKeys.settingsSaveHost(
       environmentId,
       hostId,
-      viewerId,
+      base.viewerId,
+      base.session,
     ),
     queryFn:
       source === null
@@ -122,12 +129,8 @@ function saveHostQuery(
 }
 
 /** authn's rows of `kind`, as the person's edit is made over them. */
-function saveItemsQuery(
-  source: EnvironmentCloudSource | null,
-  environmentId: string,
-  kind: string,
-  viewerId: string,
-) {
+function saveItemsQuery(base: EditBaseScope, kind: string) {
+  const { source, environmentId } = base;
   // `source` is the sign-in of the viewer the key already names.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   return queryOptions({
@@ -135,7 +138,8 @@ function saveItemsQuery(
     queryKey: environmentQueryKeys.settingsSaveItems(
       environmentId,
       kind,
-      viewerId,
+      base.viewerId,
+      base.session,
     ),
     queryFn:
       source === null
@@ -161,6 +165,10 @@ interface SaveScope {
   readonly environmentId: string;
   readonly hostId: string;
   readonly viewerId: string;
+  /** The editor session whose base reads a save is made over. */
+  readonly session: string;
+  /** Begins a new editor session, with fresh base reads. */
+  readonly renewSession: () => void;
 }
 
 /**
@@ -172,16 +180,12 @@ async function followSave(
   save: SettingsSave,
   accountId: string,
 ): Promise<PendingSettingsSave> {
-  const { coordinator, queryClient, source, environmentId, hostId } = scope;
+  const { coordinator, queryClient, environmentId, hostId } = scope;
   const rowsOf = async (kind: string, key: string) =>
-    (
-      await queryClient.fetchQuery(
-        saveItemsQuery(source, environmentId, kind, scope.viewerId),
-      )
-    ).filter((row) => row.key === key);
-  const host = await queryClient.fetchQuery(
-    saveHostQuery(source, environmentId, hostId, scope.viewerId),
-  );
+    (await queryClient.fetchQuery(saveItemsQuery(scope, kind))).filter(
+      (row) => row.key === key,
+    );
+  const host = await queryClient.fetchQuery(saveHostQuery(scope, hostId));
   if (host === null) return NOTHING_TO_FOLLOW;
   const address = settingsSaveBaseAddress(save);
   const baseRows =
@@ -211,7 +215,9 @@ async function followSave(
   return {
     kind: "send",
     answered: () => {
-      void coordinator.settle(ticket, true);
+      // Settling applies the save's hold, which moves the live revision the
+      // next edit is made over.
+      void coordinator.settle(ticket, true).finally(scope.renewSession);
     },
     failed: () => {
       void coordinator.settle(ticket, false);
@@ -221,12 +227,16 @@ async function followSave(
 
 /**
  * Where the saves on `client`'s host are remembered, with authn's rows of
- * `kinds` read when the editor opens; null while that is not known.
+ * `kinds` read when each editor session begins; null while that is not known.
  */
 function useSaveScope(
   client: HostClient<HostRpcRegistry> | null,
   kinds: readonly string[],
 ): SaveScope | null {
+  const [session, setSession] = useState(() => crypto.randomUUID());
+  const renewSession = useCallback(() => {
+    setSession(crypto.randomUUID());
+  }, []);
   const coordinator = useSettingsSaveCoordinator();
   const hostId = useRequesterHostId(client);
   const environmentRead = useEnvironmentHostReadQuery(
@@ -249,27 +259,41 @@ function useSaveScope(
       hostId === null ||
       viewerId.length === 0
         ? null
-        : { coordinator, queryClient, source, environmentId, hostId, viewerId },
-    [coordinator, queryClient, source, environmentId, hostId, viewerId],
+        : {
+            coordinator,
+            queryClient,
+            source,
+            environmentId,
+            hostId,
+            viewerId,
+            session,
+            renewSession,
+          },
+    [
+      coordinator,
+      queryClient,
+      source,
+      environmentId,
+      hostId,
+      viewerId,
+      session,
+      renewSession,
+    ],
   );
 
+  const base: EditBaseScope = {
+    source: scope?.source ?? null,
+    environmentId: environmentId ?? "",
+    viewerId,
+    session,
+  };
   useQuery({
-    ...saveHostQuery(
-      scope?.source ?? null,
-      environmentId ?? "",
-      hostId ?? "",
-      viewerId,
-    ),
+    ...saveHostQuery(base, hostId ?? ""),
     enabled: scope !== null,
   });
   useQueries({
     queries: kinds.map((kind) => ({
-      ...saveItemsQuery(
-        scope?.source ?? null,
-        environmentId ?? "",
-        kind,
-        viewerId,
-      ),
+      ...saveItemsQuery(base, kind),
       enabled: scope !== null,
     })),
   });
@@ -332,12 +356,7 @@ export function useSettingsItemExists(
       if (scope === null) return false;
       try {
         const rows = await scope.queryClient.fetchQuery(
-          saveItemsQuery(
-            scope.source,
-            scope.environmentId,
-            kind,
-            scope.viewerId,
-          ),
+          saveItemsQuery(scope, kind),
         );
         return rows.filter((row) => row.key === key).length === 1;
       } catch {
