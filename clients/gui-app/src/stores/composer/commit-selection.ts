@@ -28,12 +28,24 @@ export function commitSelection(
   // The composer's target host keys every memory read/write below - the
   // toolbar store carries it in its catalog scope, so the picker and the
   // palette funnel through the identical host without threading it.
-  const hostId = store.getState().catalog.hostId;
+  const state = store.getState();
+  const hostId = state.catalog.hostId;
+  // Committing the account already shown (a model pick, a re-click of the
+  // provider) chooses no account: a default account stays a default, and the
+  // pick keeps the Terminal login it stands in for.
+  const accountChanged =
+    harnessId !== state.selection.harnessId ||
+    profileId !== state.selection.profileId;
+  if (accountChanged) state.setAccountChosen(true);
+  const committedProfileId =
+    accountChanged || harnessId !== state.values.selection.harnessId
+      ? profileId
+      : state.values.selection.profileId;
   const memory = useComposerHarnessMemoryStore.getState();
   // Profile memory is independent of model memory. Record the explicit choice
   // immediately so header usage previews can follow it even while the target
   // harness's model catalog is still resolving (and before a settings emit).
-  memory.recordProfileSelection(hostId, harnessId, profileId);
+  memory.recordProfileSelection(hostId, harnessId, committedProfileId);
   const resolved =
     modelSlug === null
       ? memory.resolveHarnessSwitch(hostId, harnessId)
@@ -42,7 +54,11 @@ export function commitSelection(
           ...memory.resolveModelSelection(hostId, harnessId, modelSlug),
         };
   store.getState().applyComposerSelection({
-    selection: { harnessId, profileId, modelSlug: resolved.modelSlug },
+    selection: {
+      harnessId,
+      profileId: committedProfileId,
+      modelSlug: resolved.modelSlug,
+    },
     reasoning: resolved.reasoningEffort ?? "",
     serviceTier: resolved.serviceTier ?? "",
   });
@@ -61,6 +77,8 @@ export function commitProfileSelection(
   store: ComposerToolbarStore,
   profileId: string | null,
 ): void {
+  // An account picked by a person, even the one already shown.
+  store.getState().setAccountChosen(true);
   const state = store.getState();
   const selection = { ...state.selection, profileId };
   useComposerHarnessMemoryStore
