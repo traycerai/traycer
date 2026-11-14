@@ -16,6 +16,7 @@ export function HostUpdateRequiredAction(props: {
   readonly hostId: string;
   readonly detail: SelectionIncompatibility;
   readonly testId: string;
+  readonly buttonVariant?: "default" | "outline";
 }): ReactNode {
   const update = useOlderHostUpdate(props.hostId);
   const localHostId = useReactiveLocalHostId();
@@ -26,7 +27,7 @@ export function HostUpdateRequiredAction(props: {
     <div className="flex w-full flex-col items-start gap-2">
       <Button
         type="button"
-        variant="default"
+        variant={props.buttonVariant ?? "default"}
         size="sm"
         disabled={update.pending}
         onClick={update.update}

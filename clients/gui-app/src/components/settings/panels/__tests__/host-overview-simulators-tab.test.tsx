@@ -216,6 +216,7 @@ function renderTab(): QueryClient {
   render(
     <QueryClientProvider client={queryClient}>
       <HostOverviewSimulatorsTab
+        usable
         client={null}
         hostId={HOST}
         hostName="Studio Mac"

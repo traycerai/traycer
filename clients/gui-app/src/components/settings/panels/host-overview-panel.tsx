@@ -1922,6 +1922,7 @@ export function HostOverviewPanel(props: {
   );
   const simulatorsTab = (
     <HostOverviewSimulatorsTab
+      usable={usable}
       client={client}
       hostId={host.hostId}
       hostName={displayName}
