@@ -39,6 +39,13 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+const sandboxCredentialRefusal = vi.hoisted(() => ({
+  current: null as string | null,
+}));
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => sandboxCredentialRefusal.current,
+}));
+
 import {
   act,
   cleanup,
@@ -68,6 +75,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
 import {
@@ -95,6 +103,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  sandboxCredentialRefusal.current = null;
 });
 
 // A non-login program: its family default is no flags, so switching to it must
@@ -141,6 +150,7 @@ function renderShellPanelOverRpc(options: {
    * distinct from a recorded-but-empty manifest.
    */
   readonly methods?: readonly string[] | null;
+  readonly hostKind?: HostScopeOption["kind"];
 }): ConfigHostFixture & {
   readonly queryClient: QueryClient;
   readonly rerenderPanel: () => void;
@@ -173,6 +183,17 @@ function renderShellPanelOverRpc(options: {
       hostId,
       isLocalMachine,
       connectable: options.connectable ?? true,
+      kind: options.hostKind ?? "personal",
+      sandbox:
+        options.hostKind === "sandbox"
+          ? {
+              state: null,
+              frozen: false,
+              summary: null,
+              teamOwned: false,
+              ownerKind: "unknown",
+            }
+          : null,
     }),
     hostId,
     status: "ready",
@@ -1289,6 +1310,28 @@ describe("<ShellSettingsPanel /> host environment variables", () => {
     expect(set).toHaveBeenCalledWith({
       key: "REPO_URL",
       value: SIGN_IN_URL,
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+  });
+
+  it("saves a credential-shaped variable from a sandbox's Variables and shells settings", async () => {
+    sandboxCredentialRefusal.current = "Sandboxes don't take sign-ins";
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      isLocalMachine: false,
+      hostKind: "sandbox",
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("OPENAI_API_KEY", "OPENAI_API_KEY", "sk-test");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "OPENAI_API_KEY",
+      value: "sk-test",
       executableWriteGrant: null,
     });
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();

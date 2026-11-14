@@ -36,10 +36,17 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostBinding: () => hostBindingMock.current,
-    // Add a secret, which a key-shaped value is refused for, reads the client.
+    // Add a secret reads through the selected host's client.
     useHostClient: () => hostBindingMock.current?.hostClient,
   };
 });
+
+const sandboxCredentialRefusal = vi.hoisted(() => ({
+  current: null as string | null,
+}));
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => sandboxCredentialRefusal.current,
+}));
 
 /** What the pending SET label's host count reads: controlled per test. */
 const hostsRunningPersonalMock = vi.hoisted(
@@ -156,6 +163,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  sandboxCredentialRefusal.current = null;
   vi.clearAllMocks();
   hostsRunningPersonalMock.current = { hosts: [], state: "ready" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -263,7 +271,7 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
   });
 });
 
-describe("ProviderEnvOverridesSection on a host that takes no credentials", () => {
+describe("ProviderEnvOverridesSection on a sandbox host", () => {
   function renderWithOverride(): void {
     render(
       withQueryClient(
@@ -279,6 +287,23 @@ describe("ProviderEnvOverridesSection on a host that takes no credentials", () =
   }
 
   it("keeps the editor live and saves a credential-shaped variable", async () => {
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId: "host-sandbox",
+        isLocalMachine: false,
+        kind: "sandbox",
+        sandbox: {
+          state: null,
+          frozen: false,
+          summary: null,
+          teamOwned: false,
+          ownerKind: "unknown",
+        },
+      }),
+      hostId: "host-sandbox",
+      status: "ready",
+    };
+    sandboxCredentialRefusal.current = "Sandboxes don't take sign-ins";
     renderWithOverride();
 
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
