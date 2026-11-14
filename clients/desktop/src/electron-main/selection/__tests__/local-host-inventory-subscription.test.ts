@@ -1,4 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   HostListItem,
@@ -338,15 +349,29 @@ function buildHarness(): Harness {
 const HOST_1: LocalHostEndpoint = {
   hostId: "host-1",
   websocketUrl: "ws://host-1",
-  version: "1.0.0",
+  version: "2.0.0",
 };
 const HOST_2: LocalHostEndpoint = {
   hostId: "host-2",
   websocketUrl: "ws://host-2",
-  version: "1.0.0",
+  version: "2.0.0",
 };
 
 describe("startLocalHostInventorySubscription", () => {
+  it("does not open an inventory client below the floor and admits the same endpoint at equality", () => {
+    const harness = buildHarness();
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+
+    harness.setLocalHost({ ...HOST_1, version: "1.5.4" });
+    expect(harness.clients).toHaveLength(0);
+
+    harness.setLocalHost(HOST_1);
+    expect(harness.clients).toHaveLength(1);
+    expect(harness.clients[0]?.sessions).toHaveLength(1);
+
+    subscription.dispose();
+  });
+
   it("A1: a host answering unsupported opens no session and never arms push", () => {
     const harness = buildHarness();
     harness.setLocalHost(HOST_1);

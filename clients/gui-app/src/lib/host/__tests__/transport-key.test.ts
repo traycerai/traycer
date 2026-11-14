@@ -1,4 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -31,6 +42,7 @@ import {
   hostTransportKey,
   hostTransportKeyFor,
   dialableHostEndpoint,
+  dialableHostEndpointFor,
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
 
@@ -44,7 +56,7 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
     label: "Host A",
     kind: "local",
     websocketUrl: "ws://127.0.0.1:9/stream",
-    version: "1.2.3",
+    version: "2.0.0",
     transportDialability: "dialable",
     ...overrides,
   };
@@ -180,6 +192,38 @@ describe("the transport's refusal gate", () => {
     const dead = remoteWithConnectivity("offline");
     expect(hostTransportKey(dead)).toBeNull();
     expect(dialableHostEndpoint(dead)).toBeNull();
+  });
+});
+
+describe("minimum-version transport gate", () => {
+  it("uses the local entry version and remote appVersion for both key and endpoint", () => {
+    const localAtFloor = entry({ version: "2.0.0" });
+    const localBelowFloor = entry({ version: "1.5.4" });
+    const remoteAtFloor = remoteEntry({
+      version: "9.9.9",
+      remoteStatus: {
+        connectivity: "connectable",
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "2.0.0",
+        lastSeenAt: null,
+      },
+    });
+    const remoteBelowFloor = remoteEntry({
+      ...remoteAtFloor,
+      remoteStatus: { ...remoteAtFloor.remoteStatus, appVersion: "1.5.4" },
+    });
+
+    expect(hostTransportKeyFor(localAtFloor, false)).not.toBeNull();
+    expect(dialableHostEndpointFor(localAtFloor, false)).not.toBeNull();
+    expect(hostTransportKeyFor(localBelowFloor, false)).toBeNull();
+    expect(dialableHostEndpointFor(localBelowFloor, false)).toBeNull();
+
+    expect(hostTransportKeyFor(remoteAtFloor, false)).not.toBeNull();
+    expect(dialableHostEndpointFor(remoteAtFloor, false)).not.toBeNull();
+    expect(hostTransportKeyFor(remoteBelowFloor, false)).toBeNull();
+    expect(dialableHostEndpointFor(remoteBelowFloor, false)).toBeNull();
   });
 });
 

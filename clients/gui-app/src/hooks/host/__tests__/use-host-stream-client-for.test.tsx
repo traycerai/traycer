@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -14,6 +25,7 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { remoteEntry as routingRemoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   RemoteStreamClient,
   type CreateRemoteTransportOptions,
@@ -104,7 +116,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // The SPINE `useHostClient` hands back in this suite - never bound to any one
 // host (redesign P4.2 deleted the active slot `.bind()` used to fill).
 const knownHostEntries = new Map<string, HostDirectoryEntry>([
-  [mockLocalHostEntry.hostId, mockLocalHostEntry],
+  [mockLocalHostEntry.hostId, { ...mockLocalHostEntry, version: "2.0.0" }],
 ]);
 
 function buildGlobalClient(withContext: boolean): HostClient<HostRpcRegistry> {
@@ -133,6 +145,7 @@ const TARGET_B: HostDirectoryEntry = {
   ...mockLocalHostEntry,
   hostId: "host-b",
   websocketUrl: "ws://127.0.0.1:59999/rpc",
+  version: "2.0.0",
 };
 
 interface ControllableSession extends IRemoteSession<
@@ -394,6 +407,87 @@ describe("useHostStreamClientFor", () => {
     expect(result.current).not.toBe(first);
   });
 
+  it("keeps an equal-floor cache hit and releases its owner when the row drops below the floor", () => {
+    const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+    globalClientRef.value = buildGlobalClient(true);
+    const { result, rerender } = renderHook(
+      ({ target }) => useHostStreamClientFor(target, null),
+      { initialProps: { target: TARGET_B } },
+    );
+    const atFloorClient = result.current;
+    expect(atFloorClient).toBeInstanceOf(WsStreamClient);
+
+    rerender({ target: { ...TARGET_B, label: "Same endpoint" } });
+    expect(result.current).toBe(atFloorClient);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    rerender({ target: { ...TARGET_B, version: "1.5.4" } });
+    expect(result.current).toBeNull();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(closeSpy.mock.contexts[0]).toBe(atFloorClient);
+  });
+
+  it("shares an at-floor remote cache hit and releases each owner when appVersion drops below the floor", () => {
+    const session = controllableSession();
+    mocks.createRemoteHostTransport.mockImplementation(() => ({
+      session,
+      streamClient: new RemoteStreamClient(session),
+    }));
+    globalClientRef.value = buildGlobalClient(true);
+    const remoteBase = routingRemoteEntry("remote-floor-cache", null);
+    const targetAtFloor: RemoteHostDirectoryEntry = {
+      ...remoteBase,
+      version: "9.9.9",
+      remoteStatus: {
+        ...remoteBase.remoteStatus,
+        appVersion: "2.0.0",
+      },
+    };
+    const firstOwner = renderHook(
+      ({ target }) => useHostStreamClientFor(target, null),
+      { initialProps: { target: targetAtFloor } },
+    );
+    const sharedClient = firstOwner.result.current;
+    expect(sharedClient).toBeInstanceOf(RemoteStreamClient);
+
+    const secondOwner = renderHook(
+      ({ target }) => useHostStreamClientFor(target, null),
+      { initialProps: { target: targetAtFloor } },
+    );
+    expect(secondOwner.result.current).toBe(sharedClient);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    const stillAtFloor: RemoteHostDirectoryEntry = {
+      ...targetAtFloor,
+      remoteStatus: {
+        ...targetAtFloor.remoteStatus,
+        appVersion: "2.1.0",
+      },
+    };
+    firstOwner.rerender({ target: stillAtFloor });
+    secondOwner.rerender({ target: stillAtFloor });
+    expect(firstOwner.result.current).toBe(sharedClient);
+    expect(secondOwner.result.current).toBe(sharedClient);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    expect(session.closeCalls).toBe(0);
+
+    const belowFloor: RemoteHostDirectoryEntry = {
+      ...stillAtFloor,
+      remoteStatus: {
+        ...stillAtFloor.remoteStatus,
+        appVersion: "1.5.4",
+      },
+    };
+    firstOwner.rerender({ target: belowFloor });
+    expect(firstOwner.result.current).toBeNull();
+    expect(session.closeCalls).toBe(0);
+
+    secondOwner.rerender({ target: belowFloor });
+    expect(secondOwner.result.current).toBeNull();
+    expect(session.closeCalls).toBe(1);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+  });
+
   it("does not rebuild when the app-wide requester is re-minted (an effective-host move)", () => {
     // `useHostClient()` returns a requester pinned to the effective host and
     // re-minted when that host moves. This hook needs only the transport
@@ -553,7 +647,10 @@ describe("useHostStreamClientFor", () => {
       .setUnverifiedSession(profile, { userId: "u1", username: "U" });
     try {
       const { result } = renderHook(() =>
-        useHostStreamClientFor(mockLocalHostEntry, null),
+        useHostStreamClientFor(
+          knownHostEntries.get(mockLocalHostEntry.hostId) ?? null,
+          null,
+        ),
       );
       const first = result.current;
       expect(first).toBeInstanceOf(WsStreamClient);

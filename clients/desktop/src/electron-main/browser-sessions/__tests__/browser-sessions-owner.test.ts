@@ -1,4 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 import type {
   BrowserPrimaryProfileDelta,
   BrowserSessionsServerFrame,
@@ -1142,6 +1153,75 @@ describe("the browser.sessions jar plane lives in main", () => {
     session.emit(observedProfileFrame(), null);
     expect(harness.jar.observed).toHaveLength(1);
     expect(listRegisteredHosts).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps an equal-floor browser owner and retires it after only appVersion drops below the floor", async () => {
+    const hostId = "remote-floor-host";
+    let appVersion = "2.0.0";
+    const baseResult = hostListResultForOwner(hostId, PERSONAL_OWNER);
+    if (baseResult.kind !== "ok") {
+      throw new Error("expected the owner fixture to return a host list");
+    }
+    const baseRow = baseResult.response.hosts[0];
+    if (baseRow === undefined) throw new Error("owner fixture row missing");
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string): Promise<HostListFetchResult> =>
+        Promise.resolve({
+          kind: "ok",
+          response: {
+            hosts: [
+              {
+                ...baseRow,
+                status: { ...baseRow.status, appVersion },
+              },
+            ],
+          },
+        }),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "test-bearer",
+      listRegisteredHosts,
+      now: () => 1_000_000,
+    });
+    await directory.resolve(hostId);
+
+    registry.dispose();
+    registry = new BrowserSessionsRegistry({ ...harness.deps, directory });
+    const clientPromise = harness.nextClient();
+    registry.open("window-floor", { ...OPEN_REQUEST, hostId });
+    const client = await clientPromise;
+    const session = client.sessions[0];
+    if (session === undefined) throw new Error("no browser stream opened");
+    session.emitStatus("open");
+    session.emit(snapshotFrame(), null);
+
+    directory.invalidate(hostId);
+    await directory.resolve(hostId);
+    expect(harness.closedTransports).toEqual([]);
+    expect(client.isClosed()).toBe(false);
+
+    appVersion = "1.5.4";
+    directory.invalidate(hostId);
+    await directory.resolve(hostId);
+
+    expect(harness.closedTransports).toEqual([0]);
+
+    const priorFailures = lifecycles(harness.emitted).filter(
+      (lifecycle) => lifecycle === "failed",
+    ).length;
+    registry.open("window-floor", { ...OPEN_REQUEST, hostId });
+    await vi.waitFor(() => {
+      expect(
+        lifecycles(harness.emitted).filter(
+          (lifecycle) => lifecycle === "failed",
+        ).length,
+      ).toBeGreaterThan(priorFailures);
+    });
+    expect(harness.clients).toHaveLength(1);
+    expect(harness.closedTransports).toEqual([0]);
   });
 
   it("reopens after same-user bearer rotation clears the trusted owner cache", async () => {

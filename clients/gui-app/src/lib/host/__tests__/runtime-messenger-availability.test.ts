@@ -17,6 +17,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   HostRequestAbortedError,
@@ -43,6 +54,7 @@ import {
   buildRuntimeHostMessenger,
   type RuntimeHostMessengerBinding,
 } from "../host-messenger";
+import { HostBelowMinimumError } from "../host-below-minimum-error";
 
 // Only the network boundary is replaced. Every other export of this barrel
 // stays REAL, matching `stream-runtime.test.tsx`.
@@ -221,7 +233,7 @@ const localEntry: HostDirectoryEntry = {
   label: "This machine",
   kind: "local",
   websocketUrl: "ws://127.0.0.1:1/",
-  version: "1.2.3",
+  version: "2.0.0",
   transportDialability: "dialable",
 };
 
@@ -251,12 +263,20 @@ function harness(): {
   ) => Promise<unknown>;
   requestLocal: () => void;
   requestLocalWithSignal: (abortSignal: AbortSignal) => Promise<unknown>;
+  requestLocalWithTimeoutAndSignal: (
+    abortSignal: AbortSignal,
+  ) => Promise<unknown>;
+  setRemoteEntry: (entry: RemoteHostDirectoryEntry) => void;
+  setLocalEntry: (entry: HostDirectoryEntry) => void;
+  hostListChanged: () => void;
   reset: () => void;
   dispose: () => void;
 } {
   const firstSession = controllableSession();
   const sessions: ControllableSession[] = [firstSession];
   let cachedSession: ControllableSession | null = firstSession;
+  let currentRemoteEntry = remoteEntry;
+  let currentLocalEntry = localEntry;
   mocks.createRemoteHostTransport.mockImplementation(() => {
     if (cachedSession === null || cachedSession.isClosed()) {
       cachedSession = controllableSession();
@@ -280,7 +300,7 @@ function harness(): {
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     resolveTarget: (hostId) =>
-      hostId === REMOTE_HOST_ID ? remoteEntry : localEntry,
+      hostId === REMOTE_HOST_ID ? currentRemoteEntry : currentLocalEntry,
     auth: null,
     authnBaseUrl: "https://authn.invalid",
     hostTokens: inertHostTokenSource(),
@@ -352,6 +372,16 @@ function harness(): {
           abortSignal,
         },
       }),
+    requestLocalWithTimeoutAndSignal: (abortSignal: AbortSignal) =>
+      binding.messenger.requestWithResponseTimeout("host.status", {}, 5_000, {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: {
+          ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
+          abortSignal,
+        },
+      }),
     requestLocalWithSignal: (abortSignal: AbortSignal) =>
       binding.messenger.request(
         "host.status",
@@ -366,6 +396,13 @@ function harness(): {
           },
         },
       ),
+    setRemoteEntry: (entry) => {
+      currentRemoteEntry = entry;
+    },
+    setLocalEntry: (entry) => {
+      currentLocalEntry = entry;
+    },
+    hostListChanged: () => binding.hostListChanged(),
     reset: () => {
       // Auth reset changes the cache identity even if the old shared session
       // remains warm, so the next transport construction cannot adopt it.
@@ -394,6 +431,7 @@ function harness(): {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("RuntimeHostMessenger availability forwarding", () => {
@@ -1550,6 +1588,117 @@ describe("a SANDBOX_FROZEN verdict ends when the list shows the sandbox thawed o
     expect(rig.dials()).toBe(1);
 
     rig.binding.dispose();
+  });
+});
+
+describe("RuntimeHostMessenger minimum-version gates", () => {
+  it("preflights both request entry points against the remote app version before transport creation", async () => {
+    const h = harness();
+    h.setRemoteEntry({
+      ...remoteEntry,
+      version: "9.9.9",
+      remoteStatus: { ...remoteEntry.remoteStatus, appVersion: "1.5.4" },
+    });
+
+    await expect(h.requestRemoteRaw()).rejects.toBeInstanceOf(
+      HostBelowMinimumError,
+    );
+    await expect(
+      h.requestRemoteWithTimeoutAndSignal(new AbortController().signal),
+    ).rejects.toBeInstanceOf(HostBelowMinimumError);
+
+    expect(mocks.createRemoteHostTransport).not.toHaveBeenCalled();
+    h.dispose();
+  });
+
+  it("preflights both local request entry points before constructing a local client", async () => {
+    const h = harness();
+    const localSocketConstructor = vi.fn();
+    vi.stubGlobal("WebSocket", localSocketConstructor);
+    h.setLocalEntry({ ...localEntry, version: "1.5.4" });
+
+    await expect(
+      h.requestLocalWithSignal(new AbortController().signal),
+    ).rejects.toBeInstanceOf(HostBelowMinimumError);
+    await expect(
+      h.requestLocalWithTimeoutAndSignal(new AbortController().signal),
+    ).rejects.toBeInstanceOf(HostBelowMinimumError);
+
+    expect(localSocketConstructor).not.toHaveBeenCalled();
+    h.dispose();
+  });
+
+  it("releases a held remote binding when only appVersion drops below the floor and admits equality", async () => {
+    const h = harness();
+    const atFloor: RemoteHostDirectoryEntry = {
+      ...remoteEntry,
+      version: "9.9.9",
+      remoteStatus: { ...remoteEntry.remoteStatus, appVersion: "2.0.0" },
+    };
+    h.setRemoteEntry(atFloor);
+    await h.requestRemoteRaw();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    expect(h.session.closeCalls).toBe(0);
+
+    h.hostListChanged();
+    expect(h.session.closeCalls).toBe(0);
+
+    h.setRemoteEntry({
+      ...atFloor,
+      remoteStatus: { ...atFloor.remoteStatus, appVersion: "1.5.4" },
+    });
+    h.hostListChanged();
+    expect(h.session.closeCalls).toBe(1);
+
+    await expect(h.requestRemoteRaw()).rejects.toBeInstanceOf(
+      HostBelowMinimumError,
+    );
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    h.setRemoteEntry(atFloor);
+    h.hostListChanged();
+    expect(h.recovered).toContain(REMOTE_HOST_ID);
+    h.dispose();
+  });
+
+  it("keeps the malformed-entry RPC error at the floor when a remote row cannot form a transport", async () => {
+    const h = harness();
+    h.setRemoteEntry({
+      ...remoteEntry,
+      version: "9.9.9",
+      websocketUrl: null,
+      remoteStatus: { ...remoteEntry.remoteStatus, appVersion: "2.0.0" },
+    });
+    const expectedMessage = `Remote host '${REMOTE_HOST_ID}' has no usable remote transport right now (malformed directory entry, or no presentable credential mid auth transition)`;
+
+    await expect(h.requestRemoteRaw()).rejects.toMatchObject({
+      name: "HostRpcError",
+      code: "RPC_ERROR",
+      message: expectedMessage,
+      requestId: "req-1",
+      method: "host.status",
+      fatalDetails: null,
+      holders: null,
+      holdersRevision: null,
+      staleWrite: null,
+      doorRefusal: null,
+    });
+    await expect(
+      h.requestRemoteWithTimeoutAndSignal(new AbortController().signal),
+    ).rejects.toMatchObject({
+      name: "HostRpcError",
+      code: "RPC_ERROR",
+      message: expectedMessage,
+      requestId: "req-1",
+      method: "host.status",
+      fatalDetails: null,
+      holders: null,
+      holdersRevision: null,
+      staleWrite: null,
+      doorRefusal: null,
+    });
+    expect(mocks.createRemoteHostTransport).not.toHaveBeenCalled();
+    h.dispose();
   });
 });
 

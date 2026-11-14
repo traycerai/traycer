@@ -1,4 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
@@ -21,6 +32,7 @@ import { createLocalHostInventoryStreamClient } from "../local-host-inventory-su
 
 const SIGN_IN_TOKEN = "main-sign-in-token";
 const HOST_TOKEN = "main-host-token";
+const LOCAL_HOST_AT_FLOOR = { ...mockLocalHostEntry, version: "2.0.0" };
 
 describe("desktop main local streams open with host tokens", () => {
   beforeEach(() => {
@@ -51,13 +63,13 @@ describe("desktop main local streams open with host tokens", () => {
       expiresAtMs: Date.now() + 60_000,
     });
 
-    const websocketUrl = mockLocalHostEntry.websocketUrl;
+    const websocketUrl = LOCAL_HOST_AT_FLOOR.websocketUrl;
     if (websocketUrl === null)
       throw new Error("the mock local host has no websocket URL");
     const endpoint = {
-      hostId: mockLocalHostEntry.hostId,
+      hostId: LOCAL_HOST_AT_FLOOR.hostId,
       websocketUrl,
-      version: mockLocalHostEntry.version,
+      version: LOCAL_HOST_AT_FLOOR.version,
     };
     const localHost = () => endpoint;
     const inventoryClient = createLocalHostInventoryStreamClient({
@@ -86,7 +98,7 @@ describe("desktop main local streams open with host tokens", () => {
     await settle();
 
     const browserTransport = openBrowserSessionsTransport(
-      mockLocalHostEntry,
+      LOCAL_HOST_AT_FLOOR,
       USER_A,
       {
         authnBaseUrl: () => "https://authn.test",
@@ -125,5 +137,48 @@ describe("desktop main local streams open with host tokens", () => {
     browserTransport.close();
     inventory.close();
     inventoryWsStreamClient.close("test complete");
+  });
+
+  it("does not construct either local stream transport below the minimum", async () => {
+    const provider = newProvider();
+    signIn(provider, USER_A, SIGN_IN_TOKEN);
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const websocketUrl = LOCAL_HOST_AT_FLOOR.websocketUrl;
+    if (websocketUrl === null)
+      throw new Error("the mock local host has no websocket URL");
+    const belowFloor = {
+      ...LOCAL_HOST_AT_FLOOR,
+      websocketUrl,
+      version: "1.5.4",
+    };
+    const endpoint = {
+      hostId: belowFloor.hostId,
+      websocketUrl: belowFloor.websocketUrl,
+      version: belowFloor.version,
+    };
+    const inventoryFactory = createLocalHostInventoryStreamClient({
+      hostTokens,
+      localHost: () => endpoint,
+      bearer: liveBearer(provider),
+      appVersion: "1.0.0-test",
+    });
+
+    expect(inventoryFactory(endpoint, USER_A)).toBeNull();
+    expect(
+      openBrowserSessionsTransport(belowFloor, USER_A, {
+        authnBaseUrl: () => "https://authn.test",
+        bearer: liveBearer(provider),
+        cloudAuthorized: () => true,
+        endpoint: () => endpoint,
+        appVersion: "1.0.0-test",
+        hostTokens,
+      }),
+    ).toBeNull();
+    expect(FakeNativeWebSocket.instances).toHaveLength(0);
   });
 });
