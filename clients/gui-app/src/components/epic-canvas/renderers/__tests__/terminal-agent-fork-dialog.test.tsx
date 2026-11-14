@@ -6,8 +6,9 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useState } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
@@ -23,6 +24,27 @@ import {
 import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { modLabel } from "@/lib/keybindings/platform";
 import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { CreateTuiAgentInput } from "@/hooks/agent/use-create-tui-agent";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+
+interface PrepareMutationHandle {
+  readonly isPending: boolean;
+  readonly mutateAsync: (
+    input: RequestOfMethod<HostRpcRegistry, "agent.tui.prepareLaunch">,
+  ) => Promise<ResponseOfMethod<HostRpcRegistry, "agent.tui.prepareLaunch">>;
+}
+
+const prepareMutationContext = createContext<PrepareMutationHandle | null>(
+  null,
+);
 
 const dialogMocks = vi.hoisted(() => ({
   create: vi.fn<(input: TerminalForkCreateInput) => Promise<string | null>>(),
@@ -49,10 +71,31 @@ vi.mock("@/hooks/agent/use-create-tui-agent", async (importOriginal) => {
     await importOriginal<typeof import("@/hooks/agent/use-create-tui-agent")>();
   return {
     ...actual,
-    useCreateTuiAgentForClient: () => ({
-      create: dialogMocks.create,
-      isPending: false,
-    }),
+    useCreateTuiAgentForClient: () => {
+      const prepare = useContext(prepareMutationContext);
+      if (prepare === null)
+        return { create: dialogMocks.create, isPending: false };
+      return {
+        create: async (input: CreateTuiAgentInput): Promise<string | null> => {
+          await prepare.mutateAsync({
+            harnessId: input.harnessId,
+            epicId: input.epicId,
+            model: input.model,
+            reasoningEffort: input.reasoningEffort,
+            agentMode: "regular",
+            tuiAgentId: "fork-agent-test",
+            harnessSessionId: null,
+            terminalAgentArgs: input.terminalAgentArgs,
+            workspaceMode: input.workspaceMode,
+            profileId: input.profileId,
+            forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
+            forkSourceTuiAgentId: input.sourceTuiAgentId,
+          });
+          return null;
+        },
+        isPending: prepare.isPending,
+      };
+    },
   };
 });
 
@@ -71,9 +114,17 @@ vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
 }));
 
 vi.mock("sonner", () => ({
-  toast: (message: string) => {
-    dialogMocks.toast(message);
-  },
+  toast: Object.assign(
+    (message: string) => {
+      dialogMocks.toast(message);
+    },
+    {
+      error: (message: string) => dialogMocks.toast(message),
+      warning: (message: string) => dialogMocks.toast(message),
+      success: (message: string) => dialogMocks.toast(message),
+      dismiss: () => undefined,
+    },
+  ),
 }));
 
 // The dialog validates its seeded profileId against live `providers.list`
@@ -83,16 +134,21 @@ vi.mock("sonner", () => ({
 // and `dialogMocks.providersByClient` has no entry for `null` unless a test
 // seeds one - so `useHostQuery` returns no data by default and every seed
 // holds its profileId verbatim (no profiles to judge against).
-vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: (args: {
-    readonly client: unknown;
-    readonly options: { readonly enabled: boolean } | null;
-  }) => {
-    if (!(args.options?.enabled ?? false)) return { data: undefined };
-    const providers = dialogMocks.providersByClient.get(args.client);
-    return { data: providers === undefined ? undefined : { providers } };
-  },
-}));
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/host/use-host-query")>();
+  return {
+    ...actual,
+    useHostQuery: (args: {
+      readonly client: unknown;
+      readonly options: { readonly enabled: boolean } | null;
+    }) => {
+      if (!(args.options?.enabled ?? false)) return { data: undefined };
+      const providers = dialogMocks.providersByClient.get(args.client);
+      return { data: providers === undefined ? undefined : { providers } };
+    },
+  };
+});
 
 // Stub picker that still exposes the toolbar store so continue-mode title
 // tests can flip the selected profile without pulling in the full picker.
@@ -207,8 +263,70 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
+import { hostRpcRegistry } from "@/lib/host";
+import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { TerminalAgentForkDialog } from "../terminal-agent-fork-dialog";
+
+interface ForkHostFixture {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+}
+
+function buildLateGuardClient(message: string): ForkHostFixture {
+  const error = new HostRpcError({
+    code: "removed-by-person",
+    message,
+    requestId: "req-1",
+    method: "agent.tui.prepareLaunch",
+    fatalDetails: null,
+  });
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-1",
+    handlers: {
+      "agent.tui.prepareLaunch": () => {
+        throw error;
+      },
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return {
+    client: spine.createRequester(mockLocalHostEntry),
+    messenger,
+  };
+}
+
+function RealPrepareMutationProvider(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly children: ReactNode;
+}): ReactNode {
+  const prepare = useAgentStartTerminalSession(props.client);
+  return (
+    <prepareMutationContext.Provider value={prepare}>
+      {props.children}
+    </prepareMutationContext.Provider>
+  );
+}
+
+function withQueryClient(node: ReactNode): ReactNode {
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+  return <QueryClientProvider client={client}>{node}</QueryClientProvider>;
+}
 
 describe("<TerminalAgentForkDialog />", () => {
   afterEach(() => {
@@ -796,6 +914,126 @@ describe("<TerminalAgentForkDialog />", () => {
       );
     });
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("shows Was removed in the prepare toast and the late-fork alert, with the retained-worktree note", async () => {
+    const note =
+      "If a worktree or workspace folder was already prepared for this launch attempt, it has not been removed - review it from workspace/worktree management if unused.";
+    const fixture = buildLateGuardClient(
+      `No profile "work" is registered for provider "claude-code". ${note}`,
+    );
+    render(
+      withQueryClient(
+        <RealPrepareMutationProvider client={fixture.client}>
+          <TerminalAgentForkDialog
+            open
+            target={{
+              sourceAgent: sourceAgent(),
+              workspaceSeed: emptyWorkspaceSeed(),
+              intent: "continue",
+            }}
+            epicId="epic-test"
+            tabId="tab-test"
+            hostId="host-test"
+            hostClient={fixture.client}
+            onOpenChange={() => undefined}
+          />
+        </RealPrepareMutationProvider>,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain("Was removed");
+      expect(screen.getByText(note)).toBeDefined();
+      expect(dialogMocks.toast).toHaveBeenCalledWith("Was removed");
+    });
+    expect(fixture.messenger.calls.map((call) => call.method)).toContain(
+      "agent.tui.prepareLaunch",
+    );
+    const dialogText = document.body.textContent;
+    expect(dialogText).not.toContain("No profile");
+    expect(dialogText).not.toContain("Can't continue this session");
+    expect(dialogText).toContain(note);
+  });
+
+  it("omits the note and computer profile sentence when a removed-profile refusal has no disclosure", async () => {
+    dialogMocks.create.mockRejectedValueOnce(
+      new HostRpcError({
+        code: "removed-by-person",
+        message: 'No profile "work" is registered for provider "claude-code".',
+        requestId: "req-test",
+        method: "agent.tui.prepareLaunch",
+        fatalDetails: null,
+      }),
+    );
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "continue",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain("Was removed");
+    });
+    const dialogText = document.body.textContent;
+    expect(dialogText).not.toContain("No profile");
+    expect(dialogText).not.toContain("Can't continue this session");
+    expect(dialogText).not.toContain(
+      "If a worktree or workspace folder was already prepared",
+    );
+  });
+
+  it("keeps the existing alert and full note for RPC_ERROR with the same late-guard message", async () => {
+    const message =
+      'No profile "work" is registered for provider "claude-code". If a worktree or workspace folder was already prepared for this launch attempt, it has not been removed - review it from workspace/worktree management if unused.';
+    dialogMocks.create.mockRejectedValueOnce(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message,
+        requestId: "req-test",
+        method: "agent.tui.prepareLaunch",
+        fatalDetails: null,
+      }),
+    );
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: emptyWorkspaceSeed(),
+          intent: "continue",
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toBe(
+        'Can\'t continue this session under the default profile. That profile isn\'t available right now - it may be signed out, still finishing setup, or no longer supported. Choose a different profile, or start a new terminal agent.No profile "work" is registered for provider "claude-code". If a worktree or workspace folder was already prepared for this launch attempt, it has not been removed - review it from workspace/worktree management if unused.',
+      );
+      expect(screen.getByText(message)).toBeDefined();
+    });
   });
 
   it("updates the live default title when the picker profile changes, and freezes after typing", async () => {
