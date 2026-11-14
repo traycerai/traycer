@@ -10,11 +10,11 @@ import { getClientAppVersion } from "@/lib/app-version";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { usePressStartActivation } from "@/lib/host/press-start-activation";
+import { doorCoverCopy } from "@/lib/host/door-cover-copy";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   hostUpdateSkew,
-  isDoorCoverVariant,
-  type DoorCoverKind,
+  isDoorStateCoverVariant,
   type WindowNarrationCause,
   type WindowNarrationVariant,
 } from "@/lib/host/window-narration";
@@ -567,41 +567,6 @@ interface WindowHostModalCopy {
   } | null;
 }
 
-const DOOR_COVER_COPY: Readonly<
-  Record<
-    DoorCoverKind,
-    { readonly title: string; readonly description: string }
-  >
-> = {
-  "token-unavailable": {
-    title: "We can't confirm access to this computer right now",
-    description: "We'll try again. Your draft is saved.",
-  },
-  "keys-unavailable": {
-    title: "This computer needs to connect once before it can verify access",
-    description: "Check its connection, then retry.",
-  },
-  "clock-skew": {
-    title: "This computer's date or time appears incorrect",
-    description: "Enable automatic date and time on that computer, then retry.",
-  },
-  "token-expired": {
-    title: "Access needs to be renewed before you can reconnect",
-    description:
-      "Connect to the internet and retry. Work already started remains on this computer.",
-  },
-  "enrolment-broken": {
-    title: "This computer's connection to the team needs repair",
-    description:
-      "Ask a team administrator to restore it. Work is still stored here.",
-  },
-  "membership-removed": {
-    title: "You no longer have access to this team's computer",
-    description:
-      "Ask a team administrator if this is unexpected. Work you started continues for the team.",
-  },
-};
-
 /**
  * One wording per state, and the report family chosen with it.
  *
@@ -623,27 +588,8 @@ function modalCopy(
   variant: WindowNarrationVariant,
   cause: WindowNarrationCause,
 ): WindowHostModalCopy {
-  if (variant.kind === "team-membership-required") {
-    return {
-      title: "This computer belongs to a team",
-      description:
-        "This account is not a member. Switch accounts to use Traycer here.",
-      report: {
-        title: "Team membership required",
-        message: "This account cannot use this team's computer.",
-        code: "TEAM_MEMBERSHIP_REQUIRED",
-      },
-    };
-  }
-  if (variant.kind === "not-admitted") {
-    return {
-      title: "This account cannot access this computer",
-      description: "Switch accounts to use it.",
-      report: null,
-    };
-  }
-  if (isDoorCoverVariant(variant)) {
-    return { ...DOOR_COVER_COPY[variant.kind], report: null };
+  if (isDoorStateCoverVariant(variant)) {
+    return { ...doorCoverCopy(variant), report: null };
   }
   if (variant.kind === "update-client") {
     const { requirement } = variant;
