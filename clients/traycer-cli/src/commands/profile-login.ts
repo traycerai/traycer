@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+  providerLoginProfileOutcomeSchema,
   type ProviderCliState,
   type ProviderId,
+  type ProviderLoginProfileOutcome,
   type ProviderLoginRefusal,
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -255,8 +257,7 @@ export function buildProfileLoginCommand(
             ...typed,
             profileId: isAmbientProfileId(row.profileId) ? null : row.profileId,
           };
-    const outcome = await runLogin(ctx, io, providerId, target, state);
-    return resultOf(providerId, outcome);
+    return await runLogin(ctx, io, providerId, target, state);
   };
 }
 
@@ -342,8 +343,8 @@ async function runLogin(
   io: ProfileLoginIo,
   providerId: ProviderId,
   target: ResolvedTarget,
-  state: ProviderCliState,
-): Promise<LoginOutcome> {
+  state: ProviderListState,
+): Promise<CommandResult> {
   const holderId = io.newHolderId();
   const abort = new AbortController();
   // The first Ctrl+C cancels this sign-in; it also stops listening, so a
@@ -400,7 +401,7 @@ async function runLogin(
     const holdsLogin = answer.started || answer.pending === "starting";
     if (abort.signal.aborted) {
       if (holdsLogin) await release();
-      return { status: "cancelled" };
+      return resultOf(providerId, { status: "cancelled" });
     }
     const notStarted = notStartedMessage(
       answer,
@@ -408,7 +409,10 @@ async function runLogin(
     );
     if (notStarted !== null) {
       if (holdsLogin) await release();
-      return { status: "not-started", message: notStarted };
+      return resultOf(providerId, {
+        status: "not-started",
+        message: notStarted,
+      });
     }
     const acceptsPastedCode = declares(state.loginCapability?.codePaste);
     const stopPaste = acceptsPastedCode
@@ -443,13 +447,23 @@ async function runLogin(
       });
       if (result === null) {
         await release();
-        return { status: "cancelled" };
+        return resultOf(providerId, { status: "cancelled" });
       }
       // The sign-in has ended; what is left is reading the row back and
       // naming a new profile. A Ctrl+C from here ends the process at once
       // rather than being taken as cancelling a sign-in that already happened.
       stopListening();
-      return await outcomeOf(providerId, target, heldProfileId, result);
+      const profileResult = await profileResultOf(
+        providerId,
+        target,
+        state,
+        result,
+      );
+      if (profileResult !== null) return profileResult;
+      return resultOf(
+        providerId,
+        await outcomeOf(providerId, target, heldProfileId, result),
+      );
     } finally {
       stopKeepalive();
     }
@@ -466,7 +480,7 @@ async function runLogin(
     // a Ctrl+C pressed during it must not turn a real error into "cancelled".
     const interrupted = abort.signal.aborted;
     await release();
-    if (interrupted) return { status: "cancelled" };
+    if (interrupted) return resultOf(providerId, { status: "cancelled" });
     throw error;
   } finally {
     stopListening();
@@ -702,6 +716,8 @@ async function awaitUntilSettled(
       throw error;
     }
     if (signal.aborted) return null;
+    if (readUntargetedProfileOutcome(result.profileOutcome) !== null)
+      return result;
     // Not settled only while neither ambient source has answered: a verdict
     // on the ambient row counts even while the provider's summary lags.
     const pending =
@@ -714,6 +730,89 @@ async function awaitUntilSettled(
     if (!pending || repolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) return result;
     await io.wait(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS, signal);
     if (signal.aborted) return null;
+  }
+}
+
+type UntargetedProfileOutcome = Exclude<
+  ProviderLoginProfileOutcome,
+  { kind: "target-refused" | "staged-for-leave" }
+>;
+
+function readUntargetedProfileOutcome(
+  value: unknown,
+): UntargetedProfileOutcome | null {
+  const parsed = providerLoginProfileOutcomeSchema.safeParse(value);
+  if (!parsed.success) return null;
+  switch (parsed.data.kind) {
+    case "target-refused":
+    case "staged-for-leave":
+      return null;
+    default:
+      return parsed.data;
+  }
+}
+
+function waitingForProfileResult(providerId: ProviderId): CommandResult {
+  return {
+    data: { providerId, status: "waiting-for-profile" },
+    human: "Waiting for Traycer. Your sign-in is complete.",
+    exitCode: 0,
+  };
+}
+
+async function profileResultOf(
+  providerId: ProviderId,
+  target: ResolvedTarget,
+  state: ProviderListState,
+  result: AwaitLoginResult,
+): Promise<CommandResult | null> {
+  const outcome = readUntargetedProfileOutcome(result.profileOutcome);
+  if (outcome === null) return null;
+  switch (outcome.kind) {
+    case "waiting-for-profile":
+      return waitingForProfileResult(providerId);
+    case "signed-in":
+    case "already-signed-in": {
+      const echoed = (result.state?.profiles ?? []).map(summarizeProfile);
+      let profile = await findProfileRow(providerId, echoed, outcome.profileId);
+      if (profile === null) return waitingForProfileResult(providerId);
+      const created = outcome.kind === "signed-in" && target.create !== null;
+      if (created) {
+        profile = await nameNewProfile(
+          providerId,
+          profile,
+          target.create.label,
+        );
+      }
+      return {
+        data: {
+          providerId,
+          status: outcome.kind === "signed-in" ? "signed-in" : "already-exists",
+          profile,
+          created,
+        },
+        human: `${outcome.kind === "signed-in" ? "Signed in" : "Already signed in"} as ${printable(profile.label)}`,
+        exitCode: 0,
+      };
+    }
+    case "account-mismatch":
+    case "account-unproven": {
+      const profile =
+        target.profileId === null
+          ? (state.profiles.find(
+              (row) => row.terminalOnThisComputer === true,
+            ) ?? findProfileByIdOrAlias(state.profiles, "ambient"))
+          : findProfileByIdOrAlias(state.profiles, target.profileId);
+      if (profile === null) return null;
+      return {
+        data: { providerId, status: outcome.kind },
+        human:
+          outcome.kind === "account-mismatch"
+            ? `That sign-in is a different account. ${printable(profile.label)} was not changed.`
+            : `This sign-in can't be matched to the account this profile uses.\n${printable(profile.label)} was not changed.`,
+        exitCode: 1,
+      };
+    }
   }
 }
 

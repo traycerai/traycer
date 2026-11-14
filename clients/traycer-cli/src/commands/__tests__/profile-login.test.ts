@@ -18,6 +18,7 @@ import {
   providersStartLoginResponseSchemaV13,
   type ProviderCliState,
   type ProviderMutationCliStateV21,
+  type ProviderLoginProfileOutcome,
   type ProvidersAwaitLoginResponse,
   type ProvidersListResponse,
   type ProvidersStartLoginResponseV13,
@@ -187,6 +188,7 @@ interface AwaitSpec {
   readonly state: StateSpec | null;
   readonly existingProfileId: string | null;
   readonly codeRejected: boolean;
+  readonly profileOutcome?: ProviderLoginProfileOutcome | null;
   readonly refusal: {
     readonly reason: string;
     readonly actionUrl: string | null;
@@ -354,6 +356,15 @@ function listCalls(): DispatchCall[] {
 
 function submitCalls(): DispatchCall[] {
   return callsTo("providers.submitLoginCode");
+}
+
+function expectOutcomeCalls(methods: readonly string[]): void {
+  expect(dispatchMock.mock.calls.map((call) => call[0]).sort()).toEqual(
+    [...methods].sort(),
+  );
+  expect(onlyCallTo("providers.startLogin")[1]).toEqual(
+    expect.objectContaining({ target: null }),
+  );
 }
 
 const START_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
@@ -2743,6 +2754,496 @@ describe("login on an account that has other names", () => {
         expect(named.human).toBe(plain.human);
         expect(named.data).toEqual(plain.data);
       }
+    }
+  });
+});
+
+describe("profile login outcomes", () => {
+  it("adds a signed-in profile with the new sentence, exit and data", async () => {
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([NEW_PROFILE]),
+          profileOutcome: { kind: "signed-in", profileId: "prof_new" },
+        }),
+      );
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("Signed in as Work");
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: rowOf(NEW_PROFILE, "Work"),
+      created: true,
+    });
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+  });
+
+  it("reports an already-signed-in row as not created", async () => {
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([WORK_PROFILE]),
+          profileOutcome: {
+            kind: "already-signed-in",
+            profileId: "prof_work",
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("Already signed in as Work");
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "already-exists",
+      profile: rowOf(WORK_PROFILE, "Work"),
+      created: false,
+    });
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+  });
+
+  it("reports a completed add that is not listed yet", async () => {
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: null,
+          codeRejected: true,
+          refusal: { reason: "legacy refusal", actionUrl: null },
+          profileOutcome: { kind: "waiting-for-profile" },
+        }),
+      );
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("Waiting for Traycer. Your sign-in is complete.");
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "waiting-for-profile",
+    });
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+  });
+
+  it("logs in to an existing profile with the new success sentence", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([WORK_PROFILE]),
+          profileOutcome: { kind: "signed-in", profileId: "prof_work" },
+        }),
+      );
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("Signed in as Work");
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: rowOf(WORK_PROFILE, "Work"),
+      created: false,
+    });
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+  });
+
+  it("rejects a different account using the preflight row name without mutation", async () => {
+    for (const stdinIsTerminal of [true, false]) {
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+      scenario.listState = listState({
+        ...NO_PROFILES,
+        profiles: [WORK_PROFILE],
+      });
+      scenario.listEnvelope = null;
+      scenario.laterListReads = null;
+      scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+      scenario.awaitLogin = () =>
+        Promise.resolve(
+          awaitResult({
+            state: signedInState([{ ...WORK_PROFILE, label: "Changed name" }]),
+            profileOutcome: { kind: "account-mismatch" },
+          }),
+        );
+      const fake = makeIo(false);
+      fake.stdinIsTerminal.mockReturnValue(stdinIsTerminal);
+
+      const result = await runLogin(
+        existing("prof_work"),
+        fake,
+        makeCtx(false, false),
+      );
+
+      expect(result.human).toBe(
+        "That sign-in is a different account. Work was not changed.",
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.data).toEqual({
+        providerId: "claude-code",
+        status: "account-mismatch",
+      });
+      expectOutcomeCalls([
+        "providers.list",
+        "providers.startLogin",
+        "providers.awaitLogin",
+      ]);
+    }
+  });
+
+  it("uses the name of a listed managed Terminal row for an unproven account", async () => {
+    for (const stdinIsTerminal of [true, false]) {
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+      scenario.listState = deviceList(accountRows(null, true), []);
+      scenario.listEnvelope = null;
+      scenario.laterListReads = null;
+      scenario.startAnswers = [startAnswer({ profileId: null })];
+      scenario.awaitLogin = () =>
+        Promise.resolve(
+          awaitResult({
+            state: signedInState([{ ...WORK_PROFILE, label: "Changed name" }]),
+            profileOutcome: { kind: "account-unproven" },
+          }),
+        );
+      const fake = makeIo(false);
+      fake.stdinIsTerminal.mockReturnValue(stdinIsTerminal);
+
+      const result = await runLogin(
+        existing("ambient"),
+        fake,
+        makeCtx(false, false),
+      );
+
+      expect(result.human).toBe(
+        "This sign-in can't be matched to the account this profile uses.\nWork was not changed.",
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.data).toEqual({
+        providerId: "claude-code",
+        status: "account-unproven",
+      });
+      expectOutcomeCalls([
+        "providers.list",
+        "providers.startLogin",
+        "providers.awaitLogin",
+      ]);
+    }
+  });
+
+  it("reads missing signed-in and already-signed-in names with one list reread", async () => {
+    for (const kind of ["signed-in", "already-signed-in"] as const) {
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+      scenario.listState = listState(NO_PROFILES);
+      scenario.laterListReads = listState({
+        ...NO_PROFILES,
+        profiles: [WORK_PROFILE],
+      });
+      scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+      scenario.awaitLogin = () =>
+        Promise.resolve(
+          awaitResult({
+            state: signedInState([]),
+            profileOutcome: { kind, profileId: "prof_work" },
+          }),
+        );
+      const fake = makeIo(false);
+
+      const result = await runLogin(
+        create("Work"),
+        fake,
+        makeCtx(false, false),
+      );
+
+      expect(fake.wait).not.toHaveBeenCalled();
+      expect(result.human).toBe(
+        kind === "signed-in"
+          ? "Signed in as Work"
+          : "Already signed in as Work",
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.data).toEqual({
+        providerId: "claude-code",
+        status: kind === "signed-in" ? "signed-in" : "already-exists",
+        profile: rowOf(WORK_PROFILE, "Work"),
+        created: kind === "signed-in",
+      });
+      expectOutcomeCalls([
+        "providers.list",
+        "providers.list",
+        "providers.startLogin",
+        "providers.awaitLogin",
+      ]);
+    }
+  });
+
+  it("waits when the profile is missing from both the echo and the single reread", async () => {
+    scenario.listState = listState(NO_PROFILES);
+    scenario.laterListReads = listState(NO_PROFILES);
+    scenario.startAnswers = [startAnswer({ profileId: "prof_new" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([]),
+          profileOutcome: { kind: "signed-in", profileId: "prof_new" },
+        }),
+      );
+    const fake = makeIo(false);
+
+    const result = await runLogin(create("Work"), fake, makeCtx(false, false));
+
+    expect(result.human).toBe("Waiting for Traycer. Your sign-in is complete.");
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "waiting-for-profile",
+    });
+    expect(fake.wait).not.toHaveBeenCalled();
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+  });
+
+  it("renames a newly signed-in profile without --label before printing it", async () => {
+    scenario.startAnswers = [startAnswer({ profileId: "prof_new" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([{ ...NEW_PROFILE, label: "Pending" }]),
+          profileOutcome: { kind: "signed-in", profileId: "prof_new" },
+        }),
+      );
+
+    const result = await runLogin(
+      create(null),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("Signed in as jane.doe");
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: rowOf(NEW_PROFILE, "jane.doe"),
+      created: true,
+    });
+    expect(onlyCallTo("providers.setEnabled")[1]).toEqual({
+      providerId: "claude-code",
+      enabled: true,
+      profileAction: {
+        type: "rename",
+        profileId: "prof_new",
+        label: "jane.doe",
+      },
+    });
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+      "providers.setEnabled",
+    ]);
+  });
+
+  it("keeps explicit null outcomes on today's add and login output and data", async () => {
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([WORK_PROFILE]),
+          existingProfileId: "prof_work",
+          profileOutcome: null,
+        }),
+      );
+
+    const add = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(add.human).toBe(
+      'That account is already claude (Claude Code) profile prof_work "Work". No profile was added.',
+    );
+    expect(add.exitCode).toBe(0);
+    expect(add.data).toEqual({
+      providerId: "claude-code",
+      status: "already-exists",
+      profile: rowOf(WORK_PROFILE, "Work"),
+    });
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+
+    dispatchMock.mockClear();
+    startIndex = 0;
+    listReads = 0;
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([WORK_PROFILE]),
+          profileOutcome: null,
+        }),
+      );
+
+    const login = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(login.human).toBe(
+      'Signed in claude (Claude Code) profile prof_work "Work" (work@example.com).',
+    );
+    expect(login.exitCode).toBe(0);
+    expect(login.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: rowOf(WORK_PROFILE, "Work"),
+      created: false,
+    });
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+  });
+
+  it("uses today's keys when a Terminal outcome cannot be named", async () => {
+    scenario.listState = listState(NO_PROFILES);
+    scenario.startAnswers = [startAnswer({ profileId: null })];
+    const fake = makeIo(false);
+    fake.stdinIsTerminal.mockReturnValue(false);
+
+    for (const kind of ["account-mismatch", "account-unproven"] as const) {
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+      scenario.awaitLogin = () =>
+        Promise.resolve(
+          awaitResult({
+            state: null,
+            existingProfileId: null,
+            codeRejected: false,
+            refusal: null,
+            profileOutcome: { kind },
+          }),
+        );
+
+      const result = await runLogin(
+        existing("ambient"),
+        fake,
+        makeCtx(false, false),
+      );
+
+      expect(result.human).toBe("The sign-in did not complete.");
+      expect(result.exitCode).toBe(1);
+      expect(result.data).toEqual({
+        providerId: "claude-code",
+        status: "not-completed",
+      });
+      expectOutcomeCalls([
+        "providers.list",
+        "providers.startLogin",
+        "providers.awaitLogin",
+      ]);
+    }
+  });
+
+  it("falls back to today's keys for an impossible and an unknown outcome kind", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    for (const answer of [
+      awaitResult({
+        state: null,
+        profileOutcome: {
+          kind: "target-refused",
+          reason: "target-removed",
+        },
+      }),
+      providersAwaitLoginResponseSchema.parse({
+        ...DEFAULT_AWAIT,
+        state: null,
+        profileOutcome: { kind: "future-outcome" },
+      }),
+    ]) {
+      dispatchMock.mockClear();
+      startIndex = 0;
+      listReads = 0;
+      scenario.awaitLogin = () => Promise.resolve(answer);
+
+      const result = await runLogin(
+        existing("prof_work"),
+        makeIo(false),
+        makeCtx(false, false),
+      );
+
+      expect(result.human).toBe("The sign-in did not complete.");
+      expect(result.exitCode).toBe(1);
+      expect(result.data).toEqual({
+        providerId: "claude-code",
+        status: "not-completed",
+      });
+      expectOutcomeCalls([
+        "providers.list",
+        "providers.startLogin",
+        "providers.awaitLogin",
+      ]);
     }
   });
 });
