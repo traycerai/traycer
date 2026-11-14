@@ -32,6 +32,7 @@ import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import type { ClaimRunningChats } from "@/components/settings/team/claim-running-chats";
 
 const ENVIRONMENT_ID = "env-a";
 const OTHER_ENVIRONMENT_ID = "env-b";
@@ -42,9 +43,30 @@ const noteHostMembershipChanged = vi.hoisted(() =>
   vi.fn<(hostId: string) => void>(),
 );
 
+const runningChatsAnswer = vi.hoisted(
+  (): { value: ClaimRunningChats | null } => ({ value: null }),
+);
+
 vi.mock("@/lib/host/local-admission-invalidation", () => ({
   noteHostMembershipChanged,
 }));
+
+// The host's `{ kind: "computer" }` subject is not on the stack yet, so a
+// count can only come from here; `null` leaves the real read in place.
+vi.mock(
+  "@/components/settings/team/claim-running-chats",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/settings/team/claim-running-chats")
+      >();
+    return {
+      ...actual,
+      useClaimRunningChats: (hostId: string | null): ClaimRunningChats =>
+        runningChatsAnswer.value ?? actual.useClaimRunningChats(hostId),
+    };
+  },
+);
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -164,6 +186,7 @@ async function openClaimDialog(user: UserEvent) {
 
 beforeEach(() => {
   hostBinding.value = { auth, directory };
+  runningChatsAnswer.value = null;
   listTeamComputers.mockReset();
   releaseTeamComputer.mockReset();
   noteHostMembershipChanged.mockReset();
@@ -312,6 +335,48 @@ describe("TeamComputersSection", () => {
       ),
     );
     expect(noteHostMembershipChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("says running chats will stop when the computer's count is not known", async () => {
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+
+    const dialog = await openClaimDialog(user);
+
+    expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
+    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
+  });
+
+  it("says how many chats will stop when the computer counts them", async () => {
+    runningChatsAnswer.value = { kind: "counted", chats: 3 };
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+
+    const dialog = await openClaimDialog(user);
+
+    expect(
+      within(dialog).getByText("3 chats are running and will stop."),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
+  });
+
+  it("draws no running-chats line when the computer has none running", async () => {
+    runningChatsAnswer.value = { kind: "counted", chats: 0 };
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
+    await screen.findByRole("button", { name: "Claim this computer" });
+
+    const dialog = await openClaimDialog(user);
+
+    expect(
+      within(dialog).getByText(
+        "This computer will become yours. The team will lose access to it.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/chats are running/)).toBeNull();
+    expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
   });
 
   it("keeps claiming available when team configuration editing is not authorized", async () => {
