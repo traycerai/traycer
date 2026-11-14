@@ -63,6 +63,13 @@ vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: () => 0,
 }));
 
+const authErrorToast = vi.hoisted(() => ({
+  show: vi.fn<(error: unknown, fallback: string) => void>(),
+}));
+vi.mock("@/lib/auth-error-toast", () => ({
+  toastFromAuthError: authErrorToast.show,
+}));
+
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { JSX } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -79,6 +86,7 @@ import {
 import type { SelectionIncompatibility } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { IHostManagement } from "@traycer-clients/shared/platform/runner-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { WindowHostModal } from "@/components/layout/dialogs/window-host-modal";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { buildOverviewManagement } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { installAuthValidationFetch } from "../../../../__tests__/test-browser-apis";
@@ -94,6 +102,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 
 /**
  * Real `useOlderHostUpdate` and real `useUpdateHostVersionPolicy`. The floor
@@ -214,6 +223,7 @@ function managementFor(
 function renderUpdate(
   binding: HostRuntimeBinding<HostRpcRegistry> | null,
   runnerHost: MockRunnerHost,
+  narration: JSX.Element | undefined,
 ): void {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -231,6 +241,7 @@ function renderUpdate(
             testId="host-scope-update-host"
           />
           <DirectoryAppVersion />
+          {narration}
         </HostRuntimeContext.Provider>
       </RunnerHostProvider>
     </QueryClientProvider>,
@@ -251,11 +262,14 @@ interface SignedInHarness {
   readonly rows: { current: readonly HostDirectoryEntry[] };
 }
 
-async function renderSignedIn(args: {
-  readonly localHostId: string | null;
-  readonly entry: HostDirectoryEntry | null;
-  readonly applyStaged: IHostManagement["applyStaged"] | null;
-}): Promise<SignedInHarness> {
+async function renderSignedIn(
+  args: {
+    readonly localHostId: string | null;
+    readonly entry: HostDirectoryEntry | null;
+    readonly applyStaged: IHostManagement["applyStaged"] | null;
+  },
+  narration: JSX.Element | undefined,
+): Promise<SignedInHarness> {
   const rows: SignedInHarness["rows"] = {
     current: args.entry === null ? [] : [args.entry],
   };
@@ -319,8 +333,26 @@ async function renderSignedIn(args: {
       hostId: null,
     },
     runnerHost,
+    narration,
   );
   return { directory, rows };
+}
+
+function hostNarration(isTargetHost: boolean): JSX.Element {
+  return (
+    <WindowHostModal
+      cause="no-usable-host"
+      variant={olderHostUpdateVariant(HOST_ID, isTargetHost, "1.5.4")}
+      progress={null}
+      bootBody={null}
+      onRetry={null}
+      retryPending={false}
+      onOpenSettings={() => undefined}
+      showReportIssue={false}
+      settingsEmphasis="button"
+      settingsOnly={false}
+    />
+  );
 }
 
 function updateButton(): HTMLButtonElement {
@@ -351,6 +383,7 @@ beforeEach(() => {
   remoteTransport.mockReset();
   patchCalls.length = 0;
   patchAnswer = "ok";
+  authErrorToast.show.mockReset();
   installPolicyFetch();
 });
 
@@ -369,12 +402,46 @@ afterEach(() => {
 });
 
 describe("useOlderHostUpdate remote write", () => {
+  it.each([
+    [
+      "matches the local host id even when it is not the target",
+      HOST_ID,
+      false,
+      "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched.",
+    ],
+    [
+      "uses remote copy when the target flag is true but the id is remote",
+      "host-local",
+      true,
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    ],
+  ] as const)(
+    "modal copy: %s",
+    async (_label, localHostId, isTargetHost, copy) => {
+      await renderSignedIn(
+        {
+          localHostId,
+          entry: null,
+          applyStaged: null,
+        },
+        hostNarration(isTargetHost),
+      );
+
+      expect(
+        screen.getByTestId("window-host-modal-description").textContent,
+      ).toBe(copy);
+    },
+  );
+
   it("patches the test floor from a shell with no host management, and does not dial", async () => {
-    await renderSignedIn({
-      localHostId: null,
-      entry: null,
-      applyStaged: null,
-    });
+    await renderSignedIn(
+      {
+        localHostId: null,
+        entry: null,
+        applyStaged: null,
+      },
+      undefined,
+    );
 
     updateButton().click();
 
@@ -398,11 +465,14 @@ describe("useOlderHostUpdate remote write", () => {
         },
       });
     };
-    await renderSignedIn({
-      localHostId: "this-machine",
-      entry: null,
-      applyStaged,
-    });
+    await renderSignedIn(
+      {
+        localHostId: "this-machine",
+        entry: null,
+        applyStaged,
+      },
+      undefined,
+    );
 
     updateButton().click();
 
@@ -427,11 +497,14 @@ describe("useOlderHostUpdate remote write", () => {
         },
       });
     };
-    await renderSignedIn({
-      localHostId: HOST_ID,
-      entry: null,
-      applyStaged,
-    });
+    await renderSignedIn(
+      {
+        localHostId: HOST_ID,
+        entry: null,
+        applyStaged,
+      },
+      undefined,
+    );
 
     updateButton().click();
 
@@ -447,33 +520,69 @@ describe("useOlderHostUpdate remote write", () => {
     ["network-error", "Couldn't reach Traycer to update this host."],
     ["not-found", "This host is no longer available."],
   ] as const)(
-    "shows the existing %s line and does not dial",
+    "reports the existing %s auth error without an inline remote failure or dial",
     async (kind, message) => {
       patchAnswer = kind;
-      await renderSignedIn({
-        localHostId: null,
-        entry: null,
-        applyStaged: null,
-      });
+      await renderSignedIn(
+        {
+          localHostId: null,
+          entry: null,
+          applyStaged: null,
+        },
+        undefined,
+      );
 
       updateButton().click();
 
       await waitFor(() => {
-        expect(
-          screen.getByTestId("host-ensure-failure-message").textContent,
-        ).toBe(message);
+        expect(authErrorToast.show).toHaveBeenCalledWith(
+          expect.objectContaining({ message }),
+          "Couldn't update this host.",
+        );
       });
+      expect(screen.queryByTestId("host-ensure-failure-message")).toBeNull();
       expectFloorPatch();
       expectNoDial();
     },
   );
 
-  it("does not fabricate Update pending when the directory row is not pending", async () => {
-    await renderSignedIn({
-      localHostId: null,
-      entry: host154("current"),
-      applyStaged: null,
+  it("keeps a local apply failure inline", async () => {
+    const applyStaged: IHostManagement["applyStaged"] = () =>
+      Promise.resolve({
+        kind: "failed",
+        message: "Couldn't apply the staged host.",
+        errorCode: null,
+      });
+    await renderSignedIn(
+      {
+        localHostId: HOST_ID,
+        entry: null,
+        applyStaged,
+      },
+      undefined,
+    );
+
+    updateButton().click();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-ensure-failure-message").textContent,
+      ).toBe("Couldn't apply the staged host.");
     });
+    expect(authErrorToast.show).not.toHaveBeenCalled();
+    expect(patchCalls).toEqual([]);
+    expectNoDial();
+  });
+
+  it("does not fabricate Update pending when the directory row is not pending", async () => {
+    await renderSignedIn(
+      {
+        localHostId: null,
+        entry: host154("current"),
+        applyStaged: null,
+      },
+      undefined,
+    );
 
     updateButton().click();
 
@@ -488,47 +597,49 @@ describe("useOlderHostUpdate remote write", () => {
     expectNoDial();
   });
 
-  it("patches the floor for a pending 1.5.4 host, then clears when the directory leaves pending", async () => {
-    const harness = await renderSignedIn({
-      localHostId: null,
-      entry: host154("pending"),
-      applyStaged: null,
-    });
+  it("replaces the action with pending status, then restores it when the directory clears pending", async () => {
+    const harness = await renderSignedIn(
+      {
+        localHostId: null,
+        entry: host154("pending"),
+        applyStaged: null,
+      },
+      undefined,
+    );
 
-    const button = updateButton();
-    expect(button.disabled).toBe(false);
+    expect(screen.queryByTestId("host-scope-update-host")).toBeNull();
     expect(screen.getByText("Update pending")).toBeTruthy();
-    button.click();
-
-    await waitFor(() => {
-      expect(patchCalls).toHaveLength(1);
-    });
-    expectFloorPatch();
-    expectNoDial();
+    expect(
+      screen.getByText(
+        "Applied on this host's next check-in — within ~10 minutes, and only when no sessions are running.",
+      ),
+    ).toBeTruthy();
+    expect(patchCalls).toEqual([]);
 
     harness.rows.current = [host154("current")];
     await harness.directory.refresh();
     await waitFor(() => {
       expect(screen.queryByText("Update pending")).toBeNull();
+      expect(screen.getByTestId("host-scope-update-host")).toBeTruthy();
     });
     expect(updateButton().disabled).toBe(false);
     updateButton().click();
     await waitFor(() => {
-      expect(patchCalls).toHaveLength(2);
+      expect(patchCalls).toHaveLength(1);
     });
-    expect(patchCalls[1]).toEqual({
-      url: `${AUTHN}/api/v3/hosts/${HOST_ID}`,
-      body: FLOOR_PATCH_BODY,
-    });
+    expectFloorPatch();
     expectNoDial();
   });
 
   it("publishes an appVersion-only change through the directory subscriber", async () => {
-    const harness = await renderSignedIn({
-      localHostId: null,
-      entry: host154("current"),
-      applyStaged: null,
-    });
+    const harness = await renderSignedIn(
+      {
+        localHostId: null,
+        entry: host154("current"),
+        applyStaged: null,
+      },
+      undefined,
+    );
 
     expect(screen.getByTestId("directory-app-version").textContent).toBe(
       "1.5.4",
@@ -558,7 +669,7 @@ describe("useOlderHostUpdate remote write", () => {
     expectNoDial();
   });
 
-  it("with no runtime binding shows the existing sign-in line and does not dial", async () => {
+  it("reports missing runtime binding through the existing auth toast without inline failure or dial", async () => {
     const runnerHost = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
       authnBaseUrl: AUTHN,
@@ -569,15 +680,17 @@ describe("useOlderHostUpdate remote write", () => {
       traycerCli: undefined,
       hostManagement: null,
     });
-    renderUpdate(null, runnerHost);
+    renderUpdate(null, runnerHost, undefined);
 
     updateButton().click();
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("host-ensure-failure-message").textContent,
-      ).toBe("Sign in to update this host.");
+      expect(authErrorToast.show).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Sign in to update this host." }),
+        "Couldn't update this host.",
+      );
     });
+    expect(screen.queryByTestId("host-ensure-failure-message")).toBeNull();
     expect(patchCalls).toEqual([]);
     expectNoDial();
   });

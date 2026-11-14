@@ -1,7 +1,7 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { PrSubscribeListForEpicServerFrame } from "@traycer/protocol/host/pr-schemas";
@@ -27,6 +27,23 @@ import {
 } from "../use-pr-list-subscription";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { installHostUpdateGestureDirectory } from "@/hooks/host/__tests__/host-update-gesture-directory";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+
+const toast = vi.hoisted(() => vi.fn());
+
+vi.mock("sonner", () => ({ toast }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 
 /**
  * Mock stream session for `pr.subscribeListForEpic`. Unlike git's status
@@ -167,6 +184,7 @@ describe("usePrListSubscription", () => {
   };
 
   beforeEach(() => {
+    toast.mockReset();
     __resetPrListSubscriptionsForTesting();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -177,6 +195,54 @@ describe("usePrListSubscription", () => {
   afterEach(() => {
     __resetPrListSubscriptionsForTesting();
     queryClient.clear();
+  });
+
+  it("preflights list refresh against the live host row and admits the floor", async () => {
+    const liveDirectory = await installHostUpdateGestureDirectory(
+      "host1",
+      "2.0.0",
+      "1.0.0",
+    );
+
+    try {
+      const { result } = renderHook(
+        () =>
+          usePrListSubscription({
+            hostId: "host1",
+            epicId: "epic1",
+            mode: "foreground",
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() => {
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+      });
+      const session = mockWsStreamClient.getSession("pr.subscribeListForEpic", {
+        epicId: "epic1",
+        mode: "foreground",
+      });
+      if (session === undefined) throw new Error("Expected PR list session");
+
+      await liveDirectory.refreshVersions("1.5.4", "9.9.9");
+      act(() => result.current.sendRefresh());
+
+      expect(session.sentClientFrames).toEqual([]);
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(toast.mock.calls[0]?.[0]).toBe(HOST_UPDATE_SKEW_COPY.title);
+
+      await liveDirectory.refreshVersions("2.0.0", "1.0.0");
+      act(() => result.current.sendRefresh());
+
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(session.sentClientFrames).toEqual([
+        { kind: "refresh", hasBinaryPayload: false },
+      ]);
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    } finally {
+      liveDirectory.dispose();
+    }
   });
 
   it("background and foreground subscribers for the same host+epic open two independent sessions, and unmounting one leaves the other open", async () => {

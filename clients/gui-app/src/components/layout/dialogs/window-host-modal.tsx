@@ -18,6 +18,8 @@ import {
   type WindowNarrationVariant,
 } from "@/lib/host/window-narration";
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { REMOTE_HOST_UPDATE_DESCRIPTION } from "@/lib/host/version-skew-copy";
 
 /**
  * THE window narrator (M5): one global surface for the two facts that
@@ -110,7 +112,8 @@ export interface WindowHostModalProps {
 }
 
 export function WindowHostModal(props: WindowHostModalProps): ReactNode {
-  const copy = modalCopy(props.variant, props.cause);
+  const localHostId = useReactiveLocalHostId();
+  const copy = modalCopy(props.variant, props.cause, localHostId);
   return (
     <DialogPrimitive.Root open modal>
       <DialogPrimitive.Portal>
@@ -221,7 +224,8 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
  * one" signal a row of equal-weight buttons is.
  */
 export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
-  const copy = modalCopy(props.variant, props.cause);
+  const localHostId = useReactiveLocalHostId();
+  const copy = modalCopy(props.variant, props.cause, localHostId);
   // The released card face: body only, one heading, for a start that is
   // progressing or slow. A SETTLED failure gets the titled face below even on
   // the cold-start cause - a crash report under no heading reads as debris.
@@ -550,6 +554,7 @@ interface WindowHostModalCopy {
 function modalCopy(
   variant: WindowNarrationVariant,
   cause: WindowNarrationCause,
+  localHostId: string | null,
 ): WindowHostModalCopy {
   if (variant.kind === "team-membership-required") {
     return {
@@ -607,9 +612,10 @@ function modalCopy(
       // incompatibility is a bug rather than routine drift, and the copy names
       // the leg the handshake says is behind rather than a generic fatal.
       title: hostUpdateSkew(variant.detail, getClientAppVersion()).title,
-      description: variant.isTargetHost
-        ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
-        : "Another host on this account is running a version this app can't talk to, and it can't be updated from here. Update Traycer on that computer, or switch to a host this one can reach.",
+      description:
+        variant.hostId === localHostId
+          ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
+          : REMOTE_HOST_UPDATE_DESCRIPTION,
       reportTitle: "Host update required",
       reportMessage: "Traycer Host requires an update.",
       reportCode: "HOST_INCOMPATIBLE",

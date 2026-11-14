@@ -31,7 +31,7 @@ export function useOlderHostUpdate(hostId: string): OlderHostUpdate {
       code: outcome.kind === "failed" ? outcome.errorCode : null,
     };
   }
-  const error = local ? localUpdate.error : remoteUpdate.error;
+  const error = local ? localUpdate.error : null;
   if (error !== null) failure = { message: error.message, code: null };
   const remotePending =
     !local &&

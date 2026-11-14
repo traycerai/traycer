@@ -8,7 +8,6 @@ import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-h
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 
 export interface HostUpdateGestureDirectory {
-  readonly directory: HostDirectoryService;
   readonly refreshVersions: (
     appVersion: string,
     entryVersion: string,
@@ -43,7 +42,6 @@ export async function installHostUpdateGestureDirectory(
   });
 
   return {
-    directory,
     refreshVersions: async (appVersion, entryVersion) => {
       row = remoteRow(hostId, appVersion, entryVersion);
       await directory.refresh();

@@ -54,6 +54,7 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
+  useHostBinding: () => null,
   useHostDirectory: () => ({
     onChange: () => ({ dispose() {} }),
     findById: () => null,
@@ -77,6 +78,23 @@ import {
 } from "../use-pr-detail-subscription";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { installHostUpdateGestureDirectory } from "@/hooks/host/__tests__/host-update-gesture-directory";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+
+const toast = vi.hoisted(() => vi.fn());
+
+vi.mock("sonner", () => ({ toast }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 
 /**
  * Mock stream session for `pr.subscribeDetail`. Frame fields ride directly
@@ -255,6 +273,7 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
   };
 
   beforeEach(() => {
+    toast.mockReset();
     __resetPrDetailSubscriptionsForTesting();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -268,6 +287,59 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
     __resetPrDetailSubscriptionsForTesting();
     queryClient.clear();
     wsStreamClientRef.value = null;
+  });
+
+  it("preflights detail refresh against the live host row and admits the floor", async () => {
+    const liveDirectory = await installHostUpdateGestureDirectory(
+      "host1",
+      "2.0.0",
+      "1.0.0",
+    );
+
+    try {
+      const { result } = renderHook(
+        () =>
+          usePrDetailSubscription({
+            epicId: "epic-1",
+            githubHost: "github.com",
+            owner: "acme",
+            repo: "widgets",
+            prNumber: 42,
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() => {
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+      });
+      const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+        epicId: "epic-1",
+        githubHost: "github.com",
+        owner: "acme",
+        repo: "widgets",
+        prNumber: 42,
+      });
+      if (session === undefined) throw new Error("Expected PR detail session");
+
+      await liveDirectory.refreshVersions("1.5.4", "9.9.9");
+      act(() => result.current.sendRefresh());
+
+      expect(session.sentClientFrames).toEqual([]);
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(toast.mock.calls[0]?.[0]).toBe(HOST_UPDATE_SKEW_COPY.title);
+
+      await liveDirectory.refreshVersions("2.0.0", "1.0.0");
+      act(() => result.current.sendRefresh());
+
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(session.sentClientFrames).toEqual([
+        { kind: "refresh", hasBinaryPayload: false },
+      ]);
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    } finally {
+      liveDirectory.dispose();
+    }
   });
 
   it("subscribes through whatever client useTabHostId resolves to, for a bound host that is NOT any app-wide 'active host', with exact open-request params, and tears down on unmount", async () => {
