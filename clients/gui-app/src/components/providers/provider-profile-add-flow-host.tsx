@@ -70,6 +70,8 @@ function ProviderProfileAddFlowSession({
 
   return (
     <AddProviderProfileDialog
+      target={null}
+      targetResult={null}
       key={state.providerId}
       state={state}
       client={client}
