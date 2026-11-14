@@ -87,18 +87,6 @@ export function heldCommandLine(entry: ReviewHeldEntry): HeldCommandLine {
     case "env_override":
       return variableLine(entry, facts);
     default:
-      // No held entry is a hook today; a host that holds one names its event.
-      if (facts.event !== null) {
-        return {
-          name: entry.key,
-          clause:
-            facts.command === null
-              ? "(hook)"
-              : `(hook) runs ${facts.command} on ${facts.event}`,
-          acts: facts.command !== null,
-          reach: RUNS_EVERYWHERE,
-        };
-      }
       // A kind newer than this line set: named as the host spells it.
       return runsLine(
         entry.key,

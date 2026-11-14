@@ -53,7 +53,6 @@ function shown(text: string): string | null {
 
 export interface HeldFacts {
   readonly command: string | null;
-  readonly event: string | null;
   readonly description: string | null;
   readonly harness: string | null;
   readonly value: string | null;
@@ -61,7 +60,6 @@ export interface HeldFacts {
 
 const NO_FACTS: HeldFacts = {
   command: null,
-  event: null,
   description: null,
   harness: null,
   value: null,
@@ -93,9 +91,10 @@ const heldStringValueSchema = lazySchema(() => z.object({ value: z.string() }));
 /**
  * What a held executable entry does, for its line on the sheet. A value that
  * does not parse for its kind has no facts. Never filled, because nothing on
- * this host knows them: a setup script's trigger (none is recorded), a
- * skill's description (the migration holds no skill, and a held skill's
- * content is not on this host) and an agent definition's harness.
+ * this host knows them: a skill's description (the migration holds no
+ * skill, and a held skill's content is not on this host) and an agent
+ * definition's harness. No held change names when it runs, so the facts
+ * carry no trigger.
  */
 export function heldFactsOf(entry: {
   readonly kind: string;
