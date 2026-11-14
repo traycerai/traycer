@@ -695,8 +695,8 @@ function showFileTree(): void {
 describe("AgentHoverTooltip host section", () => {
   beforeEach(showFileTree);
 
-  it("shows host identity, cost and shape without payer or starter claims while teams load", () => {
-    h.sandboxes = [sandboxRow({ environmentId: "env-personal" })];
+  it("does not infer a payer while teams load and keeps the viewer as creator", () => {
+    h.sandboxes = [sandboxRow({})];
     h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];
     h.busySessionCount = 3;
     h.agents = [
@@ -723,7 +723,7 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain("unknown");
     expect(text).toContain(shortPriceLabel(120));
     expect(text).toContain("Sandbox · Linux · 2 vCPU · 4 GB");
-    expect(text).not.toContain("started by you");
+    expect(text).toContain("started by you");
     expect(text).not.toContain("paid by you");
     expect(text).toMatch(/\d+ min awake/);
     expect(text).toContain(hoverTodayCost(2000));
@@ -776,7 +776,7 @@ describe("AgentHoverTooltip host section", () => {
 
     const text = screen.getByTestId("worktree-host-section").textContent;
     expect(text).not.toContain("paid by");
-    expect(text).not.toContain("started by you");
+    expect(text).toContain("started by you");
   });
 
   describe("with File Tree off", () => {
