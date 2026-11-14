@@ -452,6 +452,19 @@ function armMatchingRequest(): number {
   return armTerminalAgentContinueProfile("test-host", "epic-test", "agent-1");
 }
 
+function clearContinueProfileRequest(
+  hostId: string,
+  epicId: string,
+  agentId: string,
+): void {
+  const cleanupRequestId = armTerminalAgentContinueProfile(
+    hostId,
+    epicId,
+    agentId,
+  );
+  consumeTerminalAgentContinueProfile(cleanupRequestId);
+}
+
 function noContinueDialog(): void {
   expect(
     screen.queryByRole("heading", {
@@ -473,12 +486,11 @@ describe("<TuiAgentTile /> removed-profile refusals", () => {
       reportIssueAvailable: false,
       reportIssueContext: null,
     });
-    const cleanupRequestId = armTerminalAgentContinueProfile(
-      "cleanup-host",
-      "cleanup-epic",
-      "cleanup-agent",
-    );
-    consumeTerminalAgentContinueProfile(cleanupRequestId);
+    clearContinueProfileRequest("test-host", "epic-test", "agent-1");
+    clearContinueProfileRequest("other-host", "epic-test", "agent-1");
+    clearContinueProfileRequest("test-host", "other-epic", "agent-1");
+    clearContinueProfileRequest("test-host", "epic-test", "other-agent");
+    clearContinueProfileRequest("test-host", "epic-test", "another-agent");
   });
 
   afterAll(() => {
@@ -589,6 +601,34 @@ describe("<TuiAgentTile /> removed-profile refusals", () => {
         name: "Continue under another profile",
       }),
     ).toBeTruthy();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+  });
+
+  it("preserves another agent's queued request while this tile consumes its own", async () => {
+    clientSlot.set(buildClient("terminal.create", "RPC_ERROR").client);
+    const oldOtherRequestId = armTerminalAgentContinueProfile(
+      "test-host",
+      "epic-test",
+      "another-agent",
+    );
+    const newerOtherRequestId = armTerminalAgentContinueProfile(
+      "test-host",
+      "epic-test",
+      "another-agent",
+    );
+    const requestId = armMatchingRequest();
+    renderTile();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Continue under another profile",
+      }),
+    ).toBeTruthy();
+    expect(consumeTerminalAgentContinueProfile(oldOtherRequestId)).toBe(false);
+    expect(consumeTerminalAgentContinueProfile(newerOtherRequestId)).toBe(true);
     expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
   });
 

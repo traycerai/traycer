@@ -8,24 +8,40 @@ interface ContinueProfileRequest {
 }
 
 interface ContinueProfileState {
-  readonly request: ContinueProfileRequest | null;
+  readonly requests: ReadonlyMap<string, ContinueProfileRequest>;
   readonly lastId: number;
 }
 
 const useContinueProfileStore = create<ContinueProfileState>(() => ({
-  request: null,
+  requests: new Map<string, ContinueProfileRequest>(),
   lastId: 0,
 }));
 
-/** Only the latest navigation gesture survives until its terminal tile takes it. */
+function continueProfileTargetKey(
+  hostId: string,
+  epicId: string,
+  agentId: string,
+): string {
+  return JSON.stringify([hostId, epicId, agentId]);
+}
+
+/** Each agent retains only its latest navigation gesture until its tile takes it. */
 export function armTerminalAgentContinueProfile(
   hostId: string,
   epicId: string,
   agentId: string,
 ): number {
-  const id = useContinueProfileStore.getState().lastId + 1;
+  const state = useContinueProfileStore.getState();
+  const id = state.lastId + 1;
+  const requests = new Map(state.requests);
+  requests.set(continueProfileTargetKey(hostId, epicId, agentId), {
+    id,
+    hostId,
+    epicId,
+    agentId,
+  });
   useContinueProfileStore.setState({
-    request: { id, hostId, epicId, agentId },
+    requests,
     lastId: id,
   });
   return id;
@@ -36,20 +52,19 @@ export function useTerminalAgentContinueProfile(
   epicId: string,
   agentId: string,
 ): ContinueProfileRequest | null {
-  return useContinueProfileStore((state) => {
-    const request = state.request;
-    return request !== null &&
-      request.hostId === hostId &&
-      request.epicId === epicId &&
-      request.agentId === agentId
-      ? request
-      : null;
-  });
+  const key = continueProfileTargetKey(hostId, epicId, agentId);
+  return useContinueProfileStore((state) => state.requests.get(key) ?? null);
 }
 
 /** An older effect or a second view of the same agent cannot take a request twice. */
 export function consumeTerminalAgentContinueProfile(id: number): boolean {
-  if (useContinueProfileStore.getState().request?.id !== id) return false;
-  useContinueProfileStore.setState({ request: null });
-  return true;
+  const requests = useContinueProfileStore.getState().requests;
+  for (const [key, request] of requests) {
+    if (request.id !== id) continue;
+    const remaining = new Map(requests);
+    remaining.delete(key);
+    useContinueProfileStore.setState({ requests: remaining });
+    return true;
+  }
+  return false;
 }

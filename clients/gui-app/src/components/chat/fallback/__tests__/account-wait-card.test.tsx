@@ -363,9 +363,9 @@ afterEach(() => {
   cleanup();
   mockState.sessions.clear();
   const cleanupRequestId = armTerminalAgentContinueProfile(
-    "cleanup-host",
-    "cleanup-epic",
-    "cleanup-agent",
+    HOST_ID,
+    "epic-terminal",
+    "agent-terminal",
   );
   consumeTerminalAgentContinueProfile(cleanupRequestId);
 });
