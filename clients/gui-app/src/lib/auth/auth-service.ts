@@ -1,5 +1,12 @@
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
+  readSignInRequestViaHttp,
+  recordSignInRequestViaHttp,
+  type SignInRequestReadAnswer,
+  type SignInRequestRecordAnswer,
+} from "@traycer-clients/shared/host-client/provider-sign-in-request";
+import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
+import {
   AUTH_ERROR_DISK_FULL,
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
@@ -3583,6 +3590,42 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  /**
+   * Records the person's sign-in request on a verified session. A 401 hands
+   * the session to the shared revalidator, which is what any refused session
+   * gets: it rotates, or signs out and says the session expired.
+   */
+  async recordSignInRequest(
+    request: ProviderLoginSignInRequest,
+    signal: AbortSignal,
+  ): Promise<SignInRequestRecordAnswer> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const answer = await recordSignInRequestViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      request,
+      signal,
+    );
+    if (answer.kind === "unauthorized") void this.revalidateCurrentContext();
+    return answer;
+  }
+
+  /** The person's read of a sign-in request they recorded, on a verified session. */
+  async readSignInRequest(
+    request: ProviderLoginSignInRequest,
+    signal: AbortSignal,
+  ): Promise<SignInRequestReadAnswer> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return readSignInRequestViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      request,
+      signal,
+    );
   }
 
   /** The user's answer to an agent's grant request. */
