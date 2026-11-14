@@ -1290,6 +1290,13 @@ function areLandingDraftsEqual(
       return false;
     }
     if (left[index].closed !== right[index].closed) return false;
+    // Local provenance moves without a content edit: another window choosing
+    // the Terminal login on purpose changes only this.
+    if (
+      left[index].accountFollowsDefault !== right[index].accountFollowsDefault
+    ) {
+      return false;
+    }
     if (
       !sameStoredReturnedSandbox(
         left[index].returnedSandbox,
@@ -2113,20 +2120,23 @@ function keptReturnedSandbox(
 }
 
 /**
- * The echo of this device's own write keeps the row's account provenance; an
- * account another device set is somebody's choice.
+ * Only this window's own write coming back keeps the row's account
+ * provenance: a document on the same host line at the revision the row
+ * already holds, which is its own acknowledged write
+ * (`landingDraftRememberSynced`). A newer revision is another window's or
+ * device's write, and a cloud head (revision 0) proves nothing, so those count
+ * as chosen whatever account they name: equal values are not an own echo.
  */
 function keptAccountFollowsDefault(
   existing: LandingDraftTab | undefined,
-  settings: ChatRunSettings | null,
+  document: DraftDocument,
 ): boolean {
   return (
     existing !== undefined &&
     existing.accountFollowsDefault &&
-    settings !== null &&
-    existing.settings !== null &&
-    settings.harnessId === existing.settings.harnessId &&
-    settings.profileId === existing.settings.profileId
+    document.revision > 0 &&
+    existing.ownerHostId === document.ownerHostId &&
+    existing.hostRevision === document.revision
   );
 }
 
@@ -2182,13 +2192,12 @@ export function applyLandingHostDocument(
     );
     return true;
   }
-  const settings = echoedRunSettings(document.portable.runSettings, existing);
   const next: LandingDraftTab = {
     id: document.draftId,
     content,
     selection: document.portable.selection,
     lastTouchedAt: document.lastTouchedAt,
-    settings,
+    settings: echoedRunSettings(document.portable.runSettings, existing),
     composerMode: document.portable.composerMode,
     workspace:
       document.workspace === null
@@ -2212,7 +2221,7 @@ export function applyLandingHostDocument(
       existing,
     ),
     returnedSandbox: keptReturnedSandbox(existing),
-    accountFollowsDefault: keptAccountFollowsDefault(existing, settings),
+    accountFollowsDefault: keptAccountFollowsDefault(existing, document),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);

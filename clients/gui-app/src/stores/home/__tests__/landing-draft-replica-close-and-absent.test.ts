@@ -9,6 +9,7 @@ import {
   dropForeignLandingMirrorsAbsent,
   emptyLandingDraftWorkspaceSnapshot,
   EMPTY_LANDING_DRAFT_CONTENT,
+  landingDraftRememberSynced,
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
@@ -702,12 +703,16 @@ function frozenRunSettings(profileId: string | null) {
   });
 }
 
-function ownEcho(draftId: string, profileId: string | null): DraftDocument {
+function ownEcho(
+  draftId: string,
+  profileId: string | null,
+  revision: number,
+): DraftDocument {
   return {
     draftId,
     kind: "landing",
     target: { epicId: null, chatId: null, blockId: null },
-    revision: 2,
+    revision,
     lastTouchedAt: 100,
     workspace: null,
     supersedes: null,
@@ -756,14 +761,14 @@ describe("landing draft store: accountFollowsDefault across an own echo and a pe
     resetLandingDraftRetirementsForTests();
   });
 
-  it("keeps the bit when this device's own echo names the same harness and profile", () => {
+  function seedFollowing(id: string): void {
     useLandingDraftStore.setState({
       drafts: [
-        baseDraft("echo-same", {
+        baseDraft(id, {
           origin: "own",
           adoption: { state: "adopted", hostId: "host-a" },
           ownerHostId: "host-a",
-          hostRevision: 1,
+          hostRevision: 0,
           generation: 2,
           syncedGeneration: 2,
           settings: TERMINAL_SETTINGS,
@@ -772,46 +777,86 @@ describe("landing draft store: accountFollowsDefault across an own echo and a pe
       ],
       activeDraftId: null,
     });
+  }
 
-    applyLandingHostDocument(
-      ownEcho("echo-same", null),
-      EMPTY_LANDING_DRAFT_CONTENT,
-    );
+  function acknowledge(id: string, revision: number): void {
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    if (draft === undefined) throw new Error("expected a draft to acknowledge");
+    landingDraftRememberSynced(id, revision, draft.generation, "host-a");
+    const acked = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    if (acked === undefined)
+      throw new Error("the acknowledgement dropped the draft");
+    expect(acked.hostRevision).toBe(revision);
+    expect(acked.ownerHostId).toBe("host-a");
+    expect(acked.accountFollowsDefault).toBe(true);
+  }
+
+  it("keeps the bit when the echo is this window's acknowledged revision", () => {
+    seedFollowing("echo-ack");
+    acknowledge("echo-ack", 2);
+
+    expect(
+      applyLandingHostDocument(
+        ownEcho("echo-ack", null, 2),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
 
     const after = useLandingDraftStore
       .getState()
-      .drafts.find((draft) => draft.id === "echo-same");
+      .drafts.find((draft) => draft.id === "echo-ack");
     if (after === undefined) throw new Error("the echo did not land");
     expect(after.accountFollowsDefault).toBe(true);
+    expect(after.hostRevision).toBe(2);
+    expect(after.ownerHostId).toBe("host-a");
+    expect(after.content).toEqual(EMPTY_LANDING_DRAFT_CONTENT);
+    expect(after.settings?.profileId).toBeNull();
   });
 
-  it("drops the bit when this device's own echo names a different profile", () => {
-    useLandingDraftStore.setState({
-      drafts: [
-        baseDraft("echo-other", {
-          origin: "own",
-          adoption: { state: "adopted", hostId: "host-a" },
-          ownerHostId: "host-a",
-          hostRevision: 1,
-          generation: 2,
-          syncedGeneration: 2,
-          settings: TERMINAL_SETTINGS,
-          accountFollowsDefault: true,
-        }),
-      ],
-      activeDraftId: null,
-    });
+  it("drops the bit when a later write from the same owner keeps Terminal", () => {
+    seedFollowing("echo-later");
+    acknowledge("echo-later", 2);
 
-    applyLandingHostDocument(
-      ownEcho("echo-other", "work-profile"),
-      EMPTY_LANDING_DRAFT_CONTENT,
-    );
+    expect(
+      applyLandingHostDocument(
+        ownEcho("echo-later", null, 3),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
 
     const after = useLandingDraftStore
       .getState()
-      .drafts.find((draft) => draft.id === "echo-other");
+      .drafts.find((draft) => draft.id === "echo-later");
     if (after === undefined) throw new Error("the echo did not land");
     expect(after.accountFollowsDefault).toBe(false);
+    expect(after.hostRevision).toBe(3);
+    expect(after.ownerHostId).toBe("host-a");
+    expect(after.content).toEqual(EMPTY_LANDING_DRAFT_CONTENT);
+    expect(after.settings?.profileId).toBeNull();
+  });
+
+  it("drops the bit when the document is a cloud head at revision 0", () => {
+    seedFollowing("echo-cloud");
+    acknowledge("echo-cloud", 2);
+
+    expect(
+      applyLandingHostDocument(
+        ownEcho("echo-cloud", null, 0),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+
+    const after = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === "echo-cloud");
+    if (after === undefined) throw new Error("the cloud head did not land");
+    expect(after.accountFollowsDefault).toBe(false);
+    expect(after.content).toEqual(EMPTY_LANDING_DRAFT_CONTENT);
+    expect(after.settings?.profileId).toBeNull();
   });
 
   it("keeps the bit through partialize and merge", () => {

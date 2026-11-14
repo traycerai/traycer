@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMobileApp } from "@/lib/mobile-app";
 import {
+  adoptLandingDraft,
   applyLandingDraftDesktopProjection,
   emptyLandingDraftWorkspaceSnapshot,
   EMPTY_LANDING_DRAFT_CONTENT,
@@ -13,6 +14,9 @@ import {
   freshLandingMirrorState,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
+import { collectDraftMirrorDirtyWrites } from "@/lib/drafts/draft-mirror-coordinator";
+import { isRecord } from "@/lib/editor/prosemirror-json";
+import { parseLandingDrafts } from "../../../../../desktop/src/ipc-contracts/window-state-parsers";
 import * as landingImageGc from "@/lib/composer/landing-image-gc";
 import * as landingImageMove from "@/lib/composer/landing-image-move";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -71,6 +75,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import type {
   DesktopJsonValue,
+  DesktopPerWindowLandingDraft,
   DesktopPerWindowSnapshot,
   DesktopPerWindowStatePatch,
 } from "@/lib/windows/types";
@@ -171,6 +176,42 @@ function emptyWindowSnapshot(
     activeLandingDraftId: null,
     ...patch,
   };
+}
+
+function carriesAccountFollowsDefault(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => carriesAccountFollowsDefault(entry));
+  }
+  if (!isRecord(value)) return false;
+  if (Object.hasOwn(value, "accountFollowsDefault")) return true;
+  return Object.values(value).some((entry) =>
+    carriesAccountFollowsDefault(entry),
+  );
+}
+
+function profileIdOf(settings: DesktopJsonValue | null): unknown {
+  if (!isRecord(settings)) {
+    throw new Error("projected settings are not a record");
+  }
+  return settings.profileId;
+}
+
+/** The bit the desktop parser kept, on the projected entry the renderer ingests. */
+function draftsWithParsedBit(
+  projected: readonly DesktopPerWindowLandingDraft[],
+  parsed: ReadonlyArray<{
+    readonly id: string;
+    readonly accountFollowsDefault?: boolean;
+  }>,
+): DesktopPerWindowLandingDraft[] {
+  return projected.flatMap((draft) => {
+    const match = parsed.find((entry) => entry.id === draft.id);
+    if (match === undefined) return [];
+    const { accountFollowsDefault: _bit, ...rest } = draft;
+    return match.accountFollowsDefault === true
+      ? [{ ...rest, accountFollowsDefault: true }]
+      : [rest];
+  });
 }
 
 function worktreeIntentEntry(workspacePath: string) {
@@ -1489,6 +1530,144 @@ describe("useLandingDraftStore", () => {
       );
     },
   );
+
+  it("projects raw Terminal and the provenance bit, and a bit-only inbound change lands", () => {
+    const patches: DesktopPerWindowStatePatch[] = [];
+    setLandingDraftDesktopProjectionBridge({
+      update: (patch) => {
+        patches.push(patch);
+        return Promise.resolve();
+      },
+      flush: () => Promise.resolve(),
+      dispose: () => undefined,
+    });
+
+    const followsId = useLandingDraftStore
+      .getState()
+      .createDraft(HAIKU_SETTINGS);
+    useLandingDraftStore
+      .getState()
+      .setDraftAccountFollowsDefault(followsId, true);
+    const chosenId = useLandingDraftStore
+      .getState()
+      .createDraft(HAIKU_SETTINGS);
+
+    const outbound = patches.at(-1)?.landingDrafts ?? [];
+    const follows = outbound.find((draft) => draft.id === followsId);
+    const chosen = outbound.find((draft) => draft.id === chosenId);
+    if (follows === undefined || chosen === undefined) {
+      throw new Error("the desktop projection omitted a draft");
+    }
+    expect(follows.accountFollowsDefault).toBe(true);
+    expect(profileIdOf(follows.settings)).toBeNull();
+    expect(Object.hasOwn(chosen, "accountFollowsDefault")).toBe(false);
+    expect(profileIdOf(chosen.settings)).toBeNull();
+
+    const activeLandingDraftId = patches.at(-1)?.activeLandingDraftId ?? null;
+    const parsed = parseLandingDrafts(outbound);
+    const parsedFollows = parsed.find((draft) => draft.id === followsId);
+    const parsedChosen = parsed.find((draft) => draft.id === chosenId);
+    if (parsedFollows === undefined || parsedChosen === undefined) {
+      throw new Error("the desktop parser dropped a projected draft");
+    }
+    expect(parsedFollows.accountFollowsDefault).toBe(true);
+    expect(Object.hasOwn(parsedChosen, "accountFollowsDefault")).toBe(false);
+
+    const projected = draftsWithParsedBit(outbound, parsed);
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: projected,
+        activeLandingDraftId,
+      }),
+    );
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === followsId)?.accountFollowsDefault,
+    ).toBe(true);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === followsId)?.settings?.profileId,
+    ).toBeNull();
+
+    const echoed = useLandingDraftStore.getState().drafts;
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: projected,
+        activeLandingDraftId,
+      }),
+    );
+    expect(useLandingDraftStore.getState().drafts).toBe(echoed);
+
+    const withoutBit = outbound.map((draft) => {
+      if (draft.id !== followsId) return draft;
+      const { accountFollowsDefault: _bit, ...rest } = draft;
+      return rest;
+    });
+    const parsedWithout = parseLandingDrafts(withoutBit);
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: draftsWithParsedBit(withoutBit, parsedWithout),
+        activeLandingDraftId,
+      }),
+    );
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === followsId)?.accountFollowsDefault,
+    ).toBe(false);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === chosenId)?.accountFollowsDefault,
+    ).toBe(false);
+
+    const parsedRestored = parseLandingDrafts(outbound);
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: draftsWithParsedBit(outbound, parsedRestored),
+        activeLandingDraftId,
+      }),
+    );
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === followsId)?.accountFollowsDefault,
+    ).toBe(true);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === chosenId)?.accountFollowsDefault,
+    ).toBe(false);
+
+    setLandingDraftDesktopProjectionBridge(null);
+  });
+
+  it("publishes a landing draft without accountFollowsDefault", () => {
+    const id = useLandingDraftStore.getState().createDraft(HAIKU_SETTINGS);
+    useLandingDraftStore.getState().setDraftAccountFollowsDefault(id, true);
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(id, textContent("hello"), null);
+    adoptLandingDraft(id, HOST_A);
+
+    const row = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === id);
+    if (row === undefined) throw new Error("the landing draft is gone");
+    expect(row.accountFollowsDefault).toBe(true);
+
+    const entry = collectDraftMirrorDirtyWrites(HOST_A).find(
+      (candidate) => candidate.write.draftId === id,
+    );
+    if (entry === undefined) throw new Error("expected a landing host write");
+    if (entry.write.kind !== "landing") {
+      throw new Error("expected a landing host write");
+    }
+    expect(carriesAccountFollowsDefault(entry.write)).toBe(false);
+    expect(carriesAccountFollowsDefault(entry.write.portable)).toBe(false);
+  });
 
   it("drops an inbound draft whose doc `content` is not an array (malformed)", () => {
     // A corrupted snapshot: doc-typed but `content` is not an array. The inbound

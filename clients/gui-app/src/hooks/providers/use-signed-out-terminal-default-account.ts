@@ -13,11 +13,11 @@ import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-st
  * Terminal login is signed out (`soleSignedInProfileForSignedOutTerminal`),
  * read from the `providers.list` of `client`, the host the chat is created on.
  *
- * The list decides only while it is current: its latest fetch succeeded and
- * it is not stale (`isStale` is the query's own staleness, which an
- * invalidation also sets). TanStack keeps the previous data through a failed
- * fetch and while a stale one is refetched, and that data may no longer
- * describe the host, so it moves nothing and the Terminal login shows.
+ * The list decides only while it is current: its latest fetch succeeded, it
+ * is not stale (`isStale` is the query's own staleness, which an invalidation
+ * also sets), and no fetch is running. TanStack keeps the previous data
+ * through a failed fetch and while any refetch runs, and that data may no
+ * longer describe the host, so it moves nothing and the Terminal login shows.
  */
 export function useSignedOutTerminalDefaultAccount(
   toolbarStore: ComposerToolbarStore,
@@ -39,7 +39,9 @@ export function useSignedOutTerminalDefaultAccount(
     subscribed: enabled,
   });
   const current =
-    providersQuery.status === "success" && !providersQuery.isStale;
+    providersQuery.status === "success" &&
+    !providersQuery.isStale &&
+    providersQuery.fetchStatus === "idle";
   const providerId = providerCliIdForHarness(harnessId);
   const provider =
     current && providerId !== null

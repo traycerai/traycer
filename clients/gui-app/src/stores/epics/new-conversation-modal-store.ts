@@ -711,21 +711,20 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
         },
       };
     }
-    const settings = runSettingsFromDraftEcho(
-      document.portable.runSettings,
-      current.draftId === document.draftId ? current.settings : null,
-    );
     return {
       draftPatchesByEpicId: {
         ...state.draftPatchesByEpicId,
         [epicId]: {
           ...keptAccountProvenance(
             dropReturnedSandboxOnNewLine(current, document.draftId),
-            current.draftId === document.draftId ? settings : null,
+            document,
           ),
           content: document.portable.content,
           selection: document.portable.selection,
-          settings,
+          settings: runSettingsFromDraftEcho(
+            document.portable.runSettings,
+            current.draftId === document.draftId ? current.settings : null,
+          ),
           composerMode: document.portable.composerMode,
           workspace: document.workspace,
           draftId: document.draftId,
@@ -743,20 +742,22 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
 }
 
 /**
- * The echo of this device's own settings keeps the draft's account
- * provenance; an account another device set, or another line, is somebody's
- * choice.
+ * Only this window's own write coming back keeps the draft's account
+ * provenance: a document on the same draft line at the revision the patch
+ * already holds, which is its own acknowledged write
+ * (`newChatDraftRememberSynced`). A newer revision is another window's or
+ * device's write, and a cloud head (revision 0) proves nothing, so those count
+ * as chosen whatever account they name: equal values are not an own echo.
  */
 function keptAccountProvenance(
   current: NewConversationModalDraftPatch,
-  settings: ChatRunSettings | null,
+  document: DraftDocument,
 ): NewConversationModalDraftPatch {
   if (current.accountFollowsDefault !== true) return current;
   if (
-    settings !== null &&
-    current.settings !== null &&
-    settings.harnessId === current.settings.harnessId &&
-    settings.profileId === current.settings.profileId
+    current.draftId === document.draftId &&
+    document.revision > 0 &&
+    current.hostRevision === document.revision
   ) {
     return current;
   }

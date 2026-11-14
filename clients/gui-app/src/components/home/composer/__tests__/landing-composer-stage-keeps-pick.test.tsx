@@ -57,9 +57,10 @@ const host = vi.hoisted(() => ({
   clearEditor: vi.fn(),
   /** `undefined` leaves `providers.list` unread, as the other cases here do. */
   providers: undefined as ReadonlyArray<ProviderCliState> | undefined,
-  /** The query decides only while `status === "success"` and it is not stale. */
+  /** The query decides only while it succeeded, is fresh, and is not fetching. */
   providersStatus: "success" as "pending" | "error" | "success",
   providersStale: false,
+  providersFetchStatus: "idle" as "idle" | "fetching",
 }));
 
 const PLACEMENT_CLIENT = vi.hoisted(() => ({ hostId: "host-test" }));
@@ -438,8 +439,8 @@ vi.mock(
         isError: status === "error",
         isPending: status === "pending",
         isSuccess: status === "success",
-        isFetching: false,
-        fetchStatus: "idle" as const,
+        isFetching: host.providersFetchStatus === "fetching",
+        fetchStatus: host.providersFetchStatus,
       };
     },
   }),
@@ -608,6 +609,7 @@ beforeEach(() => {
   host.providers = undefined;
   host.providersStatus = "success";
   host.providersStale = false;
+  host.providersFetchStatus = "idle";
   queryClient.removeQueries({ queryKey: PROVIDERS_LIST_KEY, exact: true });
   host.startTask.mockReset();
   host.startTask.mockImplementation(
@@ -1291,6 +1293,29 @@ describe("a signed-out Terminal login on the landing composer", () => {
       await Promise.resolve();
     });
     expect(toolbar().getState().selection.profileId).toBeNull();
+  });
+
+  it("stays on Terminal while a fresh provider list is still fetching, then shows the profile", async () => {
+    host.providersFetchStatus = "fetching";
+    publishSignedOutTerminal([WORK_PROFILE], false);
+    seedSignedOutTerminal();
+    const view = mount(null, null);
+
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.profileId).toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(toolbar().getState().selection.profileId).toBeNull();
+
+    host.providersFetchStatus = "idle";
+    view.rerender(composer(null, null));
+    await waitFor(() =>
+      expect(toolbar().getState().selection.profileId).toBe(WORK_PROFILE),
+    );
+    expect(toolbar().getState().values.selection.profileId).toBeNull();
   });
 
   it("stays on Terminal when the provider read is stale", async () => {
