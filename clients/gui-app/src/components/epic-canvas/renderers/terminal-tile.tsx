@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { useStore } from "zustand";
 import {
   Suspense,
@@ -694,6 +695,7 @@ function HostTerminalTileLive(
         tileId={props.tileId}
         message={durableCreate.error.message}
         onRetry={() => {
+          if (showHostUpdateNeededForGesture(hostId)) return;
           retryEpicTerminalDurableCreate(hostId, props.node.id);
         }}
       />
@@ -704,7 +706,10 @@ function HostTerminalTileLive(
       <TerminalStartError
         tileId={props.tileId}
         message={lifecycle.requestError.message}
-        onRetry={lifecycle.retry}
+        onRetry={() => {
+          if (showHostUpdateNeededForGesture(hostId)) return;
+          lifecycle.retry();
+        }}
       />
     );
   }

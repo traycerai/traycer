@@ -1,3 +1,7 @@
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import { hostTokenBearerFor } from "@traycer-clients/shared/auth/host-token-lease";
 import {
@@ -124,6 +128,8 @@ export function buildRawHostMessengerForTarget<
 >(
   params: BuildRawHostMessengerForTargetParams<Registry>,
 ): BuiltHostMessenger<Registry> | null {
+  if (hostDirectoryEntryNeedsUpdate(params.target, MINIMUM_HOST_VERSION))
+    return null;
   if (isPoolHostDirectoryEntry(params.target)) {
     // The server pool: the same session as a host's, on a direct leg. What
     // `open` presents (the user bearer, `authz: null`, no member credential)

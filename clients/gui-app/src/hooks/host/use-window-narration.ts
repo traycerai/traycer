@@ -4,6 +4,7 @@ import {
   deriveWindowNarration,
   findLease,
   isServingLease,
+  olderHostUpdateVariant,
   type WindowNarrationState,
 } from "@/lib/host/window-narration";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
@@ -13,6 +14,12 @@ import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-author
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { hostAppVersionFromDirectoryEntry } from "@/lib/host/version-skew-copy";
 
 /**
  * The window narrator's verdict for THIS window.
@@ -36,6 +43,9 @@ export function useWindowNarration(): WindowNarrationState {
     (state) => state.targetHostId,
   );
   const leases = useHostLeases();
+  const updateCandidate = useHostDirectoryEntry(
+    effectiveHostId ?? targetHostId,
+  );
   // The NULL-TOLERANT read, deliberately: this hook mounts at the app root,
   // and the throwing `useRunnerHost` is exactly the RunnerHostProvider
   // coupling that once cost two root-route suites their whole tree (see
@@ -78,29 +88,43 @@ export function useWindowNarration(): WindowNarrationState {
     setHasBeenServed(true);
   }
 
-  return useMemo(
-    () =>
-      deriveWindowNarration({
-        attached,
-        effectiveHostId,
-        targetHostId,
-        leases,
-        hasBeenServed,
-        localHostExpected,
-        discoveryConcluded,
-        localHostId,
-        doorState,
-      }),
-    [
+  return useMemo<WindowNarrationState>(() => {
+    if (
+      attached &&
+      updateCandidate !== null &&
+      hostDirectoryEntryNeedsUpdate(updateCandidate, MINIMUM_HOST_VERSION)
+    ) {
+      return {
+        kind: "narrating",
+        cause: effectiveHostId === null ? "no-usable-host" : "cold-start",
+        variant: olderHostUpdateVariant(
+          updateCandidate.hostId,
+          updateCandidate.hostId === targetHostId,
+          hostAppVersionFromDirectoryEntry(updateCandidate),
+        ),
+      };
+    }
+    return deriveWindowNarration({
       attached,
-      discoveryConcluded,
       effectiveHostId,
-      hasBeenServed,
+      targetHostId,
       leases,
+      hasBeenServed,
       localHostExpected,
+      discoveryConcluded,
       localHostId,
       doorState,
-      targetHostId,
-    ],
-  );
+    });
+  }, [
+    attached,
+    discoveryConcluded,
+    effectiveHostId,
+    hasBeenServed,
+    leases,
+    localHostExpected,
+    localHostId,
+    doorState,
+    targetHostId,
+    updateCandidate,
+  ]);
 }

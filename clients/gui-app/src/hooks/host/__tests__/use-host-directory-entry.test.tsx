@@ -43,15 +43,36 @@ class ChurningDirectory<T extends HostDirectoryEntry = HostDirectoryEntry> {
 
 const directoryRef = vi.hoisted(() => ({
   value: null as ChurningDirectory | null,
+  bound: true,
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostDirectory: () => {
-    if (directoryRef.value === null) {
-      throw new Error("test directory not configured");
-    }
-    return directoryRef.value;
+const rowSubscriptions = vi.hoisted(() => vi.fn());
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-connection-registry",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-connection-registry")
+      >();
+    return {
+      ...actual,
+      subscribeHostRowChanged: (
+        hostId: string,
+        listener: () => void,
+      ): (() => void) => {
+        rowSubscriptions(hostId);
+        return actual.subscribeHostRowChanged(hostId, listener);
+      },
+    };
   },
+);
+
+vi.mock("@/lib/host", () => ({
+  useHostBinding: () =>
+    directoryRef.bound && directoryRef.value !== null
+      ? { directory: directoryRef.value }
+      : null,
 }));
 
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -60,7 +81,39 @@ describe("useHostDirectoryEntry", () => {
   afterEach(() => {
     cleanup();
     directoryRef.value = null;
+    directoryRef.bound = true;
+    rowSubscriptions.mockClear();
     vi.restoreAllMocks();
+  });
+
+  it("returns null and does not subscribe when no host runtime is bound", () => {
+    rowSubscriptions.mockClear();
+    const directory = new ChurningDirectory(mockLocalHostEntry);
+    const onChange = vi.spyOn(directory, "onChange");
+    directoryRef.value = directory;
+    directoryRef.bound = false;
+
+    const { result } = renderHook(() =>
+      useHostDirectoryEntry(mockLocalHostEntry.hostId),
+    );
+
+    expect(result.current).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(rowSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it("does not subscribe when the directory is bound and the host id is null", () => {
+    rowSubscriptions.mockClear();
+    const directory = new ChurningDirectory(mockLocalHostEntry);
+    const onChange = vi.spyOn(directory, "onChange");
+    directoryRef.value = directory;
+    directoryRef.bound = true;
+
+    const { result } = renderHook(() => useHostDirectoryEntry(null));
+
+    expect(result.current).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(rowSubscriptions).not.toHaveBeenCalled();
   });
 
   it("keeps the same reference across a field-identical re-emit (benign churn)", () => {

@@ -1,6 +1,36 @@
+const updateAction = vi.hoisted(() => ({ update: vi.fn() }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+vi.mock("@/hooks/host/use-older-host-update", () => ({
+  useOlderHostUpdate: () => ({
+    update: updateAction.update,
+    pending: false,
+    remotePending: false,
+    failure: null,
+  }),
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
+  useHostProvisioningProgress: () => null,
+}));
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { within } from "@testing-library/react";
 import { useEffect, useState, type ReactNode } from "react";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   hostScopeFixture,
@@ -50,7 +80,66 @@ function expectClassTokens(element: Element, tokens: readonly string[]): void {
  * Collapsing them told people with hosts to go install a host.
  */
 describe("<HostScopeGate /> empty and failed states", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    updateAction.update.mockClear();
+  });
+
+  it.each(["local", "remote"] as const)(
+    "shows the update notice and working outline action for a picked %s host below the minimum",
+    (kind) => {
+      const entry =
+        kind === "local"
+          ? {
+              ...mockLocalHostEntry,
+              hostId: "picked-old-host",
+              version: "1.5.4",
+            }
+          : (() => {
+              const base = remoteEntry("picked-old-host", null);
+              return {
+                ...base,
+                version: "2.0.0",
+                remoteStatus: {
+                  ...base.remoteStatus,
+                  appVersion: "1.5.4",
+                },
+              };
+            })();
+      const host = hostScopeOptionFixture({
+        hostId: entry.hostId,
+        name: "Build Mac",
+        isLocalMachine: kind === "local",
+        entry,
+      });
+
+      render(
+        <HostScopeGate
+          scope={hostScopeFixture({ host, status: "following" })}
+          skeleton={<div data-testid="skeleton" />}
+        >
+          <div data-testid="body" />
+        </HostScopeGate>,
+      );
+
+      const notice = screen.getByTestId("host-scope-update-needed");
+      expect(within(notice).getByText("Host update needed").textContent).toBe(
+        "Host update needed",
+      );
+      expect(
+        within(notice).getByText(
+          "This host is running an older version than this app supports.",
+        ).textContent,
+      ).toBe("This host is running an older version than this app supports.");
+      const update = screen.getByRole("button", { name: "Update now" });
+      expect(update.textContent).toBe("Update now");
+      expect(update.getAttribute("data-variant")).toBe("outline");
+      expectHiddenFromView(screen.queryByTestId("body"));
+
+      fireEvent.click(update);
+      expect(updateAction.update).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("renders the panel body once the scope is ready", () => {
     render(
@@ -328,7 +417,10 @@ function EffectProbe(props: { readonly log: string[] }) {
  * by a REAL host switch — never by a transient same-host flap.
  */
 describe("<HostScopeGate /> concealment and preservation", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    updateAction.update.mockClear();
+  });
 
   function gateAt(
     status: "ready" | "unreachable",
@@ -423,5 +515,65 @@ describe("<HostScopeGate /> concealment and preservation", () => {
 
     rerender(gateAt("ready", surface, "host-a"));
     expect(screen.getByTestId("portal-surface")).not.toBeNull();
+  });
+
+  it("hides a below-minimum host's controls and effects while preserving its draft for recovery", () => {
+    const log: string[] = [];
+    const localHost = (version: string) =>
+      hostScopeOptionFixture({
+        hostId: "host-floor-transition",
+        entry: {
+          ...mockLocalHostEntry,
+          hostId: "host-floor-transition",
+          version,
+        },
+      });
+    const scopeAt = (version: string) =>
+      hostScopeFixture({
+        host: localHost(version),
+        status: "following",
+      });
+    const surface = (
+      <>
+        <TypedProbe />
+        <EffectProbe log={log} />
+        <Popover open>
+          <PopoverTrigger>anchor</PopoverTrigger>
+          <PopoverContent>
+            <button type="button" data-testid="portal-control">
+              Change setting
+            </button>
+          </PopoverContent>
+        </Popover>
+      </>
+    );
+    const renderAt = (version: string) => (
+      <HostScopeGate
+        scope={scopeAt(version)}
+        skeleton={<div data-testid="skeleton" />}
+      >
+        {surface}
+      </HostScopeGate>
+    );
+    const { rerender } = render(renderAt("2.0.0"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Typed probe" }), {
+      target: { value: "keep this draft" },
+    });
+    expect(screen.getByTestId("portal-control")).not.toBeNull();
+    expect(log).toEqual(["mount"]);
+
+    rerender(renderAt("1.5.4"));
+
+    expect(screen.getByText("Host update needed")).not.toBeNull();
+    expectHiddenFromView(screen.queryByDisplayValue("keep this draft"));
+    expect(screen.queryByRole("button", { name: "Change setting" })).toBeNull();
+    expect(screen.queryByTestId("portal-control")).toBeNull();
+    expect(log).toEqual(["mount", "cleanup"]);
+
+    rerender(renderAt("2.0.1"));
+
+    expect(screen.getByDisplayValue("keep this draft")).not.toBeNull();
+    expect(screen.getByTestId("portal-control")).not.toBeNull();
+    expect(log).toEqual(["mount", "cleanup", "mount"]);
   });
 });

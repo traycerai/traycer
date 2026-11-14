@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,8 @@ import {
   type WindowNarrationVariant,
 } from "@/lib/host/window-narration";
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { REMOTE_HOST_UPDATE_DESCRIPTION } from "@/lib/host/version-skew-copy";
 
 /**
  * THE window narrator (M5): one global surface for the two facts that
@@ -75,13 +78,6 @@ export interface WindowHostModalProps {
   readonly bootBody: ReactNode | null;
   readonly onRetry: (() => void) | null;
   readonly retryPending: boolean;
-  /**
-   * Re-runs the host install onto this build. `null` when this app cannot
-   * manage the host, or when the handshake says THIS APP is the outdated leg -
-   * forcing a host update can never fix an outdated client, so offering it
-   * there is an action that could only fail.
-   */
-  readonly onUpdateHost: (() => void) | null;
   readonly onOpenSettings: () => void;
   /**
    * Whether anything has failed yet. `Report issue` is the affordance that
@@ -116,7 +112,8 @@ export interface WindowHostModalProps {
 }
 
 export function WindowHostModal(props: WindowHostModalProps): ReactNode {
-  const copy = modalCopy(props.variant, props.cause);
+  const localHostId = useReactiveLocalHostId();
+  const copy = modalCopy(props.variant, props.cause, localHostId);
   return (
     <DialogPrimitive.Root open modal>
       <DialogPrimitive.Portal>
@@ -227,7 +224,8 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
  * one" signal a row of equal-weight buttons is.
  */
 export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
-  const copy = modalCopy(props.variant, props.cause);
+  const localHostId = useReactiveLocalHostId();
+  const copy = modalCopy(props.variant, props.cause, localHostId);
   // The released card face: body only, one heading, for a start that is
   // progressing or slow. A SETTLED failure gets the titled face below even on
   // the cold-start cause - a crash report under no heading reads as debris.
@@ -315,17 +313,13 @@ function NarrationActions(
       {props.variant.kind === "update-client" ? (
         <ClientUpdateRequiredAction requirement={props.variant.requirement} />
       ) : null}
-      {props.onUpdateHost === null ? null : (
-        <Button
-          type="button"
-          size="sm"
-          variant="default"
-          onClick={props.onUpdateHost}
-          data-testid="window-host-modal-update-host"
-        >
-          Update host
-        </Button>
-      )}
+      {props.variant.kind === "update-host" ? (
+        <HostUpdateRequiredAction
+          hostId={props.variant.hostId}
+          detail={props.variant.detail}
+          testId="window-host-modal-update-host"
+        />
+      ) : null}
       {props.variant.kind === "team-membership-required" &&
       props.onSwitchAccount !== undefined ? (
         <Button
@@ -560,6 +554,7 @@ interface WindowHostModalCopy {
 function modalCopy(
   variant: WindowNarrationVariant,
   cause: WindowNarrationCause,
+  localHostId: string | null,
 ): WindowHostModalCopy {
   if (variant.kind === "team-membership-required") {
     return {
@@ -596,13 +591,10 @@ function modalCopy(
       // incompatibility is a bug rather than routine drift, and the copy names
       // the leg the handshake says is behind rather than a generic fatal.
       title: hostUpdateSkew(variant.detail, getClientAppVersion()).title,
-      // Two descriptions, because on the fallback arm the first one's advice
-      // is something the reader cannot act on from here. "Update the host to
-      // continue" beside no button is an unexplained gap; naming the machine
-      // and saying where it can be updated is an honest absence.
-      description: variant.isTargetHost
-        ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
-        : "Another host on this account is running a version this app can't talk to, and it can't be updated from here. Update Traycer on that computer, or switch to a host this one can reach.",
+      description:
+        variant.hostId === localHostId
+          ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
+          : REMOTE_HOST_UPDATE_DESCRIPTION,
       reportTitle: "Host update required",
       reportMessage: "Traycer Host requires an update.",
       reportCode: "HOST_INCOMPATIBLE",

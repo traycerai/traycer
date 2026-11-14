@@ -1050,14 +1050,12 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-update-host")).toBeTruthy();
   });
 
-  it("arm 2: a non-target incompatible host is named, and no local action is offered for it", async () => {
+  it("arm 2: a non-target incompatible host is named and can be updated directly", async () => {
     // `deriveNoHostVariant` arm 2 - "some OTHER lease is dead because it is
     // incompatible", reached when the target is dead for an unrelated reason.
     // Arm 1 (target IS the incompatible host) is what the two tests around this
-    // one cover, and on that arm the named host and the acted-on host are the
-    // same machine, which is why `canManageHost` reads as a sufficient guard.
-    // It is not: it asks "is the TARGET this machine", while the card names
-    // whichever host is incompatible. Here those differ.
+    // one cover. This arm proves the named remote host's update action stays
+    // available even though local provisioning belongs to the other target.
     const forceProvisioning = vi.fn();
     applySnapshot({
       attached: true,
@@ -1084,10 +1082,8 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       {
         ...EMPTY_PRESENTATION,
-        // `canManageHost` is TRUE here, and legitimately so: the target is this
-        // machine. That is exactly what makes the guard insufficient - it is
-        // satisfied by a fact about the target while the card is about a
-        // different host.
+        // Local provisioning applies to the target; the modal's update action
+        // applies to the separately named remote host.
         targetKind: "local",
         localBootIntent: true,
         canManageHost: true,
@@ -1111,14 +1107,14 @@ describe("<WindowHostModalHost />", () => {
       "0.9.0",
     );
 
-    // Fixed: no button, because this machine's provisioning cannot fix that
-    // machine's host. Asserted alongside a POSITIVE consequence - the card
-    // still names the incompatible host and now explains the absence - so this
-    // cannot pass on a build where the whole modal failed to render.
-    expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+    expect(
+      screen.getByTestId("window-host-modal-update-host").textContent,
+    ).toBe("Update now");
     expect(
       screen.getByTestId("window-host-modal-description").textContent,
-    ).toContain("can't be updated from here");
+    ).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
+    );
     expect(forceProvisioning).not.toHaveBeenCalled();
   });
 

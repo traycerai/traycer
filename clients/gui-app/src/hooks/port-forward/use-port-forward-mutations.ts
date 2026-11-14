@@ -3,7 +3,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import {
   hostClientUnavailableError,
   withHostMutationLifecycleBoundary,
@@ -52,7 +52,7 @@ export function usePortForwardStopFor(
     withHostMutationLifecycleBoundary("portForward.stop", {
       mutationKey: portForwardMutationKeys.stop(),
       mutationFn: (variables) =>
-        withHostQueryErrorBoundary("portForward.stop", () => {
+        withHostMutationErrorBoundary("portForward.stop", () => {
           if (client === null) {
             return Promise.reject<
               ResponseOfMethod<HostRpcRegistry, "portForward.stop">
@@ -101,7 +101,7 @@ export function usePortForwardCutLeaseFor(
     withHostMutationLifecycleBoundary("portForward.cutLease", {
       mutationKey: portForwardMutationKeys.cutLease(),
       mutationFn: (variables) =>
-        withHostQueryErrorBoundary("portForward.cutLease", () => {
+        withHostMutationErrorBoundary("portForward.cutLease", () => {
           if (client === null) {
             return Promise.reject<
               ResponseOfMethod<HostRpcRegistry, "portForward.cutLease">
