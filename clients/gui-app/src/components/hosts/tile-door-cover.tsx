@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useHostBinding } from "@/lib/host";
 import { doorCoverCopy } from "@/lib/host/door-cover-copy";
 import { retryHostDoor } from "@/lib/host/host-door-retry";
+import { appLogger } from "@/lib/logger";
 import {
   offersDoorRetry,
   type DoorStateCoverVariant,
@@ -53,7 +54,13 @@ function TileDoorCoverAction(props: {
         variant="outline"
         className="mt-2"
         onClick={() => {
-          void retryHostDoor(cover.hostId, hostTokens);
+          // The reconnect has already run when a failed token refresh
+          // rejects; the cover stays up until an open is admitted.
+          retryHostDoor(cover.hostId, hostTokens).catch(() => {
+            appLogger.warn("[host-door] retry token refresh failed", {
+              hostId: cover.hostId,
+            });
+          });
         }}
       >
         Retry

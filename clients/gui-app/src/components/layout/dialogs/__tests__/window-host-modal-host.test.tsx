@@ -37,6 +37,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { appLogger } from "@/lib/logger";
 
 const signOutRound2Harness = vi.hoisted(() => ({
   signOut: vi.fn<() => Promise<boolean>>(() => Promise.resolve(false)),
@@ -284,7 +285,7 @@ function renderHostWithGate(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <HostReadinessControllerContext.Provider
@@ -295,6 +296,7 @@ function renderHostWithGate(
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
+  return { ...rendered, runnerHost };
 }
 
 const BOOTSTRAP_MARKERS = {
@@ -342,7 +344,8 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   useHostDoorStateStore.setState({ byHost: new Map() });
   useDesktopDialogStore.getState().setReportIssueAvailable(false);
-  useAuthStore.setState({ status: "signed-out" });
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  vi.restoreAllMocks();
   useSignOutConfirmStore.getState().setOpen(false);
   setMobileApp(false);
 });
@@ -1446,7 +1449,10 @@ describe("<WindowHostModalHost />", () => {
    * generic recovery (Retry, Report issue, diagnostics) would be offered if the
    * door cover did not choose its own actions.
    */
-  async function renderDoorCover(state: HostDoorState): Promise<HTMLElement> {
+  async function renderDoorCover(state: HostDoorState): Promise<{
+    readonly surface: HTMLElement;
+    readonly runnerHost: MockRunnerHost;
+  }> {
     noteHostDoorState(state);
     applySnapshot({
       attached: true,
@@ -1454,7 +1460,7 @@ describe("<WindowHostModalHost />", () => {
       targetHostId: LOCAL_HOST_ID,
       leases: [],
     });
-    renderHostWithGate(
+    const { runnerHost } = renderHostWithGate(
       {
         ...EMPTY_PRESENTATION,
         targetKind: "local",
@@ -1465,11 +1471,14 @@ describe("<WindowHostModalHost />", () => {
       new MockTraycerCli(),
       GATE_OPEN,
     );
-    return screen.findByTestId("window-host-modal");
+    return {
+      surface: await screen.findByTestId("window-host-modal"),
+      runnerHost,
+    };
   }
 
   it("message 1, a token that cannot be had: its words and Open settings only", async () => {
-    const surface = await renderDoorCover({
+    const { surface } = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "token-unavailable",
       detail: null,
@@ -1484,7 +1493,7 @@ describe("<WindowHostModalHost />", () => {
   });
 
   it("message 3, keys never fetched: its words, Retry and Open settings; Retry reconnects to that computer", async () => {
-    const surface = await renderDoorCover({
+    const { surface } = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "keys-unavailable",
       detail: null,
@@ -1505,7 +1514,7 @@ describe("<WindowHostModalHost />", () => {
   });
 
   it("message 4, a wrong clock: its words, Retry and Open settings", async () => {
-    const surface = await renderDoorCover({
+    const { surface } = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "clock-skew",
       detail: null,
@@ -1522,7 +1531,7 @@ describe("<WindowHostModalHost />", () => {
   });
 
   it("message 5, an expired token: its words, Retry and Open settings", async () => {
-    const surface = await renderDoorCover({
+    const { surface } = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "token-expired",
       detail: null,
@@ -1538,8 +1547,37 @@ describe("<WindowHostModalHost />", () => {
     expect(buttonsOf(surface)).toEqual(["Retry", "Open settings"]);
   });
 
+  it("message 5's Retry still reconnects when the new token cannot be had, and owns the failure", async () => {
+    useAuthStore.setState({
+      contextMetadata: { userId: "retry-user", username: "retry-user" },
+    });
+    const { surface, runnerHost } = await renderDoorCover({
+      hostId: LOCAL_HOST_ID,
+      kind: "token-expired",
+      detail: null,
+    });
+    vi.spyOn(runnerHost.hostTokens, "obtain").mockRejectedValue(
+      new Error("token storage is unavailable"),
+    );
+    const warn = vi.spyOn(appLogger, "warn");
+    const rebuildNow = vi.fn();
+    const stopHearing = onHostDoorRetry(LOCAL_HOST_ID, rebuildNow);
+
+    fireEvent.click(within(surface).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "[host-door] retry token refresh failed",
+        { hostId: LOCAL_HOST_ID },
+      ),
+    );
+    expect(rebuildNow).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("window-host-modal")).toBe(surface);
+    stopHearing();
+  });
+
   it("message 6, a broken enrolment: its words and Open settings only", async () => {
-    const surface = await renderDoorCover({
+    const { surface } = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "enrolment-broken",
       detail: null,
@@ -1556,7 +1594,7 @@ describe("<WindowHostModalHost />", () => {
   });
 
   it("message 7, a removed membership: its words and Open settings only", async () => {
-    const surface = await renderDoorCover({
+    const { surface } = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "membership-removed",
       detail: null,
@@ -1573,7 +1611,7 @@ describe("<WindowHostModalHost />", () => {
   });
 
   it("message 8, not a member: Switch account and Open settings only", async () => {
-    const surface = await renderDoorCover({
+    const { surface } = await renderDoorCover({
       hostId: LOCAL_HOST_ID,
       kind: "not-a-member",
       detail: null,

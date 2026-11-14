@@ -442,7 +442,13 @@ function resolveRetry(args: {
   if (offersDoorRetry(variant)) {
     return {
       onRetry: () => {
-        void retryHostDoor(variant.hostId, hostTokens);
+        // The reconnect has already run when a failed token refresh rejects;
+        // the cover stays up until an open is admitted.
+        retryHostDoor(variant.hostId, hostTokens).catch(() => {
+          appLogger.warn("[host-door] retry token refresh failed", {
+            hostId: variant.hostId,
+          });
+        });
       },
       pending: false,
     };
