@@ -1,4 +1,5 @@
 import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
+import { useProfileRecordPersonAction } from "@/hooks/providers/use-profile-record-person-action-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -507,7 +508,12 @@ function ProfileSignOutAction(props: {
   readonly disabled: boolean;
   readonly onSignedOut: () => void;
 }): ReactNode {
-  const signOut = useSignOutProviderProfile();
+  const localSignOut = useSignOutProviderProfile();
+  const recordSignOut = useProfileRecordPersonAction(
+    "sign-out",
+    props.recordAccount,
+  );
+  const signOut = props.recordAccount ? recordSignOut : localSignOut;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const host = usePersonalPageHost();
   const supported = useHostSupportsMethod(
@@ -517,7 +523,7 @@ function ProfileSignOutAction(props: {
   const custodyClass = props.profile.credentialHome?.custodyClass;
   const recordAccount = props.recordAccount;
   if (
-    !supported ||
+    (!recordAccount && !supported) ||
     props.profile.kind !== "managed" ||
     (!recordAccount &&
       (props.profile.presence?.kind !== "admitted" ||
@@ -683,7 +689,14 @@ export function ProfileEditDialog(props: {
   const environmentName = usePickedTeamLabel(
     presence?.scope === "environment" ? presence.environmentId : "",
   );
-  const removeProfile = useRemoveProviderProfile();
+  const localRemoveProfile = useRemoveProviderProfile();
+  const recordRemoveProfile = useProfileRecordPersonAction(
+    "remove",
+    recordAccount,
+  );
+  const removeProfile = recordAccount
+    ? recordRemoveProfile
+    : localRemoveProfile;
   const renameProfile = useProfileRename(props.profile);
   const recolorProfile = useRecolorProviderProfile();
   const [switchingAccountOverride, setSwitchingAccount] = useState<
