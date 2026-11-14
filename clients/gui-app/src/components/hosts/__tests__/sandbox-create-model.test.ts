@@ -173,7 +173,7 @@ describe("sandboxTeamCreateLines", () => {
   it("is the four lines, verbatim and in order", () => {
     expect(sandboxTeamCreateLines("acme")).toEqual([
       "Belongs to: acme",
-      "Charged to your bundle under acme.",
+      "Charged to acme.",
       "Chats on it are visible to the people of the task you use it in, which can include people outside acme.",
       "Agents on it work with acme's hosts only; they cannot work with agents on your own computer. The task still shares its files and chats.",
     ]);
