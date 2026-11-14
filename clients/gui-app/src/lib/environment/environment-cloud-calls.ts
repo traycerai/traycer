@@ -159,6 +159,18 @@ export function environmentCloudHostError(
   });
 }
 
+/**
+ * One operation's sender. Every request it sends goes on the sign-in that was
+ * current when the operation began, so an operation of several requests
+ * never finishes on the next person's sign-in. Failures are the
+ * `HostRpcError` a host gave; with no session service each request fails as a
+ * host with no client does.
+ */
+export type EnvironmentCloudSend = <Method extends EnvironmentCloudMethod>(
+  method: Method,
+  request: RequestOfMethod<HostRpcRegistry, Method>,
+) => Promise<ResponseOfMethod<HostRpcRegistry, Method>>;
+
 /** One moved method, sent on the person's sign-in. */
 export async function callEnvironmentCloud<
   Method extends EnvironmentCloudMethod,

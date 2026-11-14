@@ -1,8 +1,5 @@
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  environmentCloudQueryKey,
-  requestEnvironmentCloud,
-} from "@/hooks/environment/use-environment-cloud";
+import { environmentCloudQueryKey } from "@/hooks/environment/use-environment-cloud";
 import { removalLabel } from "@/components/settings/details/details-copy";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -177,11 +174,10 @@ async function singleSecretDetails(
   const versions =
     removed?.removal.outcome === "destroyed"
       ? null
-      : await requestEnvironmentCloud(
-          context.environmentCloud,
-          "environment.secrets.versions",
-          { environmentId: subject.environmentId, secretId: subject.key },
-        );
+      : await context.environmentCloud("environment.secrets.versions", {
+          environmentId: subject.environmentId,
+          secretId: subject.key,
+        });
   const current = versions?.versions.find((version) => version.current);
   const removal = newestRemoval(
     versions?.removal ?? null,
@@ -231,11 +227,7 @@ async function readSecretsList(
       [],
     ),
     queryFn: () =>
-      requestEnvironmentCloud(
-        context.environmentCloud,
-        "environment.secrets.list",
-        { environmentId },
-      ),
+      context.environmentCloud("environment.secrets.list", { environmentId }),
     staleTime: 0,
     retry: false,
   });
