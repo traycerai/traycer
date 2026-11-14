@@ -10,13 +10,12 @@ import {
   DETAILS,
   RETRY,
   sandboxVerbFailureLine,
-  teamSandboxOutOfCreditsLine,
 } from "@/lib/sandboxes/sandbox-strings";
+import { SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT } from "@traycer/protocol/host/sandbox-control";
 import {
-  SANDBOX_REFUSAL_CODE_FROZEN,
-  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
-} from "@traycer/protocol/host/sandbox-control";
-import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
+  SandboxOperationError,
+  sandboxFailureMessageFor,
+} from "@/hooks/sandboxes/sandbox-failure-copy";
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
@@ -114,9 +113,9 @@ export function useSandboxOperationFailure(
 }
 
 /**
- * A failure other than a credit refusal. A team's sandbox refused for being
- * out of credits says whose bundle is out to anyone who cannot buy it, in
- * place of telling them to add credits.
+ * A failure other than a credit refusal, worded for whether the person can
+ * buy the team's credits (a team's sandbox out of credits names whose
+ * bundle is out to anyone who cannot).
  */
 function operationFailureLine(
   operation: Extract<SandboxRowOperation, { kind: "failed" }>,
@@ -125,24 +124,14 @@ function operationFailureLine(
   offersAddCredits: boolean,
 ): string {
   const failed = sandboxVerbFailureLine(operation.verb, name);
-  const failure =
-    operation.error instanceof SandboxOperationError
-      ? operation.error.failure
-      : null;
-  const frozen =
-    failure?.kind === "refused" && failure.code === SANDBOX_REFUSAL_CODE_FROZEN;
-  if (
-    frozen &&
-    configuration.kind === "team" &&
-    configuration.teamName.length > 0 &&
-    !offersAddCredits
-  ) {
-    return `${failed}. ${teamSandboxOutOfCreditsLine(configuration.teamName)}`;
-  }
-  return `${failed}${safeFailureClause(operation.error)}`;
-}
-
-/** Only translated control failures are safe to show inline. */
-function safeFailureClause(error: Error): string {
-  return error instanceof SandboxOperationError ? `. ${error.message}` : "";
+  if (!(operation.error instanceof SandboxOperationError)) return failed;
+  const sentence = sandboxFailureMessageFor(
+    operation.error.failure,
+    operation.error.message,
+    {
+      buysTeamCredits: offersAddCredits,
+      teamName: configuration.kind === "team" ? configuration.teamName : null,
+    },
+  );
+  return `${failed}. ${sentence}`;
 }

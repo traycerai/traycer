@@ -123,7 +123,7 @@ export function useSandboxCreate(
         sandboxFailureMessageFor(
           result,
           sandboxCreateFailureMessage(result, teamName),
-          buysTeamCredits,
+          { buysTeamCredits, teamName },
         ),
         result.kind === "refused" ? result.code : null,
         result.kind === "refused" ? result.reason : null,

@@ -28,6 +28,7 @@ import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import {
   SandboxOperationError,
   sandboxFailureMessageFor,
+  type SandboxFailureReader,
 } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
@@ -137,10 +138,10 @@ function withOperationFailure(
 
 function operationFailureMessage(
   error: Error,
-  buysTeamCredits: boolean,
+  reader: SandboxFailureReader,
 ): string {
   return error instanceof SandboxOperationError
-    ? sandboxFailureMessageFor(error.failure, error.message, buysTeamCredits)
+    ? sandboxFailureMessageFor(error.failure, error.message, reader)
     : error.message;
 }
 
@@ -215,7 +216,15 @@ function SandboxDetailsSections(props: {
               <p>
                 {sandboxVerbFailureLine(operation.verb, summary.displayName)}
               </p>
-              <p>{operationFailureMessage(operation.error, buysTeamCredits)}</p>
+              <p>
+                {operationFailureMessage(operation.error, {
+                  buysTeamCredits,
+                  teamName:
+                    configuration?.kind === "team"
+                      ? configuration.teamName
+                      : null,
+                })}
+              </p>
               <p>{`Support reference: ${operation.reference}`}</p>
             </li>
           ) : null}
