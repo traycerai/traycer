@@ -334,6 +334,7 @@ async function createHarness(
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
     registry: hostRpcRegistry,
+    singleAttemptMessenger: null,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `inventory-${++requestSeq}`,
