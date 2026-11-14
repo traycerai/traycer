@@ -84,6 +84,8 @@ const testState = vi.hoisted(() => ({
   ingesting: false,
   createPending: false,
   pasteDisabled: false,
+  /** The `pathsReachTarget` the composer handed `useLandingComposerPaste`. */
+  pastePathsReachTarget: null as boolean | null,
   resolvingPaths: false,
   runPendingImageJob: null as
     | ((job: (signal: AbortSignal) => Promise<void>) => void)
@@ -347,6 +349,12 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
+/** This renderer's own host id, which the composer compares its placement host with. */
+const localHost = vi.hoisted(() => ({ id: null as string | null }));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => localHost.id,
+}));
+
 vi.mock("@/hooks/composer/use-landing-composer-paste", async (importActual) => {
   const actual =
     await importActual<
@@ -354,8 +362,12 @@ vi.mock("@/hooks/composer/use-landing-composer-paste", async (importActual) => {
     >();
   return {
     ...actual,
-    useLandingComposerPaste: (params: { readonly disabled: boolean }) => {
+    useLandingComposerPaste: (params: {
+      readonly disabled: boolean;
+      readonly pathsReachTarget: boolean;
+    }) => {
       testState.pasteDisabled = params.disabled;
+      testState.pastePathsReachTarget = params.pathsReachTarget;
       // Mirror runPendingImageJob → isIngestingImages so submit gating covers
       // the in-place paste path (not the deleted attach-at-anchor path).
       const runPendingImageJob = (
@@ -504,6 +516,8 @@ afterEach(() => {
   testState.composerIsPinned = true;
   testState.submitRefusal = null;
   testState.pickerCalls = [];
+  testState.pastePathsReachTarget = null;
+  localHost.id = null;
   testState.toolbarStore?.setState({
     selection: {
       harnessId: "claude",
@@ -838,5 +852,71 @@ describe("landing composer clears a refused §54 notice on host change", () => {
     // resurrect.
     resolveTo("host-b", "Build Box");
     expect(screen.queryByTestId("composer-host-notice")).toBeNull();
+  });
+});
+
+// A typed path means something only where the placement host's files are the
+// ones the path names. The paste hook decides from this one flag; what it does
+// with each answer is pinned beside it, in `use-landing-composer-paste-remote-files`.
+describe("landing composer: do typed paths reach the placement host", () => {
+  it.each([
+    { local: "host-a", reaches: true, machine: "this machine" },
+    { local: "host-elsewhere", reaches: false, machine: "another machine" },
+    { local: null, reaches: false, machine: "no local host known" },
+  ])(
+    "hands its paste $reaches when the placement host is host-a and this renderer is on $machine",
+    ({ local, reaches }) => {
+      localHost.id = local;
+      render(
+        <LandingComposer
+          draftId={null}
+          pendingCreateId="pending-1"
+          initialSettings={null}
+          workspaceControls={() => null}
+        />,
+      );
+
+      expect(testState.pastePathsReachTarget).toBe(reaches);
+    },
+  );
+
+  it("hands its paste false when the placement has no host, even where this renderer knows none either", () => {
+    localHost.id = null;
+    landingTarget = { ...READ_TARGET, resolvedHostId: null };
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    expect(testState.pastePathsReachTarget).toBe(false);
+  });
+
+  it("follows the placement when its resolved host moves between machines", () => {
+    localHost.id = "host-a";
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    expect(testState.pastePathsReachTarget).toBe(true);
+
+    landingTarget = { ...READ_TARGET, resolvedHostId: "host-b" };
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    expect(testState.pastePathsReachTarget).toBe(false);
   });
 });

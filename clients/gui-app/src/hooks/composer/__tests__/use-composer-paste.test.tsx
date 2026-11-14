@@ -99,12 +99,12 @@ function useAdapterUnderTest(
     beginPathInsertion: () => filePathsRef.current.beginPathInsertion(),
     focus: () => undefined,
   });
-  return useComposerHashPaste(
-    editorRef,
-    filePaths.fileDrops,
-    filePaths.mentionRoots,
-    null,
-  );
+  return useComposerHashPaste(editorRef, {
+    fileDrops: filePaths.fileDrops,
+    mentionRoots: filePaths.mentionRoots,
+    fileRoute: null,
+    pathsReachTarget: filePaths.pathsReachTarget,
+  });
 }
 
 /** The deleted `useComposerPaste`'s signature, likewise over the shipping hook. */
@@ -113,7 +113,12 @@ function usePasteUnderTest(
   fileDrops: IFileDropHost,
   mentionRoots: ReadonlyArray<string>,
 ): UseComposerPasteResult {
-  return useComposerHashPaste(editorRef, fileDrops, mentionRoots, null);
+  return useComposerHashPaste(editorRef, {
+    fileDrops,
+    mentionRoots,
+    fileRoute: null,
+    pathsReachTarget: true,
+  });
 }
 
 // Default fixture for tests that don't care about file-path resolution at
@@ -127,6 +132,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
   },
   mentionRoots: [],
   beginPathInsertion: () => null,
+  pathsReachTarget: true,
 };
 
 afterEach(() => {
@@ -537,6 +543,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "notes.txt": ["/repo/notes.txt"] }, {}),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -560,6 +567,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "doc.pdf": ["/repo/external/doc.pdf"] }, {}),
       mentionRoots: [],
       beginPathInsertion: () => (paths) => {
@@ -585,6 +593,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "my-folder": ["/repo/my-folder"] }, {}),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -607,6 +616,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops(
         {},
         // `fileUriToPath` strips the `file://` scheme before this is called,
@@ -645,6 +655,7 @@ describe("composer paste core - onPaste", () => {
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     };
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops,
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -673,6 +684,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       // Mirrors the non-Electron surface: resolveDroppedFilePaths always [].
       fileDrops: makeFileDrops({}, {}),
       mentionRoots: [],
@@ -703,6 +715,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops(
         {
           "a.txt": ["/repo/a.txt"],
@@ -740,6 +753,7 @@ describe("composer paste core - onPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "notes.txt": ["/repo/notes.txt"] }, {}),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -771,6 +785,7 @@ describe("composer paste core - onPaste", () => {
       Promise.resolve(["/repo/notes.txt"]),
     );
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,
@@ -808,6 +823,7 @@ describe("composer paste core - onPaste", () => {
       Promise.resolve(["/tmp/traycer-copy/shot-xyz.png"]),
     );
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,
@@ -846,6 +862,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths: () =>
           new Promise((resolve) => {
@@ -913,6 +930,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
     vi.useFakeTimers();
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths: () => new Promise(() => undefined),
         copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
@@ -993,6 +1011,7 @@ describe("composer paste core - drag-and-drop", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops({ "doc.pdf": ["/repo/doc.pdf"] }, {}),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -1022,6 +1041,7 @@ describe("composer paste core - drag-and-drop", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops(
         { "dropped-folder": ["/repo/dropped-folder"] },
         {},
@@ -1046,6 +1066,7 @@ describe("composer paste core - drag-and-drop", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: makeFileDrops(
         {},
         {
@@ -1149,6 +1170,7 @@ describe("composer paste core - drag-and-drop", () => {
     );
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
+      pathsReachTarget: true,
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,

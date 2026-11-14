@@ -1,7 +1,7 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "../host-stream-client";
-import type { StreamMethodSupport } from "../ws-stream-client";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -92,7 +92,33 @@ export class FakeStreamSession implements IStreamSession {
     this.emitFatalWithCode("UNAUTHORIZED", reason);
   }
 
-  /** A terminal close carrying `code`, for a consumer that tells closes apart by it. */
+  /** The close a host sends when it cannot serve `method` at all. */
+  emitIncompatible(method: string, reason: string): void {
+    this.status = "closed";
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "INCOMPATIBLE",
+          reason,
+          incompatibleMethods: [
+            {
+              method,
+              clientCanonical: null,
+              hostCanonical: null,
+              blocking: "host-missing-method",
+            },
+          ],
+          upgradeGuidance: null,
+        },
+      },
+      null,
+      null,
+    );
+  }
+
+  /** The terminal close a host sends with a specific code. */
   emitFatalWithCode(code: string, reason: string): void {
     this.status = "closed";
     this.statusHandler?.(

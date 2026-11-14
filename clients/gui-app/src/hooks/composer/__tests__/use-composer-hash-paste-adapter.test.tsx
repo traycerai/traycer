@@ -71,6 +71,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
   },
   mentionRoots: [],
   beginPathInsertion: () => null,
+  pathsReachTarget: true,
 };
 
 function pngFile(name: string, bytes: ReadonlyArray<number>): File {
