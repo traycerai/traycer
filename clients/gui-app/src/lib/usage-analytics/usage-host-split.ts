@@ -1,4 +1,8 @@
-import { hostNameFromLabel, UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
+import {
+  computerNameFromLabel,
+  hostNameFromLabel,
+  UNNAMED_HOST_LABEL,
+} from "@/lib/host/host-name";
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 import { sumTokenTotals } from "@/lib/usage-analytics/usage-chart-data";
 import type { UsageCostProvenance } from "@/lib/usage-analytics/usage-breakdown";
@@ -9,8 +13,7 @@ export function resolveUsageHostName(
   hostId: string,
   hostNames: ReadonlyMap<string, string>,
 ): string {
-  const name = hostNameFromLabel(hostNames.get(hostId) ?? null, hostId);
-  return name === UNNAMED_HOST_LABEL ? "Unnamed computer" : name;
+  return computerNameFromLabel(hostNames.get(hostId) ?? null, hostId);
 }
 
 export interface UsageHostSplitRow {
