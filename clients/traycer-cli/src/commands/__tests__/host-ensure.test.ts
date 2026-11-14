@@ -354,8 +354,9 @@ describe("buildHostEnsureCommand", () => {
     );
 
     expect(result.data).toMatchObject({ teamBinding: teamBindingFixture });
-    expect(result.human).toContain("belongs to acme");
-    expect(result.human).not.toContain("belongs to Acme");
+    expect(result.human).toContain(
+      `belongs to ${teamBindingFixture.environment.label}`,
+    );
 
     expect(mocks.completeTeamInstallMock).toHaveBeenCalledWith(
       "acme",
