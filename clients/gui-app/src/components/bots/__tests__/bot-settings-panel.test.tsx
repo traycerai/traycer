@@ -479,7 +479,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
     expect(screen.queryByText(/Runs on/)).toBeNull();
   });
 
-  it("enables Apply once the person picks another model, and applies exactly that", async () => {
+  it("enables Apply once the person picks another model and account, and applies both", async () => {
     const user = userEvent.setup();
     mountPanel(BOT, false);
     expect(applyButton().disabled).toBe(true);
@@ -488,7 +488,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
       liveStore().getState().setSelection({
         harnessId: "claude",
         modelSlug: "model-c",
-        profileId: "profile-1",
+        profileId: "selected-account",
       });
     });
     expect(applyButton().disabled).toBe(false);
@@ -500,9 +500,22 @@ describe("<BotChannelSettingsPanel /> model", () => {
       harness: "claude",
       model: "model-c",
       effort: "high",
-      profile: "profile-1",
+      profile: "selected-account",
     });
     expect(mocks.runSettingsClients.at(-1)).toBe(mocks.hostClient);
+  });
+
+  it("shows the pending account choice once in the model settings", () => {
+    mountPanel({ ...BOT, profileChoice: "ambiguous" }, false);
+
+    const refusals = screen.getAllByTestId("bot-settings-refusal");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.textContent).toBe(
+      "This bot's profile could be more than one account. Choose the account it should use.",
+    );
+    expect(screen.getByTestId("bot-settings-model").contains(refusals[0])).toBe(
+      true,
+    );
   });
 
   it("disables Apply again when the person picks the bot's own model back", () => {

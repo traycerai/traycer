@@ -282,8 +282,14 @@ export type BotAppearance = z.infer<typeof botAppearanceSchema>;
  * a host that predates it, which a reader takes as every choice at its
  * default. The record every other method and minor carries stays without it.
  */
-export const botDirectoryRecordSchema = lazySchema(() =>
+export const botDirectoryRecordSchemaV12 = lazySchema(() =>
   botRecordSchema.extend({ appearance: botAppearanceSchema.optional() }),
+);
+/** `bot.list@1.3` and `bot.read@1.2`: one pending account choice per bot. */
+export const botDirectoryRecordSchema = lazySchema(() =>
+  botDirectoryRecordSchemaV12.extend({
+    profileChoice: z.literal("ambiguous").nullable().optional(),
+  }),
 );
 export type BotDirectoryRecord = z.infer<typeof botDirectoryRecordSchema>;
 
@@ -358,6 +364,13 @@ export const botListResponseSchemaV11 = lazySchema(() =>
 );
 
 /** `bot.list@1.2`: each row carries the bot's appearance. */
+export const botListResponseSchemaV12 = lazySchema(() =>
+  z.object({
+    bots: z.array(botDirectoryRecordSchemaV12),
+    mainBotIds: z.record(z.string().min(1), botIdSchema).nullable(),
+  }),
+);
+/** The bound host's pending account choice, once per bot. */
 export const botListResponseSchema = lazySchema(() =>
   z.object({
     bots: z.array(botDirectoryRecordSchema),
@@ -379,6 +392,9 @@ export const botReadResponseSchemaV10 = lazySchema(() =>
 );
 
 /** `bot.read@1.1`: the row and its appearance. */
+export const botReadResponseSchemaV11 = lazySchema(() =>
+  z.object({ bot: botDirectoryRecordSchemaV12 }),
+);
 export const botReadResponseSchema = lazySchema(() =>
   z.object({ bot: botDirectoryRecordSchema }),
 );
@@ -463,7 +479,7 @@ export type BotUpdateAppearanceRequest = z.infer<
 >;
 
 export const botUpdateAppearanceResponseSchema = lazySchema(() =>
-  z.object({ bot: botDirectoryRecordSchema }),
+  z.object({ bot: botDirectoryRecordSchemaV12 }),
 );
 export type BotUpdateAppearanceResponse = z.infer<
   typeof botUpdateAppearanceResponseSchema
