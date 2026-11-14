@@ -3,10 +3,12 @@ import {
   hostChatRecordsSubscribeServerFrameSchemaV12,
   hostChatRecordsSubscribeServerFrameSchemaV13,
   hostChatRecordsSubscribeServerFrameSchemaV14,
+  hostChatRecordsSubscribeServerFrameSchemaV15,
   type ChatRecordRemovalReason,
-  type ChatRecordSummaryStreamV13,
+  type ChatRecordSummaryStreamV15,
   type HostChatRecordsSubscribeServerFrameV13,
   type HostChatRecordsSubscribeServerFrameV14,
+  type HostChatRecordsSubscribeServerFrameV15,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
@@ -56,8 +58,11 @@ export type ChatRecordDelta =
        * NOT the list's `@1.2` row: that one also carries `docResident`, which
        * a delta may not state (see `chatRecordSummaryStreamV13Schema`). The
        * consumer seeds that field from what it already holds.
+       *
+       * Typed as the `@1.5` row so its `starterUserId` is named; below `@1.5`
+       * the key is absent, as `head` is below `@1.3`.
        */
-      readonly record: ChatRecordSummaryStreamV13;
+      readonly record: ChatRecordSummaryStreamV15;
     }
   | {
       readonly kind: "remove";
@@ -246,7 +251,8 @@ export interface ChatRecordsStreamClientOptions {
  */
 type ChatRecordsStreamFrame =
   | HostChatRecordsSubscribeServerFrameV13
-  | HostChatRecordsSubscribeServerFrameV14;
+  | HostChatRecordsSubscribeServerFrameV14
+  | HostChatRecordsSubscribeServerFrameV15;
 
 type ParsedFrame =
   | {
@@ -311,7 +317,7 @@ function parseV11Frame(envelope: StreamFrameEnvelope): ParsedFrame {
  * exactly how `@1.4` came to be negotiated and then parsed as `@1.3`, silently
  * discarding the list revision and the session facet the minor exists to carry.
  */
-export const CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING = 4;
+export const CHAT_RECORDS_STREAM_PARSED_MINOR_CEILING = 5;
 
 function parseNegotiatedFrame(
   negotiated: SchemaVersion | null,
@@ -333,6 +339,9 @@ function parseNegotiatedFrame(
   // EXACT minors below, never `>=`. `>=` is what let the top arm answer for a
   // minor it was never written for; the guard above is only a backstop, and it
   // cannot help while the ladder itself still claims everything above it.
+  if (negotiated.minor === 5) {
+    return hostChatRecordsSubscribeServerFrameSchemaV15.safeParse(envelope);
+  }
   if (negotiated.minor === 4) {
     return hostChatRecordsSubscribeServerFrameSchemaV14.safeParse(envelope);
   }

@@ -130,17 +130,16 @@ describe("host.chatRecords.subscribe@1.0 contract", () => {
       major: 1,
       minor: 0,
     });
-    // The manifest names the newest installed minor - @1.4 since every record
-    // delta grew the LIST revision stamp (and the `tuiUpsert` row the session
-    // facet). @1.0 through @1.3 stay installed beneath it for clients that
-    // negotiated the frozen sets.
+    // The manifest names the newest installed minor - @1.5 since the chat
+    // upsert row says who started the chat. @1.0 through @1.4 stay installed
+    // beneath it for clients that negotiated the frozen sets.
     expect(
       buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR)[
         METHOD
       ],
     ).toEqual({
       major: 1,
-      minor: 4,
+      minor: 5,
     });
   });
 
