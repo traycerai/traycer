@@ -382,27 +382,25 @@ describe("sandboxClockLine", () => {
       name: "a team with an unknown payer",
       configuration: teamConfiguration,
       wakePayer: null,
-      expected: "Your Acme credits ran out.",
+      expected: "Acme's credits ran out.",
     },
     {
       name: "a team whose payer is the viewer",
       configuration: teamConfiguration,
       wakePayer: { userId: "viewer", displayName: "Me" },
-      expected: "Your Acme credits ran out.",
+      expected: "Acme's credits ran out.",
     },
     {
       name: "a team whose payer is another member",
       configuration: teamConfiguration,
       wakePayer: { userId: "payer", displayName: "Priya" },
-      expected:
-        "Priya's Acme credits ran out. Resuming changes the payer to you.",
+      expected: "Acme's credits ran out.",
     },
     {
       name: "a team whose other payer has no name",
       configuration: teamConfiguration,
       wakePayer: { userId: "payer", displayName: null },
-      expected:
-        "A member's Acme credits ran out. Resuming changes the payer to you.",
+      expected: "Acme's credits ran out.",
     },
   ] as const)(
     "names whose credits ran out for $name",
@@ -1162,7 +1160,7 @@ describe("sandboxClockLine, an awake row's day from the ledger", () => {
   });
 });
 
-describe("team payer in the resource line", () => {
+describe("team credits in the resource line", () => {
   const team: SandboxPageConfiguration = {
     kind: "team",
     teamId: "team-a",
@@ -1175,28 +1173,29 @@ describe("team payer in the resource line", () => {
     priceMcPerHour: { awakeMc: 210, suspendedMc: 1, stoppedMc: 1 },
   });
   const HOURLY = "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake";
-  const CREDITS = `${HOURLY} · uses your Acme credits`;
-  const WAKE = "waking it makes you the payer";
+  const CREDITS = `${HOURLY} · uses Acme's credits`;
 
-  it("names whose credits pay when the viewer is not a team non-payer", () => {
+  it("names the team's credits whether another member paid last or no payer is named", () => {
     expect(sandboxShapeAndCostLine(summary, team)).toBe(CREDITS);
-    expect(sandboxShapeAndCostLine(summary, team)).toBe(HOURLY);
     expect(sandboxShapeAndCostLine(summary, team)).not.toContain("paid by");
+    expect(sandboxShapeAndCostLine({ ...summary, wakePayer: null }, team)).toBe(
+      CREDITS,
+    );
   });
-  it("warns a resting team non-payer that waking changes the payer", () => {
+  it("keeps the same team credit line on suspended and stopped rows", () => {
     expect(
       sandboxShapeAndCostLine({ ...summary, state: "suspended" }, team),
-    ).toBe(`${HOURLY} · ${WAKE}`);
+    ).toBe(CREDITS);
     expect(
       sandboxShapeAndCostLine({ ...summary, state: "stopped" }, team),
-    ).toBe(`${HOURLY} · ${WAKE}`);
+    ).toBe(CREDITS);
   });
-  it("keeps the payer's credit line, with no wake warning, when that row rests", () => {
+  it("keeps the team credit line when that row rests", () => {
     expect(
       sandboxShapeAndCostLine({ ...summary, state: "suspended" }, team),
     ).toBe(CREDITS);
   });
-  it("keeps the funding clause when the payer has no name", () => {
+  it("uses the team's name when the wake payer has no display name", () => {
     const unnamed = {
       ...summary,
       wakePayer: { userId: "payer", displayName: null },
@@ -1224,7 +1223,7 @@ describe("team payer in the resource line", () => {
       reachability: { unreachable: false, lastContactAt: null },
       now: 1_791_100_000_000,
     });
-    expect(restingClock).not.toContain("storage uses");
+    expect(restingClock).toContain("storage uses Acme's credits");
     expect(restingClock).not.toContain("a member");
     expect(
       sandboxClockLine({
@@ -1239,9 +1238,9 @@ describe("team payer in the resource line", () => {
         reachability: { unreachable: false, lastContactAt: null },
         now: 1_791_100_000_000,
       }),
-    ).toContain("storage uses your Acme credits");
+    ).toContain("storage uses Acme's credits");
   });
-  it("leaves the wake warning off a frozen row and off a personal resting row", () => {
+  it("leaves team credits off frozen rows and preserves personal credits", () => {
     expect(
       sandboxShapeAndCostLine(
         { ...summary, state: "suspended", frozen: true },
@@ -1269,20 +1268,20 @@ describe("team payer in the resource line", () => {
     });
 
     it.each(["suspended", "stopped"] as const)(
-      "puts the creator on a %s row beside the wake warning",
+      "puts the creator and team credit line on a %s row",
       (state) => {
         expect(sandboxShapeAndCostLine(agentRow({ state }), team)).toBe(
-          `${HOURLY} · ${WAKE} · ${CREATOR}`,
+          `${HOURLY} · uses Acme's credits · ${CREATOR}`,
         );
       },
     );
 
-    it("puts the creator on awake and personal rows without a wake warning", () => {
+    it("puts the creator on awake and personal rows, naming team credits only for the team", () => {
       expect(
         sandboxShapeAndCostLine(agentRow({ state: "suspended" }), team),
-      ).toBe(`${HOURLY} · ${CREATOR}`);
+      ).toBe(`${HOURLY} · uses Acme's credits · ${CREATOR}`);
       expect(sandboxShapeAndCostLine(agentRow({ state: "awake" }), team)).toBe(
-        `${HOURLY} · ${CREATOR}`,
+        `${HOURLY} · uses Acme's credits · ${CREATOR}`,
       );
       expect(
         sandboxShapeAndCostLine(agentRow({ state: "suspended" }), {
@@ -1299,7 +1298,7 @@ describe("team payer in the resource line", () => {
       ...overrides,
     });
 
-    it("names the wake change and the creator without inventing a rate", () => {
+    it("names team credits and the creator without inventing a rate", () => {
       expect(
         sandboxShapeAndCostLine(
           unpriced({
@@ -1311,13 +1310,15 @@ describe("team payer in the resource line", () => {
           }),
           team,
         ),
-      ).toBe(`${SHAPE} · ${WAKE} · created by Planner for Sandbox setup`);
+      ).toBe(
+        `${SHAPE} · uses Acme's credits · created by Planner for Sandbox setup`,
+      );
     });
 
-    it("warns that waking changes the payer on an unpriced stopped row", () => {
+    it("names team credits on an unpriced stopped row", () => {
       expect(
         sandboxShapeAndCostLine(unpriced({ state: "stopped" }), team),
-      ).toBe(`${SHAPE} · ${WAKE}`);
+      ).toBe(`${SHAPE} · uses Acme's credits`);
     });
 
     it("leaves a personal resting row as the shape alone when no rate is available", () => {

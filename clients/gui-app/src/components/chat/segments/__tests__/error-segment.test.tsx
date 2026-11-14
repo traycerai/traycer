@@ -1,6 +1,13 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
+import {
+  installHostDirectoryRows,
+  plainHostEntry,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import {
   knownField,
   setSupportContextSnapshot,
@@ -9,6 +16,12 @@ import {
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { ErrorSegment } from "../error-segment";
+
+const billing = vi.hoisted(() => ({ buysTeamCredits: false }));
+
+vi.mock("@/hooks/sandboxes/use-team-billing-admin", () => ({
+  useTeamBillingAdmin: () => billing.buysTeamCredits,
+}));
 
 describe("<ErrorSegment />", () => {
   afterEach(() => {
@@ -588,7 +601,11 @@ describe("<ErrorSegment />", () => {
 // interruption with the sandbox's own words, not a red error carrying the
 // host's raw `SANDBOX_FROZEN: sandbox host '...'` message.
 describe("<ErrorSegment /> sandbox refusals", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    resetHostDirectoryRows();
+    billing.buysTeamCredits = false;
+  });
 
   const RAW_MESSAGE =
     "SANDBOX_FROZEN: sandbox host 'build-box': frozen, out of credits";
@@ -723,5 +740,148 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     renderRow({ code: "SANDBOX_FROZEN", message: RAW_MESSAGE });
 
     expect(screen.queryByTestId("sandbox-refusal-host-detail")).toBeNull();
+  });
+
+  const TRANSCRIPT_HOST_ID = "sandbox-host-acme";
+
+  function renderTranscriptRow(input: {
+    readonly team: { readonly id: string; readonly name: string } | null;
+    readonly buysTeamCredits: boolean;
+    readonly code: string | null;
+  }): void {
+    billing.buysTeamCredits = input.buysTeamCredits;
+    installHostDirectoryRows([
+      sandboxHostEntry(TRANSCRIPT_HOST_ID, input.team),
+    ]);
+    render(
+      <ChatTranscriptProvider
+        value={{
+          chatId: "chat-with-frozen-sandbox",
+          hostId: TRANSCRIPT_HOST_ID,
+        }}
+      >
+        <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
+          turnId={null}
+          message={RAW_MESSAGE}
+          code={input.code}
+          recoverable={false}
+          findUnitId={null}
+          harnessId="traycer"
+          failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
+        />
+      </ChatTranscriptProvider>,
+    );
+  }
+
+  it.each([
+    ["Editor", false],
+    ["Viewer", false],
+    ["role loading", false],
+    ["environment list failed", false],
+  ] as const)(
+    "loads through ErrorSegment and shows the team's C29 copy for an %s, with a code",
+    (_role, buysTeamCredits) => {
+      renderTranscriptRow({
+        team: { id: "team-acme", name: "Acme" },
+        buysTeamCredits,
+        code: "SANDBOX_FROZEN",
+      });
+
+      expect(screen.getByText("Paused: Acme is out of credits")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "This sandbox ran out of credits, which ended the turn. Once Acme has credits again, send a message to pick up where it stopped.",
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ["Editor", false],
+    ["Viewer", false],
+    ["role loading", false],
+    ["environment list failed", false],
+  ] as const)(
+    "uses the same team copy for an %s when SANDBOX_FROZEN appears only in the message prefix",
+    (_role, buysTeamCredits) => {
+      renderTranscriptRow({
+        team: { id: "team-acme", name: "Acme" },
+        buysTeamCredits,
+        code: null,
+      });
+
+      expect(screen.getByText("Paused: Acme is out of credits")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "This sandbox ran out of credits, which ended the turn. Once Acme has credits again, send a message to pick up where it stopped.",
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["SANDBOX_FROZEN", null] as const)(
+    "keeps the team title and admin recovery line for a team Admin (%s)",
+    (code) => {
+      renderTranscriptRow({
+        team: { id: "team-acme", name: "Acme" },
+        buysTeamCredits: true,
+        code,
+      });
+
+      expect(screen.getByText("Paused: Acme is out of credits")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["SANDBOX_FROZEN", null] as const)(
+    "keeps Personal's transcript copy (%s)",
+    (code) => {
+      renderTranscriptRow({ team: null, buysTeamCredits: false, code });
+
+      expect(screen.getByText("Paused: account out of credits")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it("keeps today's copy when the transcript host is not a sandbox", () => {
+    installHostDirectoryRows([plainHostEntry(TRANSCRIPT_HOST_ID)]);
+    render(
+      <ChatTranscriptProvider
+        value={{ chatId: "chat-on-personal-host", hostId: TRANSCRIPT_HOST_ID }}
+      >
+        <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
+          turnId={null}
+          message={RAW_MESSAGE}
+          code="SANDBOX_FROZEN"
+          recoverable={false}
+          findUnitId={null}
+          harnessId="traycer"
+          failure={null}
+          settledNotice={null}
+          settledNoticeFindUnitId={null}
+        />
+      </ChatTranscriptProvider>,
+    );
+
+    expect(screen.getByText("Paused: account out of credits")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+      ),
+    ).toBeTruthy();
   });
 });

@@ -172,6 +172,14 @@ const VIEWER = "user-viewer";
 const ENV = "env_team";
 
 function renderCard(sandbox: HostScopeSandbox, teamOwned: boolean): void {
+  renderCardWithTeamName(sandbox, teamOwned, "Acme");
+}
+
+function renderCardWithTeamName(
+  sandbox: HostScopeSandbox,
+  teamOwned: boolean,
+  teamName: string | null,
+): void {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
@@ -186,7 +194,7 @@ function renderCard(sandbox: HostScopeSandbox, teamOwned: boolean): void {
       <SandboxHeaderCost sandbox={{ ...sandbox, teamOwned }} />
       <SandboxHeaderNotices
         sandbox={{ ...sandbox, teamOwned }}
-        teamName="Acme"
+        teamName={teamName}
       />
       <SandboxInstallationGroup sandbox={{ ...sandbox, teamOwned }} />
       {sandbox.summary === null ? null : (
@@ -267,8 +275,8 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
-describe("team creator and wake payer", () => {
-  it("names the creator and the wake payer on a team card, as 'you' for the viewer", () => {
+describe("team creator and billing identity", () => {
+  it("names the creator on a team card without a wake payer row", () => {
     renderCard(
       sandboxOf("awake", false, {
         createdBy: { userId: VIEWER, displayName: "Vera Viewer" },
@@ -277,10 +285,10 @@ describe("team creator and wake payer", () => {
       true,
     );
     expect(text("sandbox-card-creator")).toBe("you");
-    expect(text("sandbox-card-wake-payer")).toBe("You");
+    expect(screen.queryByTestId("sandbox-card-wake-payer")).toBeNull();
   });
 
-  it("names another member by their display name", () => {
+  it("names another creator by their display name without a wake payer row", () => {
     renderCard(
       sandboxOf("awake", false, {
         createdBy: { userId: "user-ada", displayName: "Ada Lovelace" },
@@ -289,7 +297,7 @@ describe("team creator and wake payer", () => {
       true,
     );
     expect(text("sandbox-card-creator")).toBe("Ada Lovelace");
-    expect(text("sandbox-card-wake-payer")).toBe("Grace Hopper");
+    expect(screen.queryByTestId("sandbox-card-wake-payer")).toBeNull();
   });
 
   it("shows the creator but no payer line while the team sandbox is asleep", () => {
@@ -321,7 +329,7 @@ describe("team creator and wake payer", () => {
     expect(screen.queryByTestId("sandbox-card-creator")).toBeNull();
   });
 
-  it("names the team payer and removal date in the header notice", () => {
+  it("names the team's credits and removal date in the header notice", () => {
     const frozenAt = new Date(2026, 8, 1, 12).getTime();
     renderCard(
       sandboxOf("suspended", true, {
@@ -331,12 +339,12 @@ describe("team creator and wake payer", () => {
       true,
     );
     expect(text("sandbox-card-state-line")).toBe(
-      `Ada Lovelace's Acme credits ran out · Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}`,
+      `Acme's credits ran out · Will be removed on ${formatSandboxDate(frozenDestroyAt(frozenAt), true)}`,
     );
   });
 
-  it("uses neutral payer wording when team sandbox details are unavailable", () => {
-    renderCard(
+  it("names the unknown team's credits when its sandbox details are unavailable", () => {
+    renderCardWithTeamName(
       {
         state: "suspended",
         frozen: true,
@@ -345,17 +353,14 @@ describe("team creator and wake payer", () => {
         teamOwned: true,
       },
       true,
+      null,
     );
-    expect(text("sandbox-card-state-line")).toBe(
-      "Its payer's Acme credits ran out",
-    );
+    expect(text("sandbox-card-state-line")).toBe("Your team's credits ran out");
   });
 
-  it("uses neutral payer wording when a team summary has no wake payer", () => {
+  it("names Acme's credits when its summary has no wake payer", () => {
     renderCard(sandboxOf("suspended", true, { wakePayer: null }), true);
-    expect(text("sandbox-card-state-line")).toBe(
-      "Its payer's Acme credits ran out",
-    );
+    expect(text("sandbox-card-state-line")).toBe("Acme's credits ran out");
   });
 });
 

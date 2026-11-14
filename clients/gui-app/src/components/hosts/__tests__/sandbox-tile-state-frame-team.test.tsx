@@ -71,7 +71,7 @@ import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
 /**
  * The tile overlay's Resume or Start on a TEAM sandbox asks before it bills
  * the opener; a team pod and a personal sandbox do not ask. A frozen team
- * sandbox's overlay names whose bundle is out.
+ * sandbox's overlay names the team's bundle when credits run out.
  */
 
 /** The registry row as the host list reports it, `owner` included. */
@@ -211,7 +211,7 @@ describe("<SandboxTileStateFrame /> wake on a team sandbox", () => {
 describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
   const ADA = { userId: "user-ada", displayName: "Ada Lovelace" };
 
-  it("names whose bundle is out instead of the personal credits line, and offers no wake", () => {
+  it("names the team's bundle instead of personal credits, and offers no wake", () => {
     setEntry({
       state: "suspended",
       frozen: true,
@@ -249,7 +249,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     expect(overlayParagraph(overlay, 1).textContent).toBe(clock);
   });
 
-  it("names the missing payer when the sandbox list has no row for the host", () => {
+  it("names the team when the sandbox list has no row for the host", () => {
     const state: HostSandboxState = "suspended";
     setEntry({
       state,

@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   entry: null as RemoteHostDirectoryEntry | null,
   configuration: { kind: "personal" } as SandboxPageConfiguration,
+  buysTeamCredits: false,
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -89,9 +90,15 @@ vi.mock("@/components/host/host-restart-sessions", () => ({
   KnownHostSessionsList: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
-  useSandboxConfigurations: () => ({ configurations: [], complete: true }),
-  sandboxConfigurationOf: () => ({ kind: "personal" }),
+  useSandboxConfigurations: () => ({
+    configurations: [mocks.configuration],
+    complete: true,
+  }),
+  sandboxConfigurationOf: () => mocks.configuration,
   useSandboxWakeString: () => null,
+}));
+vi.mock("@/hooks/sandboxes/use-team-billing-admin", () => ({
+  useOffersAddCredits: () => mocks.buysTeamCredits,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: undefined }),
@@ -150,6 +157,7 @@ beforeEach(() => {
   mocks.entry = null;
   useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
   mocks.configuration = { kind: "personal" };
+  mocks.buysTeamCredits = true;
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: "u1", userName: "Ada", email: "ada@example.test" },
@@ -331,6 +339,99 @@ async function copiedDiagnostics(): Promise<string> {
 }
 
 describe("sandbox row operations", () => {
+  const TEAM_CONFIGURATION: SandboxPageConfiguration = {
+    kind: "team",
+    teamId: "team-acme",
+    teamName: "Acme",
+    environmentId: "env-acme",
+  };
+
+  it.each([
+    ["Editor", false],
+    ["Viewer", false],
+    ["role loading", false],
+    ["environment list failed", false],
+    ["Admin", true],
+  ] as const)(
+    "renders the C29 frozen refusal for a team %s on the row",
+    async (_role, buysTeamCredits) => {
+      mocks.configuration = TEAM_CONFIGURATION;
+      mocks.buysTeamCredits = buysTeamCredits;
+      const resume = CASES.find((entry) => entry.verb === "resume");
+      if (resume === undefined) throw new Error("Expected the Resume case");
+      const { answer } = setup(resume, null);
+      const row = await press(resume);
+      await act(async () => {
+        answer.resolve(refusal(402, "sandbox_frozen"));
+        await answer.promise;
+      });
+
+      const failure = await within(row).findByRole("alert");
+      expect(failure.textContent).toContain(
+        buysTeamCredits
+          ? "Couldn't resume build-box. This sandbox is out of credits. Add credits to wake it."
+          : "Couldn't resume build-box. This sandbox is out of credits. Acme's bundle is out.",
+      );
+    },
+  );
+
+  it("keeps today's frozen refusal sentence when the team name is unavailable", async () => {
+    mocks.configuration = { ...TEAM_CONFIGURATION, teamName: "" };
+    mocks.buysTeamCredits = false;
+    const resume = CASES.find((entry) => entry.verb === "resume");
+    if (resume === undefined) throw new Error("Expected the Resume case");
+    const { answer } = setup(resume, null);
+    const row = await press(resume);
+    await act(async () => {
+      answer.resolve(refusal(402, "sandbox_frozen"));
+      await answer.promise;
+    });
+
+    expect((await within(row).findByRole("alert")).textContent).toContain(
+      "Couldn't resume build-box. This sandbox is out of credits. Add credits to wake it.",
+    );
+  });
+
+  it.each([
+    [
+      "Editor",
+      false,
+      "The team's credits don't cover an hour of this sandbox.",
+    ],
+    [
+      "Admin",
+      true,
+      "The team's credits don't cover an hour of this sandbox. Add $1.20 and try again.",
+    ],
+  ] as const)(
+    "shows the C29 insufficient-credit History line for a team %s",
+    async (_role, buysTeamCredits, expected) => {
+      mocks.configuration = TEAM_CONFIGURATION;
+      mocks.buysTeamCredits = buysTeamCredits;
+      const resume = CASES.find((entry) => entry.verb === "resume");
+      if (resume === undefined) throw new Error("Expected the Resume case");
+      const { answer } = setup(resume, null);
+      const row = await press(resume);
+      await act(async () => {
+        answer.resolve({
+          ...refusal(402, "insufficient_credit"),
+          reason: "denied",
+          shortfallMc: 120,
+          newRateMcPerHour: 120,
+          currentAwakeBurnMcPerHour: 0,
+          creditSource: "team",
+        });
+        await answer.promise;
+      });
+
+      const failure = await within(row).findByRole("alert");
+      await userEvent.click(
+        within(failure).getByRole("button", { name: "Details" }),
+      );
+      expect(await screen.findByText(expected)).toBeTruthy();
+    },
+  );
+
   it("keeps a stopped receipt and its draft when Start fails, then clears it after a successful Retry", async () => {
     const testCase = CASES.find((entry) => entry.verb === "start");
     if (testCase === undefined) throw new Error("Expected the Start case");

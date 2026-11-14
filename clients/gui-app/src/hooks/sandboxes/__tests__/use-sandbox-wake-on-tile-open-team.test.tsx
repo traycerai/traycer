@@ -46,7 +46,7 @@ import { useSandboxWakeForOpenedTile } from "@/hooks/sandboxes/use-sandbox-wake-
 /**
  * A tab opened on a sandbox wakes it at once, a team's included: the payer is
  * said where the action is offered, not asked here. A frozen team sandbox's
- * refusal blames the payer's bundle.
+ * refusal names the team's bundle.
  */
 
 function entryFor(input: {
@@ -234,7 +234,7 @@ describe("useSandboxWakeForOpenedTile on a frozen sandbox", () => {
     return binding;
   }
 
-  it("says its payer's bundle is out on a team sandbox and sends no verb", async () => {
+  it("names the team's bundle when a team wake is refused and sends no verb", async () => {
     const binding = await openFrozen(TEAM);
 
     expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
@@ -242,7 +242,7 @@ describe("useSandboxWakeForOpenedTile on a frozen sandbox", () => {
     expect(mocks.toastWarning).toHaveBeenCalledWith(
       "This sandbox is out of credits.",
       {
-        description: "Its payer's bundle is out.",
+        description: "Acme's bundle is out.",
       },
     );
   });

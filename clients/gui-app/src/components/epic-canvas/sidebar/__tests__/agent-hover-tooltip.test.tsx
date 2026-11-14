@@ -695,8 +695,8 @@ function showFileTree(): void {
 describe("AgentHoverTooltip host section", () => {
   beforeEach(showFileTree);
 
-  it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", () => {
-    h.sandboxes = [sandboxRow({})];
+  it("shows host identity, cost and shape without payer or starter claims while teams load", () => {
+    h.sandboxes = [sandboxRow({ environmentId: "env-personal" })];
     h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];
     h.busySessionCount = 3;
     h.agents = [
@@ -723,8 +723,8 @@ describe("AgentHoverTooltip host section", () => {
     expect(text).toContain("unknown");
     expect(text).toContain(shortPriceLabel(120));
     expect(text).toContain("Sandbox · Linux · 2 vCPU · 4 GB");
-    expect(text).toContain("started by you");
-    expect(text).toContain("paid by you");
+    expect(text).not.toContain("started by you");
+    expect(text).not.toContain("paid by you");
     expect(text).toMatch(/\d+ min awake/);
     expect(text).toContain(hoverTodayCost(2000));
     expect(text).toContain("Suspends after 30 idle min");
@@ -746,6 +746,37 @@ describe("AgentHoverTooltip host section", () => {
     expect(
       screen.queryByRole("button", { name: KEEP_THIS_SANDBOX }),
     ).toBeNull();
+  });
+
+  it("does not call a team sandbox paid by you when its team is named Personal", () => {
+    h.configurations = {
+      configurations: [
+        { kind: "personal" },
+        {
+          kind: "team",
+          teamId: "team-personal",
+          teamName: "Personal",
+          environmentId: "env-team-personal",
+        },
+      ],
+      teamEnvironmentIds: new Set(["env-team-personal"]),
+      complete: true,
+    };
+    h.sandboxes = [
+      sandboxRow({
+        environmentId: "env-team-personal",
+        wakePayer: { userId: "user-1", displayName: "Sam" },
+      }),
+    ];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    const text = screen.getByTestId("worktree-host-section").textContent;
+    expect(text).not.toContain("paid by");
+    expect(text).not.toContain("started by you");
   });
 
   describe("with File Tree off", () => {

@@ -702,8 +702,17 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
     it("says a refusal for want of the team's credit under the button, and lets the person press it again", async () => {
       const user = userEvent.setup();
+      mocks.state.environments = mocks.state.environments.map((environment) =>
+        environment.environmentId === "env-new"
+          ? { ...environment, effectiveRole: "editor" }
+          : environment,
+      );
       auth().createSandbox.mockResolvedValue({
         ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+        reason: "denied",
+        shortfallMc: 120,
+        newRateMcPerHour: 120,
+        currentAwakeBurnMcPerHour: 0,
         creditSource: "team",
       });
       render(surfaceFor(SETUP_BOT_ID));
@@ -718,6 +727,34 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         "The team's credits don't cover an hour of this sandbox.",
       );
       expect(enableButton()).toHaveProperty("disabled", false);
+    });
+
+    it("keeps the add-credit amount on a team Admin's refusal", async () => {
+      const user = userEvent.setup();
+      mocks.state.environments = mocks.state.environments.map((environment) =>
+        environment.environmentId === "env-new"
+          ? { ...environment, effectiveRole: "admin" }
+          : environment,
+      );
+      auth().createSandbox.mockResolvedValue({
+        ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+        reason: "denied",
+        shortfallMc: 120,
+        newRateMcPerHour: 120,
+        currentAwakeBurnMcPerHour: 0,
+        creditSource: "team",
+      });
+      render(surfaceFor(SETUP_BOT_ID));
+
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      await user.click(enableButton());
+
+      const alert = await within(cloudOption()).findByRole("alert");
+      expect(alert.textContent).toBe(
+        "The team's credits don't cover an hour of this sandbox. Add $1.20 and try again.",
+      );
     });
   });
 });

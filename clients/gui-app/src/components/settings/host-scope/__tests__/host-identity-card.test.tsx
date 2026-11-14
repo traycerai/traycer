@@ -144,6 +144,7 @@ describe("<HostIdentityCard /> a sandbox's state word against its health", () =>
 
     const state = screen.getByTestId("host-identity-sandbox-state");
     expect(state.parentElement?.textContent).toContain(HOST_FROZEN_WORD);
+    expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
   });
 
   it("makes the full busy breakdown available by keyboard through its tooltip", async () => {

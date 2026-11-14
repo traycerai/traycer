@@ -177,6 +177,7 @@ export const mocks = {
       label: string;
       ownerKind: "organization" | "user";
       providerHandle: string | null;
+      effectiveRole?: "admin" | "editor" | "viewer" | null;
     }>,
   },
 };

@@ -255,21 +255,30 @@ describe("useChatSandboxState", () => {
     expect(stateOf(true)).toEqual({ kind: "none" });
   });
 
-  it("says a team wake changes the payer only when another member paid for the last wake", () => {
+  it("keeps the team configuration when a team sandbox names any wake payer", () => {
     const resting = (wakePayer: SandboxSummary["wakePayer"]) =>
       row({ state: "suspended", environmentId: TEAM_ENV, wakePayer });
 
     sources.sandboxes = [resting({ userId: OTHER, displayName: "Other" })];
-    expect(stateOf(false)).toMatchObject({ wakeChangesPayer: true });
+    expect(stateOf(false)).toMatchObject({
+      kind: "resting",
+      configuration: { kind: "team", teamId: "team-a" },
+    });
 
     sources.sandboxes = [resting({ userId: VIEWER, displayName: "V" })];
-    expect(stateOf(false)).toMatchObject({ wakeChangesPayer: false });
+    expect(stateOf(false)).toMatchObject({
+      kind: "resting",
+      configuration: { kind: "team", teamId: "team-a" },
+    });
 
     sources.sandboxes = [resting(null)];
-    expect(stateOf(false)).toMatchObject({ wakeChangesPayer: false });
+    expect(stateOf(false)).toMatchObject({
+      kind: "resting",
+      configuration: { kind: "team", teamId: "team-a" },
+    });
   });
 
-  it("never says a personal sandbox changes the payer, whoever the row names", () => {
+  it("keeps a personal sandbox personal when the row names a previous payer", () => {
     sources.sandboxes = [
       row({
         state: "suspended",

@@ -670,6 +670,38 @@ describe("sandbox confirm dialogs", () => {
     expect(screen.getByTestId("sandbox-confirm-sessions")).toBeDefined();
   });
 
+  it.each([null, { userId: "priya", displayName: "Priya" }] as const)(
+    "names Acme's storage credits in Suspend and Stop when wakePayer is %s",
+    (wakePayer) => {
+      mocks.configuration = {
+        kind: "team",
+        teamId: "team-a",
+        teamName: "Acme",
+        environmentId: "team-a",
+      };
+      const sandbox = sandboxSummaryFixture({
+        displayName: NAME,
+        state: "awake",
+        environmentId: "team-a",
+        wakePayer,
+      });
+      render(
+        <SandboxSuspendDialog sandbox={sandbox} open onOpenChange={vi.fn()} />,
+      );
+      const suspend = screen.getByTestId("sandbox-confirm-suspend").textContent;
+      expect(suspend).toContain("Storage uses Acme's credits.");
+      expect(suspend).not.toContain("until another member wakes it");
+      cleanup();
+
+      render(
+        <SandboxStopDialog sandbox={sandbox} open onOpenChange={vi.fn()} />,
+      );
+      expect(screen.getByTestId("sandbox-confirm-stop").textContent).toContain(
+        "The disk is kept at the lower storage rate on Acme's credits.",
+      );
+    },
+  );
+
   describe("dates, counted from a pinned now", () => {
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -733,7 +765,7 @@ describe("sandbox confirm dialogs", () => {
       );
     });
 
-    it("states the actual team wake payer once and leaves it out of the preview", () => {
+    it("names the team paying for an awake sandbox regardless of its wake payer", () => {
       mocks.configuration = {
         kind: "team",
         teamId: "team-a",
@@ -756,13 +788,14 @@ describe("sandbox confirm dialogs", () => {
 
       const dialog = screen.getByTestId("sandbox-confirm-keep");
       expect(
-        within(dialog).getAllByText("Paid by Priya while awake."),
+        within(dialog).getAllByText("Paid by Acme while awake."),
       ).toHaveLength(1);
       expect(dialog.textContent).not.toContain("who pays are unchanged");
+      expect(dialog.textContent).not.toContain("Paid by Priya while awake.");
       expect(dialog.textContent).not.toContain("Paid by you while awake.");
     });
 
-    it("uses you once when the viewer is the wake payer", () => {
+    it("names the team rather than the viewer when the viewer woke it", () => {
       mocks.configuration = {
         kind: "team",
         teamId: "team-a",
@@ -785,7 +818,7 @@ describe("sandbox confirm dialogs", () => {
 
       expect(
         within(screen.getByTestId("sandbox-confirm-keep")).getAllByText(
-          "Paid by you while awake.",
+          "Paid by Acme while awake.",
         ),
       ).toHaveLength(1);
     });

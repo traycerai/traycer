@@ -1,6 +1,7 @@
 import { vi, type Mock } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
+  TeamEnvironmentFetchResult,
   SandboxAutomationFetchResult,
   SandboxAutomationOpenFetchResult,
   SandboxControlFailure,
@@ -47,6 +48,9 @@ type KeepSandbox = (sandboxId: string) => Promise<SandboxVerbFetchResult>;
 export interface FakeSandboxAuth {
   /** `null` is a build that can reach the control plane; a string is why not. */
   readonly sandboxControlUnavailableReason: Mock<() => string | null>;
+  readonly getTeamEnvironment: Mock<
+    (teamId: string) => Promise<TeamEnvironmentFetchResult>
+  >;
   readonly listSandboxes: Mock<ListSandboxes>;
   readonly createSandbox: Mock<CreateSandbox>;
   readonly runSandboxVerb: Mock<RunSandboxVerb>;
@@ -70,6 +74,9 @@ export function createFakeSandboxBinding(): FakeSandboxBinding {
   return {
     auth: {
       sandboxControlUnavailableReason: vi.fn<() => string | null>(() => null),
+      getTeamEnvironment: vi.fn<
+        (teamId: string) => Promise<TeamEnvironmentFetchResult>
+      >(() => Promise.resolve({ kind: "not-a-member" })),
       listSandboxes: vi.fn<ListSandboxes>(() =>
         Promise.resolve({ kind: "ok", response: { sandboxes: [] } }),
       ),

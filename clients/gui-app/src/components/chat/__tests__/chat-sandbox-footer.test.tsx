@@ -61,6 +61,10 @@ function resting(
   state: "suspended" | "stopped",
   options: {
     readonly team: boolean;
+    readonly wakePayer?: {
+      readonly userId: string;
+      readonly displayName: string;
+    } | null;
   },
 ): ChatSandboxState {
   return {
@@ -69,6 +73,9 @@ function resting(
       id: "sbx-r",
       displayName: "e2e-sbx-rest",
       state,
+      ...(options.wakePayer === undefined
+        ? {}
+        : { wakePayer: options.wakePayer }),
       priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 },
     }),
     configuration: options.team
@@ -132,25 +139,30 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     },
   );
 
-  it("adds the team clauses only when the wake changes who pays", () => {
+  it("names Acme's credits for a team sandbox regardless of its wake payer", () => {
     const { unmount } = render(
-      <ChatSandboxFooter line={lineOf(resting("suspended", { team: true }))} />,
+      <ChatSandboxFooter
+        line={lineOf(
+          resting("suspended", {
+            team: true,
+            wakePayer: { userId: "priya", displayName: "Priya" },
+          }),
+        )}
+      />,
     );
-    const paying = document.body.textContent;
-    expect(paying).toContain("uses your Acme credits");
-    expect(paying).toContain(
-      "Storage while it's suspended or stopped, on the same credits until another member wakes it.",
-    );
-    expect(paying).toContain("Other members can use it while you pay.");
+    expect(document.body.textContent).toContain("uses Acme's credits");
+    expect(document.body.textContent).not.toContain("Storage while");
+    expect(document.body.textContent).not.toContain("Other members can use it");
     unmount();
 
     render(
-      <ChatSandboxFooter line={lineOf(resting("suspended", { team: true }))} />,
+      <ChatSandboxFooter
+        line={lineOf(resting("suspended", { team: true, wakePayer: null }))}
+      />,
     );
-    const same = document.body.textContent;
-    expect(same).toContain("uses your Acme credits");
-    expect(same).not.toContain("Storage while it's suspended or stopped");
-    expect(same).not.toContain("Other members can use it");
+    expect(document.body.textContent).toContain("uses Acme's credits");
+    expect(document.body.textContent).not.toContain("Storage while");
+    expect(document.body.textContent).not.toContain("Other members can use it");
   });
 
   it("offers no action and no offline or clone wording: the next message is the wake", () => {
@@ -217,7 +229,7 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     expect(footer.querySelectorAll("p")).toHaveLength(2);
   });
 
-  it("shows the actual payer consequence on its own wrapping line and offers a short Resume", () => {
+  it("names the team's credits when frozen and offers Resume without payer wording", () => {
     useAuthStore.setState({
       status: "signed-in",
       profile: { userId: "viewer", userName: "V", email: "v@example.com" },
@@ -246,9 +258,10 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     expect(screen.getByRole("button", { name: "Resume" }).textContent).toBe(
       "Resume",
     );
-    expect(
-      document.body.textContent.match(/Resuming changes the payer to you\./gu),
-    ).toHaveLength(1);
+    expect(document.body.textContent).toContain("Acme's credits ran out.");
+    expect(document.body.textContent).not.toContain(
+      "Resuming changes the payer",
+    );
   });
 });
 

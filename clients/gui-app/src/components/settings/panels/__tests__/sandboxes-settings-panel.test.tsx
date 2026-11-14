@@ -2352,7 +2352,7 @@ describe("<SandboxesSettingsPanel />", () => {
     });
   });
 
-  describe("a team row's payer", () => {
+  describe("a team row's credits", () => {
     const ACME = {
       kind: "team",
       teamId: "team-1",
@@ -2387,7 +2387,7 @@ describe("<SandboxesSettingsPanel />", () => {
       return line.textContent;
     }
 
-    it("reads Paid by you to the payer, and the payer's name to another member", () => {
+    it("names the team's credits and has no Paid by badge for either member", () => {
       const awake = row("sbx-paid", {
         state: "awake",
         environmentId: TEAM_ENV,
@@ -2395,9 +2395,8 @@ describe("<SandboxesSettingsPanel />", () => {
       });
       viewAs(PAYER.userId);
       renderPanel([awake]);
-      expect(within(rowOf(awake.id)).getByText("Paid by you")).toBeDefined();
-      expect(within(rowOf(awake.id)).queryByText("Paid by Priya")).toBeNull();
-      expect(shapeOf(awake.id)).not.toContain("paid by");
+      expect(within(rowOf(awake.id)).queryByText(/Paid by/)).toBeNull();
+      expect(shapeOf(awake.id)).toContain("uses Acme's credits");
       expect(
         screen.getByRole("heading", { name: "Acme's sandboxes" }),
       ).toBeTruthy();
@@ -2413,9 +2412,9 @@ describe("<SandboxesSettingsPanel />", () => {
 
       viewAs("user-other");
       renderPanel([awake]);
-      expect(within(rowOf(awake.id)).getByText("Paid by Priya")).toBeDefined();
+      expect(within(rowOf(awake.id)).queryByText(/Paid by/)).toBeNull();
       expect(shapeOf(awake.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(within(rowOf(awake.id)).queryByText(/a member/)).toBeNull();
     });
@@ -2445,11 +2444,11 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(rowOf(unnamed.id)).queryByText(/a member/)).toBeNull();
       expect(shapeOf(unnamed.id)).not.toContain("paid by");
       expect(shapeOf(unnamed.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
     });
 
-    it("omits an unnamed resting payer and keeps the funding clause for an unnamed awake payer", () => {
+    it("names team storage and credits when the payer has no display name", () => {
       viewAs("user-other");
       const resting = row("sbx-unnamed-rest", {
         state: "suspended",
@@ -2457,10 +2456,10 @@ describe("<SandboxesSettingsPanel />", () => {
         wakePayer: { userId: "user-hidden", displayName: null },
       });
       renderPanel([resting]);
-      expect(clockOf(resting.id)).not.toContain("storage uses");
+      expect(clockOf(resting.id)).toContain("storage uses Acme's credits");
       expect(clockOf(resting.id)).not.toContain("a member");
       expect(shapeOf(resting.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(shapeOf(resting.id)).not.toContain(
         "waking it makes you the payer",
@@ -2481,11 +2480,11 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(rowOf(awake.id)).queryByText(/Paid by/)).toBeNull();
       expect(within(rowOf(awake.id)).queryByText(/a member/)).toBeNull();
       expect(shapeOf(awake.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
     });
 
-    it("tells only a member who isn't the payer that resuming makes them the payer", () => {
+    it("names team storage and credits for a resting row despite its previous payer", () => {
       const resting = row("sbx-resting", {
         state: "suspended",
         environmentId: TEAM_ENV,
@@ -2493,10 +2492,10 @@ describe("<SandboxesSettingsPanel />", () => {
       });
       viewAs(PAYER.userId);
       renderPanel([resting]);
-      expect(clockOf(resting.id)).toContain("storage uses your Acme credits");
+      expect(clockOf(resting.id)).toContain("storage uses Acme's credits");
       expect(clockOf(resting.id)).not.toContain("Storage uses");
       expect(shapeOf(resting.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(shapeOf(resting.id)).not.toContain(
         "waking it makes you the payer",
@@ -2511,20 +2510,19 @@ describe("<SandboxesSettingsPanel />", () => {
 
       viewAs("user-other");
       renderPanel([resting]);
-      expect(clockOf(resting.id)).toContain(
-        "storage uses Priya's Acme credits",
-      );
+      expect(clockOf(resting.id)).toContain("storage uses Acme's credits");
       expect(clockOf(resting.id)).not.toContain("Resuming changes the payer");
       expect(shapeOf(resting.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · waking it makes you the payer",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(
-        within(rowOf(resting.id)).getByTestId("sandboxes-row-payer-consequence")
-          .textContent,
-      ).toBe("Resuming changes the payer to you.");
+        within(rowOf(resting.id)).queryByTestId(
+          "sandboxes-row-payer-consequence",
+        ),
+      ).toBeNull();
     });
 
-    it("omits storage credits on a team row with no wake payer, and on a personal resting row names the viewer's credits", () => {
+    it("names team storage with no wake payer and preserves personal storage wording", () => {
       viewAs("user-other");
       const unnamed = row("sbx-no-payer", {
         state: "stopped",
@@ -2532,9 +2530,9 @@ describe("<SandboxesSettingsPanel />", () => {
         wakePayer: null,
       });
       renderPanel([unnamed]);
-      expect(clockOf(unnamed.id)).not.toContain("storage uses");
+      expect(clockOf(unnamed.id)).toContain("storage uses Acme's credits");
       expect(shapeOf(unnamed.id)).toBe(
-        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses your Acme credits",
+        "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
       );
       expect(shapeOf(unnamed.id)).not.toContain(
         "waking it makes you the payer",
@@ -2554,7 +2552,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(within(rowOf(personal.id)).queryByText(/Paid by/)).toBeNull();
     });
 
-    it("keeps the frozen payer consequence once before a short Resume", () => {
+    it("names the team's frozen credits once before Resume", () => {
       const frozen = row("sbx-frozen-payer", {
         state: "suspended",
         frozen: true,
@@ -2569,12 +2567,8 @@ describe("<SandboxesSettingsPanel />", () => {
       const consequence = within(frozenRow).getByTestId(
         "sandboxes-row-payer-consequence",
       );
-      expect(consequence.textContent).toBe(
-        "Priya's Acme credits ran out. Resuming changes the payer to you.",
-      );
-      expect(
-        frozenRow.textContent.match(/Resuming changes the payer to you\./gu),
-      ).toHaveLength(1);
+      expect(consequence.textContent).toBe("Acme's credits ran out.");
+      expect(frozenRow.textContent).not.toContain("Resuming changes the payer");
       expect(frozenRow.textContent).not.toContain(
         "waking it makes you the payer",
       );
