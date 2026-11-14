@@ -59,9 +59,11 @@ import {
 import {
   CLOUD_UNAVAILABLE_MESSAGE,
   EnvironmentCloudError,
+  NEEDS_PERMISSION_MESSAGE,
   SIGN_IN_AGAIN_MESSAGE,
   environmentPath,
   errorBodyCode,
+  isCloudFailure,
   isSuccess,
   sendEnvironmentRequest,
   type EnvironmentAnswer,
@@ -184,7 +186,9 @@ function refusal(answer: EnvironmentAnswer): EnvironmentCloudError {
       SIGN_IN_AGAIN_MESSAGE.secrets,
     );
   }
-  if (answer.status >= 500)
+  if (answer.status === 403)
+    return new EnvironmentCloudError("forbidden", NEEDS_PERMISSION_MESSAGE);
+  if (isCloudFailure(answer))
     return new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
   return new EnvironmentCloudError("invalid", refusalMessage(answer.body));
 }

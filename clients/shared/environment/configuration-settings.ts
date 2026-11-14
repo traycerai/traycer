@@ -47,9 +47,11 @@ import {
   EnvironmentCloudError,
   environmentPath,
   errorBodyCode,
+  isRequestRefusal,
   isSuccess,
   parseSettings,
   sendSettings,
+  settingsRefusal,
   type EnvironmentAnswer,
   type EnvironmentCloud,
 } from "./environment-cloud";
@@ -60,6 +62,7 @@ function mutationOutcome(answer: EnvironmentAnswer): {
 } {
   if (answer.status === 403) return { outcome: "forbidden", reason: null };
   if (isSuccess(answer)) return { outcome: "saved", reason: null };
+  if (!isRequestRefusal(answer)) throw settingsRefusal(answer);
   return { outcome: "refused", reason: errorBodyCode(answer.body) };
 }
 
@@ -417,6 +420,9 @@ export async function putConfigurationMcpServer(
     if (answer.status === 403) {
       return { outcome: "forbidden", reason: null, serverId: null };
     }
+    if (!isSuccess(answer) && !isRequestRefusal(answer)) {
+      throw settingsRefusal(answer);
+    }
     if (!isSuccess(answer)) {
       return {
         outcome: "refused",
@@ -472,6 +478,7 @@ export async function putConfigurationMcpServer(
     return { outcome: "saved", reason: null, serverId: saved.id };
   }
   await rollBack();
+  if (!isRequestRefusal(itemAnswer)) throw settingsRefusal(itemAnswer);
   return {
     outcome: "refused",
     reason:

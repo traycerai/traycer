@@ -66,6 +66,9 @@ export const SIGN_IN_AGAIN_MESSAGE: Readonly<
   secrets: "Sign in again to manage secrets.",
 };
 
+/** The words of a `forbidden` failure: the person's role does not allow it. */
+export const NEEDS_PERMISSION_MESSAGE = "This change needs permission.";
+
 /** The words of an `unavailable` failure, as the host's cloud errors say them. */
 export const CLOUD_UNAVAILABLE_MESSAGE =
   "Cloud service is temporarily unavailable. Please try again shortly.";
@@ -176,6 +179,25 @@ export function isSuccess(answer: EnvironmentAnswer): boolean {
   return answer.status >= 200 && answer.status < 300;
 }
 
+/**
+ * Whether a non-success is authn refusing the request itself: a 4xx other
+ * than 401 and 403, which a write may report as its own outcome. A 401, a
+ * 403, a 5xx, a 3xx and a status 0 never are: they are the caller's error.
+ */
+export function isRequestRefusal(answer: EnvironmentAnswer): boolean {
+  return (
+    answer.status >= 400 &&
+    answer.status < 500 &&
+    answer.status !== 401 &&
+    answer.status !== 403
+  );
+}
+
+/** A 3xx, a status 0 or a 5xx: the cloud did not answer this request as asked. */
+export function isCloudFailure(answer: EnvironmentAnswer): boolean {
+  return !isSuccess(answer) && (answer.status < 400 || answer.status >= 500);
+}
+
 function bodyOf(text: string | null): unknown {
   if (text === null || text.length === 0) return null;
   try {
@@ -255,11 +277,8 @@ export function settingsRefusal(
       SIGN_IN_AGAIN_MESSAGE.settings,
     );
   if (answer.status === 403)
-    return new EnvironmentCloudError(
-      "forbidden",
-      "This change needs permission.",
-    );
-  if (answer.status >= 500)
+    return new EnvironmentCloudError("forbidden", NEEDS_PERMISSION_MESSAGE);
+  if (isCloudFailure(answer))
     return new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
   return new EnvironmentCloudError(
     "invalid",
