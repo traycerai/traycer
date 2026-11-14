@@ -10,11 +10,8 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
-import {
-  getMobileAppPlatform,
-  isMobileApp,
-  type MobileAppPlatform,
-} from "@/lib/mobile-app";
+import { getMobileAppPlatform, isMobileApp } from "@/lib/mobile-app";
+import { mobileStoreUpdateNote } from "@/components/host/client-update-copy";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useUpdateCheckOnBlockingMount } from "@/components/host/use-update-check-on-blocking-mount";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -321,22 +318,6 @@ function renderCachedUpdateAction(input: {
     }
   }
   return null;
-}
-
-/**
- * The one sentence a phone can act on, per shell.
- *
- * `null` is the mobile stream's dev browser tab, which belongs to neither
- * store; naming one there would be a guess, so it gets the neutral sentence.
- */
-function mobileStoreUpdateNote(platform: MobileAppPlatform | null): string {
-  if (platform === "ios") {
-    return "Update the Traycer app in TestFlight or the App Store, then reopen it.";
-  }
-  if (platform === "android") {
-    return "Update the Traycer app in Google Play, then reopen it.";
-  }
-  return "Update the Traycer app from the store you installed it from, then reopen it.";
 }
 
 function ReleasesPageButton(): ReactNode {

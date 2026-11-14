@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { ProviderApiKeySection } from "@/components/settings/panels/provider-api-key-section";
+import { apiKeyState } from "./provider-api-key-section-fixture";
 import {
   NO_NOTICES,
   NO_OVERRIDES,
@@ -44,33 +44,6 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLink,
 }));
-
-function apiKeyState(
-  providerId: ProviderCliState["providerId"],
-): ProviderCliState {
-  return {
-    providerId,
-    enabled: true,
-    disabledBy: null,
-    selected: { kind: "path" },
-    candidates: [],
-    auth: {
-      status: "unknown",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: true, configured: false, source: null },
-    terminalAgentArgs: "",
-    envOverrides: [],
-    loginCapability: null,
-    availabilityPending: false,
-    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-    profiles: [],
-  };
-}
 
 afterEach(() => {
   cleanup();

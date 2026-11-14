@@ -1,11 +1,13 @@
 /**
- * `AuthService.getSandboxGrants` / `decideSecretRequest`: the two secrets-broker
- * calls. With no verified bearer they answer `unauthorized` and never reach the
- * runner host; with one they hand it `(bearer, ...args)` and return its answer
- * untouched.
+ * AuthService cloud calls use a verified session before reaching their cloud
+ * request boundary.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  AUTH_FETCH_MAX_ATTEMPTS,
+  authRetryDelayMs,
+} from "@traycer-clients/shared/auth/auth-validation";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -46,7 +48,7 @@ const SUMMARY_RESULT: SandboxGrantsFetchResult = {
 };
 
 function installFetch(
-  handler: (input: unknown) => Promise<Response>,
+  handler: (input: unknown, init: RequestInit | undefined) => Promise<Response>,
 ): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
   Object.defineProperty(globalThis, "fetch", {
@@ -111,6 +113,10 @@ function okWithProfile(): Promise<Response> {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
 const trackedServices: AuthService[] = [];
 
 function makeService(): { service: AuthService; host: MockRunnerHost } {
@@ -142,7 +148,7 @@ async function signedInService(): Promise<{
   return made;
 }
 
-describe("AuthService secrets-broker calls", () => {
+describe("AuthService cloud calls", () => {
   let restoreFetch: () => void = () => undefined;
 
   beforeEach(() => {
@@ -249,6 +255,110 @@ describe("AuthService secrets-broker calls", () => {
   });
 
   describe("signed in", () => {
+    it("uses the verified service bearer for its own provider-record request", async () => {
+      const { service } = await signedInService();
+      restoreFetch();
+      const directRequests: Array<{
+        readonly url: string;
+        readonly authorized: boolean;
+        readonly setBody: boolean;
+      }> = [];
+      restoreFetch = installFetch((input, init) => {
+        const url = String(input);
+        if (url.includes("/provider-keys/")) {
+          const body =
+            init?.body === null || init?.body === undefined
+              ? null
+              : JSON.parse(String(init.body));
+          const bodyRecord = isRecord(body) ? body : null;
+          directRequests.push({
+            url,
+            authorized:
+              new Headers(init?.headers).get("Authorization") ===
+              `Bearer ${BEARER}`,
+            setBody:
+              bodyRecord !== null &&
+              typeof bodyRecord.key === "string" &&
+              bodyRecord.onlyIfAbsent === false,
+          });
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                profileId: "profile-synthetic",
+                providerId: "cursor",
+                state: "live",
+                signInNumber: "3",
+                recordRevision: "5",
+                personIntentNumber: "2",
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 500 }));
+      });
+
+      const result = await service.changeProviderKeyRecord(
+        "env-synthetic",
+        "cursor",
+        { action: "set", apiKey: "synthetic-provider-key" },
+        null,
+      );
+
+      expect(result.kind === "record").toBe(true);
+      const [directRequest] = directRequests;
+      expect(
+        directRequests.length === 1 &&
+          directRequest !== undefined &&
+          directRequest.authorized &&
+          directRequest.setBody,
+      ).toBe(true);
+      expect(
+        directRequest !== undefined &&
+          directRequest.url.includes(
+            "/environments/env-synthetic/provider-keys/cursor",
+          ),
+      ).toBe(true);
+    });
+
+    it("refuses the provider-record request while the retained session is unverified", async () => {
+      vi.useFakeTimers();
+      const { service, host } = makeService();
+      await host.tokenStore.signIn(
+        { token: BEARER, refreshToken: "user-token-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        Promise.reject(new TypeError("offline")),
+      );
+      const starting = service.start();
+      for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+        await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+      }
+      await starting;
+      expect(useAuthStore.getState().status).toBe("unverified");
+
+      restoreFetch();
+      let providerRecordRequests = 0;
+      restoreFetch = installFetch((input) => {
+        if (String(input).includes("/provider-keys/"))
+          providerRecordRequests += 1;
+        return Promise.reject(new TypeError("offline"));
+      });
+      const result = await service.changeProviderKeyRecord(
+        "env-synthetic",
+        "cursor",
+        { action: "clear" },
+        null,
+      );
+
+      expect(result.kind === "refused" && result.code === "UNAUTHORIZED").toBe(
+        true,
+      );
+      expect(providerRecordRequests).toBe(0);
+    });
+
     it("getSandboxGrants hands the runner host the bearer and the host id and returns its result", async () => {
       const { service, host } = await signedInService();
       const getSandboxGrants = vi
