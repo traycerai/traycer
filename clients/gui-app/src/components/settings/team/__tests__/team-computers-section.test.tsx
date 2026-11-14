@@ -13,7 +13,6 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 import type {
   TeamComputer,
   TeamComputersResult,
-  SetEnvironmentBotHostResult,
 } from "@traycer-clients/shared/host-client/team-computers";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
@@ -36,7 +35,6 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 
 const ENVIRONMENT_ID = "env-a";
 const OTHER_ENVIRONMENT_ID = "env-b";
-const VIEWER_HOST_ID = "host-viewer";
 const CURRENT_USER = "user-a";
 const OTHER_USER = "user-b";
 const hostBinding = vi.hoisted((): { value: unknown } => ({ value: null }));
@@ -56,14 +54,6 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 
 const listTeamComputers =
   vi.fn<(environmentId: string) => Promise<TeamComputersResult>>();
-const setEnvironmentBotHost =
-  vi.fn<
-    (
-      environmentId: string,
-      hostId: string,
-      sharingGeneration: number,
-    ) => Promise<SetEnvironmentBotHostResult>
-  >();
 const releaseTeamComputer =
   vi.fn<
     (
@@ -73,12 +63,8 @@ const releaseTeamComputer =
   >();
 const auth = {
   listTeamComputers,
-  setEnvironmentBotHost,
   releaseTeamComputer,
-} satisfies Pick<
-  AuthService,
-  "listTeamComputers" | "setEnvironmentBotHost" | "releaseTeamComputer"
->;
+} satisfies Pick<AuthService, "listTeamComputers" | "releaseTeamComputer">;
 const directory = { refresh: vi.fn(() => Promise.resolve()) };
 
 function computer(overrides: Partial<TeamComputer>): TeamComputer {
@@ -88,7 +74,6 @@ function computer(overrides: Partial<TeamComputer>): TeamComputer {
     hostName: "Studio",
     hostKind: "personal",
     sharingGeneration: 14,
-    holdsBotSlot: false,
     purgePending: false,
     ...overrides,
   };
@@ -180,7 +165,6 @@ async function openClaimDialog(user: UserEvent) {
 beforeEach(() => {
   hostBinding.value = { auth, directory };
   listTeamComputers.mockReset();
-  setEnvironmentBotHost.mockReset();
   releaseTeamComputer.mockReset();
   invalidateLocalTeamAdmissionAfterClaim.mockReset();
   invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
@@ -189,12 +173,6 @@ beforeEach(() => {
     Promise.resolve({
       kind: "ok",
       hosts: [computer({ environmentId })],
-    }),
-  );
-  setEnvironmentBotHost.mockImplementation((environmentId, hostId) =>
-    Promise.resolve({
-      kind: "ok",
-      host: computer({ environmentId, hostId, holdsBotSlot: true }),
     }),
   );
   releaseTeamComputer.mockResolvedValue({ kind: "ok" });
@@ -259,18 +237,7 @@ describe("TeamComputersSection", () => {
     expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
   });
 
-  it("does not choose a bot host when no computer holds the bot slot", async () => {
-    listTeamComputers.mockResolvedValue({
-      kind: "ok",
-      hosts: [computer({ holdsBotSlot: false })],
-    });
-    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
-
-    expect(await screen.findByText("No bot computer chosen")).toBeTruthy();
-    expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID);
-  });
-
-  it("refreshes a successful empty list after an external enrollment and uses the new generation", async () => {
+  it("refreshes a successful empty list after an external enrollment", async () => {
     const hostName = "New computer";
     const enrolled = computer({
       hostId: "host-new-computer",
@@ -282,11 +249,6 @@ describe("TeamComputersSection", () => {
       .mockResolvedValue({ kind: "ok", hosts: [enrolled] })
       .mockResolvedValueOnce({ kind: "ok", hosts: [] })
       .mockReturnValueOnce(refreshed.promise);
-    setEnvironmentBotHost.mockImplementation(() => {
-      const assigned = { ...enrolled, holdsBotSlot: true };
-      listTeamComputers.mockResolvedValue({ kind: "ok", hosts: [assigned] });
-      return Promise.resolve({ kind: "ok", host: assigned });
-    });
     mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
@@ -304,66 +266,6 @@ describe("TeamComputersSection", () => {
 
     const row = await screen.findByRole("listitem");
     expect(within(row).getByText(hostName)).toBeTruthy();
-    const picker = screen.getByRole("combobox", { name: "Bot host" });
-    await user.click(picker);
-    await user.click(await screen.findByRole("option", { name: hostName }));
-    await waitFor(() =>
-      expect(picker.textContent).toBe(`${hostName} · Current bot computer`),
-    );
-    expect(setEnvironmentBotHost).toHaveBeenCalledWith(
-      ENVIRONMENT_ID,
-      enrolled.hostId,
-      42,
-    );
-  });
-
-  it("shows the current sandbox host and sends the eligible computer's generation without changing the viewing host", async () => {
-    const available = computer({
-      hostId: "host-available",
-      hostName: "Bench",
-      sharingGeneration: 29,
-    });
-    const returned = computer({
-      hostId: "host-returning",
-      hostName: "Returning computer",
-      sharingGeneration: 30,
-      purgePending: true,
-    });
-    const sandbox = computer({
-      hostId: "host-sandbox",
-      hostName: "Sandbox",
-      hostKind: "sandbox",
-      holdsBotSlot: true,
-    });
-    listTeamComputers.mockResolvedValue({
-      kind: "ok",
-      hosts: [available, returned, sandbox],
-    });
-    const pick = { kind: "team", environmentId: ENVIRONMENT_ID } as const;
-    const viewingHost = { hostId: VIEWER_HOST_ID, name: "Viewing computer" };
-    useSettingsHostScopeStore.getState().selectHost(pick, viewingHost);
-    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
-    const user = userEvent.setup();
-
-    expect(await screen.findByText("Sandbox")).toBeTruthy();
-    await user.click(screen.getByRole("combobox", { name: "Bot host" }));
-    const returningOption = await screen.findByRole("option", {
-      name: /Returning computer/,
-    });
-    expect(screen.queryByRole("option", { name: /Sandbox/ })).toBeNull();
-    expect(returningOption.getAttribute("aria-disabled")).toBe("true");
-    await user.click(await screen.findByRole("option", { name: "Bench" }));
-
-    await waitFor(() =>
-      expect(setEnvironmentBotHost).toHaveBeenCalledWith(
-        ENVIRONMENT_ID,
-        "host-available",
-        29,
-      ),
-    );
-    expect(useSettingsHostScopeStore.getState().hostByEnvironment).toEqual({
-      "team:env-a": viewingHost,
-    });
   });
 
   it("lets a team member claim a computer after confirming", async () => {
@@ -448,11 +350,6 @@ describe("TeamComputersSection", () => {
       ),
     );
     expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
-    expect(
-      screen
-        .getByRole("combobox", { name: "Bot host" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
     expect(
       screen.getByRole("button", { name: "Refresh" }).hasAttribute("disabled"),
     ).toBe(false);
