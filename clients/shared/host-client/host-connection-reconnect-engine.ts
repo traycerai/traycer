@@ -246,12 +246,20 @@ export interface HostReconnectEngine {
   readonly claimWakeEpisode: (key: object, nowMs: number) => boolean;
   /** Was `key`'s episode stamped within the window ending at `nowMs`? */
   readonly isWithinWakeEpisode: (key: object, nowMs: number) => boolean;
+  /**
+   * Fires every lane whose reopen is armed, now rather than when its timer
+   * runs out: the person asked to retry. A lane with nothing armed is left
+   * alone, and the backoff each lane has earned stays, so a reopen refused
+   * again waits as long as it would have.
+   */
+  readonly reopenNow: () => void;
   /** Drops every lane and episode. Called when the host's record is dropped. */
   readonly dispose: () => void;
 }
 
 export function createHostReconnectEngine(): HostReconnectEngine {
-  const lanes = new Set<ReopenLane>();
+  // Each lane, with what reopens it now if its reopen is armed.
+  const lanes = new Map<ReopenLane, () => void>();
   // Keyed by the caller's own object so a retired session's episode is
   // collectable with it rather than pinned by a string id nobody clears.
   const episodes = new WeakMap<object, number>();
@@ -294,7 +302,12 @@ export function createHostReconnectEngine(): HostReconnectEngine {
         lanes.delete(lane);
       },
     };
-    lanes.add(lane);
+    lanes.set(lane, () => {
+      if (disposed || laneDisposed || timer === null) return;
+      globalThis.clearTimeout(timer);
+      timer = null;
+      reopen();
+    });
     return lane;
   };
 
@@ -313,9 +326,12 @@ export function createHostReconnectEngine(): HostReconnectEngine {
       const last = episodes.get(key);
       return last !== undefined && nowMs - last < WAKE_RETRY_EPISODE_MS;
     },
+    reopenNow: () => {
+      for (const fireNow of [...lanes.values()]) fireNow();
+    },
     dispose: () => {
       disposed = true;
-      for (const lane of [...lanes]) {
+      for (const lane of [...lanes.keys()]) {
         lane.dispose();
       }
       lanes.clear();

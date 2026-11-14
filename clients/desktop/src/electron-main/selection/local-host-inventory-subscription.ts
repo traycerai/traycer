@@ -1,6 +1,6 @@
 import {
   hostTokenBearer,
-  hostTokenRevalidator,
+  hostTokenSessionAuth,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
@@ -471,14 +471,17 @@ export function createLocalHostInventoryStreamClient(deps: {
         endpoint.hostId,
         ignoreHostTokenState,
       ),
-      auth: hostTokenRevalidator({
-        tokens: deps.hostTokens,
-        currentUserId: () => deps.bearer()?.identity.userId ?? null,
-        hostId: endpoint.hostId,
-        signInRecovery: null,
-        onState: ignoreHostTokenState,
-        now: Date.now,
-      }),
+      ...hostTokenSessionAuth(
+        {
+          tokens: deps.hostTokens,
+          currentUserId: () => deps.bearer()?.identity.userId ?? null,
+          hostId: endpoint.hostId,
+          signInRecovery: null,
+          onState: ignoreHostTokenState,
+          now: Date.now,
+        },
+        null,
+      ),
       clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,

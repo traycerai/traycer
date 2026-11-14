@@ -114,10 +114,15 @@ describe("local stream host-token open frame", () => {
       signIn: null,
       now: () => Date.now(),
     });
-    await tokens.adopt(USER_A, hostId, {
-      token,
-      expiresAtMs: Date.now() + 3_600_000,
-    });
+    await tokens.adopt(
+      USER_A,
+      hostId,
+      {
+        token,
+        expiresAtMs: Date.now() + 3_600_000,
+      },
+      tokens.era(USER_A),
+    );
     return tokens;
   }
 
@@ -342,10 +347,15 @@ describe("local stream host-token open frame", () => {
       signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await hostTokens.adopt(USER_A, hostId, {
-      token: "held-before-outage",
-      expiresAtMs: initialTokenExpiresAtMs,
-    });
+    await hostTokens.adopt(
+      USER_A,
+      hostId,
+      {
+        token: "held-before-outage",
+        expiresAtMs: initialTokenExpiresAtMs,
+      },
+      hostTokens.era(USER_A),
+    );
     const client = buildLocalClient(target, provider, hostTokens);
     const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
     let connected = false;
@@ -430,6 +440,122 @@ describe("local stream host-token open frame", () => {
 
     expect(mintCalls).toBe(4);
     expect(connected).toBe(true);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("mints again after a real local open is admitted between not_admitted refusals", async () => {
+    const hostId = "local-admitted-between-refusals";
+    clearHostDoorState(hostId);
+    const provider = newProvider();
+    signIn(provider, USER_A, SIGN_IN_TOKEN);
+    const outcomes: HostTokenMintOutcome[] = [
+      {
+        kind: "ok",
+        token: {
+          token: "fresh-after-first-refusal",
+          expiresAtMs: Date.now() + 60_000,
+        },
+      },
+      {
+        kind: "ok",
+        token: {
+          token: "fresh-after-second-refusal",
+          expiresAtMs: Date.now() + 60_000,
+        },
+      },
+    ];
+    let mintCalls = 0;
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        const outcome = outcomes.shift();
+        if (outcome === undefined) throw new Error("unexpected token mint");
+        return Promise.resolve(outcome);
+      },
+      signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(
+      USER_A,
+      hostId,
+      { token: "initial-held-token", expiresAtMs: Date.now() + 60_000 },
+      hostTokens.era(USER_A),
+    );
+    const client = buildLocalClient(
+      { ...mockLocalHostEntry, hostId },
+      provider,
+      hostTokens,
+    );
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    const statuses: string[] = [];
+    session.onStatusChange((status) => statuses.push(status));
+
+    const firstSocket = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(1);
+      return FakeNativeWebSocket.instances[0];
+    });
+    firstSocket.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(firstSocket, "open")).toHaveLength(1),
+    );
+    firstSocket.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(statuses).toContain("open"));
+    firstSocket.fireMessage(
+      JSON.stringify({
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "host did not admit the token",
+          doorReason: "not_admitted",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(mintCalls).toBe(1));
+    expect(hostTokens.current(USER_A, hostId)?.token).toBe(
+      "fresh-after-first-refusal",
+    );
+    await vi.advanceTimersToNextTimerAsync();
+    const admittedSocket = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      return FakeNativeWebSocket.instances[1];
+    });
+    admittedSocket.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(admittedSocket, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(admittedSocket, "open")[0]?.token).toBe(
+      "fresh-after-first-refusal",
+    );
+    admittedSocket.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() =>
+      expect(statuses.filter((status) => status === "open")).toHaveLength(2),
+    );
+    admittedSocket.fireMessage(
+      JSON.stringify({
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "host did not admit the token",
+          doorReason: "not_admitted",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(mintCalls).toBe(2));
+    expect(hostTokens.current(USER_A, hostId)?.token).toBe(
+      "fresh-after-second-refusal",
+    );
+    expect(hostDoorStateFor(hostId)).toBeNull();
+    expect(statuses).not.toContain("closed");
+
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);

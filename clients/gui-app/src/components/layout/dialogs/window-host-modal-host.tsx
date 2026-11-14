@@ -24,11 +24,17 @@ import {
 import { BootOpenSettingsButton } from "@/components/host/host-boot-surface";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import { retryHostDoor } from "@/lib/host/host-door-retry";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import { useMarkDrawnDoorCover } from "@/stores/host/drawn-door-cover-store";
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { isMobileApp } from "@/lib/mobile-app";
 import { appLogger } from "@/lib/logger";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
+  isDoorCoverVariant,
+  type DoorCoverKind,
   type WindowNarrationCause,
   type WindowNarrationState,
   type WindowNarrationVariant,
@@ -87,11 +93,16 @@ export function WindowHostModalHost(props: {
    */
   readonly bypassed: boolean;
 }): ReactNode {
-  const narration = useWindowNarration();
+  const { narration, doorCoverHostId } = useWindowNarration();
 
   if (narration.kind === "silent") return null;
   if (props.bypassed) return null;
-  return <NarratingWindowHostModal narration={narration} />;
+  return (
+    <NarratingWindowHostModal
+      narration={narration}
+      doorCoverHostId={doorCoverHostId}
+    />
+  );
 }
 
 /**
@@ -146,6 +157,8 @@ function NarratingWindowHostModal(props: {
     WindowNarrationState,
     { readonly kind: "narrating" }
   >;
+  /** The host whose door cover this narration is, if it is one. */
+  readonly doorCoverHostId: string | null;
 }): ReactNode {
   const { narration } = props;
   const hostBinding = useHostBinding();
@@ -154,15 +167,17 @@ function NarratingWindowHostModal(props: {
   const progress = useHostProvisioningProgress();
   const controller = useHostReadinessController();
   const shellAdmission = useShellLocalPlaneAdmission();
+  const { hostTokens } = useRunnerHost();
   const presentation = controller.defaultHostPresentation;
   const localLifecycle = presentsLocalHostLifecycle(presentation);
   const settled = hasSettledFailure(narration.cause, presentation);
-  const retry = resolveRetry(
-    narration.variant,
+  const retry = resolveRetry({
+    variant: narration.variant,
+    hostTokens,
     presentation,
     localLifecycle,
     settled,
-  );
+  });
   // ONE NARRATOR PER SCOPE, enforced from this side too.
   //
   // The gate draws its own full-screen card for the kinds the narrator does not
@@ -219,6 +234,11 @@ function NarratingWindowHostModal(props: {
   // is naming WHICH card won, and re-deriving that from the readiness here
   // would be the second copy this suppression exists to avoid.
   useSuppressionLog(gateDrawn?.kind ?? null, narration);
+  useMarkDrawnDoorCover(
+    drawsNarration(gateDrawn !== null, signOutQuestionOpen, blocking, narration)
+      ? props.doorCoverHostId
+      : null,
+  );
   if (gateDrawn !== null || signOutQuestionOpen) {
     return null;
   }
@@ -273,8 +293,9 @@ function NarratingWindowHostModal(props: {
     // report to be about. Not folded into `onRetry`'s gate: Retry is also
     // right on the slow arm, where nothing has failed yet but the wait has
     // outrun the healthy band, and a report there would still describe a
-    // start that is merely taking its time.
-    showReportIssue: settled.failed,
+    // start that is merely taking its time. And only on a state whose board
+    // draws it: see `REPORTED_VARIANTS`.
+    showReportIssue: showsReportIssue(narration.variant, settled),
     // With no Retry and no Report issue on a healthy start, `Open settings`
     // is the only control on screen - and as an equal-weight button it still
     // reads as "something is wrong, pick one". Quiet link while nothing has
@@ -329,6 +350,21 @@ function NarratingWindowHostModal(props: {
 }
 
 /**
+ * Whether `NarratingWindowHostModal` puts a card or a dialog on screen: the
+ * branches that return one, in its order. The toast stays quiet for a door
+ * refusal only while its cover is drawn, so this must not drift from them.
+ */
+function drawsNarration(
+  gateCardDrawn: boolean,
+  signOutQuestionOpen: boolean,
+  blocking: boolean,
+  narration: Extract<WindowNarrationState, { readonly kind: "narrating" }>,
+): boolean {
+  if (gateCardDrawn || signOutQuestionOpen) return false;
+  return blocking || narration.cause !== "cold-start";
+}
+
+/**
  * Whether this wait has produced anything a recovery action could be about.
  *
  * `failed` is a settled failure of the attempt being narrated; `slow` is the
@@ -339,7 +375,8 @@ function NarratingWindowHostModal(props: {
  * Only the cold-start cause gets the healthy grace period. `no-usable-host`
  * means nothing can serve this window right now, which IS the settled failure -
  * there is no in-progress start to protect there, and withholding recovery on
- * that arm would be the mirror defect.
+ * that arm would be the mirror defect. `door-state` is no failure of this app:
+ * the host or the sign-in answered, so there is nothing to report.
  */
 interface SettledFailure {
   readonly failed: boolean;
@@ -351,6 +388,7 @@ function hasSettledFailure(
   presentation: DefaultHostReadinessPresentation,
 ): SettledFailure {
   if (cause === "no-usable-host") return { failed: true, slow: false };
+  if (cause === "door-state") return { failed: false, slow: false };
   return {
     // `provisioningError` is read ONLY under this cause. Its own contract warns
     // it outlives the attempt that produced it - a host that failed to install
@@ -389,13 +427,29 @@ interface ResolvedRetry {
  * converge's retirement). When it does not - a fleet of remote machines this
  * app cannot start - the only honest retry is re-reading the registry.
  */
-function resolveRetry(
-  variant: WindowNarrationVariant,
-  presentation: DefaultHostReadinessPresentation,
-  localLifecycle: boolean,
-  settled: SettledFailure,
-): ResolvedRetry {
-  if (variant.kind !== "offline") return { onRetry: null, pending: false };
+function resolveRetry(args: {
+  readonly variant: WindowNarrationVariant;
+  readonly hostTokens: HostTokenSource;
+  readonly presentation: DefaultHostReadinessPresentation;
+  readonly localLifecycle: boolean;
+  readonly settled: SettledFailure;
+}): ResolvedRetry {
+  const { variant, hostTokens, presentation, localLifecycle, settled } = args;
+  if (isDoorCoverVariant(variant)) {
+    return DOOR_COVERS_WITH_RETRY.has(variant.kind)
+      ? {
+          onRetry: () => {
+            void retryHostDoor(variant.hostId, hostTokens);
+          },
+          pending: false,
+        }
+      : { onRetry: null, pending: false };
+  }
+  // An unrecognised refusal is the `offline` cover with its code shown, and
+  // keeps that cover's recovery.
+  if (variant.kind !== "offline" && variant.kind !== "unrecognised-refusal") {
+    return { onRetry: null, pending: false };
+  }
   // A healthy start in progress has nothing to retry. `cause === "cold-start"`
   // always resolves to `offline` by design, so before this gate every local
   // boot rendered Retry from its first frame, with no failure of any kind - the
@@ -412,6 +466,27 @@ function resolveRetry(
   }
   return { onRetry: presentation.refreshDirectory, pending: false };
 }
+
+/**
+ * The covers that offer Report issue once something has failed: the ordinary
+ * offline cover, the same cover over a refusal this app does not know (ruling
+ * 188), and the app-update cover, which no board redraws. Every door cover
+ * (C1) and the host-update cover (C5) draws its own buttons without it.
+ */
+const REPORTED_VARIANTS: ReadonlySet<WindowNarrationVariant["kind"]> = new Set<
+  WindowNarrationVariant["kind"]
+>(["offline", "unrecognised-refusal", "update-client"]);
+
+function showsReportIssue(
+  variant: WindowNarrationVariant,
+  settled: SettledFailure,
+): boolean {
+  return settled.failed && REPORTED_VARIANTS.has(variant.kind);
+}
+
+/** The door covers board C1 draws with a Retry: each says "then retry". */
+const DOOR_COVERS_WITH_RETRY: ReadonlySet<DoorCoverKind> =
+  new Set<DoorCoverKind>(["keys-unavailable", "clock-skew", "token-expired"]);
 
 /**
  * The boot body, or null when this state has none.

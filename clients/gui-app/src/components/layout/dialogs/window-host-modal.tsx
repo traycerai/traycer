@@ -14,6 +14,8 @@ import { usePressStartActivation } from "@/lib/host/press-start-activation";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   hostUpdateSkew,
+  isDoorCoverVariant,
+  type DoorCoverKind,
   type WindowNarrationCause,
   type WindowNarrationVariant,
 } from "@/lib/host/window-narration";
@@ -163,6 +165,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
             {copy.description}
           </p>
           <WindowHostModalBody
+            cause={props.cause}
             variant={props.variant}
             progress={props.progress}
             bootBody={props.bootBody}
@@ -229,7 +232,9 @@ export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
   // The released card face: body only, one heading, for a start that is
   // progressing or slow. A SETTLED failure gets the titled face below even on
   // the cold-start cause - a crash report under no heading reads as debris.
-  const bareColdStart = props.cause === "cold-start" && !props.showReportIssue;
+  const offlineColdStart =
+    props.cause === "cold-start" && props.variant.kind === "offline";
+  const bareColdStart = offlineColdStart && !props.showReportIssue;
   return (
     <div
       className={cn(
@@ -252,11 +257,9 @@ export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
               data-testid="window-host-startup-card-title"
               className="font-heading text-lg leading-none font-medium"
             >
-              {props.cause === "cold-start"
-                ? "Traycer Host didn't start"
-                : copy.title}
+              {offlineColdStart ? "Traycer Host didn't start" : copy.title}
             </h2>
-            {props.cause === "cold-start" ? null : (
+            {offlineColdStart ? null : (
               <p
                 className="text-ui-sm text-muted-foreground"
                 data-testid="window-host-startup-card-description"
@@ -267,6 +270,7 @@ export function WindowHostStartupCard(props: WindowHostModalProps): ReactNode {
           </div>
         )}
         <WindowHostModalBody
+          cause={props.cause}
           variant={props.variant}
           progress={props.progress}
           bootBody={props.bootBody}
@@ -374,12 +378,12 @@ function NarrationActions(
       >
         Open settings
       </Button>
-      {props.showReportIssue ? (
+      {props.showReportIssue && props.copy.report !== null ? (
         <ReportIssueAction
           context={createReportIssueContext({
-            title: props.copy.reportTitle,
-            message: props.copy.reportMessage,
-            code: props.copy.reportCode,
+            title: props.copy.report.title,
+            message: props.copy.report.message,
+            code: props.copy.report.code,
             source: "Host connection",
           })}
           presentation="text"
@@ -391,6 +395,7 @@ function NarrationActions(
 }
 
 function WindowHostModalBody(props: {
+  readonly cause: WindowNarrationCause;
   readonly variant: WindowNarrationVariant;
   readonly progress: HostProgressView | null;
   readonly bootBody: ReactNode | null;
@@ -401,6 +406,12 @@ function WindowHostModalBody(props: {
   if (props.variant.kind === "update-client") {
     return <ClientCompatibilityDetail variant={props.variant} />;
   }
+  if (props.variant.kind === "unrecognised-refusal") {
+    return <RefusalDetail code={props.variant.code} />;
+  }
+  // A door state's cover is its title, its line and its buttons: a lane
+  // running on this machine is not part of it.
+  if (props.cause === "door-state") return null;
   if (props.bootBody !== null) return props.bootBody;
   if (props.progress === null) return null;
   return <LaneProgressLine progress={props.progress} />;
@@ -486,6 +497,19 @@ function IncompatibleDetail(props: {
   );
 }
 
+/** A refusal whose reason this app does not know: its code, for a report. */
+function RefusalDetail(props: { readonly code: string }): ReactNode {
+  return (
+    <div
+      // align-ok: the same block as `IncompatibleDetail` above.
+      className="flex w-full flex-col gap-1 rounded-md bg-foreground/8 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+      data-testid="window-host-modal-refusal-detail"
+    >
+      <span className="break-words">Reason: {props.code}</span>
+    </div>
+  );
+}
+
 /**
  * The host's own structured requirement, printed as facts rather than folded
  * into the sentence above it.
@@ -529,10 +553,48 @@ function ClientCompatibilityDetail(props: {
 interface WindowHostModalCopy {
   readonly title: string;
   readonly description: string;
-  readonly reportTitle: string;
-  readonly reportMessage: string;
-  readonly reportCode: string;
+  /** What an issue report is pre-filled with; `null` where there is no report to make. */
+  readonly report: {
+    readonly title: string;
+    readonly message: string;
+    readonly code: string;
+  } | null;
 }
+
+const DOOR_COVER_COPY: Readonly<
+  Record<
+    DoorCoverKind,
+    { readonly title: string; readonly description: string }
+  >
+> = {
+  "token-unavailable": {
+    title: "We can't confirm access to this computer right now",
+    description: "We'll try again. Your draft is saved.",
+  },
+  "keys-unavailable": {
+    title: "This computer needs to connect once before it can verify access",
+    description: "Check its connection, then retry.",
+  },
+  "clock-skew": {
+    title: "This computer's date or time appears incorrect",
+    description: "Enable automatic date and time on that computer, then retry.",
+  },
+  "token-expired": {
+    title: "Access needs to be renewed before you can reconnect",
+    description:
+      "Connect to the internet and retry. Work already started remains on this computer.",
+  },
+  "enrolment-broken": {
+    title: "This computer's connection to the team needs repair",
+    description:
+      "Ask a team administrator to restore it. Work is still stored here.",
+  },
+  "membership-removed": {
+    title: "You no longer have access to this team's computer",
+    description:
+      "Ask a team administrator if this is unexpected. Work you started continues for the team.",
+  },
+};
 
 /**
  * One wording per state, and the report family chosen with it.
@@ -561,10 +623,22 @@ function modalCopy(
       title: "This computer belongs to a team",
       description:
         "This account is not a member. Switch accounts to use Traycer here.",
-      reportTitle: "Team membership required",
-      reportMessage: "This account cannot use this team's computer.",
-      reportCode: "TEAM_MEMBERSHIP_REQUIRED",
+      report: {
+        title: "Team membership required",
+        message: "This account cannot use this team's computer.",
+        code: "TEAM_MEMBERSHIP_REQUIRED",
+      },
     };
+  }
+  if (variant.kind === "not-admitted") {
+    return {
+      title: "This account cannot access this computer",
+      description: "Switch accounts to use it.",
+      report: null,
+    };
+  }
+  if (isDoorCoverVariant(variant)) {
+    return { ...DOOR_COVER_COPY[variant.kind], report: null };
   }
   if (variant.kind === "update-client") {
     const { requirement } = variant;
@@ -578,10 +652,12 @@ function modalCopy(
         requirement.observedClientAppVersion === null
           ? "This Traycer installation is too old to identify a compatible generation. Install the latest Traycer app."
           : `This host needs a newer Traycer generation. You are running ${requirement.observedClientAppVersion}; install the latest version.`,
-      reportTitle: "Traycer app update required",
-      reportMessage:
-        "The host refused this app at its client-compatibility epoch gate.",
-      reportCode: "CLIENT_INCOMPATIBLE",
+      report: {
+        title: "Traycer app update required",
+        message:
+          "The host refused this app at its client-compatibility epoch gate.",
+        code: "CLIENT_INCOMPATIBLE",
+      },
     };
   }
   if (variant.kind === "update-host") {
@@ -595,9 +671,11 @@ function modalCopy(
         variant.hostId === localHostId
           ? "Traycer Host is running a version this app can't talk to. Update the host to continue - your agents and history are untouched."
           : REMOTE_HOST_UPDATE_DESCRIPTION,
-      reportTitle: "Host update required",
-      reportMessage: "Traycer Host requires an update.",
-      reportCode: "HOST_INCOMPATIBLE",
+      report: {
+        title: "Host update required",
+        message: "Traycer Host requires an update.",
+        code: "HOST_INCOMPATIBLE",
+      },
     };
   }
   if (cause === "cold-start") {
@@ -605,17 +683,21 @@ function modalCopy(
       title: "Setting up Traycer",
       description:
         "Traycer is getting this computer's host ready. This runs once, and the app opens as soon as it's done.",
-      reportTitle: "Traycer Host did not start",
-      reportMessage: "Traycer Host did not become available at launch.",
-      reportCode: "HOST_COLD_START_FAILED",
+      report: {
+        title: "Traycer Host did not start",
+        message: "Traycer Host did not become available at launch.",
+        code: "HOST_COLD_START_FAILED",
+      },
     };
   }
   return {
     title: "No host is available",
     description:
       "Traycer can't reach any of this account's hosts right now. It will connect again on its own as soon as one comes back.",
-    reportTitle: "No Traycer Host is reachable",
-    reportMessage: "No host on this account could be reached.",
-    reportCode: "HOST_NONE_USABLE",
+    report: {
+      title: "No Traycer Host is reachable",
+      message: "No host on this account could be reached.",
+      code: "HOST_NONE_USABLE",
+    },
   };
 }

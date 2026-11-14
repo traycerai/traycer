@@ -62,21 +62,37 @@ export function botPausedCopy(
  *   environment room (T65); the tab never moves to the bot's host;
  * - `paused`: no host can run the bot's turns now; the reason picks the
  *   banner's copy, and the channel still renders;
+ * - `reconnecting`: the open failed only because the tab's host could not
+ *   reach the cloud; that host's cloud-recovery doorbell asks it again;
  * - `failed`: the open itself failed.
  */
 export type BotTabOpenState =
   | { readonly kind: "opening" }
   | { readonly kind: "serving" }
   | { readonly kind: "paused"; readonly reason: BotTabPausedReason }
+  | { readonly kind: "reconnecting" }
   | { readonly kind: "failed"; readonly message: string };
+
+/**
+ * A failed `bot.open`: what it said, and whether it failed only because the
+ * host could not reach the cloud (`isTransientCloudFailure`).
+ */
+export interface BotTabOpenFailure {
+  readonly message: string;
+  readonly transient: boolean;
+}
 
 /** Reads `bot.open`'s answer for the tab. */
 export function botTabOpenState(input: {
   readonly response: BotOpenResponse | undefined;
-  readonly error: string | null;
+  readonly error: BotTabOpenFailure | null;
 }): BotTabOpenState {
   const { response, error } = input;
-  if (error !== null) return { kind: "failed", message: error };
+  if (error !== null) {
+    return error.transient
+      ? { kind: "reconnecting" }
+      : { kind: "failed", message: error.message };
+  }
   if (response === undefined) return { kind: "opening" };
   const { outcome } = response;
   switch (outcome.kind) {

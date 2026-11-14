@@ -660,6 +660,9 @@ async function postHostRoute(
                 },
           ...(body === null ? {} : { body }),
           signal: abort.signal,
+          // The sign-in rides in a header, so a redirect is never followed:
+          // it would carry the sign-in to wherever the answer pointed.
+          redirect: "manual",
         }),
         abort.signal,
       );
@@ -669,6 +672,9 @@ async function postHostRoute(
         detail: `the mint request never completed (${describeFetchFailure(error).classification})`,
       };
     }
+    // A redirect is an answer that minted nothing, refused like any status
+    // this route does not name. A browser reports it as an opaque response
+    // with status 0, which the range check below also refuses.
     if (response.status < 200 || response.status >= 300)
       return {
         kind: "refused",

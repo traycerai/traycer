@@ -1,3 +1,8 @@
+import {
+  resetTracyPlaceStores,
+  railOf,
+  WINDOW_HOST,
+} from "./tracy-place-test-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import {
@@ -25,28 +30,20 @@ import {
   createPersistentMemoryHistory,
   getHistoryController,
 } from "@/lib/persistent-history";
-import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
   TracyChannelPlaceRoute,
   TracySurfacePlaceRoute,
 } from "@/routes/tracy-route-components";
-import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import {
   useBotOpenThreadStore,
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import {
   tracySessionOf,
   tracyViewOf,
   useTracyPlaceStore,
 } from "@/stores/bots/tracy-place-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-import { emptyTabStripLayout } from "@/stores/tabs/layout";
-import { useTabsStore } from "@/stores/tabs/store";
-import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import * as DesktopTabsPersistence from "@/stores/tabs/desktop-tabs-persistence";
 
@@ -59,7 +56,6 @@ import * as DesktopTabsPersistence from "@/stores/tabs/desktop-tabs-persistence"
  * real `TabNavigationRouteBridge`.
  */
 
-const WINDOW_HOST = "host-window";
 const WINDOW_KEY = "tracy-place-persisted";
 const STORAGE_KEY = `traycer-gui-app:last-route:${WINDOW_KEY}`;
 const BOT_A = "bot-a";
@@ -168,33 +164,6 @@ async function mountHydratingLater(): Promise<{
   return { harness, hydrate: () => view.rerender(tree(true)) };
 }
 
-function resetStores(): void {
-  useTracySurfaceStore.setState({
-    open: false,
-    hostId: null,
-    botId: null,
-    visitedBotIds: [],
-    goneReports: {},
-  });
-  useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
-  useBotOpenThreadStore.setState(useBotOpenThreadStore.getInitialState(), true);
-  useBotDraftsStore.setState(useBotDraftsStore.getInitialState(), true);
-  useBotTabLandingStore.setState(useBotTabLandingStore.getInitialState(), true);
-  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useSelectionAuthorityStore.setState({
-    attached: true,
-    effectiveHostId: WINDOW_HOST,
-  });
-  useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
-  tabCommandCoordinator.resetReconciliationForTesting();
-  __resetTabNavigationControllerForTesting();
-}
-
-function railOf(botId: string): BotRail | null {
-  const { byBotId } = useBotOpenThreadStore.getState();
-  return Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
-}
-
 /** The place the surface's stores hold for `botId`. */
 function storePlace(botId: string): TracyPlace {
   const place = useTracyPlaceStore.getState();
@@ -299,7 +268,7 @@ describe("the Tracy surface's place over the persisted history", () => {
   beforeEach(() => {
     window.localStorage.clear();
     window.sessionStorage.clear();
-    resetStores();
+    resetTracyPlaceStores();
   });
   afterEach(() => {
     releaseHeldLoad();
@@ -307,7 +276,7 @@ describe("the Tracy surface's place over the persisted history", () => {
     current = null;
     cleanup();
     vi.restoreAllMocks();
-    resetStores();
+    resetTracyPlaceStores();
     window.localStorage.clear();
     window.sessionStorage.clear();
   });
@@ -407,7 +376,7 @@ describe("the Tracy surface's place over the persisted history", () => {
       // store is set as it would restore it (persisted open/host/bot).
       first.stop();
       current = null;
-      resetStores();
+      resetTracyPlaceStores();
       useTracySurfaceStore.setState({
         open: true,
         hostId: WINDOW_HOST,
@@ -523,7 +492,7 @@ describe("the Tracy surface's place over the persisted history", () => {
 
       first.stop();
       current = null;
-      resetStores();
+      resetTracyPlaceStores();
       useTracySurfaceStore.setState({
         open: true,
         hostId: WINDOW_HOST,
@@ -555,7 +524,6 @@ describe("the Tracy surface's place over the persisted history", () => {
       expect(second.router.state.location.href).toBe(shown);
       expectPlace(second.router.state.location.search);
       expect(storedStack()).toEqual(persisted);
-      expect(storedStack().entries[persisted.index]).toBe(shown);
       expect(liveStack(second)).toEqual(persisted);
 
       act(() => goBack(second.router));
@@ -597,7 +565,7 @@ describe("the Tracy surface's place over the persisted history", () => {
 
       first.stop();
       current = null;
-      resetStores();
+      resetTracyPlaceStores();
       useTracySurfaceStore.setState({
         open: true,
         hostId: WINDOW_HOST,
@@ -898,10 +866,8 @@ describe("the Tracy surface's place over the persisted history", () => {
           rails().setRail(BOT_A, THREAD_A);
         },
       );
-      await act(async () => {
-        place().setView(BOT_A, "activity");
-        await Promise.resolve();
-      });
+      act(() => place().setView(BOT_A, "activity"));
+      await waitFor(() => expect(landings).toBe(1));
       stopListening();
       await settle(harness, BOT_A);
 

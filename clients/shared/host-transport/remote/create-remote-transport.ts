@@ -25,9 +25,12 @@ import {
   type AttachGrantProvider,
 } from "./grant-client";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
-import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
-  hostTokenRevalidator,
+  isIssuedHostTokenEra,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
+import {
+  hostTokenSessionAuth,
   type HostTokenStateSink,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import { decodeHostPublicKey } from "./noise-channel";
@@ -288,7 +291,15 @@ export function createRemoteHostTransport<
             detail: "no user bearer available (signed out?)",
             context: "",
           };
+        // No era, no mint: the sign-in is never sent for work that cannot
+        // keep what it brings.
         const era = options.hostTokens.era(options.userId);
+        if (!isIssuedHostTokenEra(era))
+          return {
+            kind: "unavailable",
+            detail: "no host-token era for this person",
+            context: "",
+          };
         const minted = await mintRelayPassWithHostTokenViaHttp(
           options.authnBaseUrl,
           options.hostId,
@@ -307,6 +318,7 @@ export function createRemoteHostTransport<
             options.userId,
             options.hostId,
             minted.hostToken,
+            era,
           );
           return { kind: "ok", grant: minted.grant };
         }
@@ -324,21 +336,23 @@ export function createRemoteHostTransport<
         hostToken: () =>
           options.hostTokens.current(options.userId, options.hostId)?.token ??
           null,
-        door: options.door,
         // The SAME read the grant provider above uses, now also reported to the
         // host at the far end. The mint gate decides whether this client may
         // reach the relay; this tells the host what the session it reaches may
         // spend, which is a different question with a different consumer - the
         // host's own background workers, which no client-side gate can reach.
         cloudAuthorized,
-        auth: hostTokenRevalidator({
-          tokens: options.hostTokens,
-          currentUserId: () => bearer()?.identity.userId ?? null,
-          hostId: options.hostId,
-          signInRecovery: options.auth,
-          onState: options.onState,
-          now: Date.now,
-        }),
+        ...hostTokenSessionAuth(
+          {
+            tokens: options.hostTokens,
+            currentUserId: () => bearer()?.identity.userId ?? null,
+            hostId: options.hostId,
+            signInRecovery: options.auth,
+            onState: options.onState,
+            now: Date.now,
+          },
+          options.door,
+        ),
         clock: options.clock,
         rpcRegistry: options.rpcRegistry,
         streamRegistry: options.streamRegistry,
