@@ -85,9 +85,10 @@ function takeImages<Image>(
 }
 
 /**
- * The agent composer's paste and drop adapter for a message box: the same
- * preparation and the same size refusal. An image lands in the editor; a file
- * that is no image is refused, where the agent composer would write its path.
+ * The agent composer's paste, drop and pick adapter for a message box: the
+ * same preparation and the same size refusal. An image lands in the editor; a
+ * file that is no image is refused, where the agent composer would write its
+ * path or upload it.
  */
 export function useBotBoxImageIngest(
   editorRef: RefObject<ComposerPromptEditorHandle | null>,
@@ -124,7 +125,12 @@ export function useBotBoxImageIngest(
     }),
     [runnerHost.fileDrops],
   );
-  return useComposerPasteAdapter(insert, filePaths);
+  const adapter = useComposerPasteAdapter(insert, filePaths);
+  return { ...adapter, attachFiles: refuseFiles };
+}
+
+function refuseFiles(files: ReadonlyArray<File>): void {
+  if (files.length > 0) refuseAsNoImage();
 }
 
 /**
