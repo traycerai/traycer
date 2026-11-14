@@ -642,6 +642,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.getRuntimeCapabilities": "addressed-peer",
   "host.identity.get": "target-host",
   "host.identity.set": "target-host",
+  "host.accountSettings.refresh": "target-host",
   "host.notificationHooks.save": "target-host",
   "host.notificationHooks.status": "target-host",
   "host.notificationHooks.test": "target-host",

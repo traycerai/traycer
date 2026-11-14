@@ -1,3 +1,4 @@
+import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
 import {
   epicCreateV14,
   epicCreateUpgradeV13ToV14,
@@ -7946,6 +7947,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: hostNotificationHooksSaveDowngradeV30ToV10,
         2: hostNotificationHooksSaveDowngradeV30ToV20,
       },
+    },
+  },
+  "host.accountSettings.refresh": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostAccountSettingsRefreshV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
   "host.notifications.getConfig": {
