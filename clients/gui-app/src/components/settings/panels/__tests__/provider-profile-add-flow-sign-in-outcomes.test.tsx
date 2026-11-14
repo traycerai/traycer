@@ -1211,6 +1211,27 @@ describe("Add a profile around one sign-in", () => {
         expect(harness.created).not.toHaveBeenCalled();
         expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
         expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
+        fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+        await waitFor(() => {
+          expect(
+            methodCount(harness.messenger.calls, "providers.startLogin"),
+          ).toBe(2);
+        });
+        const retry = harness.calls.filter(
+          (call) => call.method === "providers.startLogin",
+        )[1];
+        if (retry === undefined) {
+          throw new Error("Expected a second start login call.");
+        }
+        expect(retry.params).toMatchObject({
+          providerId: "claude-code",
+          profileId: null,
+          target: null,
+        });
+        expect(startCreateProfile(retry.params)).toEqual({
+          label: "New profile",
+          shareSkillsAndPlugins: true,
+        });
       }
     },
   );

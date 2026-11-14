@@ -18,7 +18,13 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   recordNegotiatedHostManifest,
@@ -220,10 +226,11 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
       signedOut: false,
       onHostOnly: true,
-      advertiseLink: false,
+      advertiseLink: true,
     });
     const line = await screen.findByTestId(LINE_TESTID);
     expect(line.textContent).toContain(AVAILABLE_HERE);
+    expect(within(line).queryByRole("button", { name: "Link" })).toBeNull();
     expect(
       screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
     ).toBeNull();
