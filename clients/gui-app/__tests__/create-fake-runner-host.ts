@@ -7,7 +7,7 @@ import {
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
-import type { AuthService } from "@/lib/auth/auth-service";
+import { AuthService } from "@/lib/auth/auth-service";
 import {
   createInProcessSelectionAuthority,
   inertLocalHostOutageSignal,
@@ -36,18 +36,18 @@ export function createFakeEnvironmentCloudAuth(options: {
     listEnvironments: () => options.listEnvironments(),
     environmentTransport: options.transport,
   });
-  return {
-    listEnvironments: () => runnerHost.listEnvironments("test-bearer"),
-    environmentCloud: () => ({
-      authnBaseUrl: runnerHost.authnBaseUrl,
-      bearer: {
-        kind: "cloud",
-        getBearerToken: () => Promise.resolve("test-bearer"),
-      },
-      transport: runnerHost.environmentTransport,
-      onOriginSignIn: () => true,
-    }),
-  } as unknown as AuthService;
+  const auth = new AuthService({ runnerHost });
+  auth.listEnvironments = () => runnerHost.listEnvironments("test-bearer");
+  auth.environmentCloud = () => ({
+    authnBaseUrl: runnerHost.authnBaseUrl,
+    bearer: {
+      kind: "cloud",
+      getBearerToken: () => Promise.resolve("test-bearer"),
+    },
+    transport: runnerHost.environmentTransport,
+    onOriginSignIn: () => true,
+  });
+  return auth;
 }
 
 /** Shared authn transport fake for the list join and settings reads. */
