@@ -710,6 +710,14 @@ function bootstrapMain(config: BootstrapConfig): void {
     }
   }
 
+  // A site shared by an artifact's mounts (the desktop's) names the mount
+  // ahead of the tree path as `/m/<mountId>`; a host that names the mount
+  // itself has no such prefix.
+  const mountInPath = /^\/m\/[a-z0-9]+(?=\/)/;
+  const mountPrefix = location.host.includes("--")
+    ? ""
+    : (mountInPath.exec(location.pathname)?.[0] ?? "");
+
   // Links the frame follows itself: an anchor within this page, and on a
   // served artifact page another `.html` page of the same folder, which loads
   // through the same server and prelude. Any other file would load without
@@ -728,9 +736,33 @@ function bootstrapMain(config: BootstrapConfig): void {
       return false;
     }
     return (
-      targetPath.startsWith(config.artifactRootPath) &&
+      targetPath.startsWith(mountPrefix + config.artifactRootPath) &&
       (/\.html?$/i.test(targetPath) || targetPath.endsWith("/"))
     );
+  };
+
+  // A root-absolute link resolves against the site and drops the mount. This
+  // puts it back, so the link names a place under this frame's own mount. A
+  // path that already names a mount, this one or another, is left as written:
+  // prefixed again it would name a place under this mount the link never did.
+  const throughOwnMount = (url: URL): URL => {
+    if (
+      mountPrefix === "" ||
+      url.protocol !== location.protocol ||
+      url.host !== location.host ||
+      mountInPath.test(url.pathname)
+    )
+      return url;
+    const mounted = new URL(url.href);
+    mounted.pathname = mountPrefix + url.pathname;
+    return mounted;
+  };
+
+  const stayInFrame = (anchor: Element, authored: URL, target: URL): void => {
+    if (target !== authored) anchor.setAttribute("href", target.href);
+    // The sandbox has no popup permission. Override explicit and inherited
+    // targets so a page inside this artifact always stays in its frame.
+    anchor.setAttribute("target", "_self");
   };
 
   // Bubble phase on window, so a page that handles its own clicks (and calls
@@ -741,16 +773,15 @@ function bootstrapMain(config: BootstrapConfig): void {
     const anchor = target instanceof Element ? target.closest("a[href]") : null;
     if (anchor === null) return;
     const linkHref = anchor.getAttribute("href") ?? "";
-    let url: URL;
+    let authored: URL;
     try {
-      url = new URL(linkHref, document.baseURI);
+      authored = new URL(linkHref, document.baseURI);
     } catch {
       return;
     }
+    const url = throughOwnMount(authored);
     if (followsInFrame(url)) {
-      // The sandbox has no popup permission. Override explicit and inherited
-      // targets so a page inside this artifact always stays in its frame.
-      anchor.setAttribute("target", "_self");
+      stayInFrame(anchor, authored, url);
       return;
     }
     event.preventDefault();

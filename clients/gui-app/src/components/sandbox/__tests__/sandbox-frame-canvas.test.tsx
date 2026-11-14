@@ -74,8 +74,8 @@ function artifactSource(
 function runnerHost(): IRunnerHost {
   const bridge: SandboxArtifactBridge = {
     policySource: POLICY_SOURCE,
-    artifactOrigin: ({ artifactId, mountId }: SandboxArtifactOriginParts) =>
-      `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+    artifactOrigin: ({ artifactId }: SandboxArtifactOriginParts) =>
+      `traycer-sandbox://artifact-${artifactId}`,
     register: () => Promise.resolve(),
     unregister: () => Promise.resolve(),
     onRequest: () => ({ dispose: () => undefined }),
