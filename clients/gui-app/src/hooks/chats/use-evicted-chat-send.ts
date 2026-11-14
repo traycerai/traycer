@@ -106,7 +106,9 @@ function handBack(chatId: string, send: ParkedEvictedSend): boolean {
         send.row.clientActionId,
         restore.content,
         EVICTED_SEND_FAILED_MESSAGE,
+        false,
       ),
+      false,
     );
   }
   releaseComposerContentImageRoots(imageRootsHolder(send));

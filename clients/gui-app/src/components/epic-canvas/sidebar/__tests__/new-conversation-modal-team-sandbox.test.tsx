@@ -411,6 +411,10 @@ vi.mock("@/lib/composer/repointed-staging-toast", () => ({
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
+    accountChosen: false,
+    defaultAccount: null,
+    setAccountChosen: vi.fn(),
+    setDefaultAccount: vi.fn(),
     ultracode: false,
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
     // The raw pick; `selection` above is what this host's catalog shows.

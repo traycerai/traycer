@@ -2201,6 +2201,17 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Each begin captures its own choice; each settle must consume its own token.
+  "providers.beginApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.settleApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an API key changes persisted credentials.
   "providers.setApiKey": {
     mode: "fifo",

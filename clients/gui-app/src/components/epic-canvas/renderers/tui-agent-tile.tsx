@@ -72,6 +72,8 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-copy";
+import { isRemovedProfileRefusalCode } from "@/lib/chats/rejected-frame-reason";
 import { cn } from "@/lib/utils";
 import {
   Popover,
@@ -1133,9 +1135,14 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
       );
     }
     const message = error?.message ?? "Unknown error";
+    // A start that names an account a person removed says the pin's words in
+    // place of the whole line: the computer's sentence carries the profile id.
+    const line = isRemovedProfileRefusalCode(error?.code ?? null)
+      ? REMOVED_PROFILE_PIN_TEXT
+      : `Failed to start terminal: ${message}`;
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center text-ui-sm text-destructive">
-        <span>Failed to start terminal: {message}</span>
+        <span>{line}</span>
         <div className="flex flex-wrap items-center justify-center gap-2">
           <Button
             type="button"
