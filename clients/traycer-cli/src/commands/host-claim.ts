@@ -30,7 +30,9 @@ import type {
 const CLAIM_WORDS = {
   belongsTo: (slug: string) => `This computer belongs to ${slug}.`,
   chatsWillStop: (count: number) =>
-    `${String(count)} chats are running and will stop.`,
+    count === 1
+      ? "1 chat is running and will stop."
+      : `${String(count)} chats are running and will stop.`,
   // When the count could not be read (ruling 210).
   runningChatsUnknown: "Running chats will stop.",
   question: "Claim it as your own? [y/N] ",
@@ -100,8 +102,12 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         PLAIN_DISPATCH,
       ),
     );
+    const environmentId = binding.environment.environmentId;
     ctx.output.humanRequired(
-      confirmLine(owner.name, await readRunningChatCount()),
+      confirmLine(
+        owner.name,
+        await readRunningChatCount(endpoint, auth, environmentId),
+      ),
     );
     if (!args.yes && !(await confirmClaim(ctx))) {
       return {
@@ -114,7 +120,7 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       auth.authnBaseUrl,
       auth.token,
       endpoint.hostId,
-      binding.environment.environmentId,
+      environmentId,
     );
     ctx.runtime.logger.info("Host claim release settled", {
       environment: ctx.runtime.environment,

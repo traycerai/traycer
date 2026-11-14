@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   resolveEndpointMock: vi.fn(),
   callHostRpcAtResolvedEndpointMock: vi.fn(),
   provisionRunningHostCredentialMock: vi.fn(),
-  readRunningChatCountMock: vi.fn(),
   questionMock: vi.fn(),
   closePromptMock: vi.fn(),
 }));
@@ -39,10 +38,6 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
   };
 });
 
-vi.mock("../../host/running-chat-count", () => ({
-  readRunningChatCount: () => mocks.readRunningChatCountMock(),
-}));
-
 vi.mock("node:readline/promises", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("node:readline/promises")>();
@@ -58,12 +53,7 @@ vi.mock("node:readline/promises", async (importOriginal) => {
 import { buildHostClaimCommand } from "../host-claim";
 import type { HostClaimArgs } from "../host-claim";
 import { CLI_ERROR_CODES } from "../../runner/errors";
-import type { RunningChats } from "../../host/running-chat-count";
-
-const { readRunningChatCount: readRealRunningChatCount } =
-  await vi.importActual<typeof import("../../host/running-chat-count")>(
-    "../../host/running-chat-count",
-  );
+import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 
 const HOST_ID = "host-local";
 const TEAM_ID = "team-acme";
@@ -85,7 +75,12 @@ let ownership: HostOwnership = {
 let ownershipStatus = 200;
 let releaseStatus = 204;
 let questionAnswer = "y";
+let localFacts: () => Promise<unknown> = noTeamWork;
 let savedStdinIsTTY: PropertyDescriptor | undefined;
+
+function noTeamWork(): Promise<unknown> {
+  return Promise.resolve({ activeTurns: 0, terminals: 0 });
+}
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -153,19 +148,23 @@ beforeEach(() => {
     hostId: HOST_ID,
     websocketUrl: "ws://127.0.0.1:1/rpc",
   });
-  mocks.callHostRpcAtResolvedEndpointMock.mockResolvedValue({
-    hostId: HOST_ID,
-    environment: { environmentId: ENVIRONMENT_ID },
-    explicit: true,
-    enrolledByUserId: "member-1",
-    canUnbind: true,
-  });
+  mocks.callHostRpcAtResolvedEndpointMock.mockImplementation(
+    async (method: string) =>
+      method === "environment.previewLocalFacts"
+        ? localFacts()
+        : {
+            hostId: HOST_ID,
+            environment: { environmentId: ENVIRONMENT_ID },
+            explicit: true,
+            enrolledByUserId: "member-1",
+            canUnbind: true,
+          },
+  );
   mocks.provisionRunningHostCredentialMock.mockImplementation(async () => {
     events.push("provision");
     return { kind: "active", minted: false };
   });
   mocks.questionMock.mockImplementation(async () => questionAnswer);
-  mocks.readRunningChatCountMock.mockImplementation(readRealRunningChatCount);
   ownership = {
     hostId: HOST_ID,
     owner: { kind: "team", id: TEAM_ID, name: "acme" },
@@ -175,6 +174,7 @@ beforeEach(() => {
   ownershipStatus = 200;
   releaseStatus = 204;
   questionAnswer = "y";
+  localFacts = noTeamWork;
   requests = [];
   events = [];
 });
@@ -214,6 +214,13 @@ describe("buildHostClaimCommand", () => {
       expect.objectContaining({ token: BEARER }),
       expect.anything(),
     );
+    expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledWith(
+      "environment.previewLocalFacts",
+      { environmentId: ENVIRONMENT_ID, subject: { kind: "computer" } },
+      expect.objectContaining({ hostId: HOST_ID }),
+      expect.objectContaining({ token: BEARER }),
+      expect.anything(),
+    );
     expect(requests.map(({ url }) => url)).toEqual([
       `${AUTHN}/api/v3/hosts?include=owner%2CremoteAccess%2CsandboxState`,
       `${AUTHN}/api/v3/hosts/${HOST_ID}/team-release`,
@@ -232,38 +239,62 @@ describe("buildHostClaimCommand", () => {
     expect(events).toEqual(["ownership", "release", "provision"]);
   });
 
-  // Board C17's confirm; the not-known sentence is ruling 210. `null` keeps
-  // the command's own reader, which answers not known until the computer
-  // subject of `environment.previewLocalFacts` is on this stack.
+  // Board C17's confirm; the not-known sentence is ruling 210.
+  const UNKNOWN_CONFIRM =
+    "This computer belongs to acme. Running chats will stop.";
   const confirmStates: ReadonlyArray<{
     readonly label: string;
-    readonly running: RunningChats | null;
+    readonly facts: () => Promise<unknown>;
     readonly confirm: string;
   }> = [
     {
       label: "chats running",
-      running: { kind: "count", count: 3 },
+      facts: () => Promise.resolve({ activeTurns: 3, terminals: 1 }),
       confirm:
         "This computer belongs to acme. 3 chats are running and will stop.",
     },
     {
+      label: "one chat running",
+      facts: () => Promise.resolve({ activeTurns: 1, terminals: 0 }),
+      confirm:
+        "This computer belongs to acme. 1 chat is running and will stop.",
+    },
+    {
       label: "nothing running",
-      running: { kind: "none" },
+      facts: noTeamWork,
       confirm: "This computer belongs to acme.",
     },
     {
-      label: "the running count not known",
-      running: null,
-      confirm: "This computer belongs to acme. Running chats will stop.",
+      label: "a null count",
+      facts: () => Promise.resolve({ activeTurns: null, terminals: null }),
+      confirm: UNKNOWN_CONFIRM,
+    },
+    {
+      label: "a failed read",
+      facts: () => Promise.reject(new Error("socket closed")),
+      confirm: UNKNOWN_CONFIRM,
+    },
+    {
+      label: "a host that answers unsupported",
+      facts: () =>
+        Promise.reject(
+          new HostRpcError({
+            code: "E_HOST_UNSUPPORTED",
+            message:
+              "This host does not support 'environment.previewLocalFacts'.",
+            requestId: "req_1",
+            method: "environment.previewLocalFacts",
+            fatalDetails: null,
+          }),
+        ),
+      confirm: UNKNOWN_CONFIRM,
     },
   ];
 
   it.each(confirmStates)(
     "with $label, confirms with its line and asks the question",
-    async ({ running, confirm }) => {
-      if (running !== null) {
-        mocks.readRunningChatCountMock.mockResolvedValue(running);
-      }
+    async ({ facts, confirm }) => {
+      localFacts = facts;
       setStdinIsTTY(true);
       const ctx = fakeCtx(false);
 
@@ -279,10 +310,8 @@ describe("buildHostClaimCommand", () => {
 
   it.each(confirmStates)(
     "with $label, --yes prints its line and skips the question",
-    async ({ running, confirm }) => {
-      if (running !== null) {
-        mocks.readRunningChatCountMock.mockResolvedValue(running);
-      }
+    async ({ facts, confirm }) => {
+      localFacts = facts;
       const ctx = fakeCtx(false);
 
       const result = await makeClaimCommand(true)(ctx);
