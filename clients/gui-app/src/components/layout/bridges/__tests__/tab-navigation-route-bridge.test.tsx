@@ -14,6 +14,10 @@ import {
   tabNavigationController,
 } from "@/lib/tab-navigation";
 import { STARTUP_NAVIGATION_INTENT_KEY } from "@/lib/host/startup-navigation-intent";
+import {
+  historyEntryIdentity,
+  takeTracyPlaceStep,
+} from "@/lib/bots/tracy-place-traversal";
 import { withOverlayCleared } from "@/lib/system-tab-overlay-search";
 import { useTabsStore } from "@/stores/tabs/store";
 import * as DesktopTabsPersistence from "@/stores/tabs/desktop-tabs-persistence";
@@ -57,6 +61,8 @@ const testState = vi.hoisted(() => ({
   subscriber: null as ((input: HistoryObserverInput) => void) | null,
   replaceCalls: [] as Array<ReplaceCall>,
   blockerRegistered: false,
+  /** The entry the fake history stands on, which `replace` moves. */
+  historyLocation: { href: "/live", state: { __TSR_index: 0 } },
   navigate: vi.fn<(options: NavigateOptions) => Promise<void>>(() =>
     Promise.resolve(),
   ),
@@ -83,6 +89,9 @@ vi.mock("@tanstack/react-router", () => ({
       return { location: testState.routerLocation };
     },
     history: {
+      get location() {
+        return testState.historyLocation;
+      },
       subscribe: (listener: (input: HistoryObserverInput) => void) => {
         testState.subscriber = listener;
         return () => undefined;
@@ -94,6 +103,7 @@ vi.mock("@tanstack/react-router", () => ({
       ): void => {
         const ignoreBlocker = navigateOpts?.ignoreBlocker ?? false;
         testState.replaceCalls.push({ path, ignoreBlocker });
+        testState.historyLocation = { href: path, state: { __TSR_index: 0 } };
         const notify = (): void => {
           testState.subscriber?.({
             location: { pathname: path, state: {}, search: "" },
@@ -119,6 +129,7 @@ beforeEach(() => {
   testState.subscriber = null;
   testState.replaceCalls = [];
   testState.blockerRegistered = false;
+  testState.historyLocation = { href: "/live", state: { __TSR_index: 0 } };
   testState.navigate.mockClear();
   testState.parseSearch.mockReset();
   testState.parseSearch.mockImplementation(parseCanonicalSearch);
@@ -321,6 +332,48 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
       useTabsStore.getState().systemTabs.settings?.lastPath,
       "the extra menu marker must not change which path the settings tab opens to",
     ).toBe("/settings/host");
+  });
+
+  it("declares the restored Tracy route a landing the surface takes once", () => {
+    seedRestoredRoute("/bot/bot-a?view=activity");
+
+    render(<TabNavigationRouteBridge />);
+
+    const identity = historyEntryIdentity(testState.historyLocation);
+    expect(takeTracyPlaceStep(identity)).toBe(true);
+    expect(takeTracyPlaceStep(identity)).toBe(false);
+  });
+
+  it("declares nothing when the restored route is not Tracy's", () => {
+    seedRestoredRoute("/restored?tab=1");
+
+    render(<TabNavigationRouteBridge />);
+
+    expect(
+      takeTracyPlaceStep(historyEntryIdentity(testState.historyLocation)),
+    ).toBe(false);
+  });
+
+  it("restores nothing, and declares no landing, under an explicit startup navigation intent", () => {
+    testState.hydrated = false;
+    seedRestoredRoute("/bot/bot-a?view=activity");
+    const { rerender } = render(<TabNavigationRouteBridge />);
+    testState.routerLocation = {
+      pathname: "/settings/host",
+      search: {},
+      searchStr: "",
+      state: { [STARTUP_NAVIGATION_INTENT_KEY]: true },
+    };
+
+    act(() => {
+      testState.hydrated = true;
+      rerender(<TabNavigationRouteBridge />);
+    });
+
+    expect(testState.replaceCalls).toEqual([]);
+    expect(
+      takeTracyPlaceStep(historyEntryIdentity(testState.historyLocation)),
+    ).toBe(false);
   });
 
   it("still restores the desktop route when a cold launch redirects itself to / before hydration", () => {

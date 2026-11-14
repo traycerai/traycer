@@ -411,9 +411,23 @@ describe("useStripTabItem through a bare presentation", () => {
       fireEvent.pointerMove(row, { pointerId: 1, clientX: 40, clientY: 10 });
     });
     await waitFor(() => expect(navigation.calls).toHaveLength(1));
+    // A started drag makes dnd-kit stop every click on the document, and its
+    // release lifts that on a timer. The timer runs here so the drag ends with
+    // this test: left pending, it swallows a later test's click.
+    vi.useFakeTimers();
     act(() => {
       fireEvent.pointerUp(row, { pointerId: 1, clientX: 40, clientY: 10 });
     });
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    const bubbled = vi.fn();
+    document.body.addEventListener("click", bubbled);
+    try {
+      fireEvent.click(row);
+    } finally {
+      document.body.removeEventListener("click", bubbled);
+    }
+    expect(bubbled).toHaveBeenCalledTimes(1);
   });
 
   it("opens the context menu on a long press, and a moving touch cancels it", async () => {

@@ -240,6 +240,58 @@ function showUploadFailedToast(fileName: string): void {
   );
 }
 
+/** The toast's line for what a gesture left out; `null` when it left out nothing. */
+function couldNotAttachMessage(names: ReadonlyArray<string>): string | null {
+  const first = names.at(0);
+  if (first === undefined) return null;
+  return names.length === 1
+    ? `Couldn't attach ${first}.`
+    : `Couldn't attach ${String(names.length)} items.`;
+}
+
+/**
+ * What a drop or paste left out of a chat whose agent runs on another
+ * computer, where a typed path would name nothing: a folder, or an entry with
+ * no bytes to send.
+ */
+export function showRemoteAttachRefusedToast(
+  names: ReadonlyArray<string>,
+): void {
+  const message = couldNotAttachMessage(names);
+  if (message === null) return;
+  reportableErrorToast(
+    message,
+    {
+      description: "This chat runs on another computer. Use the attach button.",
+    },
+    {
+      title: "Could not attach to a chat on another computer",
+      message: null,
+      code: null,
+      source: TOAST_SOURCE,
+    },
+  );
+}
+
+/** The same for an inline message edit on such a chat, which attaches nothing. */
+export function showEditAttachRefusedToast(names: ReadonlyArray<string>): void {
+  const message = couldNotAttachMessage(names);
+  if (message === null) return;
+  reportableErrorToast(
+    message,
+    {
+      description:
+        "Files can't be added while editing. Send them in a new message.",
+    },
+    {
+      title: "Could not add files while editing",
+      message: null,
+      code: null,
+      source: TOAST_SOURCE,
+    },
+  );
+}
+
 /**
  * Why `file` cannot go to `target` at all, decided before any byte is read.
  * `null` admits it. The per-message count is decided after hashing, by the

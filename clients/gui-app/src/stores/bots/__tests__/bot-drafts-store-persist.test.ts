@@ -912,7 +912,7 @@ describe("closing Tracy and forgetting a bot", () => {
       (stored) => stored?.[BOT_ID]?.channel !== undefined,
     );
 
-    surface.getState().forgetBot(BOT_ID);
+    surface.getState().forgetBot(BOT_ID, 1);
 
     expect(app.drafts.getState().threadBoxes[BOT_ID]).toBeUndefined();
     expect(app.drafts.getState().answers[BOT_ID]).toBeUndefined();

@@ -708,7 +708,7 @@ export function prMatchesSearch(
   });
 }
 
-export interface PrSearchSegment {
+interface PrSearchSegment {
   /** Offset of `text` in the whole string; unique, so it serves as a key. */
   readonly start: number;
   readonly text: string;

@@ -143,6 +143,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
 import { useChannelBackground } from "@/hooks/bots/use-bot-appearance";
+import { isTransientCloudFailure } from "@/lib/host/transient-cloud-failure";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
@@ -178,6 +179,24 @@ function channelConversation(
 export type BotChannelLanding = BotTranscriptLanding & {
   readonly threadId: string | null;
 };
+
+/**
+ * Whether a read's failure is drawn. A read that holds an answer keeps
+ * showing it when a refetch fails only because the host could not reach the
+ * cloud: the host's cloud-recovery doorbell asks it again
+ * (`cloud-recovery-doorbell-mount.tsx`). Any other failure, or one with
+ * nothing to show, is drawn.
+ */
+function readShowsFailure(read: {
+  readonly isError: boolean;
+  readonly data: unknown;
+  readonly error: unknown;
+}): boolean {
+  return (
+    read.isError &&
+    (read.data === undefined || !isTransientCloudFailure(read.error))
+  );
+}
 
 /**
  * The listed thread whose panel is drawn: none while the channel's own read
@@ -727,13 +746,14 @@ export function BotChannelView(props: {
   const threadLanding = useThreadPanelLanding(
     props.landOn,
     drawnPanelThreadId({
-      channelReadFailed: conversations.isError,
+      channelReadFailed: readShowsFailure(conversations),
       channel,
       threadOpen,
       openThread,
     }),
   );
   const { refetch: refetchThreads } = threadList;
+  const threadListShowsFailure = readShowsFailure(threadList);
   // The row the open thread hangs off, as the channel's session has it: the
   // panel's own read of it fetches it when cold. Read beside the panel, not
   // around it, so the panel keeps its place while the session comes and goes.
@@ -750,7 +770,7 @@ export function BotChannelView(props: {
       post: anchorRow,
       threadAnchorKinds,
     });
-    const retry = threadList.isError ? () => void refetchThreads() : null;
+    const retry = threadListShowsFailure ? () => void refetchThreads() : null;
     // A listed thread, one its post opened and a box that starts one keep
     // what the list last said, the box and its draft through a failed read.
     if (openThread !== null) {
@@ -762,7 +782,10 @@ export function BotChannelView(props: {
     if (open?.announcement === true) {
       return { kind: "unopened", retry, sendable };
     }
-    if (retry !== null) return { kind: "failed", retry };
+    // No thread to show: any failure of the list is drawn.
+    if (threadList.isError) {
+      return { kind: "failed", retry: () => void refetchThreads() };
+    }
     return { kind: "pending" };
   }, [
     anchorRow,
@@ -771,6 +794,7 @@ export function BotChannelView(props: {
     refetchThreads,
     threadAnchorKinds,
     threadList.isError,
+    threadListShowsFailure,
   ]);
   const presentedThreadId = useReadThreadWhilePresented({
     client,
@@ -801,7 +825,7 @@ export function BotChannelView(props: {
     [resolveMember, viewer],
   );
 
-  if (conversations.isError) {
+  if (readShowsFailure(conversations)) {
     return (
       <div className="p-4">
         <BotReadFailure
@@ -1341,8 +1365,13 @@ function useChannelSearch(args: {
   return {
     railOpen: args.railHeld || showing === "results",
     showing,
+    // A result's landing belongs to the search that opened its thread: once
+    // anything else holds the rail (a step back or forward, the memory, a
+    // thread opened by hand), the same thread shown again opens where it opens.
     threadLandingOn: (postId) =>
-      threadLanding?.postId === postId ? threadLanding.landing : null,
+      showing === "thread" && threadLanding?.postId === postId
+        ? threadLanding.landing
+        : null,
   };
 }
 
@@ -1457,7 +1486,6 @@ function useChannelThreads(args: {
         ? threadHasNewReplies(
             readCursors,
             thread.threadId,
-            thread.lastReplyAt,
             followingOf(follows, thread.threadId) !== null &&
               !channelMuted(levels, thread.conversationId),
           )
