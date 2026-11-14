@@ -10,7 +10,7 @@ const ITEM_KEY = `${HARNESS_ID}:${PROFILE_ID}`;
 const managedProfile = {
   kind: "managed_profile",
   key: ITEM_KEY,
-  os: null,
+  os: "linux",
   value: {
     enabled: true,
     displayName: "Account",
@@ -58,7 +58,7 @@ describe("setProfileRecordEnabledViaHttp", () => {
       null,
     );
 
-    expect(result).toEqual({ kind: "applied" });
+    expect(result).toEqual({ kind: "ok" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
       "https://authn.example.test/api/v3/environments/environment-1/items?kind=managed_profile",
@@ -87,7 +87,7 @@ describe("setProfileRecordEnabledViaHttp", () => {
 
   it.each([
     { stage: "GET", status: 403, expected: "forbidden" },
-    { stage: "GET", status: 409, expected: "conflict" },
+    { stage: "GET", status: 409, expected: "failed" },
     { stage: "PUT", status: 403, expected: "forbidden" },
     { stage: "PUT", status: 409, expected: "conflict" },
   ] as const)(
@@ -135,6 +135,80 @@ describe("setProfileRecordEnabledViaHttp", () => {
 
     expect(result).toEqual({ kind: "conflict" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails without writing when the matched item's value is not an object", async () => {
+    const fetchMock = fetchMockFor(
+      response(
+        200,
+        JSON.stringify({
+          items: [{ ...managedProfile, value: "scalar" }],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await setProfileRecordEnabledViaHttp(
+      AUTHN,
+      "session-token",
+      ENVIRONMENT_ID,
+      HARNESS_ID,
+      PROFILE_ID,
+      false,
+      null,
+    );
+
+    expect(result).toEqual({ kind: "failed" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates only the matched item's object value and adds enabled", async () => {
+    const profileWithoutEnabled = {
+      kind: "managed_profile",
+      key: ITEM_KEY,
+      os: "linux",
+      value: { displayName: "Account", retained: { source: "person" } },
+      revision: 18,
+    };
+    const unrelatedScalarItem = {
+      kind: "managed_profile",
+      key: "other-harness:other-profile",
+      value: "scalar",
+      revision: 19,
+    };
+    const fetchMock = fetchMockFor(
+      response(
+        200,
+        JSON.stringify({ items: [unrelatedScalarItem, profileWithoutEnabled] }),
+      ),
+      response(204, ""),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await setProfileRecordEnabledViaHttp(
+      AUTHN,
+      "session-token",
+      ENVIRONMENT_ID,
+      HARNESS_ID,
+      PROFILE_ID,
+      false,
+      null,
+    );
+
+    expect(result).toEqual({ kind: "ok" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, writeInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(JSON.parse(String(writeInit.body))).toEqual({
+      key: ITEM_KEY,
+      os: null,
+      value: {
+        displayName: "Account",
+        retained: { source: "person" },
+        enabled: false,
+      },
+      revision: 18,
+      upload: null,
+    });
   });
 
   it("returns only the failed result for malformed bodies and fetch errors", async () => {

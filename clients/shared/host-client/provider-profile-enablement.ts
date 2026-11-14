@@ -3,7 +3,7 @@ import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { PATH_ID_PATTERN } from "./path-id";
 
 export type ProfileRecordEnablementResult =
-  | { readonly kind: "applied" }
+  | { readonly kind: "ok" }
   | { readonly kind: "forbidden" }
   | { readonly kind: "conflict" }
   | { readonly kind: "failed" };
@@ -23,8 +23,7 @@ const itemsSchema = z.object({
     z.object({
       kind: z.string(),
       key: z.string(),
-      os: z.string().nullable(),
-      value: z.object({ enabled: z.boolean() }).catchall(z.json()),
+      value: z.json(),
       revision: z.number().int().nonnegative(),
     }),
   ),
@@ -64,7 +63,6 @@ export async function setProfileRecordEnabledViaHttp(
       abort.signal,
     );
     if (listed.status === 403) return { kind: "forbidden" };
-    if (listed.status === 409) return { kind: "conflict" };
     if (!listed.ok) return { kind: "failed" };
     const body: unknown = JSON.parse(
       await untilAborted(listed.text(), abort.signal),
@@ -73,12 +71,13 @@ export async function setProfileRecordEnabledViaHttp(
     if (!parsed.success) return { kind: "failed" };
     const key = `${harnessId}:${profileId}`;
     const item = parsed.data.items.find(
-      (entry) =>
-        entry.kind === "managed_profile" &&
-        entry.key === key &&
-        entry.os === null,
+      (entry) => entry.kind === "managed_profile" && entry.key === key,
     );
     if (item === undefined) return { kind: "conflict" };
+    const value = item.value;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return { kind: "failed" };
+    }
     const written = await untilAborted(
       fetch(new URL(`${itemsUrl.pathname}/managed_profile`, base), {
         method: "PUT",
@@ -86,7 +85,7 @@ export async function setProfileRecordEnabledViaHttp(
         body: JSON.stringify({
           key,
           os: null,
-          value: { ...item.value, enabled },
+          value: { ...value, enabled },
           revision: item.revision,
           upload: null,
         }),
@@ -97,7 +96,7 @@ export async function setProfileRecordEnabledViaHttp(
     );
     if (written.status === 403) return { kind: "forbidden" };
     if (written.status === 409) return { kind: "conflict" };
-    return { kind: written.ok ? "applied" : "failed" };
+    return { kind: written.ok ? "ok" : "failed" };
   } catch {
     return { kind: "failed" };
   } finally {
