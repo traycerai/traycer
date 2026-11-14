@@ -1,3 +1,4 @@
+import type { ModelOption } from "@/components/home/data/landing-options";
 /**
  * On a team's sandbox host only a harness whose credential stays a
  * placeholder may run. The in-task New conversation modal must hold both of
@@ -410,52 +411,157 @@ vi.mock("@/lib/composer/repointed-staging-toast", () => ({
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
-  const store = createStore(() => ({
-    accountChosen: false,
-    defaultAccount: null,
-    setAccountChosen: vi.fn(),
-    setDefaultAccount: vi.fn(),
-    ultracode: false,
-    selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
-    // The raw pick; `selection` above is what this host's catalog shows.
-    values: {
-      ultracode: false,
-      selection: {
-        harnessId: "codex",
-        modelSlug: "gpt-6.1-sol",
-        profileId: null,
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const store = createStore<ToolbarMockState>((set, get) => {
+    const replaceStatePreservingCatalog = (
+      state: ToolbarMockState,
+      nextState: ToolbarMockState,
+    ): void => {
+      const catalogDescriptor = Object.getOwnPropertyDescriptor(
+        state,
+        "catalog",
+      );
+      if (
+        catalogDescriptor !== undefined &&
+        (typeof catalogDescriptor.get === "function" ||
+          typeof catalogDescriptor.set === "function")
+      ) {
+        Object.defineProperty(nextState, "catalog", catalogDescriptor);
+      }
+      set(nextState, true);
+    };
+
+    return {
+      accountChosen: false,
+      defaultAccount: emptyDefaultAccount,
+      setAccountChosen: (chosen: boolean) => {
+        const state = get();
+        const rawSelection = state.values.selection;
+        const defaultAccount = state.defaultAccount;
+        const defaultApplies =
+          !chosen &&
+          defaultAccount !== null &&
+          rawSelection.profileId === null &&
+          rawSelection.harnessId === defaultAccount.harnessId &&
+          state.selection.harnessId === defaultAccount.harnessId;
+        const nextState: ToolbarMockState = {
+          ...state,
+          accountChosen: chosen,
+          selection: defaultApplies
+            ? { ...state.selection, profileId: defaultAccount.profileId }
+            : defaultAccount !== null &&
+                state.selection.profileId === defaultAccount.profileId
+              ? { ...state.selection, profileId: rawSelection.profileId }
+              : state.selection,
+        };
+        replaceStatePreservingCatalog(state, nextState);
       },
+      setDefaultAccount: (
+        account: {
+          readonly harnessId: string;
+          readonly profileId: string;
+        } | null,
+      ) => {
+        const state = get();
+        const rawSelection = state.values.selection;
+        const defaultApplies =
+          !state.accountChosen &&
+          account !== null &&
+          rawSelection.profileId === null &&
+          rawSelection.harnessId === account.harnessId &&
+          state.selection.harnessId === account.harnessId;
+        const nextState: ToolbarMockState = {
+          ...state,
+          defaultAccount: account,
+          selection: defaultApplies
+            ? { ...state.selection, profileId: account.profileId }
+            : state.defaultAccount !== null &&
+                state.selection.profileId === state.defaultAccount.profileId
+              ? { ...state.selection, profileId: rawSelection.profileId }
+              : state.selection,
+        };
+        replaceStatePreservingCatalog(state, nextState);
+      },
+      ultracode: false,
+      selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
+      // The raw pick; `selection` above is what this host's catalog shows.
+      values: {
+        ultracode: false,
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-6.1-sol",
+          profileId: null,
+        },
+        permission: "supervised",
+        reasoning: "high",
+        serviceTier: "",
+      },
+      selectedModel: null,
       permission: "supervised",
-      reasoning: "high",
+      reasoning: "medium",
       serviceTier: "",
-    },
-    selectedModel: null,
-    permission: "supervised",
-    reasoning: "medium",
-    serviceTier: "",
-    agentMode: "regular",
-    get catalog() {
-      return testState.catalogHostId === null
-        ? {
-            hostId: null,
-            harnesses: undefined,
-            modelsHarnessId: "claude",
-            modelsProfileId: null,
-            models: [],
-            modelsLoaded: false,
-            modelsFailed: false,
-          }
-        : {
-            hostId: testState.catalogHostId,
-            harnesses: [],
-            modelsHarnessId: "claude",
-            modelsProfileId: null,
-            models: [],
-            modelsLoaded: true,
-            modelsFailed: false,
-          };
-    },
-  }));
+      agentMode: "regular",
+      get catalog() {
+        return testState.catalogHostId === null
+          ? {
+              hostId: null,
+              harnesses: undefined,
+              modelsHarnessId: "claude",
+              modelsProfileId: null,
+              models: [],
+              modelsLoaded: false,
+              modelsFailed: false,
+            }
+          : {
+              hostId: testState.catalogHostId,
+              harnesses: [],
+              modelsHarnessId: "claude",
+              modelsProfileId: null,
+              models: [],
+              modelsLoaded: true,
+              modelsFailed: false,
+            };
+      },
+    };
+  });
   testState.toolbarStore = store;
   return { useComposerToolbarStore: () => store };
 });
