@@ -781,24 +781,11 @@ async function refreshAuthTokenOnceViaHttp(
           ...(clientKind === null ? {} : { clientKind }),
           ...(rotationCode === null ? {} : { rotationCode }),
         }),
-        // The body carries the refresh token: a redirect is answered here and
-        // never followed with it.
-        redirect: "manual",
         signal,
       }),
       signal,
     );
   } catch {
-    return { kind: "network-error" };
-  }
-
-  // A redirect is not authn's answer: no pair, nothing refused, and the
-  // credential stays as it is, like every other non-2xx below that is not a
-  // refusal.
-  if (
-    response.type === "opaqueredirect" ||
-    (response.status >= 300 && response.status < 400)
-  ) {
     return { kind: "network-error" };
   }
 
