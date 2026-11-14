@@ -31,11 +31,16 @@ import { authQueryKeys } from "@/lib/query-keys";
  * disclosure and confirms, and the confirm stages, records the acceptance at
  * authn and starts it (`useEnvironmentMoveStartMutation`). A give uploads
  * nothing and has no per-row choice, so it stages no choices. Until the
- * computer answers `done`, the dialog reads the attempt's outcome.
+ * computer answers `done`, the dialog reads the attempt's outcome from
+ * `environment.status@1.3`'s `move`, on that read's own poll: the give adds
+ * no timer of its own.
  *
  * A computer whose disclosure is another version than this app's shows the
  * needs-an-update line and no confirm. One that answers `needs_person`, or no
- * longer holds the attempt, shows C7's line with the confirm beside it.
+ * longer holds the attempt, shows C7's line with the confirm beside it. A
+ * status answer naming no attempt, or another one, says the attempt is not
+ * held only when it was read after the start answered; one read before could
+ * still name the previous attempt.
  *
  * Mounted while a team is chosen, keyed by it, so every give starts afresh.
  */
@@ -63,18 +68,9 @@ export function TeamGiveDialog(props: {
     options: { refetchOnWindowFocus: false },
   });
   const start = useEnvironmentMoveStartMutation(props.client, null);
-  const [attemptId, setAttemptId] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState<GiveAttempt | null>(null);
   const [notFinished, setNotFinished] = useState(false);
-  const outcome = useHostQuery<HostRpcRegistry, "environment.move.outcome">({
-    cacheKeyIdentity: undefined,
-    client: props.client,
-    method: "environment.move.outcome",
-    params: { attemptId: attemptId ?? "" },
-    options: { enabled: attemptId !== null, poll: true },
-  });
-  const polled = attemptId === null ? undefined : outcome.data?.state;
-  const given = polled === "done";
-  const ended = polled === "needs_person" || polled === "not_found";
+  const { given, ended, reread } = useGiveAttempt(props.client, attempt);
   const givenOnce = useRef(false);
   const { onGiven } = props;
   useEffect(() => {
@@ -92,12 +88,14 @@ export function TeamGiveDialog(props: {
       setNotFinished(true);
       return;
     }
-    // `done` reads the same through the outcome as `running`, so one path
-    // ends the give.
-    setAttemptId(answer.attemptId);
+    // `done` reads the same through the status as `running`, so one path
+    // ends the give. The re-read cancels one already in flight, so every
+    // answer after `startedAt` was asked after the start.
+    setAttempt({ attemptId: answer.attemptId, startedAt: Date.now() });
+    reread();
   };
   const confirm = (planHash: string): void => {
-    setAttemptId(null);
+    setAttempt(null);
     setNotFinished(false);
     start.mutate(
       { hostId: props.hostId, target, planHash, keyChoices: [] },
@@ -113,7 +111,7 @@ export function TeamGiveDialog(props: {
     );
   };
 
-  const giving = start.isPending || (attemptId !== null && !given && !ended);
+  const giving = start.isPending || (attempt !== null && !given && !ended);
   const versionDiffers =
     plan.data !== undefined &&
     plan.data.disclosureVersion !== TEAM_TRANSFER_DISCLOSURE_VERSION;
@@ -179,6 +177,41 @@ export function TeamGiveDialog(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+interface GiveAttempt {
+  readonly attemptId: string;
+  readonly startedAt: number;
+}
+
+/**
+ * Where the started give stands, from `environment.status`'s `move` on that
+ * read's own poll. `reread` asks again at once, cancelling a read in flight.
+ */
+function useGiveAttempt(
+  client: HostClient<HostRpcRegistry>,
+  attempt: GiveAttempt | null,
+): { readonly given: boolean; readonly ended: boolean; reread: () => void } {
+  const status = useHostQuery<HostRpcRegistry, "environment.status">({
+    cacheKeyIdentity: undefined,
+    client,
+    method: "environment.status",
+    params: {},
+    options: { enabled: attempt !== null, poll: true },
+  });
+  const move = status.data?.move ?? null;
+  const own =
+    attempt !== null && move?.attemptId === attempt.attemptId ? move : null;
+  const notHeld =
+    attempt !== null &&
+    own === null &&
+    status.data !== undefined &&
+    status.dataUpdatedAt > attempt.startedAt;
+  return {
+    given: own?.state === "done",
+    ended: own?.state === "needs_person" || notHeld,
+    reread: () => void status.refetch().catch(ignoreError),
+  };
 }
 
 /** What the dialog says beside the disclosure, each only while it is true. */
