@@ -360,7 +360,6 @@ function ThreadCard(props: {
           resolveMember={directory.resolve}
           scroller={scroller}
           onShowPost={showPost}
-          onOpenThread={openThread}
         />
       ) : (
         <ThreadSummary
@@ -780,7 +779,6 @@ function FullThread(props: {
   readonly resolveMember: BotMemberResolver;
   readonly scroller: HTMLElement | null;
   readonly onShowPost: () => void;
-  readonly onOpenThread: () => void;
 }): ReactNode {
   const {
     hostId,
@@ -790,7 +788,6 @@ function FullThread(props: {
     resolveMember,
     scroller,
     onShowPost,
-    onOpenThread,
   } = props;
   const { bot, thread } = entry;
   const { botId } = bot;
@@ -835,11 +832,10 @@ function FullThread(props: {
             tail: FOLDED_TAIL,
             onUnfold: () => unfold(threadId),
           },
-      onOpenThread,
       onShowPost,
       readMark,
     }),
-    [onOpenThread, onShowPost, readMark, threadId, unfold, unfolded],
+    [onShowPost, readMark, threadId, unfold, unfolded],
   );
   const viewer = useAuthStore((s) => s.profile);
   const anchorSenderLabel = useCallback(
