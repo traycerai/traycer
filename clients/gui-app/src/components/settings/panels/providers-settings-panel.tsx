@@ -1775,6 +1775,8 @@ function ProviderDetail({
       </div>
       {addProfileOpen ? (
         <AddProviderProfileDialog
+          target={null}
+          targetResult={null}
           key={state.providerId}
           state={state}
           client={hostClient}
