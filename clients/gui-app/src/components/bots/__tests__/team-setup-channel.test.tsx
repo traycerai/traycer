@@ -215,7 +215,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       ).toBeTruthy();
       expect(
         screen.getByText(
-          "Run this on the computer, then sign in as a team member.",
+          "Run this on the computer. If nobody is signed in to Traycer there, it asks you to sign in.",
         ),
       ).toBeTruthy();
       expect(
