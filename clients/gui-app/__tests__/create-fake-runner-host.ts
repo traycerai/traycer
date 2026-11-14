@@ -70,10 +70,15 @@ export async function heldHostTokenSource(
   hostId: string,
 ): Promise<HostTokenSource> {
   const tokens = inertHostTokenSource();
-  await tokens.adopt(userId, hostId, {
-    token: `host-token-${hostId}`,
-    expiresAtMs: Date.now() + 3_600_000,
-  });
+  await tokens.adopt(
+    userId,
+    hostId,
+    {
+      token: `host-token-${hostId}`,
+      expiresAtMs: Date.now() + 3_600_000,
+    },
+    tokens.era(userId),
+  );
   return tokens;
 }
 
