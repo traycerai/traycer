@@ -58,8 +58,7 @@ export function TeamSyncedProviderProfiles(props: {
       const result = await auth.setProfileRecordEnabled(
         request.environmentId,
         providerIdToGuiHarnessId(props.providerId),
-        request.profileId,
-        request.enabled,
+        { profileId: request.profileId, enabled: request.enabled },
         null,
       );
       if (result.kind === "forbidden")

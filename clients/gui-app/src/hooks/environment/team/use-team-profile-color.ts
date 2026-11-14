@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
   ProviderId,
@@ -6,43 +6,68 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
-import { useConfigurationProviderItemsQuery } from "./use-provider-items-query";
-import { useConfigurationItemMutations } from "./use-configuration-item-mutations";
+import { useAuthService } from "@/lib/host";
+import { authQueryKeys, environmentMutationKeys } from "@/lib/query-keys";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 
-/** Read the current revision after sign-in or Rename, then change only color. */
 export function useTeamProfileColor(
   onOutcome: (result: EnvironmentConfigurationItemWriteResponse) => void,
 ) {
-  const items = useConfigurationProviderItemsQuery();
-  const { put } = useConfigurationItemMutations();
+  const auth = useAuthService();
+  const queries = useQueryClient();
+  const viewerId = useCloudChatViewerId();
+  const write = useMutation({
+    mutationKey: environmentMutationKeys.providersSetColor(),
+    retry: false,
+    mutationFn: (request: {
+      readonly environmentId: string;
+      readonly providerId: ProviderId;
+      readonly profileId: string;
+      readonly color: ProviderProfileAccentColor;
+    }) =>
+      auth.setProfileRecordColor(
+        request.environmentId,
+        providerIdToGuiHarnessId(request.providerId),
+        { profileId: request.profileId, color: request.color },
+        null,
+      ),
+    onSettled: (_data, _error, request) =>
+      queries.invalidateQueries({
+        queryKey: authQueryKeys.environmentProfileRecords(
+          request.environmentId,
+          viewerId,
+        ),
+      }),
+  });
   return {
-    pending: items.isFetching || put.isPending,
+    pending: write.isPending,
     save: async (
       environmentId: string,
       providerId: ProviderId,
       profileId: string,
       color: ProviderProfileAccentColor,
     ): Promise<boolean> => {
-      const fresh = await items.refetch();
-      const item = fresh.data?.find(
-        (row) =>
-          row.kind === "managed_profile" &&
-          row.key === `${providerIdToGuiHarnessId(providerId)}:${profileId}`,
-      );
-      if (fresh.isError || item === undefined) {
+      try {
+        const result = await write.mutateAsync({
+          environmentId,
+          providerId,
+          profileId,
+          color,
+        });
+        if (result.kind === "failed") {
+          toast.error("Couldn't save these settings.");
+          return false;
+        }
+        if (result.kind === "ok")
+          onOutcome({ outcome: "saved", revision: null });
+        else if (result.kind === "forbidden")
+          onOutcome({ outcome: "forbidden" });
+        else onOutcome({ outcome: "conflict", current: null });
+        return result.kind === "ok";
+      } catch {
         toast.error("Couldn't save these settings.");
         return false;
       }
-      const result = await put.mutateAsync({
-        environmentId,
-        kind: "managed_profile",
-        key: item.key,
-        os: null,
-        value: { ...z.record(z.string(), z.json()).parse(item.value), color },
-        revision: item.revision,
-      });
-      onOutcome(result);
-      return result.outcome === "saved";
     },
   };
 }

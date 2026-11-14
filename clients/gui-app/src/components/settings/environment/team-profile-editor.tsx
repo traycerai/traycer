@@ -74,17 +74,13 @@ export function TeamProfileEditor(props: {
         colorOverride !== null &&
         colorOverride !== props.profile.accentColor
       ) {
-        try {
-          const saved = await colorWrite.save(
-            environmentId,
-            props.providerId,
-            props.profile.profileId,
-            colorOverride,
-          );
-          if (!saved) return;
-        } finally {
-          await records.reread();
-        }
+        const saved = await colorWrite.save(
+          environmentId,
+          props.providerId,
+          props.profile.profileId,
+          colorOverride,
+        );
+        if (!saved) return;
       }
       props.onClose();
     } catch {
@@ -97,7 +93,7 @@ export function TeamProfileEditor(props: {
         profile={props.profile}
         profiles={props.profiles}
         title="Edit profile"
-        description={`Update how ${profileDisplayLabel(props.profile)} appears.`}
+        description={`Update how ${profileDisplayLabel(props.profile)} appears and which account it uses.`}
         open={!confirmRemove && !confirmSignOut}
         onOpenChange={(open) => {
           if (!open) props.onClose();

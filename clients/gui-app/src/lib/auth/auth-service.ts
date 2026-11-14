@@ -5,6 +5,9 @@ import {
 import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
 import {
   setProfileRecordEnabledViaHttp,
+  setProfileRecordColorViaHttp,
+  type ProfileRecordColorClient,
+  type ProfileRecordColorChange,
   type ProfileRecordEnablementClient,
   type ProfileRecordEnablementResult,
 } from "@traycer-clients/shared/host-client/provider-profile-enablement";
@@ -658,7 +661,10 @@ export interface RevokedCloudAuthorization {
  *      failed - please try again") without clearing persisted credentials.
  */
 export class AuthService
-  implements ProfileRecordClient, ProfileRecordEnablementClient
+  implements
+    ProfileRecordClient,
+    ProfileRecordEnablementClient,
+    ProfileRecordColorClient
 {
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
@@ -3716,6 +3722,24 @@ export class AuthService
       providerId,
       profileId,
       name,
+      callerSignal,
+    );
+  }
+
+  async setProfileRecordColor(
+    environmentId: string,
+    harnessId: string,
+    change: ProfileRecordColorChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return setProfileRecordColorViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      harnessId,
+      change,
       callerSignal,
     );
   }

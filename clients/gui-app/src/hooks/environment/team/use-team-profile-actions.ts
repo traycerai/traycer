@@ -50,8 +50,7 @@ export function useTeamProfileActions(reread: () => Promise<unknown>) {
       const result = await auth.nameProfileRecord(
         request.environmentId,
         request.providerId,
-        request.profileId,
-        request.label,
+        { profileId: request.profileId, name: request.label },
         null,
       );
       if (result.kind !== "ok") throw new Error(result.message);

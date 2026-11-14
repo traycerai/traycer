@@ -61,6 +61,7 @@ export const environmentMutationKeys = {
   invitationsAccept: () => ["environment.invitations.accept"] as const,
   reviewHeldApply: () => ["environment.review.heldApply"] as const,
   reviewRecord: () => ["environment.review.record"] as const,
+  providersSetColor: () => ["auth", "profile-record-color"] as const,
   providersSetEnabled: () => ["auth", "profile-record-enabled"] as const,
   providersSignOut: () => ["auth", "profile-record-sign-out"] as const,
   providersRemove: () => ["auth", "profile-record-remove"] as const,
