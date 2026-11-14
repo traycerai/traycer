@@ -958,6 +958,27 @@ describe("<ChatMessage /> bot rows", () => {
     expect(screen.queryByTestId("bot-reply-options")).toBeNull();
   });
 
+  it("draws a bot's picture one size under a person's, inside the same 40px box", () => {
+    renderRow(botRow(undefined), presentation);
+    renderRow(memberPost(undefined), presentation);
+
+    const botAvatar = within(screen.getByTestId("bot-reply-row")).getByTestId(
+      "bot-avatar",
+    );
+    expect(botAvatar.getAttribute("data-size")).toBe("default");
+    expect(
+      botAvatar
+        .querySelector('[data-slot="bot-mascot"]')
+        ?.getAttribute("viewBox"),
+    ).toBe("0 0 32 32");
+    expect(botAvatar.parentElement?.classList.contains("size-10")).toBe(true);
+    expect(
+      within(screen.getByTestId("bot-member-row"))
+        .getByTestId("person-avatar")
+        .getAttribute("data-size"),
+    ).toBe("lg");
+  });
+
   // Every kind the schema accepts, with its label and bar colour. `question`
   // is a row a released host wrote before announcements stopped asking; no
   // current host writes one, but a stored one must still draw.

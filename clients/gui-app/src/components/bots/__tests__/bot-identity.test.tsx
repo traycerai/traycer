@@ -241,7 +241,7 @@ describe("a bot channel's rows", () => {
     expect(avatarShape(within(memberRow).getByTestId("person-avatar"))).toBe(
       "circle",
     );
-    // The bot is its own mascot, at the message row's 40 px.
+    // The bot is its own mascot, a size under the row's 40 px box.
     expect(
       [
         ...within(botRow)
@@ -251,7 +251,7 @@ describe("a bot channel's rows", () => {
     ).toEqual(
       drawMascotMark(
         botMascot(BOT_ID, null, false),
-        40,
+        32,
         MASCOT_AT_REST,
       ).layers.map((layer) => layer.path),
     );

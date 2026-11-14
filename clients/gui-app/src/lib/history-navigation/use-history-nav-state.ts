@@ -2,6 +2,7 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { getHistoryController } from "@/lib/persistent-history";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   findEligibleOffset,
   isHistoryEntryEligible,
@@ -73,9 +74,12 @@ export function useHistoryNavState(): HistoryNavState {
       if (controller === null) return router.history.subscribe(onStoreChange);
       const unsubscribeController = controller.subscribe(onStoreChange);
       const unsubscribeCanvas = useEpicCanvasStore.subscribe(onStoreChange);
+      // A bot shown gone flips its entries' eligibility with no history event.
+      const unsubscribeTracy = useTracySurfaceStore.subscribe(onStoreChange);
       return () => {
         unsubscribeController();
         unsubscribeCanvas();
+        unsubscribeTracy();
       };
     },
     [controller, router],
