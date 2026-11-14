@@ -182,14 +182,18 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   // host directory — reconnects survive a host restart on a new port. Polls
   // are serialized (no out-of-order clobber) and a good endpoint is never
   // overwritten with `null` (a momentarily-absent pid file keeps the last-known
-  // URL; dials simply retry until a fresh one appears).
+  // URL; dials simply retry until a fresh one appears). A host below the floor,
+  // at start or after a restart, is never dialed: the monitor ends.
   const endpointResolutionLogState: EndpointResolutionLogState = {
     value: null,
   };
-  let endpoint = await tryResolveStreamEndpoint(
+  const initialEndpoint = await tryResolveStreamEndpoint(
     logger,
     endpointResolutionLogState,
   );
+  if (initialEndpoint === "below-floor") throw olderHostCliError();
+  let endpoint: HostTransportEndpoint | null = initialEndpoint;
+  const hostBelowFloor = new AbortController();
   logger.debug("Monitor initial endpoint resolution completed", {
     environment: config.environment,
     hasEndpoint: endpoint !== null,
@@ -215,6 +219,11 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     pollInFlight = true;
     void tryResolveStreamEndpoint(logger, endpointResolutionLogState)
       .then((next) => {
+        if (next === "below-floor") {
+          endpoint = null;
+          hostBelowFloor.abort();
+          return;
+        }
         if (next !== null && !sameEndpoint(endpoint, next)) {
           endpoint = next;
           logger.debug("Monitor endpoint refreshed", {
@@ -223,8 +232,6 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           });
         }
       })
-      // A host restarted below the floor is never dialed: the monitor keeps
-      // the endpoint it has. Logged where it is found.
       .catch(() => undefined)
       .finally(() => {
         pollInFlight = false;
@@ -296,6 +303,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       { agentId, epicId },
       logger,
       stdoutReaderClosed(),
+      hostBelowFloor.signal,
     );
     // Reached only when stdout's reader went away: there is nobody left to
     // print a message to, so stop holding the inbox open. Nothing was acked
@@ -500,6 +508,9 @@ type InboxMintRefusals = (
  * A mint authn refuses for good, whether the stream was waiting for its first
  * token or recovering, is terminal with the mint's line: no reconnect could
  * be given a token. One that cannot reach authn is waited out.
+ *
+ * `hostBelowFloor` aborts when the host restarted below the minimum version:
+ * terminal with the older-host line.
  */
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
@@ -510,6 +521,7 @@ function runInboxSubscription(
   target: InboxTarget,
   logger: ILogger,
   readerClosed: AbortSignal,
+  hostBelowFloor: AbortSignal,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let session: IStreamSession | null = null;
@@ -730,6 +742,13 @@ function runInboxSubscription(
         epicId: target.epicId,
       });
       fail(hostTokenFailureCliError(failure));
+    });
+    if (hostBelowFloor.aborted) {
+      fail(olderHostCliError());
+      return;
+    }
+    hostBelowFloor.addEventListener("abort", () => fail(olderHostCliError()), {
+      once: true,
     });
     subscribe();
   });
@@ -1033,13 +1052,13 @@ async function handleServerFrame(
 }
 
 /**
- * The host the pid file names, `null` while it names none usable; throws the
- * older-host error for a host below the minimum version.
+ * The host the pid file names, `null` while it names none usable, or
+ * `"below-floor"` for a host below the minimum version, which is never dialed.
  */
 async function tryResolveStreamEndpoint(
   logger: ILogger,
   logState: EndpointResolutionLogState,
-): Promise<HostTransportEndpoint | null> {
+): Promise<HostTransportEndpoint | null | "below-floor"> {
   const metadata = await readHostPidMetadata(config.environment);
   if (metadata === null) {
     logEndpointResolution(logState, "missing", () => {
@@ -1072,7 +1091,7 @@ async function tryResolveStreamEndpoint(
         minimumHostVersion: MINIMUM_HOST_VERSION,
       });
     });
-    throw olderHostCliError();
+    return "below-floor";
   }
   // `WsStreamClient` maps the `/rpc` URL to `/stream` itself.
   logState.value = `ready:${metadata.hostId}:${metadata.websocketUrl}`;

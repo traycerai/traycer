@@ -394,6 +394,42 @@ describe("runMonitor recovery", () => {
     expect(subscribeMock).not.toHaveBeenCalled();
   });
 
+  it("ends with the older-host line when the host restarts below the floor at the same URL", async () => {
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+      (caught: unknown) => caught,
+    );
+    await waitForSessions(1);
+    const options = streamClientOptions[0];
+    if (options === undefined)
+      throw new Error("stream options were not captured");
+    expect(options.endpoint()).toEqual({
+      hostId: "d1",
+      websocketUrl: "ws://127.0.0.1:9/rpc",
+    });
+    pidMock.mockResolvedValue({
+      pid: 2,
+      hostId: "d1",
+      version: "1.9.9",
+      websocketUrl: "ws://127.0.0.1:9/rpc",
+      startedAt: "2026-01-01T00:01:00.000Z",
+      processStartIdentity: null,
+      processStartIdentityRead: "absent",
+      layer0: null,
+      layer0Slot: null,
+    });
+
+    await advanceFakeTime(2_000);
+
+    expect(await result).toMatchObject({
+      code: "E_HOST_INCOMPATIBLE",
+      message:
+        "The host is out of date. Reinstall the latest host with 'traycer host update'.",
+    });
+    expect(options.endpoint()).toBeNull();
+    expect(sessions[0]?.closed).toBe(true);
+    expect(subscribeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not read sign-in or dial when an agent session has no capability", async () => {
     agentEnvironment.agentId = "a1";
     const error = await runMonitor({ agentId: "a1", epicId: "e1" }).catch(
