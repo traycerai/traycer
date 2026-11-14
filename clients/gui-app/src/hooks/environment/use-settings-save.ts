@@ -16,9 +16,12 @@ import {
   readSettingsSaveHost,
 } from "@traycer-clients/shared/environment/settings-save-target";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
+import { settingValueSchema } from "@traycer/protocol/host/environment/settings-proposals";
 import {
+  canonicalSettingValue,
   settingsSaveBaseAddress,
   settingsSaveItemEdit,
+  type SettingsItemEdit,
   type SettingsSave,
 } from "@traycer/protocol/host/environment/settings-save-mapping";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
@@ -87,10 +90,9 @@ const NOTHING_TO_FOLLOW: PendingSettingsSave = {
 
 /**
  * Read once per editor session and kept: the revision the person edits over
- * is the one read when the session began, so a newer value from another
- * device makes the hold a conflict that waits in the review list. A session
- * begins when the editor opens, and again once a save it sent has settled,
- * so the next edit is made over what that save left.
+ * is the one read when the editor opened, so a newer value from another
+ * device makes the hold a conflict that waits in the review list. Only the
+ * session's own saves move it ({@link keepOwnWrite}).
  */
 const EDIT_BASE_READ = {
   staleTime: Number.POSITIVE_INFINITY,
@@ -167,8 +169,59 @@ interface SaveScope {
   readonly viewerId: string;
   /** The editor session whose base reads a save is made over. */
   readonly session: string;
-  /** Begins a new editor session, with fresh base reads. */
-  readonly renewSession: () => void;
+}
+
+/** Whether `row`, authn's row at `edit`'s address, is what `edit` wrote. */
+function isOwnWrite(row: AuthnItemRow | null, edit: SettingsItemEdit): boolean {
+  if (edit.operation === "delete") return row === null;
+  if (row === null) return false;
+  const value = settingValueSchema.safeParse(row.value);
+  return (
+    value.success && canonicalSettingValue(value.data) === edit.canonicalValue
+  );
+}
+
+/** `rows` with `edit`'s row as authn now holds it, `row`. */
+function withOwnWrite(
+  rows: readonly AuthnItemRow[],
+  edit: SettingsItemEdit,
+  row: AuthnItemRow | null,
+): readonly AuthnItemRow[] {
+  const held = liveRowAt(
+    rows.filter((candidate) => candidate.key === edit.key),
+    edit.os,
+  );
+  // A later save of this session already moved the base past this one.
+  if (held !== undefined && row !== null && row.revision <= held.revision) {
+    return rows;
+  }
+  const others = rows.filter((candidate) => candidate !== held);
+  return row === null ? others : [...others, row];
+}
+
+/**
+ * Once a save of this session has settled, moves the base of its row to the
+ * row authn holds, when that row is the one the save wrote: the person has
+ * seen their own write, and their next edit is made over it. A row anyone
+ * else wrote leaves the base where the person last saw it, whether the next
+ * edit began before this save settled or after, so that edit waits in the
+ * review list against the change instead of overwriting it.
+ */
+async function keepOwnWrite(
+  scope: SaveScope,
+  edit: SettingsItemEdit,
+): Promise<void> {
+  const { queryClient, source, environmentId } = scope;
+  const rows = await readSettingsItemRows(source(), environmentId, edit.kind);
+  const row =
+    liveRowAt(
+      rows.filter((candidate) => candidate.key === edit.key),
+      edit.os,
+    ) ?? null;
+  if (!isOwnWrite(row, edit)) return;
+  queryClient.setQueryData(saveItemsQuery(scope, edit.kind).queryKey, (held) =>
+    held === undefined ? held : withOwnWrite(held, edit, row),
+  );
 }
 
 /**
@@ -215,9 +268,10 @@ async function followSave(
   return {
     kind: "send",
     answered: () => {
-      // Settling applies the save's hold, which moves the live revision the
-      // next edit is made over.
-      void coordinator.settle(ticket, true).finally(scope.renewSession);
+      void coordinator
+        .settle(ticket, true)
+        .then(() => keepOwnWrite(scope, edit))
+        .catch(() => undefined);
     },
     failed: () => {
       void coordinator.settle(ticket, false);
@@ -233,10 +287,7 @@ function useSaveScope(
   client: HostClient<HostRpcRegistry> | null,
   kinds: readonly string[],
 ): SaveScope | null {
-  const [session, setSession] = useState(() => crypto.randomUUID());
-  const renewSession = useCallback(() => {
-    setSession(crypto.randomUUID());
-  }, []);
+  const [session] = useState(() => crypto.randomUUID());
   const coordinator = useSettingsSaveCoordinator();
   const hostId = useRequesterHostId(client);
   const environmentRead = useEnvironmentHostReadQuery(
@@ -267,7 +318,6 @@ function useSaveScope(
             hostId,
             viewerId,
             session,
-            renewSession,
           },
     [
       coordinator,
@@ -277,7 +327,6 @@ function useSaveScope(
       hostId,
       viewerId,
       session,
-      renewSession,
     ],
   );
 
