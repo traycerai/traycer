@@ -5,14 +5,11 @@ import type {
 
 /**
  * What the environment wire says about a seat whose role authorizes nothing:
- * a membership still stored on the retired role, or a team fact the reader
- * could not get at all.
+ * a Viewer's seat, or a team fact the reader could not get at all.
  *
- * It spells that `viewer` because the released wire has no other word for it
- * and every reader down to the support floor already treats the value as
- * "shows the row, edits nothing". It is a STATEMENT ABOUT AUTHORITY, not a
- * role anyone holds: nothing grants it, and a reader that needs the
- * distinction reads the role as `null`.
+ * It spells that `viewer`, the Viewer's own word, because every reader down to
+ * the support floor treats the value as "shows the row, edits nothing", which
+ * is all a Viewer may do too. Read as authority, it grants nothing.
  */
 export const WIRE_ROLE_NO_AUTHORITY = "viewer" as const;
 
@@ -23,8 +20,11 @@ export interface ConfigurationListFacts {
   ): Promise<readonly { readonly purgePending: boolean }[]>;
   team(environment: EnvironmentDescriptor): Promise<{
     readonly providerHandle: string;
-    /** `null` where the caller's seat on this team authorizes nothing. */
-    readonly effectiveRole: "admin" | "editor" | null;
+    /**
+     * `viewer` sees the team and changes nothing; `null` where the caller's
+     * seat on this team authorizes nothing.
+     */
+    readonly effectiveRole: "admin" | "editor" | "viewer" | null;
   }>;
   /**
    * One row's facts could not be read; the row lists anyway, degraded. The
@@ -46,9 +46,9 @@ export interface ConfigurationListFacts {
  * authority (no edit control) and no provider handle, because a transient
  * failure must not look like a lost environment.
  *
- * A team whose role was read and authorizes NOTHING - a seat still stored on
- * the retired view-only role - is a different answer and is left out of the
- * list entirely. Listing it would name an environment the caller cannot read
+ * A team whose role was read and authorizes NOTHING is a different answer
+ * and is left out of the list entirely; a Viewer's team is listed, as
+ * `viewer`. Listing it would name an environment the caller cannot read
  * or write anything in, which is the distinction the two cases turn on: one
  * is "not known yet", the other is "not theirs".
  */
@@ -76,7 +76,7 @@ export function enrichConfigurationList(
       }
       let team: {
         readonly providerHandle: string | null;
-        readonly effectiveRole: "admin" | "editor" | null;
+        readonly effectiveRole: "admin" | "editor" | "viewer" | null;
       };
       let roleRead = true;
       try {

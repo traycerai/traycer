@@ -23,7 +23,7 @@ const TEAM: EnvironmentDescriptor = {
 
 interface TeamFacts {
   readonly providerHandle: string;
-  readonly effectiveRole: "admin" | "editor" | null;
+  readonly effectiveRole: "admin" | "editor" | "viewer" | null;
 }
 
 function factsWith(
@@ -39,7 +39,7 @@ function factsWith(
   };
 }
 
-describe("enrichConfigurationList with a retired team seat", () => {
+describe("enrichConfigurationList team seats", () => {
   it("leaves out a team whose role was read and authorizes nothing", async () => {
     const failures: string[] = [];
     const rows = await enrichConfigurationList(
@@ -90,6 +90,24 @@ describe("enrichConfigurationList with a retired team seat", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       effectiveRole: "editor",
+      providerHandle: "acme",
+    });
+  });
+
+  it("lists a Viewer's team as viewer", async () => {
+    const rows = await enrichConfigurationList(
+      [TEAM],
+      factsWith(
+        () =>
+          Promise.resolve({ providerHandle: "acme", effectiveRole: "viewer" }),
+        [],
+      ),
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "team",
+      effectiveRole: "viewer",
       providerHandle: "acme",
     });
   });
