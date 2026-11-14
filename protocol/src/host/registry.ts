@@ -939,11 +939,13 @@ import {
   epicListChatRecordsUpgradeV11ToV12,
   epicListChatRecordsUpgradeV12ToV13,
   epicListChatRecordsUpgradeV13ToV14,
+  epicListChatRecordsUpgradeV14ToV15,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
   epicListChatRecordsV14,
+  epicListChatRecordsV15,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsDowngradeV30ToV10,
   epicGetChatRunSettingsDowngradeV30ToV20,
@@ -1448,6 +1450,7 @@ import {
   hostChatRecordsSubscribeV12,
   hostChatRecordsSubscribeV13,
   hostChatRecordsSubscribeV14,
+  hostChatRecordsSubscribeV15,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   editorOpenPathsUpgradeV10ToV11,
@@ -10987,9 +10990,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // @1.4 says on each row whether this host has dropped the chat's records
   // (`evicted`). One added key under the snapshot's `chats[]`; a @1.3 peer's
   // rows upgrade with `false`, which is what every older host's chats are.
+  // @1.5 says on each row who started the chat (`starterUserId`), an optional
+  // added key; a @1.4 peer's rows upgrade unchanged.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
@@ -11064,6 +11069,13 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // No `responseGrowthProjectionGated`: `evicted` is a plain added
           // key on the `snapshot` arm's rows, which zod strips for a 1.3
           // peer, and the root union is 1.3's unchanged.
+        },
+        5: {
+          contract: epicListChatRecordsV15,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV14ToV15,
+          // No `responseGrowthProjectionGated`, for 1.4's reason:
+          // `starterUserId` is an optional added key on the `snapshot` arm's
+          // rows, which zod strips for a 1.4 peer.
         },
       },
       downgradePathsFromLatest: {},
@@ -16458,7 +16470,7 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
   },
   "host.chatRecords.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
@@ -16474,6 +16486,9 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         4: {
           contract: hostChatRecordsSubscribeV14,
+        },
+        5: {
+          contract: hostChatRecordsSubscribeV15,
         },
       },
     },

@@ -792,6 +792,47 @@ describe("ChatRecordsStreamClient", () => {
     });
   });
 
+  describe("the @1.5 chat row - who started the chat", () => {
+    function upsertWithStarter(): Record<string, unknown> {
+      return {
+        kind: "upsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        revision: 7,
+        listRevision: listRevision({ revision: 12 }),
+        record: {
+          ...rowStreamV13({ chatId: "chat-a", revision: 7 }),
+          starterUserId: "starter-1",
+        },
+      };
+    }
+
+    it("delivers `starterUserId` on a chat upsert at @1.5", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 5 };
+      h.session.emitFrame(upsertWithStarter());
+
+      expect(h.deltas).toHaveLength(1);
+      const delta = h.deltas[0];
+      if (delta.kind !== "upsert") throw new Error("expected upsert");
+      expect(delta.record.starterUserId).toBe("starter-1");
+      h.client.close();
+    });
+
+    it("strips `starterUserId` at @1.4 - the older schema has no field for it", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
+      h.session.emitFrame(upsertWithStarter());
+
+      expect(h.deltas).toHaveLength(1);
+      const delta = h.deltas[0];
+      if (delta.kind !== "upsert") throw new Error("expected upsert");
+      expect(delta.record).not.toHaveProperty("starterUserId");
+      h.client.close();
+    });
+  });
+
   it("reports connection status and closes its session idempotently", () => {
     const h = harness();
     const reason: StreamCloseReason = { kind: "caller" };
