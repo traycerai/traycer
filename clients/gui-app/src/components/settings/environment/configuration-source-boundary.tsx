@@ -10,10 +10,7 @@ import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  grantedTeamMemberRole,
-  type EnvironmentInvitation,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   configurationRoleOf,
@@ -87,20 +84,14 @@ interface AnsweredQuestion {
 }
 
 /**
- * The team invited them instead, so its settings are an Accept away — as much
- * of them as the invited role is given.
- *
- * The role is RESOLVED rather than read literally. An invitation on the retired
- * view-only role is no longer offered, but a client can be newer than the
- * service that stops offering it, and the promise is the part that must not be
- * wrong: a seat that grants nothing must not be sold as one that can change
- * anything.
+ * The team invited them instead, so its settings are an Accept away. A
+ * viewer's invitation promises reading them and nothing more.
  */
 function invitedInsteadLine(invitation: EnvironmentInvitation): string {
   const lead = `You're invited to ${invitation.teamName}. Accept to see`;
-  return grantedTeamMemberRole(invitation.role) === null
-    ? `${lead} its settings.`
-    : `${lead} and change its settings.`;
+  return invitation.role === "admin" || invitation.role === "editor"
+    ? `${lead} and change its settings.`
+    : `${lead} its settings.`;
 }
 
 /**
