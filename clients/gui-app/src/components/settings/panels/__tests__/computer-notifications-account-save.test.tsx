@@ -219,6 +219,7 @@ function renderComputerTab(client: HostClient<HostRpcRegistry>) {
 
 async function convertCommandHookToHttp(): Promise<void> {
   const manager = await screen.findByTestId("notification-hooks-manager");
+  await screen.findByTestId("notification-hook-row-convert-this-hook");
   fireEvent.click(within(manager).getAllByRole("button", { name: "Edit" })[0]!);
   const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("combobox", { name: "Action" }));
