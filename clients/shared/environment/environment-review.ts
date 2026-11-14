@@ -8,6 +8,8 @@
  *   revision the person saw: authn checks both, and consumes the hold, in one
  *   transaction.
  * - `POST …/review/held/:heldId/discard` with the hold's revision.
+ * - The same list read for the app's own saves: each hold's address, origin
+ *   and a digest of its value, never the value.
  * - `GET …/notices` and `POST …/changes/:revision/undo`.
  *
  * Each answer authn gives that a person acts on is an outcome here, not an
@@ -22,6 +24,12 @@ import {
   type EnvironmentWriteOutcome,
 } from "@traycer/protocol/host/environment-schemas";
 import { heldFactsOf } from "@traycer/protocol/host/environment/held-facts";
+import {
+  settingValueSchema,
+  type SettingValue,
+} from "@traycer/protocol/host/environment/settings-proposals";
+import { canonicalSettingValue } from "@traycer/protocol/host/environment/settings-save-mapping";
+import { utf8Bytes, webCryptoSha256Hex } from "../cloud-chat/bytes";
 import {
   ITEM_OS_VALUES,
   REVIEW_INCLUDE_OPERATION,
@@ -176,36 +184,10 @@ export interface ReviewChoiceOutcome {
   readonly outcome: "applied" | "conflict" | "gone" | "forbidden";
 }
 
-/**
- * Apply sends the hold's revision and the live revision the person saw, and
- * authn checks both and consumes the hold in one transaction; Discard sends
- * the hold's revision.
- */
-export async function applyReviewChoice(
-  cloud: EnvironmentCloud,
-  environmentId: string,
-  entry: ReviewHeldEntry,
+function choiceOutcome(
+  answer: EnvironmentAnswer,
   choice: "approve" | "discard",
-): Promise<ReviewChoiceOutcome> {
-  const answer =
-    choice === "approve"
-      ? await sendReview(
-          cloud,
-          "POST",
-          heldPath(environmentId, entry.entryId, "apply"),
-          {
-            revision: entry.heldRevision,
-            expectedLiveRevision: entry.liveRevision,
-          },
-          REVIEW_OFFLINE_MESSAGE,
-        )
-      : await sendReview(
-          cloud,
-          "POST",
-          heldPath(environmentId, entry.entryId, "discard"),
-          { revision: entry.heldRevision },
-          REVIEW_OFFLINE_MESSAGE,
-        );
+): ReviewChoiceOutcome {
   if (answer.status === 403) return { outcome: "forbidden" };
   if (answer.status === 409 && choice === "approve") {
     const conflict = authnHeldApplyConflictSchema.safeParse(answer.body);
@@ -217,6 +199,134 @@ export async function applyReviewChoice(
     return { outcome: "gone" };
   if (!isSuccess(answer)) throw reviewRefusal(answer);
   return { outcome: "applied" };
+}
+
+/**
+ * Apply one hold: its revision, and the live revision its applier expects.
+ * authn checks both and consumes the hold in one transaction, so of two
+ * windows applying the same hold one writes it; the other is answered a
+ * replay of that write, or that the hold is gone.
+ */
+export async function applyHeldChange(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  hold: {
+    readonly heldId: string;
+    readonly revision: number;
+    readonly expectedLiveRevision: number | null;
+  },
+): Promise<ReviewChoiceOutcome> {
+  return choiceOutcome(
+    await sendReview(
+      cloud,
+      "POST",
+      heldPath(environmentId, hold.heldId, "apply"),
+      {
+        revision: hold.revision,
+        expectedLiveRevision: hold.expectedLiveRevision,
+      },
+      REVIEW_OFFLINE_MESSAGE,
+    ),
+    "approve",
+  );
+}
+
+/**
+ * Apply sends the hold's revision and the live revision the person saw;
+ * Discard sends the hold's revision.
+ */
+export async function applyReviewChoice(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  entry: ReviewHeldEntry,
+  choice: "approve" | "discard",
+): Promise<ReviewChoiceOutcome> {
+  if (choice === "approve") {
+    return applyHeldChange(cloud, environmentId, {
+      heldId: entry.entryId,
+      revision: entry.heldRevision,
+      expectedLiveRevision: entry.liveRevision,
+    });
+  }
+  return choiceOutcome(
+    await sendReview(
+      cloud,
+      "POST",
+      heldPath(environmentId, entry.entryId, "discard"),
+      { revision: entry.heldRevision },
+      REVIEW_OFFLINE_MESSAGE,
+    ),
+    "discard",
+  );
+}
+
+// ── the app's own holds ─────────────────────────────────────────────────────
+
+/**
+ * A hold as the app matches it against a save it made: its address, the
+ * host and generation that proposed it, and a digest of its value. The value
+ * itself is read only to take that digest and is never returned.
+ */
+export interface HeldChangeForMatch {
+  readonly heldId: string;
+  /** The hold's version: Apply names exactly this one. */
+  readonly revision: number;
+  readonly kind: string;
+  readonly key: string;
+  readonly os: string | null;
+  readonly op: "put" | "delete";
+  readonly hostId: string;
+  /** Null for a hold stored before authn recorded it; such a hold matches no save. */
+  readonly sharingGeneration: number | null;
+  /**
+   * {@link settingValueDigest} of the held value; null for a delete, and for
+   * a value that is no item value, which then matches no save.
+   */
+  readonly valueDigest: string | null;
+}
+
+/** SHA-256, as lowercase hex, of a value's one canonical text. */
+export function settingValueDigest(value: SettingValue): Promise<string> {
+  return webCryptoSha256Hex(utf8Bytes(canonicalSettingValue(value)));
+}
+
+/** The environment's holds (`GET …/review?include=operation`), each as a save is matched against it. */
+export async function readHeldChangesForMatch(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+): Promise<readonly HeldChangeForMatch[]> {
+  const query = new URLSearchParams({ include: REVIEW_INCLUDE_OPERATION });
+  const { review } = parseReview(
+    await sendReview(
+      cloud,
+      "GET",
+      `${environmentPath(environmentId)}/review?${query.toString()}`,
+      null,
+      REVIEW_OFFLINE_MESSAGE,
+    ),
+    authnOperationReviewResponseSchema,
+  );
+  const holds: HeldChangeForMatch[] = [];
+  for (const entry of review?.needsYou ?? []) {
+    if (entry.type !== "held") continue;
+    let valueDigest: string | null = null;
+    if (entry.op === "put") {
+      const value = settingValueSchema.safeParse(entry.value);
+      valueDigest = value.success ? await settingValueDigest(value.data) : null;
+    }
+    holds.push({
+      heldId: entry.heldId,
+      revision: entry.revision,
+      kind: entry.kind,
+      key: entry.key,
+      os: entry.os,
+      op: entry.op,
+      hostId: entry.hostId,
+      sharingGeneration: entry.sharingGeneration,
+      valueDigest,
+    });
+  }
+  return holds;
 }
 
 const noticeAddressSchema = z.tuple([
