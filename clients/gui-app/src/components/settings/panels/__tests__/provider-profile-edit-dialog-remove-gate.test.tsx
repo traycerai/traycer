@@ -3,10 +3,12 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+
+const fixture = vi.hoisted(() => ({ offersSignIns: false }));
 
 // Same rationale as the sibling panel suites: the dialog pulls in
 // mutation/host hooks unconditionally, so those are stubbed to keep this test
@@ -18,6 +20,11 @@ vi.mock("@/lib/host", async (importOriginal) => {
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: () => ({
+    data: fixture.offersSignIns ? { offersSignIns: true } : undefined,
+  }),
 }));
 vi.mock("@/hooks/providers/use-remove-provider-profile-mutation", () => ({
   useRemoveProviderProfile: () => ({
@@ -103,8 +110,7 @@ function opencodeState(profile: ProviderProfile): ProviderCliState {
   };
 }
 
-function renderDialogFor(kind: ProviderProfile["kind"]) {
-  const profile = profileOfKind(kind);
+function renderDialog(profile: ProviderProfile) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -135,6 +141,10 @@ function renderDialogFor(kind: ProviderProfile["kind"]) {
   );
 }
 
+function renderDialogFor(kind: ProviderProfile["kind"]) {
+  return renderDialog(profileOfKind(kind));
+}
+
 /**
  * The remove affordance is gated on `profile.kind` alone
  * (`PROFILE_REMOVE_PRESENTATION`): an ambient profile is the user's default
@@ -147,6 +157,11 @@ function renderDialogFor(kind: ProviderProfile["kind"]) {
  * removal for everything.
  */
 describe("<ProfileEditDialog /> remove gate by profile kind", () => {
+  afterEach(() => {
+    cleanup();
+    fixture.offersSignIns = false;
+  });
+
   afterEach(() => {
     cleanup();
   });
@@ -214,6 +229,32 @@ describe("<ProfileEditDialog /> remove gate by profile kind", () => {
     expect(
       tooltipTextNear(screen.getByRole("button", { name: "Remove profile" })),
     ).toBeNull();
+  });
+
+  it("keeps the existing local Remove confirmation when offersSignIns is absent", () => {
+    renderDialog(profileOfKind("managed"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
+
+    expect(screen.getByText("Remove Work account?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Agents that ran on Work account will show it as removed. Running sessions on this profile must be stopped first.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses the approved mirror copy and environment fallback when offersSignIns is enabled", () => {
+    fixture.offersSignIns = true;
+    renderDialog({ ...profileOfKind("managed"), aliases: ["legacy-work"] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
+
+    expect(
+      screen.getByText(
+        "Remove Work account from every list in this environment. Running work finishes first. You can add this account again later by signing in.",
+      ),
+    ).toBeTruthy();
   });
 });
 

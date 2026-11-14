@@ -251,6 +251,7 @@ function ConfigurationProfileEditor(props: {
       confirmRemoveOpen={confirmRemoveOpen}
       onConfirmRemoveOpenChange={setConfirmRemoveOpen}
       removeDescription="Remove this profile from the team."
+      removeConfirmation={null}
       onConfirmRemove={confirmRemove}
     >
       {error === null ? null : (
