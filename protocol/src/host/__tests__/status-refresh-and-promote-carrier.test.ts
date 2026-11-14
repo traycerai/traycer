@@ -23,6 +23,16 @@ const promoteRequestV14 = {
   expectedEnvironmentId: null,
 };
 
+const promoteOnlyErrorCodes = [
+  "needs_connection",
+  "upload_refused",
+  "needs_grant",
+  "environment_not_served",
+  "not_global_scope",
+  "bound_to_this_computer",
+  "invalid_entry",
+] as const;
+
 describe("dormant status refresh and promote carrier contracts", () => {
   it("keeps host.status.refresh@1.0 empty in both directions", () => {
     expect(hostStatusRefreshV10.requestSchema.parse({})).toEqual({});
@@ -117,5 +127,39 @@ describe("dormant status refresh and promote carrier contracts", () => {
     expect(providersNativeMutateV14.requestSchema.parse(current)).toEqual(
       promoteRequestV14,
     );
+  });
+
+  it("parses the seven promote-only refusals only on the v1.5 response", () => {
+    for (const code of promoteOnlyErrorCodes) {
+      const answer = { result: { ok: false as const, code, detail: null } };
+      expect(providersNativeMutateV15.responseSchema.parse(answer)).toEqual(
+        answer,
+      );
+      expect(() =>
+        providersNativeMutateV14.responseSchema.parse(answer),
+      ).toThrow();
+    }
+  });
+
+  it("keeps v1.4 refusals and success responses in the v1.5 response", () => {
+    for (const code of [
+      "environment_mismatch",
+      "server_not_found",
+      "unsupported_action",
+    ] as const) {
+      const answer = { result: { ok: false as const, code, detail: null } };
+      expect(providersNativeMutateV15.responseSchema.parse(answer)).toEqual(
+        answer,
+      );
+    }
+    const success = { result: { ok: true, kind: "plugins", plugins: [] } };
+    expect(providersNativeMutateV15.responseSchema.parse(success)).toEqual(
+      success,
+    );
+    expect(() =>
+      providersNativeMutateV15.responseSchema.parse({
+        result: { ok: false, code: "future_error", detail: null },
+      }),
+    ).toThrow();
   });
 });

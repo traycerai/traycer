@@ -275,8 +275,8 @@ export const hostRemoteAccessSetV20 = defineRpcContract({
  * `host.status.refresh@1.0`: this computer reads its own row now, through
  * the status read it already runs, and answers once that read has ended,
  * whether the row was read, unreachable or refused. It has no refusals of its
- * own. On a sandbox, or a host with no environment domain running, it answers
- * at once and does nothing. The answer carries no result on purpose (see
+ * own. A host with no environment domain running answers at once and does
+ * nothing. The answer carries no result on purpose (see
  * `hostStatusRefreshResponseSchema`). Defined and not registered: it
  * registers with the app's Remote access caller. Not an agent capability, and
  * not on the host-to-host allowlist.

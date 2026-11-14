@@ -1596,6 +1596,7 @@ import {
   providersNativeMutateResponseSchemaV10Preimage,
   providersNativeMutateResponseSchemaV11Preimage,
   providersNativeMutateResponseSchemaV14,
+  providersNativeMutateResponseSchemaV15,
   providersCancelLoginResponseSchemaV10,
   providersClearApiKeyRequestSchema,
   providersClearApiKeyRequestSchemaV10,
@@ -5219,15 +5220,18 @@ export const providersNativeMutateUpgradeV13ToV14 = defineUpgradePath<
 
 /**
  * `providers.nativeMutate@1.5`: the `promoteToPersonal` arm carries the app's
- * `intentOperationId`. The response is `@1.4`'s. Defined and not registered:
- * it registers with the app's click that sends it. A `@1.5` request to a
- * `@1.4` host is re-parsed onto `@1.4`, whose non-strict arm strips the key.
+ * `intentOperationId`, and the result gains the seven codes only that arm
+ * answers (`providerNativeMutateErrorCodeSchemaV15`). Defined and not
+ * registered: it registers with the app's click that sends it, and its entry
+ * then declares `responseGrowthProjectionGated`, since the host never answers
+ * the seven to a `@1.4` caller. A `@1.5` request to a `@1.4` host is
+ * re-parsed onto `@1.4`, whose non-strict arm strips the key.
  */
 export const providersNativeMutateV15 = defineRpcContract({
   method: "providers.nativeMutate",
   schemaVersion: { major: 1, minor: 5 } as const,
   requestSchema: providersNativeMutateRequestSchemaV15,
-  responseSchema: providersNativeMutateResponseSchemaV14,
+  responseSchema: providersNativeMutateResponseSchemaV15,
 });
 
 /** A `@1.4` caller states no intent: its promote arm gains null. */

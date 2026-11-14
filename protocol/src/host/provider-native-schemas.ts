@@ -1676,6 +1676,52 @@ export type NativeMutationResultV14 = z.infer<
   typeof nativeMutationResultSchemaV14
 >;
 
+/**
+ * A mutation's refusal codes on `providers.nativeMutate@1.5`: `@1.4`'s plus
+ * seven that only the `promoteToPersonal` arm answers, for both entry kinds.
+ * The host answers them with a null `detail`, so no host sentence reaches a
+ * `@1.5` caller, and never to a `@1.4` or older caller, which gets today's
+ * throw or today's `unsupported_action` with today's text.
+ *
+ * - `needs_connection`: no answer from authn, or no environment read yet.
+ * - `upload_refused`: authn refused the promote upload, for any reason.
+ * - `needs_grant`: the old path, with a null intent and a null
+ *   executable-write grant.
+ *
+ * The arm's other refusals (the entry is gone, a skill is not ready, the
+ * editor role, a name taken) stay `unsupported_action` with text.
+ */
+export const providerNativeMutateErrorCodeSchemaV15 = lazySchema(() =>
+  z.enum([
+    ...providerNativeMutateErrorCodeSchema.options,
+    "needs_connection",
+    "upload_refused",
+    "needs_grant",
+    "environment_not_served",
+    "not_global_scope",
+    "bound_to_this_computer",
+    "invalid_entry",
+  ]),
+);
+export type ProviderNativeMutateErrorCodeV15 = z.infer<
+  typeof providerNativeMutateErrorCodeSchemaV15
+>;
+
+/** Mutation result on `providers.nativeMutate@1.5`. */
+export const nativeMutationResultSchemaV15 = lazySchema(() =>
+  z.union([
+    nativeMutationSuccessResultSchema,
+    z.object({
+      ok: z.literal(false),
+      code: providerNativeMutateErrorCodeSchemaV15,
+      detail: z.string().nullable(),
+    }),
+  ]),
+);
+export type NativeMutationResultV15 = z.infer<
+  typeof nativeMutationResultSchemaV15
+>;
+
 /** MCP mutation result published on nativeMutate@1.1. */
 export const nativeMutationResultSchemaV11Preimage = lazySchema(() =>
   z.union([

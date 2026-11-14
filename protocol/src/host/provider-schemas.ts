@@ -49,6 +49,7 @@ import {
   nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
   nativeMutationResultSchemaV14,
+  nativeMutationResultSchemaV15,
   nativeMutationResultSchemaV10Preimage,
   nativeMutationResultSchemaV11Preimage,
   nativeMutationSchema,
@@ -4622,6 +4623,14 @@ export const providersNativeMutateResponseSchemaV14 = lazySchema(() =>
 );
 export type ProvidersNativeMutateResponseV14 = z.infer<
   typeof providersNativeMutateResponseSchemaV14
+>;
+
+/** `providers.nativeMutate@1.5` response: the promote arm's seven codes. */
+export const providersNativeMutateResponseSchemaV15 = lazySchema(() =>
+  z.object({ result: nativeMutationResultSchemaV15 }),
+);
+export type ProvidersNativeMutateResponseV15 = z.infer<
+  typeof providersNativeMutateResponseSchemaV15
 >;
 
 // ── Model providers (optional capability channel) ──────────────────────────
