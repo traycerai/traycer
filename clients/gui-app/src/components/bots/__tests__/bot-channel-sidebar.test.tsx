@@ -955,7 +955,10 @@ describe("<BotChannelSidebar /> Threads", () => {
         follows: { "release-new": FOLLOWING, "release-read": FOLLOWING },
         cursors: {
           cursors: { "release-read": { messageId: "m-1", seq: 2_000 } },
-          latest: {},
+          latest: {
+            "release-new": { messageId: "m-2", seq: 2_000 },
+            "release-read": { messageId: "m-1", seq: 2_000 },
+          },
         },
       },
       "bot-notes": {
@@ -964,7 +967,13 @@ describe("<BotChannelSidebar /> Threads", () => {
           "notes-new": FOLLOWING,
           "notes-other": { state: "unfollowed", reason: "manual" },
         },
-        cursors: { cursors: {}, latest: {} },
+        cursors: {
+          cursors: {},
+          latest: {
+            "notes-new": { messageId: "m-3", seq: 3_000 },
+            "notes-other": { messageId: "m-4", seq: 3_000 },
+          },
+        },
       },
     };
     mount("bot-release", view(false));
@@ -977,6 +986,20 @@ describe("<BotChannelSidebar /> Threads", () => {
     expect(threadsRow().textContent).toBe("Threads2 with new replies");
     expect(threadsRow().getAttribute("aria-current")).toBeNull();
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
+  });
+
+  it("counts nothing for a followed thread the host reports no newest row for, however new its summary says it is", () => {
+    mocks.state.threadReads = {
+      "bot-release": {
+        threads: [thread("release-new", 9_000)],
+        follows: { "release-new": FOLLOWING },
+        cursors: { cursors: {}, latest: {} },
+      },
+    };
+    mount("bot-release", view(false));
+
+    expect(threadsRow().textContent).toBe("Threads");
+    expect(screen.queryByTestId("bot-channel-threads-count")).toBeNull();
   });
 
   it("is the current row while Threads shows, the tab's channel row is not, and that row goes back to the channel", async () => {
