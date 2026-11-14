@@ -1,5 +1,9 @@
 import { fetchEnvironmentTransport } from "../../environment/environment-cloud";
 import {
+  listEnvironmentsViaHttp,
+  type EnvironmentDirectoryResult,
+} from "../environment-directory";
+import {
   readHostOwnershipViaHttp,
   type HostOwnershipResult,
 } from "../host-ownership";
@@ -761,6 +765,15 @@ export class MockRunnerHost implements IRunnerHost {
   // The sandbox control plane: same no-CORS-boundary parity as above.
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult> {
+    return listEnvironmentsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+    );
   }
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {

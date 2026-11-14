@@ -1,5 +1,6 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
 import type { EnvironmentTransport } from "../environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type {
   TeamComputersResult,
@@ -515,6 +516,14 @@ export interface IRunnerHost {
    * failures collapse into the discriminated results.
    */
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  /**
+   * Every environment the signed-in person belongs to, read from traycer-server
+   * (`GET /api/environments`) with the user bearer, as
+   * `host-client/environment-directory.ts` reads it: the renderer joins it
+   * with authn's reads, so the list needs no computer awake. Run where the
+   * shell's other traycer-server calls run, for the same reason. Never throws.
+   */
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
