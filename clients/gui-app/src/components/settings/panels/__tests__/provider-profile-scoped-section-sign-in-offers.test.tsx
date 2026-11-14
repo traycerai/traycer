@@ -261,6 +261,28 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
     expect(harness.listCalls()).toBe(1);
   });
 
+  it("keeps today's on-this-host line and Link when offersSignIns is false", async () => {
+    const harness = renderSection({
+      offers: false,
+      row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
+      signedOut: false,
+      onHostOnly: true,
+      advertiseLink: true,
+    });
+    const line = await screen.findByTestId(LINE_TESTID);
+    expect(line.textContent).toContain(ON_THIS_HOST);
+    fireEvent.click(screen.getByRole("button", { name: "Link" }));
+    expect(useProviderLinkDialogStore.getState().target).toEqual({
+      providerId: "opencode",
+      profileId: PROFILE_ID,
+    });
+    expect(screen.queryByText(AVAILABLE_HERE)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
+    ).toBeNull();
+    expect(harness.listCalls()).toBe(1);
+  });
+
   it.each([true, "10.11"] as const)(
     "shows the no-home summary and stale standing when offersSignIns is %s",
     async (offers) => {
