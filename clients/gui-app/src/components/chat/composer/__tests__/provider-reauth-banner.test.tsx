@@ -1223,7 +1223,13 @@ describe("<ProviderReauthBanner />", () => {
     // Droid has an encrypted host-side key store, so the banner persists the key
     // as that secret (`providers.setApiKey`) — exactly like Settings > Providers —
     // rather than a plaintext env override.
-    expect(mocks.setApiKeyMutate.mock.calls.length === 1).toBe(true);
+    const saveCall = mocks.setApiKeyMutate.mock.calls.at(0);
+    expect(
+      mocks.setApiKeyMutate.mock.calls.length === 1 &&
+        saveCall !== undefined &&
+        saveCall[0].providerId === "droid" &&
+        saveCall[0].apiKey === "fk-droid-123",
+    ).toBe(true);
     expect(mocks.setEnvOverrideMutate).not.toHaveBeenCalled();
   });
 
@@ -2178,7 +2184,13 @@ describe("<ProviderReauthBanner />", () => {
       target: { value: "  cursor-key  " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(mocks.setApiKeyMutate.mock.calls.length === 1).toBe(true);
+    const saveCall = mocks.setApiKeyMutate.mock.calls.at(0);
+    expect(
+      mocks.setApiKeyMutate.mock.calls.length === 1 &&
+        saveCall !== undefined &&
+        saveCall[0].providerId === "cursor" &&
+        saveCall[0].apiKey === "cursor-key",
+    ).toBe(true);
   });
 
   it("clears a refused record-backed paste and shows the partial-success notice without probing", async () => {
