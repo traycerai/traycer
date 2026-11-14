@@ -676,6 +676,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.service.register": "target-host",
   "host.service.status": "target-host",
   "host.status": "addressed-peer",
+  "host.status.refresh": "target-host",
   "host.update.activate": "target-host",
   "host.update.check": "target-host",
   "host.update.continue": "target-host",
