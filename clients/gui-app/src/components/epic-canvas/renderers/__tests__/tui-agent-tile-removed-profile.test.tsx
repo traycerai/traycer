@@ -1,18 +1,61 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { useEffect, type ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import type { RenderResult } from "@testing-library/react";
+import { StrictMode, useEffect, type ReactNode } from "react";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { providersListResponseSchema } from "@traycer/protocol/host/provider-schemas";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { HostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  pinProfile,
+  providerState,
+} from "@/components/providers/__tests__/profile-pin-fixtures";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notifications/app-local-notifications-store";
-import type { HostRpcRegistry } from "@/lib/host";
+import { createAppQueryClient } from "@/lib/query-client";
+import {
+  armTerminalAgentContinueProfile,
+  consumeTerminalAgentContinueProfile,
+} from "@/stores/terminals/terminal-agent-continue-profile";
 
 const testHostEntry = { ...mockLocalHostEntry, hostId: "test-host" };
+const forkInventory = providersListResponseSchema.parse({
+  providers: [
+    providerState({
+      providerId: "claude-code",
+      authStatus: "authenticated",
+      profiles: [
+        pinProfile({
+          profileId: "profile-source",
+          label: "Source profile",
+          kind: "managed",
+          enabled: true,
+          authStatus: "authenticated",
+          aliases: [],
+          personNotice: null,
+          terminalOnThisComputer: true,
+          otherNames: [],
+        }),
+      ],
+    }),
+  ],
+  native: null,
+  offersSignIns: true,
+  removedProfiles: [],
+});
 
 const hooks = vi.hoisted(() => {
   let prepareError: unknown = null;
@@ -29,6 +72,43 @@ const hooks = vi.hoisted(() => {
     reset: () => {
       prepareError = null;
       createError = null;
+    },
+  };
+});
+
+const tileState = vi.hoisted(() => {
+  let origin: "registry" | "cloud" = "registry";
+  let harnessSessionId: string | null = "session-1";
+  let forkProfileSupported = true;
+  let bindingState: "success" | "error" | "pending" = "success";
+  let reachability: "reachable" | "unreachable" = "reachable";
+  return {
+    origin: () => origin,
+    harnessSessionId: () => harnessSessionId,
+    forkProfileSupported: () => forkProfileSupported,
+    bindingState: () => bindingState,
+    reachability: () => reachability,
+    setOrigin: (next: "registry" | "cloud") => {
+      origin = next;
+    },
+    setHarnessSessionId: (next: string | null) => {
+      harnessSessionId = next;
+    },
+    setForkProfileSupported: (next: boolean) => {
+      forkProfileSupported = next;
+    },
+    setBindingState: (next: "success" | "error" | "pending") => {
+      bindingState = next;
+    },
+    setReachability: (next: "reachable" | "unreachable") => {
+      reachability = next;
+    },
+    reset: () => {
+      origin = "registry";
+      harnessSessionId = "session-1";
+      forkProfileSupported = true;
+      bindingState = "success";
+      reachability = "reachable";
     },
   };
 });
@@ -100,12 +180,14 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTerminalAgent: () => ({
     id: "agent-1",
     harnessId: "claude",
+    origin: tileState.origin(),
     title: "Terminal agent",
+    profileId: "profile-source",
     parentId: null,
     createdAt: 0,
     updatedAt: 0,
     hostId: "test-host",
-    harnessSessionId: "session-1",
+    harnessSessionId: tileState.harnessSessionId(),
     terminalAgentArgs: null,
     terminalShellCommand: "claude",
     terminalShellArgs: [],
@@ -170,7 +252,55 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 }));
 
 vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
-  useWorktreeGetBinding: () => ({ data: { binding: null } }),
+  useWorktreeGetBinding: () => {
+    const bindingState = tileState.bindingState();
+    const bindingSucceeded = bindingState === "success";
+    return {
+      data: bindingSucceeded ? { binding: null } : undefined,
+      isSuccess: bindingSucceeded,
+      isError: bindingState === "error",
+      isPending: bindingState === "pending",
+    };
+  },
+}));
+
+vi.mock(
+  "@/hooks/agent/use-tui-fork-profile-support",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/agent/use-tui-fork-profile-support")
+      >();
+    return {
+      ...actual,
+      useTuiForkProfileSupported: () => tileState.forkProfileSupported(),
+    };
+  },
+);
+
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/agent/use-host-reachability")
+    >();
+  return {
+    ...actual,
+    useHostReachability: (): HostReachability => ({
+      status: tileState.reachability(),
+      hostLabel: "Computer",
+      unavailability: null,
+      basis: "directory",
+      hostKind: "remote",
+    }),
+  };
+});
+
+vi.mock("@/components/home/pickers/harness-model-picker", () => ({
+  HarnessModelPicker: () => <div data-testid="fork-harness-model-picker" />,
+}));
+
+vi.mock("@/components/home/pickers/agent-mode-toggle", () => ({
+  AgentModeToggle: () => null,
 }));
 
 vi.mock("../terminal-grid-measure-probe", () => ({
@@ -209,6 +339,7 @@ function buildClient(
     requestId: () => "req-1",
     handlers: {
       "terminal.list": () => ({ sessions: [], homeCwd: "/home" }),
+      "providers.list": () => forkInventory,
       "agent.tui.prepareLaunch": () => {
         if (failureMethod === "agent.tui.prepareLaunch") throw error;
         return {
@@ -249,45 +380,104 @@ function errorCode(error: unknown): string | null {
   return null;
 }
 
-function withQueryClient(node: ReactNode): ReactNode {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-      mutations: { retry: false },
-    },
+function wrapperFor(
+  queryClient: QueryClient,
+): (props: { readonly children: ReactNode }) => ReactNode {
+  function TestWrapper(props: { readonly children: ReactNode }): ReactNode {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <TabHostProvider hostId="test-host">{props.children}</TabHostProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+  }
+  return TestWrapper;
+}
+
+function renderWithProviders(node: ReactNode): RenderResult {
+  const queryClient = createAppQueryClient();
+  queryClient.setDefaultOptions({
+    queries: { retry: false, gcTime: 0 },
+    mutations: { retry: false },
   });
+  return render(node, { wrapper: wrapperFor(queryClient) });
+}
+
+function tileNode(): ReactNode {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <TabHostProvider hostId="test-host">{node}</TabHostProvider>
-      </TooltipProvider>
-    </QueryClientProvider>
+    <TuiAgentTile
+      viewTabId="tab-test"
+      node={{
+        id: "agent-1",
+        instanceId: "inst-agent-1",
+        type: "terminal-agent",
+        name: "terminal-agent",
+        hostId: "test-host",
+      }}
+      tileId="tile-1"
+      isActive
+    />
   );
 }
 
-function renderTile(): void {
-  render(
-    withQueryClient(
-      <TuiAgentTile
-        viewTabId="tab-test"
-        node={{
-          id: "agent-1",
-          instanceId: "inst-agent-1",
-          type: "terminal-agent",
-          name: "terminal-agent",
-          hostId: "test-host",
-        }}
-        tileId="tile-1"
-        isActive
-      />,
-    ),
+function renderTile(): RenderResult {
+  return renderWithProviders(tileNode());
+}
+
+function renderStrictTile(): RenderResult {
+  return renderWithProviders(strictTileNode());
+}
+
+function strictTileNode(): ReactNode {
+  return <StrictMode>{tileNode()}</StrictMode>;
+}
+
+function renderStrictDuplicateTiles(): RenderResult {
+  return renderWithProviders(
+    <StrictMode>
+      {tileNode()}
+      {tileNode()}
+    </StrictMode>,
   );
+}
+
+function renderWithClient(): RenderResult {
+  const fixture = buildClient("terminal.create", "RPC_ERROR");
+  clientSlot.set(fixture.client);
+  return renderTile();
+}
+
+function armMatchingRequest(): number {
+  return armTerminalAgentContinueProfile("test-host", "epic-test", "agent-1");
+}
+
+function clearContinueProfileRequest(
+  hostId: string,
+  epicId: string,
+  agentId: string,
+): void {
+  const cleanupRequestId = armTerminalAgentContinueProfile(
+    hostId,
+    epicId,
+    agentId,
+  );
+  consumeTerminalAgentContinueProfile(cleanupRequestId);
+}
+
+function noContinueDialog(): void {
+  expect(
+    screen.queryByRole("heading", {
+      name: "Continue under another profile",
+    }),
+  ).toBeNull();
 }
 
 describe("<TuiAgentTile /> removed-profile refusals", () => {
   afterEach(() => {
     cleanup();
     hooks.reset();
+    tileState.reset();
     clientSlot.clear();
     toastErrors.error.mockClear();
     __resetAppLocalNotificationsStoreForTests();
@@ -296,6 +486,33 @@ describe("<TuiAgentTile /> removed-profile refusals", () => {
       reportIssueAvailable: false,
       reportIssueContext: null,
     });
+    clearContinueProfileRequest("test-host", "epic-test", "agent-1");
+    clearContinueProfileRequest("other-host", "epic-test", "agent-1");
+    clearContinueProfileRequest("test-host", "other-epic", "agent-1");
+    clearContinueProfileRequest("test-host", "epic-test", "other-agent");
+    clearContinueProfileRequest("test-host", "epic-test", "another-agent");
+  });
+
+  afterAll(() => {
+    vi.doUnmock("sonner");
+    vi.doUnmock(
+      "@/components/home/host-workspace-selector/host-workspace-selector",
+    );
+    vi.doUnmock("@/lib/host");
+    vi.doUnmock("@/hooks/host/use-host-client-for");
+    vi.doUnmock("@/hooks/host/use-host-directory-entry");
+    vi.doUnmock("@/hooks/agent/use-agent-stop-controls");
+    vi.doUnmock("@/lib/epic-selectors");
+    vi.doUnmock("@/hooks/agent/use-prepare-tui-launch-mutation");
+    vi.doUnmock("@/hooks/terminal/use-terminal-create-mutation");
+    vi.doUnmock("@/lib/registries/terminal-session-registry");
+    vi.doUnmock("@/stores/epics/canvas/store");
+    vi.doUnmock("@/hooks/worktree/use-worktree-get-binding-query");
+    vi.doUnmock("@/hooks/agent/use-tui-fork-profile-support");
+    vi.doUnmock("@/hooks/agent/use-host-reachability");
+    vi.doUnmock("@/components/home/pickers/harness-model-picker");
+    vi.doUnmock("@/components/home/pickers/agent-mode-toggle");
+    vi.doUnmock("../terminal-grid-measure-probe");
   });
 
   const removedProfileFailureCases: ReadonlyArray<{
@@ -365,5 +582,324 @@ describe("<TuiAgentTile /> removed-profile refusals", () => {
     expect(screen.queryByText("Was removed")).toBeNull();
     const methods = fixture.messenger.calls.map((call) => call.method);
     expect(methods).toContain("agent.tui.prepareLaunch");
+  });
+
+  it("opens the existing Continue dialog for one matching ready request", async () => {
+    renderWithClient();
+    expect(
+      screen.getByRole("button", { name: "Fork" }).hasAttribute("disabled"),
+    ).toBe(false);
+
+    let requestId = 0;
+    await act(async () => {
+      requestId = armMatchingRequest();
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Continue under another profile",
+      }),
+    ).toBeTruthy();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+  });
+
+  it("preserves another agent's queued request while this tile consumes its own", async () => {
+    clientSlot.set(buildClient("terminal.create", "RPC_ERROR").client);
+    const oldOtherRequestId = armTerminalAgentContinueProfile(
+      "test-host",
+      "epic-test",
+      "another-agent",
+    );
+    const newerOtherRequestId = armTerminalAgentContinueProfile(
+      "test-host",
+      "epic-test",
+      "another-agent",
+    );
+    const requestId = armMatchingRequest();
+    renderTile();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Continue under another profile",
+      }),
+    ).toBeTruthy();
+    expect(consumeTerminalAgentContinueProfile(oldOtherRequestId)).toBe(false);
+    expect(consumeTerminalAgentContinueProfile(newerOtherRequestId)).toBe(true);
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+  });
+
+  it.each([
+    {
+      target: "host",
+      hostId: "other-host",
+      epicId: "epic-test",
+      agentId: "agent-1",
+    },
+    {
+      target: "epic",
+      hostId: "test-host",
+      epicId: "other-epic",
+      agentId: "agent-1",
+    },
+    {
+      target: "agent",
+      hostId: "test-host",
+      epicId: "epic-test",
+      agentId: "other-agent",
+    },
+  ])(
+    "does not consume a request with a mismatched $target",
+    async ({ hostId, epicId, agentId }) => {
+      clientSlot.set(buildClient("terminal.create", "RPC_ERROR").client);
+      const requestId = armTerminalAgentContinueProfile(
+        hostId,
+        epicId,
+        agentId,
+      );
+      renderTile();
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      noContinueDialog();
+      expect(consumeTerminalAgentContinueProfile(requestId)).toBe(true);
+    },
+  );
+
+  it("consumes a matching request once across strict duplicate views and remount", async () => {
+    clientSlot.set(buildClient("terminal.create", "RPC_ERROR").client);
+    const requestId = armMatchingRequest();
+    renderStrictDuplicateTiles();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      await screen.findByRole("heading", {
+        name: "Continue under another profile",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByRole("heading", {
+        name: "Continue under another profile",
+      }).length,
+    ).toBe(1);
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(noContinueDialog);
+
+    await act(async () => {
+      cleanup();
+      await Promise.resolve();
+    });
+    renderStrictTile();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    noContinueDialog();
+  });
+
+  it("does not auto-open after an unsupported request is consumed", async () => {
+    tileState.setForkProfileSupported(false);
+    const rendered = renderWithClient();
+    const trigger = screen.getByRole("button", { name: "More fork options" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+    const continueItem = await screen.findByRole("menuitem", {
+      name: /^Continue under another profile…/,
+    });
+    expect(continueItem.getAttribute("aria-disabled")).toBe("true");
+
+    let requestId = 0;
+    await act(async () => {
+      requestId = armMatchingRequest();
+      await Promise.resolve();
+    });
+    noContinueDialog();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+
+    tileState.setForkProfileSupported(true);
+    await act(async () => {
+      rendered.rerender(tileNode());
+      await Promise.resolve();
+    });
+    noContinueDialog();
+  });
+
+  it("keeps the fork controls disabled without a harness session", async () => {
+    tileState.setHarnessSessionId(null);
+    const rendered = renderWithClient();
+    expect(
+      screen.getByRole("button", { name: "Fork" }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "More fork options" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+
+    let requestId = 0;
+    await act(async () => {
+      requestId = armMatchingRequest();
+      await Promise.resolve();
+    });
+    noContinueDialog();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+
+    tileState.setHarnessSessionId("session-1");
+    await act(async () => {
+      rendered.rerender(tileNode());
+      await Promise.resolve();
+    });
+    noContinueDialog();
+  });
+
+  it("keeps cloud terminal agents without fork controls or auto-open", async () => {
+    tileState.setOrigin("cloud");
+    const rendered = renderWithClient();
+    expect(
+      screen.queryByRole("button", { name: "More fork options" }),
+    ).toBeNull();
+
+    let requestId = 0;
+    await act(async () => {
+      requestId = armMatchingRequest();
+      await Promise.resolve();
+    });
+    noContinueDialog();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+
+    tileState.setOrigin("registry");
+    await act(async () => {
+      rendered.rerender(tileNode());
+      await Promise.resolve();
+    });
+    noContinueDialog();
+  });
+
+  it("consumes a request delivered while the tile has no toolbar", async () => {
+    tileState.setReachability("unreachable");
+    const rendered = renderTile();
+    expect(
+      screen.queryByTestId("terminal-agent-pre-launch-toolbar"),
+    ).toBeNull();
+
+    let requestId = 0;
+    await act(async () => {
+      requestId = armMatchingRequest();
+      await Promise.resolve();
+    });
+    noContinueDialog();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+
+    tileState.setReachability("reachable");
+    clientSlot.set(buildClient("terminal.create", "RPC_ERROR").client);
+    await act(async () => {
+      rendered.rerender(tileNode());
+      await Promise.resolve();
+    });
+    noContinueDialog();
+  });
+
+  it("does not auto-open after a failed folder binding later resolves", async () => {
+    tileState.setBindingState("error");
+    const rendered = renderWithClient();
+    expect(
+      screen.getByRole("button", { name: "Fork" }).hasAttribute("disabled"),
+    ).toBe(true);
+
+    let requestId = 0;
+    await act(async () => {
+      requestId = armMatchingRequest();
+      await Promise.resolve();
+    });
+    noContinueDialog();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+
+    tileState.setBindingState("success");
+    await act(async () => {
+      rendered.rerender(tileNode());
+      await Promise.resolve();
+    });
+    noContinueDialog();
+  });
+
+  it("holds a request through pending binding and opens when binding succeeds", async () => {
+    tileState.setBindingState("pending");
+    clientSlot.set(buildClient("terminal.create", "RPC_ERROR").client);
+    const requestId = armMatchingRequest();
+    const rendered = renderStrictTile();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByRole("button", { name: "Fork" }).hasAttribute("disabled"),
+    ).toBe(true);
+
+    noContinueDialog();
+
+    await act(async () => {
+      tileState.setBindingState("success");
+      rendered.rerender(strictTileNode());
+      await Promise.resolve();
+    });
+    expect(
+      await screen.findByRole("heading", {
+        name: "Continue under another profile",
+      }),
+    ).toBeTruthy();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+  });
+
+  it("clears a pending request when binding fails and never opens on later success", async () => {
+    tileState.setBindingState("pending");
+    const rendered = renderWithClient();
+    let requestId = 0;
+    await act(async () => {
+      requestId = armMatchingRequest();
+      await Promise.resolve();
+    });
+    noContinueDialog();
+
+    await act(async () => {
+      tileState.setBindingState("error");
+      rendered.rerender(tileNode());
+      await Promise.resolve();
+    });
+    noContinueDialog();
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+
+    await act(async () => {
+      tileState.setBindingState("success");
+      rendered.rerender(tileNode());
+      await Promise.resolve();
+    });
+    noContinueDialog();
+  });
+
+  it("clears a pending request when the tile unmounts before binding settles", async () => {
+    tileState.setBindingState("pending");
+    const rendered = renderWithClient();
+    let requestId = 0;
+    await act(async () => {
+      requestId = armMatchingRequest();
+      await Promise.resolve();
+    });
+    noContinueDialog();
+
+    await act(async () => {
+      rendered.unmount();
+      await Promise.resolve();
+    });
+    expect(consumeTerminalAgentContinueProfile(requestId)).toBe(false);
+    await act(async () => {
+      tileState.setBindingState("success");
+      renderTile();
+      await Promise.resolve();
+    });
+    noContinueDialog();
   });
 });
