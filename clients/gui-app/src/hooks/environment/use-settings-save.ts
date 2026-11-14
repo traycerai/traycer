@@ -8,6 +8,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import type { EnvironmentCloudSource } from "@traycer-clients/shared/environment/environment-cloud";
 import {
@@ -29,13 +30,20 @@ import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-co
 import { environmentQueryKeys } from "@/lib/query-keys";
 import { useSettingsSaveCoordinator } from "@/providers/settings-save-coordinator-context";
 
-/** One save sent to a host, as the coordinator follows it. */
-export interface PendingSettingsSave {
-  /** The host answered the save. */
-  readonly answered: () => void;
-  /** The save failed, or nothing answered it. */
-  readonly failed: () => void;
-}
+/** One save about to be sent to a host, as the coordinator follows it. */
+export type PendingSettingsSave =
+  | {
+      readonly kind: "send";
+      /** The host answered the save. */
+      readonly answered: () => void;
+      /** The save failed, or nothing answered it. */
+      readonly failed: () => void;
+    }
+  /**
+   * The account changed while the save was prepared: it is not sent, and
+   * ends as an aborted request, which no notice reports.
+   */
+  | { readonly kind: "abandoned"; readonly method: string };
 
 /**
  * Called just before a save is sent, with the host it is sent on: remembers
@@ -52,6 +60,14 @@ export async function sendFollowedSave<T>(
   pending: PendingSettingsSave,
   send: () => Promise<T>,
 ): Promise<T> {
+  if (pending.kind === "abandoned") {
+    throw new HostRequestAbortedError({
+      message: "The account changed before the save was sent",
+      requestId: crypto.randomUUID(),
+      method: pending.method,
+      mayHaveDispatched: false,
+    });
+  }
   let answer: T;
   try {
     answer = await send();
@@ -64,6 +80,7 @@ export async function sendFollowedSave<T>(
 }
 
 const NOTHING_TO_FOLLOW: PendingSettingsSave = {
+  kind: "send",
   answered: () => undefined,
   failed: () => undefined,
 };
@@ -146,10 +163,14 @@ interface SaveScope {
   readonly viewerId: string;
 }
 
-/** Remembers `save` if it maps to a proposal; answers how to follow it. */
+/**
+ * Remembers `save`, made for `accountId`, if it maps to a proposal; answers
+ * how to follow it.
+ */
 async function followSave(
   scope: SaveScope,
   save: SettingsSave,
+  accountId: string,
 ): Promise<PendingSettingsSave> {
   const { coordinator, queryClient, source, environmentId, hostId } = scope;
   const rowsOf = async (kind: string, key: string) =>
@@ -175,14 +196,20 @@ async function followSave(
     address?.kind === edit.kind && address.key === edit.key
       ? baseRows
       : await rowsOf(edit.kind, edit.key);
-  const ticket = await coordinator.begin(mapping, {
+  const beginning = await coordinator.begin(mapping, {
+    accountId,
     environmentId,
     hostId,
     sharingGeneration: host.sharingGeneration,
     expectedLiveRevision: liveRowAt(editRows, edit.os)?.revision ?? null,
   });
-  if (ticket === null) return NOTHING_TO_FOLLOW;
+  if (beginning.kind === "account_changed") {
+    return { kind: "abandoned", method: save.method };
+  }
+  if (beginning.kind === "nothing_to_remember") return NOTHING_TO_FOLLOW;
+  const { ticket } = beginning;
   return {
+    kind: "send",
     answered: () => {
       void coordinator.settle(ticket, true);
     },
@@ -252,13 +279,24 @@ export function useSettingsSave(
   });
 
   return useCallback(
-    async (save: SettingsSave, sentOn: string | null) => {
+    async (
+      save: SettingsSave,
+      sentOn: string | null,
+    ): Promise<PendingSettingsSave> => {
       if (scope === null || sentOn !== scope.hostId) return NOTHING_TO_FOLLOW;
+      const accountId = scope.coordinator.account();
+      if (accountId === null) return NOTHING_TO_FOLLOW;
+      let pending: PendingSettingsSave;
       try {
-        return await followSave(scope, save);
+        pending = await followSave(scope, save, accountId);
       } catch {
-        return NOTHING_TO_FOLLOW;
+        pending = NOTHING_TO_FOLLOW;
       }
+      if (scope.coordinator.account() === accountId) return pending;
+      // Made for an account that is no longer here: it is not sent, and its
+      // record, if remembered in that account's memory, is not out.
+      if (pending.kind === "send") pending.failed();
+      return { kind: "abandoned", method: save.method };
     },
     [scope],
   );
