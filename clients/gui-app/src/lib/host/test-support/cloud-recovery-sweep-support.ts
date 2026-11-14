@@ -1,5 +1,7 @@
 import { expect, vi } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
+import type { RpcErrorCode } from "@traycer/protocol/framework";
+import { sweepTransientCloudFailures } from "@/lib/host/cloud-recovery-sweep";
 import {
   ScriptedRead,
   hostFailure,
@@ -36,9 +38,12 @@ export async function settled(client: QueryClient): Promise<void> {
   await waitUntil(() => expect(client.isFetching()).toBe(0));
 }
 
-/** One macrotask turn: what a settled attempt sets going has run. */
-export function turn(): Promise<void> {
-  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+/**
+ * One macrotask turn on the fake clock: what a settled attempt sets going has
+ * run. The calling file has `vi.useFakeTimers()` installed.
+ */
+export async function turn(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(0);
 }
 
 /** Lets what a settled attempt sets going run, and the cache go quiet. */
@@ -55,7 +60,7 @@ export async function failedRead(
     readonly hostId: string;
     readonly method: string;
     readonly name: string;
-    readonly code: Parameters<typeof hostFailure>[0];
+    readonly code: RpcErrorCode;
   },
 ): Promise<ScriptedRead> {
   const { hostId, method, name, code } = spec;
@@ -94,28 +99,73 @@ export async function dataHoldingFailedRead(
   return read;
 }
 
+/** A read stranded by a transient failure, as the in-flight cases build it. */
+export interface StrandedRead {
+  readonly label: string;
+  readonly method: string;
+  /** Asks the read has had when it is stranded. */
+  readonly base: number;
+  /** What the stranded read holds. */
+  readonly data: string | undefined;
+  /** The stranded read's key. */
+  readonly queryKey: readonly unknown[];
+  /** The transient failure its later asks are refused with. */
+  readonly refused: () => Error;
+  readonly strand: (client: QueryClient) => Promise<ScriptedRead>;
+}
+
+const STRANDED_NAME = "o";
+
 /** The stranded reads the in-flight cases run over: with data, and without. */
-export const STRANDED_READS = [
+export const STRANDED_READS: readonly StrandedRead[] = [
   {
     label: "holds data",
     method: "bot.thread.list",
-    /** Asks the read has had when it is stranded. */
     base: 2,
-    /** What the stranded read holds. */
-    data: "first" as string | undefined,
-    strand: (client: QueryClient) => dataHoldingFailedRead(client, "o"),
+    data: "first",
+    queryKey: hostReadKey(HOST, "bot.thread.list", STRANDED_NAME),
+    refused: () => hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.thread.list"),
+    strand: (client) => dataHoldingFailedRead(client, STRANDED_NAME),
   },
   {
     label: "holds no data",
     method: "bot.list",
     base: 1,
-    data: undefined as string | undefined,
-    strand: (client: QueryClient) =>
+    data: undefined,
+    queryKey: hostReadKey(HOST, "bot.list", STRANDED_NAME),
+    refused: () => hostFailure("E_CLOUD_REQUEST_REFUSED", "bot.list"),
+    strand: (client) =>
       failedRead(client, {
         hostId: HOST,
         method: "bot.list",
-        name: "o",
+        name: STRANDED_NAME,
         code: "E_CLOUD_REQUEST_REFUSED",
       }),
   },
 ];
+
+/** The stranded read with a sweep's own re-ask asking `answer`, once that ask has started. */
+export async function ownReAsk(
+  client: QueryClient,
+  variant: StrandedRead,
+  answer: () => Promise<string>,
+): Promise<{ read: ScriptedRead; first: Promise<void> }> {
+  const read = await variant.strand(client);
+  read.answer = answer;
+  const first = sweepTransientCloudFailures(client, HOST);
+  await waitUntil(() => expect(read.calls).toBe(variant.base + 1));
+  return { read, first };
+}
+
+/** The stranded read with a refetch from elsewhere asking `answer`, once that ask has started. */
+export async function refetchElsewhere(
+  client: QueryClient,
+  variant: StrandedRead,
+  answer: () => Promise<string>,
+): Promise<{ read: ScriptedRead; retry: Promise<void> }> {
+  const read = await variant.strand(client);
+  read.answer = answer;
+  const retry = client.refetchQueries({ queryKey: read.queryKey, exact: true });
+  await waitUntil(() => expect(read.calls).toBe(variant.base + 1));
+  return { read, retry };
+}

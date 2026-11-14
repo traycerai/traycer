@@ -10,7 +10,10 @@ import {
   hostFailure,
   hostReadKey,
 } from "@/lib/host/test-support/cloud-failure-reads";
-import { HOST } from "@/lib/host/test-support/cloud-recovery-sweep-support";
+import {
+  HOST,
+  STRANDED_READS,
+} from "@/lib/host/test-support/cloud-recovery-sweep-support";
 import type {
   HeldTimer,
   HeldTimers,
@@ -35,7 +38,7 @@ import { createAppQueryClient } from "@/lib/query-client";
  * and anything it hands to `notifyManager`'s scheduler fails the sequence.
  */
 
-export const ALL_EVENTS = [
+const ALL_EVENTS = [
   "ring",
   "startElsewhere",
   "startInsideError",
@@ -55,11 +58,17 @@ export const ALL_EVENTS = [
 ] as const;
 export type EventName = (typeof ALL_EVENTS)[number];
 
-export interface Pass {
+interface Pass {
   readonly alphabet: readonly EventName[];
   readonly depth: number;
   /** The events the first step may take, or `null` for all: a slice of the walk. */
   readonly firstEvents: readonly EventName[] | null;
+  /**
+   * Events a sequence of this pass must take one of, or `null` for none: at the
+   * pass's last step, a sequence that has taken none of them is offered only
+   * these, so it does not repeat a sequence another pass walks.
+   */
+  readonly requires: readonly EventName[] | null;
 }
 
 /**
@@ -81,15 +90,22 @@ const SLICE_A_EVENTS: Record<PassKind, readonly EventName[]> = {
   lifecycle: ["ring"],
 };
 
-/** The first events of a slice, or `null` for the whole walk. */
-export function firstEventsOf(
-  slice: Slice,
+/** The first events of slice `a` or `b`. */
+export function eventsOfSlice(
+  slice: "a" | "b",
   kind: PassKind,
-): readonly EventName[] | null {
-  if (slice === "all") return null;
+): readonly EventName[] {
   return slice === "a"
     ? SLICE_A_EVENTS[kind]
     : ALL_EVENTS.filter((event) => !SLICE_A_EVENTS[kind].includes(event));
+}
+
+/** The first events of a slice, or `null` for the whole walk. */
+function firstEventsOf(
+  slice: Slice,
+  kind: PassKind,
+): readonly EventName[] | null {
+  return slice === "all" ? null : eventsOfSlice(slice, kind);
 }
 
 export interface Variant {
@@ -98,10 +114,13 @@ export interface Variant {
   readonly holdsData: boolean;
 }
 
-export const VARIANTS: readonly Variant[] = [
-  { label: "holds data", method: "bot.thread.list", holdsData: true },
-  { label: "holds no data", method: "bot.list", holdsData: false },
-];
+export const VARIANTS: readonly Variant[] = STRANDED_READS.map(
+  ({ label, method, data }) => ({
+    label,
+    method,
+    holdsData: data !== undefined,
+  }),
+);
 
 /** The events every finding so far needs beyond depth 4. */
 const CORE_EVENTS: readonly EventName[] = [
@@ -139,15 +158,22 @@ export function passFor(
       ),
       depth: 4,
       firstEvents,
+      requires: null,
     };
   }
   if (kind === "core") {
-    return { alphabet: forPolicy(CORE_EVENTS, retry), depth: 5, firstEvents };
+    return {
+      alphabet: forPolicy(CORE_EVENTS, retry),
+      depth: 5,
+      firstEvents,
+      requires: null,
+    };
   }
   return {
     alphabet: forPolicy([...CORE_EVENTS, "unobserve", "gc"], retry),
     depth: 4,
     firstEvents,
+    requires: ["unobserve", "gc"],
   };
 }
 
@@ -159,10 +185,10 @@ const TRIES_UNDER: Record<RetryPolicy, number> = { off: 1, app: 2 };
 
 /**
  * The steps the tail of a sequence may take to answer every try and backoff
- * left. Across all 31,293 sequences of the walk the most any tail uses is 2
- * (6 under the app's retry policy, whose tries each add a backoff to end), so
- * 24 is four times that: a sweep that never stops asking fails the walk
- * instead of being cut short.
+ * left. Fails loudly; measured maximum 6: across all 31,293 sequences of the
+ * walk no tail uses more than 2, or 6 under the app's retry policy, whose
+ * tries each add a backoff to end. A sweep that never stops asking runs past
+ * it and fails the walk instead of being cut short.
  */
 const SETTLE_STEPS = 24;
 
@@ -190,7 +216,7 @@ interface HeldTry {
 }
 
 /** One attempt of the read: a first try, and under retries the tries after it. */
-interface Attempt {
+export interface Attempt {
   readonly id: number;
   readonly readId: number;
   readonly start: number;
@@ -422,7 +448,7 @@ export class Rig {
   /** Answers the try `attempt` has asked; a failed try before the last waits for its backoff. */
   private settle(attempt: Attempt, kind: AnswerKind): void {
     const held = attempt.current;
-    if (held === null) return;
+    if (held === null) throw new Error("the attempt has no try waiting");
     attempt.current = null;
     if (kind === "success" || attempt.tries >= TRIES_UNDER[this.retry]) {
       attempt.end = {
@@ -498,13 +524,13 @@ export class Rig {
     });
   }
 
-  ringNow(): void {
+  private ringNow(): void {
     const query = this.current();
-    const state = query?.state;
     const readId = query === undefined ? null : this.readIdOf(query);
     let arrival: RingRecord["arrival"] = "none";
     let attempt: number | null = null;
-    if (query !== undefined && state !== undefined) {
+    if (query !== undefined) {
+      const { state } = query;
       if (state.fetchStatus === "fetching") {
         const inFlight = this.attempts.findLast(
           (a) => a.readId === readId && a.end === null,
@@ -685,7 +711,8 @@ export class Rig {
   private answerOldest(event: EventName, kind: AnswerKind): void {
     this.within(`test:${event}`, () => {
       const oldest = this.pending().at(0);
-      if (oldest !== undefined) this.settle(oldest, kind);
+      if (oldest === undefined) throw new Error("no try is pending");
+      this.settle(oldest, kind);
     });
   }
 
@@ -756,32 +783,14 @@ export class Rig {
     );
   }
 
-  dRing(): void {
-    this.trace.push("ring");
-    this.ringNow();
-  }
-
-  dStartElsewhere(): void {
-    this.trace.push("startElsewhere");
-    this.startElsewhere("startElsewhere");
-  }
-
-  async dBarrier(): Promise<void> {
-    await this.barrier();
-  }
-
-  /** Settles what the check just asked, as a transient failure, until nothing waits. */
-  async finishTransiently(): Promise<void> {
-    await this.settleAll(() => null);
-  }
-
   /**
    * A backoff is expected while its attempt waits for it, and after that
    * attempt was cancelled: a retryer already settled has nothing left to
    * retry, so firing it does nothing and it is never fired.
    */
   private backoffIsExpected(timer: HeldTimer): boolean {
-    const owner = this.attempts.at(this.backoffTimers.get(timer) ?? -1);
+    const id = this.backoffTimers.get(timer);
+    const owner = id === undefined || id < 0 ? undefined : this.attempts[id];
     if (owner === undefined) return false;
     return (
       (owner.backoff && owner.end === null) || owner.end?.kind === "aborted"
@@ -790,8 +799,8 @@ export class Rig {
 
   /** (G) Nothing is held or scheduled that the harness does not expect. */
   unexpectedHold(): string | null {
-    if (this.timers.scheduled.length > 0) {
-      return `(G) notifyManager was handed ${this.timers.scheduled.length} callbacks`;
+    if (this.timers.scheduledCount > 0) {
+      return `(G) notifyManager was handed ${this.timers.scheduledCount} callbacks`;
     }
     for (const timer of this.timers.pending()) {
       const source = sourceOf(timer);
@@ -832,7 +841,7 @@ function checkAborts({ attempts, rings }: Rig): string | null {
 
 /**
  * (F) A ring never ends an attempt the sweep started itself, in flight or in
- * its retry backoff, and a ring that met one is owed to it.
+ * its retry backoff.
  */
 function checkOwnAttempts({ attempts }: Rig): string | null {
   for (const attempt of attempts) {
@@ -939,22 +948,30 @@ export function checkAll(rig: Rig): string | null {
   );
 }
 
-interface Failure {
-  readonly invariant: string;
-  readonly sequence: string;
-  readonly detail: string;
-}
-
-export interface Counts {
+interface Counts {
   sequences: number;
-  failures: Map<string, { first: Failure; total: number; sequences: string[] }>;
-  skippedD: number;
+  /** By invariant: the first failure's detail, and every failing sequence. */
+  failures: Map<string, { detail: string; sequences: string[] }>;
 }
 
-interface Setting {
+export interface Setting {
   readonly variant: Variant;
   readonly retry: RetryPolicy;
   readonly timers: HeldTimers;
+}
+
+/** Runs `body` on a rig whose read has been stranded, and disposes the rig after. */
+export async function onStrandedRig<T>(
+  setting: Setting,
+  body: (rig: Rig) => T | Promise<T>,
+): Promise<T> {
+  const rig = new Rig(setting.variant, setting.retry, setting.timers);
+  try {
+    await rig.strand();
+    return await body(rig);
+  } finally {
+    rig.dispose();
+  }
 }
 
 async function runSequence(
@@ -963,35 +980,36 @@ async function runSequence(
   pass: Pass,
   counts: Counts,
 ): Promise<number[]> {
-  const rig = new Rig(setting.variant, setting.retry, setting.timers);
   const widths: number[] = [];
-  const note = (found: string | null): void => {
-    if (found === null) return;
-    const invariant = found.slice(0, 3);
-    const entry = counts.failures.get(invariant);
-    if (entry !== undefined) {
-      entry.total += 1;
-      entry.sequences.push(rig.trace.join(" > "));
-      return;
-    }
-    counts.failures.set(invariant, {
-      first: {
-        invariant,
-        sequence: rig.trace.join(" > "),
+  await onStrandedRig(setting, async (rig) => {
+    const note = (found: string | null): void => {
+      if (found === null) return;
+      const invariant = found.slice(0, 3);
+      const sequence = rig.trace.join(" > ");
+      const entry = counts.failures.get(invariant);
+      if (entry !== undefined) {
+        entry.sequences.push(sequence);
+        return;
+      }
+      counts.failures.set(invariant, {
         detail: `${found}\n    ${rig.describe()}`,
-      },
-      total: 1,
-      sequences: [rig.trace.join(" > ")],
-    });
-  };
-  try {
-    await rig.strand();
+        sequences: [sequence],
+      });
+    };
     let failed = false;
     for (let step = 0; step < pass.depth && !failed; step += 1) {
+      const required =
+        step === pass.depth - 1 &&
+        pass.requires !== null &&
+        !pass.requires.some((event) => rig.trace.includes(event))
+          ? pass.requires
+          : null;
       const options = rig
         .enabled(pass.alphabet)
         .filter(
-          (event) => step > 0 || pass.firstEvents?.includes(event) !== false,
+          (event) =>
+            (step > 0 || pass.firstEvents?.includes(event) !== false) &&
+            (required === null || required.includes(event)),
         );
       widths.push(options.length);
       const event = options.at(choices[step] ?? 0);
@@ -1012,60 +1030,48 @@ async function runSequence(
       }
     }
     if (!failed) {
-      note(await checkClean(rig, counts));
+      note(await checkClean(rig));
     }
-  } finally {
-    rig.dispose();
-  }
+  });
   counts.sequences += 1;
   return widths;
 }
 
 /** (D) Nothing is left claimed and nothing is left owed. */
-async function checkClean(rig: Rig, counts: Counts): Promise<string | null> {
-  if (!rig.readStrandedNow()) {
-    counts.skippedD += 1;
-    return null;
-  }
+async function checkClean(rig: Rig): Promise<string | null> {
+  if (!rig.readStrandedNow()) return null;
   const before = rig.attempts.length;
-  rig.dRing();
-  await rig.dBarrier();
+  await rig.run("ring");
   if (rig.attempts.length !== before + 1) {
-    return `(D1) a fresh ring made ${rig.attempts.length - before} asks, not 1`;
+    return `(D) a fresh ring made ${rig.attempts.length - before} asks, not 1`;
   }
-  await rig.finishTransiently();
+  await rig.settleAll(() => null);
   if (rig.attempts.length !== before + 1) {
-    return `(D1) the fresh ring's ask failed and ${rig.attempts.length - before - 1} more asks followed`;
-  }
-  rig.dStartElsewhere();
-  await rig.dBarrier();
-  await rig.finishTransiently();
-  if (rig.attempts.length !== before + 2) {
-    return `(D2) a refetch that failed with no ring was followed by ${rig.attempts.length - before - 2} asks`;
+    return `(D) the fresh ring's ask failed and ${rig.attempts.length - before - 1} more asks followed`;
   }
   return null;
 }
 
 export async function explore(setting: Setting, pass: Pass): Promise<Counts> {
-  const counts: Counts = { sequences: 0, failures: new Map(), skippedD: 0 };
+  const counts: Counts = { sequences: 0, failures: new Map() };
   let choices: number[] = [];
   for (;;) {
     const widths = await runSequence(setting, choices, pass, counts);
     const taken = widths.map((_, step) => choices[step] ?? 0);
     let step = widths.length - 1;
-    while (step >= 0 && (taken[step] ?? 0) + 1 >= (widths[step] ?? 0)) {
+    while (step >= 0 && taken[step] + 1 >= widths[step]) {
       step -= 1;
     }
     if (step < 0) return counts;
-    choices = [...taken.slice(0, step), (taken[step] ?? 0) + 1];
+    choices = [...taken.slice(0, step), taken[step] + 1];
   }
 }
 
 export function describeFailures(counts: Counts): string {
   return [...counts.failures.values()]
     .map(
-      ({ first, total, sequences }) =>
-        `${first.detail}\n    first sequence: ${first.sequence}\n    failing sequences: ${total} of ${counts.sequences}\n      ${sequences.slice(0, 400).join("\n      ")}`,
+      ({ detail, sequences }) =>
+        `${detail}\n    first sequence: ${sequences[0]}\n    failing sequences: ${sequences.length} of ${counts.sequences}\n      ${sequences.slice(0, 400).join("\n      ")}`,
     )
     .join("\n");
 }

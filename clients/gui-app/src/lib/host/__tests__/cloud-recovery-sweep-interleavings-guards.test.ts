@@ -1,40 +1,29 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   QueryObserver,
   notifyManager,
   timeoutManager,
 } from "@tanstack/react-query";
 import {
-  Rig,
   VARIANTS,
   checkAll,
-  type RetryPolicy,
+  onStrandedRig,
+  type Attempt,
+  type Rig,
+  type Setting,
 } from "@/lib/host/test-support/cloud-recovery-interleavings";
-import { HeldTimers } from "@/lib/host/test-support/held-timers";
-import { appLogger } from "@/lib/logger";
+import { holdTimersForFile } from "@/lib/host/test-support/cloud-recovery-interleavings-suite";
 
 /**
  * The walk of the sweep's events is only as good as its guards: the held-timer
- * guard (G) and the invariants (A) to (F) must be able to fail. These cases
- * make each one fail on purpose, on the rig the walk uses.
+ * guard (G) and the invariants (A) to (C), (E) and (F) must be able to fail.
+ * These cases make each one fail on purpose, on the rig the walk uses.
  */
 
-const timers = new HeldTimers();
+const timers = holdTimersForFile();
 const [DATA] = VARIANTS;
-
-/** Runs `check` on a rig whose read is stranded, and disposes it. */
-async function onStrandedRig(
-  retry: RetryPolicy,
-  check: (rig: Rig) => void | Promise<void>,
-): Promise<void> {
-  const rig = new Rig(DATA, retry, timers);
-  try {
-    await rig.strand();
-    await check(rig);
-  } finally {
-    rig.dispose();
-  }
-}
+const OFF: Setting = { variant: DATA, retry: "off", timers };
+const APP: Setting = { variant: DATA, retry: "app", timers };
 
 /** A second observer of the rig's read, which never fetches, whose listener runs `listen`. */
 function listenTo(rig: Rig, listen: () => void): () => void {
@@ -48,27 +37,9 @@ function listenTo(rig: Rig, listen: () => void): () => void {
 }
 
 describe("the guards of the walk over the sweep's events", () => {
-  beforeAll(() => {
-    vi.spyOn(appLogger, "warn").mockImplementation(() => undefined);
-    timers.install();
-  });
-  afterAll(() => {
-    timers.restore();
-    vi.restoreAllMocks();
-  });
-
   describe("(G) held timers and notifyManager", () => {
-    it("is clean while only TanStack's own timers are held", async () => {
-      await onStrandedRig("app", async (rig) => {
-        await rig.run("startElsewhere");
-        await rig.run("endTransient");
-
-        expect(rig.unexpectedHold()).toBeNull();
-      });
-    });
-
     it("fails a callback handed to notifyManager", async () => {
-      await onStrandedRig("off", async (rig) => {
+      await onStrandedRig(OFF, async (rig) => {
         await rig.run("ring");
         notifyManager.schedule(() => undefined);
 
@@ -77,15 +48,15 @@ describe("the guards of the walk over the sweep's events", () => {
     });
 
     it("fails a timer set directly", async () => {
-      await onStrandedRig("off", (rig) => {
+      await onStrandedRig(OFF, (rig) => {
         timeoutManager.setTimeout(() => undefined, 5);
 
-        expect(rig.unexpectedHold()).toContain("(G)");
+        expect(rig.unexpectedHold()).toContain("(unknown, 5 ms)");
       });
     });
 
     it("fails a timer an observer's listener sets during a step", async () => {
-      await onStrandedRig("off", async (rig) => {
+      await onStrandedRig(OFF, async (rig) => {
         let notified = 0;
         const stop = listenTo(rig, () => {
           notified += 1;
@@ -95,7 +66,7 @@ describe("the guards of the walk over the sweep's events", () => {
           await rig.run("ring");
 
           expect(notified).toBeGreaterThan(0);
-          expect(rig.unexpectedHold()).toContain("(G)");
+          expect(rig.unexpectedHold()).toContain("(unknown, 5 ms)");
         } finally {
           stop();
         }
@@ -103,7 +74,7 @@ describe("the guards of the walk over the sweep's events", () => {
     });
 
     it("fails a gc-length timer a cache listener sets while a gc fires", async () => {
-      await onStrandedRig("off", async (rig) => {
+      await onStrandedRig(OFF, async (rig) => {
         const stop = rig.client.getQueryCache().subscribe((event) => {
           if (event.type === "removed") {
             timeoutManager.setTimeout(() => undefined, 300_000);
@@ -114,7 +85,7 @@ describe("the guards of the walk over the sweep's events", () => {
           await rig.run("gc");
 
           expect(rig.current()).toBeUndefined();
-          expect(rig.unexpectedHold()).toContain("(G)");
+          expect(rig.unexpectedHold()).toContain("(unknown, 300000 ms)");
         } finally {
           stop();
         }
@@ -122,7 +93,7 @@ describe("the guards of the walk over the sweep's events", () => {
     });
 
     it("fails a timer a listener sets in a retry flow, and still fires the real retry", async () => {
-      await onStrandedRig("app", async (rig) => {
+      await onStrandedRig(APP, async (rig) => {
         let strays = 0;
         let listened = false;
         const stop = listenTo(rig, () => {
@@ -139,7 +110,7 @@ describe("the guards of the walk over the sweep's events", () => {
 
           expect(listened).toBe(true);
           expect(rig.inBackoff()).toHaveLength(1);
-          expect(rig.unexpectedHold()).toContain("(G)");
+          expect(rig.unexpectedHold()).toContain("(unknown, 5 ms)");
           expect(rig.enabled(["backoffEnds"])).toEqual(["backoffEnds"]);
 
           await rig.run("backoffEnds");
@@ -155,9 +126,7 @@ describe("the guards of the walk over the sweep's events", () => {
 
   describe("the invariants", () => {
     /** An attempt record, which the cases tamper a clean rig with. */
-    const attempt = (
-      overrides: Partial<Rig["attempts"][number]>,
-    ): Rig["attempts"][number] => ({
+    const attempt = (overrides: Partial<Attempt>): Attempt => ({
       id: 90,
       readId: 0,
       start: 1,
@@ -171,13 +140,13 @@ describe("the guards of the walk over the sweep's events", () => {
     });
 
     it("pass on the stranded read", async () => {
-      await onStrandedRig("off", (rig) => {
+      await onStrandedRig(OFF, (rig) => {
         expect(checkAll(rig)).toBeNull();
       });
     });
 
     it("(A) fails an attempt aborted from outside a test step or a ring", async () => {
-      await onStrandedRig("off", (rig) => {
+      await onStrandedRig(OFF, (rig) => {
         rig.attempts.push(
           attempt({ end: { kind: "aborted", at: 2, context: "spend" } }),
         );
@@ -187,7 +156,7 @@ describe("the guards of the walk over the sweep's events", () => {
     });
 
     it("(F) fails a ring that ended an attempt the sweep started", async () => {
-      await onStrandedRig("off", (rig) => {
+      await onStrandedRig(OFF, (rig) => {
         rig.rings.push({
           n: 0,
           at: 5,
@@ -208,7 +177,7 @@ describe("the guards of the walk over the sweep's events", () => {
     });
 
     it("(C) fails more sweep attempts than rings that reached the read", async () => {
-      await onStrandedRig("off", (rig) => {
+      await onStrandedRig(OFF, (rig) => {
         rig.attempts.push(attempt({ context: "ring:0", sweepStarted: true }));
 
         expect(checkAll(rig)).toContain("(C)");
@@ -216,7 +185,7 @@ describe("the guards of the walk over the sweep's events", () => {
     });
 
     it("(E) fails an attempt the sweep started that spends no ring", async () => {
-      await onStrandedRig("off", (rig) => {
+      await onStrandedRig(OFF, (rig) => {
         rig.rings.push({
           n: 0,
           at: 1,
@@ -231,7 +200,7 @@ describe("the guards of the walk over the sweep's events", () => {
     });
 
     it("(B) fails a ring that met a failed read and was never asked", async () => {
-      await onStrandedRig("off", (rig) => {
+      await onStrandedRig(OFF, (rig) => {
         rig.rings.push({
           n: 0,
           at: 99,

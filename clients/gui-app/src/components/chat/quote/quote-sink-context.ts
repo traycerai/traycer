@@ -15,9 +15,10 @@ export type QuoteSink = (
 
 /**
  * The quote sink of the transcripts below. A task chat's draft by default; a
- * bot's channel puts the quote in its box that is open
- * (`bot-channel-view.tsx`), and `null` offers no quote at all, for a view
- * with no box to put it in (a bot's session).
+ * bot's channel puts the quote in the box of the conversation it was selected
+ * in, the channel's or the open thread's (`bot-channel-view.tsx`), and `null`
+ * offers no quote at all, for a view with no box to put it in (a bot's
+ * session).
  */
 export const QuoteSinkContext = createContext<QuoteSink | null>(
   quoteSnapshotIntoDraft,

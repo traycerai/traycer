@@ -864,6 +864,7 @@ export const HOST_STREAM_RPC_ROUTES = {
   "host.notifications.subscribe": "target-host",
   "host.sandbox.egress.subscribe": "target-host",
   "host.tunnel.open": "target-host",
+  "managedCommand.subscribeBotOutput": "target-host",
   "managedCommand.subscribeOutput": "target-host",
   "migration.run": "target-host",
   "notifications.subscribe": "target-host",

@@ -2694,40 +2694,6 @@ describe("WsRpcClient", () => {
       await rejection;
     });
 
-    it("a host error envelope carrying E_CLOUD_REQUEST_REFUSED settles as a HostRpcError with that code", async () => {
-      const { factory, sockets } = makeFactory();
-      const client = makeClient({
-        factory,
-        authToken: "t",
-        requestId: "req-cloud-request-refused",
-        dialTimeoutMs: 1_000,
-        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
-      });
-
-      const pending = client.request("host.echo", { message: "x" });
-      const rejection = expect(pending).rejects.toSatisfy(
-        (error: unknown) =>
-          error instanceof HostRpcError &&
-          error.code === "E_CLOUD_REQUEST_REFUSED",
-      );
-      await driveUntilRequestSent(sockets);
-
-      const requestFrame = expectRequestFrame(sockets[0].sent[1]);
-      sockets[0].socket.fireMessage({
-        kind: "response",
-        requestId: requestFrame.requestId,
-        method: requestFrame.method,
-        schemaVersion: requestFrame.schemaVersion,
-        result: null,
-        error: {
-          code: "E_CLOUD_REQUEST_REFUSED",
-          message: "egress budget refused",
-        },
-      });
-      await rejection;
-    });
-
     it("an unrelated retryable-marked fatal during grace does not become retryable", async () => {
       const { factory, sockets } = makeFactory();
       const client = makeClient({

@@ -39,11 +39,14 @@ describe("useManagedCommandOutputSession", () => {
     );
 
     const view = renderHook(() =>
-      useManagedCommandOutputSession({
-        epicId: "epic-1",
-        commandId: "command-1",
-        hostId: "sbx-host",
-      }),
+      useManagedCommandOutputSession(
+        {
+          target: { kind: "epic", epicId: "epic-1" },
+          commandId: "command-1",
+          hostId: "sbx-host",
+        },
+        null,
+      ),
     );
 
     expect(opened).toHaveBeenCalledTimes(1);

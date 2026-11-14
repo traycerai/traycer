@@ -11,7 +11,6 @@ export interface HeldTimer {
   readonly id: number;
   readonly delay: number;
   readonly callback: () => void;
-  /** `timeout` or `interval`. */
   readonly kind: "timeout" | "interval";
   /** Where it was set, to tell which TanStack module set it. */
   readonly stack: string;
@@ -24,8 +23,7 @@ export interface HeldTimer {
  * needs only the first few (a backoff needs about seven). The rest are kept so
  * that a listener's own frames cannot push TanStack's out of the stack: a
  * regression to searching every frame would then find them, and the guard case
- * that sets a gc-length timer from a cache listener while a gc fires (2b in
- * `...-interleavings-guards.test.ts`) fails.
+ * "fails a gc-length timer a cache listener sets while a gc fires" fails.
  */
 const STACK_FRAMES = 16;
 
@@ -69,13 +67,14 @@ function switchProvider(provider: TimeoutProvider): void {
 
 /**
  * Holds every timer TanStack sets (gc, observer staleness, retry backoff) and
- * fails on anything it hands to `notifyManager`'s scheduler, so a test fires
- * a timer only by naming it. `restore` puts back an equivalent of the default
- * provider and the default scheduler: files share a worker.
+ * counts what it hands to `notifyManager`'s scheduler, which the walk fails
+ * on, so a test fires a timer only by naming it. `restore` puts back an
+ * equivalent of the default provider and the default scheduler: files share a
+ * worker.
  */
 export class HeldTimers {
   readonly timers: HeldTimer[] = [];
-  readonly scheduled: string[] = [];
+  scheduledCount = 0;
   private nextId = 1;
 
   install(): void {
@@ -86,7 +85,7 @@ export class HeldTimers {
       clearInterval: (id) => this.clear(id),
     });
     notifyManager.setScheduler(() => {
-      this.scheduled.push("notifyManager");
+      this.scheduledCount += 1;
     });
   }
 
@@ -109,10 +108,9 @@ export class HeldTimers {
   /** Forgets every timer and scheduled callback, for the next run. */
   reset(): void {
     this.timers.length = 0;
-    this.scheduled.length = 0;
+    this.scheduledCount = 0;
   }
 
-  /** Timers set and neither cleared nor fired. */
   pending(): HeldTimer[] {
     return this.timers.filter((timer) => !timer.cleared && !timer.fired);
   }
