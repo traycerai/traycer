@@ -43,10 +43,15 @@ type AwaitLoginContext = { readonly hostId: string | null };
  * that window would take that request's "not signed in" for its own answer.
  * Aborting `signal` detaches this wait, so the next one is asked afresh.
  * `undefined` for a caller that only ever waits to the end.
+ *
+ * `readsProfileOutcome` is true only for a caller that reads the answer's
+ * `profileOutcome`: it alone has the list read again for an answer with no
+ * state that names a profile. Every other caller makes today's reads.
  */
 export type AwaitLoginVariables = {
   readonly request: AwaitLoginRequest;
   readonly signal: AbortSignal | undefined;
+  readonly readsProfileOutcome: boolean;
 };
 
 // The provider state a login echo carries. Named rather than inlined so the
@@ -57,6 +62,11 @@ type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
  * Drops `loginCapability` from a mutation state echo so an overlay cannot
  * narrow the cached capability. See the call site for why this one field is
  * different from every other field on the echo.
+ *
+ * The echo's rows are the frozen profile shape, so a cached row keeps every
+ * field the echo does not carry (the list's own projection fields, and any
+ * a later list answer adds) and takes the echo's value for every field it
+ * does, except `enabled` and `launchCommand`, which only the list decides.
  */
 function withoutLoginCapability(
   state: AwaitLoginProviderState,
@@ -73,12 +83,18 @@ function withoutLoginCapability(
       return cached === undefined
         ? parsed
         : {
+            ...cached,
             ...parsed,
             enabled: cached.enabled,
             launchCommand: cached.launchCommand,
           };
     }),
   };
+}
+
+function awaitAnswerNamesProfile(data: AwaitLoginResponse): boolean {
+  const kind = data.profileOutcome?.kind;
+  return kind === "signed-in" || kind === "already-signed-in";
 }
 
 /**
@@ -92,7 +108,9 @@ function withoutLoginCapability(
  * cache, so the re-auth gate flips (and unmounts the banner) without a second
  * probe. A `null` state means nothing about the provider changed - nothing was
  * in flight to await, or the host could not install an approved sign-in - and
- * leaves the cache untouched.
+ * leaves the cache untouched, except that for a caller that reads outcomes
+ * (`readsProfileOutcome`) an answer whose `profileOutcome` names a profile has
+ * the list read again.
  */
 export function useProvidersAwaitLogin(): UseMutationResult<
   AwaitLoginResponse,
@@ -160,15 +178,34 @@ export function useProvidersAwaitLoginForClient(args: {
     options: {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
-      onSuccess: async (data: AwaitLoginResponse, _variables, context) => {
+      onSuccess: async (data: AwaitLoginResponse, variables, context) => {
+        if (context.hostId === null) return;
         const next = data.state;
-        if (next === null || context.hostId === null) return;
+        if (next === null) {
+          // A caller that reads outcomes looks a named profile up in the
+          // list, so for it alone the list is read again here first, whether
+          // or not the answer carries a state: this read is the one that
+          // lookup uses, and this handler finishes before the caller's own.
+          if (!variables.readsProfileOutcome || !awaitAnswerNamesProfile(data))
+            return;
+          await queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              context.hostId,
+              "providers.list",
+            ),
+          });
+          return;
+        }
         await commitAuthoritativeProvidersList({
           queryClient,
           hostId: context.hostId,
           update: (prev) => {
             if (prev === undefined) return prev;
+            // Every envelope key the echo does not replace (`offersSignIns`,
+            // `removedProfiles`, `native`, and any a later answer adds) is
+            // kept as cached.
             return {
+              ...prev,
               providers: prev.providers.map((p) =>
                 p.providerId === next.providerId
                   ? // Overlay the echo onto the cached entry rather than

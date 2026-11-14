@@ -4,6 +4,8 @@ import { usePersonalHostName } from "@/components/settings/personal/personal-pag
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
+import { AVAILABLE_ON_THIS_COMPUTER_TEXT } from "@/components/providers/profile-sync-copy";
+import { listOffersSignIns } from "@/components/providers/provider-profile-model";
 
 /**
  * "On <host> only, link to use everywhere": a profile this host signed in on
@@ -19,9 +21,8 @@ export function ProviderOnHostOnlyLine(props: {
   readonly providerId: string;
   readonly profileId: string;
 }): ReactNode {
-  const onHostOnly =
-    useProvidersList({ enabled: true, subscribed: true }).data?.onHostOnly ??
-    null;
+  const list = useProvidersList({ enabled: true, subscribed: true }).data;
+  const onHostOnly = list?.onHostOnly ?? null;
   const hostName = usePersonalHostName() ?? "this host";
   const linkSupported = useHostMethodSupport(props.hostId, "providers.link");
   const openLink = useProviderLinkDialogStore((state) => state.open);
@@ -32,6 +33,18 @@ export function ProviderOnHostOnlyLine(props: {
         entry.profileId === props.profileId,
     ) === true;
   if (!onlyHere) return null;
+  // A computer that offers sign-ins by itself: where the profile is, with
+  // nothing to press.
+  if (listOffersSignIns(list)) {
+    return (
+      <p
+        data-testid="profile-on-host-only"
+        className="min-w-0 text-ui-xs text-muted-foreground"
+      >
+        {AVAILABLE_ON_THIS_COMPUTER_TEXT}
+      </p>
+    );
+  }
   return (
     <div
       data-testid="profile-on-host-only"

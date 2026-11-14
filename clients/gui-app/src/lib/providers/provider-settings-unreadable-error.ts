@@ -22,6 +22,9 @@ export const PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX =
   "Provider settings could not be read";
 
 /** What the panel shows instead of the generic load-failure card - the host is fine, the file is not. */
+/** The Providers list could not be read, for any other reason. */
+export const PROVIDER_STATE_UNREADABLE_COPY = "Couldn't load provider state.";
+
 export const PROVIDER_SETTINGS_UNREADABLE_COPY =
   "Provider settings could not be read on this host. Retry.";
 

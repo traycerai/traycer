@@ -1299,8 +1299,8 @@ export const botTaskEntrySchema = lazySchema(() =>
 export type BotTaskEntry = z.infer<typeof botTaskEntrySchema>;
 
 /**
- * The task entry of `bot.subscribe@1.4`, frozen by hand: with the check-in
- * members' pause, stop and Run now (T92), and without the
+ * The task entry of `bot.subscribe@1.4`, frozen by hand: with pause, stop and
+ * Run now (T92), and without the
  * `@1.5` open surfaces, so a 1.4 peer's re-parse strips them.
  */
 const botTaskEntrySchemaV14 = lazySchema(() =>

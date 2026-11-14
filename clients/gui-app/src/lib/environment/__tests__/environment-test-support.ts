@@ -36,6 +36,7 @@ export interface EnvironmentClientFixture {
   readonly spine: HostClient<HostRpcRegistry>;
   /** A requester pinned to `hostId`. */
   readonly client: HostClient<HostRpcRegistry>;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
 }
 
 export function buildEnvironmentClient(options: {
@@ -43,21 +44,22 @@ export function buildEnvironmentClient(options: {
   readonly handlers: MockHandlerMap<HostRpcRegistry>;
 }): EnvironmentClientFixture {
   const entry = hostEntryFixture(options.hostId);
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `req-${options.hostId}`,
+    handlers: options.handlers,
+  });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
     schedulingPolicy: hostRpcSchedulingPolicy,
     findHostById: (hostId) => (hostId === entry.hostId ? entry : null),
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `req-${options.hostId}`,
-      handlers: options.handlers,
-    }),
+    messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return { spine, client: spine.createRequester(entry) };
+  return { spine, client: spine.createRequester(entry), messenger };
 }
 
 export function itemStatusFixture(

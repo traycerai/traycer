@@ -44,7 +44,10 @@ import {
   WsRpcClient,
 } from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
-import { isProfileLifecycleRejection } from "../../../shared/host-transport/profile-lifecycle-rejection";
+import {
+  isProfileLifecycleRejection,
+  isRemovedProfileRefusal,
+} from "../../../shared/host-transport/profile-lifecycle-rejection";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import {
@@ -862,7 +865,12 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
-  if (err.code === "E_CLOUD_UNREACHABLE") {
+  // The host's own egress budget refusing a cloud request is retryable like a
+  // cloud that gave no verdict, and the person's next step is the same.
+  if (
+    err.code === "E_CLOUD_UNREACHABLE" ||
+    err.code === "E_CLOUD_REQUEST_REFUSED"
+  ) {
     return cliError({
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
       message: `traycer: ${err.message}`,
@@ -931,11 +939,14 @@ function mapHostRpcError(err: HostRpcError): CliError {
   // registered, still being set up, wrong provider) is the person's own
   // selection and expected. The host sends it as `RPC_ERROR` with a fixed
   // message, so it is recognized by message; if the host later sends the same
-  // refusal as `E_INVALID_ARGUMENT`, the output below does not change.
+  // refusal as `E_INVALID_ARGUMENT`, the output below does not change. An
+  // account a person removed is refused with the unknown-id sentence under
+  // `removed-by-person`, and prints exactly what an unknown id prints.
   if (
     err.code === "E_INVALID_ARGUMENT" ||
     err.code === "MESSAGE_TOO_LARGE" ||
-    isProfileLifecycleRejection(err.code, err.message)
+    isProfileLifecycleRejection(err.code, err.message) ||
+    isRemovedProfileRefusal(err.code, err.message)
   ) {
     return cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,

@@ -29,10 +29,21 @@ import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provide
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useProvidersAnswerProfileNameForClient } from "@/hooks/providers/use-providers-answer-profile-name-mutation";
-import { profileOtherNames } from "@/components/providers/provider-profile-model";
+import {
+  listOffersSignIns,
+  profileOtherNames,
+} from "@/components/providers/provider-profile-model";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { SIGN_IN_AGAIN_DIALOG_TITLE } from "@/components/providers/profile-sync-copy";
+import { useCachedProviderProfilesReader } from "@/hooks/providers/use-cached-providers-list";
+import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { useHostClient } from "@/lib/host";
 import { redactEmail } from "@/lib/providers/redact-email";
-import { ProviderProfileReauthPanel } from "./provider-profile-reauth-panel";
+import {
+  ProviderProfileReauthPanel,
+  type ReauthSignInOutcomes,
+} from "./provider-profile-reauth-panel";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import {
@@ -85,10 +96,13 @@ function ProfileEditErrors(props: {
 function profileEditDialogCopy(
   profile: ProviderProfile,
   startInReauth: boolean,
+  offersSignIns: boolean,
 ) {
   if (startInReauth) {
     return {
-      title: `Sign in to ${profileDisplayLabel(profile)}`,
+      title: offersSignIns
+        ? SIGN_IN_AGAIN_DIALOG_TITLE
+        : `Sign in to ${profileDisplayLabel(profile)}`,
       description: "Reconnect this profile without changing its name or color.",
     };
   }
@@ -417,6 +431,7 @@ function ProfileEditAccountSection(props: {
   readonly onCancelSwitchingAccount: () => void;
   readonly onCloseAfterSignIn: () => void;
   readonly onFinishSignIn: (profile: ProviderProfile) => void;
+  readonly signInOutcomes: ReauthSignInOutcomes | null;
 }): ReactNode {
   if (props.switchingAccount) {
     return (
@@ -433,6 +448,7 @@ function ProfileEditAccountSection(props: {
             ? props.onCloseAfterSignIn
             : props.onCancelSwitchingAccount
         }
+        signInOutcomes={props.signInOutcomes}
       />
     );
   }
@@ -587,6 +603,41 @@ function useProfileRename(profile: ProviderProfile): ProfileRename {
   };
 }
 
+/**
+ * What Sign in again reads of a completed sign-in on a computer that offers
+ * sign-ins by itself (`listOffersSignIns` of this host's cached list), or
+ * null. `Add as a new profile` closes this dialog and opens Add for the same
+ * provider on the same host, selecting the new profile here once it exists.
+ */
+function useReauthSignInOutcomes(
+  providerId: ProviderId,
+  closeDialog: () => void,
+  selectProfile: (profileId: string | null) => void,
+  onSettledChange: (settled: boolean) => void,
+): ReauthSignInOutcomes | null {
+  const hostClient = useHostClient();
+  const offersSignIns = listOffersSignIns(
+    useProvidersList({ enabled: false, subscribed: false }).data,
+  );
+  const reader = useCachedProviderProfilesReader(hostClient, providerId);
+  const openAddFlow = useProviderProfileAddFlowStore(
+    (state) => state.openForHarness,
+  );
+  if (!offersSignIns) return null;
+  return {
+    reader,
+    onAddAsNewProfile: () => {
+      closeDialog();
+      openAddFlow(
+        providerIdToGuiHarnessId(providerId),
+        hostClient.getActiveHostId(),
+        selectProfile,
+      );
+    },
+    onSettledChange,
+  };
+}
+
 export function ProfileEditDialog(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
@@ -608,6 +659,13 @@ export function ProfileEditDialog(props: {
   ) => void;
 }): ReactNode {
   const providerId = props.state.providerId;
+  const [signInSettled, setSignInSettled] = useState(false);
+  const signInOutcomes = useReauthSignInOutcomes(
+    providerId,
+    () => props.onOpenChange(false),
+    props.onSelectedProfileIdChange,
+    setSignInSettled,
+  );
   const removeProfile = useRemoveProviderProfile();
   const renameProfile = useProfileRename(props.profile);
   const recolorProfile = useRecolorProviderProfile();
@@ -645,7 +703,11 @@ export function ProfileEditDialog(props: {
   const invalid = trimmedLabel.length === 0;
   const removePresentation = PROFILE_REMOVE_PRESENTATION[props.profile.kind];
   const removeDisabledReason = removePresentation.disabledReason;
-  const dialogCopy = profileEditDialogCopy(props.profile, props.startInReauth);
+  const dialogCopy = profileEditDialogCopy(
+    props.profile,
+    props.startInReauth,
+    signInOutcomes !== null,
+  );
   const eligibilityDisabledReason = profileEligibilityToggleDisabledReason(
     props.state.enabled,
     PROVIDER_DISPLAY_NAMES[providerId],
@@ -710,6 +772,7 @@ export function ProfileEditDialog(props: {
       open={props.open}
       onOpenChange={props.onOpenChange}
       switchingAccount={switchingAccount}
+      signInSettled={signInSettled}
       label={label}
       onLabelChange={setLabel}
       accentColor={accentColor}
@@ -784,6 +847,7 @@ export function ProfileEditDialog(props: {
         onCancelSwitchingAccount={() => setSwitchingAccount(false)}
         onCloseAfterSignIn={closeAfterSignIn}
         onFinishSignIn={finishSignIn}
+        signInOutcomes={signInOutcomes}
       />
 
       <ProfileEditErrors

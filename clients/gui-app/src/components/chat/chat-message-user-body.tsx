@@ -114,6 +114,7 @@ import {
   composerAttachmentsHoldSend,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
 import { containsPendingFileAttachment } from "@/lib/composer/file-attachments";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
@@ -788,6 +789,7 @@ function InlineUserMessageEditor({
   const focusFrameRef = useRef<number | null>(null);
   const visibilityFrameRef = useRef<number | null>(null);
   const runnerHost = useRunnerHost();
+  const pathsReachTarget = useTypedPathsReach(tabHostId);
   const {
     onPaste,
     onDrop,
@@ -797,13 +799,13 @@ function InlineUserMessageEditor({
     isResolvingFilePaths,
     isAttachingFiles,
     runPendingImageJob,
-  } = useComposerHashPaste(
-    editorRef,
-    runnerHost.fileDrops,
-    resolvedMentionRoots,
+  } = useComposerHashPaste(editorRef, {
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots: resolvedMentionRoots,
     // An edit keeps the files its message already carries; it attaches none.
-    null,
-  );
+    fileRoute: null,
+    pathsReachTarget,
+  });
   const {
     ingestPastedComposerImages,
     reingestPendingImages,

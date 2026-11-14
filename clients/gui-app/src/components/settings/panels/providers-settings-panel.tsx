@@ -39,6 +39,7 @@ import { Button } from "@/components/ui/button";
 import {
   isProviderSettingsUnreadableError,
   PROVIDER_SETTINGS_UNREADABLE_COPY,
+  PROVIDER_STATE_UNREADABLE_COPY,
 } from "@/lib/providers/provider-settings-unreadable-error";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -862,7 +863,7 @@ function ProvidersPanelBody({
     }
     return (
       <div className="flex flex-wrap items-center gap-2 px-6 py-8 text-ui-sm text-destructive">
-        Couldn't load provider state.
+        {PROVIDER_STATE_UNREADABLE_COPY}
         {retryButton}
         <ReportIssueAction
           context={createReportIssueContext({

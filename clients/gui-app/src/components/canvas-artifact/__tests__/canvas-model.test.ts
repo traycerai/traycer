@@ -8,6 +8,7 @@ import {
   canvasPageItems,
   canvasToolForKey,
   createCursorThrottle,
+  liveBoardSlotBudget,
   selectLiveBoards,
   type CursorThrottle,
 } from "../canvas-model";
@@ -348,6 +349,68 @@ describe("selectLiveBoards", () => {
       });
       expect(live.size).toBe(2);
     });
+  });
+});
+
+describe("liveBoardSlotBudget", () => {
+  // Sixty light boards in a row: more than either budget, so the number
+  // that stays live is the budget itself.
+  const paths = Array.from(
+    { length: 60 },
+    (_unused, index) => `boards/b${String(index).padStart(2, "0")}.html`,
+  );
+  const snapshot = snapshotFromFixture({
+    pages: [{ id: "page-1", name: "Flow" }],
+    boards: Object.fromEntries(
+      paths.map((path, index) => [
+        path,
+        { x: index * 200, y: 0, w: 100, h: 100 },
+      ]),
+    ),
+    notes: {},
+    order: paths,
+  });
+  const liveCount = (slotBudget: number): number =>
+    liveBoards(snapshot, "page-1", { slotBudget }).size;
+  // The desktop serves one site per artifact and names the mount in the
+  // path; an artifact id holding "--" keeps a site per mount there.
+  const desktop = {
+    artifactOrigin: ({
+      artifactId,
+      mountId,
+    }: {
+      readonly artifactId: string;
+      readonly mountId: string;
+    }): string =>
+      artifactId.includes("--")
+        ? `traycer-sandbox://artifact-${artifactId}--${mountId}`
+        : `traycer-sandbox://artifact-${artifactId}`,
+  };
+
+  it("keeps 48 boards live where the shell serves the canvas from one site, so its boards share a renderer", () => {
+    expect(liveCount(liveBoardSlotBudget(desktop, "canvas-art"))).toBe(48);
+  });
+
+  it.each<[string, string]>([
+    ["iOS", "traycer-artifact://artifact-canvas-art--"],
+    ["Android", "https://artifact-canvas-art--"],
+  ])(
+    "keeps 24 on %s, whose origin names the mount: the boards live in the app's own content process",
+    (_label, prefix) => {
+      const suffix = prefix.startsWith("https")
+        ? ".traycer-artifact.invalid"
+        : "";
+      const bridge = {
+        artifactOrigin: ({ mountId }: { readonly mountId: string }): string =>
+          `${prefix}${mountId}${suffix}`,
+      };
+      expect(liveCount(liveBoardSlotBudget(bridge, "canvas-art"))).toBe(24);
+    },
+  );
+
+  it("keeps 24 for a desktop artifact whose id forces a site per mount, and where no shell serves artifacts", () => {
+    expect(liveCount(liveBoardSlotBudget(desktop, "canvas--art"))).toBe(24);
+    expect(liveCount(liveBoardSlotBudget(null, "canvas-art"))).toBe(24);
   });
 });
 

@@ -27,6 +27,19 @@ export function profileCommitId(profile: ProviderProfile): string | null {
   return profile.kind === "ambient" ? null : profile.profileId;
 }
 
+/**
+ * Whether the computer that answered this list offers sign-ins by itself in a
+ * switched-on environment (`providers.list@10.12` `offersSignIns`). The one
+ * condition every one-sign-in screen of the Providers page and the Add and
+ * Sign in again dialogs decides on: false or absent, each of them is exactly
+ * what it was before the key existed.
+ */
+export function listOffersSignIns(
+  list: { readonly offersSignIns?: boolean } | undefined,
+): boolean {
+  return list?.offersSignIns === true;
+}
+
 /** One account a person removed, as `providers.list` names it: ids only. */
 export type RemovedProviderProfile = NonNullable<
   ProvidersListResponse["removedProfiles"]

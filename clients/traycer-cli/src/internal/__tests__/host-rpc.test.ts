@@ -536,6 +536,14 @@ describe("callHostRpc", () => {
         "agent.getTranscript: cannot read agent 'a1' because the cloud could not be reached, so its published copy could not be read. Check this machine's network and try again.",
     },
     {
+      // The host's own egress budget refused the call: retryable, like a
+      // cloud that gave no verdict.
+      wire: "E_CLOUD_REQUEST_REFUSED" as const,
+      cli: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message:
+        "cloud request refused by the host egress budget (breaker-open, family=bots)",
+    },
+    {
       // Sent for a reply on a thread that belongs to another pair
       // (RESPONSE_ID_MISMATCH): the caller's own input.
       wire: "E_INVALID_ARGUMENT" as const,
@@ -596,11 +604,58 @@ describe("callHostRpc", () => {
         details: null,
         exitCode: 1,
       });
-      expect(
-        EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.INVALID_ARGUMENT),
-      ).toBe(true);
     },
   );
+
+  const unknownProfileCodes: ReadonlyArray<"RPC_ERROR" | "removed-by-person"> =
+    ["RPC_ERROR", "removed-by-person"];
+  it.each(unknownProfileCodes)(
+    "maps the unknown-profile refusal under %s to INVALID_ARGUMENT",
+    async (wire) => {
+      const message =
+        'No profile "work" is registered for provider "claude-code".';
+      const mapped = await toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: wire,
+            message,
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ).catch((error: unknown) => error);
+
+      expect(mapped).toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: `traycer: ${message}`,
+        details: null,
+        exitCode: 1,
+      });
+    },
+  );
+
+  it("keeps an unrelated removed-by-person refusal unexpected", async () => {
+    const message = "The provider request was refused for another reason.";
+    const mapped = await toAgentCliError(
+      Promise.reject(
+        new HostRpcError({
+          code: "removed-by-person",
+          message,
+          requestId: "r1",
+          method: "agent.sendMessage",
+          fatalDetails: null,
+        }),
+      ),
+    ).catch((error: unknown) => error);
+
+    expect(mapped).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message,
+      details: null,
+      exitCode: 1,
+    });
+  });
 
   // Control: an RPC_ERROR whose message is not a profile-selection refusal
   // stays UNEXPECTED and captured, so a host-side request-validation defect
