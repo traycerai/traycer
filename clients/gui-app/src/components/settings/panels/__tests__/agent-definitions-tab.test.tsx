@@ -65,6 +65,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { AgentDefinitionsTab } from "@/components/settings/panels/agent-definitions-tab";
 import {
+  mountTeamPage,
+  requireTeamEnvironmentAuthnBinding,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
@@ -98,6 +103,7 @@ afterEach(() => {
   cloudSource.current = { kind: "host" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
   useAuthStore.setState({ status: "signed-out" });
+  resetTeamPageHarness();
 });
 
 /** The configuration the page under test reads; the host's own unless a case says. */
@@ -113,6 +119,8 @@ interface Rig {
   readonly lists: () => number;
   /** Reads of the cloud configuration the page makes under a team or Personal. */
   readonly itemReads: () => number;
+  readonly authnItemReads: () => number;
+  readonly hostItemReads: () => number;
 }
 
 interface RigOptions {
@@ -220,12 +228,17 @@ function renderPage(
     hostId: hostIdMock.id,
     handlers,
   });
+  const hostRequest = vi.spyOn(client, "request");
+  const authnHarness = mountTeamPage(cloudSource.current, handlers);
+  const authnBinding = requireTeamEnvironmentAuthnBinding();
   if (options.methods !== null) {
     recordNegotiatedHostMethods(hostIdMock.id, options.methods);
   }
   hostMock.client = client;
   hostMock.binding = {
+    ...authnBinding,
     auth: {
+      ...authnBinding.auth,
       mintExecutableWriteGrant: () =>
         Promise.resolve({
           kind: "ok" as const,
@@ -251,6 +264,12 @@ function renderPage(
     deletes,
     lists: () => listCalls,
     itemReads: () => itemReadCalls,
+    authnItemReads: () =>
+      authnHarness.paramsOf("environment.configuration.items").length,
+    hostItemReads: () =>
+      hostRequest.mock.calls.filter(
+        ([method]) => method === "environment.configuration.items",
+      ).length,
   };
 }
 
@@ -540,6 +559,8 @@ describe("<AgentDefinitionsTab />", () => {
     const failure = await screen.findByText(
       "Couldn't read Acme's agent definitions.",
     );
+    expect(rig.authnItemReads()).toBeGreaterThan(0);
+    expect(rig.hostItemReads()).toBe(0);
     const reads = rig.itemReads();
     expect(reads).toBeGreaterThan(0);
     fireEvent.click(
@@ -661,8 +682,12 @@ describe("<AgentDefinitionsTab />", () => {
     });
     recordNegotiatedHostMethods("host-a", METHODS);
     recordNegotiatedHostMethods("host-b", METHODS);
+    mountTeamPage({ kind: "host" }, {});
+    const authnBinding = requireTeamEnvironmentAuthnBinding();
     hostMock.binding = {
+      ...authnBinding,
       auth: {
+        ...authnBinding.auth,
         mintExecutableWriteGrant: () =>
           Promise.resolve({
             kind: "ok" as const,
@@ -746,6 +771,8 @@ describe("<AgentDefinitionsTab />", () => {
 
     interface TwoTeams {
       readonly puts: Record<string, unknown>[];
+      readonly authnItemReads: () => number;
+      readonly hostItemReads: () => number;
       readonly show: (environmentId: string) => void;
     }
 
@@ -758,48 +785,54 @@ describe("<AgentDefinitionsTab />", () => {
         "env-a": "Text in A.",
         "env-b": "Text in B.",
       };
+      const handlers: MockHandlerMap<HostRpcRegistry> = {
+        "environment.status": () => environmentStatusFixture({}),
+        "environment.list": () => ({ environments: [] }),
+        "environment.configuration.items": (request) =>
+          Promise.resolve({
+            items: [
+              {
+                kind: "agent_definition" as const,
+                key: "reviewer.md",
+                os: null,
+                value: { text: textOf[request.environmentId] ?? "" },
+                revision: 3,
+                updatedAt: 1,
+                writtenBy: {
+                  source: "live" as const,
+                  hostId: null,
+                  hostName: null,
+                },
+              },
+            ],
+          }),
+        "environment.configuration.items.put": (request) => {
+          puts.push({ ...request });
+          return Promise.resolve(
+            request.environmentId === "env-b"
+              ? {
+                  outcome: "conflict" as const,
+                  current: { revision: 3, changedBy: "Rin", changedAt: 1 },
+                }
+              : { outcome: "saved" as const, revision: 4 },
+          );
+        },
+      };
       const { client } = buildEnvironmentClient({
         hostId: "host-a",
-        handlers: {
-          "environment.status": () => environmentStatusFixture({}),
-          "environment.list": () => ({ environments: [] }),
-          "environment.configuration.items": (request) =>
-            Promise.resolve({
-              items: [
-                {
-                  kind: "agent_definition" as const,
-                  key: "reviewer.md",
-                  os: null,
-                  value: { text: textOf[request.environmentId] ?? "" },
-                  revision: 3,
-                  updatedAt: 1,
-                  writtenBy: {
-                    source: "live" as const,
-                    hostId: null,
-                    hostName: null,
-                  },
-                },
-              ],
-            }),
-          "environment.configuration.items.put": (request) => {
-            puts.push({ ...request });
-            return Promise.resolve(
-              request.environmentId === "env-b"
-                ? {
-                    outcome: "conflict" as const,
-                    current: { revision: 3, changedBy: "Rin", changedAt: 1 },
-                  }
-                : { outcome: "saved" as const, revision: 4 },
-            );
-          },
-        },
+        handlers,
       });
+      const hostRequest = vi.spyOn(client, "request");
+      const authnHarness = mountTeamPage(teamSource("env-a"), handlers);
+      const authnBinding = requireTeamEnvironmentAuthnBinding();
       recordNegotiatedHostMethods("host-a", [
         ...METHODS,
         "environment.configuration.items.put",
       ]);
       hostMock.client = client;
-      hostMock.binding = null;
+      hostMock.binding = {
+        ...authnBinding,
+      };
       const queryClient = new QueryClient({
         defaultOptions: {
           queries: { retry: false },
@@ -819,6 +852,12 @@ describe("<AgentDefinitionsTab />", () => {
       const view = render(page("env-a"));
       return {
         puts,
+        authnItemReads: () =>
+          authnHarness.paramsOf("environment.configuration.items").length,
+        hostItemReads: () =>
+          hostRequest.mock.calls.filter(
+            ([method]) => method === "environment.configuration.items",
+          ).length,
         show: (environmentId) => view.rerender(page(environmentId)),
       };
     }
@@ -828,6 +867,8 @@ describe("<AgentDefinitionsTab />", () => {
       await waitFor(() => {
         expect(editorFor("reviewer.md").value).toBe("Text in A.");
       });
+      expect(teams.authnItemReads()).toBeGreaterThan(0);
+      expect(teams.hostItemReads()).toBe(0);
       fireEvent.change(editorFor("reviewer.md"), {
         target: { value: "A draft." },
       });

@@ -13,5 +13,6 @@ export function createEnvironmentCloud(token: string | null): EnvironmentCloud {
     authnBaseUrl: "https://authn.example.test",
     bearer,
     transport: fetchEnvironmentTransport,
+    onOriginSignIn: () => true,
   };
 }

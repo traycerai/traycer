@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readConfigurationRevision } from "../configuration-settings";
-import { sendEnvironmentRequest, settingsRefusal } from "../environment-cloud";
 import { createEnvironmentCloud } from "./environment-cloud-test-support";
 
 const BEARER = "environment-test-bearer";
@@ -28,21 +27,15 @@ describe("environment authn transport", () => {
       return Promise.resolve(response);
     });
 
-    const answer = await sendEnvironmentRequest(
-      createEnvironmentCloud(BEARER),
-      "settings",
-      "GET",
-      "api/v3/environments/team-a/items",
-      null,
-    );
+    await expect(
+      readConfigurationRevision(createEnvironmentCloud(BEARER), ENVIRONMENT_ID),
+    ).rejects.toMatchObject({ kind: "unavailable" });
 
-    expect(answer.status).toBe(302);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.redirect).toBe("manual");
     expect(new Headers(requests[0]?.headers).get("Authorization")).toBe(
       `Bearer ${BEARER}`,
     );
-    expect(settingsRefusal(answer).kind).toBe("invalid");
   });
 
   it("treats an opaque status zero as an answered refusal", async () => {
@@ -50,17 +43,11 @@ describe("environment authn transport", () => {
     Object.defineProperty(opaque, "status", { value: 0 });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(opaque);
 
-    const answer = await sendEnvironmentRequest(
-      createEnvironmentCloud(BEARER),
-      "settings",
-      "GET",
-      "api/v3/environments/team-a/items",
-      null,
-    );
+    await expect(
+      readConfigurationRevision(createEnvironmentCloud(BEARER), ENVIRONMENT_ID),
+    ).rejects.toMatchObject({ kind: "unavailable" });
 
-    expect(answer.status).toBe(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(settingsRefusal(answer).kind).toBe("invalid");
   });
 
   it.each([

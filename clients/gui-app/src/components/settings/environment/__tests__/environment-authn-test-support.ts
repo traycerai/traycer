@@ -366,6 +366,7 @@ export function createFakeEnvironmentAuthn(
       authnBaseUrl: AUTHN_BASE_URL,
       bearer,
       transport: fetchEnvironmentTransport,
+      onOriginSignIn: () => true,
     },
     paramsOf: (method) =>
       calls.filter((call) => call.method === method).map((call) => call.params),
