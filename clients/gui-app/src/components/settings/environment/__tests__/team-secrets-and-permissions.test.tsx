@@ -675,19 +675,33 @@ describe("TeamPermissions", () => {
       const editor = await screen.findByRole("textbox", {
         name: "Approval policy",
       });
-      const view = EditorView.findFromDOM(editor);
-      if (view === null) throw new Error("no approval policy editor");
-      expect(view.state.readOnly).toBe(false);
+      const initialView = EditorView.findFromDOM(editor);
+      if (initialView === null) throw new Error("no approval policy editor");
+      expect(initialView.state.readOnly).toBe(false);
       expect(
         screen.getByRole("button", { name: "Reset to default" }),
       ).toBeTruthy();
       await userEvent.click(screen.getByRole("tab", { name: "Preview" }));
-      expect(await screen.findByText("Allow reads")).toBeTruthy();
+      expect(
+        await within(
+          screen.getByTestId("team-approval-policy-preview"),
+        ).findByText("Allow reads"),
+      ).toBeTruthy();
       await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
 
+      const activeEditor = await screen.findByRole("textbox", {
+        name: "Approval policy",
+      });
+      const activeView = EditorView.findFromDOM(activeEditor);
+      if (activeView === null)
+        throw new Error("no active approval policy editor");
       act(() => {
-        view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: "Ask first" },
+        activeView.dispatch({
+          changes: {
+            from: 0,
+            to: activeView.state.doc.length,
+            insert: "Ask first",
+          },
         });
       });
       const save = screen.getByRole("button", { name: "Save" });
@@ -714,7 +728,7 @@ describe("TeamPermissions", () => {
       wrapper: harness.Wrapper,
     });
 
-    expect(await screen.findByText("Admins change this: Ada.")).toBeTruthy();
+    expect(await screen.findByText("Ada can change this.")).toBeTruthy();
     expect(
       screen.getByRole("textbox", { name: "Approval policy" }).textContent,
     ).toContain("Allow reads");

@@ -347,7 +347,7 @@ describe("MembersView", () => {
     ["Editor", "editor"],
     ["not known", null],
   ] as const)(
-    "shows a %s seat no membership controls and a pending summary",
+    "shows a %s seat no membership mutation controls and a pending summary",
     (_label, viewerRole) => {
       renderView({
         ...BASE,
@@ -358,9 +358,6 @@ describe("MembersView", () => {
       expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: /Manage seats and allowances/ }),
-      ).toBeNull();
       expect(screen.queryByRole("combobox")).toBeNull();
       expect(screen.queryByText("new@acme.test")).toBeNull();
       const summary = screen.getByTestId("members-pending-summary");

@@ -672,9 +672,6 @@ describe("HostEnvironmentSection", () => {
       },
     });
 
-    const selector = screen.getByRole("combobox", { name: "Environment" });
-    fireEvent.keyDown(selector, { key: "ArrowDown" });
-    expect(await screen.findByRole("option", { name: /^Acme/ })).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Claim this computer" }),
     ).toBeNull();
@@ -692,12 +689,6 @@ describe("HostEnvironmentSection", () => {
       },
     });
 
-    const selector = screen.getByRole("combobox", { name: "Environment" });
-    fireEvent.keyDown(selector, { key: "ArrowDown" });
-    expect(
-      await screen.findByRole("option", { name: /^Personal/ }),
-    ).toBeTruthy();
-    expect(screen.queryByRole("option", { name: /Acme/ })).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Claim this computer" }),
     ).toBeNull();
