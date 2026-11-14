@@ -7,9 +7,11 @@
  * object for the same host; a reader that dials its own client opens a second
  * `bot.subscribe` against a host that already serves one.
  *
- * The real `HostStreamProvider` (the app-wide client Home's row reads) and the
- * real `useHostStreamClientFor` + `host-stream-client-cache` (the per-host
- * client every other reader reads) are both mounted. The only fake is the
+ * The real `useHostStreamClientFor` + `host-stream-client-cache` (the per-host
+ * client every bot reader reads, Home's row included) is mounted beside the
+ * real `HostStreamProvider`, whose app-wide client is the control: it is a
+ * separate object for the same host, which no bot reader may subscribe
+ * through. The only fake is the
  * socket class `buildHostStreamClient` constructs for a local host: each
  * construction yields a client with its own `instanceId`, as in production, and
  * every `subscribe("bot.subscribe")` and its `close` on ANY such client lands
