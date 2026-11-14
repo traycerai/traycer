@@ -7,10 +7,6 @@
  * the edit applies that hold. This module is the wire between the host and
  * that app:
  *
- * - {@link settingsSaveAnswerSchema}: what every save answers. The save is
- *   durable on this host; `proposal` is the receipt of what the host will
- *   send, or null when the save proposes nothing (a value kept on this host
- *   only, or a host that serves no environment).
  * - {@link settingsProposalReceiptSchema}: the receipt. It carries what the
  *   app needs to find its own hold among authn's held changes and nothing
  *   else: never a hold id and never a value. The app recognises its hold by
@@ -169,19 +165,6 @@ export const settingsProposalReceiptSchema = lazySchema(() =>
 export type SettingsProposalReceipt = z.infer<
   typeof settingsProposalReceiptSchema
 >;
-
-/**
- * The answer to every save made in a host's settings. `saved` means the
- * change is written on this host and in force here, whatever authn later
- * says; `proposal` is null when the save proposes nothing.
- */
-export const settingsSaveAnswerSchema = lazySchema(() =>
-  z.object({
-    outcome: z.literal("saved"),
-    proposal: settingsProposalReceiptSchema.nullable(),
-  }),
-);
-export type SettingsSaveAnswer = z.infer<typeof settingsSaveAnswerSchema>;
 
 // ── environment.proposals ───────────────────────────────────────────────────
 
