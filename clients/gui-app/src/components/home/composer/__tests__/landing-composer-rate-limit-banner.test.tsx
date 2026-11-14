@@ -197,11 +197,92 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
-  const toolbarStore = createStore(() => ({
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => ({
     accountChosen: false,
-    defaultAccount: null,
-    setAccountChosen: vi.fn(),
-    setDefaultAccount: vi.fn(),
+    defaultAccount: emptyDefaultAccount,
+    setAccountChosen: (chosen: boolean) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultAccount = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        defaultAccount !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === defaultAccount.harnessId &&
+        state.selection.harnessId === defaultAccount.harnessId;
+      set({
+        accountChosen: chosen,
+        selection: defaultApplies
+          ? { ...state.selection, profileId: defaultAccount.profileId }
+          : defaultAccount !== null &&
+              state.selection.profileId === defaultAccount.profileId
+            ? { ...state.selection, profileId: rawSelection.profileId }
+            : state.selection,
+      });
+    },
+    setDefaultAccount: (
+      account: {
+        readonly harnessId: string;
+        readonly profileId: string;
+      } | null,
+    ) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      set({
+        defaultAccount: account,
+        selection: defaultApplies
+          ? { ...state.selection, profileId: account.profileId }
+          : state.defaultAccount !== null &&
+              state.selection.profileId === state.defaultAccount.profileId
+            ? { ...state.selection, profileId: rawSelection.profileId }
+            : state.selection,
+      });
+    },
     ultracode: false,
     selection: {
       harnessId: "claude",
