@@ -92,6 +92,10 @@ import {
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
 import {
+  fetchEnvironmentPerson,
+  type EnvironmentPersonResult,
+} from "@traycer-clients/shared/auth/environment-people";
+import {
   claimCreditOfferViaHttp,
   listCreditOffersViaHttp,
   type ClaimCreditOfferFetchResult,
@@ -3540,6 +3544,27 @@ export class AuthService {
       this.runnerHost.authnBaseUrl,
       bearer,
       environmentId,
+    );
+  }
+
+  /**
+   * Someone who is or was a member of `environmentId`, from authn: the name
+   * and picture of a member who has left, whom the member directory no
+   * longer lists.
+   */
+  async readEnvironmentPerson(
+    environmentId: string,
+    userId: string,
+    signal: AbortSignal | null,
+  ): Promise<EnvironmentPersonResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to read team members.");
+    return fetchEnvironmentPerson(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      userId,
+      signal,
     );
   }
 
