@@ -13,8 +13,6 @@
  * value, and a row that looks like a key carries only its name. Optional
  * capabilities with `degrade: { kind: "unsupported" }`, off the released
  * floor, like every environment method (`environment/contracts.ts`).
- * `plan@2.0`, `stage`, `start` and `outcome` are defined and not registered:
- * each registers with the host slice that serves it and its first caller.
  */
 import { z } from "zod";
 import {
@@ -276,6 +274,26 @@ export const environmentMovePlanV20 = defineRpcContract({
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: environmentMovePlanRequestSchemaV20,
   responseSchema: environmentMovePlanResponseSchemaV20,
+});
+
+/**
+ * Required by the registry for a new major, and never run: `@2.0` has no
+ * downgrade to `@1.x`, so a host refuses a `@1.x` caller before upgrading
+ * anything, and an app meets a `@1.x`-only host as unsupported. `@1.2`'s
+ * request names no target, and `@2.0` cannot be read without one.
+ */
+export const environmentMovePlanUpgradeV12ToV20 = defineUpgradePath<
+  typeof environmentMovePlanV12,
+  typeof environmentMovePlanV20
+>({
+  from: environmentMovePlanV12.schemaVersion,
+  to: environmentMovePlanV20.schemaVersion,
+  upgradeRequest: () => {
+    throw new Error(
+      "environment.move.plan v1.2 requests cannot be upgraded to v2.0: v1.2 names no target",
+    );
+  },
+  upgradeResponse: ({ itemChoices: _itemChoices, ...response }) => response,
 });
 
 /** What every `environmentMoveItemChoiceKey` starts with. */

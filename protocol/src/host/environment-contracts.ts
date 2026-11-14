@@ -237,11 +237,7 @@ export const environmentStatusUpgradeV11ToV12 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, acceptedUploads: [] }),
 });
 
-/**
- * Defined and not registered: registering a new latest minor changes the
- * answer every caller reads, so `@1.3` registers with the host slice that
- * fills `move` and the app change that reads it.
- */
+/** `@1.2`'s answer with the move attempt's outcome, `move`. */
 export const environmentStatusV13 = defineRpcContract({
   method: "environment.status",
   schemaVersion: { major: 1, minor: 3 } as const,
@@ -259,10 +255,17 @@ export const environmentStatusUpgradeV12ToV13 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, move: null }),
 });
 
+/** `host.remoteAccess.set@1.0`: On and Off, through the host. */
+export const hostRemoteAccessSetV10 = defineRpcContract({
+  method: "host.remoteAccess.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.hostRemoteAccessSetRequestSchema,
+  responseSchema: schemas.hostRemoteAccessSetResponseSchema,
+});
+
 /**
- * `host.remoteAccess.set@2.0`, Off only; `@1.0` stays as registered below.
- * Defined and not registered: it registers with the host slice that serves
- * it and its first caller. Not an agent capability.
+ * `host.remoteAccess.set@2.0`, Off only; `@1.0` stays registered beside it.
+ * Not an agent capability.
  */
 export const hostRemoteAccessSetV20 = defineRpcContract({
   method: "host.remoteAccess.set",
@@ -272,14 +275,39 @@ export const hostRemoteAccessSetV20 = defineRpcContract({
 });
 
 /**
+ * Required by the registry for a new major, and never run: `@2.0` has no
+ * downgrade to `@1.0`, so a host refuses a `@1.0` caller before upgrading
+ * anything, and an app meets a `@1.0`-only host as unsupported. Neither side
+ * can be carried honestly: `{ enabled: true }` has no `@2.0` form, because
+ * turning remote access on is the app's call to authn, and `@1.0`'s
+ * `turning_off` is not `@2.0`'s `off`.
+ */
+export const hostRemoteAccessSetUpgradeV10ToV20 = defineUpgradePath<
+  typeof hostRemoteAccessSetV10,
+  typeof hostRemoteAccessSetV20
+>({
+  from: hostRemoteAccessSetV10.schemaVersion,
+  to: hostRemoteAccessSetV20.schemaVersion,
+  upgradeRequest: () => {
+    throw new Error(
+      "host.remoteAccess.set v1.0 requests cannot be upgraded to v2.0: v2.0 only turns remote access off",
+    );
+  },
+  upgradeResponse: () => {
+    throw new Error(
+      "host.remoteAccess.set v1.0 responses cannot be upgraded to v2.0: v1.0's state is not v2.0's off",
+    );
+  },
+});
+
+/**
  * `host.status.refresh@1.0`: this computer reads its own row now, through
  * the status read it already runs, and answers once that read has ended,
  * whether the row was read, unreachable or refused. It has no refusals of its
  * own. A host with no environment domain running answers at once and does
  * nothing. The answer carries no result on purpose (see
  * `hostStatusRefreshResponseSchema`). Any person the door admits may call
- * it, with no role: it reads only this computer's own row. Defined and not
- * registered: it registers with the app's Remote access caller, off
+ * it, with no role: it reads only this computer's own row. Off
  * `RELEASED_FLOOR_METHOD_NAMES` with `degrade: { kind: "unsupported" }`, so
  * a host without the method keeps today's two-minute interval. Not an agent
  * capability, and not on the host-to-host allowlist.
@@ -904,6 +932,10 @@ export const ENVIRONMENT_RPC_METHODS = {
           contract: environmentStatusV12,
           upgradeFromPreviousVersion: environmentStatusUpgradeV11ToV12,
         },
+        3: {
+          contract: environmentStatusV13,
+          upgradeFromPreviousVersion: environmentStatusUpgradeV12ToV13,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -971,13 +1003,18 @@ export const ENVIRONMENT_RPC_METHODS = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "host.remoteAccess.set",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.hostRemoteAccessSetRequestSchema,
-            responseSchema: schemas.hostRemoteAccessSetResponseSchema,
-          }),
+          contract: hostRemoteAccessSetV10,
           upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostRemoteAccessSetV20,
+          upgradeFromPreviousVersion: hostRemoteAccessSetUpgradeV10ToV20,
         },
       },
       downgradePathsFromLatest: {},

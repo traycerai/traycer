@@ -56,10 +56,15 @@ import {
 import {
   environmentMoveAcceptV10,
   environmentMovePlanUpgradeV10ToV11,
+  environmentMoveOutcomeV10,
   environmentMovePlanUpgradeV11ToV12,
+  environmentMovePlanUpgradeV12ToV20,
   environmentMovePlanV10,
   environmentMovePlanV11,
   environmentMovePlanV12,
+  environmentMovePlanV20,
+  environmentMoveStageV10,
+  environmentMoveStartV10,
   environmentMoveStopPreviewUpgradeV10ToV11,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
@@ -133,6 +138,16 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMovePlanV20,
+          upgradeFromPreviousVersion: environmentMovePlanUpgradeV12ToV20,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
   "environment.move.accept": {
     degrade: { kind: "unsupported" },
@@ -141,6 +156,45 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentMoveAcceptV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.move.stage": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMoveStageV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.move.start": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMoveStartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.move.outcome": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMoveOutcomeV10,
           upgradeFromPreviousVersion: null,
         },
       },

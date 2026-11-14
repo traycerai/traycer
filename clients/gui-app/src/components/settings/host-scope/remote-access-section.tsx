@@ -27,9 +27,8 @@ import type { HostRpcRegistry } from "@/lib/host";
  * Remote access on the picked host: whether other devices and agents on the
  * person's account or team can reach this computer, and the switch.
  *
- * Off is visible while it happens: the host answers `turning_off` until it
- * has closed every session (within 30 seconds), and the section says so until
- * the host's own status reports `off`.
+ * Off is visible while it happens: once the host has taken it, the section
+ * says "turning off" until the host's own status reports `off`.
  */
 export function RemoteAccessSection(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -44,13 +43,15 @@ export function RemoteAccessSection(props: {
     props.principal,
     true,
   );
-  // The host's last answer to a switch made here.
+  // An Off pressed here, which the host has taken.
   const [lastAnswer, setLastAnswer] = useState<RemoteAccessState | null>(null);
   // Once the host reports `off`, the answer has done its job.
   if (lastAnswer === "turning_off" && props.status === "off") {
     setLastAnswer(null);
   }
-  const set = useRemoteAccessSetMutation(props.client, setLastAnswer);
+  const set = useRemoteAccessSetMutation(props.client, () =>
+    setLastAnswer("turning_off"),
+  );
   const turnOn = useRemoteAccessTurnOnMutation(props.client, props.hostId);
   const failure = turnOn.error ?? set.error;
   const shown = shownRemoteAccess(props.status, lastAnswer);
@@ -77,7 +78,7 @@ export function RemoteAccessSection(props: {
               pending={set.isPending || turnOn.isPending}
               onSet={(enabled) => {
                 if (enabled) turnOn.mutate();
-                else set.mutate({ enabled: false });
+                else set.mutate({});
               }}
             />
           )}

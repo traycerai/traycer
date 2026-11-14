@@ -6741,15 +6741,15 @@ set-state-in-effect` forbids the effect form, and an effect would also
        question's On) is the app's own call to authn on the person's sign-in
        (`PUT /api/v3/hosts/:hostId/remote-access`), then one
        `host.status.refresh` to that computer, whose failure is silent; the
-       section then reads `environment.status`. `host.remoteAccess.set
-{enabled: false}` answers `turning_off` until the host has closed its
-       sessions, and the section keeps saying so until the host's status
-       reports `off` (`shownRemoteAccess`), even when a status read still says
-       `on`. On a team's computer the wording names team members and agents.
+       section then reads `environment.status`. Turn off is
+       `host.remoteAccess.set@2.0` to that computer; once it is taken, the
+       section says Turning off until the host's status reports `off`
+       (`shownRemoteAccess`), even when a status read still says `on`. On a team's computer the wording names team members and agents.
        Its switch is outside the otherwise read-only team sections and is
        offered only when the bound team's current role is admin or editor,
        using the host's binding and the environment list, not the selected
-       settings page. An unknown or failed role read offers no switch. A
+       settings page. A Viewer, an unknown role or a failed role read offers
+       no switch. A
        refused change is shown inline and does not mark the question answered
        or change the displayed state.
     4. **Terminal account**, one row per provider with an ambient profile,

@@ -55,10 +55,10 @@ export function remoteAccessFailureText(code: string): string {
 }
 
 /**
- * The state the section shows. Off answers `turning_off` until the host has
- * closed every session, and the status read can still say `on` for a poll or
- * two after that answer, so an Off the person pressed shows "turning off"
- * until the host itself reports `off`. Any other answer is the status's.
+ * The state the section shows. The status read can still say `on` for a poll
+ * or two after the host took an Off, so an Off the person pressed
+ * (`lastAnswer` `turning_off`) shows "turning off" until the host itself
+ * reports `off`. Otherwise the status's.
  */
 export function shownRemoteAccess(
   status: RemoteAccessState,

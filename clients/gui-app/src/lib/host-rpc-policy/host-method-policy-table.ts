@@ -2709,6 +2709,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // pool, members and the retrospective sheet. Reads take the latest answer;
   // every write is ordered and never joined.
   "environment.move.plan": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in polling (`poll: true`), for one caller: the give dialog, which
+  // reads the attempt's outcome until it is done. A give of a handful of
+  // items ends in seconds, so the cadence is the move's own.
+  "environment.move.outcome": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 2 * SECOND_MS },
+  },
   "environment.move.stopPreview": { ...LATEST_SCHEDULING, poll: null },
   "environment.configuration.revision": {
     ...LATEST_SCHEDULING,
@@ -2758,6 +2765,16 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.move.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.stage": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.start": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
