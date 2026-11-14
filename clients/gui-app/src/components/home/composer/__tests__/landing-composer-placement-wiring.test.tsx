@@ -348,13 +348,24 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
         rawSelection.profileId === null &&
         rawSelection.harnessId === account.harnessId &&
         state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies && account !== null) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        account !== null &&
+        state.selection.profileId === account.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
       set({
         accountChosen: chosen,
-        selection: defaultApplies
-          ? { ...state.selection, profileId: account.profileId }
-          : account !== null && state.selection.profileId === account.profileId
-            ? { ...state.selection, profileId: rawSelection.profileId }
-            : state.selection,
+        selection: presentedSelection,
       });
     },
     setDefaultAccount: (account) => {
@@ -366,14 +377,24 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
         rawSelection.profileId === null &&
         rawSelection.harnessId === account.harnessId &&
         state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies && account !== null) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        state.defaultAccount !== null &&
+        state.selection.profileId === state.defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
       set({
         defaultAccount: account,
-        selection: defaultApplies
-          ? { ...state.selection, profileId: account.profileId }
-          : state.defaultAccount !== null &&
-              state.selection.profileId === state.defaultAccount.profileId
-            ? { ...state.selection, profileId: rawSelection.profileId }
-            : state.selection,
+        selection: presentedSelection,
       });
     },
     ultracode: false,
