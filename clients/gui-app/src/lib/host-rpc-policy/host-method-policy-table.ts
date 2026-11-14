@@ -2715,6 +2715,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "environment.history": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.previewLocalFacts": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.seats": {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
