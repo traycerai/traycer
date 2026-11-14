@@ -20,8 +20,9 @@ import {
   AGENT_SANDBOX,
   costLine,
   keptByLine,
-  paidByLine,
   startedByLine,
+  teamPossessive,
+  teamPossessiveSentence,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
   burstIdleLine,
@@ -285,19 +286,6 @@ function facingMemberName(
   return member.displayName;
 }
 
-/**
- * A team payer who is someone else and whom the server names. An unnamed
- * payer is not one: the `a member` fallback is not a name, and it is not `you`.
- */
-function namedOtherPayer(
-  payer: SandboxMember | null,
-  viewerUserId: string | null,
-): boolean {
-  if (payer === null) return false;
-  const name = facingMemberName(payer, viewerUserId);
-  return name !== null && name !== "you";
-}
-
 /** `you`, the member's name, or `a member` when they have none to show. */
 export function sandboxMemberName(
   member: SandboxMember,
@@ -335,26 +323,6 @@ export function sandboxKeptByLabel(
   return name === null ? null : keptByLine(name);
 }
 
-/**
- * `Paid by you` to the payer, `Paid by Priya` to anyone else, on an awake
- * team row only. A payer the server does not name is never `a member`.
- */
-export function sandboxPaidByLabel(
-  summary: SandboxSummary,
-  configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
-): string | null {
-  if (configuration.kind !== "team") return null;
-  if (sandboxPublicState(summary) !== "awake" || summary.wakePayer === null) {
-    return null;
-  }
-  const payer = summary.wakePayer;
-  if (viewerUserId !== null && payer.userId === viewerUserId) {
-    return paidByLine("you");
-  }
-  return payer.displayName === null ? null : paidByLine(payer.displayName);
-}
-
 // ── The shape and cost line ─────────────────────────────────────────────────
 
 /** `Linux · 2 vCPU · 4 GB`. */
@@ -366,37 +334,28 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
 /**
  * The row's second line: the shape, then the cost line. An agent sandbox
  * names the agent that created it and its task. A kept row is not burst and
- * still carries that task, in the same clause. A resting team row whose
- * payer is someone else says that waking it changes the payer.
+ * still carries that task, in the same clause. A team row's cost line names
+ * the team's credits whoever woke it last.
  */
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
 ): string {
   if (summary.kind === "automation") return automationsShapeLine(configuration);
   const creator = agentCreatorClause(summary);
-  const resting = summary.state === "suspended" || summary.state === "stopped";
-  const teamNonPayer =
-    configuration.kind === "team" &&
-    namedOtherPayer(summary.wakePayer, viewerUserId);
-  const wakeWarning =
-    !summary.frozen && teamNonPayer && resting
-      ? "waking it makes you the payer"
-      : null;
   if (summary.priceMcPerHour === null) {
-    return joinParts(sandboxShapeLine(summary), wakeWarning, creator);
+    return joinParts(sandboxShapeLine(summary), creator);
   }
   const hourly = `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
   // A burst creator replaces the funding clause. A kept row's task does not.
   const cost =
-    (summary.burst && creator !== null) || teamNonPayer
+    summary.burst && creator !== null
       ? hourly
       : costLine(
           summary.priceMcPerHour.awakeMc,
           configurationCopy(configuration),
         );
-  return joinParts(sandboxShapeLine(summary), cost, wakeWarning, creator);
+  return joinParts(sandboxShapeLine(summary), cost, creator);
 }
 
 /**
@@ -415,25 +374,6 @@ function agentCreatorClause(summary: SandboxSummary): string | null {
   }
   if (task === null) return null;
   return agent === null ? `for ${task}` : `created by ${agent} for ${task}`;
-}
-
-/** The payer consequence sits on its own line before the row's actions. */
-export function sandboxWakePayerConsequence(
-  summary: SandboxSummary,
-  configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
-): string | null {
-  if (summary.frozen)
-    return sandboxFrozenCause(summary, configuration, viewerUserId);
-  if (configuration.kind !== "team" || summary.wakePayer === null) return null;
-  const resting =
-    summary.state === "suspended" ||
-    summary.state === "stopped" ||
-    summary.state === "suspending" ||
-    summary.state === "stopping";
-  return resting && namedOtherPayer(summary.wakePayer, viewerUserId)
-    ? "Resuming changes the payer to you."
-    : null;
 }
 
 /** What the configuration's Automations host is for, and what it costs. */
@@ -630,40 +570,30 @@ function idleMinutesOf(summary: SandboxSummary): number {
 }
 
 /**
- * The row's last payer names whose credits ran out. The out-of-credits badge
- * sits beside the state; this line says what happened and whether resuming
- * changes the payer.
+ * Whose credits ran out: the person's own on Personal, the team's on a
+ * team's sandbox, whoever woke it last. The out-of-credits badge sits beside
+ * the state.
  */
 export function sandboxFrozenCause(
-  summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
 ): string {
   if (configuration.kind === "personal") {
     return "Your credits ran out.";
   }
-  const team = configuration.teamName;
-  const payer = summary.wakePayer;
-  if (
-    payer === null ||
-    (viewerUserId !== null && payer.userId === viewerUserId)
-  ) {
-    return `Your ${team} credits ran out.`;
-  }
-  return `${payer.displayName ?? "A member"}'s ${team} credits ran out. Resuming changes the payer to you.`;
+  return `${teamPossessiveSentence(configuration.teamName)} credits ran out.`;
 }
 
-/** Whether a frozen row's remedy is the viewer's own top-up. */
-export function sandboxFrozenNeedsOwnCredits(
-  summary: SandboxSummary,
+/**
+ * Whether a frozen row's remedy is adding credits: the person's own on
+ * Personal; on a team's sandbox, the team's, which only its Admin may buy.
+ * Everyone else is offered Resume. Never the person's own top-up for a
+ * team's sandbox.
+ */
+export function sandboxFrozenOffersAddCredits(
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
+  teamBillingAdmin: boolean,
 ): boolean {
-  if (configuration.kind === "personal") return true;
-  const payer = summary.wakePayer;
-  return (
-    payer === null || (viewerUserId !== null && payer.userId === viewerUserId)
-  );
+  return configuration.kind === "personal" || teamBillingAdmin;
 }
 
 /** The frozen clock's sentence; the frozen date governs even a `never` period. */
@@ -793,7 +723,7 @@ export function sandboxClockLine(input: SandboxClockInput): string {
       return "Pending.";
     case "frozen":
       return [
-        sandboxFrozenCause(summary, input.configuration, input.viewerUserId),
+        sandboxFrozenCause(input.configuration),
         sandboxFrozenClock(summary.frozenAt),
       ]
         .filter((item): item is string => item !== null)
@@ -858,21 +788,11 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
 }
 
-/**
- * Whose credits a resting row's storage draws on. A team row with no payer,
- * or a payer the server does not name, leaves the clause out.
- */
-function storageCreditClause(
-  summary: SandboxSummary,
-  configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
-): string | null {
-  if (configuration.kind === "personal") return "storage uses your credits";
-  if (summary.wakePayer === null) return null;
-  const who = facingMemberName(summary.wakePayer, viewerUserId);
-  if (who === null) return null;
-  const scope = who === "you" ? "your" : `${who}'s`;
-  return `storage uses ${scope} ${configuration.teamName} credits`;
+/** Whose credits a resting row's storage draws on: the person's, or the team's. */
+function storageCreditClause(configuration: SandboxPageConfiguration): string {
+  return configuration.kind === "personal"
+    ? "storage uses your credits"
+    : `storage uses ${teamPossessive(configuration.teamName)} credits`;
 }
 
 function restingClockLine(
@@ -895,7 +815,7 @@ function restingClockLine(
         );
   return joinParts(
     resting,
-    storageCreditClause(summary, configuration, input.viewerUserId),
+    storageCreditClause(configuration),
     cost !== null && cost.todayMillicredits > 0
       ? `${formatSandboxCost(cost.todayMillicredits)} today`
       : null,
@@ -1130,7 +1050,6 @@ export type SandboxRowAction =
   | "retry"
   | "retry-applying"
   | "repair-setup"
-  | "resume-paying"
   | "add-credits"
   | "open-tab"
   | "open-terminal"
@@ -1155,8 +1074,8 @@ const NO_ROW_ACTIONS: SandboxRowActions = { primary: null, menu: [] };
 export function sandboxRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
-  /** A frozen row's remedy is the viewer's own top-up. */
-  readonly frozenNeedsOwnCredits: boolean;
+  /** A frozen row offers adding credits; everyone else is offered Resume. */
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const actions = matrixRowActions(input);
@@ -1167,7 +1086,7 @@ export function sandboxRowActions(input: {
 function matrixRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const { summary } = input;
@@ -1183,7 +1102,7 @@ function matrixRowActions(input: {
   const state = sandboxPublicState(summary);
   if (state === "frozen") {
     return {
-      primary: input.frozenNeedsOwnCredits ? "add-credits" : "resume-paying",
+      primary: input.frozenOffersAddCredits ? "add-credits" : "resume",
       menu: ["rename", "destroy"],
     };
   }
@@ -1248,10 +1167,9 @@ const SANDBOX_ROW_ACTION_LABEL = {
   rename: "Rename",
   "idle-settings": "Idle settings…",
   destroy: "Destroy",
-} satisfies Record<Exclude<SandboxRowAction, "resume-paying">, string>;
+} satisfies Record<SandboxRowAction, string>;
 
 export function sandboxRowActionLabel(action: SandboxRowAction): string {
-  if (action === "resume-paying") return "Resume";
   return SANDBOX_ROW_ACTION_LABEL[action];
 }
 

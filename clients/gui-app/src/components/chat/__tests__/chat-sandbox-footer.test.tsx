@@ -61,7 +61,6 @@ function resting(
   state: "suspended" | "stopped",
   options: {
     readonly team: boolean;
-    readonly wakeChangesPayer: boolean;
   },
 ): ChatSandboxState {
   return {
@@ -75,7 +74,6 @@ function resting(
     configuration: options.team
       ? { kind: "team", teamId: "team-a", teamName: "Acme" }
       : { kind: "personal" },
-    wakeChangesPayer: options.wakeChangesPayer,
   };
 }
 
@@ -127,11 +125,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     "says a %s sandbox wakes on the next message, what it costs and whose credits",
     (state, line) => {
       render(
-        <ChatSandboxFooter
-          line={lineOf(
-            resting(state, { team: false, wakeChangesPayer: false }),
-          )}
-        />,
+        <ChatSandboxFooter line={lineOf(resting(state, { team: false }))} />,
       );
 
       expect(document.body.textContent).toContain(line);
@@ -140,11 +134,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
 
   it("adds the team clauses only when the wake changes who pays", () => {
     const { unmount } = render(
-      <ChatSandboxFooter
-        line={lineOf(
-          resting("suspended", { team: true, wakeChangesPayer: true }),
-        )}
-      />,
+      <ChatSandboxFooter line={lineOf(resting("suspended", { team: true }))} />,
     );
     const paying = document.body.textContent;
     expect(paying).toContain("uses your Acme credits");
@@ -155,11 +145,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     unmount();
 
     render(
-      <ChatSandboxFooter
-        line={lineOf(
-          resting("suspended", { team: true, wakeChangesPayer: false }),
-        )}
-      />,
+      <ChatSandboxFooter line={lineOf(resting("suspended", { team: true }))} />,
     );
     const same = document.body.textContent;
     expect(same).toContain("uses your Acme credits");
@@ -169,11 +155,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
 
   it("offers no action and no offline or clone wording: the next message is the wake", () => {
     render(
-      <ChatSandboxFooter
-        line={lineOf(
-          resting("stopped", { team: false, wakeChangesPayer: false }),
-        )}
-      />,
+      <ChatSandboxFooter line={lineOf(resting("stopped", { team: false }))} />,
     );
 
     expect(screen.queryByRole("button")).toBeNull();
@@ -187,7 +169,7 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
   const FROZEN_AT = Date.UTC(2026, 9, 20, 6, 21);
 
   function frozen(team: boolean): ChatSandboxState {
-    const base = resting("suspended", { team, wakeChangesPayer: false });
+    const base = resting("suspended", { team });
     if (base.kind !== "resting") throw new Error("expected a resting state");
     return {
       ...base,
@@ -216,7 +198,7 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
   });
 
   it("omits the removal paragraph when the server sent no frozenAt", () => {
-    const base = resting("suspended", { team: false, wakeChangesPayer: false });
+    const base = resting("suspended", { team: false });
     if (base.kind !== "resting") throw new Error("expected a resting state");
     render(
       <ChatSandboxFooter
@@ -252,16 +234,12 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     };
     render(<ChatSandboxFooter line={lineOf(state)} />);
 
-    const payerLine = sandboxFrozenCause(
-      state.sandbox,
-      {
-        kind: "team",
-        teamId: "team-a",
-        teamName: "Acme",
-        environmentId: "team-a",
-      },
-      "viewer",
-    );
+    const payerLine = sandboxFrozenCause({
+      kind: "team",
+      teamId: "team-a",
+      teamName: "Acme",
+      environmentId: "team-a",
+    });
     const paragraph = screen.getByText(payerLine);
     expect(paragraph.className).toContain("wrap-anywhere");
     expect(paragraph.parentElement?.className).toContain("flex-col");
@@ -304,10 +282,7 @@ describe("<ChatSandboxFooter /> an awake sandbox that cannot be reached", () => 
 });
 
 describe("<ChatSandboxFooter /> no footer line", () => {
-  const unresolved = resting("suspended", {
-    team: true,
-    wakeChangesPayer: false,
-  });
+  const unresolved = resting("suspended", { team: true });
 
   it.each([
     ["none", { kind: "none" }],

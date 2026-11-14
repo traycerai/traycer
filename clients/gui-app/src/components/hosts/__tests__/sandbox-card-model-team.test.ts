@@ -3,8 +3,6 @@ import {
   sandboxCardShowsCostView,
   sandboxCreatorName,
   sandboxPodRoomLine,
-  sandboxTeamFrozenLine,
-  sandboxWakePayerName,
 } from "@/components/hosts/sandbox-card-model";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
@@ -14,7 +12,7 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
  * Every line names a member the way the viewer would: "you" for the viewer's
  * own user id, the member's display name otherwise, and a neutral phrase when
  * the control plane has no name to give. A personal card never reaches these
- * (its `createdBy` and `wakePayer` are `null`).
+ * (its `createdBy` is `null`).
  */
 
 const VIEWER = "user-viewer";
@@ -40,102 +38,6 @@ describe("sandboxCreatorName", () => {
         null,
       ),
     ).toBe("Ada Lovelace");
-  });
-});
-
-describe("sandboxWakePayerName", () => {
-  const payerIsViewer = sandboxSummaryFixture({
-    wakePayer: { userId: VIEWER, displayName: "Vera Viewer" },
-  });
-  const payerIsAda = sandboxSummaryFixture({
-    wakePayer: { userId: "user-ada", displayName: "Ada Lovelace" },
-  });
-  const payerHasNoName = sandboxSummaryFixture({
-    wakePayer: { userId: "user-ada", displayName: null },
-  });
-
-  it("names the viewer as You", () => {
-    expect(sandboxWakePayerName("awake", false, payerIsViewer, VIEWER)).toBe(
-      "You",
-    );
-  });
-
-  it("names another member without possessive wording", () => {
-    expect(sandboxWakePayerName("awake", false, payerIsAda, VIEWER)).toBe(
-      "Ada Lovelace",
-    );
-  });
-
-  it("uses a neutral name when the payer has no display name", () => {
-    expect(sandboxWakePayerName("awake", false, payerHasNoName, VIEWER)).toBe(
-      "A team member",
-    );
-  });
-
-  it("is silent unless the sandbox is awake", () => {
-    expect(
-      sandboxWakePayerName("suspended", false, payerIsAda, VIEWER),
-    ).toBeNull();
-    expect(
-      sandboxWakePayerName("resuming", false, payerIsAda, VIEWER),
-    ).toBeNull();
-    expect(sandboxWakePayerName(null, false, payerIsAda, VIEWER)).toBeNull();
-  });
-
-  it("is silent on a frozen sandbox", () => {
-    expect(sandboxWakePayerName("awake", true, payerIsAda, VIEWER)).toBeNull();
-  });
-
-  it("is silent when nobody is recorded as paying", () => {
-    expect(
-      sandboxWakePayerName(
-        "awake",
-        false,
-        sandboxSummaryFixture({ wakePayer: null }),
-        VIEWER,
-      ),
-    ).toBeNull();
-  });
-});
-
-describe("sandboxTeamFrozenLine", () => {
-  it("says the viewer's own bundle is out", () => {
-    expect(
-      sandboxTeamFrozenLine(
-        sandboxSummaryFixture({
-          wakePayer: { userId: VIEWER, displayName: "Vera Viewer" },
-        }),
-        VIEWER,
-      ),
-    ).toBe("Out of credits: your bundle is out.");
-  });
-
-  it("names another member's bundle", () => {
-    expect(
-      sandboxTeamFrozenLine(
-        sandboxSummaryFixture({
-          wakePayer: { userId: "user-ada", displayName: "Ada Lovelace" },
-        }),
-        VIEWER,
-      ),
-    ).toBe("Out of credits: Ada Lovelace's bundle is out.");
-  });
-
-  it("says 'its payer's bundle' when no payer is recorded", () => {
-    expect(
-      sandboxTeamFrozenLine(sandboxSummaryFixture({ wakePayer: null }), VIEWER),
-    ).toBe("Out of credits: its payer's bundle is out.");
-  });
-
-  it("says 'its payer's bundle' when the payer has no display name", () => {
-    expect(
-      sandboxTeamFrozenLine(
-        sandboxSummaryFixture({
-          wakePayer: { userId: "user-ada", displayName: null },
-        }),
-        VIEWER,
-      ),
-    ).toBe("Out of credits: its payer's bundle is out.");
   });
 });
 

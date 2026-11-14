@@ -90,7 +90,7 @@ interface SandboxRowActionsProps {
   readonly summary: SandboxSummary;
   readonly configuration: SandboxPageConfiguration;
   readonly unreachable: boolean;
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }
 
@@ -177,7 +177,7 @@ function SandboxLifecycleRowActions(
   const actions = sandboxRowActions({
     summary,
     unreachable: props.unreachable,
-    frozenNeedsOwnCredits: props.frozenNeedsOwnCredits,
+    frozenOffersAddCredits: props.frozenOffersAddCredits,
     settingsFailed: props.settingsFailed,
   });
   const primary = useSandboxSettingsPrimaryAction(summary, actions.primary);
@@ -214,8 +214,6 @@ function SandboxLifecycleRowActions(
   const immediate: Partial<Record<SandboxRowAction, () => void>> = {
     resume: () => wake("resume"),
     start: () => wake("start"),
-    // The row states the payer consequence before this action.
-    "resume-paying": () => wake("resume"),
     "add-credits": () =>
       void openLink(
         sandboxAddCreditsUrl(runnerHost.signInUrl, configuration),

@@ -64,7 +64,7 @@ export function SandboxFailedRowActions(props: {
   const actions = sandboxRowActions({
     summary,
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
   });
   const pendingVerb = operation?.kind === "pending" ? operation.verb : null;

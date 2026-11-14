@@ -158,7 +158,7 @@ export function roleGrantPrefix(role: TeamRole): string {
 }
 
 export function roleGrantCommon(): string {
-  return "Full use and management of the team's sandboxes and connected services. Uses your team credits. Every member can interrupt or permanently delete any team sandbox, including ones you created. Your name and email are visible to the team's members. Your actions are attributed to you in status, history and notifications that the reader is authorized to see.";
+  return "Full use and management of the team's sandboxes and connected services. Uses the team's credits. Every member can interrupt or permanently delete any team sandbox, including ones you created. Your name and email are visible to the team's members. Your actions are attributed to you in status, history and notifications that the reader is authorized to see.";
 }
 
 export function invitePendingSeatsSentence(): string {

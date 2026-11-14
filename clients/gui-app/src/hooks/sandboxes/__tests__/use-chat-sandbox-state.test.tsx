@@ -166,7 +166,6 @@ describe("useChatSandboxState", () => {
       kind: "resting",
       sandbox,
       configuration: null,
-      wakeChangesPayer: false,
     });
   });
 
@@ -281,7 +280,6 @@ describe("useChatSandboxState", () => {
     expect(stateOf(false)).toMatchObject({
       kind: "resting",
       configuration: { kind: "personal" },
-      wakeChangesPayer: false,
     });
   });
 });

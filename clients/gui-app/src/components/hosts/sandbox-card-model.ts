@@ -19,6 +19,10 @@ import {
   sandboxFailedToStart,
   sandboxFrozenClock,
 } from "@/lib/sandboxes/sandbox-row-lines";
+import {
+  teamPossessive,
+  teamPossessiveSentence,
+} from "@/lib/sandboxes/sandbox-strings";
 
 /**
  * The sandbox card's per-state copy and actions, kept free of React so the
@@ -28,11 +32,7 @@ import {
 
 /** An action the card offers. `destroy` always asks for confirmation. */
 export type SandboxCardAction =
-  | "suspend"
-  | "resume"
-  | "stop"
-  | "start"
-  | "destroy";
+  "suspend" | "resume" | "stop" | "start" | "destroy";
 
 const NO_ACTIONS: readonly SandboxCardAction[] = [];
 const FROZEN_ACTIONS: readonly SandboxCardAction[] = ["destroy"];
@@ -219,36 +219,9 @@ export function sandboxCreatorName(
   return memberWords(creator, viewerUserId, CREATOR_WORDS);
 }
 
-/**
- * Who pays for the running wake of a team sandbox, while it is
- * awake; `null` asleep, frozen, or when the server names no payer.
- */
-export function sandboxWakePayerName(
-  state: HostSandboxState | null,
-  frozen: boolean,
-  summary: SandboxSummary,
-  viewerUserId: string | null,
-): string | null {
-  const payer = summary.wakePayer;
-  if (state !== "awake" || frozen || payer === null) return null;
-  return viewerUserId !== null && payer.userId === viewerUserId
-    ? "You"
-    : (payer.displayName ?? "A team member");
-}
-
-/** A frozen team sandbox: the paying member's bundle ran out. */
-export function sandboxTeamFrozenLine(
-  summary: SandboxSummary | null,
-  viewerUserId: string | null,
-): string {
-  const payer = summary === null ? null : summary.wakePayer;
-  if (payer === null) return `${HOST_FROZEN_WORD}: its payer's bundle is out.`;
-  if (viewerUserId !== null && payer.userId === viewerUserId) {
-    return `${HOST_FROZEN_WORD}: your bundle is out.`;
-  }
-  return payer.displayName === null
-    ? `${HOST_FROZEN_WORD}: its payer's bundle is out.`
-    : `${HOST_FROZEN_WORD}: ${payer.displayName}'s bundle is out.`;
+/** A frozen team sandbox: the team's bundle ran out, whoever woke it last. */
+export function sandboxTeamFrozenLine(teamName: string | null): string {
+  return `${HOST_FROZEN_WORD}: ${teamPossessive(teamName)} bundle is out.`;
 }
 
 /** A team pod's room, from the pod list's `headroom` and `liveShells`. */
@@ -634,17 +607,9 @@ export function sandboxHeaderCreditsLine(
   summary: SandboxSummary | null,
   teamOwned: boolean,
   teamName: string | null,
-  viewerUserId: string | null,
 ): string {
-  const payer = summary?.wakePayer ?? null;
-  let payerName = "Its payer's";
-  if (payer !== null)
-    payerName =
-      payer.userId === viewerUserId
-        ? "Your"
-        : `${payer.displayName ?? "A member"}'s`;
   const credits = teamOwned
-    ? `${payerName} ${teamName ?? "team"} credits ran out`
+    ? `${teamPossessiveSentence(teamName)} credits ran out`
     : "Your credits ran out";
   const frozenAt = summary?.frozenAt ?? null;
   const destroyAt =

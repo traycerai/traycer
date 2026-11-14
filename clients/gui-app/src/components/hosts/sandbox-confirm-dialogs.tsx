@@ -57,7 +57,6 @@ import {
   configurationCopy,
   formatSandboxDate,
   sandboxIdleRefusal,
-  sandboxMemberName,
   sandboxPeriodDraft,
   sandboxPeriodMinutes,
   sandboxRestingRefusal,
@@ -79,6 +78,7 @@ import {
   keptByLine,
   paidByLine,
   startedByLine,
+  teamPossessive,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -126,18 +126,11 @@ function useDialogSessions(
   ).report;
 }
 
-/** `your Acme credits` / `Priya's Acme credits` / `your credits`. */
-function storageCredits(
-  sandbox: SandboxSummary,
-  configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
-): string {
-  if (configuration.kind === "personal") return "your credits";
-  const payer =
-    sandbox.wakePayer === null
-      ? "you"
-      : sandboxMemberName(sandbox.wakePayer, viewerUserId);
-  return `${payer === "you" ? "your" : `${payer}'s`} ${configuration.teamName} credits`;
+/** `your credits` / `Acme's credits`: a team's sandbox is on the team's. */
+function storageCredits(configuration: SandboxPageConfiguration): string {
+  return configuration.kind === "personal"
+    ? "your credits"
+    : `${teamPossessive(configuration.teamName)} credits`;
 }
 
 /**
@@ -276,16 +269,11 @@ function VerbConfirmDialog(
 
 export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
-  const viewerUserId = useViewerUserId();
   const wake = useSandboxWakeString(props.sandbox);
-  const team = configuration.kind === "team";
-  const storage = team
-    ? `Storage uses ${storageCredits(props.sandbox, configuration, viewerUserId)} until another member wakes it.`
-    : `Storage uses ${storageCredits(props.sandbox, configuration, viewerUserId)}.`;
   const outcome = [
     wake === null ? null : `${wake}.`,
     "Finish or stop running agent turns and shells before suspending.",
-    storage,
+    `Storage uses ${storageCredits(configuration)}.`,
   ]
     .filter((part): part is string => part !== null)
     .join(" ");
@@ -302,7 +290,6 @@ export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
 
 export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
-  const viewerUserId = useViewerUserId();
   const now = useSampledNow();
   // A withdrawn row gets no destroy date: the resting pass will not destroy
   // it, so naming the date its period would have fallen on promises something
@@ -318,7 +305,7 @@ export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
       title={`Stop ${props.sandbox.displayName}?`}
       outcome={[
         "Finish or stop running agent turns and shells before stopping. Start boots the sandbox again.",
-        `The disk is kept at the lower storage rate on ${storageCredits(props.sandbox, configuration, viewerUserId)}.`,
+        `The disk is kept at the lower storage rate on ${storageCredits(configuration)}.`,
         destroyed,
       ]
         .filter((part): part is string => part !== null)
@@ -405,16 +392,14 @@ export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
   const keep = useSandboxKeep(props.sandbox.id);
   const [lost, setLost] = useState(false);
   const configuration = useDialogConfiguration(props.sandbox);
-  const viewerUserId = useViewerUserId();
   const wake = useSandboxWakeString(props.sandbox);
   const now = useSampledNow();
   const name = props.sandbox.displayName;
   const restingDays = SANDBOX_DEFAULT_RESTING_MINUTES / (24 * 60);
   const restsUntil = now + SANDBOX_DEFAULT_RESTING_MINUTES * MS_PER_MINUTE;
+  // A team's sandbox is paid by the team whoever keeps it.
   const payer =
-    props.sandbox.wakePayer === null
-      ? "you"
-      : sandboxMemberName(props.sandbox.wakePayer, viewerUserId);
+    configuration.kind === "personal" ? "you" : configuration.teamName;
   const who = [startedByLine("an agent"), keptByLine("you")].join(" · ");
   const idle = [`Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min`, wake]
     .filter((part): part is string => part !== null)

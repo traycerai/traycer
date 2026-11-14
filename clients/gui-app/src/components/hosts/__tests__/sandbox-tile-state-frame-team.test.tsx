@@ -130,12 +130,6 @@ function renderFrame(): void {
   );
 }
 
-function listedSummary(): SandboxSummary {
-  const listed = mocks.list?.sandboxes[0];
-  if (listed === undefined) throw new Error("expected the listed sandbox");
-  return listed;
-}
-
 function overlayParagraph(
   overlay: HTMLElement,
   index: number,
@@ -229,7 +223,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
 
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.getAttribute("data-kind")).toBe("frozen");
-    const cause = `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine(listedSummary(), VIEWER)}`;
+    const cause = `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine("Alpha")}`;
     expect(overlayParagraph(overlay, 0).textContent).toBe(cause);
     expect(overlay.textContent).toBe(cause);
     expect(overlay.querySelectorAll("p")).toHaveLength(1);
@@ -248,7 +242,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     renderFrame();
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlayParagraph(overlay, 0).textContent).toBe(
-      `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine(listedSummary(), VIEWER)}`,
+      `${hostSandboxStateWord("suspended")} · ${sandboxTeamFrozenLine("Alpha")}`,
     );
     const clock = sandboxFrozenClock(frozenAt);
     if (clock === null) throw new Error("expected a removal clock");
@@ -268,7 +262,7 @@ describe("<SandboxTileStateFrame /> frozen team sandbox", () => {
     renderFrame();
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlayParagraph(overlay, 0).textContent).toBe(
-      `${hostSandboxStateWord(state)} · ${sandboxTeamFrozenLine(null, VIEWER)}`,
+      `${hostSandboxStateWord(state)} · ${sandboxTeamFrozenLine("Alpha")}`,
     );
     expect(overlay.querySelectorAll("p")).toHaveLength(1);
   });

@@ -308,7 +308,7 @@ describe("<SandboxRowActions />", () => {
     const props = {
       configuration: { kind: "personal" } as const,
       unreachable: false,
-      frozenNeedsOwnCredits: false,
+      frozenOffersAddCredits: false,
       settingsFailed: false,
     };
     renderRow(
@@ -355,7 +355,7 @@ describe("<SandboxRowActions />", () => {
         })}
         configuration={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -386,7 +386,7 @@ describe("<SandboxRowActions />", () => {
         })}
         configuration={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -430,7 +430,7 @@ describe("<SandboxRowActions />", () => {
           })}
           configuration={{ kind: "personal" }}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
@@ -461,7 +461,7 @@ describe("<SandboxRowActions />", () => {
         })}
         configuration={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -511,7 +511,7 @@ describe("<SandboxRowActions />", () => {
         })}
         configuration={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -546,7 +546,7 @@ describe("<SandboxRowActions />", () => {
           })}
           configuration={{ kind: "personal" }}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
@@ -566,7 +566,7 @@ describe("<SandboxRowActions />", () => {
         summary={sandboxSummaryFixture({ state: "failed" })}
         configuration={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -692,7 +692,7 @@ describe("<SandboxRowActions />", () => {
           summary={summary}
           configuration={configuration}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
@@ -1158,7 +1158,7 @@ describe("<SandboxRowActions />", () => {
         })}
         configuration={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -1196,7 +1196,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
         })}
         configuration={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={settingsFailed}
       />,
     );
@@ -1460,7 +1460,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
           })}
           configuration={{ kind: "personal" }}
           unreachable
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );

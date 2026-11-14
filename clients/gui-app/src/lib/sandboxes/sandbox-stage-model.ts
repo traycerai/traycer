@@ -21,7 +21,8 @@ import {
 } from "@/lib/sandboxes/sandbox-pricing";
 import {
   notEnoughCreditsLine,
-  teamAllowanceShortLine,
+  teamCreditsShortLine,
+  teamPossessive,
   audienceClause,
   costLine,
   moveClause,
@@ -603,12 +604,7 @@ export interface ConsequencesInput {
 }
 
 export type ConsequenceClauseKind =
-  | "price"
-  | "audience"
-  | "reach"
-  | "team"
-  | "resting-storage"
-  | "move";
+  "price" | "audience" | "reach" | "team" | "resting-storage" | "move";
 
 export interface ConsequenceClause {
   readonly kind: ConsequenceClauseKind;
@@ -623,14 +619,14 @@ export function priceClause(input: ConsequencesInput): ConsequenceClause {
       kind: "price",
       text:
         copy.kind === "team"
-          ? teamAllowanceShortLine(copy.teamName, input.shortfallMc ?? null)
+          ? teamCreditsShortLine(copy.teamName, input.shortfallMc ?? null)
           : notEnoughCreditsLine(input.shortfallMc ?? null),
     };
   }
   if (input.wakingName && copy.kind === "team") {
     return {
       kind: "price",
-      text: `Waking ${input.wakingName} uses your ${copy.teamName} allowance and makes you the payer.`,
+      text: `Waking ${input.wakingName} uses ${teamPossessive(copy.teamName)} credits.`,
     };
   }
   if (input.price === null) {

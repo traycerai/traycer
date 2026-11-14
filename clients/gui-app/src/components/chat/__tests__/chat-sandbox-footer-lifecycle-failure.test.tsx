@@ -94,7 +94,6 @@ function frozenTeam(state: "stopped" | "suspended"): ChatSandboxState {
       frozenAt: FROZEN_AT,
     }),
     configuration: { kind: "team", teamId: "team-a", teamName: "Acme" },
-    wakeChangesPayer: false,
   };
 }
 

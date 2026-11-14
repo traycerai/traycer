@@ -336,7 +336,6 @@ export function useSandboxStaging(input: {
       (host) => host.hostId === (stage.createdHostId ?? existingHostId),
     );
     const existingSummary = existingHost?.sandbox?.summary;
-    const payer = existingSummary?.wakePayer;
     return {
       configuration: stagedConfiguration,
       os:
@@ -353,10 +352,8 @@ export function useSandboxStaging(input: {
         balance === null || price === null
           ? null
           : Math.max(1, price.awakeMcPerHour - balance),
-      wakingName:
-        stage.target.kind === "existing" && payer?.userId !== viewerUserId
-          ? stage.target.name
-          : null,
+      // Waking a team's sandbox uses the team's credits whoever woke it last.
+      wakingName: stage.target.kind === "existing" ? stage.target.name : null,
       audience: audienceFor(stagedConfiguration),
       reachHost: reachFor(
         stage.target.kind === "existing" ? stage.target.hostId : "",
@@ -734,8 +731,8 @@ function stagedNewFacts(
 
 /**
  * `New Acme sandbox` over `Linux · 2 vCPU · 4 GB · $0.12 an hour while awake ·
- * uses your Acme credits`; at a short balance `New Acme sandbox · needs
- * credits` over `Linux · 2 vCPU · 4 GB · from $0.12 an hour · uses your Acme
+ * uses Acme's credits`; at a short balance `New Acme sandbox · needs
+ * credits` over `Linux · 2 vCPU · 4 GB · from $0.12 an hour · uses Acme's
  * credits`.
  */
 function newRowPresentation(
@@ -1018,16 +1015,12 @@ function sandboxRowLines(
   ];
   if (team !== null)
     lines.unshift(
-      sandboxShapeAndCostLine(
-        summary,
-        {
-          kind: "team",
-          teamId: team.teamId,
-          teamName: team.teamName,
-          environmentId: summary.environmentId,
-        },
-        context.viewerUserId,
-      ),
+      sandboxShapeAndCostLine(summary, {
+        kind: "team",
+        teamId: team.teamId,
+        teamName: team.teamName,
+        environmentId: summary.environmentId,
+      }),
     );
   return lines;
 }

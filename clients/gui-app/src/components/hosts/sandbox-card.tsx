@@ -32,7 +32,6 @@ import {
   sandboxHeaderNeedsRepair,
   sandboxHeaderFailureLine,
   sandboxSuspendKeepsLine,
-  sandboxWakePayerName,
   sandboxWithdrawalLine,
   type SandboxCardAction,
   type SandboxSecretsReadiness,
@@ -127,7 +126,6 @@ export function SandboxInstallationGroup(props: {
             summary={summary}
             teamOwned={teamOwned}
             state={state}
-            frozen={frozen}
             viewerUserId={viewerUserId}
           />
           {summary.os === "windows" ? (
@@ -281,13 +279,7 @@ export function SandboxHeaderNotices(props: {
   readonly teamName: string | null;
 }): ReactNode {
   const { summary, state, frozen, teamOwned } = props.sandbox;
-  const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
-  const credits = sandboxHeaderCreditsLine(
-    summary,
-    teamOwned,
-    props.teamName,
-    viewerUserId,
-  );
+  const credits = sandboxHeaderCreditsLine(summary, teamOwned, props.teamName);
   const failure = sandboxHeaderFailureLine(props.sandbox);
   return (
     <div className="flex shrink-0 flex-col gap-2 px-5 text-ui-xs">
@@ -404,7 +396,6 @@ function SandboxFacts(props: {
   readonly summary: SandboxSummary;
   readonly teamOwned: boolean;
   readonly state: HostSandboxState | null;
-  readonly frozen: boolean;
   readonly viewerUserId: string | null;
 }): ReactNode {
   const { summary } = props;
@@ -455,8 +446,6 @@ function SandboxFacts(props: {
       <SandboxProvenance
         summary={summary}
         teamOwned={props.teamOwned}
-        state={props.state}
-        frozen={props.frozen}
         viewerUserId={props.viewerUserId}
       />
     </dl>
@@ -499,22 +488,12 @@ function SandboxOtherRate(props: {
 function SandboxProvenance(props: {
   readonly summary: SandboxSummary;
   readonly teamOwned: boolean;
-  readonly state: HostSandboxState | null;
-  readonly frozen: boolean;
   readonly viewerUserId: string | null;
 }): ReactNode {
   const { summary } = props;
-  // A team row's creator and wake payer; a personal row is the viewer's own.
+  // A team row's creator; a personal row is the viewer's own.
   const creator = props.teamOwned
     ? sandboxCreatorName(summary, props.viewerUserId)
-    : null;
-  const payer = props.teamOwned
-    ? sandboxWakePayerName(
-        props.state,
-        props.frozen,
-        summary,
-        props.viewerUserId,
-      )
     : null;
   return (
     <>
@@ -528,12 +507,6 @@ function SandboxProvenance(props: {
         <>
           <dt className="text-muted-foreground">Created by</dt>
           <dd data-testid="sandbox-card-creator">{creator}</dd>
-        </>
-      )}
-      {payer === null ? null : (
-        <>
-          <dt className="text-muted-foreground">Wake payer</dt>
-          <dd data-testid="sandbox-card-wake-payer">{payer}</dd>
         </>
       )}
     </>
@@ -1104,8 +1077,7 @@ export function SandboxHeaderActions(props: {
   readonly sandbox: HostScopeSandbox;
   readonly onDestroyed: (() => void) | null;
   readonly renderActions:
-    | ((primary: ReactNode, menuItems: ReactNode) => ReactNode)
-    | null;
+    ((primary: ReactNode, menuItems: ReactNode) => ReactNode) | null;
 }): ReactNode {
   const summary = props.sandbox.summary;
   if (summary === null) return props.renderActions?.(null, null) ?? null;
@@ -1126,8 +1098,7 @@ function SandboxHeaderActionSet(props: {
   readonly hostName: string;
   readonly onDestroyed: (() => void) | null;
   readonly renderActions:
-    | ((primary: ReactNode, menuItems: ReactNode) => ReactNode)
-    | null;
+    ((primary: ReactNode, menuItems: ReactNode) => ReactNode) | null;
 }): ReactNode {
   const { summary, sandbox } = props;
   const actions = sandboxCardActions(

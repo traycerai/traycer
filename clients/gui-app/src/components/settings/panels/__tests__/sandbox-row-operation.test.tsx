@@ -236,7 +236,7 @@ function Rows(): ReactNode {
         summary={summary}
         configuration={mocks.configuration}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />
     </section>
@@ -682,7 +682,7 @@ describe("sandbox row operations", () => {
             summary={main}
             configuration={mocks.configuration}
             unreachable={false}
-            frozenNeedsOwnCredits={false}
+            frozenOffersAddCredits={false}
             settingsFailed={false}
           />
         </section>

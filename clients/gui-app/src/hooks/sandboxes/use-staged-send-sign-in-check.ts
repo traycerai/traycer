@@ -12,7 +12,7 @@ import {
   ADD_CREDITS_LINK,
   CHECKING_SANDBOX_AGENTS,
   notEnoughCreditsLine,
-  teamAllowanceShortLine,
+  teamCreditsShortLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import type { ComposerHostNoticeState } from "@/components/home/composer/composer-host-notice";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -122,7 +122,7 @@ export function useStagedSendSignInCheck(
             kind: "refused",
             message:
               configuration.kind === "team"
-                ? teamAllowanceShortLine(configuration.teamName, shortfall)
+                ? teamCreditsShortLine(configuration.teamName, shortfall)
                 : notEnoughCreditsLine(shortfall),
             action: {
               label: ADD_CREDITS_LINK,

@@ -421,7 +421,7 @@ describe("a requested terminal and an Automations terminal opening together", ()
               summary={automationsRow()}
               configuration={{ kind: "personal" }}
               unreachable={false}
-              frozenNeedsOwnCredits={false}
+              frozenOffersAddCredits={false}
               settingsFailed={false}
             />
             <SandboxRowActions
@@ -435,7 +435,7 @@ describe("a requested terminal and an Automations terminal opening together", ()
               })}
               configuration={{ kind: "personal" }}
               unreachable={false}
-              frozenNeedsOwnCredits={false}
+              frozenOffersAddCredits={false}
               settingsFailed={false}
             />
             <LandingTerminalPanel />

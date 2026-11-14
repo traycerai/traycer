@@ -54,7 +54,6 @@ function resting(state: "suspended" | "stopped"): RestingChatSandbox {
       state,
     }),
     configuration: { kind: "team", teamId: "team-a", teamName: "Acme" },
-    wakeChangesPayer: true,
   };
 }
 

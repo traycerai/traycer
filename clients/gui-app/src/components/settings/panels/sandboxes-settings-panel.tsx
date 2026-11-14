@@ -40,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSandboxAutomation } from "@/hooks/sandboxes/use-sandbox-automation-query";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useTeamBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
 import {
   useSandboxConfigurations,
   useSandboxWakeString,
@@ -73,15 +74,14 @@ import {
   sandboxDestroyAllIdleOffered,
   sandboxFilterCount,
   sandboxFilterSummary,
-  sandboxFrozenNeedsOwnCredits,
+  sandboxFrozenCause,
   sandboxFrozenClock,
+  sandboxFrozenOffersAddCredits,
   sandboxKeptByLabel,
-  sandboxPaidByLabel,
   sandboxStartedByLabel,
   sandboxSessionPills,
   sandboxSessionsLine,
   type SandboxSessionReport,
-  sandboxWakePayerConsequence,
   sandboxListHeader,
   sandboxPublicState,
   sandboxRowKind,
@@ -929,6 +929,26 @@ function UnstartedAutomationsRow(props: {
   );
 }
 
+/**
+ * A frozen row's cause line, and whether its primary offers "Add credits":
+ * Personal always, a team's only to the team's Admin.
+ */
+function useFrozenRowFacts(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+): { readonly cause: string | null; readonly offersAddCredits: boolean } {
+  const teamBillingAdmin = useTeamBillingAdmin(
+    configuration.kind === "team" ? configuration.teamId : null,
+  );
+  return {
+    cause: summary.frozen ? sandboxFrozenCause(configuration) : null,
+    offersAddCredits: sandboxFrozenOffersAddCredits(
+      configuration,
+      teamBillingAdmin,
+    ),
+  };
+}
+
 function SandboxListRow(props: {
   readonly summary: SandboxSummary;
   readonly list: UseQueryResult<SandboxListResponse | null>;
@@ -959,11 +979,8 @@ function SandboxListRow(props: {
   };
   const setupFailed =
     awake && (settingsFailed || summary.guestConfigured === false);
-  const payerConsequence = sandboxWakePayerConsequence(
-    summary,
-    configuration,
-    viewerUserId,
-  );
+  const frozen = useFrozenRowFacts(summary, configuration);
+  const frozenCause = frozen.cause;
   let clock: string | null;
   if (summary.frozen) clock = sandboxFrozenClock(summary.frozenAt);
   else
@@ -1002,12 +1019,11 @@ function SandboxListRow(props: {
           </div>
           <SandboxRowIdentityBadges
             summary={summary}
-            configuration={configuration}
             publicState={publicState}
             viewerUserId={viewerUserId}
           />
           <p className="text-ui-sm text-muted-foreground wrap-anywhere">
-            {sandboxShapeAndCostLine(summary, configuration, viewerUserId)}
+            {sandboxShapeAndCostLine(summary, configuration)}
           </p>
           {clock === null ? null : (
             <p
@@ -1034,12 +1050,12 @@ function SandboxListRow(props: {
             testId="sandboxes-row-session-notice"
           />
           <SandboxRowWithdrawal summary={summary} />
-          {payerConsequence === null ? null : (
+          {frozenCause === null ? null : (
             <p
               className="text-ui-xs text-muted-foreground wrap-anywhere"
               data-testid="sandboxes-row-payer-consequence"
             >
-              {payerConsequence}
+              {frozenCause}
             </p>
           )}
         </div>
@@ -1048,11 +1064,7 @@ function SandboxListRow(props: {
         summary={summary}
         configuration={configuration}
         unreachable={unreachable}
-        frozenNeedsOwnCredits={sandboxFrozenNeedsOwnCredits(
-          summary,
-          configuration,
-          viewerUserId,
-        )}
+        frozenOffersAddCredits={frozen.offersAddCredits}
         settingsFailed={settingsFailed}
       />
     </li>
@@ -1061,17 +1073,11 @@ function SandboxListRow(props: {
 
 function SandboxRowIdentityBadges(props: {
   readonly summary: SandboxSummary;
-  readonly configuration: SandboxPageConfiguration;
   readonly publicState: SandboxPublicState;
   readonly viewerUserId: string | null;
 }): ReactNode {
   const startedBy = sandboxStartedByLabel(props.summary, props.viewerUserId);
   const keptBy = sandboxKeptByLabel(props.summary, props.viewerUserId);
-  const paidBy = sandboxPaidByLabel(
-    props.summary,
-    props.configuration,
-    props.viewerUserId,
-  );
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Badge
@@ -1086,11 +1092,6 @@ function SandboxRowIdentityBadges(props: {
       {startedBy === null ? null : (
         <Badge variant="muted" wrap>
           <span className="wrap-anywhere">{startedBy}</span>
-        </Badge>
-      )}
-      {paidBy === null ? null : (
-        <Badge variant="muted" wrap>
-          <span className="wrap-anywhere">{paidBy}</span>
         </Badge>
       )}
       {keptBy === null ? null : (

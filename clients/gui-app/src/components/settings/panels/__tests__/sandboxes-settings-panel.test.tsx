@@ -354,7 +354,7 @@ vi.mock(
         summary: SandboxSummary;
         configuration: SandboxPageConfiguration;
         unreachable: boolean;
-        frozenNeedsOwnCredits: boolean;
+        frozenOffersAddCredits: boolean;
         settingsFailed: boolean;
       }) => {
         if (mocks.realActions) return <original.SandboxRowActions {...props} />;

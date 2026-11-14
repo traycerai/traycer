@@ -23,6 +23,7 @@ import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
   sandboxCreditShortLine,
+  teamPossessiveSentence,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -231,12 +232,12 @@ function toastWakeOutcome(
     case "awake":
       return;
     case "refused":
-      // A team sandbox's wake is on its payer's bundle, not the viewer's
+      // A team sandbox's wake is on the team's bundle, not the viewer's
       // credits, so the personal "your credits ran out" would misdirect.
       toast.warning("This sandbox is out of credits.", {
         description:
           configuration.kind === "team"
-            ? "Its payer's bundle is out."
+            ? `${teamPossessiveSentence(configuration.teamName)} bundle is out.`
             : outcome.message,
       });
       return;

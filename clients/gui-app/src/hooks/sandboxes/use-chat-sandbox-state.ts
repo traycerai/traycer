@@ -13,7 +13,6 @@ import {
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
-import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * Sandbox state precedes generic transport reachability on every chat copy:
@@ -30,7 +29,6 @@ export function useChatSandboxState(
   const list = useSandboxList();
   const configurations = useSandboxConfigurations();
   const entry = useHostDirectoryEntry(hostId);
-  const viewerId = useAuthStore((state) => state.profile?.userId ?? null);
   if (hostId === null) return { kind: "none" };
   if (task.kind === "ended") return { kind: "destroyed", ended: task.ended };
   const sandbox = list.data?.sandboxes.find((row) => row.hostId === hostId);
@@ -49,10 +47,6 @@ export function useChatSandboxState(
       kind: "resting",
       sandbox,
       configuration,
-      wakeChangesPayer:
-        configuration?.kind === "team" &&
-        sandbox.wakePayer !== null &&
-        sandbox.wakePayer.userId !== viewerId,
     };
   }
   if (sandbox.state === "awake") {

@@ -171,7 +171,10 @@ function AuthorizedHostSection(props: {
 }): ReactNode {
   const { sandbox } = props;
   const configurations = useSandboxConfigurations();
-  const configuration = hoverConfiguration(sandbox, configurations);
+  const { label: configuration, ownership } = hoverConfiguration(
+    sandbox,
+    configurations,
+  );
   const awake = sandbox.state === "awake" && !sandbox.frozen;
   return (
     <section className="space-y-1 px-3 py-2 text-ui-xs" aria-label={HOST_LABEL}>
@@ -188,7 +191,7 @@ function AuthorizedHostSection(props: {
       <HostIdentityLine
         sandbox={sandbox}
         epicId={props.epicId}
-        configuration={configuration}
+        ownership={ownership}
         awake={awake}
       />
       <HostIdlePolicy sandbox={sandbox} />
@@ -211,27 +214,34 @@ function AuthorizedHostSection(props: {
   );
 }
 
+/** Whose the sandbox is, as far as the person's teams have answered. */
+type HostOwnership = "team" | "personal" | "unknown";
+
 /**
  * The configuration the sandbox runs under, the line under its name: the
  * sandbox's bound environment, read against the person's teams (Personal
  * once every team has answered and none is its). An absent environment is
- * unknown; `null` only while its name is still unread. The summary keeps this
- * available while the sandbox is suspended or stopped.
+ * unknown; the label is `null` only while its name is still unread. The
+ * summary keeps this available while the sandbox is suspended or stopped.
  */
 function hoverConfiguration(
   sandbox: SandboxSummary,
   configurations: SandboxConfigurations,
-): string | null {
-  if (sandbox.environmentId === null) return "unknown";
+): { readonly label: string | null; readonly ownership: HostOwnership } {
+  if (sandbox.environmentId === null) {
+    return { label: "unknown", ownership: "unknown" };
+  }
   const configuration = sandboxConfigurationOf(
     sandbox,
     configurations.configurations,
   );
-  if (configuration?.kind === "team") return configuration.teamName;
+  if (configuration?.kind === "team") {
+    return { label: configuration.teamName, ownership: "team" };
+  }
   return configurations.complete &&
     !configurations.teamEnvironmentIds.has(sandbox.environmentId)
-    ? "Personal"
-    : null;
+    ? { label: "Personal", ownership: "personal" }
+    : { label: null, ownership: "unknown" };
 }
 
 function HostHeading(props: {
@@ -263,17 +273,17 @@ function HostHeading(props: {
 function HostIdentityLine(props: {
   readonly sandbox: SandboxSummary;
   readonly epicId: string;
-  readonly configuration: string | null;
+  readonly ownership: HostOwnership;
   readonly awake: boolean;
 }): ReactNode {
   const { sandbox } = props;
+  const personal = props.ownership === "personal";
   const costs = useSandboxCosts();
   useRefreshSandboxCosts();
   const viewerUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
   const createdBy = memberName(sandbox.createdBy, viewerUserId);
-  const payer = memberName(sandbox.wakePayer, viewerUserId);
   const creatorName = useMaybeEpicStore((state) => {
     const id = sandbox.createdByAgentId;
     if (id === null || sandbox.createdByTaskId !== props.epicId) return null;
@@ -286,10 +296,11 @@ function HostIdentityLine(props: {
   const cost = costs.data?.sandboxes.find(
     (row) => row.sandboxId === sandbox.id,
   );
-  const payerName =
-    payer ?? (props.configuration === "Personal" ? "you" : null);
-  const startedBy =
-    createdBy ?? (props.configuration === "Personal" ? "you" : null);
+  // A team's credits pay for its sandbox, so no member is named as payer.
+  const payerName = personal
+    ? (memberName(sandbox.wakePayer, viewerUserId) ?? "you")
+    : null;
+  const startedBy = createdBy ?? (personal ? "you" : null);
   return (
     <p className="text-muted-foreground">
       <HostIdentity

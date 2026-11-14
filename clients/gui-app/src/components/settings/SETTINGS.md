@@ -1030,16 +1030,14 @@ see read-only defaults. Viewers see the named editors and admins, with loading,
 failure and retry states, plus **Members**. The list heading is **Your
 sandboxes**, or **{team}'s sandboxes**. The line under it is the count and
 today's cost (UTC day), or the filter summary while a filter applies. Each row
-gives the full name its own wrapping line, then starter, keeper and, while a
-team row is awake and has a payer, **Paid by you** or **Paid by {name}**. The
+gives the full name its own wrapping line, then starter and keeper. The
 next line is **{Linux|Windows} · {n} vCPU · {memory}**, then **{rate} an hour
-while awake** when a price is known, **waking it makes you the payer** on a
-resting team row whose payer is someone else, and **created by {agent}** or
+while awake** when a price is known, and **created by {agent}** or
 **created by {agent} for {task}** on an agent sandbox. A resting clock appends
-**storage uses your credits** on Personal, or **storage uses your {team}
-credits** / **storage uses {name}'s {team} credits** on a team when a wake
-payer exists. **Resuming changes the payer to you.** is its own line before
-the actions when that team row is resting and the payer is not the viewer.
+**storage uses your credits** on Personal, or **storage uses {team}'s
+credits** on a team: the team's credits pay for a team sandbox whoever wakes
+it. A frozen team row says **{team}'s credits ran out.**, and its primary is
+**Add credits** for the team's Admin and **Resume** for everyone else.
 **Give it another {period}** is offered on a resting row inside its warning
 lead and precedes the primary action. **Details** stays inline. Setup failures
 show **Retry applying** (or **Repair setup** on an older host), applicable
@@ -1047,14 +1045,15 @@ show **Retry applying** (or **Repair setup** on an older host), applicable
 **Details** once; remaining secondary actions stay in **More**. Rows show
 starter and keeper, agent/task purpose, session counts and names, and setup
 evidence with support references. **Details** retains lifecycle status, settings
-diagnostics, history and export. Keep states the actual wake payer once. A size option carries its hourly rate
+diagnostics, history and export. Keep states who pays while it is awake (you,
+or the team) once. A size option carries its hourly rate
 (`from` unless the catalogue prices that shape exactly), and the sheet states
 the suspended and stopped rates beside the selection. The defaults shape
 control is the operating system, the resources, that rate, and how waking
 behaves (**Suspend keeps memory**, or **Suspend keeps the disk; processes
 restart on resume**). The out-of-credits chat
 footer keeps the lifecycle state beside **Out of credits**, then the list's
-payer sentence and a dated **Will be removed on** line above **Resume** or **Add
+whose-credits sentence and a dated **Will be removed on** line above **Resume** or **Add
 credits**. Blocking lifecycle overlays on other tiles hide the underlying body
 without unmounting it, so its status and buttons do not show through and
 terminal history returns on wake. Their frozen state also keeps the lifecycle
@@ -6634,7 +6633,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
   formerly did and appears exactly once. CLI-floor remedies remain in Updates.
 
   Exceptions sit below the state: offline, update required, settings failure,
-  out of credits with the payer and removal date, withdrawal and update progress.
+  out of credits with whose credits ran out and the removal date, withdrawal and update progress.
   The Environment row is omitted when the host is not usable, there is no
   client, the status read is unsupported or failed, or the binding read is
   unsupported or failed. When it shows, the label is **Environment** and
@@ -6656,7 +6655,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
   host's Installation opens with a titled **Sandbox** group (size, region
   when known, the other rate — awake rate while resting, storage rate
   otherwise — idle policy including what a suspend keeps, last active,
-  and, on a team sandbox, created by and wake payer, plus the team pod's
+  and, on a team sandbox, created by, plus the team pod's
   room line). Secrets holds the grants, readiness and network events, and
   **Manage** opens that environment's Secrets page. Costs holds the awake
   rate and the storage rate, and, for a personal sandbox, today's charge

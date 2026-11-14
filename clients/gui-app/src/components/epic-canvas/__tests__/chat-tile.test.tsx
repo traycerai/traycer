@@ -694,7 +694,6 @@ const RESTING_COPY_SANDBOX = {
     displayName: "resting-copy",
   }),
   configuration: { kind: "personal" as const },
-  wakeChangesPayer: false,
 };
 const QUEUED_CONTENT: JsonContent = {
   type: "doc",

@@ -25,7 +25,6 @@ import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useHostBinding } from "@/lib/host";
 import { sandboxMutationKeys } from "@/lib/query-keys";
-import { useAuthStore } from "@/stores/auth/auth-store";
 import { sandboxFrozenClock } from "@/lib/sandboxes/sandbox-row-lines";
 import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
 
@@ -110,7 +109,7 @@ function SandboxTileStateFrameInRuntime(props: {
           hostId={hostId}
           overlay={overlay}
           state={facts?.state ?? null}
-          teamOwned={facts !== null && facts.ownerTeamName !== null}
+          teamName={facts?.ownerTeamName ?? null}
         />
       )}
     </div>
@@ -133,15 +132,20 @@ function SandboxTileOverlayLayer(props: {
   readonly hostId: string;
   readonly overlay: SandboxTileOverlay;
   readonly state: HostSandboxState | null;
-  /** A team's frozen sandbox says whose bundle is out, not "your credits". */
-  readonly teamOwned: boolean;
+  /**
+   * The owning team's name, or null for a personal sandbox: a team's frozen
+   * sandbox says whose bundle is out, not "your credits".
+   */
+  readonly teamName: string | null;
 }): ReactNode {
   const list = useSandboxList();
-  const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const summary =
     list.data?.sandboxes.find((s) => s.hostId === props.hostId) ?? null;
   const { overlay } = props;
-  const frozenCause = tileFrozenCause(props.teamOwned, summary, viewerUserId);
+  const frozenCause =
+    props.teamName === null
+      ? sandboxFrozenLine(null)
+      : sandboxTeamFrozenLine(props.teamName);
   const removal =
     summary === null ? null : sandboxFrozenClock(summary.frozenAt);
   return (
@@ -239,16 +243,6 @@ function SandboxTileRowMissing(): ReactNode {
       </Button>
     </>
   );
-}
-
-/** Personal rows use the frozen banner; a team row names whose bundle is out. */
-function tileFrozenCause(
-  teamOwned: boolean,
-  summary: SandboxSummary | null,
-  viewerUserId: string | null,
-): string {
-  if (!teamOwned) return sandboxFrozenLine(null);
-  return sandboxTeamFrozenLine(summary, viewerUserId);
 }
 
 function SandboxTileWakeButton(props: {

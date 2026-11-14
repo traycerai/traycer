@@ -155,16 +155,34 @@ export const NO_MATCH_ELSEWHERE_LINE =
 
 // ── Money ─────────────────────────────────────────────────────────────────
 
-/** `uses your credits` / `uses your Acme credits`. */
+/**
+ * `Acme's`: whose credits a team's sandbox uses. A team's sandbox is paid
+ * from the team's credits, whoever woke it, so every sentence about its
+ * credits names the team. With no name known, `the team's`.
+ */
+export function teamPossessive(teamName: string | null): string {
+  return teamName === null || teamName.length === 0
+    ? "the team's"
+    : `${teamName}'s`;
+}
+
+/** {@link teamPossessive} at the start of a sentence: `Acme's`, `The team's`. */
+export function teamPossessiveSentence(teamName: string | null): string {
+  return teamName === null || teamName.length === 0
+    ? "The team's"
+    : `${teamName}'s`;
+}
+
+/** `uses your credits` / `uses Acme's credits`. */
 export function usesCreditsClause(
   configuration: SandboxConfigurationCopy,
 ): string {
   return configuration.kind === "personal"
     ? "uses your credits"
-    : `uses your ${configuration.teamName} credits`;
+    : `uses ${teamPossessive(configuration.teamName)} credits`;
 }
 
-/** The cost line: `$0.12 an hour while awake · uses your Acme credits`. */
+/** The cost line: `$0.12 an hour while awake · uses Acme's credits`. */
 export function costLine(
   priceMcPerHour: number,
   configuration: SandboxConfigurationCopy,
@@ -264,12 +282,10 @@ export function teamAccessClause(teamName: string): string {
 }
 
 export const RESTING_STORAGE_CLAUSE =
-  "Storage while it's suspended or stopped, on the same credits until another member wakes it.";
+  "Storage while it's suspended or stopped, on the same credits.";
 export function restingStorageClause(): string {
   return RESTING_STORAGE_CLAUSE;
 }
-
-export const SHARED_USE_CLAUSE = "Other members can use it while you pay.";
 
 /** The move clause: `computer` still holds settings not in Personal yet. */
 export function moveClause(computer: string): string {
@@ -418,16 +434,20 @@ function notEnoughCreditsText(
   return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
-/** Short for an hour on a team allowance; `null` names no amount. */
-export function teamAllowanceShortLine(
+/**
+ * Short for an hour of a team's sandbox, which the team's credits pay;
+ * `null` names no amount.
+ */
+export function teamCreditsShortLine(
   teamName: string,
   shortfallMc: number | null,
 ): string {
+  const whose = teamPossessiveSentence(teamName);
   if (shortfallMc === null) {
-    return `Your ${teamName} allowance is too short to start this sandbox for an hour.`;
+    return `${whose} credits don't cover an hour of this sandbox.`;
   }
   const amount = formatSandboxDollarsRequired(shortfallMc);
-  return `Your ${teamName} allowance is short ${amount}. ${amount} more starts this sandbox for an hour.`;
+  return `${whose} credits are short ${amount}. ${amount} more starts this sandbox for an hour.`;
 }
 
 /**
@@ -445,17 +465,23 @@ export function sandboxCreditShortLine(
     return notEnoughCreditsText(shortfallMc, options);
   }
   const allowance = creditSource === "team-allowance";
-  const whose = context === "sentence" ? "Your" : "your";
+  const sentence = context === "sentence";
+  const whose = sentence ? "Your" : "your";
   // The refusal names the pot; the configuration only supplies the team's
   // name. A refusal from a team pot with no team configuration known (the
   // directory had no row) still says it was the team's, never the person's.
+  // A member's allowance is the member's own; the team's credits are the
+  // team's, whoever woke the sandbox.
   let pot = `${whose} credits`;
-  if (creditSource !== "personal") {
-    if (configuration.kind === "team") {
-      pot = `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`;
-    } else {
-      pot = `${whose} ${allowance ? "team allowance" : "team's credits"}`;
-    }
+  if (allowance) {
+    pot =
+      configuration.kind === "team"
+        ? `${whose} ${configuration.teamName} allowance`
+        : `${whose} team allowance`;
+  } else if (creditSource === "team") {
+    const teamName =
+      configuration.kind === "team" ? configuration.teamName : null;
+    pot = `${sentence ? teamPossessiveSentence(teamName) : teamPossessive(teamName)} credits`;
   }
   if (shortfallMc === null) {
     if (!waking && allowance)
