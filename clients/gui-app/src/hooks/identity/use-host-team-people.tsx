@@ -7,6 +7,7 @@ import {
 } from "react";
 import { queryOptions, useQueries } from "@tanstack/react-query";
 import type { EnvironmentPersonResult } from "@traycer-clients/shared/auth/environment-people";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
@@ -25,9 +26,11 @@ import {
  * the team's member directory (`environment.members`), consulted before any
  * directory a surface above already offers, and for an id no directory names
  * once the team's is complete, authn's person read, which still names someone
- * who has left the team. A host no team owns, or one whose owner cannot be
- * read yet, passes the surface above's directory through unchanged, so a
- * personal computer asks for nothing.
+ * who has left the team. Both are read in the team's environment, which the
+ * viewer's `environment.list` names; until it answers, nobody is named. A
+ * host no team owns, or one whose owner cannot be read yet, passes the
+ * surface above's directory through unchanged, so a personal computer asks
+ * for nothing.
  */
 export function HostTeamPeopleProvider(props: {
   readonly hostId: string;
@@ -44,21 +47,33 @@ export function HostTeamPeopleProvider(props: {
 function useHostTeamMembers(hostId: string): BotMemberResolver {
   const outer = use(PersonMembersContext);
   const teamId = useHostOwnerTeamId(hostId);
-  // The directory is a pool-tier read, so any client of this runtime reaches
-  // it; optional, because a tile under test renders with no runtime.
+  // The directory and the list are pool-tier reads, so any client of this
+  // runtime reaches them; optional, because a tile under test renders with no
+  // runtime.
   const client = useOptionalHostClient();
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
   const membersSupported =
     useHostMethodSupport(hostId, "environment.members") === true;
+  const readsTeam = teamId !== null && cloudAuthorized && membersSupported;
+  // A team's environment is not the team: both reads below are addressed by
+  // the environment, which the viewer's environment list names for the team.
+  const environments = useEnvironmentListQuery(client, readsTeam);
+  const listed = environments.data?.environments;
+  const environmentId =
+    listed?.find(
+      (environment) =>
+        environment.ownerKind === "organization" &&
+        environment.ownerId === teamId,
+    )?.environmentId ?? null;
   const directory = useEnvironmentMemberDirectory(
     client,
-    teamId,
-    teamId !== null && cloudAuthorized && membersSupported,
+    environmentId,
+    readsTeam && environmentId !== null,
   );
   const former = useFormerMembers(
-    teamId,
+    environmentId,
     cloudAuthorized && directory.members !== null,
   );
   const team = directory.resolve;
@@ -66,7 +81,18 @@ function useHostTeamMembers(hostId: string): BotMemberResolver {
     (userId: string) => team(userId) ?? outer(userId) ?? former(userId),
     [team, outer, former],
   );
-  return teamId === null ? outer : composed;
+  if (!readsTeam) return outer;
+  // Until the list names the team's environment, nobody on this host is
+  // known: the surface's own directory is not the team's people.
+  if (listed === undefined) return nobodyKnown;
+  // The list answered without the team: its directory is not the viewer's
+  // to read, so the surface's own directory stands, as on a personal host.
+  if (environmentId === null) return outer;
+  return composed;
+}
+
+function nobodyKnown(): null {
+  return null;
 }
 
 /**
@@ -104,13 +130,13 @@ class MissedPeople {
 }
 
 /**
- * authn's person read for each id the team's complete directory does not
- * name, asked once per id for the life of the session. A 404
+ * authn's person read, in the team's environment, for each id its complete
+ * directory does not name, asked once per id for the life of the session. A 404
  * `person_not_found`, or a read that failed, names nobody, and the surface
  * shows the id it has.
  */
 function useFormerMembers(
-  teamId: string | null,
+  environmentId: string | null,
   readable: boolean,
 ): BotMemberResolver {
   const auth = useHostBinding()?.auth ?? null;
@@ -129,18 +155,18 @@ function useFormerMembers(
         queryKey: authQueryKeys.environmentPerson(
           auth,
           viewerId,
-          teamId,
+          environmentId,
           userId,
         ),
-        enabled: readable && auth !== null && teamId !== null,
+        enabled: readable && auth !== null && environmentId !== null,
         retry: false,
         staleTime: Infinity,
         gcTime: Infinity,
         queryFn: ({ signal }): Promise<EnvironmentPersonResult> => {
-          if (auth === null || teamId === null) {
+          if (auth === null || environmentId === null) {
             throw new Error("No sign-in to read this person with.");
           }
-          return auth.readEnvironmentPerson(teamId, userId, signal);
+          return auth.readEnvironmentPerson(environmentId, userId, signal);
         },
       }),
     ),

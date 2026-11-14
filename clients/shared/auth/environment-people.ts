@@ -7,20 +7,19 @@ import { composeRequestAbort, untilAborted } from "./request-abort";
  * answers for a member who has since left, which the member directory no
  * longer lists.
  */
-const environmentPersonSchema = z
-  .object({
-    userId: z.string().min(1),
-    name: z.string().nullable(),
-    handle: z.string().nullable(),
-    avatarUrl: z.string().nullable(),
-  })
-  .strict();
+const environmentPersonSchema = z.strictObject({
+  userId: z.string().min(1),
+  name: z.string().nullable(),
+  handle: z.string(),
+  avatarUrl: z.string().nullable(),
+});
 export type EnvironmentPerson = z.infer<typeof environmentPersonSchema>;
 
 /**
- * `found` for someone who is or was a member; `not-found` for authn's 404
- * `person_not_found` (never a member, or not readable by this sign-in). Any
- * other answer throws.
+ * `found` for someone who is or was a member; `not-found` for authn's 404,
+ * either `person_not_found` (no record of this person on the environment, a
+ * malformed id included) or `environment_not_found` (this sign-in cannot read
+ * the environment): both name nobody. Any other answer throws.
  */
 export type EnvironmentPersonResult =
   | { readonly kind: "found"; readonly person: EnvironmentPerson }
