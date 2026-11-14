@@ -21,7 +21,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostRead } from "@/hooks/bots/use-environment-host-read-query";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -42,11 +42,11 @@ const OTHER_HOST = "host-10";
 const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
 interface DeferredStatusAnswer {
   readonly kind: "deferred_status";
-  readonly promise: Promise<EnvironmentStatusResponseV12>;
-  readonly resolve: (answer: EnvironmentStatusResponseV12) => void;
+  readonly promise: Promise<EnvironmentStatusResponseV13>;
+  readonly resolve: (answer: EnvironmentStatusResponseV13) => void;
 }
-type StatusAnswer = EnvironmentStatusResponseV12 | Error | DeferredStatusAnswer;
-let statusAnswer: EnvironmentStatusResponseV12 | Error =
+type StatusAnswer = EnvironmentStatusResponseV13 | Error | DeferredStatusAnswer;
+let statusAnswer: EnvironmentStatusResponseV13 | Error =
   environmentStatusFixture({});
 let statusAnswers: ReadonlyArray<StatusAnswer> = [];
 let bindingAnswers: ReadonlyArray<EnvironmentHostBinding | Error> = [];
@@ -136,9 +136,9 @@ const OTHER_BINDING: EnvironmentHostBinding = {
 };
 
 function deferredStatusAnswer(): DeferredStatusAnswer {
-  let resolveAnswer: (answer: EnvironmentStatusResponseV12) => void = () =>
+  let resolveAnswer: (answer: EnvironmentStatusResponseV13) => void = () =>
     undefined;
-  const promise = new Promise<EnvironmentStatusResponseV12>((resolve) => {
+  const promise = new Promise<EnvironmentStatusResponseV13>((resolve) => {
     resolveAnswer = resolve;
   });
   return {

@@ -17,7 +17,7 @@ import {
 import type {
   EnvironmentReviewEntryV12,
   EnvironmentReviewResponseV12,
-  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
 } from "@traycer/protocol/host/environment-schemas";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
@@ -68,7 +68,7 @@ function entryOf(
 }
 
 function renderSession(
-  status: EnvironmentStatusResponseV12,
+  status: EnvironmentStatusResponseV13,
   entries: readonly EnvironmentReviewEntryV12[],
   recorded: string[],
 ): HostClient<HostRpcRegistry> {
@@ -79,7 +79,7 @@ function renderSession(
 }
 
 function renderSessionWith(
-  status: EnvironmentStatusResponseV12,
+  status: EnvironmentStatusResponseV13,
   entries: readonly EnvironmentReviewEntryV12[],
   recorded: string[],
   session: {

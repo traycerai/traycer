@@ -61,7 +61,6 @@ function askingHost(overrides: Partial<EnvironmentStatusResponse>): AccessHost {
       remoteAccess: "off",
       ...overrides,
     }),
-    remoteAccessAnswer: { state: "on" },
   });
 }
 

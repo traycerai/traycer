@@ -12,7 +12,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
 import { EnvironmentPickUpkeep } from "@/components/settings/environment-picker";
 import { environmentPickerModel } from "@/components/settings/environment/environment-picker-model";
@@ -36,7 +36,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 const pickerModelMock = vi.hoisted(
   (): {
     current: EnvironmentPickerModel | null;
-    statuses: Map<string, EnvironmentStatusResponseV12>;
+    statuses: Map<string, EnvironmentStatusResponseV13>;
   } => ({ current: null, statuses: new Map() }),
 );
 vi.mock(
@@ -63,7 +63,7 @@ vi.mock(
 
 function renderPage(
   section: "mcp-servers" | "skills" | "sandboxes" | "storage",
-  status: EnvironmentStatusResponseV12,
+  status: EnvironmentStatusResponseV13,
 ): void {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,

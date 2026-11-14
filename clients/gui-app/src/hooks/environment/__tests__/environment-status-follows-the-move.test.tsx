@@ -6,7 +6,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import { LocalMovePageOr } from "@/components/settings/environment/local-move-page";
 import {
   buildEnvironmentClient,
@@ -56,7 +56,7 @@ vi.mock("@/components/settings/details/overview-card-details-line", () => ({
 }));
 
 /** Not moved and waiting for the person's word: the pre-move note. */
-const AWAITING_CONSENT: EnvironmentStatusResponseV12 = environmentStatusFixture(
+const AWAITING_CONSENT: EnvironmentStatusResponseV13 = environmentStatusFixture(
   {
     principal: null,
     planes: { records: "local", broker: "local", room: "local" },
@@ -75,7 +75,7 @@ const AWAITING_CONSENT: EnvironmentStatusResponseV12 = environmentStatusFixture(
  * fixture that sets it here would let a cadence keyed on the consent pass a
  * test the real feed fails.
  */
-function moving(applied: number): EnvironmentStatusResponseV12 {
+function moving(applied: number): EnvironmentStatusResponseV13 {
   const keys = ["ANTHROPIC_AUTH_TOKEN", "DEPLOY_KEY", "github"];
   return environmentStatusFixture({
     principal: { kind: "personal" },
@@ -93,13 +93,13 @@ function moving(applied: number): EnvironmentStatusResponseV12 {
 }
 
 /** The move finished: this computer runs Personal. */
-const MOVED: EnvironmentStatusResponseV12 = environmentStatusFixture({
+const MOVED: EnvironmentStatusResponseV13 = environmentStatusFixture({
   principal: { kind: "personal" },
   consent: { acceptedAt: ACCEPTED_AT, planHash: "plan-1" },
   setup: { stage: "done", state: "done" },
 });
 
-function renderNote(answer: () => EnvironmentStatusResponseV12): {
+function renderNote(answer: () => EnvironmentStatusResponseV13): {
   readonly queryClient: QueryClient;
   readonly reads: () => number;
 } {
@@ -164,7 +164,7 @@ afterEach(() => {
 
 describe("the status read while this computer's move runs", () => {
   it("counts the items up and clears the note when the move ends, within the move's own span", async () => {
-    let answer: EnvironmentStatusResponseV12 = AWAITING_CONSENT;
+    let answer: EnvironmentStatusResponseV13 = AWAITING_CONSENT;
     const { queryClient } = renderNote(() => answer);
     await holdFor(0);
     expect(screen.getByTestId("local-move-page").textContent).toContain(

@@ -23,7 +23,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -619,7 +619,7 @@ describe("Settings entry host resolution", () => {
       entryClient = makeClient();
       const target = targetOption("retained-status", "local");
       const { rendered, queryClient } = requestEntry(target);
-      const retry = Promise.withResolvers<EnvironmentStatusResponseV12>();
+      const retry = Promise.withResolvers<EnvironmentStatusResponseV13>();
       const oldStatus = environmentStatusFixture({});
       const queryKey = queryKeys.hostMethod<
         HostRpcRegistry,
@@ -686,7 +686,7 @@ describe("Settings entry host resolution", () => {
       const target = targetOption("offline-computer", "remote");
       const expected = await neverReadOfflineOutcome(target);
       const { rendered, queryClient } = requestEntry(target);
-      const retry = Promise.withResolvers<EnvironmentStatusResponseV12>();
+      const retry = Promise.withResolvers<EnvironmentStatusResponseV13>();
       const queryKey = queryKeys.hostMethod<
         HostRpcRegistry,
         "environment.status"

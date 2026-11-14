@@ -40,7 +40,7 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { IStreamSession } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { epicGetChatRunSettingsV41 } from "@traycer/protocol/host/epic/contracts";
-import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusResponseSchemaV13 } from "@traycer/protocol/host/environment-schemas";
 import {
   providerState,
   type ProviderSpec,
@@ -188,7 +188,7 @@ function hostFailure(method: string): HostRpcError {
 }
 
 function statusAnswer() {
-  return environmentStatusResponseSchemaV12.parse({
+  return environmentStatusResponseSchemaV13.parse({
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,

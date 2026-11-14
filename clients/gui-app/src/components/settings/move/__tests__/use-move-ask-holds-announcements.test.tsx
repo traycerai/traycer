@@ -6,7 +6,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
 import { useMoveAskHoldsAnnouncements } from "@/components/settings/move/use-move-ask-holds-announcements";
 import {
@@ -53,7 +53,7 @@ let activeComputer: ThisComputer = {
   client: null,
 };
 
-function computerAnswering(status: EnvironmentStatusResponseV12): ThisComputer {
+function computerAnswering(status: EnvironmentStatusResponseV13): ThisComputer {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: { "environment.status": () => status },

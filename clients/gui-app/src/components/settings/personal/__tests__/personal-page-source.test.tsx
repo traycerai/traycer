@@ -55,7 +55,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -142,8 +142,8 @@ function mountPage(options: {
   readonly pick: EnvironmentPick;
   readonly methods: readonly string[] | null;
   readonly status: () =>
-    | EnvironmentStatusResponseV12
-    | Promise<EnvironmentStatusResponseV12>;
+    | EnvironmentStatusResponseV13
+    | Promise<EnvironmentStatusResponseV13>;
 }): Mounted {
   return mountSection({
     ...options,
@@ -159,8 +159,8 @@ function mountSection(options: {
   /** `null` records nothing: no handshake has completed yet. */
   readonly methods: readonly string[] | null;
   readonly status: () =>
-    | EnvironmentStatusResponseV12
-    | Promise<EnvironmentStatusResponseV12>;
+    | EnvironmentStatusResponseV13
+    | Promise<EnvironmentStatusResponseV13>;
 }): Mounted {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.status": options.status,
@@ -319,7 +319,7 @@ describe("PersonalPageFrame's source, one per pick", () => {
   });
 
   it("shows a spinner and sends neither source's reads until the host's status answers, then mounts the right one", async () => {
-    let answer: (status: EnvironmentStatusResponseV12) => void = () =>
+    let answer: (status: EnvironmentStatusResponseV13) => void = () =>
       undefined;
     const mounted = mountPage({
       pick: { kind: "personal" },

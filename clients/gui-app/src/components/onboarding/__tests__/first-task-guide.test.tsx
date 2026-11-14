@@ -16,7 +16,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
   EnvironmentReviewEntryV12,
-  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
 } from "@traycer/protocol/host/environment-schemas";
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
@@ -216,7 +216,7 @@ function computerHolding(entries: readonly EnvironmentReviewEntryV12[]): void {
 }
 
 /** This computer, with a fake host answering `environment.status` with `status`. */
-function computerWithStatus(status: EnvironmentStatusResponseV12): void {
+function computerWithStatus(status: EnvironmentStatusResponseV13): void {
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
@@ -241,7 +241,7 @@ function computerWithStatus(status: EnvironmentStatusResponseV12): void {
  * fails. `statusReads` counts the reads the host has been asked.
  */
 function computerWhoseStatusFailsAfterOneRead(
-  status: EnvironmentStatusResponseV12,
+  status: EnvironmentStatusResponseV13,
 ): { readonly statusReads: () => number } {
   let reads = 0;
   const { client } = buildEnvironmentClient({
@@ -613,7 +613,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
      * a claim about what it did NOT show to mean anything.
      */
     function computerWhoseStatusChanges(
-      answer: () => EnvironmentStatusResponseV12,
+      answer: () => EnvironmentStatusResponseV13,
     ): { readonly reads: () => { status: number; review: number } } {
       let status = 0;
       let review = 0;

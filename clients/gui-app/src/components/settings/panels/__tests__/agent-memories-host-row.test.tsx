@@ -34,7 +34,7 @@ import type {
   ConfigAgentMemoriesSetResponse,
 } from "@traycer/protocol/host/config/schemas";
 import type {
-  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
   EnvironmentUploadReceipt,
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -124,8 +124,8 @@ function receipt(
 const script: {
   reads: ConfigAgentMemoriesResponse[];
   get: (() => Promise<ConfigAgentMemoriesResponse>) | null;
-  statuses: EnvironmentStatusResponseV12[];
-  status: (() => Promise<EnvironmentStatusResponseV12>) | null;
+  statuses: EnvironmentStatusResponseV13[];
+  status: (() => Promise<EnvironmentStatusResponseV13>) | null;
   set: (request: {
     readonly enabled: boolean;
   }) =>
@@ -943,7 +943,7 @@ describe("Memories ▸ the host row's write", () => {
   );
 
   it("retires an active observation when a new client serves the same host", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV13) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1439,7 +1439,7 @@ describe("Memories ▸ the host row's write", () => {
   });
 
   it("stands down when the configuration switches while status is in flight", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV13) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1471,7 +1471,7 @@ describe("Memories ▸ the host row's write", () => {
   });
 
   it("ignores an older held status after a newer write supersedes it", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV13) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1513,7 +1513,7 @@ describe("Memories ▸ the host row's write", () => {
   });
 
   it("ignores a status response after the row unmounts", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV13) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
