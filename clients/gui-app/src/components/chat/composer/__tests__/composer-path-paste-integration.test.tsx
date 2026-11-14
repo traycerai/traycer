@@ -693,11 +693,7 @@ async function mountedComposer(
     />
   );
   const view = render(harness());
-  await act(async () => {
-    await flushMicrotasksRaw();
-  });
-  expect(handleRef.current).not.toBeNull();
-  expect(handleRef.current?.isReady()).toBe(true);
+  await waitFor(() => expect(handleRef.current?.isReady()).toBe(true));
   const moveTarget = (next: ComposerTarget): void => {
     target = next;
     view.rerender(harness());

@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "../host-stream-client";
 import type {
@@ -89,15 +90,52 @@ export class FakeStreamSession implements IStreamSession {
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
   emitFatal(reason: string): void {
-    this.emitClosed({
-      kind: "fatalError",
-      details: {
-        code: "UNAUTHORIZED",
-        reason,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
+    this.emitFatalWithCode("UNAUTHORIZED", reason);
+  }
+
+  /** The close a host sends when it cannot serve `method` at all. */
+  emitIncompatible(method: string, reason: string): void {
+    this.status = "closed";
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "INCOMPATIBLE",
+          reason,
+          incompatibleMethods: [
+            {
+              method,
+              clientCanonical: null,
+              hostCanonical: null,
+              blocking: "host-missing-method",
+            },
+          ],
+          upgradeGuidance: null,
+        },
       },
-    });
+      null,
+      null,
+    );
+  }
+
+  /** The terminal close a host sends with a specific code. */
+  emitFatalWithCode(code: string, reason: string): void {
+    this.status = "closed";
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code,
+          reason,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      null,
+      null,
+    );
   }
 
   emitClosed(reason: StreamCloseReason): void {
@@ -260,12 +298,26 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     return this.silentFor;
   }
 
-  getMethodSupport(): "unknown" {
-    return "unknown";
+  /** What {@link getMethodSupport} answers; `"unknown"` until a suite says otherwise. */
+  methodSupport: StreamMethodSupport = "unknown";
+
+  getMethodSupport(): StreamMethodSupport {
+    return this.methodSupport;
   }
 
-  subscribeMethodSupport(): () => void {
-    return () => undefined;
+  private readonly methodSupportListeners = new Set<() => void>();
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    this.methodSupportListeners.add(listener);
+    return () => {
+      this.methodSupportListeners.delete(listener);
+    };
+  }
+
+  /** Changes {@link methodSupport} the way a handshake does: then tells every subscriber. */
+  setMethodSupport(next: StreamMethodSupport): void {
+    this.methodSupport = next;
+    for (const listener of [...this.methodSupportListeners]) listener();
   }
 
   subscribeAvailabilityRecovered(): () => void {

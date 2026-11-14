@@ -24,6 +24,7 @@ import {
 import { BootOpenSettingsButton } from "@/components/host/host-boot-surface";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
+import { useMarkDrawnDoorCover } from "@/stores/host/drawn-door-cover-store";
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { getClientAppVersion } from "@/lib/app-version";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -91,11 +92,16 @@ export function WindowHostModalHost(props: {
    */
   readonly bypassed: boolean;
 }): ReactNode {
-  const narration = useWindowNarration();
+  const { narration, doorCoverHostId } = useWindowNarration();
 
   if (narration.kind === "silent") return null;
   if (props.bypassed) return null;
-  return <NarratingWindowHostModal narration={narration} />;
+  return (
+    <NarratingWindowHostModal
+      narration={narration}
+      doorCoverHostId={doorCoverHostId}
+    />
+  );
 }
 
 /**
@@ -150,6 +156,8 @@ function NarratingWindowHostModal(props: {
     WindowNarrationState,
     { readonly kind: "narrating" }
   >;
+  /** The host whose door cover this narration is, if it is one. */
+  readonly doorCoverHostId: string | null;
 }): ReactNode {
   const { narration } = props;
   const hostBinding = useHostBinding();
@@ -223,6 +231,11 @@ function NarratingWindowHostModal(props: {
   // is naming WHICH card won, and re-deriving that from the readiness here
   // would be the second copy this suppression exists to avoid.
   useSuppressionLog(gateDrawn?.kind ?? null, narration);
+  useMarkDrawnDoorCover(
+    drawsNarration(gateDrawn !== null, signOutQuestionOpen, blocking, narration)
+      ? props.doorCoverHostId
+      : null,
+  );
   if (gateDrawn !== null || signOutQuestionOpen) {
     return null;
   }
@@ -333,6 +346,21 @@ function NarratingWindowHostModal(props: {
     return <WindowHostStartupCard {...narrationProps} />;
   }
   return <WindowHostModal {...narrationProps} />;
+}
+
+/**
+ * Whether `NarratingWindowHostModal` puts a card or a dialog on screen: the
+ * branches that return one, in its order. The toast stays quiet for a door
+ * refusal only while its cover is drawn, so this must not drift from them.
+ */
+function drawsNarration(
+  gateCardDrawn: boolean,
+  signOutQuestionOpen: boolean,
+  blocking: boolean,
+  narration: Extract<WindowNarrationState, { readonly kind: "narrating" }>,
+): boolean {
+  if (gateCardDrawn || signOutQuestionOpen) return false;
+  return blocking || narration.cause !== "cold-start";
 }
 
 /**

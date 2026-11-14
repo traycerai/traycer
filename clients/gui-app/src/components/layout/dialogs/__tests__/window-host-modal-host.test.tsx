@@ -59,14 +59,17 @@ vi.mock("@/hooks/host/use-window-narration", async (load) => {
   return {
     ...actual,
     useWindowNarration: () => {
-      const narration = actual.useWindowNarration();
+      const reading = actual.useWindowNarration();
       return narrationRound2Harness.teamMembershipRequired
         ? {
-            kind: "narrating" as const,
-            cause: "no-usable-host" as const,
-            variant: { kind: "team-membership-required" as const },
+            ...reading,
+            narration: {
+              kind: "narrating" as const,
+              cause: "no-usable-host" as const,
+              variant: { kind: "team-membership-required" as const },
+            },
           }
-        : narration;
+        : reading;
     },
   };
 });

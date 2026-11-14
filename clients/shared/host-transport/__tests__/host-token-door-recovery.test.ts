@@ -73,10 +73,15 @@ async function harness(
     signIn: (userId) => (userId === USER_ID ? "signed-in" : null),
     now: () => NOW,
   });
-  await tokens.adopt(USER_ID, HOST_ID, {
-    token: "held-token",
-    expiresAtMs: NOW + 10_000,
-  });
+  await tokens.adopt(
+    USER_ID,
+    HOST_ID,
+    {
+      token: "held-token",
+      expiresAtMs: NOW + 10_000,
+    },
+    tokens.era(USER_ID),
+  );
   const recovery = signInRecovery ?? {
     revalidateForReconnect: () => {
       signInCalls.push("sign-in");
@@ -122,6 +127,29 @@ describe("host-token refusal recovery", () => {
     expect(test.signInCalls).toEqual([]);
   });
 
+  it("mints again for token_expired after an unavailable replacement", async () => {
+    const test = await harness(
+      [
+        { kind: "unavailable", detail: "authn answered HTTP 503" },
+        tokenOutcome("fresh-token"),
+      ],
+      null,
+    );
+    const expired = refusal("UNAUTHORIZED", "token_expired", false);
+
+    await expect(test.recover.revalidateRefused(expired)).resolves.toBe(
+      "network-error",
+    );
+    expect(test.tokens.current(USER_ID, HOST_ID)?.token).toBe("held-token");
+    await expect(test.recover.revalidateRefused(expired)).resolves.toBe(
+      "rotated",
+    );
+
+    expect(test.mintCalls).toEqual([HOST_ID, HOST_ID]);
+    expect(test.tokens.current(USER_ID, HOST_ID)?.token).toBe("fresh-token");
+    expect(test.states).toEqual(["token-unavailable"]);
+  });
+
   it("mints once for not_admitted and raises state only when that fresh token is refused again", async () => {
     const test = await harness([tokenOutcome("fresh-token")], null);
     const refusalDetails = refusal("UNAUTHORIZED", "not_admitted", false);
@@ -136,6 +164,29 @@ describe("host-token refusal recovery", () => {
     expect(test.mintCalls).toEqual([HOST_ID]);
     expect(test.states).toEqual(["not-admitted"]);
     expect(test.signInCalls).toEqual([]);
+  });
+
+  it("mints again for not_admitted after an unavailable replacement", async () => {
+    const test = await harness(
+      [
+        { kind: "unavailable", detail: "authn answered HTTP 503" },
+        tokenOutcome("fresh-token"),
+      ],
+      null,
+    );
+    const notAdmitted = refusal("UNAUTHORIZED", "not_admitted", false);
+
+    await expect(test.recover.revalidateRefused(notAdmitted)).resolves.toBe(
+      "network-error",
+    );
+    expect(test.tokens.current(USER_ID, HOST_ID)?.token).toBe("held-token");
+    await expect(test.recover.revalidateRefused(notAdmitted)).resolves.toBe(
+      "rotated",
+    );
+
+    expect(test.mintCalls).toEqual([HOST_ID, HOST_ID]);
+    expect(test.tokens.current(USER_ID, HOST_ID)?.token).toBe("fresh-token");
+    expect(test.states).toEqual(["token-unavailable"]);
   });
 
   it("routes session_revoked through sign-in recovery without minting a host token", async () => {
@@ -217,10 +268,15 @@ describe("host-token refusal recovery", () => {
       signIn: (userId) => (userId === USER_ID ? "signed-in" : null),
       now: () => Date.now(),
     });
-    await tokens.adopt(USER_ID, HOST_ID, {
-      token: "held-token",
-      expiresAtMs: Date.now() + 60_000,
-    });
+    await tokens.adopt(
+      USER_ID,
+      HOST_ID,
+      {
+        token: "held-token",
+        expiresAtMs: Date.now() + 60_000,
+      },
+      tokens.era(USER_ID),
+    );
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
         new Response(

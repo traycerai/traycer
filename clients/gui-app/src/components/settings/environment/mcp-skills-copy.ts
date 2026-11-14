@@ -87,7 +87,7 @@ export const SKILL_POLICY_LABELS = {
 
 /** What each policy does, under the page's list. */
 export const SKILL_POLICIES_LINE =
-  "Auto-update: follows upstream, cannot be edited here. Evolve: you and your agents can change it, updates wait for you. Frozen: nothing changes it.";
+  "Auto-update: follows upstream, cannot be edited here. Evolve: you and your agents can change it. Upstream updates require your action. Frozen: nothing changes it.";
 
 export const SKILL_UPDATE_AVAILABLE = "Update available";
 export const SKILL_UPDATE_NOW_LABEL = "Update now";

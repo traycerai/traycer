@@ -1,6 +1,9 @@
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
-import type { HostTokenRenewal } from "@traycer-clients/shared/auth/host-token-source";
+import type {
+  HostTokenMintOutcome,
+  HostTokenRenewal,
+} from "@traycer-clients/shared/auth/host-token-source";
 import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-token-sign-out";
 import {
   listTeamComputersViaHttp,
@@ -12,7 +15,13 @@ import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/s
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
+  RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
+import type {
+  HostTokenEraReply,
+  HostTokenObtainReply,
+  HostTokenRenewReply,
+} from "../../ipc-contracts/host-token-types";
 import {
   listUserSessionsViaHttp,
   mintHostCredentialViaHttp,
@@ -148,10 +157,13 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
   // the ask is answered on this process's next sign-in change: one waiting
   // ask per person, replaced by a newer one, which answers the older ask
   // `already-current`.
+  // The ask keeps the era it was made in: one from before a sign-out is
+  // answered `superseded`, and never mints in the era after it.
   const waitingRenewals = new Map<string, () => void>();
   const renewOnNextSignIn = (
     userId: string,
     hostIds: readonly string[],
+    era: number,
   ): Promise<HostTokenRenewal> =>
     new Promise((resolve) => {
       waitingRenewals.get(userId)?.();
@@ -159,6 +171,10 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
         bridge.authSession.off("change", onChange);
         if (waitingRenewals.get(userId) === stop)
           waitingRenewals.delete(userId);
+        if (tokens.era(userId) !== era) {
+          resolve({ kind: "superseded" });
+          return;
+        }
         tokens.renew(userId, hostIds).then(resolve, () => {
           resolve({ kind: "already-current" });
         });
@@ -175,39 +191,79 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
   bridge.disposeFns.push(() => {
     for (const stop of Array.from(waitingRenewals.values())) stop();
   });
+  // Main's era is the only one: a window reads it here, and every write a
+  // window asks for names the era it began in. Each handler compares that era
+  // and starts the source's work in one step, and the source reads its own era
+  // as that work starts, so nothing begun in an earlier era is kept.
+  bridge.handleSync(RunnerHostSync.hostTokensEra, (_event, userId: unknown) => {
+    assertString(userId, "hostTokensEra.userId");
+    return tokens.era(userId);
+  });
   bridge.handleInvoke(
     RunnerHostInvoke.hostTokensObtain,
-    async (_event, userId: unknown, hostId: unknown, fresh: unknown) => {
+    async (
+      _event,
+      userId: unknown,
+      hostId: unknown,
+      fresh: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenObtainReply> => {
       assertString(userId, "hostTokensObtain.userId");
       assertString(hostId, "hostTokensObtain.hostId");
       assertBoolean(fresh, "hostTokensObtain.fresh");
-      return tokens.obtain(userId, hostId, fresh, null);
+      assertNumber(expectedEra, "hostTokensObtain.expectedEra");
+      const outcome: HostTokenMintOutcome =
+        tokens.era(userId) === expectedEra
+          ? await tokens.obtain(userId, hostId, fresh, null)
+          : { kind: "superseded" };
+      return { outcome, era: tokens.era(userId) };
     },
   );
   bridge.handleInvoke(
     RunnerHostInvoke.hostTokensRenew,
-    async (_event, userId: unknown, hostIds: unknown) => {
+    async (
+      _event,
+      userId: unknown,
+      hostIds: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenRenewReply> => {
       assertString(userId, "hostTokensRenew.userId");
+      assertNumber(expectedEra, "hostTokensRenew.expectedEra");
       const wanted = hostIdsOf(hostIds);
+      if (tokens.era(userId) !== expectedEra)
+        return { renewal: { kind: "superseded" }, era: tokens.era(userId) };
       const renewal = await tokens.renew(userId, wanted);
-      return renewal.kind === "already-current"
-        ? renewOnNextSignIn(userId, wanted)
-        : renewal;
+      return {
+        renewal:
+          renewal.kind === "already-current"
+            ? await renewOnNextSignIn(userId, wanted, expectedEra)
+            : renewal,
+        era: tokens.era(userId),
+      };
     },
   );
   bridge.handleInvoke(
     RunnerHostInvoke.hostTokensAdopt,
-    async (_event, userId: unknown, hostId: unknown, token: unknown) => {
+    async (
+      _event,
+      userId: unknown,
+      hostId: unknown,
+      token: unknown,
+      expectedEra: unknown,
+    ): Promise<HostTokenEraReply> => {
       assertString(userId, "hostTokensAdopt.userId");
       assertString(hostId, "hostTokensAdopt.hostId");
-      await tokens.adopt(userId, hostId, hostTokenOf(token));
+      assertNumber(expectedEra, "hostTokensAdopt.expectedEra");
+      await tokens.adopt(userId, hostId, hostTokenOf(token), expectedEra);
+      return { era: tokens.era(userId) };
     },
   );
   bridge.handleInvoke(
     RunnerHostInvoke.hostTokensForgetUser,
-    async (_event, userId: unknown) => {
+    async (_event, userId: unknown): Promise<HostTokenEraReply> => {
       assertString(userId, "hostTokensForgetUser.userId");
       await tokens.forgetUser(userId);
+      return { era: tokens.era(userId) };
     },
   );
   bridge.disposeFns.push(
@@ -216,6 +272,7 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
         userId,
         hostId,
         token: tokens.current(userId, hostId),
+        era: tokens.era(userId),
       });
     }),
   );

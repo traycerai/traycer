@@ -9,15 +9,12 @@ import { toast } from "sonner";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
-import {
-  HOST_DOOR_STATE_POLICY,
-  hostRefusalOf,
-} from "@traycer-clients/shared/host-transport/host-door-state";
+import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import { staleWriteOfHostError } from "@/lib/environment/stale-write";
 import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
-import { useHostDoorStateStore } from "@/stores/host/host-door-state-store";
+import { drawnDoorCoverHost } from "@/stores/host/drawn-door-cover-store";
 import { hostOfFailedCall } from "@/lib/host/refused-host";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -625,8 +622,9 @@ export function toastFromHostErrorWithDetail(
  * call was refreshed and sent once more, or recovery ended it. A sign-out
  * on the way flips auth status to `signed-out`, and
  * `AuthSessionExpiredToastBridge` says so. Still signed in, the refusal says
- * nothing only where a door state that blocks now covers the host the call
- * was sent to: the person sees that cover. Anything else gets the caller's
+ * nothing only while the window is drawing the door cover of the host the
+ * call was sent to: the person sees that cover. A blocking state stored for
+ * a host no cover is drawn for does not count. Anything else gets the caller's
  * own line. The `retryable` variant keeps its own copy: it is not a
  * credential statement.
  */
@@ -640,12 +638,10 @@ function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
   return doorStateCovers(error);
 }
 
-/** Whether a door state that blocks is up for the host `error` was sent to. */
+/** Whether the window has the door cover of the host `error` was sent to on screen. */
 function doorStateCovers(error: HostRpcError): boolean {
   const hostId = hostOfFailedCall(error);
-  if (hostId === null) return false;
-  const state = useHostDoorStateStore.getState().byHost.get(hostId);
-  return state !== undefined && HOST_DOOR_STATE_POLICY[state.kind].blocks;
+  return hostId !== null && drawnDoorCoverHost() === hostId;
 }
 
 /**
