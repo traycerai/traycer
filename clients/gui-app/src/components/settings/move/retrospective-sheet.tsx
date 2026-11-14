@@ -85,6 +85,8 @@ export function RetrospectiveSheet(props: {
   readonly held: readonly HeldRow[];
   readonly stillLocal: readonly StillLocalRow[];
   readonly heldPendingId: string | null;
+  /** Held rows whose Approve is unavailable: the live value moved under it. */
+  readonly heldApproveRefused: ReadonlySet<string>;
   /** A held-row choice the configuration refused, said under the rows. */
   readonly heldIssue: ConfigurationWriteIssue;
   /** Where the inventory's read is while it is read or once it fails. */
@@ -179,6 +181,7 @@ export function RetrospectiveSheet(props: {
                   rows={props.held}
                   actions={HELD_COMMAND_CHOICES}
                   pendingId={props.heldPendingId}
+                  approveRefused={props.heldApproveRefused}
                   onHeldApply={props.onHeldApply}
                 />
               </InventoryRow>
@@ -312,6 +315,7 @@ function HeldList(props: {
   readonly rows: readonly HeldRow[];
   readonly actions: readonly HeldChoiceAction[];
   readonly pendingId: string | null;
+  readonly approveRefused: ReadonlySet<string>;
   readonly onHeldApply: (heldId: string, choice: HeldApplyChoice) => void;
 }): ReactNode {
   return (
@@ -342,7 +346,11 @@ function HeldList(props: {
                   type="button"
                   size="xs"
                   variant={action.choice === "discard" ? "muted" : "outline"}
-                  disabled={props.pendingId !== null}
+                  disabled={
+                    props.pendingId !== null ||
+                    (action.choice === "approve" &&
+                      props.approveRefused.has(row.heldId))
+                  }
                   data-testid={`retrospective-held-${row.heldId}-${action.choice}`}
                   onClick={() => props.onHeldApply(row.heldId, action.choice)}
                 >
