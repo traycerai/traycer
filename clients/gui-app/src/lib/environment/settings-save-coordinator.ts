@@ -31,6 +31,13 @@ import {
 /** An apply that went unanswered is tried once more at the same hold revision. */
 const TRIES_PER_HOLD_REVISION = 2;
 
+/**
+ * How long a save the host does not list is kept. Another window may still
+ * have it out: that window's answer comes within this time and reconciles it
+ * there.
+ */
+const UNLISTED_GRACE_MS = 60_000;
+
 /** Where a save is made, and what the person saw when they made it. */
 export interface SettingsSaveContext {
   readonly environmentId: string;
@@ -47,10 +54,16 @@ export interface SettingsSaveCoordinatorPorts {
   readonly accountId: () => string | null;
   /** One authn operation on the current sign-in; null with no session service. */
   readonly cloud: () => EnvironmentCloud | null;
-  /** `environment.proposals` on `hostId`. */
+  /**
+   * `environment.proposals` on `hostId`, over a connection this window
+   * already holds open for its own reasons, or null when it holds none. It
+   * never opens or dials one: a remote host only through a borrowed ready
+   * session (`tryAcquireReadyRemoteSession`), this machine's host through its
+   * own requester.
+   */
   readonly readProposals: (
     hostId: string,
-  ) => Promise<EnvironmentProposalsResponse>;
+  ) => Promise<EnvironmentProposalsResponse | null>;
   readonly now: () => number;
 }
 
@@ -122,12 +135,14 @@ interface RememberedSave {
 
 /**
  * The host's own records sorted by what its proposals list says of each:
- * those to forget (refused, or not listed while no save of theirs is out),
- * and those authn holds, by environment. A queued one is in neither.
+ * those to forget (refused, or not listed while no save of theirs is out in
+ * this window and older than {@link UNLISTED_GRACE_MS}), and those authn
+ * holds, by environment. A queued one is in neither.
  */
 function sortByReceipt(
   mine: ReadonlyArray<readonly [string, SettingsSaveMemoryRecord]>,
   proposals: EnvironmentProposalsResponse,
+  now: number,
 ): {
   readonly forget: readonly string[];
   readonly proposed: ReadonlyMap<string, readonly RememberedSave[]>;
@@ -139,8 +154,11 @@ function sortByReceipt(
       receiptMatches(record, row.proposal),
     )?.proposal;
     if (receipt === undefined) {
-      // A save still out may not have reached the host's list yet.
-      if (!inFlight(id)) forget.push(id);
+      // A save still out, here or in another window, may not have reached
+      // the host's list yet.
+      if (!inFlight(id) && now - record.writtenAt > UNLISTED_GRACE_MS) {
+        forget.push(id);
+      }
     } else if (receipt.state === "refused") {
       forget.push(id);
     } else if (receipt.state === "proposed") {
@@ -208,16 +226,17 @@ export function createSettingsSaveCoordinator(
     );
     if (mine.length === 0) return;
 
-    let proposals: EnvironmentProposalsResponse;
+    let proposals: EnvironmentProposalsResponse | null;
     try {
       proposals = await ports.readProposals(hostId);
     } catch {
-      // Nothing answered: every record waits for the next connection.
-      return;
+      proposals = null;
     }
-    if (!sameAccount()) return;
+    // Not connected, or nothing answered: every record waits for the next
+    // connection.
+    if (proposals === null || !sameAccount()) return;
 
-    const sorted = sortByReceipt(mine, proposals);
+    const sorted = sortByReceipt(mine, proposals, ports.now());
     for (const id of sorted.forget) store().forget(id);
     if (sorted.proposed.size === 0) return;
 
