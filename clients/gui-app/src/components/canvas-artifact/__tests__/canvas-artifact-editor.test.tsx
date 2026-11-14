@@ -102,7 +102,6 @@ interface FakeFlowInstance {
   readonly zoomTo: (zoom: number) => void;
   readonly setCenter: (x: number, y: number, options: object) => void;
   readonly fitView: (options: FitViewOptions) => void;
-  readonly getViewport: () => FlowViewport;
   readonly setViewport: (viewport: FlowViewport) => Promise<boolean>;
 }
 
@@ -115,7 +114,9 @@ interface FakeFlowInstance {
 // does), and the move lifecycle. `setViewport` mirrors xyflow's own
 // behavior for a programmatic set: it fires `onMove` then `onMoveEnd`
 // synchronously with the new viewport, which is what lets the editor's own
-// "programmatic wheel moves fire end on every tick" comment hold in a test.
+// "programmatic wheel moves fire end on every frame" comment hold in a test.
+// React Flow reports the viewport the editor last rendered, unless a test
+// pins `reportedViewport` to play a React Flow that has yet to catch up.
 interface FlowCapture {
   nodes: CanvasFlowNode[];
   dragStop: DragStop | null;
@@ -126,6 +127,8 @@ interface FlowCapture {
   zoomTo: Mock<(zoom: number) => void>;
   setCenter: Mock<(x: number, y: number, options: object) => void>;
   fitView: Mock<(options: FitViewOptions) => void>;
+  setViewport: Mock<(viewport: FlowViewport) => void>;
+  reportedViewport: FlowViewport | null;
   onMove: MoveHandler | null;
   onMoveStart: MoveHandler | null;
   onMoveEnd: MoveHandler | null;
@@ -140,6 +143,8 @@ const flow: FlowCapture = vi.hoisted(() => ({
   zoomTo: vi.fn<(zoom: number) => void>(),
   setCenter: vi.fn<(x: number, y: number, options: object) => void>(),
   fitView: vi.fn<(options: FitViewOptions) => void>(),
+  setViewport: vi.fn<(viewport: FlowViewport) => void>(),
+  reportedViewport: null,
   onMove: null,
   onMoveStart: null,
   onMoveEnd: null,
@@ -169,8 +174,8 @@ vi.mock("@xyflow/react", async () => {
             zoomTo: flow.zoomTo,
             setCenter: flow.setCenter,
             fitView: flow.fitView,
-            getViewport: () => flow.viewport ?? { x: 0, y: 0, zoom: 1 },
             setViewport: (next) => {
+              flow.setViewport(next);
               flow.onMove?.(null, next);
               flow.onMoveEnd?.(null, next);
               return Promise.resolve(true);
@@ -217,10 +222,13 @@ vi.mock("@xyflow/react", async () => {
       );
     },
     Background: () => null,
-    // Board headers counter-scale by the viewport zoom; jsdom has no
-    // viewport, so every read sees the identity transform.
-    useStore: (selector: (state: { transform: number[] }) => number) =>
-      selector({ transform: [0, 0, 1] }),
+    // The store's transform is the viewport React Flow has drawn: the one
+    // the editor last rendered, unless a test pins an older one.
+    useStore: <T,>(selector: (state: { transform: number[] }) => T): T => {
+      const shown = flow.reportedViewport ??
+        flow.viewport ?? { x: 0, y: 0, zoom: 1 };
+      return selector({ transform: [shown.x, shown.y, shown.zoom] });
+    },
     NodeToolbar: (props: { children: ReactNode }) => props.children,
     Position: { Top: "top" },
     NodeResizer: (props: { onResizeEnd?: ResizeEnd }) => {
@@ -390,6 +398,8 @@ afterEach(() => {
   flow.zoomTo.mockClear();
   flow.setCenter.mockClear();
   flow.fitView.mockClear();
+  flow.setViewport.mockClear();
+  flow.reportedViewport = null;
   flow.viewport = null;
   flow.onMove = null;
   flow.onMoveStart = null;
@@ -1679,6 +1689,20 @@ describe("CanvasArtifactEditor wheel settling", () => {
     return stage;
   }
 
+  // A wheel event only queues its move; the next animation frame applies it.
+  function applyWheelFrame(): void {
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+  }
+
+  // A zoom gesture reaches React Flow once it has been quiet for 120ms.
+  function settleZoomGesture(): void {
+    act(() => {
+      vi.advanceTimersByTime(120);
+    });
+  }
+
   it("keeps the near board live at mount, before any gesture", () => {
     const { sourceForBoard } = mountWheelEditor();
     expect(sourceForBoard).toHaveBeenCalledWith(NEAR);
@@ -1749,6 +1773,7 @@ describe("CanvasArtifactEditor wheel settling", () => {
     const stage = stageElement();
 
     fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    applyWheelFrame();
     expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
     const panned = flow.viewport;
     if (panned === null) throw new Error("the canvas never panned");
@@ -1768,6 +1793,7 @@ describe("CanvasArtifactEditor wheel settling", () => {
     const stage = stageElement();
 
     fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    applyWheelFrame();
     const panned = flow.viewport;
     if (panned === null) throw new Error("the canvas never panned");
 
@@ -1794,6 +1820,7 @@ describe("CanvasArtifactEditor wheel settling", () => {
     const stage = stageElement();
 
     fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    applyWheelFrame();
     const panned = flow.viewport;
     if (panned === null) throw new Error("the canvas never panned");
     const onMoveStart = flow.onMoveStart;
@@ -1831,6 +1858,401 @@ describe("CanvasArtifactEditor wheel settling", () => {
     // fitView is a bare mock with no viewport side effect in this harness,
     // so the cancelled wheel settle must not have fired on its own.
     expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+  });
+
+  describe("one camera move per animation frame", () => {
+    // INITIAL_VIEW is { x: 60, y: 100, zoom: 0.6 }, and jsdom lays the stage
+    // out at the screen's origin.
+    it("adds up the wheel events of a frame, each capped on its own, into a single move", () => {
+      mountWheelEditor();
+      const stage = stageElement();
+
+      fireEvent.wheel(stage, { deltaX: 30, deltaY: 10 });
+      fireEvent.wheel(stage, { deltaX: 30, deltaY: -4 });
+      // A momentum tail: capped at 80, as it would be arriving alone.
+      fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+      expect(flow.setViewport).not.toHaveBeenCalled();
+
+      applyWheelFrame();
+
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      expect(flow.setViewport).toHaveBeenCalledWith({
+        x: 60 - 30 - 30 - 80,
+        y: 100 - 10 + 4,
+        zoom: 0.6,
+      });
+      expect(flow.viewport).toEqual({ x: -80, y: 94, zoom: 0.6 });
+    });
+
+    it("zooms about each event's own point, in the order the events came", () => {
+      mountWheelEditor();
+      const stage = stageElement();
+
+      fireEvent.wheel(stage, {
+        deltaY: -100,
+        ctrlKey: true,
+        clientX: 200,
+        clientY: 100,
+      });
+      fireEvent.wheel(stage, { deltaX: 50, deltaY: 0 });
+      fireEvent.wheel(stage, {
+        deltaY: -100,
+        ctrlKey: true,
+        clientX: 400,
+        clientY: 300,
+      });
+      applyWheelFrame();
+      settleZoomGesture();
+
+      // Each zoom keeps the canvas point under its pointer where it was.
+      const step = Math.exp(0.3);
+      const first = { x: 200 - (200 - 60) * step, y: 100, zoom: 0.6 * step };
+      const panned = { ...first, x: first.x - 50 };
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      const moved = flow.setViewport.mock.calls[0][0];
+      expect(moved.zoom).toBeCloseTo(panned.zoom * step, 10);
+      expect(moved.x).toBeCloseTo(400 - (400 - panned.x) * step, 10);
+      expect(moved.y).toBeCloseTo(300 - (300 - panned.y) * step, 10);
+    });
+
+    it("builds each frame on the last one even while React Flow still reports an older viewport", () => {
+      mountWheelEditor();
+      const stage = stageElement();
+      // React Flow reports a viewport only once React has rendered it; a
+      // busy canvas can be frames behind the wheel.
+      flow.reportedViewport = { x: 60, y: 100, zoom: 0.6 };
+
+      fireEvent.wheel(stage, { deltaX: 40, deltaY: 0 });
+      applyWheelFrame();
+      fireEvent.wheel(stage, { deltaX: 40, deltaY: 0 });
+      applyWheelFrame();
+
+      expect(flow.setViewport).toHaveBeenLastCalledWith({
+        x: 60 - 40 - 40,
+        y: 100,
+        zoom: 0.6,
+      });
+    });
+
+    it("starts again from React Flow's viewport once another camera move has taken over", () => {
+      mountWheelEditor();
+      const stage = stageElement();
+      fireEvent.wheel(stage, { deltaX: 40, deltaY: 0 });
+      applyWheelFrame();
+
+      // A drag pans the canvas somewhere else entirely.
+      const dragged = { x: 500, y: 500, zoom: 0.6 };
+      act(() => {
+        flow.onMoveStart?.(new MouseEvent("mousedown"), dragged);
+        flow.onMove?.(new MouseEvent("mousemove"), dragged);
+        flow.onMoveEnd?.(new MouseEvent("mouseup"), dragged);
+      });
+      fireEvent.wheel(stage, { deltaX: 40, deltaY: 0 });
+      applyWheelFrame();
+
+      expect(flow.setViewport).toHaveBeenLastCalledWith({
+        x: 460,
+        y: 500,
+        zoom: 0.6,
+      });
+    });
+
+    it("drops a move still queued when the editor unmounts", () => {
+      mountWheelEditor();
+      fireEvent.wheel(stageElement(), { deltaX: 40, deltaY: 0 });
+
+      cleanup();
+      vi.advanceTimersToNextFrame();
+
+      expect(flow.setViewport).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("CanvasArtifactEditor zoom gestures", () => {
+  // The gesture scales what is already drawn and React Flow redraws once, at
+  // the end. INITIAL_VIEW is { x: 60, y: 100, zoom: 0.6 }.
+  const STEP = Math.exp(0.3);
+  const ZOOM_IN = { deltaY: -100, ctrlKey: true, clientX: 200, clientY: 100 };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function pane(): HTMLElement {
+    return screen.getByRole("group", { name: "Canvas pane" });
+  }
+  function layer(): HTMLElement {
+    const element = pane().parentElement;
+    if (element === null) throw new Error("could not find the zoom layer");
+    return element;
+  }
+  function transformOf(value: string): {
+    x: number;
+    y: number;
+    scale: number;
+  } {
+    const match = /^translate\((.+)px, (.+)px\) scale\((.+)\)$/.exec(value);
+    if (match === null) throw new Error(`not a layer transform: "${value}"`);
+    return {
+      x: Number(match[1]),
+      y: Number(match[2]),
+      scale: Number(match[3]),
+    };
+  }
+  function layerTransform(): { x: number; y: number; scale: number } {
+    return transformOf(layer().style.transform);
+  }
+  function frame(): void {
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+  }
+  function wait(ms: number): void {
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  }
+
+  it("scales the drawn canvas about the pointer and tells React Flow only once the gesture is quiet", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+
+    // Scaling about (200, 100) keeps that point of the picture in place.
+    const shown = layerTransform();
+    expect(shown.scale).toBeCloseTo(STEP, 10);
+    expect(shown.x).toBeCloseTo(200 * (1 - STEP), 10);
+    expect(shown.y).toBeCloseTo(100 * (1 - STEP), 10);
+    expect(layer().style.willChange).toBe("transform");
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    expect(flow.viewport).toEqual({ x: 60, y: 100, zoom: 0.6 });
+
+    // 120ms after the wheel event, not after the frame that drew it.
+    wait(103);
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    wait(1);
+
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(flow.viewport?.zoom).toBeCloseTo(0.6 * STEP, 10);
+    expect(flow.viewport?.x).toBeCloseTo(200 - 140 * STEP, 10);
+    // The layer lets go in the render that draws the real viewport.
+    expect(layer().style.transform).toBe("");
+    expect(layer().style.willChange).toBe("");
+  });
+
+  it("gives the backdrop the inverse of the layer's transform, so the dot grid and fill stay on the stage", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY: 100 });
+    frame();
+
+    const scaled = layerTransform();
+    const countered = transformOf(
+      layer().style.getPropertyValue("--canvas-backdrop-transform"),
+    );
+    expect(scaled.scale).toBeCloseTo(1 / STEP, 10);
+    // The backdrop sits inside the layer: its transform runs first, then
+    // the layer's. Together they must leave it exactly where it was.
+    expect(scaled.scale * countered.scale).toBeCloseTo(1, 10);
+    expect(scaled.scale * countered.x + scaled.x).toBeCloseTo(0, 8);
+    expect(scaled.scale * countered.y + scaled.y).toBeCloseTo(0, 8);
+
+    wait(120);
+    expect(layer().style.getPropertyValue("--canvas-backdrop-transform")).toBe(
+      "",
+    );
+  });
+
+  it.each([
+    ["minimum", 4000, 0.05],
+    ["maximum", -4000, 4],
+  ])(
+    "lets go of the layer after a gesture runs into the %s zoom, and after pinching on at it",
+    (_limit, deltaY, zoom) => {
+      mountEditor();
+      for (let step = 0; step < 6; step += 1)
+        fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY });
+      frame();
+      wait(120);
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      expect(flow.viewport?.zoom).toBe(zoom);
+      expect(layer().style.transform).toBe("");
+
+      // Nothing changes at the limit, so React Flow has nothing to redraw.
+      fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY });
+      frame();
+      wait(120);
+      expect(flow.viewport?.zoom).toBe(zoom);
+      expect(layer().style.transform).toBe("");
+      expect(layer().style.willChange).toBe("");
+    },
+  );
+
+  it("lets go of the layer when React Flow draws a viewport other than the one it was handed", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    // React Flow settles somewhere else: a limit of its own, a rounding.
+    flow.reportedViewport = { x: 10, y: 20, zoom: 0.7 };
+
+    wait(120);
+
+    // Kept over a drawing it does not match, the layer would show the
+    // canvas transformed twice.
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(layer().style.transform).toBe("");
+    expect(layer().style.willChange).toBe("");
+  });
+
+  it("holds the redraw back for as long as wheel events keep coming", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    wait(100);
+    fireEvent.wheel(pane(), ZOOM_IN);
+    wait(119);
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    expect(layerTransform().scale).toBeCloseTo(STEP * STEP, 10);
+
+    wait(1);
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(flow.viewport?.zoom).toBeCloseTo(0.6 * STEP * STEP, 10);
+  });
+
+  it("carries a pan that joins the gesture on the layer and redraws both together", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    const zoomed = layerTransform();
+
+    fireEvent.wheel(pane(), { deltaX: 50, deltaY: -20 });
+    frame();
+
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    expect(layerTransform().x).toBeCloseTo(zoomed.x - 50, 10);
+    expect(layerTransform().y).toBeCloseTo(zoomed.y + 20, 10);
+
+    wait(120);
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(flow.viewport?.x).toBeCloseTo(200 - 140 * STEP - 50, 10);
+    expect(flow.viewport?.y).toBeCloseTo(100 + 20, 10);
+    expect(layer().style.transform).toBe("");
+  });
+
+  it("follows React Flow when it draws an earlier pan under a zoom in progress", () => {
+    mountEditor();
+    // React Flow has yet to draw anything past the starting viewport.
+    flow.reportedViewport = { x: 60, y: 100, zoom: 0.6 };
+    fireEvent.wheel(pane(), { deltaX: 40, deltaY: 0 });
+    frame();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    // The layer shows the pan too: React Flow has not drawn it.
+    expect(layerTransform().x).toBeCloseTo(200 * (1 - STEP) - 40 * STEP, 10);
+
+    // The pan lands. The layer keeps the same picture over the new drawing.
+    flow.reportedViewport = { x: 20, y: 100, zoom: 0.6 };
+    act(() => {
+      flow.onMove?.(null, { x: 20, y: 100, zoom: 0.6 });
+    });
+
+    expect(layerTransform().x).toBeCloseTo(200 * (1 - STEP), 10);
+    expect(layerTransform().scale).toBeCloseTo(STEP, 10);
+  });
+
+  it("lets go of the layer when the gesture ends where it began, with nothing for React Flow to redraw", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+    fireEvent.wheel(pane(), { ...ZOOM_IN, deltaY: 100 });
+    frame();
+    expect(layer().style.willChange).toBe("transform");
+
+    wait(120);
+
+    expect(layer().style.transform).toBe("");
+    expect(layer().style.willChange).toBe("");
+  });
+
+  it("hands React Flow the zoom on screen before another camera move starts from it", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /, zoom$/ }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Fit to screen$/ }));
+
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+    expect(flow.setViewport.mock.calls[0][0].zoom).toBeCloseTo(0.6 * STEP, 10);
+    expect(flow.setViewport.mock.invocationCallOrder[0]).toBeLessThan(
+      flow.fitView.mock.invocationCallOrder[0],
+    );
+    expect(layer().style.transform).toBe("");
+    // Nothing is left to redraw later.
+    wait(200);
+    expect(flow.setViewport).toHaveBeenCalledOnce();
+  });
+
+  it("redraws nothing for a gesture the editor unmounted under", () => {
+    mountEditor();
+    fireEvent.wheel(pane(), ZOOM_IN);
+    frame();
+
+    cleanup();
+    vi.advanceTimersByTime(200);
+
+    expect(flow.setViewport).not.toHaveBeenCalled();
+  });
+});
+
+describe("CanvasArtifactEditor wheel moves under fullscreen", () => {
+  it("lets go of a zoom in progress when a board goes fullscreen, and comes back to the zoomed view", () => {
+    mountEditor();
+    const pane = screen.getByRole("group", { name: "Canvas pane" });
+    const layer = pane.parentElement;
+    if (layer === null) throw new Error("could not find the zoom layer");
+    fireEvent.wheel(pane, { deltaY: -100, ctrlKey: true });
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+    expect(layer.style.transform).not.toBe("");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home fullscreen" }),
+    );
+
+    // The fullscreen board must not be drawn through the gesture's scale.
+    expect(layer.style.transform).toBe("");
+    expect(flow.setViewport).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Back to canvas" }));
+    expect(flow.viewport?.zoom).toBeCloseTo(0.6 * Math.exp(0.3), 10);
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops a move queued just before a board went fullscreen, which owns the viewport from then on", () => {
+    mountEditor();
+    const pane = screen.getByRole("group", { name: "Canvas pane" });
+    fireEvent.wheel(pane, { deltaX: 40, deltaY: 0 });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Play Home fullscreen" }),
+    );
+    act(() => {
+      vi.advanceTimersToNextFrame();
+    });
+
+    expect(flow.setViewport).not.toHaveBeenCalled();
   });
 });
 
