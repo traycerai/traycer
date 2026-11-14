@@ -1,8 +1,5 @@
 import { useState, type ReactNode } from "react";
-import {
-  grantedTeamMemberRole,
-  type EnvironmentInvitation,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import {
   INVITATION_GONE,
   inviteAcceptTitle,
@@ -32,11 +29,6 @@ export function InviteAcceptDialog(props: {
   const accept = useEnvironmentInvitationAcceptMutation(useHostClient());
   const [gone, setGone] = useState(false);
   const invitation = props.invitation;
-  // An invitation to the retired view-only role cannot be accepted as
-  // anything: the role is gone and accepting is never a promotion. It reads
-  // as an invitation that is no longer there, which is what it is.
-  const invitedRole =
-    invitation === null ? null : grantedTeamMemberRole(invitation.role);
   const close = (open: boolean): void => {
     if (open) return;
     setGone(false);
@@ -71,7 +63,7 @@ export function InviteAcceptDialog(props: {
               {inviteAcceptTitle(invitation.teamName)}
             </DialogDescription>
           </DialogHeader>
-          {gone || invitedRole === null ? (
+          {gone ? (
             <p
               className="max-w-[72ch] text-ui-sm text-destructive"
               data-testid="invite-accept-gone"
@@ -81,7 +73,7 @@ export function InviteAcceptDialog(props: {
             </p>
           ) : (
             <InviteAcceptGrant
-              role={invitedRole}
+              role={invitation.role}
               noticeText={dataHandlingNoticeText()}
               paidPlan={invitation.paidPlan}
               accepting={accept.isPending}

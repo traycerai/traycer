@@ -132,6 +132,11 @@ type DefaultsCardBody =
       readonly shape: StageShape | null;
     };
 
+/** The roles that change a configuration's defaults; every other one reads them. */
+function changesDefaults(role: SandboxDefaultsEnvironment["role"]): boolean {
+  return role === "owner" || role === "admin" || role === "editor";
+}
+
 function defaultsCardBody(
   catalogue: SandboxCatalogue | null,
   environment: SandboxDefaultsEnvironment | null,
@@ -145,7 +150,7 @@ function defaultsCardBody(
   const shape = configurationStageShape(catalogue, ready?.defaults ?? null);
   if (
     environment === null ||
-    environment.role === null ||
+    !changesDefaults(environment.role) ||
     ready === null ||
     shape === null
   ) {
@@ -192,7 +197,7 @@ export function SandboxDefaultsSection(props: {
       {body.kind === "list" ? (
         <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
       ) : null}
-      {environment !== null && environment.role === null ? (
+      {environment !== null && !changesDefaults(environment.role) ? (
         <DefaultsEditors environmentId={environment.environmentId} />
       ) : null}
       {read !== null && read.kind === "failed" ? (
@@ -245,7 +250,8 @@ function DefaultsEditors(props: { readonly environmentId: string }): ReactNode {
     members.isPending || members.isError
       ? []
       : members.members.flatMap((member) =>
-          member.effectiveRole !== null &&
+          (member.effectiveRole === "admin" ||
+            member.effectiveRole === "editor") &&
           member.inviteState !== "pending" &&
           member.displayName !== null
             ? [member.displayName]

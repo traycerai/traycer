@@ -697,7 +697,7 @@ describe("InviteAcceptDialog", () => {
     expect(screen.queryByTestId("invite-accept")).toBeNull();
   });
 
-  it("reads an invitation to the retired viewer role as no longer open, with nothing to accept", async () => {
+  it("offers an invitation to a Viewer and explains what accepting allows", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
       "environment.invitations.accept": V10,
@@ -715,12 +715,11 @@ describe("InviteAcceptDialog", () => {
       { wrapper: wrapperWithRunnerHost(harness.Wrapper) },
     );
 
-    expect((await screen.findByTestId("invite-accept-gone")).textContent).toBe(
-      "This invitation is no longer open.",
+    expect((await screen.findByTestId("role-grant-prefix")).textContent).toBe(
+      "You can see the team's settings but not change them.",
     );
-    expect(screen.queryByTestId("invite-accept-grant")).toBeNull();
-    expect(screen.queryByTestId("invite-accept")).toBeNull();
-    expect(harness.paramsOf("environment.invitations.accept")).toHaveLength(0);
+    expect(screen.queryByTestId("invite-accept-gone")).toBeNull();
+    expect(screen.getByTestId("invite-accept")).toBeTruthy();
     expect(onAccepted).not.toHaveBeenCalled();
   });
 });

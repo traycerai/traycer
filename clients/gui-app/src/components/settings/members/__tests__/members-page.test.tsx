@@ -195,7 +195,7 @@ describe("MembersPage members read", () => {
     expect(failure.textContent).toBe("Couldn't load Acme's members.Retry");
   });
 
-  it("keeps a listed retired role from regaining admin controls through the descriptor", async () => {
+  it("shows a Viewer member with a role picker to an admin", async () => {
     useAuthStore.setState({
       profile: { userId: "u-admin", userName: "Ada", email: "ada@acme.test" },
     });
@@ -204,7 +204,7 @@ describe("MembersPage members read", () => {
       {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () =>
-          membersPage([{ ...ADA, effectiveRole: "viewer" }, PRIYA]),
+          membersPage([ADA, { ...PRIYA, effectiveRole: "viewer" }]),
       },
     );
     render(<MembersPage environmentId="env-a" />, {
@@ -212,13 +212,50 @@ describe("MembersPage members read", () => {
     });
 
     await screen.findByText("Acme · 2 people");
-    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+    const viewerRow = rowOf("u-priya");
+    expect(within(viewerRow).getByText("Viewer")).toBeTruthy();
     expect(
-      within(rowOf("u-priya")).queryByRole("button", { name: "Remove" }),
-    ).toBeNull();
+      within(viewerRow).getByRole("combobox", { name: "Role for Priya" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Invite" })).toBeTruthy();
+  });
+
+  it("confirms and writes an Editor's demotion to Viewer", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.members.removePreview": () => PREVIEW,
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "Role for Priya" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("option", { name: "Viewer" }),
+    );
     expect(
-      screen.queryByRole("combobox", { name: "Role for Priya" }),
-    ).toBeNull();
+      await screen.findByText("Change Priya's role in Acme to viewer?"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+    expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
+      "Change to viewer",
+    );
+    expect(harness.paramsOf("environment.members.setRole")).toHaveLength(0);
+
+    await userEvent.click(screen.getByTestId("members-demotion-confirm"));
+    await vi.waitFor(() =>
+      expect(harness.paramsOf("environment.members.setRole")).toEqual([
+        { environmentId: "env-a", userId: "u-priya", role: "viewer" },
+      ]),
+    );
   });
 
   it("names members by name and email, you by name, and never by user id", async () => {
@@ -605,7 +642,7 @@ describe("MembersPage offboarding previews", () => {
       await screen.findByRole("combobox", { name: "Role for Grace" }),
     );
     await userEvent.click(
-      await screen.findByRole("option", { name: "Editor" }),
+      await screen.findByRole("option", { name: "Viewer" }),
     );
     const table = await screen.findByTestId("members-demotion-preview-table");
     expect(table.textContent).toContain("Unavailable");
@@ -631,7 +668,7 @@ describe("MembersPage offboarding previews", () => {
       await screen.findByRole("combobox", { name: "Role for Grace" }),
     );
     await userEvent.click(
-      await screen.findByRole("option", { name: "Editor" }),
+      await screen.findByRole("option", { name: "Viewer" }),
     );
     // A refused read is an answer, so the dialog opens on it rather than
     // staying shut — and it opens with the failure line already in it, which
@@ -957,7 +994,7 @@ describe("MembersPage refused writes", () => {
       { kind: "host" },
       {
         "environment.list": () => ({ environments: [TEAM] }),
-        "environment.members": () => membersPage([ADA, GRACE]),
+        "environment.members": () => membersPage([ADA, PRIYA]),
         "environment.members.removePreview": () => PREVIEW,
         "environment.members.setRole": () => ({ outcome: "forbidden" }),
       },
@@ -967,22 +1004,22 @@ describe("MembersPage refused writes", () => {
     });
 
     await userEvent.click(
-      await screen.findByRole("combobox", { name: "Role for Grace" }),
+      await screen.findByRole("combobox", { name: "Role for Priya" }),
     );
     await userEvent.click(
-      await screen.findByRole("option", { name: "Editor" }),
+      await screen.findByRole("option", { name: "Viewer" }),
     );
     // A demotion is confirmed before it is written, so the refusal answers
     // the confirmed write.
     await userEvent.click(
-      await screen.findByRole("button", { name: "Change to editor" }),
+      await screen.findByRole("button", { name: "Change to viewer" }),
     );
 
     expect((await screen.findByTestId("members-banner")).textContent).toBe(
       "An admin changes roles.",
     );
     expect(harness.paramsOf("environment.members.setRole")).toEqual([
-      { environmentId: "env-a", userId: "u-grace", role: "editor" },
+      { environmentId: "env-a", userId: "u-priya", role: "viewer" },
     ]);
   });
 
