@@ -1,4 +1,5 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
+import type { EnvironmentTransport } from "../environment/environment-cloud";
 import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
 import type {
   TeamComputersResult,
@@ -258,6 +259,14 @@ export interface IRunnerHost {
    * for which one is reached and when).
    */
   readonly authnBaseUrl: string;
+
+  /**
+   * How the app's own calls to authn's environment routes are sent: each once,
+   * never following a redirect (`EnvironmentTransport`). The shell owns it
+   * because only the shell knows which request honours that: a phone's patched
+   * `fetch` ignores `redirect`.
+   */
+  readonly environmentTransport: EnvironmentTransport;
 
   /**
    * Browser-safe WebSocket attach endpoint for the Remote Host Support relay

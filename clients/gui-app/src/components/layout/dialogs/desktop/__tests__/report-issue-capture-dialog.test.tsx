@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   act,
   cleanup,
@@ -217,6 +218,7 @@ function createBaseRunnerHost(): IRunnerHost {
     onRegisteredHostsChange: () => null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
+    environmentTransport: fetchEnvironmentTransport,
     relayBaseUrl: "wss://relay.example.invalid/attach",
     poolBaseUrl: "",
     hasLocalHost: true,

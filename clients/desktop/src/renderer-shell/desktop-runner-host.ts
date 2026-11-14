@@ -1,3 +1,4 @@
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type {
   TeamComputersResult,
@@ -932,6 +933,7 @@ export interface DesktopRunnerHostOptions {
 export class DesktopRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly environmentTransport = fetchEnvironmentTransport;
   readonly relayBaseUrl: string;
   readonly poolBaseUrl: string;
   // False for a launch booted in the `none` lifecycle mode: main runs no

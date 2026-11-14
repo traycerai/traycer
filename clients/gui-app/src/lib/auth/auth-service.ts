@@ -6185,6 +6185,7 @@ export class AuthService {
     return {
       authnBaseUrl: this.runnerHost.authnBaseUrl,
       bearer: { kind: "cloud", getBearerToken: () => this.cloudBearer() },
+      transport: this.runnerHost.environmentTransport,
     };
   }
 }
