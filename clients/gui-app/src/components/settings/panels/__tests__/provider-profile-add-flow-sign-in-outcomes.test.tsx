@@ -861,12 +861,14 @@ describe("Add a profile around one sign-in", () => {
         profilesBefore: [],
         profilesAfter: [],
         outcome: null,
+        codePaste: true,
         holdAwait: true,
       });
       await pressAccount(offers);
       const openButton = await screen.findByRole("button", {
         name: /Open browser/,
       });
+      expect(screen.getByText("Didn't return automatically?")).toBeTruthy();
       expect(openLinkMock).toHaveBeenCalledWith(
         "https://example.test/sign-in",
         "auth",
