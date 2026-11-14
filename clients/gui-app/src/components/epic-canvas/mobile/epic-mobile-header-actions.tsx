@@ -70,7 +70,7 @@ export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
     <Button
       type="button"
       variant="muted"
-      size="icon-sm"
+      size="icon-touch"
       aria-label="Switch tab"
       data-testid="mobile-epic-switcher-trigger"
       disabled={!mounted}

@@ -5,6 +5,7 @@ import {
   isHostLifecycleRowAvailable,
   isPreventSleepRowAvailable,
   isVoiceInputRowAvailable,
+  isMobileSwipeRowAvailable,
 } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
@@ -31,6 +32,15 @@ export const GENERAL = defineSettingsSection("general", {
     breadcrumb: null,
     availableWhen: alwaysAvailable,
     keywords: ["prompt", "input", "message box", "editor"],
+  },
+  mobileSwipeHistory: {
+    kind: "row",
+    group: "chatComposer",
+    search: { anchor: "general-mobile-swipe" },
+    label: "Swipe for back and forward",
+    description: "When off, swipes open the task sidebar and tile selector.",
+    availableWhen: isMobileSwipeRowAvailable,
+    keywords: ["swipe", "gesture", "history", "navigation"],
   },
   voiceInput: {
     kind: "row",

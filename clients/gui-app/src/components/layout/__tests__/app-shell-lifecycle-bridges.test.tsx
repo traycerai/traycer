@@ -309,7 +309,7 @@ describe("<AppShell /> across a form change", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps a pending sign-out confirmation when a rotation replaces the drawer with the strip", async () => {
+  async function rotateToStrip(): Promise<void> {
     setRootWidth(root, 400);
     queryClient = renderAppShell();
     await screen.findByTestId("mobile-nav-drawer-stub");
@@ -322,8 +322,23 @@ describe("<AppShell /> across a form change", () => {
     act(() => {
       for (const notify of rootResizeObservers) notify();
     });
-
     await screen.findByTestId("side-tab-strip");
+  }
+
+  // The installed app keeps the drawer mounted beside the strip so the edge
+  // swipe still has a drawer to open, and the confirmation it hosts with it.
+  it("keeps the drawer and a pending sign-out confirmation mounted across a rotation in the installed app", async () => {
+    await rotateToStrip();
+
+    expect(screen.getByTestId("mobile-nav-drawer-stub")).not.toBeNull();
+    expect(screen.getByTestId("confirm-destructive-dialog")).not.toBeNull();
+  });
+
+  it("keeps a pending sign-out confirmation when a rotation replaces the browser drawer with the strip", async () => {
+    setMobileApp(false);
+
+    await rotateToStrip();
+
     expect(screen.queryByTestId("mobile-nav-drawer-stub")).toBeNull();
     expect(screen.getByTestId("confirm-destructive-dialog")).not.toBeNull();
   });

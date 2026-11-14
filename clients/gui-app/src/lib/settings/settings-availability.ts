@@ -258,3 +258,9 @@ export function isSetPiecesRowAvailable(
     isSoundtrackRowAvailable(context) && context.soundtrackSetPiecesOffered
   );
 }
+
+export function isMobileSwipeRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return context.mobileApp;
+}

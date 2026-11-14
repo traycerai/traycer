@@ -24,6 +24,7 @@ import {
 } from "@/components/layout/shell/blocking-layer-claim";
 import { setMobileApp } from "@/lib/mobile-app";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import type { EpicMigrationSlice } from "@/stores/epics/open-epic/store";
 
@@ -126,6 +127,9 @@ function renderUnderMigration(history: RouterHistory): {
 
 beforeEach(() => {
   setMobileApp(true);
+  // The history cases below assert on back/forward, which only the history
+  // mode routes to; the panel mode has its own case.
+  useSettingsStore.setState({ mobileSwipeHistory: true });
   migrationState.current = IDLE_MIGRATION;
 });
 
@@ -133,6 +137,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   setMobileApp(false);
+  useSettingsStore.setState({ mobileSwipeHistory: false });
   useMobileNavStore.setState({ open: false });
   migrationState.current = IDLE_MIGRATION;
 });
@@ -209,6 +214,32 @@ describe("edge swipes under the epic migration modal", () => {
 
     expect(backSpy).not.toHaveBeenCalled();
     expect(forwardSpy).not.toHaveBeenCalled();
+  });
+
+  // In the default panel mode a leading swipe opens the drawer, so a negative
+  // back/forward check proves nothing here - the drawer staying shut does, and
+  // the idle swipe proves the same gesture opens it when nothing blocks.
+  it("leaves the drawer closed in panel mode while a migration is running", () => {
+    useSettingsStore.setState({ mobileSwipeHistory: false });
+    migrationState.current = {
+      status: "running",
+      phase: "upload",
+      chunksDone: 1,
+      chunksTotal: 2,
+    };
+    const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+    const view = renderUnderMigration(history);
+
+    swipeFromEdge("leading");
+    expect(useMobileNavStore.getState().open).toBe(false);
+
+    migrationState.current = IDLE_MIGRATION;
+    act(() => {
+      view.rerender();
+    });
+    swipeFromEdge("leading");
+
+    expect(useMobileNavStore.getState().open).toBe(true);
   });
 
   // A migration the user cannot act on at all is the one they are most likely

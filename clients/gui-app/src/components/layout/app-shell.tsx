@@ -1,3 +1,4 @@
+import { isMobileApp } from "@/lib/mobile-app";
 import { useState, type ReactNode } from "react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
@@ -234,11 +235,9 @@ function AppShellBody(props: AppShellProps) {
                   <SoundtrackShortcutBridge />
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
-                  {/* Above the drawer's mount gate: a rotation that replaces
-                    the drawer with the strip must not take a pending
-                    confirmation with it. */}
+                  {/* Keep a pending confirmation outside the drawer. */}
                   <SignOutConfirmDialog />
-                  {isMobile && mobileStripForm === null ? (
+                  {isMobile && (mobileStripForm === null || isMobileApp()) ? (
                     <MobileNavDrawer />
                   ) : null}
                   {/* Test-only probe: binds the active hostId to a hidden DOM

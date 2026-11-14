@@ -40,6 +40,8 @@ import {
 } from "@/lib/history-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -380,12 +382,75 @@ describe("useMobileHistorySwipes", () => {
 
   beforeEach(() => {
     setMobileApp(true);
+    useSettingsStore.setState({ mobileSwipeHistory: true });
   });
 
   afterEach(() => {
     setMobileApp(false);
+    useSettingsStore.setState({ mobileSwipeHistory: false });
     useMobileNavStore.setState({ open: false });
     for (const unmount of activeUnmounts.splice(0)) unmount();
+  });
+
+  it("opens the task sidebar by default instead of going back", () => {
+    useSettingsStore.setState({ mobileSwipeHistory: false });
+    const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+    const backSpy = vi.spyOn(history, "back");
+    mountSwipes(history);
+    swipeFromEdge("leading");
+    expect(useMobileNavStore.getState().open).toBe(true);
+    expect(backSpy).not.toHaveBeenCalled();
+  });
+
+  it("opens only the focused task's registered tile selector", () => {
+    useSettingsStore.setState({ mobileSwipeHistory: false });
+    const ref = { kind: "epic" as const, id: "task-tab" };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: "item", ref }],
+      activeItemId: "item",
+      stripOrder: [ref],
+    });
+    const open = vi.fn();
+    const unregister = useMobileSwitcherStore
+      .getState()
+      .registerSwipeOpen(ref.id, open);
+    mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
+    swipeFromEdge("trailing");
+    expect(open).toHaveBeenCalledTimes(1);
+    unregister();
+    swipeFromEdge("trailing");
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the selector target from the start of a split-pane swipe", () => {
+    useSettingsStore.setState({ mobileSwipeHistory: false });
+    const ref = { kind: "epic" as const, id: "task-tab" };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: "item", ref }],
+      activeItemId: "item",
+      stripOrder: [ref],
+    });
+    const first = vi.fn();
+    const second = vi.fn();
+    const unregisterFirst = useMobileSwitcherStore
+      .getState()
+      .registerSwipeOpen(ref.id, first);
+    mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
+    act(() => {
+      dispatchPointer("pointerdown", {
+        clientX: window.innerWidth - 8,
+        timeStamp: 0,
+      });
+      useMobileSwitcherStore.getState().registerSwipeOpen(ref.id, second);
+      dispatchPointer("pointermove", {
+        clientX: window.innerWidth - 80,
+        timeStamp: 100,
+      });
+    });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    unregisterFirst();
+    useMobileSwitcherStore.setState({ swipeOpenByTabId: {} });
   });
 
   it("sends a leading-edge swipe to the shared back action", () => {

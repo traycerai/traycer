@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from "react";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
 import { useMobileTileListForm } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 import {
@@ -27,8 +28,10 @@ export function MobileTabSwitcherMount(props: {
 }) {
   const { epicId, tabId } = props;
   const form = useMobileTileListForm(tabId);
+  const paneVisible = usePaneVisible();
   const open = useIsMobileSwitcherOpen(tabId);
   const setOpen = useMobileSwitcherStore((s) => s.setOpen);
+  const registerSwipeOpen = useMobileSwitcherStore((s) => s.registerSwipeOpen);
   const registerMount = useMobileSwitcherStore((s) => s.registerMount);
   const unregisterMount = useMobileSwitcherStore((s) => s.unregisterMount);
   const handleOpenChange = useCallback(
@@ -39,6 +42,10 @@ export function MobileTabSwitcherMount(props: {
     registerMount(tabId);
     return () => unregisterMount(tabId);
   }, [registerMount, tabId, unregisterMount]);
+  useEffect(() => {
+    if (form !== "bar" || !paneVisible) return;
+    return registerSwipeOpen(tabId, () => setOpen(tabId, true));
+  }, [form, paneVisible, registerSwipeOpen, setOpen, tabId]);
   if (form !== "bar") return null;
   return (
     <TabSwitcherSheet

@@ -278,6 +278,7 @@ describe("GeneralSettingsPanel", () => {
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useSettingsStore.setState({
       quoteReplyEnabled: true,
+      mobileSwipeHistory: false,
       linkOpen: {
         default: "in-app",
         markdown: "in-app",
@@ -435,6 +436,24 @@ describe("GeneralSettingsPanel", () => {
     ).toBeNull();
     expect(screen.queryByRole("switch", { name: "Home tab" })).toBeNull();
     expect(screen.queryByText("Layout")).toBeNull();
+  });
+
+  it("saves the mobile swipe preference from General settings", async () => {
+    setMobileApp(true);
+    renderPanel();
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Swipe for back and forward" }),
+    );
+    expect(useSettingsStore.getState().mobileSwipeHistory).toBe(true);
+    const key = useSettingsStore.persist.getOptions().name;
+    if (key === undefined) throw new Error("settings key is missing");
+    const saved = localStorage.getItem(key);
+    expect(saved).not.toBeNull();
+    useSettingsStore.setState({ mobileSwipeHistory: false });
+    if (saved === null) throw new Error("settings were not persisted");
+    localStorage.setItem(key, saved);
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().mobileSwipeHistory).toBe(true);
   });
 
   it("renders the quote reply row and toggles the setting", () => {
