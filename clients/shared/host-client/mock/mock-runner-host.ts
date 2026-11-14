@@ -56,6 +56,11 @@ import {
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import {
+  updateBotRunSettingsViaHttp,
+  type BotSetupWriteResult,
+} from "../bot-setup";
+import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import {
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
@@ -1030,6 +1035,20 @@ export class MockRunnerHost implements IRunnerHost {
     const next: SlackAppView = { ...app, dmsEnabled: request.dmsEnabled };
     this.slackApps.set(request.botId, next);
     return { kind: "ok", app: next };
+  }
+
+  // A bot's settings: same no-CORS-boundary parity as `listEnvironments`.
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotRunSettingsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
+    );
   }
 
   /** Test/dev hook: Slack removed the bot's app (`app_uninstalled`). */

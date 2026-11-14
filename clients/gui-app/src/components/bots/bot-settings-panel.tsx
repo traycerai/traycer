@@ -61,6 +61,7 @@ import {
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import { useBotMemory } from "@/hooks/bots/use-bot-memory";
+import { useBotMayChange } from "@/hooks/bots/use-bot-may-change";
 
 const BOT_TITLE_MAX = 500;
 
@@ -530,11 +531,17 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
   );
 }
 
+/**
+ * The harness, model, effort and profile the bot runs on. Applied by the
+ * app's own call to the server, so it needs no host; shown read-only to a
+ * person whose role may not change the bot's environment.
+ */
 function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
   const { bot } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
-  const update = useBotUpdateRunSettingsMutation(client);
+  const update = useBotUpdateRunSettingsMutation();
+  const mayChange = useBotMayChange(bot.environmentId);
   // The picker opens on what the bot RUNS, not on the app default: seeded
   // from the bot row's harness, model, effort and profile, so Apply has
   // nothing to apply until the person changes something. Permission and
@@ -598,7 +605,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
           withReasoning
           tuiOnly={false}
           lockedHarnessId={null}
-          disabled={update.isPending}
+          disabled={update.isPending || !mayChange}
           registerActivation={false}
           createProfileHostId={hostId}
           runTargetHostId={hostId}
@@ -606,30 +613,32 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
           profileAdmission={null}
           embedding={null}
         />
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={!canApply}
-          onClick={() =>
-            update.mutate({
-              botId: bot.botId,
-              harness: selection.harnessId,
-              model: selection.modelSlug,
-              effort,
-              profile: selection.profileId,
-            })
-          }
-        >
-          Apply
-          {update.isPending ? (
-            <AgentSpinningDots
-              className="ml-1"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
+        {mayChange ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!canApply}
+            onClick={() =>
+              update.mutate({
+                botId: bot.botId,
+                harness: selection.harnessId,
+                model: selection.modelSlug,
+                effort,
+                profile: selection.profileId,
+              })
+            }
+          >
+            Apply
+            {update.isPending ? (
+              <AgentSpinningDots
+                className="ml-1"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+          </Button>
+        ) : null}
       </div>
       <BotSettingsRefusal
         message={update.error === null ? null : update.error.message}

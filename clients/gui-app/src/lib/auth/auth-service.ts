@@ -73,6 +73,8 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
+import type { BotSetupWriteResult } from "@traycer-clients/shared/host-client/bot-setup";
+import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -3508,6 +3510,19 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.setSlackAppDms(bearer, request);
+  }
+
+  /**
+   * A bot's settings on traycer-server with the person's bearer: the app's
+   * own call, with no host in the path. Signed out, it answers `no_response`
+   * without a request, as an environment call does.
+   */
+  async updateBotRunSettings(
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotRunSettings(bearer, request);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

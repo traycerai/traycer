@@ -56,6 +56,10 @@ import {
   type SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import {
+  botUpdateRunSettingsRequestSchema,
+  type BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import {
   SECRET_REQUEST_DECISIONS,
   type SecretRequestDecision,
 } from "@traycer/protocol/host/sandbox-secrets";
@@ -712,6 +716,20 @@ export function parseSlackAppDmsRequest(value: unknown): SlackAppDmsRequest {
   if (!checked.success) {
     throw new Error(
       `setSlackAppDms.request: ${checked.error.issues[0].message}`,
+    );
+  }
+  return checked.data;
+}
+
+/** The renderer-supplied run settings, against the protocol's own schema. */
+export function parseBotUpdateRunSettingsRequest(
+  value: unknown,
+): BotUpdateRunSettingsRequest {
+  const checked = botUpdateRunSettingsRequestSchema.safeParse(value);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `updateBotRunSettings.request.${issue.path.join(".")}: ${issue.message}`,
     );
   }
   return checked.data;

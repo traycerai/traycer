@@ -65,6 +65,8 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
+import type { BotSetupWriteResult } from "../host-client/bot-setup";
+import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -619,6 +621,16 @@ export interface IRunnerHost {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
+  /**
+   * A bot's settings (traycer-server `/api/bots/*`) with the person's bearer,
+   * with no host in the path. Same placement as the Slack app above, sent
+   * once and following no redirect. See `host-client/bot-setup.ts`. Never
+   * throw.
+   */
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See

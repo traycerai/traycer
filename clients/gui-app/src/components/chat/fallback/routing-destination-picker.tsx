@@ -740,7 +740,7 @@ function useRoutingVerbs(input: {
     publishConfirmed,
     reporting,
   );
-  const writeBot = useBotUpdateRunSettingsMutation(client);
+  const writeBot = useBotUpdateRunSettingsMutation();
   const sendRung = (
     rung: "switch" | "retry",
     target: ChatRunSettings | null,
@@ -781,10 +781,12 @@ function useRoutingVerbs(input: {
         // A promise rather than per-call handlers, which TanStack drops once
         // this surface unmounts (its thread panel or tab closed mid-write):
         // a confirmed Switch and retry finishes either way. The retry reads
-        // the row, so it goes only once the host took the write, and its
+        // the row, so it goes only once the server took the write, and its
         // answer finds the announcer through the verb's own reporting when
         // nothing here is left to show it. A refused write leaves the row as
         // it was and is said inline; unmounted, there is no line to say it.
+        // The write is the app's own call to the server; only the retry
+        // needs this chat's host.
         void writeBot.mutateAsync(request.write).then(
           () => {
             sendRung("retry", null, attempt);

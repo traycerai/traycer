@@ -164,6 +164,11 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import {
+  updateBotRunSettingsViaHttp,
+  type BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
@@ -1056,6 +1061,21 @@ export class MobileRunnerHost implements IRunnerHost {
       this.serverBaseUrl,
       bearerToken,
       null,
+      request,
+    );
+  }
+
+  // A bot's settings: through the native request that follows no redirect,
+  // as the environment list goes.
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotRunSettingsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
       request,
     );
   }

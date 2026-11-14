@@ -175,8 +175,6 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "same bot.list proxy as bot.create: a bot's channel is opened only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx), and BotTabSurface re-checks bot.open - the newest method of the same block - on its own host before drawing any control (bot-tab-surface.tsx), so a surface restored from tracy-surface-store onto a host without bots shows the update notice; documented no-toast: the Settings panel states the refusal inline (use-bot-mutations.ts, bot-settings-panel.tsx)",
   "bot.updateTitle":
     "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
-  "bot.updateRunSettings":
-    "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
   "bot.conversation.send":
     "same bot.list proxy as bot.delete; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-message-composer.tsx)",
   "epic.attachEnvironment":
