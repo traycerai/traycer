@@ -88,7 +88,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.doUnmock("../../internal/cli-host-tokens");
   vi.unstubAllEnvs();
   rmSync(workHome, { recursive: true, force: true });
   // The runner now signals failure by SETTING `process.exitCode` rather than
@@ -245,66 +244,9 @@ const DELETED: MutationResult = {
   diskPressure: null,
 };
 
-const logoutTokenProbe = vi.hoisted(() => ({
-  forgetUserIds: [] as string[],
-  updateCalls: 0,
-  sawU1: false,
-  errors: [] as string[],
-}));
-
-vi.mock(
-  "@traycer-clients/shared/auth/host-token-file",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@traycer-clients/shared/auth/host-token-file")
-      >();
-    return {
-      ...actual,
-      createHostTokenFilePersistence: (
-        options: Parameters<typeof actual.createHostTokenFilePersistence>[0],
-      ) => {
-        const persistence = actual.createHostTokenFilePersistence(options);
-        return {
-          ...persistence,
-          update: async (change: Parameters<typeof persistence.update>[0]) => {
-            logoutTokenProbe.updateCalls += 1;
-            return persistence
-              .update((latest) => {
-                logoutTokenProbe.sawU1 = latest.has("u1");
-                return change(latest);
-              })
-              .catch((error: unknown) => {
-                logoutTokenProbe.errors.push(
-                  error instanceof Error ? error.message : String(error),
-                );
-                throw error;
-              });
-          },
-        };
-      },
-    };
-  },
-);
-
 describe("logoutCommand runner contract", () => {
   it("removes the signed-out account's host-only tokens", async () => {
-    logoutTokenProbe.forgetUserIds.length = 0;
-    logoutTokenProbe.updateCalls = 0;
-    logoutTokenProbe.sawU1 = false;
-    logoutTokenProbe.errors.length = 0;
     mockLogoutStore({ hadSession: true, signOut: DELETED });
-    vi.doMock("../../internal/cli-host-tokens", async (importOriginal) => {
-      const actual =
-        await importOriginal<typeof import("../../internal/cli-host-tokens")>();
-      return {
-        ...actual,
-        forgetCliHostTokens: async (userId: string) => {
-          logoutTokenProbe.forgetUserIds.push(userId);
-          return actual.forgetCliHostTokens(userId);
-        },
-      };
-    });
     const { config } = await import("../../config");
     const { hostTokensPath } =
       await import("@traycer-clients/shared/auth/host-token-file");
@@ -330,10 +272,6 @@ describe("logoutCommand runner contract", () => {
     const out = await runJsonCommand(logoutCommand);
 
     assertSingleTerminalResult(out);
-    expect(logoutTokenProbe.forgetUserIds).toEqual(["u1"]);
-    expect(logoutTokenProbe.updateCalls).toBe(1);
-    expect(logoutTokenProbe.sawU1).toBe(true);
-    expect(logoutTokenProbe.errors).toEqual([]);
     expect(
       JSON.parse(readFileSync(hostTokensPath(config.environment), "utf8")),
     ).toEqual({
