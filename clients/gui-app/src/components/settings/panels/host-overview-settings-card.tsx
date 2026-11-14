@@ -1,5 +1,6 @@
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
+import { useMayChangeTeamConfiguration } from "@/hooks/environment/use-may-change-team-configuration";
 import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { useTeamComputerTransfer } from "@/hooks/environment/use-team-computer-transfer";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -267,6 +268,7 @@ function ClaimLocalTeamComputer(props: {
   readonly hostName: string;
   readonly onClaimed: (receipt: string) => void;
 }): ReactNode {
+  const mayClaim = useMayChangeTeamConfiguration(props.environmentId);
   const [open, setOpen] = useState(false);
   const mutation = useTeamComputerClaim(props.environmentId, () => {
     props.onClaimed(
@@ -274,6 +276,7 @@ function ClaimLocalTeamComputer(props: {
     );
     setOpen(false);
   });
+  if (!mayClaim) return null;
   return (
     <>
       <Button

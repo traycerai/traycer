@@ -3,7 +3,11 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useState, type ReactNode } from "react";
 import type { TeamComputer } from "@traycer-clients/shared/host-client/team-computers";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useCanEditConfiguration } from "@/components/settings/environment/configuration-source";
+import {
+  mayChangeConfiguration,
+  useCanEditConfiguration,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
 import {
   usePickedTeamHandle,
   usePickedTeamLabel,
@@ -35,6 +39,12 @@ export function TeamComputersSection(props: {
 function TeamComputers(props: { readonly environmentId: string }): ReactNode {
   const { read, claim } = useTeamComputers(props.environmentId);
   const canEdit = useCanEditConfiguration();
+  const source = useConfigurationSource();
+  // Only a team's Admins and Editors claim its computers.
+  const mayClaim =
+    source.kind === "pool" &&
+    source.environmentId === props.environmentId &&
+    mayChangeConfiguration(source.effectiveRole);
   const teamName = usePickedTeamLabel(props.environmentId) ?? "this team";
   const teamHandle = usePickedTeamHandle(props.environmentId);
   const [claiming, setClaiming] = useState<TeamComputer | null>(null);
@@ -68,10 +78,14 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
               key={host.hostId}
               host={host}
               busy={busy}
-              onClaim={() => {
-                claim.reset();
-                setClaiming(host);
-              }}
+              onClaim={
+                mayClaim
+                  ? () => {
+                      claim.reset();
+                      setClaiming(host);
+                    }
+                  : null
+              }
             />
           ))}
         </ul>
@@ -196,7 +210,8 @@ function TeamComputerClaimDialog(props: {
 function TeamComputerRow(props: {
   readonly host: TeamComputer;
   readonly busy: boolean;
-  readonly onClaim: () => void;
+  /** Null for a Viewer or a role not known: only Admins and Editors claim. */
+  readonly onClaim: (() => void) | null;
 }): ReactNode {
   return (
     <li className="flex flex-wrap items-center justify-between gap-2">
@@ -204,15 +219,17 @@ function TeamComputerRow(props: {
         {props.host.hostName ?? "Unnamed computer"}
         {props.host.purgePending ? " · Unavailable" : null}
       </span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={props.busy || props.host.purgePending}
-        onClick={props.onClaim}
-      >
-        Claim this computer
-      </Button>
+      {props.onClaim !== null ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={props.busy || props.host.purgePending}
+          onClick={props.onClaim}
+        >
+          Claim this computer
+        </Button>
+      ) : null}
     </li>
   );
 }

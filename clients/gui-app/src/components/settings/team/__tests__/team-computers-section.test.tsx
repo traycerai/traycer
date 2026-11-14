@@ -19,6 +19,7 @@ import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-cli
 import type { AuthService } from "@/lib/auth/auth-service";
 import {
   ConfigurationSourceContext,
+  type ConfigurationRole,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { TeamComputersSection } from "@/components/settings/team/team-computers-section";
@@ -103,7 +104,7 @@ function computer(overrides: Partial<TeamComputer>): TeamComputer {
 
 function sourceFor(
   environmentId: string,
-  effectiveRole: "owner" | "admin" | "editor" | null,
+  effectiveRole: ConfigurationRole | null,
 ): ConfigurationSource {
   return {
     kind: "pool",
@@ -135,7 +136,7 @@ function environment(
 function sectionTree(
   harness: TeamPageHarness,
   environmentId: string,
-  effectiveRole: "owner" | "admin" | "editor" | null,
+  effectiveRole: ConfigurationRole | null,
   runnerHost: IRunnerHost,
 ): ReactNode {
   return (
@@ -153,7 +154,7 @@ function sectionTree(
 
 function mountSection(
   environmentId: string,
-  effectiveRole: "owner" | "admin" | "editor" | null,
+  effectiveRole: ConfigurationRole | null,
   providerHandle: string | null,
 ) {
   const harness = mountTeamPage(sourceFor(environmentId, effectiveRole), {
@@ -393,29 +394,28 @@ describe("TeamComputersSection", () => {
     expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
   });
 
-  it("keeps claiming available when team configuration editing is not authorized", async () => {
-    mountSection(ENVIRONMENT_ID, null, `handle-${ENVIRONMENT_ID}`);
-    const user = userEvent.setup();
+  it.each([
+    ["a Viewer", "viewer"],
+    ["a role not known", null],
+  ] as const)(
+    "offers %s no Claim and no Add a computer",
+    async (_who, role) => {
+      mountSection(ENVIRONMENT_ID, role, `handle-${ENVIRONMENT_ID}`);
 
-    await screen.findByText("Studio");
-    await user.click(
-      screen.getByRole("button", { name: "Claim this computer" }),
-    );
-    const dialog = await screen.findByRole("dialog");
-    await user.click(
-      within(dialog).getByRole("button", { name: "Claim this computer" }),
-    );
-    await waitFor(() =>
-      expect(releaseTeamComputer).toHaveBeenCalledWith(
-        "host-computer-a",
-        ENVIRONMENT_ID,
-      ),
-    );
-    expect(screen.queryByRole("button", { name: "Add a computer" })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Refresh" }).hasAttribute("disabled"),
-    ).toBe(false);
-  });
+      await screen.findByText("Studio");
+      expect(
+        screen.queryByRole("button", { name: "Claim this computer" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Add a computer" }),
+      ).toBeNull();
+      expect(
+        screen
+          .getByRole("button", { name: "Refresh" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    },
+  );
 
   it("shows a fixed error when claiming a computer fails", async () => {
     releaseTeamComputer.mockResolvedValue({ kind: "network-error" });

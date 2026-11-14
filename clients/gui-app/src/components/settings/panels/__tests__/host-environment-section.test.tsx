@@ -77,6 +77,7 @@ const mocks = vi.hoisted(() => ({
   state: {
     binding: null as EnvironmentHostBinding | null,
     status: null as EnvironmentStatusResponseV11 | null,
+    teamRole: "editor",
   },
   auth: {
     currentAuthEra: vi.fn<() => AuthEra>(),
@@ -117,6 +118,24 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
     query: { isError: false, data: mocks.state.binding ?? undefined },
   }),
 }));
+// The list is the account's, read through authn rather than this host's
+// `environment.list`; the person's role on the team is all the card reads.
+vi.mock("@/hooks/bots/use-environment-list-query", async () => {
+  const { useQuery } = await import("@tanstack/react-query");
+  return {
+    useEnvironmentListQuery: (enabled: boolean) =>
+      useQuery({
+        queryKey: ["environment-list-fixture", mocks.state.teamRole],
+        queryFn: () => ({
+          environments: [
+            listedEnvironment(PERSONAL),
+            { ...listedEnvironment(TEAM), effectiveRole: mocks.state.teamRole },
+          ],
+        }),
+        enabled,
+      }),
+  };
+});
 vi.mock("@/hooks/environment/use-environment-reads", () => ({
   useEnvironmentStatusRead: () => ({ data: mocks.state.status }),
 }));
@@ -263,6 +282,7 @@ function ownershipResult(
 }
 
 beforeEach(() => {
+  mocks.state.teamRole = "editor";
   mocks.auth.currentAuthEra.mockReset();
   mocks.auth.currentAuthEra.mockReturnValue({
     identity: "user-me",
@@ -641,6 +661,30 @@ describe("HostEnvironmentSection", () => {
     );
     expect(stopRequests).toEqual([]);
     expect(stopPreviewCalls).toBe(0);
+  });
+
+  it("does not offer a Viewer Claim this computer on the local team computer", async () => {
+    mocks.state.teamRole = "viewer";
+    mocks.state.binding = teamBinding(true);
+    mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
+    const queryClient = renderSection("personal", {
+      ...NO_SECTION_OPTIONS,
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+    });
+
+    expect(
+      await screen.findByText("This computer belongs to Acme."),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryState(["environment-list-fixture", "viewer"])
+          ?.status,
+      ).toBe("success"),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
   });
 
   it("does not offer Claim this computer on a remote team-owned host", () => {
