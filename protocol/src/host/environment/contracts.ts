@@ -867,11 +867,14 @@ export const environmentMembersRemovePreviewV10 = defineRpcContract({
 /**
  * `environment.previewLocalFacts@1.0`: this computer's own counts for a plan
  * (`plan`, by its profile) or a member (`member`) of an environment, or for
- * the computer itself (`computer`). For `computer`, the counts are the team
- * work running on this computer: `activeTurns` is the number of the team's
- * chats with a turn running on it, `terminals` the number of the team's
- * terminal sessions running on it; read before a member claims the computer,
- * when that work stops. `terminals` is always null for a `plan` subject.
+ * the computer itself (`computer`). For `computer`, the counts are the work
+ * running on this computer under the computer's own owner: the team's on a
+ * team's computer, the person's on a person's own computer. `activeTurns` is
+ * the number of that owner's chats with a turn running on it, `terminals` the
+ * number of that owner's terminal sessions running on it; read before that
+ * work stops, when a member claims a team's computer and when a person gives
+ * their computer to a team. A count the computer cannot read is null (not
+ * known), never zero. `terminals` is always null for a `plan` subject.
  * Registered with the redesign's environment methods
  * (`redesign-rpc-methods.ts`). Not an agent capability.
  */
