@@ -1,23 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CloudBearerSource } from "../../auth/bearer-source";
 import { readConfigurationRevision } from "../configuration-settings";
-import {
-  sendEnvironmentRequest,
-  settingsRefusal,
-  type EnvironmentCloud,
-} from "../environment-cloud";
+import { sendEnvironmentRequest, settingsRefusal } from "../environment-cloud";
+import { createEnvironmentCloud } from "./environment-cloud-test-support";
 
-const AUTHN_BASE_URL = "https://authn.example.test";
 const BEARER = "environment-test-bearer";
 const ENVIRONMENT_ID = "team-a";
-
-function cloudWithBearer(token: string | null): EnvironmentCloud {
-  const bearer: CloudBearerSource = {
-    kind: "cloud",
-    getBearerToken: () => token,
-  };
-  return { authnBaseUrl: AUTHN_BASE_URL, bearer };
-}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -42,7 +29,7 @@ describe("environment authn transport", () => {
     });
 
     const answer = await sendEnvironmentRequest(
-      cloudWithBearer(BEARER),
+      createEnvironmentCloud(BEARER),
       "settings",
       "GET",
       "api/v3/environments/team-a/items",
@@ -64,7 +51,7 @@ describe("environment authn transport", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(opaque);
 
     const answer = await sendEnvironmentRequest(
-      cloudWithBearer(BEARER),
+      createEnvironmentCloud(BEARER),
       "settings",
       "GET",
       "api/v3/environments/team-a/items",
@@ -87,7 +74,7 @@ describe("environment authn transport", () => {
     );
 
     await expect(
-      readConfigurationRevision(cloudWithBearer(BEARER), ENVIRONMENT_ID),
+      readConfigurationRevision(createEnvironmentCloud(BEARER), ENVIRONMENT_ID),
     ).rejects.toMatchObject({ kind });
   });
 
@@ -97,7 +84,7 @@ describe("environment authn transport", () => {
     );
 
     await expect(
-      readConfigurationRevision(cloudWithBearer(BEARER), ENVIRONMENT_ID),
+      readConfigurationRevision(createEnvironmentCloud(BEARER), ENVIRONMENT_ID),
     ).rejects.toMatchObject({ kind: "no_response" });
   });
 
@@ -105,7 +92,7 @@ describe("environment authn transport", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
 
     await expect(
-      readConfigurationRevision(cloudWithBearer(null), ENVIRONMENT_ID),
+      readConfigurationRevision(createEnvironmentCloud(null), ENVIRONMENT_ID),
     ).rejects.toMatchObject({ kind: "no_response" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
