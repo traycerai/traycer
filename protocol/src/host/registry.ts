@@ -1574,6 +1574,7 @@ import {
   providersAwaitLoginRequestSchemaV20,
   providersAwaitLoginResponseSchema,
   providersAwaitLoginResponseSchemaV22,
+  providersAwaitLoginResponseSchemaV23,
   providersAwaitLoginResponseSchemaV10,
   providersAwaitLoginResponseSchemaV20,
   providersAwaitLoginResponseSchemaV21,
@@ -1611,10 +1612,12 @@ import {
   providersStartLoginRequestSchemaV10,
   providersStartLoginRequestSchemaV11,
   providersStartLoginRequestSchemaV14,
+  providersStartLoginRequestSchemaV15,
   providersStartLoginResponseSchemaV10,
   providersStartLoginResponseSchemaV11,
   providersStartLoginResponseSchemaV12,
   providersStartLoginResponseSchemaV13,
+  providersStartLoginResponseSchemaV15,
   providersSubmitLoginCodeRequestSchema,
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
@@ -4900,6 +4903,23 @@ export const providersStartLoginUpgradeV13ToV14 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+export const providersStartLoginV15 = defineRpcContract({
+  method: "providers.startLogin",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: providersStartLoginRequestSchemaV15,
+  responseSchema: providersStartLoginResponseSchemaV15,
+});
+
+export const providersStartLoginUpgradeV14ToV15 = defineUpgradePath<
+  typeof providersStartLoginV14,
+  typeof providersStartLoginV15
+>({
+  from: { major: 1, minor: 4 },
+  to: { major: 1, minor: 5 },
+  upgradeRequest: (request) => ({ ...request, target: null }),
+  upgradeResponse: (response) => ({ ...response, targetRefusal: null }),
+});
+
 export const providersAwaitLoginV10 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -4998,7 +5018,7 @@ export const providersAwaitLoginV23 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 3 } as const,
   requestSchema: providersAwaitLoginRequestSchema,
-  responseSchema: providersAwaitLoginResponseSchema,
+  responseSchema: providersAwaitLoginResponseSchemaV23,
 });
 
 export const providersAwaitLoginUpgradeV22ToV23 = defineUpgradePath<
@@ -5009,6 +5029,23 @@ export const providersAwaitLoginUpgradeV22ToV23 = defineUpgradePath<
   to: { major: 2, minor: 3 },
   upgradeRequest: (request) => ({ ...request, lastSeenReaderCount: null }),
   upgradeResponse: (response) => ({ ...response, installation: null }),
+});
+
+export const providersAwaitLoginV24 = defineRpcContract({
+  method: "providers.awaitLogin",
+  schemaVersion: { major: 2, minor: 4 } as const,
+  requestSchema: providersAwaitLoginRequestSchema,
+  responseSchema: providersAwaitLoginResponseSchema,
+});
+
+export const providersAwaitLoginUpgradeV23ToV24 = defineUpgradePath<
+  typeof providersAwaitLoginV23,
+  typeof providersAwaitLoginV24
+>({
+  from: { major: 2, minor: 3 },
+  to: { major: 2, minor: 4 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, profileOutcome: null }),
 });
 
 export const providersAwaitLoginDowngradeV21ToV20 = defineDowngradePath<
@@ -5085,6 +5122,18 @@ export const providersAwaitLoginDowngradeV23ToV10 = defineDowngradePath<
     }),
   downgradeResponse: (response) =>
     providersAwaitLoginDowngradeV22ToV10.downgradeResponse(response),
+});
+
+export const providersAwaitLoginDowngradeV24ToV10 = defineDowngradePath<
+  typeof providersAwaitLoginV24,
+  typeof providersAwaitLoginV10
+>({
+  from: { major: 2, minor: 4 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) =>
+    providersAwaitLoginDowngradeV23ToV10.downgradeRequest(request),
+  downgradeResponse: (response) =>
+    providersAwaitLoginDowngradeV23ToV10.downgradeResponse(response),
 });
 
 export const providersCancelLoginV10 = defineRpcContract({
@@ -13183,7 +13232,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
   "providers.startLogin": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: providersStartLoginV10,
@@ -13205,6 +13254,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersStartLoginV14,
           upgradeFromPreviousVersion: providersStartLoginUpgradeV13ToV14,
         },
+        5: {
+          contract: providersStartLoginV15,
+          upgradeFromPreviousVersion: providersStartLoginUpgradeV14ToV15,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -13221,7 +13274,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: providersAwaitLoginV20,
@@ -13239,9 +13292,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersAwaitLoginV23,
           upgradeFromPreviousVersion: providersAwaitLoginUpgradeV22ToV23,
         },
+        4: {
+          contract: providersAwaitLoginV24,
+          upgradeFromPreviousVersion: providersAwaitLoginUpgradeV23ToV24,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersAwaitLoginDowngradeV23ToV10,
+        1: providersAwaitLoginDowngradeV24ToV10,
       },
     },
   },

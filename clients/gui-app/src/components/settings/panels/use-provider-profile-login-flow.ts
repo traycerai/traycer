@@ -976,6 +976,7 @@ export function useProviderProfileLoginFlow(
         request: {
           providerId,
           holderId,
+          target: null,
           profileId: existingProfileId,
           createProfile:
             mode === "create"

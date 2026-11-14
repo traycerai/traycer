@@ -4139,6 +4139,32 @@ export type ProvidersStartLoginRequestV14 = z.infer<
   typeof providersStartLoginRequestSchemaV14
 >;
 
+/** A destination target is never inferred from an ordinary profile id. */
+export const providerLoginTargetSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("environment"),
+      environmentId: z.string().min(1),
+      profileId: z.string().min(1).nullable().default(null),
+    }),
+    z.object({
+      kind: z.literal("leave-to-local"),
+      profileId: z.string().min(1),
+    }),
+  ]),
+);
+export type ProviderLoginTarget = z.infer<typeof providerLoginTargetSchema>;
+
+/** Null preserves ordinary login; invalid targets must never become null. */
+export const providersStartLoginRequestSchemaV15 = lazySchema(() =>
+  providersStartLoginRequestSchemaV14.extend({
+    target: providerLoginTargetSchema.nullable().default(null),
+  }),
+);
+export type ProvidersStartLoginRequestV15 = z.infer<
+  typeof providersStartLoginRequestSchemaV15
+>;
+
 /**
  * `providers.startLogin@1.1` response - echoes the profile this login
  * targeted, so a `createProfile` caller learns the host-minted id without a
@@ -4267,6 +4293,33 @@ export type ProvidersStartLoginResponseV13 = z.infer<
   typeof providersStartLoginResponseSchemaV13
 >;
 
+/** A targeted login refused before any provider child or staging home exists. */
+export const providerLoginTargetRefusalSchema = lazySchema(() =>
+  z.enum([
+    "unsupported-computer",
+    "not-authorized",
+    "target-unavailable",
+    "target-removed",
+    "invalid-leave-profile",
+    "not-available-yet",
+  ]),
+);
+export type ProviderLoginTargetRefusal = z.infer<
+  typeof providerLoginTargetRefusalSchema
+>;
+
+export const providersStartLoginResponseSchemaV15 = lazySchema(() =>
+  providersStartLoginResponseSchemaV13.extend({
+    targetRefusal: providerLoginTargetRefusalSchema
+      .nullable()
+      .optional()
+      .catch(null),
+  }),
+);
+export type ProvidersStartLoginResponseV15 = z.infer<
+  typeof providersStartLoginResponseSchemaV15
+>;
+
 /**
  * `providers.awaitLogin@2.1` request. Blocks until an in-flight
  * `providers.startLogin` child finishes (the browser loopback completes or the
@@ -4385,11 +4438,57 @@ export type ProviderLoginInstallation = z.infer<
   typeof providerLoginInstallationSchema
 >;
 
-/** A pending account change returns no authenticated state until its readers drain. */
-export const providersAwaitLoginResponseSchema = lazySchema(() =>
+/** Frozen 2.3 response: installation means waiting for readers, not the list. */
+export const providersAwaitLoginResponseSchemaV23 = lazySchema(() =>
   z.object({
     ...providersAwaitLoginResponseSchemaV22.shape,
     installation: providerLoginInstallationSchema
+      .nullable()
+      .optional()
+      .catch(null),
+  }),
+);
+
+/**
+ * Completed sign-in results, distinct from provider refusal and reader waits.
+ * Signed-in ids name destination list rows. A leave-staged id names the exact
+ * folder, which may be an alias in the computed list, not its admission handle.
+ */
+export const providerLoginProfileOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("waiting-for-profile") }),
+    z.object({ kind: z.literal("account-mismatch") }),
+    z.object({ kind: z.literal("account-unproven") }),
+    z.object({
+      kind: z.literal("target-refused"),
+      reason: z.enum([
+        "not-authorized",
+        "target-unavailable",
+        "target-removed",
+        "offer-refused",
+      ]),
+    }),
+    z.object({
+      kind: z.literal("staged-for-leave"),
+      profileId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("signed-in"),
+      profileId: z.string().min(1),
+    }),
+    z.object({
+      kind: z.literal("already-signed-in"),
+      profileId: z.string().min(1),
+    }),
+  ]),
+);
+export type ProviderLoginProfileOutcome = z.infer<
+  typeof providerLoginProfileOutcomeSchema
+>;
+
+export const providersAwaitLoginResponseSchema = lazySchema(() =>
+  providersAwaitLoginResponseSchemaV23.extend({
+    profileOutcome: providerLoginProfileOutcomeSchema
       .nullable()
       .optional()
       .catch(null),
