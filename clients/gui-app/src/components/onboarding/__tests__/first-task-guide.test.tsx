@@ -30,7 +30,6 @@ import {
   retireOnboardingReminder,
 } from "@/lib/toast/onboarding-reminder-toast";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
-import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
@@ -77,9 +76,6 @@ const toastState = vi.hoisted(() => {
         handler?.();
       }),
       invokeDismiss: (id: string): void => byId.get(id)?.onDismiss?.(),
-      invokeAction: (): void => {
-        [...byId.values()].at(-1)?.action?.onClick();
-      },
       /** The options of the toast shown under `id`, or `null` for none. */
       optionsFor: (id: string): ToastOptions | null => byId.get(id) ?? null,
       invokeActionFor: (id: string): void => {
@@ -270,10 +266,6 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       hostName: "this computer",
       client: null,
     };
-    useRetrospectiveSheetStore.setState({
-      target: null,
-      open: false,
-    });
     useMoveSheetStore.setState({ target: null });
     toastState.reset();
     useOnboardingStore.getState().reset();
@@ -341,7 +333,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       "environment.status": { major: 1, minor: 1 },
     });
     thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
-    renderGuide();
+    const mounted = mountGuide();
 
     await expectMoveInvitation();
 
@@ -354,6 +346,10 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
         ([, options]) => options.action?.label === "Review",
       ),
     ).toBe(false);
+    await act(async () => {
+      await mounted.queryClient.refetchQueries({}, { throwOnError: true });
+      mounted.view.unmount();
+    });
     expect(reviewReads).toBe(0);
   });
 
@@ -558,32 +554,20 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     // invitation is not the setup reminder's other wording.
     const SETUP_REMINDER_TOAST_ID = "traycer-getting-started";
 
-    /**
-     * This computer, whose `environment.status` answers whatever `answer`
-     * holds: the move's own state as the host reports it over time.
-     *
-     * `statusReads` counts the host's answers. A mount needs the status query
-     * before it can decide whether to show the move invitation, so the count
-     * says a mount has got far enough to make a claim about its toast.
-     */
+    /** This computer's `environment.status` answers whatever `answer` holds. */
     function computerWhoseStatusChanges(
       answer: () => EnvironmentStatusResponseV12,
-    ): { readonly statusReads: () => number } {
-      let status = 0;
+    ): void {
       const { client } = buildEnvironmentClient({
         hostId: "old",
         handlers: {
-          "environment.status": () => {
-            status += 1;
-            return answer();
-          },
+          "environment.status": () => answer(),
         },
       });
       recordNegotiatedHostManifest("old", {
         "environment.status": { major: 1, minor: 1 },
       });
       thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
-      return { statusReads: () => status };
     }
 
     it("carries its own id, so the setup reminder never stands in its place", async () => {
@@ -646,19 +630,21 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       // they come back. The toast is still up, unanswered, so no reminder may
       // take its turn beside it.
       let answer = NOT_MOVED_STATUS;
-      const host = computerWhoseStatusChanges(() => answer);
+      computerWhoseStatusChanges(() => answer);
       const first = mountGuide();
       await expectMoveInvitation();
 
       first.view.unmount();
       answer = environmentStatusFixture({});
-      mountGuide();
+      const second = mountGuide();
 
       // The second mount publishes nothing of its own - the invitation is
       // already up and the reminder is held back - so there is no toast to
-      // wait on. Wait for the status query to return before checking that a
-      // regressed reminder effect did not run on this mount.
-      await waitFor(() => expect(host.statusReads()).toBeGreaterThan(1));
+      // wait on. Await a successful status refetch and flush its committed
+      // effects before checking that a regressed reminder did not run here.
+      await act(async () => {
+        await second.queryClient.refetchQueries({}, { throwOnError: true });
+      });
 
       // Still on screen - `optionsFor` loses an id the moment it is
       // dismissed - and nothing took it down on the way through.
