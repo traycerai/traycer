@@ -13,7 +13,10 @@ import {
   NEEDS_CONNECTION_MESSAGE,
   NEEDS_PERMISSION_MESSAGE,
 } from "@traycer-clients/shared/environment/environment-cloud";
-import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import {
+  mayChangeConfiguration,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
 import { configurationReadMatches } from "@/hooks/environment/environment-host-list-key";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { environmentCloudHostError } from "@/lib/environment/environment-cloud-calls";
@@ -54,7 +57,8 @@ export function useTeamNotificationHooks() {
   const canEdit =
     source.kind === "pool" &&
     source.configuration === "team" &&
-    (source.effectiveRole === "admin" || source.effectiveRole === "editor");
+    !source.transportReadOnly &&
+    mayChangeConfiguration(source.effectiveRole);
   const read = useConfigurationItemsQuery(
     NOTIFICATION_HOOKS_ITEM.kind,
     hooksOf,
