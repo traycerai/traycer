@@ -19,7 +19,6 @@ import {
   type EnvironmentChangedBy,
   type EnvironmentNotice,
   type EnvironmentReviewEntryV12,
-  type EnvironmentReviewHeldApplyResponse,
   type EnvironmentWriteOutcome,
 } from "@traycer/protocol/host/environment-schemas";
 import { heldFactsOf } from "@traycer/protocol/host/environment/held-facts";
@@ -27,177 +26,73 @@ import {
   ITEM_OS_VALUES,
   REVIEW_INCLUDE_OPERATION,
   authnHeldApplyConflictSchema,
-  authnHeldDiscardResponseSchema,
-  authnItemWriteResponseSchema,
   authnNoticesResponseSchema,
   authnOperationReviewResponseSchema,
   authnUndoConflictSchema,
   authnUndoResponseSchema,
   type AuthnItemRow,
   type AuthnNoticeRow,
-  type AuthnOperationReview,
 } from "./authn-environment-schemas";
 import {
+  CLOUD_UNAVAILABLE_MESSAGE,
   EnvironmentCloudError,
   environmentPath,
-  errorBodyCode,
-  parseSettings,
+  isRedirect,
+  isSuccess,
   sendSettings,
-  settingsRefusal,
+  type EnvironmentAnswer,
   type EnvironmentCloud,
+  type EnvironmentHttpMethod,
 } from "./environment-cloud";
 
-/** The review, or null when nothing is migrated and nothing is held. */
-export async function readOperationReview(
+/**
+ * The words of each failure, as the host's review client said them: a call
+ * nothing answered, and one authn did not take.
+ */
+const OFFLINE_MESSAGE = "This needs a connection to your environment.";
+const REVIEW_OFFLINE_MESSAGE = "Connect to review these settings.";
+const REFUSED_MESSAGE = "Your environment did not accept this change.";
+/** The words a notice that no longer names an undoable change is refused with. */
+const NOTICE_GONE_MESSAGE = "This notice is no longer available.";
+
+/** One review, notice or Undo call; nothing answering is `offline`'s words. */
+async function sendReview(
   cloud: EnvironmentCloud,
-  environmentId: string,
-): Promise<AuthnOperationReview | null> {
-  const query = new URLSearchParams({ include: REVIEW_INCLUDE_OPERATION });
-  return parseSettings(
-    await sendSettings(
-      cloud,
-      "GET",
-      `${environmentPath(environmentId)}/review?${query.toString()}`,
-      null,
-    ),
-    authnOperationReviewResponseSchema,
-  ).review;
-}
-
-export interface HeldApplyRequest {
-  readonly heldId: string;
-  /** The hold's version, as the review showed it. */
-  readonly revision: number;
-  /** The live item's revision the person saw; null when there was none. */
-  readonly expectedLiveRevision: number | null;
-}
-
-export type HeldApplyOutcome =
-  /** Written: `item` null after a delete; `replayed` when it was already applied. */
-  | {
-      readonly outcome: "applied";
-      readonly item: AuthnItemRow | null;
-      readonly replayed: boolean;
-      readonly revision: number;
-    }
-  /** The hold changed since it was shown. */
-  | { readonly outcome: "superseded" }
-  /** The live item moved since it was shown; `current` is it now, null when gone. */
-  | { readonly outcome: "conflict"; readonly current: AuthnItemRow | null }
-  /** No such hold any more. */
-  | { readonly outcome: "gone" };
-
-export async function applyHeldChange(
-  cloud: EnvironmentCloud,
-  environmentId: string,
-  request: HeldApplyRequest,
-): Promise<HeldApplyOutcome> {
-  const answer = await sendSettings(
-    cloud,
-    "POST",
-    `${environmentPath(environmentId)}/review/held/${encodeURIComponent(request.heldId)}/apply`,
-    {
-      revision: request.revision,
-      expectedLiveRevision: request.expectedLiveRevision,
-    },
-  );
-  if (answer.status === 409) {
-    const conflict = authnHeldApplyConflictSchema.safeParse(answer.body);
-    if (conflict.success) {
-      return conflict.data.code === "superseded"
-        ? { outcome: "superseded" }
-        : { outcome: "conflict", current: conflict.data.current };
-    }
+  method: EnvironmentHttpMethod,
+  path: string,
+  body: unknown,
+  offline: string,
+): Promise<EnvironmentAnswer> {
+  try {
+    return await sendSettings(cloud, method, path, body);
+  } catch (error) {
+    if (error instanceof EnvironmentCloudError && error.kind === "no_response")
+      throw new EnvironmentCloudError("no_response", offline);
+    throw error;
   }
-  if (answer.status === 404) return { outcome: "gone" };
-  const written = parseSettings(answer, authnItemWriteResponseSchema);
-  return {
-    outcome: "applied",
-    item: written.item,
-    replayed: written.replayed,
-    revision: written.revision,
-  };
 }
 
-export type HeldDiscardOutcome =
-  | { readonly outcome: "discarded" }
-  | { readonly outcome: "superseded" }
-  | { readonly outcome: "gone" };
-
-export async function discardHeldChange(
-  cloud: EnvironmentCloud,
-  environmentId: string,
-  heldId: string,
-  revision: number,
-): Promise<HeldDiscardOutcome> {
-  const answer = await sendSettings(
-    cloud,
-    "POST",
-    `${environmentPath(environmentId)}/review/held/${encodeURIComponent(heldId)}/discard`,
-    { revision },
-  );
-  if (answer.status === 409 && errorBodyCode(answer.body) === "superseded") {
-    return { outcome: "superseded" };
-  }
-  if (answer.status === 404) return { outcome: "gone" };
-  parseSettings(answer, authnHeldDiscardResponseSchema);
-  return { outcome: "discarded" };
+/**
+ * A non-success the call has no outcome for: a plain refusal whatever its
+ * status, as the host gave it. A redirect never reached authn.
+ */
+function reviewRefusal(answer: EnvironmentAnswer): EnvironmentCloudError {
+  return isRedirect(answer)
+    ? new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE)
+    : new EnvironmentCloudError("refused", REFUSED_MESSAGE);
 }
 
-/** Every change of the last 30 days that displaced a value Undo can restore. */
-export async function readChangeNotices(
-  cloud: EnvironmentCloud,
-  environmentId: string,
-): Promise<readonly AuthnNoticeRow[]> {
-  return parseSettings(
-    await sendSettings(
-      cloud,
-      "GET",
-      `${environmentPath(environmentId)}/notices`,
-      null,
-    ),
-    authnNoticesResponseSchema,
-  ).notices;
+/** A read's answer parsed with `schema`; an answer that does not parse is refused too. */
+function parseReview<T>(answer: EnvironmentAnswer, schema: z.ZodType<T>): T {
+  if (!isSuccess(answer)) throw reviewRefusal(answer);
+  const parsed = schema.safeParse(answer.body);
+  if (!parsed.success)
+    throw new EnvironmentCloudError("refused", REFUSED_MESSAGE);
+  return parsed.data;
 }
 
-export interface UndoRequest {
-  /** The change that displaced the value. */
-  readonly revision: number;
-  readonly kind: string;
-  readonly key: string;
-  readonly os: AuthnNoticeRow["os"];
-}
-
-export type UndoOutcome =
-  | { readonly outcome: "undone"; readonly item: AuthnItemRow }
-  | {
-      readonly outcome: "superseded" | "nothing_displaced" | "change_not_found";
-      /** The row as it stands for `superseded`, else null. */
-      readonly current: AuthnItemRow | null;
-    };
-
-export async function undoChange(
-  cloud: EnvironmentCloud,
-  environmentId: string,
-  request: UndoRequest,
-): Promise<UndoOutcome> {
-  const answer = await sendSettings(
-    cloud,
-    "POST",
-    `${environmentPath(environmentId)}/changes/${encodeURIComponent(String(request.revision))}/undo`,
-    { kind: request.kind, key: request.key, os: request.os },
-  );
-  if (answer.status === 409) {
-    const refused = authnUndoConflictSchema.safeParse(answer.body);
-    if (refused.success) {
-      return { outcome: refused.data.code, current: refused.data.current };
-    }
-    throw settingsRefusal(answer);
-  }
-  return {
-    outcome: "undone",
-    item: parseSettings(answer, authnUndoResponseSchema).item,
-  };
+function heldPath(environmentId: string, heldId: string, verb: string): string {
+  return `${environmentPath(environmentId)}/review/held/${encodeURIComponent(heldId)}/${verb}`;
 }
 
 // ── the review sheet, the notices and Undo, as the screens read them ───────
@@ -223,12 +118,26 @@ const NO_HELD_FACTS = {
   value: null,
 } as const;
 
-/** The holds of an environment's review, each as the sheet lists it. */
+/**
+ * The holds of an environment's review (`GET …/review?include=operation`:
+ * every hold with its operation and the live item it would replace), each as
+ * the sheet lists it.
+ */
 export async function readReviewHolds(
   cloud: EnvironmentCloud,
   environmentId: string,
 ): Promise<readonly ReviewHeldEntry[]> {
-  const review = await readOperationReview(cloud, environmentId);
+  const query = new URLSearchParams({ include: REVIEW_INCLUDE_OPERATION });
+  const { review } = parseReview(
+    await sendReview(
+      cloud,
+      "GET",
+      `${environmentPath(environmentId)}/review?${query.toString()}`,
+      null,
+      REVIEW_OFFLINE_MESSAGE,
+    ),
+    authnOperationReviewResponseSchema,
+  );
   const holds: ReviewHeldEntry[] = [];
   for (const entry of review?.needsYou ?? []) {
     // A sign-in that did not move is the dashboard's to show.
@@ -255,40 +164,60 @@ export async function readReviewHolds(
 }
 
 /**
- * The review sheet's choice on one hold, as the host answered it: written,
- * gone, or not the person's to make. A hold or live item that moved since the
- * list read it is `gone` too: the row stays in the review, and the reread
- * draws it as it is now.
+ * The review sheet's choice on one hold:
+ * - `applied`: written (approve) or dropped (discard);
+ * - `conflict`: approve only: the live item moved since the list read it;
+ *   `current` is it now, null when it is gone. Its value is shown only
+ *   through the masker;
+ * - `gone`: the hold moved or is no longer there; the reread draws the row
+ *   as it is now;
+ * - `forbidden`: not the person's to make.
+ */
+export type ReviewChoiceOutcome =
+  | { readonly outcome: "applied" | "gone" | "forbidden" }
+  | { readonly outcome: "conflict"; readonly current: AuthnItemRow | null };
+
+/**
+ * Apply sends the hold's revision and the live revision the person saw, and
+ * authn checks both and consumes the hold in one transaction; Discard sends
+ * the hold's revision.
  */
 export async function applyReviewChoice(
   cloud: EnvironmentCloud,
   environmentId: string,
   entry: ReviewHeldEntry,
   choice: "approve" | "discard",
-): Promise<EnvironmentReviewHeldApplyResponse> {
-  try {
-    const answer =
-      choice === "approve"
-        ? await applyHeldChange(cloud, environmentId, {
-            heldId: entry.entryId,
+): Promise<ReviewChoiceOutcome> {
+  const answer =
+    choice === "approve"
+      ? await sendReview(
+          cloud,
+          "POST",
+          heldPath(environmentId, entry.entryId, "apply"),
+          {
             revision: entry.heldRevision,
             expectedLiveRevision: entry.liveRevision,
-          })
-        : await discardHeldChange(
-            cloud,
-            environmentId,
-            entry.entryId,
-            entry.heldRevision,
-          );
-    return answer.outcome === "applied" || answer.outcome === "discarded"
-      ? { outcome: "applied" }
-      : { outcome: "gone" };
-  } catch (error) {
-    if (error instanceof EnvironmentCloudError && error.kind === "forbidden") {
-      return { outcome: "forbidden" };
+          },
+          REVIEW_OFFLINE_MESSAGE,
+        )
+      : await sendReview(
+          cloud,
+          "POST",
+          heldPath(environmentId, entry.entryId, "discard"),
+          { revision: entry.heldRevision },
+          REVIEW_OFFLINE_MESSAGE,
+        );
+  if (answer.status === 403) return { outcome: "forbidden" };
+  if (answer.status === 409 && choice === "approve") {
+    const conflict = authnHeldApplyConflictSchema.safeParse(answer.body);
+    if (conflict.success && conflict.data.code === "revision_conflict") {
+      return { outcome: "conflict", current: conflict.data.current };
     }
-    throw error;
   }
+  if (answer.status === 404 || answer.status === 409)
+    return { outcome: "gone" };
+  if (!isSuccess(answer)) throw reviewRefusal(answer);
+  return { outcome: "applied" };
 }
 
 const noticeAddressSchema = z.tuple([
@@ -312,13 +241,26 @@ function changedByOf(
     : { kind: "host", hostId, hostLabel: hostName };
 }
 
-/** The environment's notices as the page lists them, each with Undo. */
+/**
+ * The environment's notices as the page lists them, each with Undo: every
+ * change of the last 30 days that displaced a value Undo can restore.
+ */
 export async function readNotices(
   cloud: EnvironmentCloud,
   environmentId: string,
 ): Promise<EnvironmentNotice[]> {
+  const { notices: rows } = parseReview(
+    await sendReview(
+      cloud,
+      "GET",
+      `${environmentPath(environmentId)}/notices`,
+      null,
+      OFFLINE_MESSAGE,
+    ),
+    authnNoticesResponseSchema,
+  );
   const notices: EnvironmentNotice[] = [];
-  for (const row of await readChangeNotices(cloud, environmentId)) {
+  for (const row of rows) {
     const kind = environmentItemKindSchema.safeParse(row.kind);
     if (!kind.success) continue;
     notices.push({
@@ -336,10 +278,11 @@ export async function readNotices(
   return notices;
 }
 
-/** The words a notice that no longer names an undoable change is refused with. */
-const NOTICE_GONE_MESSAGE = "This notice is no longer available.";
-
-/** Undo of one notice, answered as the host's `environment.undo` was. */
+/**
+ * Undo of one notice (`POST …/changes/:revision/undo`), answered as the
+ * host's `environment.undo` was: a 403 is `needs_grant`, a later change on
+ * the key is `stale`, and a change Undo cannot restore is refused.
+ */
 export async function undoNotice(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -353,27 +296,34 @@ export async function undoNotice(
     address = null;
   }
   if (address === null) {
-    throw new EnvironmentCloudError("invalid", NOTICE_GONE_MESSAGE);
+    throw new EnvironmentCloudError("refused", NOTICE_GONE_MESSAGE);
   }
   const [revision, kind, key, os] = address;
-  const undone = await undoChange(cloud, environmentId, {
-    revision,
-    kind,
-    key,
-    os,
-  });
-  if (undone.outcome === "undone") {
-    return { outcome: "saved", revision: undone.item.revision };
+  const answer = await sendReview(
+    cloud,
+    "POST",
+    `${environmentPath(environmentId)}/changes/${encodeURIComponent(String(revision))}/undo`,
+    { kind, key, os },
+    OFFLINE_MESSAGE,
+  );
+  if (answer.status === 403) return { outcome: "needs_grant" };
+  if (answer.status === 409) {
+    const refused = authnUndoConflictSchema.safeParse(answer.body);
+    if (refused.success && refused.data.code === "superseded") {
+      const current = refused.data.current;
+      return {
+        outcome: "stale",
+        currentRevision: current?.revision ?? null,
+        changedBy: changedByOf(
+          current?.writtenBy.hostId ?? null,
+          current?.writtenBy.hostName ?? null,
+        ),
+      };
+    }
+    if (refused.success) {
+      throw new EnvironmentCloudError("refused", NOTICE_GONE_MESSAGE);
+    }
   }
-  if (undone.outcome === "superseded") {
-    return {
-      outcome: "stale",
-      currentRevision: undone.current?.revision ?? null,
-      changedBy: changedByOf(
-        undone.current?.writtenBy.hostId ?? null,
-        undone.current?.writtenBy.hostName ?? null,
-      ),
-    };
-  }
-  throw new EnvironmentCloudError("invalid", NOTICE_GONE_MESSAGE);
+  const undone = parseReview(answer, authnUndoResponseSchema);
+  return { outcome: "saved", revision: undone.item.revision };
 }

@@ -49,7 +49,7 @@ export function useEnvironmentUndoMutation(
         if (cloud === null || environmentId === null)
           throw hostClientUnavailableError(METHOD);
         try {
-          return await undoNotice(cloud, environmentId, noticeId);
+          return await undoNotice(cloud(), environmentId, noticeId);
         } catch (error) {
           throw environmentCloudHostError(METHOD, error);
         }

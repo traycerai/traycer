@@ -9,7 +9,10 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type {
+  EnvironmentCloud,
+  EnvironmentCloudSource,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -65,10 +68,16 @@ export function environmentCloudQueryKey<Method extends EnvironmentCloudMethod>(
   ];
 }
 
-/** The app's own client for authn's environment routes; null with no session service. */
-export function useEnvironmentCloud(): EnvironmentCloud | null {
+/**
+ * Makes the app's own client for authn's environment routes, one per
+ * operation, bound to the sign-in it begins on; null with no session service.
+ */
+export function useEnvironmentCloud(): EnvironmentCloudSource | null {
   const auth = useHostBinding()?.auth ?? null;
-  return useMemo(() => auth?.environmentCloud() ?? null, [auth]);
+  return useMemo(
+    () => (auth === null ? null : () => auth.environmentCloud()),
+    [auth],
+  );
 }
 
 /** Marks every cached read of `methods`, under every scope, stale. */
@@ -90,14 +99,14 @@ export function invalidateEnvironmentReads(
  * gave; with no session service it fails as a host with no client does.
  */
 export function requestEnvironmentCloud<Method extends EnvironmentCloudMethod>(
-  cloud: EnvironmentCloud | null,
+  cloud: EnvironmentCloudSource | null,
   method: Method,
   request: RequestOfMethod<HostRpcRegistry, Method>,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   return withHostQueryErrorBoundary(method, async () => {
     cloudVerdictPreflight(method)();
     if (cloud === null) throw hostClientUnavailableError(method);
-    return callEnvironmentCloud(cloud, method, request);
+    return callEnvironmentCloud(cloud(), method, request);
   });
 }
 
@@ -216,7 +225,7 @@ export function useEnvironmentCloudOwnRead<
           cloudVerdictPreflight(method)();
           if (cloud === null) throw hostClientUnavailableError(method);
           try {
-            return await read(cloud);
+            return await read(cloud());
           } catch (error) {
             throw environmentCloudHostError(method, error);
           }

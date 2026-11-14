@@ -60,7 +60,6 @@ import {
 import {
   CLOUD_UNAVAILABLE_MESSAGE,
   EnvironmentCloudError,
-  NEEDS_PERMISSION_MESSAGE,
   SIGN_IN_AGAIN_MESSAGE,
   environmentPath,
   errorBodyCode,
@@ -135,9 +134,6 @@ function authnTextOf(body: unknown): string | null {
   return null;
 }
 
-/** A withheld string shorter than this is not searched for: it would match ordinary words. */
-const MIN_WITHHELD_LENGTH = 4;
-
 /**
  * authn's human message, printable and bounded; the generic words when there
  * is none, or when it holds any of `withheld`: what this request carried that
@@ -151,7 +147,7 @@ function refusalMessageWithout(
   const text = authnTextOf(body);
   if (text === null) return REFUSED;
   const holdsWithheld = withheld.some(
-    (value) => value.length >= MIN_WITHHELD_LENGTH && text.includes(value),
+    (value) => value.length > 0 && text.includes(value),
   );
   if (holdsWithheld) return REFUSED;
   const printable = text.replace(/[\p{Cc}\u2028\u2029]/gu, " ").trim();
@@ -212,8 +208,8 @@ function refusal(answer: SecretsAnswer): EnvironmentCloudError {
       SIGN_IN_AGAIN_MESSAGE.secrets,
     );
   }
-  if (answer.status === 403)
-    return new EnvironmentCloudError("forbidden", NEEDS_PERMISSION_MESSAGE);
+  // A 403 is authn's refusal like any other, in its own words, as the host's
+  // forwarder answered it.
   if (isCloudFailure(answer))
     return new EnvironmentCloudError("unavailable", CLOUD_UNAVAILABLE_MESSAGE);
   return new EnvironmentCloudError(

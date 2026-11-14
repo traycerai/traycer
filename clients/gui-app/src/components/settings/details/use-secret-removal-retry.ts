@@ -84,9 +84,8 @@ export function useSecretRemovalRetry(): DetailsItemRetry {
   // A Details subject always names its environment, so its secrets are the
   // app's own calls to authn.
   const send = useEnvironmentCloudSender();
-  // One mutation keeps the reads and destroy in sequence, with a shared
-  // pending/refusal state. The client is required, each call
-  // enforce their version floor, and success invalidates the captured host.
+  // One mutation keeps the reads and the destroy in sequence, with a shared
+  // pending and refusal state. Success marks every scope's secret reads stale.
   const retry = useMutation({
     mutationKey: settingsDetailsMutationKeys.secretRemovalRetry(),
     mutationFn: async (subject: DetailsSubject): Promise<string | null> => {

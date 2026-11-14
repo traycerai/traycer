@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/agent-spinning-dots";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import {
-  useConfigurationMcpServerMutations,
+  useConfigurationMcpServerSave,
   type EnvironmentMcpServer,
 } from "@/hooks/environment/team/use-mcp-servers";
 import { useHostClient } from "@/lib/host";
@@ -36,7 +36,7 @@ import {
 import {
   initialMcpServerForm,
   mcpServerCredential,
-  mcpServerPutRequest,
+  mcpServerSave,
   mcpServerReady,
   pickableSecrets,
   refusedSecret,
@@ -83,7 +83,6 @@ export function McpServerDialog(props: {
       />
     );
   else if (secrets.isLoading) secretsRead = <MutedAgentSpinner />;
-  const { put } = useConfigurationMcpServerMutations();
   const [form, setForm] = useState<McpServerForm>(() =>
     initialMcpServerForm(server),
   );
@@ -91,27 +90,29 @@ export function McpServerDialog(props: {
   const update: FormUpdate = (patch) =>
     setForm((current) => ({ ...current, ...patch }));
   const credential = mcpServerCredential(form, server !== null, true);
+  // Read again when the save is sent, so a typed value is never the
+  // mutation's variables.
+  const put = useConfigurationMcpServerSave(() =>
+    mcpServerCredential(form, server !== null, true),
+  );
   const submit = (): void => {
     if (source.kind !== "pool" || credential === null) return;
     setProblem(null);
-    put.mutate(
-      mcpServerPutRequest(form, server, source.environmentId, credential),
-      {
-        onSuccess: (result) => {
-          if (result.outcome === "saved") props.onClose();
-          else if (result.outcome === "forbidden")
-            setProblem("You no longer have access to change these settings.");
-          else
-            setProblem(
-              serverRefusal(result.reason, {
-                configuration: name,
-                server: form.name.trim(),
-                secret: refusedSecret(form, server, secretList),
-              }),
-            );
-        },
+    put.mutate(mcpServerSave(form, server, source.environmentId), {
+      onSuccess: (result) => {
+        if (result.outcome === "saved") props.onClose();
+        else if (result.outcome === "forbidden")
+          setProblem("You no longer have access to change these settings.");
+        else
+          setProblem(
+            serverRefusal(result.reason, {
+              configuration: name,
+              server: form.name.trim(),
+              secret: refusedSecret(form, server, secretList),
+            }),
+          );
       },
-    );
+    });
   };
   return (
     <Dialog

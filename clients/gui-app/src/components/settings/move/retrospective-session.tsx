@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { useCallback, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { EnvironmentReviewHeldApplyResponse } from "@traycer/protocol/host/environment-schemas";
+import type { ReviewChoiceOutcome } from "@traycer-clients/shared/environment/environment-review";
 import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -177,11 +177,11 @@ function inventoryReadLine(
 }
 
 /**
- * A held-row choice's answer under the rows. `gone` was settled elsewhere,
- * and the reread drops its row.
+ * A held-row choice's answer under the rows. `gone` and `conflict` draw
+ * nothing here: the reread draws the row as it is now, or drops it.
  */
 function heldApplyIssue(
-  answer: EnvironmentReviewHeldApplyResponse | undefined,
+  answer: ReviewChoiceOutcome | undefined,
 ): ConfigurationWriteIssue {
   return answer?.outcome === "forbidden" ? { kind: "forbidden" } : null;
 }

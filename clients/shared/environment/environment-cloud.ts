@@ -31,13 +31,17 @@ export type EnvironmentPurpose = "settings" | "secrets";
  * - `unauthorized`: authn refused the person's credential (401);
  * - `forbidden`: the person's role does not allow it (403);
  * - `invalid`: authn refused the request, or it names nothing it can serve;
+ * - `refused`: authn did not take a review, notice or Undo call, which the
+ *   host answered as a plain refusal rather than by its cause;
  * - `unavailable`: the cloud failed, or answered in a shape this cannot read;
- * - `no_response`: nothing answered, or no sign-in to send.
+ * - `no_response`: nothing answered, no sign-in to send, or the sign-in is
+ *   no longer the one the operation began on.
  */
 export type EnvironmentErrorKind =
   | "unauthorized"
   | "forbidden"
   | "invalid"
+  | "refused"
   | "unavailable"
   | "no_response";
 
@@ -52,9 +56,7 @@ export class EnvironmentCloudError extends Error {
   }
 }
 
-export const NEEDS_CONNECTION_MESSAGE: Readonly<
-  Record<EnvironmentPurpose, string>
-> = {
+const NEEDS_CONNECTION_MESSAGE: Readonly<Record<EnvironmentPurpose, string>> = {
   settings: "Connect to manage settings.",
   secrets: "Connect to manage secrets.",
 };
@@ -67,14 +69,14 @@ export const SIGN_IN_AGAIN_MESSAGE: Readonly<
 };
 
 /** The words of a `forbidden` failure: the person's role does not allow it. */
-export const NEEDS_PERMISSION_MESSAGE = "This change needs permission.";
+const NEEDS_PERMISSION_MESSAGE = "This change needs permission.";
 
 /** The words of an `unavailable` failure, as the host's cloud errors say them. */
 export const CLOUD_UNAVAILABLE_MESSAGE =
   "Cloud service is temporarily unavailable. Please try again shortly.";
 
 /** One call's deadline. */
-export const ENVIRONMENT_REQUEST_TIMEOUT_MS = 15_000;
+const ENVIRONMENT_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
  * No failure's body is read past this many bytes: one over it counts by its
@@ -84,7 +86,8 @@ export const ENVIRONMENT_REQUEST_TIMEOUT_MS = 15_000;
 export const MAX_FAILURE_BODY_BYTES = 256 * 1024;
 
 /**
- * Where a call goes and on whose sign-in.
+ * Where one operation's calls go and on whose sign-in. An operation (a read,
+ * or a write of one or more requests) is given its own, made when it begins.
  *
  * Invariant: `bearer` answers the person's verified sign-in, refreshed as the
  * session refreshes it, and null when there is none (signed out, or a token
@@ -96,7 +99,16 @@ export interface EnvironmentCloud {
   readonly authnBaseUrl: string;
   readonly bearer: CloudBearerSource;
   readonly transport: EnvironmentTransport;
+  /**
+   * Whether the sign-in the operation began on (the same person, in the same
+   * sign-in session) is still the current one. Asked before every request;
+   * while it answers false, nothing is sent.
+   */
+  readonly onOriginSignIn: () => boolean;
 }
+
+/** Makes one operation's {@link EnvironmentCloud}, bound to the sign-in current when it is made. */
+export type EnvironmentCloudSource = () => EnvironmentCloud;
 
 /** One request as the transport sends it; `body` is the JSON value, or null. */
 export interface EnvironmentTransportRequest {
@@ -184,22 +196,17 @@ export function isSuccess(answer: EnvironmentAnswer): boolean {
 }
 
 /**
- * Whether a non-success is authn refusing the request itself: a 4xx other
- * than 401 and 403, which a write may report as its own outcome. A 401, a
- * 403, a 5xx, a 3xx and a status 0 never are: they are the caller's error.
+ * A 3xx, or a browser's opaque redirect (status 0): the transport follows
+ * none, so authn never answered the request itself. No write reports one as
+ * its own outcome.
  */
-export function isRequestRefusal(answer: EnvironmentAnswer): boolean {
-  return (
-    answer.status >= 400 &&
-    answer.status < 500 &&
-    answer.status !== 401 &&
-    answer.status !== 403
-  );
+export function isRedirect(answer: EnvironmentAnswer): boolean {
+  return !isSuccess(answer) && answer.status < 400;
 }
 
-/** A 3xx, a status 0 or a 5xx: the cloud did not answer this request as asked. */
+/** A redirect or a 5xx: the cloud did not answer this request as asked. */
 export function isCloudFailure(answer: EnvironmentAnswer): boolean {
-  return !isSuccess(answer) && (answer.status < 400 || answer.status >= 500);
+  return isRedirect(answer) || answer.status >= 500;
 }
 
 function bodyOf(text: string | null): unknown {
@@ -215,9 +222,10 @@ function bodyOf(text: string | null): unknown {
 /**
  * One authn call on the person's bearer. Throws `no_response` with
  * {@link NEEDS_CONNECTION_MESSAGE} of `purpose` when nothing answered (or not
- * in time), or there is no sign-in to send.
+ * in time), or there is no sign-in to send: none at all, or not the one the
+ * operation began on.
  */
-export async function sendEnvironmentRequest(
+async function sendEnvironmentRequest(
   cloud: EnvironmentCloud,
   purpose: EnvironmentPurpose,
   method: EnvironmentHttpMethod,
@@ -246,7 +254,7 @@ export async function sendEnvironmentRequestWithBearer(
   path: string,
   body: unknown,
 ): Promise<{ readonly answer: EnvironmentAnswer; readonly bearer: string }> {
-  const bearer = cloud.bearer.getBearerToken();
+  const bearer = cloud.onOriginSignIn() ? cloud.bearer.getBearerToken() : null;
   if (bearer === null || bearer.length === 0) {
     throw new EnvironmentCloudError(
       "no_response",

@@ -1,11 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   applyReviewChoice,
+  type ReviewChoiceOutcome,
   type ReviewHeldEntry,
 } from "@traycer-clients/shared/environment/environment-review";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentReviewHeldApplyResponse } from "@traycer/protocol/host/environment-schemas";
 import type { HeldApplyChoice } from "@/components/settings/move/retrospective-copy";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import {
@@ -25,8 +25,9 @@ const METHOD = "environment.review.heldApply";
 /**
  * Applies one retrospective held-row choice, the app's own call to authn on
  * the person's sign-in. Approve names the hold's revision and the live item's
- * revision the list read and showed; a hold or item that moved since leaves
- * the row in the review, and the reread draws it as it is now.
+ * revision the list read and showed. A live item that moved since answers
+ * `conflict` with it as it is now; a hold that moved or went answers `gone`.
+ * Either leaves the row in the review, and the reread draws it.
  */
 export function useEnvironmentReviewHeldApplyMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -36,7 +37,7 @@ export function useEnvironmentReviewHeldApplyMutation(
   const cloud = useEnvironmentCloud();
   const { environmentId } = usePersonalEnvironment(client, true);
   return useMutation<
-    EnvironmentReviewHeldApplyResponse,
+    ReviewChoiceOutcome,
     HostRpcError,
     { readonly heldId: string; readonly choice: HeldApplyChoice }
   >({
@@ -49,7 +50,7 @@ export function useEnvironmentReviewHeldApplyMutation(
         const entry = entries.find((row) => row.entryId === heldId);
         if (entry === undefined) return { outcome: "gone" };
         try {
-          return await applyReviewChoice(cloud, environmentId, entry, choice);
+          return await applyReviewChoice(cloud(), environmentId, entry, choice);
         } catch (error) {
           throw environmentCloudHostError(METHOD, error);
         }

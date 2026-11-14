@@ -36,12 +36,18 @@ export function useSecretRowActions(props: {
   const verify = useSecretsWrite({
     client: props.client,
     method: "environment.secrets.verify",
+    hostOwnFloor: null,
     mutationKey: settingsDetailsMutationKeys.secretVerify(),
   });
-  // Remove targets the current version, which the latest version revokes.
+  // Remove targets the current version: @1.0 refuses it, @1.1 revokes it,
+  // whatever the environment scope.
   const remove = useSecretsWrite({
     client: props.client,
     method: "environment.secrets.destroy",
+    hostOwnFloor: {
+      method: "environment.secrets.destroy",
+      version: { major: 1, minor: 1 },
+    },
     mutationKey: settingsDetailsMutationKeys.secretDestroy(),
     onSuccess: async (answer) => {
       if (answer.outcome === "refused") return;
