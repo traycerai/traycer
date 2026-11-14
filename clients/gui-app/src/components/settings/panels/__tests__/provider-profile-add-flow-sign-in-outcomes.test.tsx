@@ -5,6 +5,7 @@
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );
+const openLinkMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 // The flow host reads `useHostClient` through the barrel, and Vite rewrites
 // that re-export onto `@/lib/host/runtime`. Both have to answer the pinned
@@ -21,7 +22,7 @@ vi.mock("@/lib/links/open-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/links/open-link")>();
   return {
     ...actual,
-    useOpenLink: () => () => Promise.resolve(),
+    useOpenLink: () => openLinkMock,
   };
 });
 
@@ -158,6 +159,7 @@ afterEach(() => {
   useDesktopDialogStore.setState({ reportIssueAvailable: false });
   clientMock.current = null;
   resetNegotiatedManifests();
+  openLinkMock.mockClear();
 });
 
 function workProfile(): ProviderProfile {
@@ -847,6 +849,40 @@ describe("Add a profile around one sign-in", () => {
           Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
         }
       }
+    },
+  );
+
+  it.each([true, "10.11"] as const)(
+    "opens the active sign-in link from the real Add dialog with offersSignIns %s",
+    async (offers) => {
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers,
+        profilesBefore: [],
+        profilesAfter: [],
+        outcome: null,
+        holdAwait: true,
+      });
+      await pressAccount(offers);
+      const openButton = await screen.findByRole("button", {
+        name: /Open browser/,
+      });
+      expect(openLinkMock).toHaveBeenCalledWith(
+        "https://example.test/sign-in",
+        "auth",
+        null,
+      );
+      const callsBeforeClick = openLinkMock.mock.calls.length;
+      fireEvent.click(openButton);
+      expect(openLinkMock).toHaveBeenCalledTimes(callsBeforeClick + 1);
+      expect(openLinkMock).toHaveBeenLastCalledWith(
+        "https://example.test/sign-in",
+        "auth",
+        null,
+      );
+      expect(methodCount(harness.messenger.calls, "providers.startLogin")).toBe(
+        1,
+      );
     },
   );
 
