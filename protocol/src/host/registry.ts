@@ -1706,6 +1706,10 @@ import {
   providersRemoveCustomPathResponseSchemaV10,
   providersRemoveCustomPathResponseSchemaV20,
   providersSetApiKeyRequestSchema,
+  providersBeginApiKeyChangeRequestSchema,
+  providersBeginApiKeyChangeResponseSchema,
+  providersSettleApiKeyChangeRequestSchema,
+  providersSettleApiKeyChangeResponseSchema,
   providersSetApiKeyRequestSchemaV10,
   providersSetApiKeyResponseSchema,
   providersSetApiKeyResponseSchemaV10,
@@ -5898,6 +5902,20 @@ export const providersSetEnabledDowngradeV21ToV10 = defineDowngradePath<
 // its entire delta over 2.1, and both went away with that control. 2.1 is the
 // head minor again, and `providersSetEnabledDowngradeV21ToV10` above is once
 // more the registered bridge down to the frozen v1.0.
+
+export const providersBeginApiKeyChangeV10 = defineRpcContract({
+  method: "providers.beginApiKeyChange",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersBeginApiKeyChangeRequestSchema,
+  responseSchema: providersBeginApiKeyChangeResponseSchema,
+});
+
+export const providersSettleApiKeyChangeV10 = defineRpcContract({
+  method: "providers.settleApiKeyChange",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSettleApiKeyChangeRequestSchema,
+  responseSchema: providersSettleApiKeyChangeResponseSchema,
+});
 
 export const providersSetApiKeyV10 = defineRpcContract({
   method: "providers.setApiKey",
@@ -13679,6 +13697,32 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersEnsurePackV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.beginApiKeyChange": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersBeginApiKeyChangeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.settleApiKeyChange": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSettleApiKeyChangeV10,
           upgradeFromPreviousVersion: null,
         },
       },
