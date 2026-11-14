@@ -98,6 +98,10 @@ describe("dormant providers.link@2.0 contracts", () => {
     expect(providersLinkCompleteV20.requestSchema.parse(request)).toEqual(
       request,
     );
+    expect(() => providersLinkCompleteV20.requestSchema.parse({})).toThrow();
+    expect(() =>
+      providersLinkCompleteV20.requestSchema.parse({ linkId: "" }),
+    ).toThrow();
     for (const extra of [
       { code: "old-code" },
       { environmentId: "environment-1" },
@@ -167,6 +171,21 @@ describe("dormant providers.link@2.0 contracts", () => {
         state: "pending",
         code: "no_sign_in",
       }),
+    ).toThrow();
+  });
+
+  it.each(["unavailable", "linked", "expired"] as const)(
+    "refuses extra fields on the %s linkComplete response",
+    (state) => {
+      expect(() =>
+        providersLinkCompleteV20.responseSchema.parse({ state, extra: true }),
+      ).toThrow();
+    },
+  );
+
+  it("refuses an empty linkId on a successful v2 response", () => {
+    expect(() =>
+      providersLinkV20.responseSchema.parse({ ok: true, linkId: "" }),
     ).toThrow();
   });
 
