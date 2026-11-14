@@ -25,6 +25,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import {
   composerAttachmentsHoldSend,
+  isAttachmentIngestPending,
   useComposerFileAttachArgs,
   useComposerHashPasteAdapter,
   type ComposerFileRoute,
@@ -560,18 +561,30 @@ function Zone(props: {
       onDragOver={handlers.onDragOver}
       onDragEnter={handlers.onDragEnter}
       data-variant={handlers.dragOverlayVariant ?? "none"}
-      data-busy={String(
-        handlers.isResolvingFilePaths || handlers.isAttachingFiles,
-      )}
+      data-busy={String(isAttachmentIngestPending(handlers))}
     />
   );
 }
 
-/** Resolves once the zone's path and upload jobs are over and the loop is idle. */
-async function settled(zone: HTMLElement): Promise<void> {
+/**
+ * Resolves once nothing a gesture started is still running, so that an
+ * assertion that something did NOT happen is made when no job is left that
+ * could still make it happen. A gesture starts three kinds of job:
+ *
+ * - the hook's own: path resolution, file hashing and image ingest, which the
+ *   zone's busy flag reports (`isAttachmentIngestPending`, the predicate that
+ *   holds a send);
+ * - an upload, which starts once its node is in the draft and outlives those
+ *   jobs: the upload registry reports each node leaving `uploading`, and the
+ *   node's outcome (its settlement and any failure toast) is written in the
+ *   same step that reports it.
+ */
+async function settled(zone: HTMLElement, rig: Rig): Promise<void> {
   await waitFor(() => expect(zone.getAttribute("data-busy")).toBe("false"));
-  await act(async () => {
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  await waitFor(() => {
+    for (const node of rig.editor.nodes()) {
+      expect(readFileAttachmentUploadStatus(node.id)).not.toBe("uploading");
+    }
   });
 }
 
@@ -667,7 +680,7 @@ describe("paste and drop of a non-image file on this machine", () => {
     await waitFor(() =>
       expect(rig.insertedPaths).toEqual([["/home/me/a.txt"]]),
     );
-    await settled(zone);
+    await settled(zone, rig);
     expect(toasts.error).not.toHaveBeenCalled();
     expect(attachedNames(rig)).toEqual([]);
     expect(rig.put).not.toHaveBeenCalled();
@@ -691,7 +704,7 @@ describe("paste and drop of a non-image file on this machine", () => {
       await waitFor(() =>
         expect(rig.insertedPaths).toEqual([["/Users/me/my-folder"]]),
       );
-      await settled(zone);
+      await settled(zone, rig);
       expect(toasts.error).not.toHaveBeenCalled();
       expect(attachedNames(rig)).toEqual([]);
       expect(rig.put).not.toHaveBeenCalled();
@@ -708,7 +721,7 @@ describe("paste and drop of a non-image file on this machine", () => {
     await waitFor(() =>
       expect(rig.insertedPaths).toEqual([["/Users/me/notes.txt"]]),
     );
-    await settled(zone);
+    await settled(zone, rig);
     expect(toasts.error).not.toHaveBeenCalled();
     expect(rig.put).not.toHaveBeenCalled();
   });
@@ -724,7 +737,7 @@ describe("paste and drop of a non-image file on this machine", () => {
     await waitFor(() =>
       expect(rig.insertedPaths).toEqual([["/Users/me/a.txt"]]),
     );
-    await settled(zone);
+    await settled(zone, rig);
     expect(toasts.error).not.toHaveBeenCalled();
     expect(rig.put).not.toHaveBeenCalled();
   });
@@ -835,7 +848,7 @@ describe("paste and drop on another machine", () => {
         fileName: "report.pdf",
         mediaType: "application/pdf",
       });
-      await settled(zone);
+      await settled(zone, rig);
       expect(rig.insertedPaths.flat()).toEqual([]);
       expect(toasts.error).not.toHaveBeenCalled();
     },
@@ -886,7 +899,7 @@ describe("paste and drop on another machine", () => {
     ]);
     await waitFor(() => expect(attachedNames(rig)).toEqual(["report.pdf"]));
     await waitFor(() => expect(rig.put).toHaveBeenCalledTimes(1));
-    await settled(zone);
+    await settled(zone, rig);
     expect(rig.insertedPaths.flat()).toEqual([]);
     expect(toasts.error).not.toHaveBeenCalled();
   });
@@ -899,7 +912,7 @@ describe("paste and drop on another machine", () => {
     perform("drop", zone, fileTransfer([pngFile("shot.png")]));
 
     await waitFor(() => expect(rig.insertedImages).toHaveLength(1));
-    await settled(zone);
+    await settled(zone, rig);
     expect(attachedNames(rig)).toEqual([]);
     expect(rig.put).not.toHaveBeenCalled();
     expect(toasts.error).not.toHaveBeenCalled();
@@ -914,7 +927,7 @@ describe("paste and drop on another machine", () => {
     perform("drop", zone, fileTransfer([oversizedFile()]));
 
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    await settled(zone);
+    await settled(zone, rig);
     expect(toasts.error).toHaveBeenCalledTimes(1);
     expect(toasts.error).toHaveBeenCalledWith(
       "huge.mov is 16.0 MiB",
@@ -944,7 +957,7 @@ describe("paste and drop on another machine", () => {
 
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(rig.put).toHaveBeenCalledTimes(20));
-    await settled(zone);
+    await settled(zone, rig);
     expect(toasts.error).toHaveBeenCalledTimes(1);
     expect(toasts.error).toHaveBeenCalledWith(
       "Couldn't attach file-20.txt.",
@@ -975,7 +988,7 @@ describe("paste and drop on another machine", () => {
     perform("drop", zone, fileTransfer([pdfFile("report.pdf")]));
 
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    await settled(zone);
+    await settled(zone, rig);
     expect(toasts.error).toHaveBeenCalledTimes(1);
     expect(toasts.error).toHaveBeenCalledWith(
       "Couldn't attach the file.",
@@ -1003,7 +1016,7 @@ describe("paste and drop on another machine", () => {
     perform("drop", zone, fileTransfer([pdfFile("report.pdf")]));
 
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    await settled(zone);
+    await settled(zone, rig);
     expect(toasts.error).toHaveBeenCalledTimes(1);
     expect(toasts.error).toHaveBeenCalledWith(
       "Couldn't attach the file.",
@@ -1030,7 +1043,7 @@ describe("paste and drop on another machine", () => {
       perform(gesture, zone, fileTransfer([folderFile("my-folder")]));
 
       await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-      await settled(zone);
+      await settled(zone, rig);
       expect(toasts.error).toHaveBeenCalledTimes(1);
       expect(toasts.error).toHaveBeenCalledWith(
         "Couldn't attach the file.",
@@ -1063,7 +1076,7 @@ describe("paste and drop on another machine", () => {
 
     await waitFor(() => expect(attachedNames(rig)).toEqual(["report.pdf"]));
     await waitFor(() => expect(rig.put).toHaveBeenCalledTimes(1));
-    await settled(zone);
+    await settled(zone, rig);
     expectRefusalToast(
       "Couldn't attach my-folder.",
       REMOTE_REFUSAL_DESCRIPTION,
@@ -1085,7 +1098,7 @@ describe("paste and drop on another machine", () => {
     );
 
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    await settled(zone);
+    await settled(zone, rig);
     expectRefusalToast("Couldn't attach 2 items.", REMOTE_REFUSAL_DESCRIPTION);
     expect(rig.put).not.toHaveBeenCalled();
     expect(rig.insertedPaths.flat()).toEqual([]);
@@ -1129,7 +1142,7 @@ describe("paste and drop on another machine", () => {
     perform("paste", zone, emptyTransfer());
 
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    await settled(zone);
+    await settled(zone, rig);
     expectRefusalToast("Couldn't attach 2 items.", REMOTE_REFUSAL_DESCRIPTION);
     expect(rig.put).not.toHaveBeenCalled();
     expect(rig.insertedPaths.flat()).toEqual([]);
@@ -1146,7 +1159,7 @@ describe("paste and drop on another machine", () => {
     await waitFor(() =>
       expect(readNativeClipboardFilePaths).toHaveBeenCalled(),
     );
-    await settled(zone);
+    await settled(zone, rig);
     expect(toasts.error).not.toHaveBeenCalled();
     expect(rig.put).not.toHaveBeenCalled();
     expect(rig.insertedPaths.flat()).toEqual([]);
@@ -1163,7 +1176,7 @@ describe("paste and drop on another machine", () => {
       gesture(zone);
 
       await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-      await settled(zone);
+      await settled(zone, rig);
       expectRefusalToast(
         `Couldn't attach ${named}.`,
         REMOTE_REFUSAL_DESCRIPTION,
@@ -1187,7 +1200,7 @@ describe("paste and drop in an inline message edit on another machine", () => {
       perform(gesture, zone, fileTransfer([pdfFile("report.pdf")]));
 
       await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-      await settled(zone);
+      await settled(zone, rig);
       expectRefusalToast(
         "Couldn't attach report.pdf.",
         INLINE_EDIT_DESCRIPTION,
@@ -1209,7 +1222,7 @@ describe("paste and drop in an inline message edit on another machine", () => {
       gesture(zone);
 
       await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-      await settled(zone);
+      await settled(zone, rig);
       expectRefusalToast(`Couldn't attach ${named}.`, INLINE_EDIT_DESCRIPTION);
       expect(rig.put).not.toHaveBeenCalled();
       expect(rig.insertedPaths.flat()).toEqual([]);
@@ -1230,7 +1243,7 @@ describe("paste and drop in an inline message edit on another machine", () => {
 
     await waitFor(() => expect(rig.insertedImages).toHaveLength(1));
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    await settled(zone);
+    await settled(zone, rig);
     expectRefusalToast("Couldn't attach report.pdf.", INLINE_EDIT_DESCRIPTION);
     expect(rig.insertedPaths.flat()).toEqual([]);
   });

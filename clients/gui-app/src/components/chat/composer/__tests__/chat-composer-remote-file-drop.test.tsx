@@ -10,14 +10,20 @@
  *
  * Nothing between the gesture and the document is stubbed: the composer wires
  * `useComposerHashPaste` into the real `ComposerPromptEditor`, whose document is
- * read back through the draft hook's change callback. The two things that are
- * answered are the machine's own id and the host client, whose `drafts.putBlob`
- * is the put this file observes.
+ * read back through the draft hook's change callback. The editor is seen through
+ * a wrapper that forwards to the real one and keeps its handle, so the file can
+ * wait for the editor's own `isReady()`. The two things that are answered are
+ * the machine's own id and the host client, whose `drafts.putBlob` is the put
+ * this file observes.
  */
-import type { ReactNode } from "react";
+import {
+  forwardRef,
+  useCallback,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -33,7 +39,11 @@ import type {
   SandboxCatalogue,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
-import type { FileAttachmentUploadClient } from "@/lib/composer/file-attachment-upload";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import {
+  readFileAttachmentUploadStatus,
+  type FileAttachmentUploadClient,
+} from "@/lib/composer/file-attachment-upload";
 import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   harnessRow,
@@ -56,6 +66,8 @@ const answers = vi.hoisted(() => ({
   client: null as FileAttachmentUploadClient | null,
   /** The last document the editor reported through the draft hook. */
   document: null as JsonContent | null,
+  /** The mounted editor's handle, held by the forwarding wrapper below. */
+  editorHandle: null as ComposerPromptEditorHandle | null,
 }));
 
 const host = vi.hoisted(() => ({
@@ -239,6 +251,34 @@ vi.mock("@/components/chat/composer/use-chat-composer-draft", () => ({
 vi.mock("@/hooks/drafts/use-chat-composer-draft-authority", () => ({
   useChatComposerDraftAuthority: () => ({ noteEdit: () => undefined }),
 }));
+// The real editor behind a wrapper that only keeps its handle: whether the
+// editor has finished initializing is `isReady()`, which is what a path or file
+// insertion asks, and the composer does not hand its ref out.
+vi.mock(
+  "@/components/chat/composer/composer-prompt-editor",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/composer/composer-prompt-editor")
+      >();
+    const HandleKeepingEditor = forwardRef<
+      ComposerPromptEditorHandle,
+      ComponentProps<typeof actual.ComposerPromptEditor>
+    >((props, ref) => {
+      const keepHandle = useCallback(
+        (handle: ComposerPromptEditorHandle | null): void => {
+          answers.editorHandle = handle;
+          if (typeof ref === "function") ref(handle);
+          else if (ref !== null) ref.current = handle;
+        },
+        [ref],
+      );
+      return <actual.ComposerPromptEditor {...props} ref={keepHandle} />;
+    });
+    HandleKeepingEditor.displayName = "HandleKeepingEditor";
+    return { ...actual, ComposerPromptEditor: HandleKeepingEditor };
+  },
+);
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({
   useComposerDictation: () => ({
     dictationControl: null,
@@ -296,9 +336,28 @@ vi.mock("@/components/chat/composer/composer-attachment-drop-zone", () => ({
   ComposerAttachmentDropZone: (props: { readonly children: ReactNode }) =>
     props.children,
 }));
-// The shell's frame, toolbar and strip are not under test; its editor slot is.
+// The shell's frame and strip are not under test; its editor slot is, and so is
+// what the toolbar is told: `attachmentPending` is the composer's own send hold
+// (every ingest the paste hook runs, or a file node still unconfirmed), and the
+// stand-in toolbar below shows it.
 vi.mock("@/components/home/composer/composer-shell", () => ({
-  ComposerShell: (props: { readonly editor: ReactNode }) => props.editor,
+  ComposerShell: (props: {
+    readonly editor: ReactNode;
+    readonly toolbar: ReactNode;
+  }) => (
+    <>
+      {props.editor}
+      {props.toolbar}
+    </>
+  ),
+}));
+vi.mock("@/components/chat/composer/chat-composer-toolbar-slot", () => ({
+  ChatComposerToolbarSlot: (props: { readonly attachmentPending: boolean }) => (
+    <span
+      data-testid="composer-attachment-pending"
+      data-busy={String(props.attachmentPending)}
+    />
+  ),
 }));
 vi.mock("@/components/chat/segments/steer-settings-conflict-dialog", () => ({
   SteerSettingsConflictDialog: () => null,
@@ -344,6 +403,7 @@ beforeEach(() => {
   answers.tabHostId = "host-local";
   answers.localHostId = null;
   answers.document = null;
+  answers.editorHandle = null;
   host.requestWithOptions.mockReset();
   host.requestWithOptions.mockResolvedValue({ ok: true });
   answers.client = {
@@ -408,9 +468,7 @@ async function mountComposer(
     </QueryClientProvider>,
   );
   const editor = await screen.findByTestId("composer-editor");
-  await act(async () => {
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-  });
+  await waitFor(() => expect(answers.editorHandle?.isReady()).toBe(true));
   return editor;
 }
 
@@ -456,6 +514,32 @@ function codeSpans(content: JsonContent | null): ReadonlyArray<string> {
   );
 }
 
+/**
+ * Resolves once nothing a gesture started is still running, so that an
+ * assertion that something did NOT happen is made when no job is left that
+ * could still make it happen: the composer's send hold is released (path
+ * resolution, file hashing and image ingest are over), and no file node in the
+ * document is still `uploading` (an upload starts once its node is inserted,
+ * which is after hashing, and outlives the hold).
+ */
+async function settled(): Promise<void> {
+  await waitFor(() =>
+    expect(
+      screen
+        .getByTestId("composer-attachment-pending")
+        .getAttribute("data-busy"),
+    ).toBe("false"),
+  );
+  await waitFor(() => {
+    for (const node of nodesOfType(answers.document, "fileAttachment")) {
+      const id = node.attrs?.id;
+      expect(
+        typeof id === "string" && readFileAttachmentUploadStatus(id),
+      ).not.toBe("uploading");
+    }
+  });
+}
+
 async function expectUploaded(): Promise<void> {
   await waitFor(() => expect(host.requestWithOptions).toHaveBeenCalledTimes(1));
   const [method, request] = host.requestWithOptions.mock.calls[0];
@@ -472,6 +556,7 @@ async function expectUploaded(): Promise<void> {
       ),
     ).toEqual(["report.pdf"]),
   );
+  await settled();
   expect(codeSpans(answers.document)).toEqual([]);
   expect(toasts.error).not.toHaveBeenCalled();
 }
@@ -486,6 +571,7 @@ describe("a file dropped or pasted into a regular chat's composer", () => {
     await waitFor(() =>
       expect(codeSpans(answers.document)).toEqual([REPORT_PATH]),
     );
+    await settled();
     expect(nodesOfType(answers.document, "fileAttachment")).toEqual([]);
     expect(host.requestWithOptions).not.toHaveBeenCalled();
     expect(toasts.error).not.toHaveBeenCalled();
@@ -536,6 +622,7 @@ describe("a file dropped or pasted into a regular chat's composer", () => {
     await waitFor(() =>
       expect(codeSpans(answers.document)).toEqual([REPORT_PATH]),
     );
+    await settled();
     expect(nodesOfType(answers.document, "fileAttachment")).toEqual([]);
     expect(host.requestWithOptions).not.toHaveBeenCalled();
   });
