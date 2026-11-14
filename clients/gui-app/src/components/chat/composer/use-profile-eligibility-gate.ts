@@ -1,3 +1,4 @@
+import type { ProvidersListResponse } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -20,12 +21,16 @@ export interface ProfileEligibilityGate {
   readonly enableProfile: () => void;
 }
 
+interface ObservedProfileEligibilityGate extends ProfileEligibilityGate {
+  readonly providersList: ProvidersListResponse | undefined;
+}
+
 export function useProfileEligibilityGate(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId,
   profileId: string | null,
   active: boolean,
-): ProfileEligibilityGate {
+): ObservedProfileEligibilityGate {
   const providerId = guiHarnessIdToProviderId(harnessId);
   const providersQuery = useProvidersListForClient(client, {
     enabled: active,
@@ -53,6 +58,7 @@ export function useProfileEligibilityGate(
   );
 
   return {
+    providersList: providersQuery.data,
     disabled: profile?.enabled === false || enablePending,
     profileLabel: profile?.label ?? null,
     enablePending,
