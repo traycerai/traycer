@@ -7,10 +7,10 @@
  * `environment.move.stopPreview` / `environment.move.stop` - what stopping
  * sharing from this computer touches, and stopping it.
  *
- * Every answer is value-free: a row names an item and never carries its
- * value. Optional capabilities with `degrade: { kind: "unsupported" }`, off
- * the released floor, like every environment method
- * (`environment/contracts.ts`).
+ * A row names an item; only a differing row's `detail` names values, both of
+ * them, a value that reads like a key as `•••`. Optional capabilities with
+ * `degrade: { kind: "unsupported" }`, off the released floor, like every
+ * environment method (`environment/contracts.ts`).
  */
 import { z } from "zod";
 import {
@@ -43,7 +43,7 @@ export const ENVIRONMENT_MOVE_ROW_EXTRA_KINDS = [
  * One row of the sheet. `key` is the item's address (a variable's name, a
  * profile's local id); `os` is null for a row with no per-OS axis; `label` is
  * what the sheet calls it and `detail` the one line under it, null when none.
- * Never a value.
+ * Only a `differsMasked` row's `detail` names values.
  */
 export const environmentMoveRowSchema = lazySchema(() =>
   z.object({
@@ -69,7 +69,8 @@ export type EnvironmentMovePlanRequest = z.infer<
  *
  * The rows: `moves` travel to Personal; `staysOnThisComputer` never leave it
  * (a terminal sign-in, a held executable); `alreadyInPersonal` are equal
- * there; `differsMasked` exist in Personal with another value, neither shown.
+ * there; `differsMasked` exist in Personal with another value, and the row's
+ * `detail` names both values, a value that reads like a key as `•••`.
  *
  * `looksLikeAKey` is retired and still declared, because `cli-v1.5.2` and
  * `cli-v1.5.3` require the key. The host sorts every row into the four groups
