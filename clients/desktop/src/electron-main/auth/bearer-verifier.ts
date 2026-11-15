@@ -110,6 +110,8 @@ export function createDesktopBearerVerifier(
   let lastAttemptAtMs = Number.NEGATIVE_INFINITY;
   /** Whether the most recent fetch ATTEMPT failed - see {@link resolveKey}. */
   let lastAttemptFailed = false;
+  /** The fetch attempt still running, which every concurrent refresh awaits. */
+  let inFlight: Promise<void> | null = null;
 
   async function fetchBearerKeys(): Promise<ReadonlyMap<string, KeyObject>> {
     const response = await config.fetchImpl(jwksUrl, {
@@ -175,6 +177,14 @@ export function createDesktopBearerVerifier(
       lastAttemptFailed = false;
       return;
     }
+    // A refresh that arrives while an attempt is running takes that attempt's
+    // answer. The cooldown below has already been stamped by it, so returning
+    // here instead would read a cold cache as an unavailable key source and
+    // refuse a valid bearer that the running fetch is about to verify.
+    if (inFlight !== null) {
+      await inFlight;
+      return;
+    }
     // The cooldown applies from the FIRST attempt, cache or no cache:
     // otherwise a cold start with authn down costs two fetches per verify,
     // and a renderer looping the IPC is an amplifier onto authn.
@@ -182,6 +192,15 @@ export function createDesktopBearerVerifier(
       return;
     }
     lastAttemptAtMs = nowMs;
+    inFlight = attemptFetch(nowMs);
+    try {
+      await inFlight;
+    } finally {
+      inFlight = null;
+    }
+  }
+
+  async function attemptFetch(nowMs: number): Promise<void> {
     try {
       keys = await fetchBearerKeys();
       fetchedAtMs = nowMs;
