@@ -938,6 +938,9 @@ async function exchangeCodeForTokensWithSignal(
         },
         body: JSON.stringify({ code, code_verifier: codeVerifier }),
         signal,
+        // The body carries the code and its verifier: a redirect is answered
+        // here, as a network error below, and never followed with them.
+        redirect: "manual",
       },
     );
   } catch {

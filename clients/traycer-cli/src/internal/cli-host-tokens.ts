@@ -183,11 +183,13 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // credentials lock stayed busy, or its write failed) is unavailable, as a
   // mint that could not reach authn is: transient, never a rejected sign-in,
   // and never a rejection for a caller that cannot handle one.
+  // A mint asked with no signal of its own (the shared recovery after a
+  // host's refusal asks so) is cancelled with this process's own mints.
   const source: HostTokenAccess = {
     current: (id, hostId) => stored.current(id, hostId),
     obtain: async (id, hostId, fresh, signal) => {
       const outcome: HostTokenMintOutcome = await stored
-        .obtain(id, hostId, fresh, signal)
+        .obtain(id, hostId, fresh, signal ?? signIn.signal)
         .catch((): HostTokenMintOutcome => ({
           kind: "unavailable",
           detail: "host-only token not saved",
