@@ -81,14 +81,14 @@ const BOT_TITLE_MAX = 500;
  *   pane the bot's card opens (decision 148);
  * - deleting the bot, behind a confirmation.
  *
- * The Model group's Apply and Delete are drawn only for a reader who may
- * change the bot's environment (`mayChange`): a team's Viewer sees what the
- * bot runs on in the same picker, disabled, and no Delete. Every write goes
- * through the tab host's client - the host `bot.open` chose to serve the tab
- * - with nothing gated on which host that is: a host that cannot make the
- * change refuses it, and the refusal is shown in place, under the control, as
- * it is when the reader's role changed after the panel opened. The stream
- * snapshot, not the mutation's answer, is what the header re-renders from.
+ * The Model group and Delete are drawn only for a reader who may change the
+ * bot's environment (`mayChange`): for a team's Viewer neither is drawn, and
+ * nothing stands in their place. Every write goes through the tab host's
+ * client - the host `bot.open` chose to serve the tab - with nothing gated on
+ * which host that is: a host that cannot make the change refuses it, and the
+ * refusal is shown in place, under the control, as it is when the reader's
+ * role changed after the panel opened. The stream snapshot, not the
+ * mutation's answer, is what the header re-renders from.
  */
 export function BotChannelSettingsPanel(props: {
   readonly bot: BotRecord;
@@ -160,7 +160,7 @@ export function BotChannelSettingsPanel(props: {
           {personal ? <BotReplyModeSection bot={bot} /> : null}
           {personal ? null : <BotTeamMembers />}
         </SettingsGroup>
-        <BotRunSettingsForm bot={bot} mayChange={mayChange} />
+        {mayChange ? <BotRunSettingsForm bot={bot} /> : null}
         {channelId === null ? null : (
           <BotNotificationsSection botId={bot.botId} channelId={channelId} />
         )}
@@ -538,16 +538,8 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
   );
 }
 
-/**
- * What the bot runs on. A reader who may not change it sees the picker
- * disabled on the bot's own harness, model, effort and profile, with nothing
- * to apply.
- */
-function BotRunSettingsForm(props: {
-  readonly bot: BotRecord;
-  readonly mayChange: boolean;
-}): ReactNode {
-  const { bot, mayChange } = props;
+function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
+  const { bot } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const update = useBotUpdateRunSettingsMutation(client);
@@ -601,11 +593,9 @@ function BotRunSettingsForm(props: {
     !unchanged && selection.modelSlug.length > 0 && !update.isPending;
   return (
     <SettingsGroup title="Model" testId="bot-settings-model">
-      {mayChange ? (
-        <p className="text-ui-xs text-muted-foreground">
-          The next turn uses what you apply here.
-        </p>
-      ) : null}
+      <p className="text-ui-xs text-muted-foreground">
+        The next turn uses what you apply here.
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <HarnessModelPicker
           withUltracode={false}
@@ -616,7 +606,7 @@ function BotRunSettingsForm(props: {
           withReasoning
           tuiOnly={false}
           lockedHarnessId={null}
-          disabled={!mayChange || update.isPending}
+          disabled={update.isPending}
           registerActivation={false}
           createProfileHostId={hostId}
           runTargetHostId={hostId}
@@ -624,32 +614,30 @@ function BotRunSettingsForm(props: {
           profileAdmission={null}
           embedding={null}
         />
-        {mayChange ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={!canApply}
-            onClick={() =>
-              update.mutate({
-                botId: bot.botId,
-                harness: selection.harnessId,
-                model: selection.modelSlug,
-                effort,
-                profile: selection.profileId,
-              })
-            }
-          >
-            Apply
-            {update.isPending ? (
-              <AgentSpinningDots
-                className="ml-1"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-          </Button>
-        ) : null}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!canApply}
+          onClick={() =>
+            update.mutate({
+              botId: bot.botId,
+              harness: selection.harnessId,
+              model: selection.modelSlug,
+              effort,
+              profile: selection.profileId,
+            })
+          }
+        >
+          Apply
+          {update.isPending ? (
+            <AgentSpinningDots
+              className="ml-1"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+        </Button>
       </div>
       <BotSettingsRefusal
         message={update.error === null ? null : update.error.message}
