@@ -37,10 +37,12 @@ async function refreshOverOpenConnection(
   if (entry === null) return;
   try {
     if (entry.kind === "local" || entry.kind === "mock") {
-      // The ordinary requester, and still never handled twice: the request
-      // carries no idempotency key, so the transport retry re-sends only a
-      // failure the host provably never dispatched, and the credential retry
-      // only a request the host refused unhandled.
+      // The ordinary requester. The request carries no idempotency key, so
+      // the transport retry re-sends only a failure the host provably never
+      // dispatched. Its credential recovery is `"always"`
+      // (`host-runtime-provider.tsx`): a sign-in refused after the request
+      // was sent is sent once more on the renewed sign-in, so the host can be
+      // asked to refresh twice.
       await client?.request("host.status.refresh", {});
       return;
     }
