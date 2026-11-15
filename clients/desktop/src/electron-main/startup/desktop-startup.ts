@@ -1,4 +1,7 @@
 import { SandboxArtifactServer } from "../app/sandbox-artifact-server";
+import { createHostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import { createHostTokenFilePersistence } from "@traycer-clients/shared/auth/host-token-file";
+import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
 import { app, dialog, nativeImage } from "electron";
 import type { Event as ElectronEvent } from "electron";
 import { randomUUID } from "node:crypto";
@@ -309,6 +312,11 @@ async function isLocalHostRunningForQuit(
     clearTimeout(timer);
   }
 }
+
+// The credentials lock is held for at most one bounded refresh, so a host
+// token write waits as long as a credentials write does.
+const HOST_TOKENS_LOCK_WAIT_MS = 12_000;
+const HOST_TOKENS_LOCK_POLL_MS = 50;
 
 /**
  * Phased desktop boot.
@@ -821,6 +829,26 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     authnBaseUrl: config.authnBaseUrl,
     watchImpl: undefined,
   });
+  // The person's host-only tokens, in the file beside the credentials file and
+  // written under its lock. Main is the only writer on this machine's desktop.
+  const hostTokens = createHostTokenSource({
+    persistence: createHostTokenFilePersistence({
+      environment: config.environment,
+      lockWaitMs: HOST_TOKENS_LOCK_WAIT_MS,
+      lockPollIntervalMs: HOST_TOKENS_LOCK_POLL_MS,
+    }),
+    mint: (hostId, signInToken, signal) =>
+      mintHostTokenViaHttp(config.authnBaseUrl, hostId, signInToken, signal),
+    // Main's own verified copy of the person's sign-in, which every window
+    // already sends it: a mint spends nothing authn has not confirmed.
+    signIn: (userId) => {
+      const session = authSession.get();
+      return session.verified && session.profile?.userId === userId
+        ? session.token
+        : null;
+    },
+    now: Date.now,
+  });
 
   const hostLabel = labelForEnvironment(config.environment);
   const hostLayout = getHostFsLayout(config.environment);
@@ -973,6 +1001,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     hostController,
     authnBaseUrl: config.authnBaseUrl,
     authTokenStore,
+    hostTokens,
     // Device flow is the only login - there is no loopback redirect_uri to
     // snapshot - so the renderer always falls back to the custom-scheme
     // sign-in URL composition.

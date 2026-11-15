@@ -23,7 +23,6 @@ import {
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostRead } from "@/hooks/bots/use-environment-host-read-query";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
@@ -79,12 +78,12 @@ const bindingRef = vi.hoisted(() => ({
     };
   } | null,
 }));
-const invalidateLocalTeamAdmissionAfterClaim = vi.hoisted(() =>
-  vi.fn<(hostId: string, runnerHost: IRunnerHost) => Promise<void>>(),
+const noteHostMembershipChanged = vi.hoisted(() =>
+  vi.fn<(hostId: string) => void>(),
 );
 
-vi.mock("@/lib/host/app-local-open-auth", () => ({
-  invalidateLocalTeamAdmissionAfterClaim,
+vi.mock("@/lib/host/local-admission-invalidation", () => ({
+  noteHostMembershipChanged,
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -271,8 +270,7 @@ describe("environment.binding.read in a pool build", () => {
     bindingAnswers = [];
     otherManifest = "advertises_status";
     connectable.hostIds = [];
-    invalidateLocalTeamAdmissionAfterClaim.mockReset();
-    invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
+    noteHostMembershipChanged.mockReset();
   });
 
   afterEach(() => {
@@ -581,10 +579,7 @@ describe("environment.binding.read in a pool build", () => {
       TARGET_HOST,
       "env-team",
     );
-    expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledWith(
-      TARGET_HOST,
-      fixture.runnerHost,
-    );
+    expect(noteHostMembershipChanged).toHaveBeenCalledWith(TARGET_HOST);
     expect(fixture.reads).toEqual([TARGET_HOST, TARGET_HOST]);
   });
 });

@@ -19,6 +19,20 @@ export const authQueryKeys = {
     userId,
     environmentId,
   ],
+  // One team's claimed computers (`AuthService.listClaimedComputers`), the
+  // reader's answer as it is: a claimed computer's cover and the team's own
+  // screens share the entry.
+  claimedComputers: (
+    auth: object | null,
+    userId: string | null,
+    environmentId: string,
+  ): readonly unknown[] => [
+    "auth",
+    "claimed-computers",
+    auth,
+    userId,
+    environmentId,
+  ],
   environmentInvitations: (
     authService: object | null,
     userId: string,

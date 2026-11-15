@@ -8,6 +8,7 @@ import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { busyWorkPhrase } from "@/components/host/host-restart-copy";
 import { deriveUpdateAffordance } from "@/components/settings/panels/my-hosts-model";
+import { HOST_UPDATE_PENDING_LABEL } from "@/lib/host/version-skew-copy";
 
 /**
  * The auto-update policy switch.
@@ -92,7 +93,7 @@ export function HostAutoUpdateRow(props: {
           className="shrink-0 rounded-sm border border-warning/30 bg-warning/10 px-1.5 py-px text-ui-xs text-warning-foreground"
           data-testid={`host-update-pill-${item.hostId}`}
         >
-          Update pending
+          {HOST_UPDATE_PENDING_LABEL}
         </span>
       ) : null}
     </div>
