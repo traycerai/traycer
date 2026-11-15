@@ -537,6 +537,7 @@ function createDirtyEpicHandle(
     ...EMPTY_PROJECTED_SLICES,
     chatRecords: EMPTY_CHATS_SLICE,
     chatRecordHeads: {},
+    chatRecordStarters: {},
     evictedChatIds: new Set(),
     chatRecordListAuthoritative: true,
     tuiAgentRecordListAuthoritative: true,

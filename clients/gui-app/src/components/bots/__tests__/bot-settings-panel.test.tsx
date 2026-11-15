@@ -416,6 +416,7 @@ function mountPanel(bot: BotRecord, personal: boolean): void {
         <BotChannelSettingsPanel
           bot={bot}
           personal={personal}
+          mayChange
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
@@ -931,6 +932,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
           <BotChannelSettingsPanel
             bot={BOT}
             personal={input.personal}
+            mayChange
             channelId={CHANNEL}
             environmentBots={input.environmentBots}
             onClose={onClose}
@@ -1100,6 +1102,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
             <BotChannelSettingsPanel
               bot={BOT}
               personal
+              mayChange
               channelId={CHANNEL}
               environmentBots={null}
               onClose={onClose}
@@ -1387,6 +1390,7 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
         <BotChannelSettingsPanel
           bot={BOT}
           personal
+          mayChange
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
