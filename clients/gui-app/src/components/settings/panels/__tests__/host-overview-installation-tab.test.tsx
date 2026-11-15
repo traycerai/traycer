@@ -20,6 +20,7 @@ interface HostBindingMock {
   readonly hostClient: unknown;
   readonly directory: {
     readonly getLocalEntry: () => { readonly hostId: string } | null;
+    readonly findById: (hostId: string) => null;
     readonly list: () => Promise<readonly []>;
     readonly onChange: (listener: () => void) => {
       readonly dispose: () => void;
@@ -223,6 +224,7 @@ function bindingWith(fixture: OverviewHostFixture): HostBindingMock {
     hostClient: fixture.client,
     directory: {
       getLocalEntry: () => null,
+      findById: () => null,
       list: () => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
     },
