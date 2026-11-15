@@ -74,7 +74,9 @@ function deferred<Value>(): {
   return { promise, resolve };
 }
 
-function binding(sharingGeneration: number | null): EnvironmentHostReadResponseV11 {
+function binding(
+  sharingGeneration: number | null,
+): EnvironmentHostReadResponseV11 {
   return {
     hostId: WINDOW_HOST_ID,
     environment: {
