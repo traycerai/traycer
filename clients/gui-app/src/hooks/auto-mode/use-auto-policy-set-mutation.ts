@@ -130,20 +130,23 @@ async function saveOnSignIn(
   }
   const result = await binding.auth.saveAutoPolicy(save.request.body);
   if (result.kind !== "ok") throw saveFailure(result.kind);
+  const saved = { updatedAt: isoFromEpochMs(result.updatedAt) };
+  // Saved, but its sign-in ended while the save was out: no computer is asked
+  // to refresh on it, so none reads the account through whoever is signed in
+  // now. Each refresh after an await is checked again.
+  if (!onOriginSignIn()) return saved;
   if (binding.directory.findById(hostId) === null) {
     await client
       .request(hostAccountSettingsRefreshV10.method, {})
       .catch(() => undefined);
   }
-  if (onOriginSignIn()) {
-    await refreshConnectedAccountSettings(
-      binding,
-      stream,
-      viewerId,
-      onOriginSignIn,
-    );
-  }
-  return { updatedAt: isoFromEpochMs(result.updatedAt) };
+  await refreshConnectedAccountSettings(
+    binding,
+    stream,
+    viewerId,
+    onOriginSignIn,
+  );
+  return saved;
 }
 
 /**
