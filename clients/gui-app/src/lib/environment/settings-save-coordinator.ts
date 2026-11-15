@@ -18,15 +18,20 @@ import {
 import type {
   EnvironmentProposalsResponse,
   SettingsProposalReceipt,
-  SettingsSaveAnswer,
 } from "@traycer/protocol/host/environment/settings-proposals";
 import type { SettingsSaveMapping } from "@traycer/protocol/host/environment/settings-save-mapping";
+import { settingsSaveMemoryKey } from "@/lib/persist";
 import {
   SETTINGS_SAVE_MEMORY_TTL_MS,
   settingsSaveMemoryRecord,
   useSettingsSaveMemoryStore,
   type SettingsSaveMemoryRecord,
 } from "@/stores/settings/settings-save-memory-store";
+
+const NOTHING_TO_REMEMBER: SettingsSaveBeginning = {
+  kind: "nothing_to_remember",
+};
+const ACCOUNT_CHANGED: SettingsSaveBeginning = { kind: "account_changed" };
 
 /** An apply that went unanswered is tried once more at the same hold revision. */
 const TRIES_PER_HOLD_REVISION = 2;
@@ -40,6 +45,11 @@ const UNLISTED_GRACE_MS = 60_000;
 
 /** Where a save is made, and what the person saw when they made it. */
 export interface SettingsSaveContext {
+  /**
+   * The account the save's preparation began for
+   * ({@link SettingsSaveCoordinator.account}, read before its first await).
+   */
+  readonly accountId: string;
   readonly environmentId: string;
   readonly hostId: string;
   /** The host's sharing generation when the save is made. */
@@ -67,24 +77,50 @@ export interface SettingsSaveCoordinatorPorts {
   readonly now: () => number;
 }
 
+/** One remembered edit: its record's id, which is the edit's own identity. */
+export interface SettingsSaveTicket {
+  readonly id: string;
+}
+
+/** What {@link SettingsSaveCoordinator.begin} did with a save. */
+export type SettingsSaveBeginning =
+  | { readonly kind: "remembered"; readonly ticket: SettingsSaveTicket }
+  /** The save proposes nothing to remember; it is sent as it is. */
+  | { readonly kind: "nothing_to_remember" }
+  /**
+   * The account changed since the save's preparation began: it is neither
+   * remembered nor sent.
+   */
+  | { readonly kind: "account_changed" };
+
 export interface SettingsSaveCoordinator {
   /**
+   * The account a save's preparation begins for: the signed-in one, while
+   * the memory is that account's. Null otherwise, and then nothing is
+   * remembered. A preparation that reads a different answer after any await
+   * is for an account that is no longer here.
+   */
+  readonly account: () => string | null;
+  /**
    * Called before the save is sent: remembers a save that maps to a proposal
-   * and marks it sent. Answers the ticket {@link settle} takes, or null when
-   * the save proposes nothing to remember.
+   * and marks it sent, answering the ticket {@link settle} takes. `applied`
+   * is called once, if this window's apply of the save's own hold writes it;
+   * never for a hold applied elsewhere, a conflict, or a save forgotten.
    */
   readonly begin: (
     mapping: SettingsSaveMapping,
     context: SettingsSaveContext,
-  ) => Promise<string | null>;
+    applied: () => void,
+  ) => Promise<SettingsSaveBeginning>;
   /**
-   * The save's answer, or null when it failed or nothing answered. A save
-   * that proposes nothing, is refused, or answers for another generation or
-   * item is forgotten; otherwise its host is reconciled.
+   * The save's send is over: `hostAnswered` when the host answered it, false
+   * when it failed or nothing answered. An answered save's host is
+   * reconciled, which finds its proposal in `environment.proposals`; no save
+   * answer carries one.
    */
   readonly settle: (
-    ticket: string,
-    answer: SettingsSaveAnswer | null,
+    ticket: SettingsSaveTicket,
+    hostAnswered: boolean,
   ) => Promise<void>;
   /**
    * Applies what `hostId` has proposed of this account's remembered saves.
@@ -123,6 +159,11 @@ function holdMatches(
   );
 }
 
+/** Whether the edit `id` is still remembered. */
+function isCurrent(id: string): boolean {
+  return Object.hasOwn(useSettingsSaveMemoryStore.getState().records, id);
+}
+
 /** Whether this window has sent `id`'s save and not yet seen it answered. */
 function inFlight(id: string): boolean {
   return Object.hasOwn(useSettingsSaveMemoryStore.getState().inFlight, id);
@@ -144,10 +185,10 @@ function sortByReceipt(
   proposals: EnvironmentProposalsResponse,
   now: number,
 ): {
-  readonly forget: readonly string[];
+  readonly forget: readonly RememberedSave[];
   readonly proposed: ReadonlyMap<string, readonly RememberedSave[]>;
 } {
-  const forget: string[] = [];
+  const forget: RememberedSave[] = [];
   const proposed = new Map<string, RememberedSave[]>();
   for (const [id, record] of mine) {
     const receipt = proposals.proposals.find((row) =>
@@ -157,10 +198,10 @@ function sortByReceipt(
       // A save still out, here or in another window, may not have reached
       // the host's list yet.
       if (!inFlight(id) && now - record.writtenAt > UNLISTED_GRACE_MS) {
-        forget.push(id);
+        forget.push({ id, record });
       }
     } else if (receipt.state === "refused") {
-      forget.push(id);
+      forget.push({ id, record });
     } else if (receipt.state === "proposed") {
       const list = proposed.get(record.environmentId) ?? [];
       list.push({ id, record });
@@ -174,45 +215,62 @@ export function createSettingsSaveCoordinator(
   ports: SettingsSaveCoordinatorPorts,
 ): SettingsSaveCoordinator {
   const running = new Map<string, Promise<void>>();
+  /** Each save begun in this window, by its record's id: who to tell it was applied. */
+  const appliedListeners = new Map<string, () => void>();
   const store = () => useSettingsSaveMemoryStore.getState();
+
+  const forget = (id: string): void => {
+    store().forget(id);
+    appliedListeners.delete(id);
+  };
+
+  /** Drops the listeners of records forgotten elsewhere: replaced, or another account's memory. */
+  const dropUnremembered = (): void => {
+    for (const id of appliedListeners.keys()) {
+      if (!isCurrent(id)) appliedListeners.delete(id);
+    }
+  };
 
   const forgetExpired = (): void => {
     const now = ports.now();
     for (const [id, record] of Object.entries(store().records)) {
       if (now - record.writtenAt > SETTINGS_SAVE_MEMORY_TTL_MS) {
-        store().forget(id);
+        forget(id);
       }
     }
   };
 
-  /** Applies `record`'s hold, if authn holds it; answers whether the record stays. */
+  /**
+   * Applies `record`'s hold, if authn holds it: `applied` when this apply
+   * wrote it, `stays` when the record waits for another try, `decided`
+   * otherwise.
+   */
   const applyHold = async (
     cloud: EnvironmentCloud,
     id: string,
     record: SettingsSaveMemoryRecord,
     holds: readonly HeldChangeForMatch[],
-  ): Promise<boolean> => {
+  ): Promise<"applied" | "stays" | "decided"> => {
     const hold = holds.find((candidate) => holdMatches(record, candidate));
     // Proposed and not held: applied by another window, or decided.
-    if (hold === undefined) return false;
+    if (hold === undefined) return "decided";
     if (
       record.unanswered?.revision === hold.revision &&
       record.unanswered.tries >= TRIES_PER_HOLD_REVISION
     ) {
-      return true;
+      return "stays";
     }
     try {
-      await applyHeldChange(cloud, record.environmentId, {
+      const { outcome } = await applyHeldChange(cloud, record.environmentId, {
         heldId: hold.heldId,
         revision: hold.revision,
         expectedLiveRevision: record.expectedLiveRevision,
       });
-      // Applied, a conflict, gone or forbidden: either way this hold is
-      // decided for this save.
-      return false;
+      // A conflict, gone or forbidden decides this hold for this save too.
+      return outcome === "applied" ? "applied" : "decided";
     } catch {
       store().noteUnanswered(id, hold.revision);
-      return true;
+      return "stays";
     }
   };
 
@@ -221,6 +279,7 @@ export function createSettingsSaveCoordinator(
     if (account === null) return;
     const sameAccount = (): boolean => ports.accountId() === account;
     forgetExpired();
+    dropUnremembered();
     const mine = Object.entries(store().records).filter(
       ([, record]) => record.hostId === hostId,
     );
@@ -236,26 +295,49 @@ export function createSettingsSaveCoordinator(
     // connection.
     if (proposals === null || !sameAccount()) return;
 
+    // Every record below is the edit as it stood before the reads: a later
+    // save of the same item may have replaced it since, and then neither its
+    // apply nor its forgetting is this run's to do.
     const sorted = sortByReceipt(mine, proposals, ports.now());
-    for (const id of sorted.forget) store().forget(id);
+    for (const { id } of sorted.forget) {
+      forget(id);
+    }
     if (sorted.proposed.size === 0) return;
 
     const cloud = ports.cloud();
     if (cloud === null) return;
     for (const [environmentId, saves] of sorted.proposed) {
-      let holds: readonly HeldChangeForMatch[];
-      try {
-        holds = await readHeldChangesForMatch(cloud, environmentId);
-      } catch {
-        continue;
-      }
-      for (const { id, record } of saves) {
-        if (!sameAccount()) return;
-        const stays = await applyHold(cloud, id, record, holds);
-        if (!sameAccount()) return;
-        if (!stays) store().forget(id);
+      if (!(await applyProposed(cloud, environmentId, saves, sameAccount))) {
+        return;
       }
     }
+  };
+
+  /**
+   * Applies the holds of `saves`, proposed in `environmentId`; answers false
+   * once the account has changed, and the run stops.
+   */
+  const applyProposed = async (
+    cloud: EnvironmentCloud,
+    environmentId: string,
+    saves: readonly RememberedSave[],
+    sameAccount: () => boolean,
+  ): Promise<boolean> => {
+    let holds: readonly HeldChangeForMatch[];
+    try {
+      holds = await readHeldChangesForMatch(cloud, environmentId);
+    } catch {
+      return true;
+    }
+    for (const { id, record } of saves) {
+      if (!sameAccount()) return false;
+      if (!isCurrent(id)) continue;
+      const result = await applyHold(cloud, id, record, holds);
+      if (!sameAccount()) return false;
+      if (result === "applied") appliedListeners.get(id)?.();
+      if (result !== "stays") forget(id);
+    }
+    return true;
   };
 
   const reconcile = (hostId: string): Promise<void> => {
@@ -272,16 +354,30 @@ export function createSettingsSaveCoordinator(
     return next;
   };
 
+  const account = (): string | null => {
+    const signedIn = ports.accountId();
+    return signedIn !== null &&
+      useSettingsSaveMemoryStore.persist.getOptions().name ===
+        settingsSaveMemoryKey(signedIn)
+      ? signedIn
+      : null;
+  };
+
   const begin = async (
     mapping: SettingsSaveMapping,
     context: SettingsSaveContext,
-  ): Promise<string | null> => {
-    if (mapping.kind !== "proposal") return null;
-    if (ports.accountId() === null) return null;
+    applied: () => void,
+  ): Promise<SettingsSaveBeginning> => {
+    if (account() !== context.accountId) return ACCOUNT_CHANGED;
+    if (mapping.kind !== "proposal") return NOTHING_TO_REMEMBER;
     const { edit } = mapping;
     const valueDigest =
       edit.operation === "put" ? await settingValueDigest(edit.value) : null;
+    // The memory may be another account's by now: an edit is remembered only
+    // in the memory of the account it was made for.
+    if (account() !== context.accountId) return ACCOUNT_CHANGED;
     const id = store().remember({
+      editId: crypto.randomUUID(),
       environmentId: context.environmentId,
       hostId: context.hostId,
       sharingGeneration: context.sharingGeneration,
@@ -295,27 +391,20 @@ export function createSettingsSaveCoordinator(
       unanswered: null,
     });
     store().markSent(id);
-    return id;
+    dropUnremembered();
+    appliedListeners.set(id, applied);
+    return { kind: "remembered", ticket: { id } };
   };
 
   const settle = async (
-    ticket: string,
-    answer: SettingsSaveAnswer | null,
+    ticket: SettingsSaveTicket,
+    hostAnswered: boolean,
   ): Promise<void> => {
-    store().markAnswered(ticket);
-    const record = settingsSaveMemoryRecord(store().records, ticket);
-    if (record === null || answer === null) return;
-    const receipt = answer.proposal;
-    if (
-      receipt === null ||
-      receipt.state === "refused" ||
-      !receiptMatches(record, receipt)
-    ) {
-      store().forget(ticket);
-      return;
-    }
+    store().markAnswered(ticket.id);
+    const record = settingsSaveMemoryRecord(store().records, ticket.id);
+    if (!hostAnswered || record === null) return;
     await reconcile(record.hostId);
   };
 
-  return { begin, settle, reconcile };
+  return { account, begin, settle, reconcile };
 }
