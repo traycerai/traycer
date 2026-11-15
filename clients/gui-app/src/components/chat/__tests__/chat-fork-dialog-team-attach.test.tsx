@@ -37,6 +37,7 @@ import {
 import type { StatusChangeHandler } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { TaskEnvironmentAttachmentResult } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
@@ -396,11 +397,7 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-type AttachTaskAnswer = Awaited<
-  ReturnType<MockRunnerHost["attachTaskEnvironment"]>
->;
-
-let heldAttachmentPost: Deferred<AttachTaskAnswer> | null = null;
+let heldAttachmentPost: Deferred<TaskEnvironmentAttachmentResult> | null = null;
 const authnCalls: Array<
   | { readonly kind: "list"; readonly bearer: string }
   | {
@@ -717,11 +714,11 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     authRunnerHost = runnerHost;
     vi.stubGlobal(
       "fetch",
-      async (_input: RequestInfo | URL, init?: RequestInit) => {
+      (_input: RequestInfo | URL, init: RequestInit | undefined) => {
         const authorization = new Headers(init?.headers).get("Authorization");
         const userId =
           authorization?.includes("token-b") === true ? "user-b" : "user-a";
-        return validAuthnResponse(userId);
+        return Promise.resolve(validAuthnResponse(userId));
       },
     );
     vi.spyOn(runnerHost, "listEnvironments").mockImplementation((bearer) => {
@@ -749,6 +746,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     let requestId = 0;
     const runtime = new HostRuntime<HostRpcRegistry>({
       runnerHost,
+      onHostTokenRenewal: () => undefined,
       registry: hostRpcRegistry,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
@@ -763,6 +761,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
       requestCoordinator: null,
       selectedHostId: () => TAB_HOST_ID,
       connectionRegistry: null,
+      singleAttemptMessenger: null,
     });
     authRuntime = runtime;
     runtimeBinding = {
@@ -904,7 +903,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
   });
 
   it("does not create the fork or show a toast when the sign-in changes while the attachment POST is out", async () => {
-    const post = deferred<AttachTaskAnswer>();
+    const post = deferred<TaskEnvironmentAttachmentResult>();
     heldAttachmentPost = post;
     await startFork();
     attachCalls[0]?.settle("resolve");
@@ -934,7 +933,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
   });
 
   it("does not create the fork or show a toast when the same account signs in again while the attachment POST is out", async () => {
-    const post = deferred<AttachTaskAnswer>();
+    const post = deferred<TaskEnvironmentAttachmentResult>();
     heldAttachmentPost = post;
     await startFork();
     attachCalls[0]?.settle("resolve");
@@ -964,7 +963,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
   });
 
   it("continues the fork when the bearer rotates on the same sign-in while the attachment POST is out", async () => {
-    const post = deferred<AttachTaskAnswer>();
+    const post = deferred<TaskEnvironmentAttachmentResult>();
     heldAttachmentPost = post;
     await startFork();
     attachCalls[0]?.settle("resolve");

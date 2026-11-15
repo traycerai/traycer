@@ -70,6 +70,7 @@ import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import * as environmentArms from "@/hooks/environment/use-environment-arms";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
@@ -244,6 +245,7 @@ interface LandingAuthBinding {
   };
   readonly auth: {
     currentAuthEra(): AuthEra;
+    environmentCloud(): EnvironmentCloud;
     readHostOwnership(
       hostId: string,
       era: AuthEra,
@@ -292,6 +294,15 @@ function createPendingLocalOwnership(): PendingLocalOwnership {
     },
     auth: {
       currentAuthEra: () => LOCAL_OWNERSHIP_ERA,
+      environmentCloud: () => ({
+        authnBaseUrl: "https://authn.traycer.invalid",
+        bearer: {
+          kind: "cloud",
+          getBearerToken: () => "landing-token-a",
+        },
+        transport: () => Promise.resolve({ status: 200, text: "" }),
+        onOriginSignIn: () => true,
+      }),
       readHostOwnership: (hostId, era) => {
         reads.push({ hostId, era });
         return reads.length === 1 ? deferred.promise : refreshed.promise;
@@ -343,6 +354,18 @@ function hasEpicCreateRequest(): boolean {
   return landingMocks.request.mock.calls.some(
     (call) => call[0] === "epic.create",
   );
+}
+
+function holdCreateAndPrepareAttachment(
+  createResponse: Promise<unknown>,
+): void {
+  landingMocks.request.mockImplementation((method: string) => {
+    if (method === "epic.create") return createResponse;
+    if (method === "epic.attachEnvironment") {
+      return Promise.resolve({ prepared: true });
+    }
+    return Promise.resolve({});
+  });
 }
 
 function epicCreatePayload(): unknown {
@@ -429,7 +452,7 @@ async function createLandingAttachmentFixture(): Promise<LandingAttachmentFixtur
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
-  vi.stubGlobal("fetch", async () => landingSignedInResponse());
+  vi.stubGlobal("fetch", () => Promise.resolve(landingSignedInResponse()));
   const auth = new AuthService({ runnerHost });
   await runnerHost.tokenStore.signIn(
     { token: "landing-token-a", refreshToken: "landing-token-a-refresh" },
@@ -448,6 +471,7 @@ async function createLandingAttachmentFixture(): Promise<LandingAttachmentFixtur
   let requestId = 0;
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: () => undefined,
     registry: hostRpcRegistry,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -462,6 +486,7 @@ async function createLandingAttachmentFixture(): Promise<LandingAttachmentFixtur
     requestCoordinator: null,
     connectionRegistry: null,
     selectedHostId: () => TEST_HOST_ID,
+    singleAttemptMessenger: null,
   });
   const authnCalls: LandingAttachmentFixture["authnCalls"] = [];
   vi.spyOn(runnerHost, "listEnvironments").mockImplementation((bearer) => {
@@ -1186,13 +1211,7 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
     const fixture = await createLandingAttachmentFixture();
     landingMocks.getHostBinding.mockReturnValue(fixture.binding);
     const createResponse = deferredValue<unknown>();
-    landingMocks.request.mockImplementation((method: string) =>
-      method === "epic.create"
-        ? createResponse.promise
-        : method === "epic.attachEnvironment"
-          ? Promise.resolve({ prepared: true })
-          : Promise.resolve({}),
-    );
+    holdCreateAndPrepareAttachment(createResponse.promise);
     const queryClient = newQueryClient();
     const { result } = renderHook(
       () => useLandingComposerActions(useTestPlacementTarget()),
@@ -1256,13 +1275,7 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
     const fixture = await createLandingAttachmentFixture();
     landingMocks.getHostBinding.mockReturnValue(fixture.binding);
     const createResponse = deferredValue<unknown>();
-    landingMocks.request.mockImplementation((method: string) =>
-      method === "epic.create"
-        ? createResponse.promise
-        : method === "epic.attachEnvironment"
-          ? Promise.resolve({ prepared: true })
-          : Promise.resolve({}),
-    );
+    holdCreateAndPrepareAttachment(createResponse.promise);
     const queryClient = newQueryClient();
     const { result } = renderHook(
       () => useLandingComposerActions(useTestPlacementTarget()),
@@ -1304,17 +1317,29 @@ describe("useLandingComposerActions team owner and team sandbox refusals", () =>
     await waitFor(() => expect(confirmed).toBe(true));
 
     expect(refusal).toBeNull();
-    expect(landingMocks.request.mock.calls).toContainEqual([
-      "epic.attachEnvironment",
-      expect.objectContaining({ epicId: expect.any(String) }),
-    ]);
+    const attachmentCall = landingMocks.request.mock.calls.find(
+      ([method]) => method === "epic.attachEnvironment",
+    );
+    if (attachmentCall === undefined) {
+      throw new Error("expected the task attachment to reach its host");
+    }
+    const attachmentPayload = attachmentCall[1];
+    if (
+      typeof attachmentPayload !== "object" ||
+      attachmentPayload === null ||
+      !("epicId" in attachmentPayload) ||
+      typeof attachmentPayload.epicId !== "string"
+    ) {
+      throw new Error("expected the host attachment to contain its task id");
+    }
+    expect(attachmentPayload).toEqual({ epicId: attachmentPayload.epicId });
     expect(fixture.authnCalls).toEqual([
       { kind: "list", bearer: "landing-token-a-rotated" },
       {
         kind: "attach",
         bearer: "landing-token-a-rotated",
         request: {
-          taskId: expect.any(String),
+          taskId: attachmentPayload.epicId,
           environmentId: STAGED_TEAM_ENVIRONMENT.environmentId,
         },
       },
