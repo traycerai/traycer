@@ -3,7 +3,8 @@
  * reads as, never on a re-projection of the same one, and what the previous
  * account's bot data lives in is retired at the move, before anyone reading
  * the lifetime is told. The module is shared by the whole file, so every case
- * reads a change of the count, never the count.
+ * reads a change of the count, never the count, and a retirer is registered
+ * for good, so the file registers one that forwards to the running case's own.
  */
 import { act, renderHook } from "@testing-library/react";
 import { flushSync } from "react-dom";
@@ -12,6 +13,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import {
   currentBotLifetime,
   registerBotLifetimeClient,
+  type BotLifetimeRetirer,
   retireAtBotLifetimeEdge,
   useBotLifetime,
 } from "@/lib/bots/bot-lifetime";
@@ -27,7 +29,11 @@ function signInAs(userId: string | null): void {
   });
 }
 
+let atMove: BotLifetimeRetirer = () => undefined;
+retireAtBotLifetimeEdge((clients) => atMove(clients));
+
 beforeEach(() => {
+  atMove = () => undefined;
   signInAs("account-a");
 });
 
@@ -54,7 +60,7 @@ describe("the bot lifetime", () => {
 
   it("moves nothing for the same user re-projected or another field of the store changing", () => {
     const retired = vi.fn();
-    retireAtBotLifetimeEdge(retired);
+    atMove = retired;
     const reads: number[] = [];
     renderHook(() => {
       const lifetime = useBotLifetime();
@@ -84,13 +90,13 @@ describe("the bot lifetime", () => {
       reads.push(lifetime);
       return lifetime;
     });
-    retireAtBotLifetimeEdge(() => {
+    atMove = () => {
       inRetirer.push(currentBotLifetime());
       const before = reads.length;
       // A reader already told would draw the new value as this flushes.
       flushSync(() => undefined);
       drawnInRetirer.push(reads.length !== before);
-    });
+    };
 
     signInAs("account-b");
 
@@ -104,7 +110,7 @@ describe("the bot lifetime", () => {
     const second = createAppQueryClient();
     registerBotLifetimeClient(first);
     const seen: QueryClient[][] = [];
-    retireAtBotLifetimeEdge((clients) => seen.push([...clients]));
+    atMove = (clients) => seen.push([...clients]);
 
     signInAs("account-b");
 
