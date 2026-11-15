@@ -46,6 +46,7 @@ import {
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import * as DesktopTabsPersistence from "@/stores/tabs/desktop-tabs-persistence";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 /**
  * The Tracy surface's place on the route over the PERSISTED history stack the
@@ -286,7 +287,7 @@ describe("the Tracy surface's place over the persisted history", () => {
       const harness = await mountOnChannel(BOT_A);
       const before = liveStack(harness);
 
-      act(() => rails().setRail(BOT_A, THREAD_A));
+      act(() => rails().setRail(BOT_A, THREAD_A, currentBotLifetime()));
       await settle(harness, BOT_A);
 
       const moved = liveStack(harness);
@@ -361,7 +362,7 @@ describe("the Tracy surface's place over the persisted history", () => {
   describe("a restart", () => {
     it("lands on the entry last shown with its place, and Back still steps to the earlier place", async () => {
       const first = await mountOnChannel(BOT_A);
-      act(() => rails().setRail(BOT_A, THREAD_A));
+      act(() => rails().setRail(BOT_A, THREAD_A, currentBotLifetime()));
       await settle(first, BOT_A);
       act(() => place().setView(BOT_A, "activity"));
       await settle(first, BOT_A);
@@ -447,7 +448,7 @@ describe("the Tracy surface's place over the persisted history", () => {
         "Activity with the bot's memory open",
         () => {
           place().setView(BOT_A, "activity");
-          rails().setRail(BOT_A, MEMORY);
+          rails().setRail(BOT_A, MEMORY, currentBotLifetime());
         },
         (search) => {
           expect(search).toMatchObject({ view: "activity", memory: true });
@@ -458,7 +459,7 @@ describe("the Tracy surface's place over the persisted history", () => {
       [
         "a thread open beside Messages",
         () => {
-          rails().setRail(BOT_A, THREAD_A);
+          rails().setRail(BOT_A, THREAD_A, currentBotLifetime());
         },
         (search) => {
           expect(search).toMatchObject({ view: "messages", thread: "msg-1" });
@@ -686,7 +687,7 @@ describe("the Tracy surface's place over the persisted history", () => {
       const start = liveStack(harness);
       const startPlace = storePlace(BOT_A);
 
-      act(() => rails().setRail(BOT_A, THREAD_A));
+      act(() => rails().setRail(BOT_A, THREAD_A, currentBotLifetime()));
       act(() => place().setView(BOT_A, "activity"));
       await settle(harness, BOT_A);
 
@@ -702,8 +703,8 @@ describe("the Tracy surface's place over the persisted history", () => {
       const start = liveStack(harness);
       const startPlace = storePlace(BOT_A);
 
-      act(() => rails().setRail(BOT_A, THREAD_A));
-      act(() => rails().setRail(BOT_A, THREAD_B));
+      act(() => rails().setRail(BOT_A, THREAD_A, currentBotLifetime()));
+      act(() => rails().setRail(BOT_A, THREAD_B, currentBotLifetime()));
       await settle(harness, BOT_A);
 
       await expectOneEntryPerMove(harness, start, () => {
@@ -718,7 +719,7 @@ describe("the Tracy surface's place over the persisted history", () => {
       const startPlace = storePlace(BOT_A);
 
       act(() => {
-        rails().setRail(BOT_A, THREAD_A);
+        rails().setRail(BOT_A, THREAD_A, currentBotLifetime());
         place().setView(BOT_A, "activity");
       });
       await settle(harness, BOT_A);
@@ -774,7 +775,7 @@ describe("the Tracy surface's place over the persisted history", () => {
         botId: BOT_A,
       });
       act(() => place().setView(BOT_A, "messages"));
-      act(() => rails().setRail(BOT_A, THREAD_A));
+      act(() => rails().setRail(BOT_A, THREAD_A, currentBotLifetime()));
       expect(harness.router.state.location.pathname).toBe("/");
       expect(harness.router.state.status).toBe("pending");
 
@@ -863,7 +864,7 @@ describe("the Tracy surface's place over the persisted history", () => {
           }
           landings += 1;
           place().markAutomaticMove();
-          rails().setRail(BOT_A, THREAD_A);
+          rails().setRail(BOT_A, THREAD_A, currentBotLifetime());
         },
       );
       act(() => place().setView(BOT_A, "activity"));

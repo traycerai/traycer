@@ -8,6 +8,7 @@ import {
   useTracyPlaceStore,
 } from "@/stores/bots/tracy-place-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 function resetStores(): void {
   window.localStorage.clear();
@@ -70,7 +71,7 @@ describe("selecting a Tracy channel", () => {
     surface().selectChannel("bot-a");
     useBotOpenThreadStore
       .getState()
-      .setRail("bot-a", { kind: "memory", back: null });
+      .setRail("bot-a", { kind: "memory", back: null }, currentBotLifetime());
 
     surface().selectChannel("bot-b");
 

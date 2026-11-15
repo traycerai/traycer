@@ -165,6 +165,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
       const [collateExchangeLines] = useState(createBotExchangeLineCollator);
       const rows = collateExchangeLines(
         transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: null,
           rendered: props.messages,
           splitLongTurns: false,
@@ -223,6 +224,8 @@ import {
   PoolArmClient,
   eventsFrame,
 } from "@/hooks/environment/__tests__/arm-pool-test-support";
+
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
 
 const BOUND_HOST_ID = "host-runs-bot";
 const DOCS_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
@@ -417,6 +420,7 @@ function Channel(
               hostId={HOST_ID}
               boundHostId={BOUND_HOST_ID}
               boundHostEpoch={1}
+              onBindingMoved={vi.fn()}
               tiles={null}
               botTitle="Release Bot"
               replyMode="direct"

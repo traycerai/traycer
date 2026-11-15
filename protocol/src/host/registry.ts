@@ -9902,8 +9902,9 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: botConversationSendV16,
           upgradeFromPreviousVersion: botConversationSendUpgradeV15ToV16,
         },
-        // @1.7 carries the send's nonce (`sendNonce`, T249), from which the
-        // host derives the request id the client already knows.
+        // @1.7 carries the send's nonce and the binding it was made for
+        // (`sendNonce`, `authority`, T249), from which the host derives the
+        // request id the client already knows.
         7: {
           contract: botConversationSendV17,
           upgradeFromPreviousVersion: botConversationSendUpgradeV16ToV17,

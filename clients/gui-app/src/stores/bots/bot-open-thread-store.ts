@@ -1,4 +1,8 @@
 import { create } from "zustand";
+import {
+  currentBotLifetime,
+  retireAtBotLifetimeEdge,
+} from "@/lib/bots/bot-lifetime";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationSendDelivery,
@@ -206,7 +210,18 @@ function threadOf(
 
 interface BotOpenThreadState {
   readonly byBotId: Readonly<Record<string, BotRail>>;
-  readonly setRail: (botId: string, rail: BotRail | null) => void;
+  /**
+   * Puts `rail` in `botId`'s slot, or empties it, for an operation of bot
+   * lifetime `lifetime`: the lifetime its control was drawn in, or the one
+   * an async step was started in. An operation of an ended lifetime changes
+   * nothing, so a rail read before an account change is never written back
+   * after it.
+   */
+  readonly setRail: (
+    botId: string,
+    rail: BotRail | null,
+    lifetime: number,
+  ) => void;
 }
 
 /**
@@ -215,18 +230,25 @@ interface BotOpenThreadState {
  * started yet still opens as the box that starts it). Closing the surface
  * drops its entry. Not persisted: after a restart the rail is what the
  * surface's route names for the channel (`useTracyPlaceRoute`), and nothing
- * where it names none.
+ * where it names none. Every change of account empties it, at the bot
+ * lifetime's edge.
  */
 export const useBotOpenThreadStore = create<BotOpenThreadState>()((set) => ({
   byBotId: {},
-  setRail: (botId, rail) =>
+  setRail: (botId, rail, lifetime) => {
+    if (lifetime !== currentBotLifetime()) return;
     set((state) => {
       const next = { ...state.byBotId };
       if (rail === null) delete next[botId];
       else next[botId] = rail;
       return { byBotId: next };
-    }),
+    });
+  },
 }));
+
+retireAtBotLifetimeEdge(() => {
+  useBotOpenThreadStore.setState({ byBotId: {} });
+});
 
 /** What `botId`'s tab has in its rail, or `null`. */
 export function useBotRail(botId: string): BotRail | null {
@@ -238,19 +260,21 @@ export function useBotRail(botId: string): BotRail | null {
 /**
  * Shows, at Send, the thread a first reply under `anchorMessageId` opens
  * (T249), in `botId`'s rail while it still shows that anchor's box; the
- * reply's receipt or refusal settles it (`settleSentThread`).
+ * reply's receipt or refusal settles it (`settleSentThread`). `lifetime` is
+ * the bot lifetime the reply was pressed in.
  */
 export function openSentThread(
   botId: string,
   anchorMessageId: string,
   sent: BotSentPost,
+  lifetime: number,
 ): void {
   const { byBotId, setRail } = useBotOpenThreadStore.getState();
   const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
   if (rail?.kind !== "thread" || rail.anchorMessageId !== anchorMessageId) {
     return;
   }
-  setRail(botId, { ...rail, sent });
+  setRail(botId, { ...rail, sent }, lifetime);
 }
 
 /** How a send that opened its thread at Send ended: the host's answer, or a refusal that wrote nothing. */
@@ -269,12 +293,14 @@ export type BotSentThreadSettlement =
  * where the bot answered in the channel, and a refusal opened none. Only a
  * rail still showing that send's thread moves; one the person closed or left
  * since stays as it is. Answers whether the rail still shows the thread, so
- * its panel says the send's delivery.
+ * its panel says the send's delivery. `lifetime` is the bot lifetime the send
+ * was pressed in: an answer heard after it ended settles nothing.
  */
 export function settleSentThread(
   botId: string,
   requestId: string,
   settlement: BotSentThreadSettlement,
+  lifetime: number,
 ): boolean {
   const { byBotId, setRail } = useBotOpenThreadStore.getState();
   const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
@@ -290,17 +316,25 @@ export function settleSentThread(
   if (settlement.kind === "refused" || threadId === null) {
     // An announcement's box stays open to start its thread; a post's own
     // thread was never opened.
-    setRail(botId, rail.announcement ? { ...rail, sent: null } : null);
+    setRail(
+      botId,
+      rail.announcement ? { ...rail, sent: null } : null,
+      lifetime,
+    );
     return false;
   }
-  setRail(botId, {
-    ...rail,
-    sent: {
-      ...rail.sent,
-      threadId,
-      delivery: settlement.delivery,
-      provisional: false,
+  setRail(
+    botId,
+    {
+      ...rail,
+      sent: {
+        ...rail.sent,
+        threadId,
+        delivery: settlement.delivery,
+        provisional: false,
+      },
     },
-  });
+    lifetime,
+  );
   return true;
 }

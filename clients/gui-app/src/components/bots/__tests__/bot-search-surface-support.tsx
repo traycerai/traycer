@@ -303,7 +303,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({
     mutate: vi.fn(),
     isPending: false,
-    variables: { redeliver: null },
+    variables: { request: { redeliver: null } },
   }),
 }));
 vi.mock("@/hooks/bots/use-bot-memory", () => ({

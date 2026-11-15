@@ -53,6 +53,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 /** A stream client whose answer to "is `bot.memory.subscribe` served?" the test sets. */
 class MemoryStreamClient extends MockWsStreamClient<StreamFrameEnvelope> {
@@ -717,7 +718,11 @@ describe("the memory in the rail's one slot", () => {
   it("takes a thread's place, names it in the header, and brings it back", async () => {
     useBotOpenThreadStore
       .getState()
-      .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
+      .setRail(
+        BOT_ID,
+        { kind: "thread", ...THREAD_OPEN },
+        currentBotLifetime(),
+      );
     const user = userEvent.setup();
     render(<MountedKnowingChannel />);
     expect(screen.getByTestId("bot-thread-pane")).toBeTruthy();

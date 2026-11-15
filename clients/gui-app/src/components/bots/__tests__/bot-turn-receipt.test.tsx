@@ -202,13 +202,14 @@ import {
   useBotOpenThreadStore,
   type BotOpenThread,
 } from "@/stores/bots/bot-open-thread-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 /** Mounts the channel with `rail` open beside it, or nothing (`null`). */
 function mountChannel(rail: BotOpenThread | null): void {
   if (rail !== null) {
     useBotOpenThreadStore
       .getState()
-      .setRail(BOT_ID, { kind: "thread", ...rail });
+      .setRail(BOT_ID, { kind: "thread", ...rail }, currentBotLifetime());
   }
   render(<MountedChannel />);
 }

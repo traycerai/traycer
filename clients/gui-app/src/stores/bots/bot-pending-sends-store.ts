@@ -2,6 +2,11 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  currentBotLifetime,
+  retireAtBotLifetimeEdge,
+} from "@/lib/bots/bot-lifetime";
+import type { BotSentAs } from "@/lib/bots/bot-sent-as";
 
 /**
  * Where a member's own send that carries a nonce is (Tracy Bots T249):
@@ -21,12 +26,19 @@ export interface BotPendingSend {
   readonly botId: string;
   /** The chat the stored row lands in: the channel's conversation, or the thread's. */
   readonly chatId: string;
-  /** The host serving the tab, whose session of `chatId` delivers the stored row. */
-  readonly hostId: string;
   /** What is drawn, shaped as the stored row will be, under its id. */
   readonly row: Message;
-  /** The request as it was sent, nonce included; Retry sends it again unchanged. */
+  /**
+   * The request as it was sent, its nonce and the binding it was made for
+   * (`authority`) included. Retry sends it again unchanged, and is offered
+   * only while that binding holds.
+   */
   readonly request: BotConversationSendRequest;
+  /**
+   * Who the send went out as: each Retry goes out as the same, in the same
+   * bot lifetime.
+   */
+  readonly sentAs: BotSentAs;
   readonly state: BotPendingSendState;
   /**
    * Set on the send's first uncertain outcome and never cleared. A later
@@ -36,6 +48,16 @@ export interface BotPendingSend {
   readonly everUncertain: boolean;
   /** `true` while an attempt is out. */
   readonly inFlight: boolean;
+  /** How many attempts of the send have started, the first included. */
+  readonly attempts: number;
+  /**
+   * The attempt whose uncertain outcome still owes the send's chat one
+   * subscribe again, `null` when none is owed: a channel the host had not
+   * created when that attempt went may exist now, and only its stored row,
+   * which a subscription brings, settles the send
+   * (`consumeOwedResubscribe`).
+   */
+  readonly owedResubscribe: number | null;
   /** Lets go of what the box's draft held for this send, once the host has it; `null` once done. */
   readonly release: (() => void) | null;
 }
@@ -64,8 +86,8 @@ interface BotPendingSendsState {
 /**
  * The member's own sends still on their way, for this window only: nothing
  * is persisted, so a reload holds none of them (the stated limit of T249).
- * Every account change retires them all
- * (`BotDraftsPersistLifecycleBridge`).
+ * Every account change retires them all at the bot lifetime's edge, before
+ * any reader hears of the change.
  */
 export const useBotPendingSendsStore = create<BotPendingSendsState>()(() => ({
   entries: {},
@@ -73,13 +95,12 @@ export const useBotPendingSendsStore = create<BotPendingSendsState>()(() => ({
 }));
 
 /**
- * The sends held for `chatId` of `botId`, as the session `hostId` serves it,
- * oldest first.
+ * The sends held for `chatId` of `botId`, oldest first, whichever host serves
+ * the tab now: a held send is the bot's and the chat's, not the host's.
  */
 export function useHeldPendingSends(
   botId: string,
   chatId: string,
-  hostId: string,
 ): ReadonlyArray<BotPendingSend> {
   return useBotPendingSendsStore(
     useShallow((state) =>
@@ -88,18 +109,24 @@ export function useHeldPendingSends(
           (entry): entry is BotPendingSend =>
             entry !== undefined &&
             entry.botId === botId &&
-            entry.chatId === chatId &&
-            entry.hostId === hostId,
+            entry.chatId === chatId,
         )
         .sort((a, b) => a.row.timestamp - b.row.timestamp),
     ),
   );
 }
 
-/** Holds `send`, drawn at once as its chat's last row. */
+/**
+ * Holds `send`, drawn at once as its chat's last row, unless the bot lifetime
+ * it was pressed in has ended: what its edge retired stays retired.
+ */
 export function holdPendingSend(
-  send: Omit<BotPendingSend, "state" | "everUncertain" | "inFlight">,
+  send: Omit<
+    BotPendingSend,
+    "state" | "everUncertain" | "inFlight" | "attempts" | "owedResubscribe"
+  >,
 ): void {
+  if (send.sentAs.lifetime !== currentBotLifetime()) return;
   const messageId = send.row.messageId;
   useBotPendingSendsStore.setState((state) =>
     state.stored.has(messageId)
@@ -112,6 +139,8 @@ export function holdPendingSend(
               state: "sending",
               everUncertain: false,
               inFlight: true,
+              attempts: 1,
+              owedResubscribe: null,
             },
           },
         },
@@ -120,15 +149,20 @@ export function holdPendingSend(
 
 /**
  * Marks another attempt of the send drawn as `messageId` out, and returns its
- * request; `null` when the send is not held or an attempt is already out.
+ * request and who it goes out as, both as its first attempt had them; `null`
+ * when the send is not held or an attempt is already out.
  */
 export function attemptPendingSend(
   messageId: string,
-): BotConversationSendRequest | null {
+): Pick<BotPendingSend, "request" | "sentAs"> | null {
   const entry = useBotPendingSendsStore.getState().entries[messageId];
   if (entry === undefined || entry.inFlight) return null;
-  replaceEntry(messageId, { ...entry, inFlight: true });
-  return entry.request;
+  replaceEntry(messageId, {
+    ...entry,
+    inFlight: true,
+    attempts: entry.attempts + 1,
+  });
+  return { request: entry.request, sentAs: entry.sentAs };
 }
 
 /**
@@ -166,8 +200,25 @@ export function settlePendingSend(
     state: "uncertain",
     everUncertain: true,
     inFlight: false,
+    owedResubscribe: entry.attempts,
   });
   return "kept";
+}
+
+/**
+ * Takes the subscribe again that `attempt` of the send drawn as `messageId`
+ * owes its chat; `true` while it was still owed. Once taken it is owed no
+ * more, whatever renders, closes or mounts follow: only another uncertain
+ * attempt owes another.
+ */
+export function consumeOwedResubscribe(
+  messageId: string,
+  attempt: number,
+): boolean {
+  const entry = useBotPendingSendsStore.getState().entries[messageId];
+  if (entry === undefined || entry.owedResubscribe !== attempt) return false;
+  replaceEntry(messageId, { ...entry, owedResubscribe: null });
+  return true;
 }
 
 /**
@@ -187,13 +238,14 @@ export function storedPendingSends(messageIds: ReadonlyArray<string>): void {
   });
 }
 
-/** Retires every held send: the account they were sent under is no longer the one signed in. */
-export function retirePendingSends(): void {
+// Every held send goes at each change of account: the account it was sent
+// under is no longer the one signed in.
+retireAtBotLifetimeEdge(() => {
   useBotPendingSendsStore.setState(
     useBotPendingSendsStore.getInitialState(),
     true,
   );
-}
+});
 
 function withoutEntries(
   entries: Readonly<Partial<Record<string, BotPendingSend>>>,

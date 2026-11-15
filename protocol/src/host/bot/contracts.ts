@@ -475,9 +475,10 @@ export const botConversationSendUpgradeV15ToV16 = defineUpgradePath<
 });
 
 /**
- * `bot.conversation.send@1.7` (T249): the send's nonce (`sendNonce`), from
- * which the host derives the request id. A 1.6 request carries none, and the
- * host mints its id.
+ * `bot.conversation.send@1.7` (T249): the send's nonce (`sendNonce`) and the
+ * binding it was made for (`authority`), from which, with its destination and
+ * sender, the host derives the request id. A 1.6 request carries neither, and
+ * the host mints its id.
  */
 export const botConversationSendV17 = defineRpcContract({
   method: "bot.conversation.send",

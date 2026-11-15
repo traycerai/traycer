@@ -127,3 +127,17 @@ describe("HostRpcError.notWritten", () => {
     expect(new HostRpcError(base).notWritten).toBe(false);
   });
 });
+
+describe("the codes a bot send refuses with, before any write", () => {
+  it.each([["E_BOT_SEND_CONFLICT"], ["E_BOT_AUTHORITY_MOVED"]])(
+    "%s reaches the client as itself, marked not written",
+    (code) => {
+      const error = HostRpcError.fromWireEnvelope(
+        { code, message: "refused", notWritten: true },
+        request.requestId,
+        request.method,
+      );
+      expect([error.code, error.notWritten]).toEqual([code, true]);
+    },
+  );
+});

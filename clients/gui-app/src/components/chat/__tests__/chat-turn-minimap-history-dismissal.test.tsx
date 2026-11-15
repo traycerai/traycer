@@ -33,6 +33,8 @@ import {
 } from "@/stores/settings/settings-store";
 import { makeMessage } from "./chat-message-fixtures";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 function user(index: number, content: string): ChatMessageModel {
   return { ...makeMessage(index, "user"), content };
 }
@@ -115,6 +117,7 @@ function renderMinimap() {
         listRef={makeListRef({ scroll: 1050, scrollLength: 160 })}
         atEndRef={{ current: false }}
         rows={transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           splitLongTurns: true,
           window: null,
           rendered: makeTranscript(12),

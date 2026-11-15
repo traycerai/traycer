@@ -43,6 +43,7 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type {
+  BotConversationSendRequest,
   BotThreadAnchors,
   BotThreadSummary,
   BotTurnRef,
@@ -86,6 +87,23 @@ import {
   turnRef,
   turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  createWindowedSession,
+  indexNamesAppendedRow,
+  messageAccepted,
+  openWindowedChat,
+  paragraph,
+  userSkeletonEntry,
+  type WindowedChatIds,
+  type WindowedSession,
+} from "@/components/bots/__tests__/bot-windowed-session-test-support";
+import { storedRowOfSend } from "@/components/bots/__tests__/bot-send-identity-test-support";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import {
+  startPendingSend,
+  type BotPendingSendStart,
+} from "@/lib/bots/bot-pending-send";
+import { useBotPendingSendsStore } from "@/stores/bots/bot-pending-sends-store";
 import {
   chatSessionWithPosts,
   chatSessionWithThreadRows,
@@ -1875,5 +1893,210 @@ describe("<BotThreadsView /> with nothing to list", () => {
       screen.getAllByText("This host can't list your threads."),
     ).toHaveLength(1);
     expect(screen.queryByTestId("bot-thread-card")).toBeNull();
+  });
+});
+
+/**
+ * A member's own reply in a card's thread, drawn while its host has not
+ * answered (Tracy Bots T249): the card's thread is the REAL chat session store
+ * on the windowed line, fed a host's frames, drawn in the page's flow rows. The
+ * host's index names the reply at the next ordinal before any frame has
+ * carried its body.
+ */
+describe("a member's own reply in a card, drawn before its host answers", () => {
+  const THREAD = "team-a";
+  const CHANNEL = `channel-${TEAM}`;
+  const REPLY_TEXT = "Is the nightly green?";
+  const HOST_STORED_AT = Date.UTC(2020, 0, 2, 3, 4, 5);
+  const IDS: WindowedChatIds = {
+    epicId: TEAM,
+    chatId: THREAD,
+    hostId: "host-1",
+    ownerId: "user-1",
+    title: "Thread",
+  };
+  let session: WindowedSession;
+
+  function earlierReply(): Extract<Message, { role: "user" }> {
+    return {
+      role: "user",
+      messageId: "team-a-reply-1",
+      sender: { type: "user", userId: "user-teammate" },
+      message: {
+        kind: "user",
+        content: paragraph("Looking now."),
+        browserAnnotations: [],
+      },
+      timestamp: 500,
+      sessionAnchor: null,
+    };
+  }
+
+  /** The card of `THREAD` over a windowed session holding one earlier reply, revealed in full. */
+  async function revealedWindowedCard(): Promise<void> {
+    foregroundWindow();
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([thread(TEAM, THREAD, 5_000)], {
+      [THREAD]: FOLLOWING,
+    });
+    session = createWindowedSession(IDS);
+    openWindowedChat(session, IDS, {
+      messages: [earlierReply()],
+      events: [],
+      activeTurnId: null,
+      chatId: THREAD,
+    });
+    mocks.threadSessions[THREAD] = session.handle;
+    mocks.replies[THREAD] = [];
+    mount();
+    await waitFor(() => expect(listed()).toContain(THREAD));
+    await revealFull(THREAD);
+    await within(card(THREAD)).findByText("Looking now.");
+  }
+
+  /** The member presses Send on a reply in this thread: the real start of a send. */
+  function pressReply(): {
+    readonly rowId: string;
+    readonly request: BotConversationSendRequest;
+  } {
+    const held: { started: BotPendingSendStart | null } = { started: null };
+    act(() => {
+      held.started = startPendingSend({
+        request: {
+          botId: TEAM,
+          conversationId: CHANNEL,
+          text: REPLY_TEXT,
+          threadId: THREAD,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: null,
+        },
+        authority: { hostId: "host-1", hostEpoch: 1 },
+        senderUserId: "user-1",
+        sentAs: { lifetime: currentBotLifetime(), account: "user-1" },
+        text: REPLY_TEXT,
+        content: paragraph(REPLY_TEXT),
+        images: [],
+        release: () => undefined,
+      });
+    });
+    if (held.started === null) throw new Error("Send started nothing");
+    const { messageId, request } = held.started;
+    return { rowId: messageId, request };
+  }
+
+  function replyRows(): HTMLElement[] {
+    return within(card(THREAD))
+      .queryAllByTestId("bot-member-row")
+      .filter((row) => row.textContent.includes(REPLY_TEXT));
+  }
+
+  function theReplyRow(step: string): HTMLElement {
+    const rows = replyRows();
+    expect(
+      rows,
+      `${step}: the reply was drawn as ${String(rows.length)} row(s); the card shows: ${card(THREAD).textContent.slice(0, 300)}`,
+    ).toHaveLength(1);
+    return rows[0];
+  }
+
+  afterEach(() => {
+    session.handle.dispose();
+    useBotPendingSendsStore.setState(
+      useBotPendingSendsStore.getInitialState(),
+      true,
+    );
+  });
+
+  it("stays one row, the same row, with its text, from the press through the index naming it to its body arriving", async () => {
+    await revealedWindowedCard();
+    const { rowId, request } = pressReply();
+    const drawn = theReplyRow("at the press");
+
+    act(() => {
+      indexNamesAppendedRow(session, IDS, {
+        rowCount: 2,
+        indexRevision: 2,
+        entry: userSkeletonEntry(rowId, Date.now()),
+      });
+    });
+
+    expect(
+      theReplyRow("after the index named the reply, before its body"),
+      "the reply was replaced by another node",
+    ).toBe(drawn);
+
+    act(() => {
+      messageAccepted(
+        session,
+        IDS,
+        storedRowOfSend(request, "user-1", HOST_STORED_AT),
+      );
+    });
+
+    expect(theReplyRow("after the body arrived")).toBe(drawn);
+  });
+
+  it("acknowledges nothing under the pending reply: no mark and no advance until its body is drawn, then one read", async () => {
+    await revealedWindowedCard();
+    const { rowId, request } = pressReply();
+    act(() => {
+      indexNamesAppendedRow(session, IDS, {
+        rowCount: 2,
+        indexRevision: 2,
+        entry: userSkeletonEntry(rowId, Date.now()),
+      });
+    });
+    // The host has written the reply, and its read names it the newest.
+    mocks.hosted[TEAM].cursors = {
+      cursors: { [THREAD]: { messageId: "team-a-reply-1", seq: 500 } },
+      latest: { [THREAD]: { messageId: rowId, seq: 6_000 } },
+    };
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    vi.useRealTimers();
+
+    expect(
+      within(card(THREAD)).queryByTestId("bot-chat-transcript-mark"),
+      "a read mark was drawn under the pending reply, whose body has not landed",
+    ).toBeNull();
+    expect(
+      mocks.advances,
+      "the card's read advanced to a reply whose body has not landed",
+    ).toEqual([]);
+
+    act(() => {
+      messageAccepted(
+        session,
+        IDS,
+        storedRowOfSend(request, "user-1", HOST_STORED_AT),
+      );
+    });
+    await waitFor(() =>
+      expect(readMark(THREAD).getAttribute("data-mark-message-id")).toBe(rowId),
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readMark(THREAD), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() =>
+      expect(mocks.advances).toEqual([
+        {
+          botId: TEAM,
+          conversationId: THREAD,
+          messageId: rowId,
+          seq: 6_000,
+        },
+      ]),
+    );
   });
 });

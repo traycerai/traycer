@@ -404,6 +404,7 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 import { emptyTabStripLayout } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const WINDOW_HOST = "host-tab";
 
@@ -621,13 +622,17 @@ async function shownChannel(botId: string): Promise<HTMLElement> {
 }
 
 function seedKeptState(botId: string): void {
-  useBotOpenThreadStore.getState().setRail(botId, {
-    kind: "thread",
-    anchorMessageId: `post-of-${botId}`,
-    announcement: false,
-    anchorKind: null,
-    sent: null,
-  });
+  useBotOpenThreadStore.getState().setRail(
+    botId,
+    {
+      kind: "thread",
+      anchorMessageId: `post-of-${botId}`,
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    },
+    currentBotLifetime(),
+  );
   useBotDraftsStore.getState().typeThreadBox(botId, "post-1", {
     text: "unsent",
     content: null,
@@ -712,13 +717,17 @@ describe("the Tracy surface shell", () => {
     const mounted = await mount(SurfaceHost, "/");
     open(mounted, "bot-release");
     await shownChannel("bot-release");
-    useBotOpenThreadStore.getState().setRail("bot-release", {
-      kind: "thread",
-      anchorMessageId: "post-1",
-      announcement: false,
-      anchorKind: null,
-      sent: null,
-    });
+    useBotOpenThreadStore.getState().setRail(
+      "bot-release",
+      {
+        kind: "thread",
+        anchorMessageId: "post-1",
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      currentBotLifetime(),
+    );
     await waitFor(() => {
       expect(
         screen.getByTestId("stub-channel").getAttribute("data-open-thread"),

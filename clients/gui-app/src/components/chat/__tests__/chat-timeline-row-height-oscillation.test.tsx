@@ -34,6 +34,8 @@ import {
   settleLegendList,
 } from "./legend-list-test-environment";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 const OSCILLATING_HEIGHTS: readonly [number, number] = [120, 180];
 const SHORT_HEIGHT = OSCILLATING_HEIGHTS[0];
 const TALL_HEIGHT = OSCILLATING_HEIGHTS[1];
@@ -99,6 +101,7 @@ function TranscriptTimeline({
   return (
     <ChatTimeline
       rows={transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
         window: null,
         rendered: messages,
         splitLongTurns: true,

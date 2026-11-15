@@ -18,7 +18,6 @@ import {
   type BotThreadBoxDraft,
 } from "@/stores/bots/bot-drafts-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
-import { retirePendingSends } from "@/stores/bots/bot-pending-sends-store";
 
 export interface BotDraftsPersistLifecycleBridgeProps {
   readonly children: ReactNode;
@@ -35,8 +34,9 @@ export interface BotDraftsPersistLifecycleBridgeProps {
  * yet, go into that box's draft; its drafts are written under its own key,
  * and the store is emptied, so nothing of it reaches the next account. Its
  * answers to surface cards and its settled sends go from the stores that kept
- * them, and its sends still drawn before their stored rows (T249) are
- * retired, their content given to no box. A card, send or box of it that
+ * them; its sends still drawn before their stored rows (T249) went at the bot
+ * lifetime's edge, before this runs, their content given to no box. A card,
+ * send or box of it that
  * answers late changes nothing (`useBotDraftActions`), and the bot tab shows
  * none of the store until it
  * is the next account's, its own drafts read (`useBotDraftsAdmitted`). Its
@@ -55,7 +55,6 @@ export function BotDraftsPersistLifecycleBridge(
       const account =
         transition.kind === "signedOut" ? null : transition.userId;
       useBotSurfaceActionsStore.setState({ entries: {} });
-      retirePendingSends();
       forgetSettledSends(queryClient);
       // Last: the bot tab shows its tree again once the store is the next
       // identity's (`useBotDraftsAdmitted`), so what the two above clear is

@@ -156,6 +156,7 @@ function mountRealChannel(args: {
               hostId={TAB_HOST_ID}
               boundHostId={TAB_HOST_ID}
               boundHostEpoch={1}
+              onBindingMoved={vi.fn()}
               botTitle="Release Bot"
               directive={null}
               appConversationChatId={CHANNEL_ID}

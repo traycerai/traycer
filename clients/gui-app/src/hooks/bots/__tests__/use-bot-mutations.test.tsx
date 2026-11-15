@@ -30,6 +30,8 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import type { BotSentAs } from "@/lib/bots/bot-sent-as";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { FloorEnforcingMessenger } from "@/hooks/config/__tests__/floor-enforcing-messenger";
@@ -80,6 +82,14 @@ const SEND: BotConversationSendRequest = {
 };
 
 const REPLY: BotConversationSendRequest = { ...SEND, replyTo: "message-1" };
+
+/** Who a send through `client` goes out as: its request context's account, in the bot lifetime now. */
+function sentAsOf(client: HostRequester<HostRpcRegistry>): BotSentAs {
+  return {
+    lifetime: currentBotLifetime(),
+    account: client.getRequestContextUserId(),
+  };
+}
 
 function hostOver(
   entry: HostDirectoryEntry,
@@ -153,7 +163,9 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
     request: BotConversationSendRequest,
   ): Promise<void> => {
     await act(async () => {
-      await result.current.mutateAsync(request).catch(() => undefined);
+      await result.current
+        .mutateAsync({ request, sentAs: sentAsOf(sendingHost) })
+        .catch(() => undefined);
     });
   };
   return {
@@ -449,10 +461,12 @@ describe("useBotConversationSendMutation's dispatch-time version floor", () => {
       messenger,
       handled,
       send: (variables) =>
-        result.current.mutateAsync(variables).then(
-          () => null,
-          (error: unknown) => error,
-        ),
+        result.current
+          .mutateAsync({ request: variables, sentAs: sentAsOf(client) })
+          .then(
+            () => null,
+            (error: unknown) => error,
+          ),
     };
   }
 

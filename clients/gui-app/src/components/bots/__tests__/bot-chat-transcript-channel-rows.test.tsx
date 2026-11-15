@@ -278,6 +278,7 @@ function mountTranscript(
           header={null}
           landOn={null}
           flow={null}
+          sendBinding={null}
         />
       </QueryClientProvider>
     </StrictMode>,

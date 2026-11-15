@@ -14,6 +14,8 @@ import {
   settleLegendList,
 } from "./legend-list-test-environment";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 /**
  * Estimated-height recovery regression at the real, unmocked
  * `ChatTimeline` + `@legendapp/list` seam. 250 alternating user/assistant rows, reader parked 5 rows from the
@@ -63,6 +65,7 @@ function renderTimeline(messages: ReadonlyArray<ChatMessageModel>) {
     <div style={{ height: 700, width: 800 }}>
       <ChatTimeline
         rows={transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: null,
           rendered: msgs,
           splitLongTurns: true,

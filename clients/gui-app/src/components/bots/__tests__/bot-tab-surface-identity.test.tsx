@@ -123,6 +123,7 @@ import {
   snapshot,
   TAB_HOST,
 } from "./bot-tab-surface-harness";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const channelHandles = vi.hoisted(() => ({
   handles: new Map<string, unknown>(),
@@ -473,10 +474,21 @@ function hostClient(): HostRequester<HostRpcRegistry> {
       hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
     messenger,
   });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
+  spine.setRequestContext(requestContextOf(ACCOUNT_A));
+  hostSpine = spine;
   return spine.createRequester(mockRemoteHostEntry);
+}
+
+/** The host client's spine the case sends through, whose request context follows the signed-in account. */
+let hostSpine: HostClient<HostRpcRegistry> | null = null;
+
+/** The request context of `userId`, as the auth service sets it before the store follows. */
+function requestContextOf(userId: string) {
+  return createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: "tok-1",
+    identity: { userId, username: userId, providerHandle: null },
+  });
 }
 
 function question(settled: boolean): Message {
@@ -533,6 +545,7 @@ function failedReply(requestId: string): Message {
 }
 
 function signInAs(userId: string): void {
+  hostSpine?.setRequestContext(requestContextOf(userId));
   act(() => {
     useAuthStore.setState({
       status: "signed-in",
@@ -550,6 +563,7 @@ function signInAs(userId: string): void {
 }
 
 function signOut(): void {
+  hostSpine?.setRequestContext(null);
   act(() => {
     useAuthStore.setState({
       status: "signed-out",
@@ -559,6 +573,25 @@ function signOut(): void {
       contextMetadata: null,
     });
   });
+}
+
+/** The post the thread cases open. */
+const POST_ID = "post-1";
+
+function openThread(): void {
+  act(() =>
+    useBotOpenThreadStore.getState().setRail(
+      BOT_ID,
+      {
+        kind: "thread",
+        anchorMessageId: POST_ID,
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      currentBotLifetime(),
+    ),
+  );
 }
 
 function surfaceTree(): ReactNode {
@@ -804,7 +837,6 @@ describe("<BotTabSurface /> what the channel's parents hold of a send, across an
 
 describe("<BotTabSurface /> a thread's box across an account switch", () => {
   const THREAD_ID = "thread-1";
-  const POST_ID = "post-1";
   const REPLY_REQUEST = "req-reply";
 
   it("shows account B an empty thread box, with no edit, when A's refused replacement was put back as an edit in the thread before the switch", async () => {
@@ -850,13 +882,17 @@ describe("<BotTabSurface /> a thread's box across an account switch", () => {
     const reply = failedReply(REPLY_REQUEST);
     channelHandles.handles.set(THREAD_ID, chatSessionWithThreadRows([reply]));
     act(() =>
-      useBotOpenThreadStore.getState().setRail(BOT_ID, {
-        kind: "thread",
-        anchorMessageId: POST_ID,
-        announcement: false,
-        anchorKind: null,
-        sent: null,
-      }),
+      useBotOpenThreadStore.getState().setRail(
+        BOT_ID,
+        {
+          kind: "thread",
+          anchorMessageId: POST_ID,
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        },
+        currentBotLifetime(),
+      ),
     );
     mountSurface();
     const panel = await screen.findByTestId("bot-thread-panel");
@@ -871,6 +907,8 @@ describe("<BotTabSurface /> a thread's box across an account switch", () => {
     );
 
     signInAs(ACCOUNT_B);
+    // The account change emptied the rail; B opens the same thread.
+    openThread();
 
     await vi.waitFor(() => expect(textOf(box())).toBe(""));
     expect(screen.queryByTestId("bot-thread-composer-editing")).toBeNull();
@@ -982,7 +1020,6 @@ describe("<BotTabSurface /> a task card's answer across an account switch", () =
 
 describe("<BotTabSurface /> a thread box's answer and quote, through the real thread panel", () => {
   const THREAD_ID = "thread-1";
-  const POST_ID = "post-1";
   const REPLY_REQUEST = "req-reply";
 
   function listedThread(): BotThreadSummary {
@@ -1005,20 +1042,12 @@ describe("<BotTabSurface /> a thread box's answer and quote, through the real th
     };
   }
 
-  function openThread(): void {
-    act(() =>
-      useBotOpenThreadStore.getState().setRail(BOT_ID, {
-        kind: "thread",
-        anchorMessageId: POST_ID,
-        announcement: false,
-        anchorKind: null,
-        sent: null,
-      }),
-    );
-  }
-
   function closeThread(): void {
-    act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+    act(() =>
+      useBotOpenThreadStore
+        .getState()
+        .setRail(BOT_ID, null, currentBotLifetime()),
+    );
   }
 
   it("gives the moved answer back, once, in the thread box opened again after the person left it while it edited the failed reply", async () => {
@@ -1096,6 +1125,8 @@ describe("<BotTabSurface /> a thread box's answer and quote, through the real th
     await user.click(screen.getAllByTestId("stub-quote")[0]);
 
     signInAs(ACCOUNT_B);
+    // The account change emptied the rail; B opens the same thread.
+    openThread();
     mocks.state.threads = [listedThread()];
     view.redraw();
 

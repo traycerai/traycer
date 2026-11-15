@@ -44,6 +44,8 @@ import {
   settleLegendList,
 } from "./legend-list-test-environment";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 const VIEWPORT_HEIGHT_PX = 700;
 const VIEWPORT_WIDTH_PX = 800;
 const ITEM_HEIGHT_PX = 90;
@@ -285,6 +287,7 @@ function renderTimeline(
     >
       <ChatTimeline
         rows={transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: null,
           rendered: messages,
           splitLongTurns: true,
@@ -1510,6 +1513,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       messages: ReadonlyArray<ChatMessageModel>,
     ): ReadonlyArray<TranscriptListRow> {
       return transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
         window: null,
         rendered: messages,
         splitLongTurns: true,

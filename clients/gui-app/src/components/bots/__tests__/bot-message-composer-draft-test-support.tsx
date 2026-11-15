@@ -35,9 +35,9 @@ export interface SendMocks {
 
 /** The send mutation the box gets: each send is scripted by the case through the callbacks it was handed. */
 export function scriptedSendMutation(mocks: SendMocks): {
-  readonly mutateAsync: (
-    variables: BotConversationSendRequest,
-  ) => Promise<BotConversationSendResponse>;
+  readonly mutateAsync: (variables: {
+    readonly request: BotConversationSendRequest;
+  }) => Promise<BotConversationSendResponse>;
   readonly isPending: false;
 } {
   return {
@@ -52,7 +52,7 @@ export function scriptedSendMutation(mocks: SendMocks): {
           () => undefined,
         ),
       );
-      mocks.send(variables, callbacks);
+      mocks.send(variables.request, callbacks);
       return promise;
     },
     isPending: false,

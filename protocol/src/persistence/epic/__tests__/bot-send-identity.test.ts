@@ -1,3 +1,4 @@
+import { v5 as uuidv5 } from "uuid";
 import { describe, expect, it } from "vitest";
 import {
   botSendRequestId,
@@ -16,6 +17,7 @@ const TUPLE = {
   threadId: null,
   announcementId: null,
   senderUserId: "user-1",
+  authority: { hostId: "host-1", hostEpoch: 3 },
   nonce: "6f1c2a52-8e1d-4f43-a1f6-0b7d4c3e9a10",
 };
 
@@ -34,6 +36,11 @@ describe("botSendRequestId", () => {
     ["the thread", { threadId: "thread-1" }],
     ["the announcement", { announcementId: "announcement-1" }],
     ["the sender", { senderUserId: "user-2" }],
+    ["the authority's host", { authority: { hostId: "host-2", hostEpoch: 3 } }],
+    [
+      "the authority's epoch",
+      { authority: { hostId: "host-1", hostEpoch: 4 } },
+    ],
     ["the nonce", { nonce: "0a1b2c3d-8e1d-4f43-a1f6-0b7d4c3e9a10" }],
   ])("differs when %s differs", (_name, change) => {
     expect(botSendRequestId({ ...TUPLE, ...change })).not.toBe(
@@ -49,9 +56,28 @@ describe("botSendRequestId", () => {
     );
   });
 
-  it("is the id the app and the host have always derived for a fixed identity: a change of namespace, tuple order or encoding moves it", () => {
+  it("is a UUID v5 of the nine-field tuple, authority before the nonce, under the send namespace: a change of namespace, tuple order or encoding moves it", () => {
     expect(botSendRequestId(TUPLE)).toBe(
-      "cb64741c-8ccd-55ba-81fc-c806793ba1b0",
+      uuidv5(
+        JSON.stringify([
+          "bot-send",
+          TUPLE.botId,
+          TUPLE.conversationId,
+          TUPLE.threadId,
+          TUPLE.announcementId,
+          TUPLE.senderUserId,
+          TUPLE.authority.hostId,
+          TUPLE.authority.hostEpoch,
+          TUPLE.nonce,
+        ]),
+        "afd605ff-fb7e-450b-97d3-818fc0b5a19b",
+      ),
+    );
+  });
+
+  it("is the id the app and the host derive for a fixed identity, authority included: a change of namespace, tuple order or encoding moves it", () => {
+    expect(botSendRequestId(TUPLE)).toBe(
+      "8c5e5719-a6f2-5dd8-b184-bb4f806e3e0f",
     );
   });
 

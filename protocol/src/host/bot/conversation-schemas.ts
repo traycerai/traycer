@@ -284,18 +284,37 @@ export const botConversationSendRequestSchemaV16 = lazySchema(() =>
 );
 
 /**
+ * The binding a send that carries a nonce was made for (T249): the bot's
+ * bound host and its epoch as the client read them from the bot's record
+ * (`boundHostId`, `hostEpoch`). Part of the send's identity
+ * (`botSendRequestId`). The host refuses the send, nothing written, with
+ * `E_BOT_AUTHORITY_MOVED` once it is no longer the bot's binding, and never
+ * derives the id again under another.
+ */
+export const botSendAuthoritySchema = lazySchema(() =>
+  z.object({
+    hostId: z.string().min(1).max(255),
+    hostEpoch: z.number().int().nonnegative(),
+  }),
+);
+export type BotSendAuthority = z.infer<typeof botSendAuthoritySchema>;
+
+/**
  * `bot.conversation.send@1.7`: the send's nonce (T249), a UUID the client
  * mints once per message and sends again, unchanged, with every retry of
- * it. The host derives the request id from the send's destination, its
- * authenticated sender and this nonce (`botSendRequestId`), so the
- * client knows the stored row's id before the host answers, and a retry that
- * reaches a host which already wrote the row answers from that row. Absent
- * for a send whose id the host mints; never set with `redeliver`, `answer`
- * or `answers`, whose ids are already fixed.
+ * it, and the binding it was made for (`authority`), which a nonce always
+ * carries. The host derives the request id from the send's destination, its
+ * authenticated sender, the authority and this nonce (`botSendRequestId`), so
+ * the client knows the stored row's id before the host answers, and a retry
+ * that reaches the host which already wrote the row answers from that row.
+ * Absent for a send whose id the host mints; never set with `redeliver`,
+ * `answer`, `answers` or `supersedes`, whose ids are already fixed. Only the
+ * bot's bound host takes a nonce: it never rides a mailbox delivery.
  */
 export const botConversationSendRequestSchema = lazySchema(() =>
   botConversationSendRequestSchemaV16.extend({
     sendNonce: z.uuid().optional(),
+    authority: botSendAuthoritySchema.optional(),
   }),
 );
 export type BotConversationSendRequest = z.infer<

@@ -168,10 +168,15 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({
-    mutate: mocks.send,
+    mutate: (
+      variables: { readonly request: BotConversationSendRequest },
+      callbacks: SendCallbacks,
+    ) => mocks.send(variables.request, callbacks),
     // The box settles its send through the promise; the case settles it
     // through the callbacks the promise is built on.
-    mutateAsync: (variables: BotConversationSendRequest) => {
+    mutateAsync: (variables: {
+      readonly request: BotConversationSendRequest;
+    }) => {
       const { promise, resolve, reject } =
         Promise.withResolvers<BotConversationSendResponse>();
       const callbacks: SendCallbacks = { onSuccess: resolve, onError: reject };
@@ -182,7 +187,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
           () => undefined,
         ),
       );
-      mocks.send(variables, callbacks);
+      mocks.send(variables.request, callbacks);
       return promise;
     },
     isPending: false,
@@ -270,6 +275,7 @@ import {
   boxWithin,
   typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-bound";
@@ -537,6 +543,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       hostId={HOST_ID}
       boundHostId={HOST_ID}
       boundHostEpoch={1}
+      onBindingMoved={vi.fn()}
       botTitle="Tracy"
       replyMode="direct"
       directive={props.directive}
@@ -559,7 +566,11 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       onOpenThread={(open) =>
         useBotOpenThreadStore
           .getState()
-          .setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
+          .setRail(
+            BOT_ID,
+            open === null ? null : { kind: "thread", ...open },
+            currentBotLifetime(),
+          )
       }
       setupHistory={null}
     />

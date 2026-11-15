@@ -544,6 +544,12 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   const context = createRequestContextFixture({
     origin: "renderer",
     bearerToken: "tok-1",
+    // The send leaves as the signed-in viewer.
+    identity: {
+      userId: VIEWER_USER_ID,
+      username: "olive",
+      providerHandle: null,
+    },
   });
   // The recovery the auth layer waits on rotates this context's lease in
   // place, as the request context provider does, so the call is sent again.
@@ -573,7 +579,20 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
     messenger,
   });
   spine.setRequestContext(context);
+  hostSpine = spine;
   return spine.createRequester(mockRemoteHostEntry);
+}
+
+/** The host client's spine the case sends through, whose request context follows the signed-in account. */
+let hostSpine: HostClient<HostRpcRegistry> | null = null;
+
+/** The request context of `userId`, as the auth service sets it before the store follows. */
+function requestContextOf(userId: string) {
+  return createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: "tok-1",
+    identity: { userId, username: userId, providerHandle: null },
+  });
 }
 
 /** The host takes the oldest send held. */
@@ -624,6 +643,7 @@ function mountChannel(openThread: BotOpenThread | null): {
                 hostId={HOST_ID}
                 boundHostId={HOST_ID}
                 boundHostEpoch={1}
+                onBindingMoved={vi.fn()}
                 botTitle="Release Bot"
                 directive={null}
                 appConversationChatId={CHANNEL_ID}
@@ -1771,6 +1791,7 @@ const ACCOUNT_A = "user-account-a";
 const ACCOUNT_B = "user-account-b";
 
 function signInAs(userId: string): void {
+  hostSpine?.setRequestContext(requestContextOf(userId));
   act(() => {
     useAuthStore.setState({
       status: "signed-in",
@@ -1786,6 +1807,7 @@ function signInAs(userId: string): void {
 }
 
 function signOut(): void {
+  hostSpine?.setRequestContext(null);
   act(() => {
     useAuthStore.setState({
       status: "signed-out",
@@ -1973,7 +1995,10 @@ describe("<BotChannelView tiles={null} /> a moved answer and the signed-in accou
           name: "Submit",
         }),
       );
-      expect(heldSends).toHaveLength(1);
+      expect(
+        heldSends,
+        `the host was never asked for the send (${String(sent.length)} sent): ${document.body.textContent.slice(0, 300)}`,
+      ).toHaveLength(1);
 
       signInAs(ACCOUNT_B);
       await vi.waitFor(() => expect(holdField().value).toBe(""));

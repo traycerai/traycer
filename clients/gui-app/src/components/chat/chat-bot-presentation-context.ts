@@ -331,3 +331,14 @@ export interface ChatBotPendingSend {
 export const ChatBotPendingSendsContext = createContext<
   ((messageId: string) => ChatBotPendingSend | null) | null
 >(null);
+
+const NO_PENDING_ROW_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * The rows a bot's list draws from its member's own sends rather than from
+ * the host's rows (Tracy Bots T249), by row id. The list seats each at the
+ * ordinal the index names for it until the host's row of it arrives
+ * (`transcriptListRows`); every other list draws none.
+ */
+export const ChatBotPendingRowIdsContext =
+  createContext<ReadonlySet<string>>(NO_PENDING_ROW_IDS);

@@ -77,6 +77,7 @@ import {
   editableIn,
   typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
@@ -422,7 +423,9 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
   ])("takes no send under %s", (_label, epoch, kinds) => {
     mocks.threads = [NOTICE_THREAD];
     mocks.threadAnchors = { hostId: BOUND_HOST_ID, epoch, kinds: [...kinds] };
-    useBotOpenThreadStore.getState().setRail(BOT_ID, BY_ANCHOR);
+    useBotOpenThreadStore
+      .getState()
+      .setRail(BOT_ID, BY_ANCHOR, currentBotLifetime());
     render(<MountedChannel />);
 
     expect(sendEnabledAfterTyping()).toBe(false);
@@ -450,7 +453,11 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
     mocks.threadAnchors = anchorsNaming([]);
     useBotOpenThreadStore
       .getState()
-      .setRail(BOT_ID, { ...BY_ANCHOR, anchorMessageId: "question-1" });
+      .setRail(
+        BOT_ID,
+        { ...BY_ANCHOR, anchorMessageId: "question-1" },
+        currentBotLifetime(),
+      );
     render(<MountedChannel />);
 
     expect(sendEnabledAfterTyping()).toBe(true);
@@ -459,7 +466,9 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
   it("takes a send while the binding names the row among the rows a thread roots on", () => {
     mocks.threads = [NOTICE_THREAD];
     mocks.threadAnchors = anchorsNaming(["answer", "message"]);
-    useBotOpenThreadStore.getState().setRail(BOT_ID, BY_ANCHOR);
+    useBotOpenThreadStore
+      .getState()
+      .setRail(BOT_ID, BY_ANCHOR, currentBotLifetime());
     render(<MountedChannel />);
 
     expect(sendEnabledAfterTyping()).toBe(true);
@@ -484,7 +493,11 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       mocks.threadAnchors = { hostId: BOUND_HOST_ID, epoch, kinds: [...kinds] };
       useBotOpenThreadStore
         .getState()
-        .setRail(BOT_ID, { ...BY_ANCHOR, anchorMessageId: "notice-cold" });
+        .setRail(
+          BOT_ID,
+          { ...BY_ANCHOR, anchorMessageId: "notice-cold" },
+          currentBotLifetime(),
+        );
       render(<MountedChannel />);
 
       expect(sendEnabledAfterTyping()).toBe(false);
@@ -525,7 +538,16 @@ describe("Reply on a row of a bot's channel", () => {
       messenger,
     });
     spine.setRequestContext(
-      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+        // The send leaves as the signed-in viewer.
+        identity: {
+          userId: VIEWER_USER_ID,
+          username: "olive",
+          providerHandle: null,
+        },
+      }),
     );
     return spine.createRequester(mockRemoteHostEntry);
   }
@@ -618,7 +640,11 @@ describe("Reply on a row of a bot's channel", () => {
     mocks.threads = [postThread()];
     useBotOpenThreadStore
       .getState()
-      .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
+      .setRail(
+        BOT_ID,
+        { kind: "thread", ...THREAD_OPEN },
+        currentBotLifetime(),
+      );
     render(<MountedChannel />);
     const panel = screen.getByTestId("bot-thread-panel");
 

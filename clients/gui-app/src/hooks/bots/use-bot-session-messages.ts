@@ -81,7 +81,7 @@ type BotSessionState = Pick<
  * The member's own sends still held for the chat (`held`, T249) are drawn
  * after the session's rows, each until its stored row is among them: that
  * row has the same id and takes its place, never beside it, and the send is
- * done for good.
+ * done for good. `pendingRowIds` names the rows drawn from those sends.
  */
 export function useBotSessionMessages(input: {
   readonly handle: ChatSessionStoreHandle;
@@ -93,6 +93,7 @@ export function useBotSessionMessages(input: {
 }): {
   readonly state: BotSessionState;
   readonly messages: ReadonlyArray<ChatMessage>;
+  readonly pendingRowIds: ReadonlySet<string>;
 } {
   const { handle, botId, chatId, viewTabId, resolveMember, held } = input;
   const state = useStore(
@@ -165,7 +166,7 @@ export function useBotSessionMessages(input: {
     }),
     [displayContext, resolveMember],
   );
-  const { rows, stored } = useMemo(
+  const { rows, drawn, stored } = useMemo(
     () => withPendingRows(state.messages, held),
     [held, state.messages],
   );
@@ -204,33 +205,42 @@ export function useBotSessionMessages(input: {
     },
     renderedDisplayContext,
   );
-  return { state, messages };
+  return { state, messages, pendingRowIds: drawn };
 }
 
 const NO_IDS: ReadonlyArray<string> = [];
+const NO_ROW_IDS: ReadonlySet<string> = new Set();
 
 /**
- * The session's rows with `held`'s after them, and the held sends whose
- * stored row is among the session's.
+ * The session's rows with `held`'s after them, the ids of the rows drawn from
+ * `held`, and the held sends whose stored row is among the session's.
  */
 function withPendingRows(
   messages: ReadonlyArray<OpenMessage>,
   held: ReadonlyArray<BotPendingSend>,
 ): {
   readonly rows: ReadonlyArray<OpenMessage>;
+  readonly drawn: ReadonlySet<string>;
   readonly stored: ReadonlyArray<string>;
 } {
-  if (held.length === 0) return { rows: messages, stored: NO_IDS };
+  if (held.length === 0) {
+    return { rows: messages, drawn: NO_ROW_IDS, stored: NO_IDS };
+  }
   const ids = new Set(messages.map((message) => message.messageId));
   const stored = held
     .filter((send) => ids.has(send.row.messageId))
     .map((send) => send.row.messageId);
   const drawn = held.filter((send) => !ids.has(send.row.messageId));
+  if (drawn.length === 0) {
+    return {
+      rows: messages,
+      drawn: NO_ROW_IDS,
+      stored: stored.length === 0 ? NO_IDS : stored,
+    };
+  }
   return {
-    rows:
-      drawn.length === 0
-        ? messages
-        : [...messages, ...drawn.map((send) => send.row)],
+    rows: [...messages, ...drawn.map((send) => send.row)],
+    drawn: new Set(drawn.map((send) => send.row.messageId)),
     stored: stored.length === 0 ? NO_IDS : stored,
   };
 }

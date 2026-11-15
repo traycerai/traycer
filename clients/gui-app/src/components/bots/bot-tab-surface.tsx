@@ -110,6 +110,7 @@ import {
   type BotSessionOpen,
   type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
+import { useBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   openBotSearch,
   useBotSearchStore,
@@ -947,6 +948,9 @@ function useBotTabRail(
 } {
   const rail = useBotRail(botId);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
+  // Every move is this render's: one made from a render before an account
+  // change writes nothing after it.
+  const lifetime = useBotLifetime();
   const searchShowing = rail?.kind === "search" ? rail.showing : null;
   const searchThread =
     searchShowing?.kind === "thread" ? searchShowing.thread : null;
@@ -957,25 +961,35 @@ function useBotTabRail(
   // that back.
   const exchanges = useMemo(
     (): BotExchangeRail => ({
-      open: (peerBotId) => setRail(botId, exchangeRailOver(rail, peerBotId)),
-      close: () => setRail(botId, rail?.kind === "exchange" ? rail.back : rail),
+      open: (peerBotId) =>
+        setRail(botId, exchangeRailOver(rail, peerBotId), lifetime),
+      close: () =>
+        setRail(botId, rail?.kind === "exchange" ? rail.back : rail, lifetime),
     }),
-    [botId, rail, setRail],
+    [botId, lifetime, rail, setRail],
   );
   const setOpenMemory = useCallback(
     (open: BotOpenMemory | null) =>
-      setRail(botId, open === null ? null : { kind: "memory", ...open }),
-    [botId, setRail],
+      setRail(
+        botId,
+        open === null ? null : { kind: "memory", ...open },
+        lifetime,
+      ),
+    [botId, lifetime, setRail],
   );
   // From the profile card: the memory takes the slot beside the channel.
   const openMemoryInChannel = useCallback(() => {
-    setRail(botId, memoryRailOver(rail));
+    setRail(botId, memoryRailOver(rail), lifetime);
     onViewChange("messages");
-  }, [botId, onViewChange, rail, setRail]);
+  }, [botId, lifetime, onViewChange, rail, setRail]);
   const setOpenThread = useCallback(
     (open: BotOpenThread | null) =>
-      setRail(botId, open === null ? null : { kind: "thread", ...open }),
-    [botId, setRail],
+      setRail(
+        botId,
+        open === null ? null : { kind: "thread", ...open },
+        lifetime,
+      ),
+    [botId, lifetime, setRail],
   );
   return {
     openThread,
@@ -1726,6 +1740,9 @@ function BotTabContent(props: {
                       hostId={hostId}
                       boundHostId={snapshot.boundHost.hostId}
                       boundHostEpoch={snapshot.boundHost.epoch}
+                      // Read again as a failed stream's Retry reads it: a
+                      // send refused as made for a binding that moved.
+                      onBindingMoved={onRetry}
                       botTitle={snapshot.bot.title}
                       replyMode={snapshot.bot.replyMode}
                       directive={snapshot.bot.directive}

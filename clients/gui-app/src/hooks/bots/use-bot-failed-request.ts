@@ -21,6 +21,8 @@ import { useProviderUpdateForClient } from "@/hooks/providers/use-provider-updat
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import { useBotSentAs } from "@/lib/bots/bot-sent-as";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
@@ -95,8 +97,9 @@ export function useBotFailedRequest(args: {
   } = useProviderUpdateForClient(boundClient, boundHostId);
   const { mutate, isPending, variables } =
     useBotConversationSendMutation(client);
+  const sentAs = useBotSentAs();
   const retryingId = isPending
-    ? (variables.redeliver?.requestId ?? null)
+    ? (variables.request.redeliver?.requestId ?? null)
     : null;
   return useCallback(
     (
@@ -135,21 +138,29 @@ export function useBotFailedRequest(args: {
                 clear();
                 mutate(
                   {
-                    botId,
-                    conversationId: channelId,
-                    // A post of images alone has no text; its images are
-                    // the row's, which the retry re-sends.
-                    text:
-                      text.length === 0
-                        ? BOT_CONVERSATION_IMAGES_ONLY_TEXT
-                        : text,
-                    threadId,
-                    announcementId: null,
-                    redeliver: { requestId },
-                    supersedes: null,
-                    answer: null,
+                    request: {
+                      botId,
+                      conversationId: channelId,
+                      // A post of images alone has no text; its images are
+                      // the row's, which the retry re-sends.
+                      text:
+                        text.length === 0
+                          ? BOT_CONVERSATION_IMAGES_ONLY_TEXT
+                          : text,
+                      threadId,
+                      announcementId: null,
+                      redeliver: { requestId },
+                      supersedes: null,
+                      answer: null,
+                    },
+                    sentAs,
                   },
-                  { onError: () => fail(null) },
+                  {
+                    onError: () => {
+                      if (sentAs.lifetime !== currentBotLifetime()) return;
+                      fail(null);
+                    },
+                  },
                 );
               },
         retrying: retryingId === requestId,
@@ -170,6 +181,7 @@ export function useBotFailedRequest(args: {
       mutate,
       onEdit,
       retryingId,
+      sentAs,
       signIn,
       supported,
       threadId,

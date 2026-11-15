@@ -194,6 +194,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         header={null}
         landOn={null}
         flow={null}
+        sendBinding={null}
       />
     </QueryClientProvider>
   );

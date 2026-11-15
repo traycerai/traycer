@@ -82,7 +82,10 @@ import {
   CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR,
   shouldMountChatTurnMinimap,
 } from "@/components/chat/chat-turn-minimap-logic";
-import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
+import {
+  ChatBotPendingRowIdsContext,
+  ChatBotPresentationContext,
+} from "@/components/chat/chat-bot-presentation-context";
 import { BotExchangeLinesContext } from "@/components/chat/bot-exchange-lines-context";
 import { createBotExchangeLineCollator } from "@/stores/chats/transcript-exchange-lines";
 import type { BotExchange } from "@/lib/bots/bot-exchanges";
@@ -2226,6 +2229,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // no message and rebuilds no line.
   const exchanges = use(BotExchangeLinesContext)?.exchanges ?? NO_EXCHANGES;
   const [collateExchangeLines] = useState(createBotExchangeLineCollator);
+  const pendingRowIds = use(ChatBotPendingRowIdsContext);
   const listRows = useMemo(
     () =>
       collateExchangeLines(
@@ -2233,12 +2237,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           window: transcriptWindow,
           rendered: messages,
           splitLongTurns,
+          pendingOwnedRowIds: pendingRowIds,
         }),
         exchanges,
       ),
     [
       collateExchangeLines,
       exchanges,
+      pendingRowIds,
       splitLongTurns,
       transcriptWindow,
       messages,

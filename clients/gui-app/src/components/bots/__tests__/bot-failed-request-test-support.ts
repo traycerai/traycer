@@ -30,11 +30,13 @@ export function signInViewer(userId: string): void {
       email: "olive@example.com",
       avatarUrl: null,
     },
+    // The account the app reads as: a change of it moves the bot lifetime.
+    contextMetadata: { userId, username: "olive" },
   });
 }
 
 /** Leaves no handshake recorded and no one signed in for the next case. */
 export function resetBotFailedRequestSupport(): void {
   resetNegotiatedManifests();
-  useAuthStore.setState({ profile: null });
+  useAuthStore.setState({ profile: null, contextMetadata: null });
 }

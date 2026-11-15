@@ -18,6 +18,7 @@ const REQUEST = {
 };
 
 const NONCE = "6f1c2a52-8e1d-4f43-a1f6-0b7d4c3e9a10";
+const AUTHORITY = { hostId: "host-1", hostEpoch: 3 };
 
 describe("bot.conversation.send@1.7", () => {
   it("is the latest line, and upgrades a 1.6 request carrying no send identifier", () => {
@@ -48,12 +49,40 @@ describe("bot.conversation.send@1.7", () => {
     ).toBe(false);
   });
 
+  it("keeps the authority sent with a nonce", () => {
+    expect(
+      sendV17.contract.requestSchema.parse({
+        ...REQUEST,
+        sendNonce: NONCE,
+        authority: AUTHORITY,
+      }).authority,
+    ).toEqual(AUTHORITY);
+  });
+
+  it.each([
+    ["an epoch of -1", { ...AUTHORITY, hostEpoch: -1 }],
+    ["an epoch of 1.5", { ...AUTHORITY, hostEpoch: 1.5 }],
+    ["an epoch sent as a string", { ...AUTHORITY, hostEpoch: "3" }],
+    ["no host", { hostEpoch: 3 }],
+    ["an empty host", { hostId: "", hostEpoch: 3 }],
+  ])("refuses %s as the authority", (_name, authority) => {
+    expect(
+      sendV17.contract.requestSchema.safeParse({
+        ...REQUEST,
+        sendNonce: NONCE,
+        authority,
+      }).success,
+    ).toBe(false);
+  });
+
   it("is frozen on 1.6 without it: a 1.6 peer never sees the key", () => {
     const parsed = sendV16.requestSchema.parse({
       ...REQUEST,
       sendNonce: NONCE,
+      authority: AUTHORITY,
     });
     expect(parsed).not.toHaveProperty("sendNonce");
+    expect(parsed).not.toHaveProperty("authority");
     expect(parsed).toEqual(sendV16.requestSchema.parse(REQUEST));
   });
 });

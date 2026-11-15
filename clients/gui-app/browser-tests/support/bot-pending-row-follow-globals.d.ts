@@ -9,14 +9,23 @@ interface BotPendingRowProbe {
   readonly distance: number;
   readonly rowsWithPendingText: number;
   readonly pendingTop: number | null;
+  readonly pendingHeight: number | null;
+  readonly pendingInView: boolean;
+  readonly bodiesHeld: number;
+  readonly rowsHanded: number;
+  readonly teammateRows: number;
+  readonly pendingIsLastRow: boolean;
+  readonly rangeRequests: number;
   readonly anchorId: string | null;
   readonly anchorTop: number | null;
 }
 
 interface BotPendingRowDriver {
   readonly ready: boolean;
-  readonly appendPending: () => void;
-  readonly storeBeforeLateRow: () => void;
+  readonly press: () => void;
+  readonly indexNamesPending: () => void;
+  readonly indexNamesTeammate: () => void;
+  readonly answerRange: () => boolean;
   readonly probe: () => BotPendingRowProbe;
 }
 

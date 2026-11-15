@@ -17,6 +17,8 @@ import { MINIMAP_TRACK_END_HIT_PADDING } from "@/components/minimap/minimap-trac
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import { ROW_SKELETON_PREVIEW_MAX_CHARS } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 function skeletonEntry(
   rowId: string,
   role: "user" | "assistant",
@@ -70,6 +72,7 @@ function listRowsFor(
   assistantContent: string,
 ): ReadonlyArray<TranscriptListRow> {
   return transcriptListRows({
+    pendingOwnedRowIds: NO_PENDING_ROWS,
     splitLongTurns: true,
     window,
     rendered: [assistantModel("r-1", assistantContent)],

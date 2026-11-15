@@ -40,6 +40,8 @@ import {
   settleLegendList,
 } from "./legend-list-test-environment";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 const MESSAGE_ROW_SELECTOR = "[data-message-id]";
 const LARGE_MESSAGE_COUNT = 400;
 
@@ -186,6 +188,7 @@ function renderTimeline(options: RenderTimelineOptions) {
       >
         <ChatTimeline
           rows={transcriptListRows({
+            pendingOwnedRowIds: NO_PENDING_ROWS,
             window: null,
             rendered: messages,
             splitLongTurns: true,
@@ -685,6 +688,7 @@ describe("ChatTimeline", () => {
       <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
         <ChatTimeline
           rows={transcriptListRows({
+            pendingOwnedRowIds: NO_PENDING_ROWS,
             window: null,
             rendered: messages,
             splitLongTurns: true,
@@ -1372,6 +1376,7 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
 
   it("turns the MVCP data channel on when a placeholder is replaced by its hydrated row under the same key", async () => {
     const hydratedRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: null,
       rendered: makeMessages(6),
       splitLongTurns: true,

@@ -1014,6 +1014,49 @@ function seatLiveRecords(input: {
 }
 
 /**
+ * Seat the member's own sends the index has started naming, in place
+ * (Tracy Bots T249).
+ *
+ * A pending send is drawn from the send itself until the host's row of it
+ * arrives. Between the `indexChanged` that first names its row id and that
+ * row's body, nothing above seats it: no span covers it, no live record backs
+ * it, and {@link unplacedRenderedRows} skips it because the skeleton names it.
+ * Left there, the post the member just sent turns into a placeholder for the
+ * length of that round trip.
+ *
+ * Only the ids the caller names are seated, never a model the renderer
+ * inferred, each at the ordinal the skeleton gives it and only where no span,
+ * live record or stale body answered and the ordinal is not suppressed. The
+ * host's row replaces it under the same id.
+ */
+function seatPendingRows(input: {
+  readonly window: TranscriptWindow;
+  readonly pendingOwnedRowIds: ReadonlySet<string>;
+  readonly modelsById: ReadonlyMap<string, ChatMessageModel>;
+  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly modelByOrdinal: Map<number, ChatMessageModel>;
+  readonly placedRowIds: Set<string>;
+  readonly suppressedOrdinals: ReadonlySet<number>;
+}): void {
+  for (const rowId of input.pendingOwnedRowIds) {
+    if (input.placedRowIds.has(rowId)) continue;
+    const model = input.modelsById.get(rowId);
+    const ordinal = input.skeletonOrdinals.get(rowId);
+    if (
+      model === undefined ||
+      ordinal === undefined ||
+      ordinal >= input.window.rowCount ||
+      input.modelByOrdinal.has(ordinal) ||
+      input.suppressedOrdinals.has(ordinal)
+    ) {
+      continue;
+    }
+    input.modelByOrdinal.set(ordinal, model);
+    input.placedRowIds.add(rowId);
+  }
+}
+
+/**
  * The invalidated-window merge, extracted for the complexity ceiling.
  *
  * The index identities are void, but the frame that voided them still
@@ -1115,6 +1158,13 @@ export function transcriptListRows(input: {
    * bound is not there to begin with.
    */
   readonly splitLongTurns: boolean;
+  /**
+   * The rows drawn from a member's own sends the host has not returned yet
+   * (Tracy Bots T249), by row id; empty for every other list. Each is seated
+   * at the ordinal the index names for it until the host's row takes its
+   * place ({@link seatPendingRows}).
+   */
+  readonly pendingOwnedRowIds: ReadonlySet<string>;
 }): readonly TranscriptListRow[] {
   const { window, rendered, splitLongTurns } = input;
   // The legacy line has no ordinal space at all.
@@ -1238,6 +1288,18 @@ export function transcriptListRows(input: {
       excludedRowIds: heldPreSplitRows,
     });
   }
+
+  // After every pass that seats a body the host sent, so any of them wins at
+  // the ordinal.
+  seatPendingRows({
+    window,
+    pendingOwnedRowIds: input.pendingOwnedRowIds,
+    modelsById,
+    skeletonOrdinals,
+    modelByOrdinal,
+    placedRowIds,
+    suppressedOrdinals,
+  });
 
   // Decided before the ordinal loop, which reads it: a carried placeholder
   // yields its key to a row this render draws after the ordinals.

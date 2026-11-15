@@ -504,7 +504,10 @@ export function conversationRequestMessageId(requestId: string): string {
 /** Fixed namespace of a bot send's derived request ids; never change it. */
 const BOT_SEND_REQUEST_ID_NAMESPACE = "afd605ff-fb7e-450b-97d3-818fc0b5a19b";
 
-/** What a bot send's request id derives from: where it goes, who sent it, and its nonce. */
+/**
+ * What a bot send's request id derives from: where it goes, who sent it, the
+ * binding it was made for, and its nonce.
+ */
 export interface BotSendIdentity {
   readonly botId: string;
   readonly conversationId: string;
@@ -515,13 +518,20 @@ export interface BotSendIdentity {
    * host that takes the RPC, the lane's user on a mailbox delivery.
    */
   readonly senderUserId: string;
+  /**
+   * The binding the send was made for, as the send carries it
+   * (`authority`): the same nonce made for another host or epoch names
+   * another request.
+   */
+  readonly authority: { readonly hostId: string; readonly hostEpoch: number };
   readonly nonce: string;
 }
 
 /**
  * A bot send's request id (`bot.conversation.send@1.7`): a UUID v5 of an
- * unambiguous encoding of the send's destination, its sender and its nonce,
- * an absent thread or announcement encoded as `null`. The client derives it
+ * unambiguous encoding of the send's destination, its sender, the binding it
+ * was made for and its nonce, an absent thread or announcement encoded as
+ * `null`. The client derives it
  * before sending, so it knows the stored row's id
  * (`conversationRequestMessageId`); the host derives it again from the sender
  * it authenticated, so a nonce sent by another member, or into another
@@ -536,6 +546,8 @@ export function botSendRequestId(identity: BotSendIdentity): string {
       identity.threadId,
       identity.announcementId,
       identity.senderUserId,
+      identity.authority.hostId,
+      identity.authority.hostEpoch,
       identity.nonce,
     ]),
     BOT_SEND_REQUEST_ID_NAMESPACE,

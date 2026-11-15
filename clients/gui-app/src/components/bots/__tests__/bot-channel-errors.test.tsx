@@ -148,13 +148,21 @@ vi.mock("@/hooks/bots/use-bot-mutations", async () => {
       // The composer settles its send through the promise; the case
       // settles it through the callbacks the promise is built on.
       const mutateAsync = useCallback(
-        (variables: BotConversationSendRequest) =>
+        ({ request }: { readonly request: BotConversationSendRequest }) =>
           new Promise<BotConversationSendResponse>((resolve, reject) => {
-            mutate(variables, { onSuccess: resolve, onError: reject });
+            mutate(request, { onSuccess: resolve, onError: reject });
           }),
         [mutate],
       );
-      return { mutate, mutateAsync, isPending, variables };
+      return {
+        mutate: (
+          sent: { readonly request: BotConversationSendRequest },
+          callbacks: SendCallbacks,
+        ) => mutate(sent.request, callbacks),
+        mutateAsync,
+        isPending,
+        variables: variables === null ? null : { request: variables },
+      };
     },
   };
 });
@@ -266,6 +274,7 @@ function mount(openThread: BotOpenThread | null): void {
               hostId={HOST_ID}
               boundHostId={HOST_ID}
               boundHostEpoch={1}
+              onBindingMoved={vi.fn()}
               botTitle="Release Bot"
               directive={null}
               appConversationChatId={CHANNEL_ID}

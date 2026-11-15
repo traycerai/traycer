@@ -25,6 +25,7 @@ import {
   useBotSearchStore,
   type BotSearchRecent,
 } from "@/stores/bots/bot-search-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const RECENTS_KEY = persistKey(STORE_KEYS.botSearchRecents);
 
@@ -148,7 +149,11 @@ describe("opening and closing the search in a bot's rail", () => {
   it("opens over a thread and gives it back on close, dropping the search but not the recents", () => {
     useBotOpenThreadStore
       .getState()
-      .setRail(SEARCH_BOT_A, { kind: "thread", ...OPEN_THREAD });
+      .setRail(
+        SEARCH_BOT_A,
+        { kind: "thread", ...OPEN_THREAD },
+        currentBotLifetime(),
+      );
     useBotSearchStore.getState().remember(recent("release", ALL));
 
     openBotSearch(SEARCH_BOT_A, IN_A, "ship");
@@ -208,10 +213,14 @@ describe("opening and closing the search in a bot's rail", () => {
     openBotSearch(SEARCH_BOT_A, ALL, "ship");
     const open = railOf(SEARCH_BOT_A);
     if (open?.kind !== "search") throw new Error("the search did not open");
-    useBotOpenThreadStore.getState().setRail(SEARCH_BOT_A, {
-      ...open,
-      showing: { kind: "thread", thread: OPEN_THREAD },
-    });
+    useBotOpenThreadStore.getState().setRail(
+      SEARCH_BOT_A,
+      {
+        ...open,
+        showing: { kind: "thread", thread: OPEN_THREAD },
+      },
+      currentBotLifetime(),
+    );
 
     showBotSearchResults(SEARCH_BOT_A);
 
@@ -221,7 +230,11 @@ describe("opening and closing the search in a bot's rail", () => {
   it("does not turn a thread or the bot's memory into results", () => {
     useBotOpenThreadStore
       .getState()
-      .setRail(SEARCH_BOT_A, { kind: "thread", ...OPEN_THREAD });
+      .setRail(
+        SEARCH_BOT_A,
+        { kind: "thread", ...OPEN_THREAD },
+        currentBotLifetime(),
+      );
 
     showBotSearchResults(SEARCH_BOT_A);
 
@@ -257,7 +270,11 @@ const PEER_BOT_ID = SEARCH_BOT_B;
 /** As the surface does: a pair's log over whatever the rail holds. */
 function openLog(botId: string): void {
   const { setRail } = useBotOpenThreadStore.getState();
-  setRail(botId, exchangeRailOver(railOf(botId), PEER_BOT_ID));
+  setRail(
+    botId,
+    exchangeRailOver(railOf(botId), PEER_BOT_ID),
+    currentBotLifetime(),
+  );
 }
 
 /** As the surface does: closing the log brings back what it displaced. */
@@ -265,14 +282,20 @@ function closeLog(botId: string): void {
   const rail = railOf(botId);
   useBotOpenThreadStore
     .getState()
-    .setRail(botId, rail?.kind === "exchange" ? rail.back : rail);
+    .setRail(
+      botId,
+      rail?.kind === "exchange" ? rail.back : rail,
+      currentBotLifetime(),
+    );
 }
 
 describe("the rail a search shares with a pair's log and the memory", () => {
   const thread: BotRail = { kind: "thread", ...OPEN_THREAD };
 
   beforeEach(() => {
-    useBotOpenThreadStore.getState().setRail(SEARCH_BOT_A, thread);
+    useBotOpenThreadStore
+      .getState()
+      .setRail(SEARCH_BOT_A, thread, currentBotLifetime());
   });
 
   it("over a pair's log: closing the results brings the log back, and closing the log what it displaced", () => {
@@ -299,7 +322,9 @@ describe("the rail a search shares with a pair's log and the memory", () => {
 
   it("over the memory: closing the results brings the memory back, with the thread it displaced", () => {
     const memory = memoryRailOver(thread);
-    useBotOpenThreadStore.getState().setRail(SEARCH_BOT_A, memory);
+    useBotOpenThreadStore
+      .getState()
+      .setRail(SEARCH_BOT_A, memory, currentBotLifetime());
 
     openBotSearch(SEARCH_BOT_A, ALL, "ship");
     closeBotSearch(SEARCH_BOT_A);
@@ -422,7 +447,11 @@ describe("a result on its way to the channel or thread that shows it", () => {
   it("moves the search to the other bot's rail, and gives the bot it left its thread back", () => {
     useBotOpenThreadStore
       .getState()
-      .setRail(SEARCH_BOT_A, { kind: "thread", ...OPEN_THREAD });
+      .setRail(
+        SEARCH_BOT_A,
+        { kind: "thread", ...OPEN_THREAD },
+        currentBotLifetime(),
+      );
     openBotSearch(SEARCH_BOT_A, ALL, "ship");
 
     const moved = jumpToBotSearchHit(
@@ -447,7 +476,9 @@ describe("a result on its way to the channel or thread that shows it", () => {
       ...OPEN_THREAD,
       anchorMessageId: "post-in-b",
     };
-    useBotOpenThreadStore.getState().setRail(SEARCH_BOT_B, threadInB);
+    useBotOpenThreadStore
+      .getState()
+      .setRail(SEARCH_BOT_B, threadInB, currentBotLifetime());
     openBotSearch(SEARCH_BOT_A, ALL, "ship");
 
     jumpToBotSearchHit(SEARCH_BOT_A, searchHit({ botId: SEARCH_BOT_B }), false);

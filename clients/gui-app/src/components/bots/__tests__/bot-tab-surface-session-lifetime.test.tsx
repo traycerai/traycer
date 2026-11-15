@@ -421,6 +421,7 @@ import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isHistoryEntryDead } from "@/lib/history-navigation/liveness";
 import { isHistoryEntryEligible } from "@/lib/history-navigation/eligibility";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 /** The trunk's turn behind a reply in the channel. */
 const REPLY_TURN: BotTurnRef = {
@@ -613,7 +614,9 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     } as const;
 
     beforeEach(() => {
-      useBotOpenThreadStore.getState().setRail(BOT_ID, OTHER_THREAD_RAIL);
+      useBotOpenThreadStore
+        .getState()
+        .setRail(BOT_ID, OTHER_THREAD_RAIL, currentBotLifetime());
       useBotTabLandingStore.setState({ byBotId: {} });
     });
 
@@ -743,7 +746,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expect(useBotTabLandingStore.getState().byBotId).toEqual({});
 
       // The person closes the thread; rendering again does not reopen it.
-      act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+      act(() =>
+        useBotOpenThreadStore
+          .getState()
+          .setRail(BOT_ID, null, currentBotLifetime()),
+      );
       rerender(surface());
       expect(
         screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
@@ -1990,15 +1997,23 @@ describe("<BotTabSurface /> a history step never lands on a message again", () =
       expect(channel.getAttribute("data-land-on")).toBe("thread-reply-9");
       expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
 
-      act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
       act(() =>
-        useBotOpenThreadStore.getState().setRail(BOT_ID, {
-          kind: "thread",
-          anchorMessageId: "post-7",
-          announcement: false,
-          anchorKind: null,
-          sent: null,
-        }),
+        useBotOpenThreadStore
+          .getState()
+          .setRail(BOT_ID, null, currentBotLifetime()),
+      );
+      act(() =>
+        useBotOpenThreadStore.getState().setRail(
+          BOT_ID,
+          {
+            kind: "thread",
+            anchorMessageId: "post-7",
+            announcement: false,
+            anchorKind: null,
+            sent: null,
+          },
+          currentBotLifetime(),
+        ),
       );
 
       const reopened = screen.getByTestId("stub-channel");

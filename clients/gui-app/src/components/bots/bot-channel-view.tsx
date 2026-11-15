@@ -100,6 +100,8 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import { currentBotLifetime, useBotLifetime } from "@/lib/bots/bot-lifetime";
+import { useBotSentAs } from "@/lib/bots/bot-sent-as";
 import { useBotSurfaceCards } from "@/hooks/bots/use-bot-surface-cards";
 import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
 import { threadParticipants } from "@/components/bots/bot-thread-participants";
@@ -299,6 +301,12 @@ export function BotChannelView(props: {
    * anchors the list names hold for this binding only.
    */
   readonly boundHostEpoch: number;
+  /**
+   * Reads the bot again: a host refused a member's send because the bot is no
+   * longer bound where this view read it, and the next send is made for the
+   * binding read then.
+   */
+  readonly onBindingMoved: () => void;
   readonly botTitle: string;
   /**
    * Where the bot answers a post, as its record says: in the post's thread,
@@ -362,6 +370,7 @@ export function BotChannelView(props: {
     hostId,
     boundHostId,
     boundHostEpoch,
+    onBindingMoved,
     botTitle,
     replyMode,
     directive,
@@ -439,6 +448,7 @@ export function BotChannelView(props: {
     mutateAsync: sendAsync,
     isPending: sending,
   } = useBotConversationSendMutation(client);
+  const sentAs = useBotSentAs();
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
   const chooseOption = useCallback(
@@ -447,19 +457,27 @@ export function BotChannelView(props: {
       clearSendFailure();
       send(
         {
-          botId,
-          conversationId: channelId,
-          text: choice,
-          threadId: null,
-          announcementId: null,
-          redeliver: null,
-          supersedes: null,
-          answer: null,
+          request: {
+            botId,
+            conversationId: channelId,
+            text: choice,
+            threadId: null,
+            announcementId: null,
+            redeliver: null,
+            supersedes: null,
+            answer: null,
+          },
+          sentAs,
         },
-        { onError: () => failSend(null) },
+        {
+          onError: () => {
+            if (sentAs.lifetime !== currentBotLifetime()) return;
+            failSend(null);
+          },
+        },
       );
     },
-    [botId, channelId, clearSendFailure, failSend, send],
+    [botId, channelId, clearSendFailure, failSend, send, sentAs],
   );
   // A question card's answer or Skip, on a question the bot asked at the
   // channel's top level: the person's message goes to the bot itself and
@@ -478,39 +496,45 @@ export function BotChannelView(props: {
       if (channelId === null) return;
       clearSendFailure();
       await sendAsync({
-        botId,
-        conversationId: channelId,
-        text: given.text,
-        threadId: null,
-        announcementId: null,
-        redeliver: null,
-        supersedes: null,
-        answer: {
-          questionMessageId,
-          questionIndex: given.questionIndex,
-          skipped: given.skipped,
+        request: {
+          botId,
+          conversationId: channelId,
+          text: given.text,
+          threadId: null,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: {
+            questionMessageId,
+            questionIndex: given.questionIndex,
+            skipped: given.skipped,
+          },
         },
+        sentAs,
       });
     },
-    [botId, channelId, clearSendFailure, sendAsync],
+    [botId, channelId, clearSendFailure, sendAsync, sentAs],
   );
   const answerQuestions = useCallback<QuestionAnswersSend>(
     async (questionMessageId, given) => {
       if (channelId === null) return;
       clearSendFailure();
       await sendAsync({
-        botId,
-        conversationId: channelId,
-        text: given.text,
-        threadId: null,
-        announcementId: null,
-        redeliver: null,
-        supersedes: null,
-        answer: null,
-        answers: { questionMessageId, entries: answerEntries(given) },
+        request: {
+          botId,
+          conversationId: channelId,
+          text: given.text,
+          threadId: null,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: null,
+          answers: { questionMessageId, entries: answerEntries(given) },
+        },
+        sentAs,
       });
     },
-    [botId, channelId, clearSendFailure, sendAsync],
+    [botId, channelId, clearSendFailure, sendAsync, sentAs],
   );
 
   // A post the bot failed to answer, in a thread or at the top level, is
@@ -609,12 +633,23 @@ export function BotChannelView(props: {
   const closeThreadOpenedAtSend = useCallback(
     (start: BotPendingSendStart) => {
       if (!openedAtSend.current.delete(start.requestId)) return;
-      settleSentThread(botId, start.requestId, { kind: "refused" });
+      settleSentThread(
+        botId,
+        start.requestId,
+        { kind: "refused" },
+        start.sentAs.lifetime,
+      );
     },
     [botId],
   );
+  // What a member's send from the channel is made for, and a held one is
+  // offered again under.
+  const sendBinding = useMemo(
+    () => ({ hostId, boundHostId, boundHostEpoch, onMoved: onBindingMoved }),
+    [boundHostEpoch, boundHostId, hostId, onBindingMoved],
+  );
   const channelPending = useBotComposerPending({
-    hostId,
+    binding: sendBinding,
     onStart: openThreadAtSend,
     onRefused: closeThreadOpenedAtSend,
   });
@@ -628,13 +663,19 @@ export function BotChannelView(props: {
       response: BotConversationSendResponse,
       text: string,
       content: JsonContent,
+      lifetime: number,
     ): boolean => {
       if (openedAtSend.current.delete(response.requestId)) {
-        return settleSentThread(botId, response.requestId, {
-          kind: "answered",
-          threadId: response.threadId,
-          delivery: response.delivery,
-        });
+        return settleSentThread(
+          botId,
+          response.requestId,
+          {
+            kind: "answered",
+            threadId: response.threadId,
+            delivery: response.delivery,
+          },
+          lifetime,
+        );
       }
       if (response.threadId === null || !threadListSupported) return false;
       onOpenThread({
@@ -984,6 +1025,7 @@ export function BotChannelView(props: {
                     header={null}
                     landOn={landing}
                     flow={null}
+                    sendBinding={sendBinding}
                   />
                 </BotExchangeLinesContext>
               </div>
@@ -1080,6 +1122,8 @@ export function BotChannelView(props: {
                       botId={botId}
                       hostId={hostId}
                       boundHostId={boundHostId}
+                      boundHostEpoch={boundHostEpoch}
+                      onBindingMoved={onBindingMoved}
                       botTitle={botTitle}
                       imageReach={imageReach}
                       answerReach={answerReach}
@@ -1397,6 +1441,7 @@ function useChannelSearch(args: {
   const threadsFailed = args.threadList.isError;
   const rail = useBotRail(botId);
   const open = rail?.kind === "search" ? rail : null;
+  const lifetime = useBotLifetime();
   const jump = useBotSearchStore((state) =>
     state.jump?.botId === botId ? state.jump : null,
   );
@@ -1417,11 +1462,11 @@ function useChannelSearch(args: {
         visit: (previous?.visit ?? 0) + 1,
       }));
       if (channelHiddenBesideRail(section, tiles)) {
-        setRail(botId, {
-          kind: "search",
-          back: open.back,
-          showing: { kind: "channel" },
-        });
+        setRail(
+          botId,
+          { kind: "search", back: open.back, showing: { kind: "channel" } },
+          lifetime,
+        );
       }
       return;
     }
@@ -1433,20 +1478,34 @@ function useChannelSearch(args: {
       return;
     }
     search.landThread(anchor.messageId, jump);
-    setRail(botId, {
-      kind: "search",
-      back: open.back,
-      showing: {
-        kind: "thread",
-        thread: {
-          anchorMessageId: anchor.messageId,
-          announcement: false,
-          anchorKind: null,
-          sent: null,
+    setRail(
+      botId,
+      {
+        kind: "search",
+        back: open.back,
+        showing: {
+          kind: "thread",
+          thread: {
+            anchorMessageId: anchor.messageId,
+            announcement: false,
+            anchorKind: null,
+            sent: null,
+          },
         },
       },
-    });
-  }, [botId, jump, open, section, setLanding, threads, threadsFailed, tiles]);
+      lifetime,
+    );
+  }, [
+    botId,
+    jump,
+    lifetime,
+    open,
+    section,
+    setLanding,
+    threads,
+    threadsFailed,
+    tiles,
+  ]);
   const showing = open?.showing.kind ?? null;
   return {
     railOpen: args.railHeld || showing === "results",

@@ -70,6 +70,7 @@ import {
 } from "@/stores/bots/bot-open-thread-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
@@ -236,7 +237,7 @@ function mountChannel(rail: BotOpenThread | null): void {
   if (rail !== null) {
     useBotOpenThreadStore
       .getState()
-      .setRail(BOT_ID, { kind: "thread", ...rail });
+      .setRail(BOT_ID, { kind: "thread", ...rail }, currentBotLifetime());
   }
   render(<MountedChannel />);
 }

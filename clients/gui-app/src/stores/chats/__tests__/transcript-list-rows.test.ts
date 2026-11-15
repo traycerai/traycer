@@ -31,6 +31,8 @@ import {
   type TranscriptListRow,
 } from "@/stores/chats/transcript-list-rows";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 /*
  * A counting PASSTHROUGH, not a stub: every test in this file still runs the
  * real projection, so nothing here relocates the invariant into a fake. The
@@ -358,6 +360,7 @@ describe("transcriptListRows", () => {
       statusLabel: "Completed" as const,
     };
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -391,6 +394,7 @@ describe("transcriptListRows", () => {
     };
     const setupRowId = "setup-card:chat-1:3:2";
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -431,6 +435,7 @@ describe("transcriptListRows", () => {
     const firstRowId = "setup-card:chat-1:2:2";
     const secondRowId = "setup-card:chat-1:3:2";
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -463,6 +468,7 @@ describe("transcriptListRows", () => {
     // its own ordinal - appending it as an unplaced row draws it twice, once
     // out of order at the end and once as the placeholder still standing.
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 4,
@@ -487,6 +493,7 @@ describe("transcriptListRows", () => {
     // The other side of the same guard: a live/pending record has no skeleton
     // entry, and must keep landing after every ordinal.
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -527,6 +534,7 @@ describe("transcriptListRows", () => {
     };
     const projectedRowId = assistantRowId(turnId);
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -570,6 +578,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -592,6 +601,7 @@ describe("transcriptListRows", () => {
     const rendered = [model("a"), model("b")];
 
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: null,
       rendered,
       splitLongTurns: true,
@@ -603,6 +613,7 @@ describe("transcriptListRows", () => {
 
   it("fills unhydrated ordinals with placeholders so the list is rowCount long", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 5,
@@ -629,6 +640,7 @@ describe("transcriptListRows", () => {
     // would fail here, drop `r-1` through to the tail, and render it twice -
     // once as content at the bottom and once as a placeholder at ordinal 1.
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
@@ -646,6 +658,7 @@ describe("transcriptListRows", () => {
 
   it("keys a placeholder on its skeleton rowId, or on the ordinal while it is a hole", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -666,6 +679,7 @@ describe("transcriptListRows", () => {
   it("changes a row's kind when it hydrates, which no comparator can look past", () => {
     const skeleton = [skeletonEntry("r-0")];
     const before = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -677,6 +691,7 @@ describe("transcriptListRows", () => {
       rendered: [],
     });
     const after = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -697,6 +712,7 @@ describe("transcriptListRows", () => {
 
   it("puts rows that own no ordinal after every ordinal", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -715,6 +731,7 @@ describe("transcriptListRows", () => {
 
   it("keeps the ordinal space mounted when the index is void", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 9,
@@ -744,6 +761,7 @@ describe("transcriptListRows", () => {
 
   it("does not expose a known nonempty void as an empty chat", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 5_000,
@@ -766,6 +784,7 @@ describe("transcriptListRows", () => {
   it("does not append a span-backed synthetic row after void placeholders", () => {
     const syntheticId = "forked-chat-link:event-1";
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -804,6 +823,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -824,6 +844,7 @@ describe("transcriptListRows", () => {
 
   it("keeps a genuinely pending null-record row after void placeholders", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -862,7 +883,12 @@ describe("transcriptListRows", () => {
     });
     const rendered = [model("u-1"), model("a-1"), model("u-2")];
     const drawn = kinds(
-      transcriptListRows({ window: before, rendered, splitLongTurns: true }),
+      transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
+        window: before,
+        rendered,
+        splitLongTurns: true,
+      }),
     );
     expect(drawn).toEqual(["H:u-1", "H:a-1", "H:u-2"]);
 
@@ -879,7 +905,12 @@ describe("transcriptListRows", () => {
     // never remounts a row it had already measured.
     expect(
       kinds(
-        transcriptListRows({ window: voided, rendered, splitLongTurns: true }),
+        transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
+          window: voided,
+          rendered,
+          splitLongTurns: true,
+        }),
       ),
     ).toEqual(drawn);
   });
@@ -921,6 +952,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -989,6 +1021,7 @@ describe("transcriptListRows", () => {
       messages: [steeredUser],
     };
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -1037,6 +1070,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -1085,6 +1119,7 @@ describe("transcriptListRows", () => {
       imageResolutions: [],
     };
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -1103,6 +1138,7 @@ describe("transcriptListRows", () => {
   it("does not append a synthetic row from an unresolved tail span", () => {
     const syntheticId = "forked-chat-link:event-unresolved";
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -1126,11 +1162,13 @@ describe("transcriptListRows", () => {
       invalidated: true,
     });
     const first = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window,
       rendered: [],
       splitLongTurns: true,
     });
     const streamed = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window,
       rendered: [pendingModel("pending-user")],
@@ -1142,6 +1180,7 @@ describe("transcriptListRows", () => {
 
   it("drops a span row that claims an ordinal past rowCount", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -1168,6 +1207,7 @@ describe("transcriptListRows", () => {
     // recently demoted. Suppressing it here is how an active row disappears
     // until replacement hydration arrives.
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -1189,6 +1229,7 @@ describe("transcriptListRows", () => {
     // placeholder rather than being published at the tail, a position it
     // never had.
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -1217,6 +1258,7 @@ describe("transcriptListRows", () => {
     // ids - `withholds a sibling slice of a stale-held record from the live
     // tail` is that case, and it must keep its placeholder.
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -1257,6 +1299,7 @@ describe("transcriptListRows", () => {
     };
     const newer: SpanFixture = { ...span(4, ["dup"]), servedAt: 9 };
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 6,
@@ -1291,6 +1334,7 @@ describe("transcriptListRows", () => {
     // no record. Both id channels therefore miss, and pre-rebase steer content
     // is published at the live tail - a position it never had.
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -1333,6 +1377,7 @@ describe("transcriptListRows", () => {
     vi.mocked(projectTranscriptRows).mockClear();
 
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -1368,6 +1413,7 @@ describe("transcriptListRows", () => {
     // at the tail instead of hiding it until replacement hydration arrives.
     const streaming = steeredAssistant("turn-steered", "q-1");
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -1502,6 +1548,7 @@ describe("transcriptListRows", () => {
     const part0Id = assistantSliceRowId(turnId, 0, true);
     const part1Id = assistantSliceRowId(turnId, 1, true);
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         spans: [],
@@ -1578,6 +1625,7 @@ describe("transcriptListRows", () => {
     const secondSteer = queueSteerRowId(secondQueueId);
 
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 5,
@@ -1632,6 +1680,7 @@ describe("transcriptListRows", () => {
     const steerId = queueSteerRowId(queueItemId);
 
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
@@ -1746,6 +1795,7 @@ describe("transcriptListRows", () => {
     const part0Id = assistantSliceRowId(turnId, 0, true);
     const part1Id = assistantSliceRowId(turnId, 1, true);
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
@@ -1863,6 +1913,7 @@ describe("transcriptListRows", () => {
 
     const assistantId = assistantRowId(turnId);
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
@@ -1907,6 +1958,7 @@ describe("Codex retry row suppression", () => {
     const steer = queueSteerRowId("queue-retry-sparse");
     const part1 = assistantSliceRowId("turn-retry-sparse", 1, true);
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
@@ -1947,6 +1999,7 @@ describe("tier-parameterized backing", () => {
     // placeholder instead of ever drawing.
     const pendingRowId = "pending-named-in-skeleton";
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -1988,6 +2041,7 @@ describe("tier-parameterized backing", () => {
     };
     const setupRowId = "setup-card:chat-1:0:2";
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -2016,6 +2070,7 @@ describe("tier-parameterized backing", () => {
     // backs" pins, with a Pending model added alongside to show the tier
     // boundary does not swallow it too.
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 2,
@@ -2078,6 +2133,7 @@ describe("tier-parameterized backing", () => {
     };
     const steerRowId = queueSteerRowId("queue-seated");
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 1,
@@ -2213,6 +2269,7 @@ describe("the carried skeleton through a void", () => {
     const pending = pendingModel("pending-send");
     const before = opened(ids);
     const beforeRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: before,
       rendered: [pending],
@@ -2223,6 +2280,7 @@ describe("the carried skeleton through a void", () => {
     const voided = reindexed(before, 2, 7);
     expect(voided.invalidated).toBe(true);
     const voidRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: voided,
       rendered: [pending],
@@ -2242,6 +2300,7 @@ describe("the carried skeleton through a void", () => {
 
     const partial = chunk(voided, 0, heterogeneous(["r-0", "r-1"]), false);
     const partialRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: partial,
       rendered: [pending],
@@ -2256,6 +2315,7 @@ describe("the carried skeleton through a void", () => {
     const snapshotted = snapshot(partial, 2, 7);
     expect(snapshotted.invalidated).toBe(false);
     const snapshotRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: snapshotted,
       rendered: [pending],
@@ -2281,6 +2341,7 @@ describe("the carried skeleton through a void", () => {
     );
     const hydratedModels = [model("r-0"), model("r-1"), pending];
     const rangeRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: ranged,
       rendered: hydratedModels,
@@ -2296,6 +2357,7 @@ describe("the carried skeleton through a void", () => {
       false,
     );
     const restreamRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: restreaming,
       rendered: hydratedModels,
@@ -2316,6 +2378,7 @@ describe("the carried skeleton through a void", () => {
     );
     expect(complete.skeletonComplete).toBe(true);
     const completeRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: complete,
       rendered: hydratedModels,
@@ -2351,6 +2414,7 @@ describe("the carried skeleton through a void", () => {
     expect(shifted.invalidated).toBe(true);
 
     const shiftedRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: shifted,
       rendered: [],
       splitLongTurns: true,
@@ -2374,6 +2438,7 @@ describe("the carried skeleton through a void", () => {
     // until the chunk naming it arrives.
     const complete = chunk(shifted, 2, heterogeneous(["b", "c", "d"]), true);
     const completeRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: complete,
       rendered: [],
       splitLongTurns: true,
@@ -2388,6 +2453,7 @@ describe("the carried skeleton through a void", () => {
     expect(
       keys(
         transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: voided,
           rendered: [],
           splitLongTurns: true,
@@ -2399,6 +2465,7 @@ describe("the carried skeleton through a void", () => {
     expect(
       keys(
         transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: partial,
           rendered: [],
           splitLongTurns: true,
@@ -2411,6 +2478,7 @@ describe("the carried skeleton through a void", () => {
     expect(
       keys(
         transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: complete,
           rendered: [],
           splitLongTurns: true,
@@ -2425,6 +2493,7 @@ describe("the carried skeleton through a void", () => {
     expect(
       keys(
         transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: second,
           rendered: [],
           splitLongTurns: true,
@@ -2440,6 +2509,7 @@ describe("the carried skeleton through a void", () => {
     expect(
       keys(
         transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: second,
           rendered: [],
           splitLongTurns: true,
@@ -2452,6 +2522,7 @@ describe("the carried skeleton through a void", () => {
     const zeroed = reindexed(opened(["a", "b"]), 2, 0);
     expect(
       transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
         window: zeroed,
         rendered: [],
         splitLongTurns: true,
@@ -2462,6 +2533,7 @@ describe("the carried skeleton through a void", () => {
     expect(
       keys(
         transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: refilled,
           rendered: [],
           splitLongTurns: true,
@@ -2472,6 +2544,7 @@ describe("the carried skeleton through a void", () => {
 
   it("keeps a hole in the carry an unplaced key", () => {
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
@@ -2502,6 +2575,7 @@ describe("the carried skeleton through a void", () => {
     const steerId = queueSteerRowId(queueItemId);
 
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: windowOf({
         rowCount: 3,
@@ -2558,6 +2632,7 @@ describe("the carried skeleton through a void", () => {
     const voided = reindexed(before, 2, 3);
     expect(voided.liveMessages).toEqual([transient]);
     const voidRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: voided,
       rendered,
       splitLongTurns: true,
@@ -2572,6 +2647,7 @@ describe("the carried skeleton through a void", () => {
 
     // The same through the normal merge once the snapshot clears the void.
     const snapshotRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: snapshot(voided, 2, 3),
       rendered,
@@ -2598,6 +2674,7 @@ describe("the carried skeleton through a void", () => {
     ]);
     // Before the void, the authoritative tier holds the same two copies.
     const restreamRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       splitLongTurns: true,
       window: restreaming,
       rendered: [],
@@ -2612,6 +2689,7 @@ describe("the carried skeleton through a void", () => {
     expect(voided.carriedSkeleton).toBe(restreaming.skeleton);
 
     const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: voided,
       rendered: [],
       splitLongTurns: true,
@@ -2626,12 +2704,14 @@ describe("the carried skeleton through a void", () => {
   it("reuses carried row objects across chunks that do not name them", () => {
     const voided = reindexed(opened(["a", "b", "c"]), 2, 3);
     const voidRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: voided,
       rendered: [],
       splitLongTurns: true,
     });
     const partial = chunk(voided, 0, heterogeneous(["a"]), false);
     const partialRows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: partial,
       rendered: [],
       splitLongTurns: true,
@@ -2642,6 +2722,7 @@ describe("the carried skeleton through a void", () => {
     // And across streaming renders of one window.
     expect(
       transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
         splitLongTurns: true,
         window: partial,
         rendered: [pendingModel("pending-user")],
@@ -2652,6 +2733,7 @@ describe("the carried skeleton through a void", () => {
 
 describe("visibleOrdinalRange", () => {
   const rows = transcriptListRows({
+    pendingOwnedRowIds: NO_PENDING_ROWS,
     splitLongTurns: true,
     window: windowOf({
       rowCount: 4,
@@ -2713,7 +2795,12 @@ describe("visibleOrdinalRange", () => {
       invalidated: false,
     });
     const expand = (message: ChatMessageModel): readonly TranscriptListRow[] =>
-      transcriptListRows({ window, rendered: [message], splitLongTurns: true });
+      transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
+        window,
+        rendered: [message],
+        splitLongTurns: true,
+      });
     const firstRows = expand(firstMessage);
     const firstParts = firstRows.filter(
       (row): row is Extract<TranscriptListRow, { kind: "hydrated" }> =>
@@ -2757,6 +2844,7 @@ describe("visibleOrdinalRange", () => {
     ).toEqual([...grownKeys, `${turnId}#text-2`]);
 
     const unsplit = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window,
       rendered: [firstMessage],
       splitLongTurns: false,
@@ -2767,5 +2855,137 @@ describe("visibleOrdinalRange", () => {
     expect(unsplit.map((row) => ({ key: row.key, part: row.part }))).toEqual([
       { key: turnId, part: null },
     ]);
+  });
+});
+
+/**
+ * A member's own send, drawn while its host has not answered (Tracy Bots
+ * T249): the chat adds its row after the session's, under the id the host will
+ * store it as. The skeleton starts naming that id at ordinal N the moment the
+ * host appends the row, before any span, live record or stale span carries
+ * the body, so nothing but the caller knows the model is the client's own.
+ * The ids it drew arrive as `pendingOwnedRowIds`.
+ */
+describe("a member's own pending send the skeleton names before its body", () => {
+  const SEND_ID = "conversation-request:own-send";
+
+  /** The row the chat drew for the send: a plain user row, no status. */
+  function ownSend(id: string): ChatMessageModel {
+    return {
+      ...model(id),
+      role: "user",
+      content: "the member's own words",
+      persistentMessageId: id,
+    };
+  }
+
+  function userRecord(id: string): Message {
+    return {
+      role: "user",
+      messageId: id,
+      sender: { type: "user", userId: "user-member" },
+      message: {
+        kind: "user",
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "the member's own words" }],
+            },
+          ],
+        },
+        browserAnnotations: [],
+      },
+      timestamp: 1000,
+      sessionAnchor: null,
+    };
+  }
+
+  /** The skeleton names the send at ordinal 0 and nothing holds its body. */
+  function namedAtZero(
+    rowIds: readonly string[],
+    spans: readonly SpanFixture[],
+  ): TranscriptWindow {
+    return windowOf({
+      rowCount: rowIds.length,
+      spans,
+      skeleton: rowIds.map((rowId) => skeletonEntry(rowId)),
+      skeletonComplete: true,
+      invalidated: false,
+    });
+  }
+
+  it("draws the send at the ordinal the skeleton names, as one hydrated row holding its own model", () => {
+    const rows = transcriptListRows({
+      pendingOwnedRowIds: new Set([SEND_ID]),
+      splitLongTurns: false,
+      window: namedAtZero([SEND_ID], []),
+      rendered: [ownSend(SEND_ID)],
+    });
+
+    expect(
+      kinds(rows),
+      "ordinal 0 drew a placeholder: the member's send turned into a skeleton",
+    ).toEqual([`H:${SEND_ID}`]);
+    expect(rows[0].ordinal).toBe(0);
+    expect(rows[0].kind === "hydrated" && rows[0].model.content).toBe(
+      "the member's own words",
+    );
+  });
+
+  it("GUARD: a rendered model the skeleton names, outside the set and backed by nothing, stays a placeholder: no model is inferred", () => {
+    const rows = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
+      splitLongTurns: false,
+      window: namedAtZero([SEND_ID], []),
+      rendered: [ownSend(SEND_ID)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
+  });
+
+  it("GUARD: a span seats the send's own row at a later ordinal than the stale skeleton names: it is drawn once, there", () => {
+    const rows = transcriptListRows({
+      pendingOwnedRowIds: new Set([SEND_ID]),
+      splitLongTurns: false,
+      window: namedAtZero(
+        [SEND_ID, "later"],
+        [{ ...span(1, [SEND_ID]), messages: [userRecord(SEND_ID)] }],
+      ),
+      rendered: [ownSend(SEND_ID)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${SEND_ID}`]);
+    expect(rows.map((row) => row.ordinal)).toEqual([0, 1]);
+  });
+
+  it("GUARD: a span seats another row at the ordinal the skeleton names for the send: the other row is drawn, the send is not drawn over it", () => {
+    const rows = transcriptListRows({
+      pendingOwnedRowIds: new Set([SEND_ID]),
+      splitLongTurns: false,
+      window: namedAtZero(
+        [SEND_ID],
+        [{ ...span(0, ["other"]), messages: [userRecord("other")] }],
+      ),
+      rendered: [ownSend(SEND_ID), ownSend("other")],
+    });
+
+    expect(kinds(rows)).toEqual(["H:other"]);
+    expect(rows[0].ordinal).toBe(0);
+  });
+
+  it("GUARD: a span names a row the renderer withheld at the ordinal the skeleton names for the send: nothing is drawn at it", () => {
+    const rows = transcriptListRows({
+      pendingOwnedRowIds: new Set([SEND_ID]),
+      splitLongTurns: false,
+      window: namedAtZero(
+        [SEND_ID],
+        [{ ...span(0, ["withheld"]), messages: [userRecord("withheld")] }],
+      ),
+      rendered: [ownSend(SEND_ID)],
+    });
+
+    expect(kinds(rows)).toEqual([]);
   });
 });

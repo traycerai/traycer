@@ -48,6 +48,9 @@ import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import { useBotSentAs } from "@/lib/bots/bot-sent-as";
 import {
   failedOn,
   failedOnRequest,
@@ -98,7 +101,10 @@ import {
   type BotSentPost,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotComposerPending } from "@/hooks/bots/use-bot-composer-pending";
-import type { BotPendingSendStart } from "@/lib/bots/bot-pending-send";
+import type {
+  BotPendingSendStart,
+  BotSendBinding,
+} from "@/lib/bots/bot-pending-send";
 import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
 import {
@@ -203,6 +209,10 @@ export function BotThreadPanel(props: {
   readonly hostId: string;
   /** The host that runs the bot, where a signed-out provider is signed in again; `null` when none does. */
   readonly boundHostId: string | null;
+  /** The bot's epoch on that host: a send from the panel is made for this binding. */
+  readonly boundHostEpoch: number;
+  /** Reads the bot again, once a host refused a send because the binding moved. */
+  readonly onBindingMoved: () => void;
   /** What the panel's box does with images. */
   readonly imageReach: BotImageReach;
   /** How a question card's answers reach the bot. */
@@ -355,6 +365,8 @@ type ThreadPanelBodyProps = {
   readonly botId: string;
   readonly hostId: string;
   readonly boundHostId: string | null;
+  readonly boundHostEpoch: number;
+  readonly onBindingMoved: () => void;
   readonly imageReach: BotImageReach;
   readonly answerReach: BotAnswerReach;
   readonly replyReach: BotReplyReach;
@@ -797,39 +809,66 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
       ) {
         return;
       }
-      openSentThread(botId, originMessageId, {
-        threadId: start.threadId,
-        requestId: start.requestId,
-        text: start.text,
-        content: start.content,
-        senderUserId: start.senderUserId,
-        sentAt: start.sentAt,
-        // Nothing is said under the row until the host answers.
-        delivery: "written",
-        provisional: true,
-      });
+      openSentThread(
+        botId,
+        originMessageId,
+        {
+          threadId: start.threadId,
+          requestId: start.requestId,
+          text: start.text,
+          content: start.content,
+          senderUserId: start.senderUserId,
+          sentAt: start.sentAt,
+          // Nothing is said under the row until the host answers.
+          delivery: "written",
+          provisional: true,
+        },
+        start.sentAs.lifetime,
+      );
     },
     [botId, originMessageId],
   );
   const closeRepliedThread = useCallback(
     (start: BotPendingSendStart) => {
-      settleSentThread(botId, start.requestId, { kind: "refused" });
+      settleSentThread(
+        botId,
+        start.requestId,
+        { kind: "refused" },
+        start.sentAs.lifetime,
+      );
     },
     [botId],
   );
   const settleRepliedThread = useCallback(
-    (response: BotConversationSendResponse): boolean => {
-      settleSentThread(botId, response.requestId, {
-        kind: "answered",
-        threadId: response.threadId,
-        delivery: response.delivery,
-      });
+    (
+      response: BotConversationSendResponse,
+      _text: string,
+      _content: JsonContent,
+      lifetime: number,
+    ): boolean => {
+      settleSentThread(
+        botId,
+        response.requestId,
+        {
+          kind: "answered",
+          threadId: response.threadId,
+          delivery: response.delivery,
+        },
+        lifetime,
+      );
       return keepOpenThread();
     },
     [botId],
   );
+  const { hostId, boundHostId, boundHostEpoch, onBindingMoved } = props;
+  // What a reply from the box is made for, and a held one is offered again
+  // under.
+  const sendBinding = useMemo(
+    () => ({ hostId, boundHostId, boundHostEpoch, onMoved: onBindingMoved }),
+    [boundHostEpoch, boundHostId, hostId, onBindingMoved],
+  );
   const pending = useBotComposerPending({
-    hostId: props.hostId,
+    binding: sendBinding,
     onStart: openRepliedThread,
     onRefused: closeRepliedThread,
   });
@@ -855,6 +894,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         <KnownThread
           {...props}
           origin={origin}
+          sendBinding={sendBinding}
           threadId={box.threadId}
           conversationId={box.conversationId}
           listed={thread.kind === "listed" ? thread.thread : null}
@@ -908,16 +948,22 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
  */
 function UnlistedThreadReplies(props: {
   readonly botId: string;
-  readonly hostId: string;
   readonly threadId: string;
+  /** What a held reply is offered again under. */
+  readonly sendBinding: BotSendBinding;
   readonly botTitle: string;
   readonly senderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
 }): ReactNode {
-  const { botId, hostId, threadId, botTitle, senderLabel, resolveMember } =
+  const { botId, threadId, sendBinding, botTitle, senderLabel, resolveMember } =
     props;
-  const held = useHeldPendingSends(botId, threadId, hostId);
-  const pendingSendOf = usePendingSendRows(botId, held, useTabHostClient());
+  const held = useHeldPendingSends(botId, threadId);
+  const pendingSendOf = usePendingSendRows(
+    botId,
+    held,
+    useTabHostClient(),
+    sendBinding,
+  );
   const viewer = useAuthStore((s) => s.profile);
   if (held.length === 0) return null;
   const names = {
@@ -1032,6 +1078,8 @@ function KnownThread(
   props: Omit<ThreadPanelBodyProps, "thread"> & {
     /** The post the thread opens on, as `ThreadOrigin` draws it. */
     readonly origin: ReactNode;
+    /** What a held reply of the thread is offered again under. */
+    readonly sendBinding: BotSendBinding;
     readonly threadId: string;
     readonly listed: BotThreadSummary | null;
     readonly retry: (() => void) | null;
@@ -1044,6 +1092,7 @@ function KnownThread(
 ): ReactNode {
   const {
     origin,
+    sendBinding,
     botId,
     hostId,
     boundHostId,
@@ -1074,6 +1123,7 @@ function KnownThread(
     mutateAsync: sendAsync,
     isPending: sending,
   } = useBotConversationSendMutation(client);
+  const sentAs = useBotSentAs();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
   // The thread's own session answers in it; its running turn is the
   // thread's typing line, and an answer it holds or fails is said on the
@@ -1125,38 +1175,44 @@ function KnownThread(
     async (questionMessageId, given) => {
       clearSendFailure();
       await sendAsync({
-        botId,
-        conversationId,
-        text: given.text,
-        threadId,
-        announcementId: null,
-        redeliver: null,
-        supersedes: null,
-        answer: {
-          questionMessageId,
-          questionIndex: given.questionIndex,
-          skipped: given.skipped,
+        request: {
+          botId,
+          conversationId,
+          text: given.text,
+          threadId,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: {
+            questionMessageId,
+            questionIndex: given.questionIndex,
+            skipped: given.skipped,
+          },
         },
+        sentAs,
       });
     },
-    [botId, clearSendFailure, conversationId, sendAsync, threadId],
+    [botId, clearSendFailure, conversationId, sendAsync, sentAs, threadId],
   );
   const answerQuestions = useCallback<QuestionAnswersSend>(
     async (questionMessageId, given) => {
       clearSendFailure();
       await sendAsync({
-        botId,
-        conversationId,
-        text: given.text,
-        threadId,
-        announcementId: null,
-        redeliver: null,
-        supersedes: null,
-        answer: null,
-        answers: { questionMessageId, entries: answerEntries(given) },
+        request: {
+          botId,
+          conversationId,
+          text: given.text,
+          threadId,
+          announcementId: null,
+          redeliver: null,
+          supersedes: null,
+          answer: null,
+          answers: { questionMessageId, entries: answerEntries(given) },
+        },
+        sentAs,
       });
     },
-    [botId, clearSendFailure, conversationId, sendAsync, threadId],
+    [botId, clearSendFailure, conversationId, sendAsync, sentAs, threadId],
   );
   // A reply's option, clicked, is the person's next message in the thread:
   // offered only while no earlier pick is still being sent and the thread
@@ -1171,16 +1227,24 @@ function KnownThread(
               clearSendFailure();
               send(
                 {
-                  botId,
-                  conversationId,
-                  text: choice,
-                  threadId,
-                  announcementId: null,
-                  redeliver: null,
-                  supersedes: null,
-                  answer: null,
+                  request: {
+                    botId,
+                    conversationId,
+                    text: choice,
+                    threadId,
+                    announcementId: null,
+                    redeliver: null,
+                    supersedes: null,
+                    answer: null,
+                  },
+                  sentAs,
                 },
-                { onError: () => failSend(null) },
+                {
+                  onError: () => {
+                    if (sentAs.lifetime !== currentBotLifetime()) return;
+                    failSend(null);
+                  },
+                },
               );
             },
       reply: sendable ? onReply : null,
@@ -1211,6 +1275,7 @@ function KnownThread(
       send,
       sendable,
       sending,
+      sentAs,
       threadId,
     ],
   );
@@ -1253,8 +1318,8 @@ function KnownThread(
       {listed === null ? (
         <UnlistedThreadReplies
           botId={botId}
-          hostId={hostId}
           threadId={threadId}
+          sendBinding={sendBinding}
           botTitle={botTitle}
           senderLabel={props.anchorSenderLabel}
           resolveMember={resolveMember}
@@ -1283,6 +1348,7 @@ function KnownThread(
             header={listHeader}
             landOn={landOn}
             flow={flow}
+            sendBinding={sendBinding}
           />
         </div>
       )}

@@ -4,6 +4,7 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   useBotTabLandingStore,
   type BotTabLanding,
@@ -264,7 +265,7 @@ export function releaseTracyLanding(
  * unsent outlives the surface (Tracy Bots T158).
  */
 function closeBotState(botId: string): void {
-  useBotOpenThreadStore.getState().setRail(botId, null);
+  useBotOpenThreadStore.getState().setRail(botId, null, currentBotLifetime());
   useTracyPlaceStore.getState().closeBot(botId);
   useBotDraftsStore.getState().closeBot(botId);
   useBotSurfaceActionsStore.getState().forgetBot(botId);

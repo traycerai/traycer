@@ -342,6 +342,17 @@ export const RPC_ERROR_CODES = [
   // drop what it replies to. Nothing was written or queued. Additive, as
   // above.
   "E_BOT_REPLIES_UNSUPPORTED",
+  // `bot.conversation.send` carried a nonce whose request id names a stored
+  // row that is not this send's: another member's, another chat's, or a row
+  // that is no member's request. Nothing was written (`notWritten`), and the
+  // same send is refused again. Additive, as above.
+  "E_BOT_SEND_CONFLICT",
+  // `bot.conversation.send` carried a nonce for a binding (`authority`) that
+  // is no longer the bot's: another host claimed it, or this host did again
+  // under a newer epoch. Nothing was written (`notWritten`); the client gives
+  // the message back to its box, and the next send reads the bot again.
+  // Additive, as above.
+  "E_BOT_AUTHORITY_MOVED",
   // ─── Evicted chats ──────────────────────────────────────────────────────
   //
   // A host dropped a chat's records once the cloud held them, and could not

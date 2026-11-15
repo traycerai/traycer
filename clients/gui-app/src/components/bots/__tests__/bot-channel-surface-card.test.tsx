@@ -540,6 +540,7 @@ function mountChannel(input: {
                 hostId={HOST_ID}
                 boundHostId={HOST_ID}
                 boundHostEpoch={1}
+                onBindingMoved={vi.fn()}
                 botTitle="Release Bot"
                 directive={null}
                 appConversationChatId={CHANNEL_ID}

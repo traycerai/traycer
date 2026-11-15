@@ -307,6 +307,7 @@ function mountTranscript(
             header={null}
             landOn={landing}
             flow={null}
+            sendBinding={null}
           />
         </BotTestRunnerHost>
       </QueryClientProvider>

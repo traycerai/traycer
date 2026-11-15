@@ -108,6 +108,8 @@ function mountPanel(
               botId={BOT_ID}
               hostId={HOST_ID}
               boundHostId={HOST_ID}
+              boundHostEpoch={1}
+              onBindingMoved={vi.fn()}
               imageReach="none"
               answerReach="each"
               replyReach="none"

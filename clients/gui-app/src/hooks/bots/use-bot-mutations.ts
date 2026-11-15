@@ -41,6 +41,11 @@ import {
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import {
+  BotSendAccountMovedError,
+  type BotSentAs,
+} from "@/lib/bots/bot-sent-as";
 
 /**
  * The `bot.*` writes (Tracy Bots). Every hook takes the client that carries the
@@ -208,6 +213,12 @@ interface BotConversationSendContext {
   readonly hostId: string | null;
 }
 
+/** A member's message and who it goes out as, fixed at the press. */
+interface BotConversationSendVariables {
+  readonly request: BotConversationSendRequest;
+  readonly sentAs: BotSentAs;
+}
+
 /**
  * One member's message: a post on the channel (`threadId: null`) or a reply
  * in a thread. Accepted whether or not the bound
@@ -224,6 +235,12 @@ interface BotConversationSendContext {
  * {@link BOT_CONVERSATION_NONCE_VERSION}: the check is on the connection that
  * dispatches it, so the nonce is never dropped for an older host.
  *
+ * A send leaves only as it was pressed (`BotSentAs`): in the bot lifetime it
+ * was pressed in, through a client whose request context is the account that
+ * pressed it. The check runs in the client resolver, in the same synchronous
+ * step as the dispatch, as a call's words do; a send refused there wrote
+ * nothing (`BotSendAccountMovedError`).
+ *
  * A send may change a thread, so the channel's thread list is read again on
  * the host the send went through. So is a card's answers sent together, or a
  * reply, that the bot's host does not take (`E_BOT_ANSWER_SETS_UNSUPPORTED`,
@@ -236,26 +253,38 @@ export function useBotConversationSendMutation(
 ): UseMutationResult<
   BotConversationSendResponse,
   HostRpcError,
-  BotConversationSendRequest,
+  BotConversationSendVariables,
   BotConversationSendContext
 > {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "bot.conversation.send",
-    BotConversationSendContext
+    BotConversationSendContext,
+    BotConversationSendVariables
   >({
-    client,
+    client: ({ sentAs }) => {
+      if (
+        client !== null &&
+        (sentAs.lifetime !== currentBotLifetime() ||
+          sentAs.account === null ||
+          client.getRequestContextUserId() !== sentAs.account)
+      ) {
+        throw new BotSendAccountMovedError();
+      }
+      return client;
+    },
     method: "bot.conversation.send",
-    requiredHostMethodVersion: conversationSendVersion,
-    mapVariables: (variables) => variables,
+    requiredHostMethodVersion: (variables) =>
+      conversationSendVersion(variables.request),
+    mapVariables: (variables) => variables.request,
     options: {
       mutationKey: botMutationKeys.conversationSend(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_response, variables, context) => {
         invalidateAfterConversationSend(
           queryClient,
-          variables.botId,
+          variables.request.botId,
           context.hostId,
         );
       },

@@ -4,9 +4,9 @@
  * either (the derivation, the request field, the error marker), this file is
  * the only one that changes; the suites ask these functions, never the wire.
  *
- * Today: the request carries `sendNonce`; its request id is
- * `botSendRequestId({ botId, conversationId, threadId, announcementId,
- * senderUserId, nonce })`; the stored row is `conversationRequestMessageId` of
+ * Today: the request carries `sendNonce` and the `authority` it was made
+ * for; its request id is `botSendRequestId({ botId, conversationId, threadId,
+ * announcementId, senderUserId, authority, nonce })`; the stored row is `conversationRequestMessageId` of
  * it; a definite refusal is a `HostRpcError` with `notWritten: true`.
  */
 import {
@@ -19,12 +19,20 @@ import {
   plainTextJsonContent,
   withImageParagraph,
 } from "@traycer/protocol/common/plain-text-content";
-import type { BotConversationSendRequest } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendRequest,
+  BotSendAuthority,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import {
   botSendRequestId,
   conversationRequestMessageId,
 } from "@traycer/protocol/persistence/epic/messages";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
+
+/** The row the host stores for a send: one shape both the persisted and the wire message take. */
+type StoredUserRow = Extract<Message, { role: "user" }> &
+  Extract<OpenMessage, { role: "user" }>;
 
 const SEND_METHOD = "bot.conversation.send";
 
@@ -34,6 +42,16 @@ export function sendNonceOf(request: BotConversationSendRequest): string {
     throw new Error("the send carries no sendNonce");
   }
   return request.sendNonce;
+}
+
+/** The binding a nonce request names; a request without one is a test failure. */
+export function authorityOfSend(
+  request: BotConversationSendRequest,
+): BotSendAuthority {
+  if (request.authority === undefined) {
+    throw new Error("the send carries no authority");
+  }
+  return request.authority;
 }
 
 /** The request id the host (and the pending row) derive for `request` from `senderUserId`. */
@@ -47,6 +65,7 @@ export function requestIdOfSend(
     threadId: request.threadId ?? null,
     announcementId: request.announcementId ?? null,
     senderUserId,
+    authority: authorityOfSend(request),
     nonce: sendNonceOf(request),
   });
 }
@@ -78,7 +97,7 @@ export function storedRowOfSend(
   request: BotConversationSendRequest,
   senderUserId: string,
   timestamp: number,
-): Message {
+): StoredUserRow {
   const requestId = requestIdOfSend(request, senderUserId);
   return {
     role: "user",
@@ -125,6 +144,21 @@ export function notWrittenRefusal(message: string): HostRpcError {
     code: "RPC_ERROR",
     message,
     requestId: "request-refused",
+    method: SEND_METHOD,
+    fatalDetails: null,
+    notWritten: true,
+  });
+}
+
+/**
+ * The host refused the send before writing it: the bot is no longer bound
+ * where the request was sent, at the epoch it named (`authority`).
+ */
+export function authorityMovedRefusal(message: string): HostRpcError {
+  return new HostRpcError({
+    code: "E_BOT_AUTHORITY_MOVED",
+    message,
+    requestId: "request-moved",
     method: SEND_METHOD,
     fatalDetails: null,
     notWritten: true,

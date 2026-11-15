@@ -19,6 +19,7 @@ import {
   type BotConversationSendDelivery,
   type BotConversationSendRequest,
   type BotConversationSendResponse,
+  type BotSendAuthority,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -40,12 +41,17 @@ import type {
 } from "@/hooks/bots/use-bot-send-version";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
-import { botSendAttemptOutcome } from "@/lib/bots/bot-send-attempt-outcome";
+import {
+  botSendAttemptOutcome,
+  botSendAuthorityMoved,
+} from "@/lib/bots/bot-send-attempt-outcome";
 import {
   startPendingSend,
   type BotPendingSendStart,
 } from "@/lib/bots/bot-pending-send";
 import { settlePendingSend } from "@/stores/bots/bot-pending-sends-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import { useBotSentAs, type BotSentAs } from "@/lib/bots/bot-sent-as";
 import type {
   BotBoxNotice,
   BotCarriedBlock,
@@ -348,13 +354,16 @@ export function BotMessageComposer(props: {
   readonly notice: BotComposerNotice | null;
   /**
    * The host accepted `text`, what the box sent; not called once the box
-   * is gone. Answers whether the owner says the send's delivery itself, where the
+   * is gone or the bot lifetime it was pressed in has ended. Answers whether
+   * the owner says the send's delivery itself, where the
    * person now looks; the box says it only when it does not.
    */
   readonly onSent: (
     response: BotConversationSendResponse,
     text: string,
     content: JsonContent,
+    /** The bot lifetime the send was pressed in, still the current one. */
+    lifetime: number,
   ) => boolean;
   /**
    * Draws the box's send in its chat at Send (T249); `null` sends as before,
@@ -390,6 +399,8 @@ export function BotMessageComposer(props: {
   const client = useTabHostClient();
   const call = useComposerCall(botId, threadId, announcementId);
   const send = useBotConversationSendMutation(client);
+  // What a send pressed in this render goes out as (`submit`).
+  const sentAs = useBotSentAs();
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const [focused, setFocused] = useState(false);
   const [form, setForm] = useState<HTMLFormElement | null>(null);
@@ -521,6 +532,7 @@ export function BotMessageComposer(props: {
       pending,
       request,
       unsent,
+      sentAs,
       release: () => keptDraft?.carry(unsent.held, "went"),
     });
     // The box empties as the send starts, which drops the draft kept outside
@@ -531,20 +543,33 @@ export function BotMessageComposer(props: {
     setLastDelivery(null);
     if (unsent.supersedes !== null) onEditEnd();
     // Settled through the promise, not `mutate`'s callbacks, which do not
-    // run once the box is gone.
-    send.mutateAsync(started === null ? request : started.request).then(
+    // run once the box is gone. It leaves only as it was pressed, and its
+    // answer is heard only in the bot lifetime it was pressed in: after an
+    // account change it belongs to an account no longer here.
+    const variables = {
+      request: started === null ? request : started.request,
+      sentAs,
+    };
+    send.mutateAsync(variables).then(
       (response) => {
+        if (sentAs.lifetime !== currentBotLifetime()) return;
         if (started === null) keptDraft?.carry(unsent.held, "went");
         else settlePendingSend(started.messageId, "accepted");
         // The send went, so it is reported whatever the box did meanwhile,
         // unless the box is gone; the delivery is said under the box only
         // while it is still empty.
         if (!mountedRef.current) return;
-        const deliverySaid = onSent(response, text, unsent.content);
+        const deliverySaid = onSent(
+          response,
+          text,
+          unsent.content,
+          sentAs.lifetime,
+        );
         if (!emptyRef.current) return;
         setLastDelivery(deliverySaid ? null : response.delivery);
       },
       (error: unknown) => {
+        if (sentAs.lifetime !== currentBotLifetime()) return;
         if (started !== null) {
           // Only a send the host wrote nothing of comes back: one whose
           // row arrived is done, one that may have been written keeps its
@@ -555,6 +580,9 @@ export function BotMessageComposer(props: {
           );
           if (fate !== "refused") return;
           pending?.onRefused(started);
+          // The bot is no longer bound where the box read it: it is read
+          // again, and the next send is made for the binding read then.
+          if (botSendAuthorityMoved(error)) pending?.onAuthorityMoved();
         }
         // Back where the draft is, while nothing newer is there: the box,
         // or the draft kept outside a box that is gone. Else offered back,
@@ -1389,14 +1417,16 @@ function startDrawnSend(input: {
   readonly pending: BotComposerPending | null;
   readonly request: BotConversationSendRequest;
   readonly unsent: BotUnsentMessage;
+  readonly sentAs: BotSentAs;
   readonly release: () => void;
 }): BotPendingSendStart | null {
   const { pending, request, unsent } = input;
   if (pending === null || unsent.supersedes !== null) return null;
   const started = startPendingSend({
     request,
-    hostId: pending.hostId,
+    authority: pending.authority,
     senderUserId: pending.senderUserId,
+    sentAs: input.sentAs,
     text: unsent.text,
     content: unsent.content,
     images:
@@ -1410,19 +1440,26 @@ function startDrawnSend(input: {
 }
 
 /**
- * A box whose send is drawn at Send (T249): where the host serving the tab
- * takes a send's nonce and someone is signed in. The owner hears the send
- * start (`onStart`), with the ids its row and any thread it opens will have,
- * and hears that the host wrote nothing of it (`onRefused`) as its text goes
- * back to the box.
+ * A box whose send is drawn at Send (T249): where the host serving the tab is
+ * the bot's bound host, takes a send's nonce, and someone is signed in. The
+ * owner hears the send start (`onStart`), with the ids its row and any
+ * thread it opens will have, hears that the host wrote nothing of it
+ * (`onRefused`) as its text goes back to the box, and hears when that was
+ * because the bot is no longer bound where the box read it
+ * (`onAuthorityMoved`).
  */
 export type BotComposerPending = {
-  /** The host serving the tab, which takes the send. */
-  readonly hostId: string;
+  /**
+   * The binding the send is made for: the host serving the tab, which is the
+   * bot's bound host, at its epoch.
+   */
+  readonly authority: BotSendAuthority;
   /** Who is signed in, the send's author. */
   readonly senderUserId: string;
   readonly onStart: (start: BotPendingSendStart) => void;
   readonly onRefused: (start: BotPendingSendStart) => void;
+  /** Reads the bot again: the next send is made for the binding read then. */
+  readonly onAuthorityMoved: () => void;
 };
 
 /** Quotes of selections, for the box to add to what it shows. */

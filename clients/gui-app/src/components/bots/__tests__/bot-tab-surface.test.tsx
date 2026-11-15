@@ -434,6 +434,7 @@ import {
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 /** The trunk's turn behind a reply in the channel. */
 const REPLY_TURN: BotTurnRef = {
@@ -1130,13 +1131,17 @@ describe("<BotTabSurface /> bot.open", () => {
 
     it("folds the bots column to the picker and tells the channel two tiles show once a thread is open at a two-tile width", () => {
       shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
-      useBotOpenThreadStore.getState().setRail(BOT_ID, {
-        kind: "thread",
-        anchorMessageId: "post-7",
-        announcement: false,
-        anchorKind: null,
-        sent: null,
-      });
+      useBotOpenThreadStore.getState().setRail(
+        BOT_ID,
+        {
+          kind: "thread",
+          anchorMessageId: "post-7",
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        },
+        currentBotLifetime(),
+      );
       render(surface());
 
       expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
@@ -1161,14 +1166,20 @@ describe("<BotTabSurface /> bot.open", () => {
 
       beforeEach(() => {
         shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
-        useBotOpenThreadStore.getState().setRail(BOT_ID, OPEN_THREAD);
+        useBotOpenThreadStore
+          .getState()
+          .setRail(BOT_ID, OPEN_THREAD, currentBotLifetime());
       });
 
       it("returns to one tile when the thread closes", () => {
         render(surface());
         expect(columnDrawn()).toBe(false);
 
-        act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+        act(() =>
+          useBotOpenThreadStore
+            .getState()
+            .setRail(BOT_ID, null, currentBotLifetime()),
+        );
 
         expect(columnDrawn()).toBe(true);
         expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("1");

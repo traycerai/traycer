@@ -217,9 +217,16 @@ vi.mock("@/components/chat/chat-messages", async () => {
 });
 
 import { botThreadIdFor } from "@traycer/protocol/persistence/epic/messages";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { countedScriptedSession } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  useBotPendingSendsStore,
+  type BotPendingSend,
+} from "@/stores/bots/bot-pending-sends-store";
 import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { BotChannelView } from "@/components/bots/bot-channel-view";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-tab";
@@ -326,7 +333,16 @@ function holdingHostClient(): HostRequester<HostRpcRegistry> {
     messenger,
   });
   spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-1",
+      // The send leaves as the signed-in viewer.
+      identity: {
+        userId: VIEWER_USER_ID,
+        username: "olive",
+        providerHandle: null,
+      },
+    }),
   );
   return spine.createRequester(mockRemoteHostEntry);
 }
@@ -342,6 +358,7 @@ function RailChannel(props: { readonly replyMode: BotReplyMode }): ReactNode {
       hostId={HOST_ID}
       boundHostId={HOST_ID}
       boundHostEpoch={1}
+      onBindingMoved={vi.fn()}
       botTitle="Release Bot"
       replyMode={props.replyMode}
       directive={null}
@@ -362,7 +379,11 @@ function RailChannel(props: { readonly replyMode: BotReplyMode }): ReactNode {
       surfaceActions={null}
       openThread={rail?.kind === "thread" ? rail : null}
       onOpenThread={(open) =>
-        setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
+        setRail(
+          BOT_ID,
+          open === null ? null : { kind: "thread", ...open },
+          currentBotLifetime(),
+        )
       }
       setupHistory={null}
     />
@@ -380,13 +401,18 @@ function signInAs(userId: string): void {
         email: "olive@example.com",
         avatarUrl: null,
       },
+      contextMetadata: { userId, username: "olive" },
     });
   });
 }
 
 function signOutViewer(): void {
   act(() => {
-    useAuthStore.setState({ status: "signed-out", profile: null });
+    useAuthStore.setState({
+      status: "signed-out",
+      profile: null,
+      contextMetadata: null,
+    });
   });
 }
 
@@ -1172,13 +1198,17 @@ function mountOpenThread(announcement: boolean): void {
     store: createChannelStore([]),
   } as ChatSessionStoreHandle;
   act(() => {
-    useBotOpenThreadStore.getState().setRail(BOT_ID, {
-      kind: "thread",
-      anchorMessageId: anchorId,
-      announcement,
-      anchorKind: null,
-      sent: null,
-    });
+    useBotOpenThreadStore.getState().setRail(
+      BOT_ID,
+      {
+        kind: "thread",
+        anchorMessageId: anchorId,
+        announcement,
+        anchorKind: null,
+        sent: null,
+      },
+      currentBotLifetime(),
+    );
   });
 }
 
@@ -1217,26 +1247,34 @@ describe("<BotChannelView /> a pending reply in a thread", () => {
     await waitFor(() => expect(sends).toHaveLength(1));
 
     act(() => {
-      useBotOpenThreadStore.getState().setRail(BOT_ID, {
-        kind: "thread",
-        anchorMessageId: "post-x",
-        announcement: false,
-        anchorKind: null,
-        sent: null,
-      });
+      useBotOpenThreadStore.getState().setRail(
+        BOT_ID,
+        {
+          kind: "thread",
+          anchorMessageId: "post-x",
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        },
+        currentBotLifetime(),
+      );
     });
     expect(
       within(await screen.findByTestId("bot-thread-panel")).queryByText(TEXT),
     ).toBeNull();
 
     act(() => {
-      useBotOpenThreadStore.getState().setRail(BOT_ID, {
-        kind: "thread",
-        anchorMessageId: OWN_POST_ID,
-        announcement: false,
-        anchorKind: null,
-        sent: null,
-      });
+      useBotOpenThreadStore.getState().setRail(
+        BOT_ID,
+        {
+          kind: "thread",
+          anchorMessageId: OWN_POST_ID,
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        },
+        currentBotLifetime(),
+      );
     });
     expect(
       within(await screen.findByTestId("bot-thread-panel")).getAllByText(TEXT),
@@ -1329,5 +1367,177 @@ describe("<BotChannelView /> a pending row that carries an image", () => {
     expect(
       within(stored[0]).getAllByRole("img", { name: "release-train.png" }),
     ).toHaveLength(1);
+  });
+});
+
+/** The host's answer to a subscribe on a channel it has not created yet. */
+const NOT_VISIBLE: FatalErrorDetails = {
+  code: "CHAT_NOT_VISIBLE",
+  reason: "CHAT_NOT_VISIBLE: not visible",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
+
+/** The window over a real session `handle`, as a reload gives. */
+function renderChannelOver(handle: ChatSessionStoreHandle): void {
+  mocks.channelHandle = handle;
+  windowReplyMode = "direct";
+  windowQueryClient = new QueryClient();
+  windowView = render(windowTree(true));
+}
+
+/**
+ * A channel the host has not created yet: the real session store, closed by
+ * its answer `CHAT_NOT_VISIBLE`, which the channel draws as its opening. The
+ * session counts the streams it opens again.
+ */
+async function mountChannelNotCreatedYet() {
+  const session = countedScriptedSession(CHANNEL_ID, []);
+  session.store.setState({
+    snapshotLoaded: false,
+    connectionStatus: "closed",
+    fatalClose: NOT_VISIBLE,
+  });
+  renderChannelOver(session.handle);
+  await findBox();
+  return session;
+}
+
+/** What the page holds, for a failure message that says what was drawn instead. */
+function pageText(): string {
+  return document.body.textContent.slice(0, 400);
+}
+
+function onlyHeldSend(): BotPendingSend[] {
+  return Object.values(useBotPendingSendsStore.getState().entries).filter(
+    (entry): entry is BotPendingSend => entry !== undefined,
+  );
+}
+
+describe("<BotChannelView /> a first post into a channel the host has not created yet", () => {
+  it("CONTROL: draws the opening alone, and opens no stream again, when nothing was sent", async () => {
+    const session = await mountChannelNotCreatedYet();
+
+    expect(screen.getByTestId("bot-channel-not-here-yet")).toBeTruthy();
+    expect(screen.queryAllByTestId("bot-member-row")).toHaveLength(0);
+    expect(session.resubscribes()).toBe(0);
+  });
+
+  it("draws a held first post beside the opening, with its text", async () => {
+    await mountChannelNotCreatedYet();
+
+    pressSend(TEXT);
+    await waitFor(() => expect(sends).toHaveLength(1));
+
+    expect(onlyHeldSend(), "the send was not held").toHaveLength(1);
+    expect(
+      screen.queryByTestId("bot-channel-not-here-yet"),
+      "the opening went",
+    ).not.toBeNull();
+    expect(
+      screen.queryAllByText(TEXT),
+      `the held first post was not drawn: ${pageText()}`,
+    ).not.toHaveLength(0);
+  });
+
+  it("draws an uncertain first post unconfirmed, with Retry reachable", async () => {
+    await mountChannelNotCreatedYet();
+    pressSend(TEXT);
+    await waitFor(() => expect(sends).toHaveLength(1));
+
+    await act(async () => {
+      firstSend().reject(unmarkedRefusal("timed out"));
+      await Promise.resolve();
+    });
+
+    expect(
+      onlyHeldSend().map((send) => send.state),
+      "the send did not end unconfirmed",
+    ).toEqual(["uncertain"]);
+    expect(
+      screen.queryAllByText(/not confirmed/i),
+      `the uncertain first post was not drawn unconfirmed: ${pageText()}`,
+    ).not.toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: "Retry" }),
+      `Retry is not reachable: ${pageText()}`,
+    ).not.toBeNull();
+  });
+
+  it("subscribes the session again once for an uncertain first post, and never again for repeated closes or a remount", async () => {
+    const session = await mountChannelNotCreatedYet();
+    pressSend(TEXT);
+    await waitFor(() => expect(sends).toHaveLength(1));
+    await act(async () => {
+      firstSend().reject(unmarkedRefusal("timed out"));
+      await Promise.resolve();
+    });
+    expect(
+      onlyHeldSend().map((send) => send.state),
+      "the send did not end unconfirmed",
+    ).toEqual(["uncertain"]);
+
+    expect(
+      session.resubscribes(),
+      "an uncertain first post did not subscribe the session again",
+    ).toBe(1);
+    // The host answers every subscribe that the channel is still not there.
+    act(() => {
+      session.store.setState({
+        connectionStatus: "closed",
+        fatalClose: NOT_VISIBLE,
+      });
+    });
+    act(() => {
+      session.store.setState({
+        connectionStatus: "closed",
+        fatalClose: { ...NOT_VISIBLE },
+      });
+    });
+    unmountChannel();
+    remountChannel();
+    act(() => {
+      session.store.setState({
+        connectionStatus: "closed",
+        fatalClose: { ...NOT_VISIBLE },
+      });
+    });
+
+    expect(
+      session.resubscribes(),
+      "repeated closes or a remount subscribed the session again",
+    ).toBe(1);
+  });
+
+  it("hands an accepted first post off to the host's stored row under the same id: one row, the stored one", async () => {
+    const session = await mountChannelNotCreatedYet();
+    pressSend(TEXT);
+    await waitFor(() => expect(sends).toHaveLength(1));
+    expect(
+      screen.queryAllByText(TEXT),
+      `the held first post was not drawn: ${pageText()}`,
+    ).not.toHaveLength(0);
+
+    await act(async () => {
+      firstSend().resolve(null);
+      await Promise.resolve();
+    });
+    // The host created the channel with the post: its stream now carries the stored row.
+    const stored = storedRowOfSend(firstSend().request, VIEWER_USER_ID, 2_000);
+    act(() => {
+      session.store.setState({
+        fatalClose: null,
+        snapshotLoaded: true,
+        connectionStatus: "open",
+        messages: [stored],
+      });
+    });
+
+    expect(
+      rowsSaying(TEXT),
+      `the stored row and the pending row were not one row: ${pageText()}`,
+    ).toHaveLength(1);
+    expect(onlyHeldSend(), "the pending send was still held").toHaveLength(0);
+    expect(screen.queryByText(/not confirmed/i)).toBeNull();
   });
 });

@@ -212,7 +212,11 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostClient: () => null,
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
-  useBotConversationSendMutation: () => ({ mutateAsync: fake.sendMock }),
+  useBotConversationSendMutation: () => ({
+    mutateAsync: (variables: {
+      readonly request: BotConversationSendRequest;
+    }) => fake.sendMock(variables.request),
+  }),
   // A call's send names its host; the host each went to is kept in order.
   useBotCallSendMutation: () => ({
     mutateAsync: (variables: {

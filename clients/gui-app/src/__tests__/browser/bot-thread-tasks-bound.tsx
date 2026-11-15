@@ -440,6 +440,8 @@ function PaneBody(): ReactElement {
                   botId="bot-1"
                   hostId={HOST_ID}
                   boundHostId={HOST_ID}
+                  boundHostEpoch={1}
+                  onBindingMoved={noop}
                   imageReach="none"
                   answerReach="each"
                   replyReach="none"

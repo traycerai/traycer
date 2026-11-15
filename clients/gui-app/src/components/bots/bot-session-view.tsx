@@ -264,6 +264,7 @@ export function BotSessionView(props: {
                     header={null}
                     landOn={session.landOn}
                     flow={null}
+                    sendBinding={null}
                   />
                 </QuoteSinkContext>
               </BotSessionStatusSlotContext>

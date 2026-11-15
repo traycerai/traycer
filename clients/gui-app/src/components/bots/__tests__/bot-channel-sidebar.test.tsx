@@ -336,6 +336,7 @@ import {
   useBotOpenThreadStore,
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const TAB_HOST = "host-tab";
 const OTHER_HOST = "host-other";
@@ -944,7 +945,9 @@ describe("<BotChannelSidebar /> opening a channel", () => {
     it("keeps the thread open beside the channel when its row is clicked over Activity", async () => {
       const user = userEvent.setup();
       useTracyPlaceStore.getState().setView("bot-release", "activity");
-      useBotOpenThreadStore.getState().setRail("bot-release", THREAD_RAIL);
+      useBotOpenThreadStore
+        .getState()
+        .setRail("bot-release", THREAD_RAIL, currentBotLifetime());
       mount("bot-release", null);
 
       await user.click(row("bot-release"));

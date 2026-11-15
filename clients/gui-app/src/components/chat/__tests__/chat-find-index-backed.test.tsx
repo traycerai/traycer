@@ -75,6 +75,8 @@ import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { makeMessageAt } from "./chat-message-fixtures";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => true,
 }));
@@ -513,6 +515,7 @@ function renderFind(input: {
       windowRef.current = transcript.window;
       rowIndexByKeyRef.current = buildRowKeyToIndex(
         transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: transcript.window,
           rendered: transcript.messages,
           splitLongTurns: true,
