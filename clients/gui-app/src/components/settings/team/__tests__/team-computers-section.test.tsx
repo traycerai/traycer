@@ -145,9 +145,6 @@ function mountSection(
   vi.spyOn(harness.auth, "listTeamComputers").mockImplementation(
     auth.listTeamComputers,
   );
-  vi.spyOn(harness.auth, "setEnvironmentBotHost").mockImplementation(
-    auth.setEnvironmentBotHost,
-  );
   vi.spyOn(harness.auth, "releaseTeamComputer").mockImplementation(
     auth.releaseTeamComputer,
   );

@@ -8,7 +8,7 @@ it("joins the host count and organization label to a team row", async () => {
     authnBaseUrl: "https://authn.example/",
     bearer: { kind: "cloud", getBearerToken: () => "test-token" },
     onOriginSignIn: () => true,
-    transport: ({ url }) => {
+    transport: async ({ url }) => {
       if (url.endsWith("/api/v3/environments/team-a/hosts")) {
         return {
           status: 200,
