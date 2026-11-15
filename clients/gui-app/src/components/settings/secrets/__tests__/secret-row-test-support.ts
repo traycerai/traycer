@@ -5,7 +5,7 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 export function secretRowFixture(
-  overrides: Partial<EnvironmentSecretV12> = {},
+  overrides: Partial<EnvironmentSecretV12>,
 ): EnvironmentSecretV12 {
   return {
     ...RETIRED_SECRET_ROW_FIELDS,

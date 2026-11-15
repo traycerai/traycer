@@ -90,7 +90,7 @@ const listKey = (): readonly unknown[] =>
     [],
   );
 
-const mountDetails = (onList: (() => void) | null = null): TeamPageHarness =>
+const mountDetails = (onList: (() => void) | null): TeamPageHarness =>
   mountTeamPage(poolSource("editor"), {
     "environment.list": () => ({ environments: [] }),
     "environment.secrets.list": () => {
@@ -126,7 +126,7 @@ afterEach(() => {
 
 describe("loadSecretDetails for a removed secret whose host failed", () => {
   it("keeps the failure line and leaves the list, failure included, in the shared cache after one list request", async () => {
-    const harness = mountDetails();
+    const harness = mountDetails(null);
     // The harness collects an unobserved query at once; the cache is read
     // after the load, so keep what the load put there.
     harness.queryClient.setDefaultOptions({
@@ -166,7 +166,7 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
   });
 
   it("asks authn for the list even when the cache holds one the client calls fresh", async () => {
-    const harness = mountDetails();
+    const harness = mountDetails(null);
     // The app's own client holds a read fresh for a minute
     // (`createAppQueryClient`). Details authorizes its read on every open, so
     // a cache hit must not stand in for it.

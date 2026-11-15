@@ -97,7 +97,7 @@ function unsetHostHandlers(): MockHandlerMap<HostRpcRegistry> {
     }),
     "environment.secrets.list": (request) => {
       if (!namesPersonal(request)) throw new Error(NOT_SET_UP);
-      return { secrets: [secretRowFixture()], removed: [] };
+      return { secrets: [secretRowFixture({})], removed: [] };
     },
     "environment.secrets.versions": (request) => {
       if (!namesPersonal(request)) throw new Error(NOT_SET_UP);
