@@ -36,7 +36,7 @@ import {
   clearHostDoorState,
   useHostDoorStateStore,
 } from "@/stores/host/host-door-state-store";
-import { drawnDoorCoverHost } from "@/stores/host/drawn-door-cover-store";
+import { isDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
 import {
   fatalDoorRefusal,
   signInForUnaryTest,
@@ -439,7 +439,7 @@ describe("door toasts follow the cover this window actually draws", () => {
     expect(useHostDoorStateStore.getState().byHost.get(hostB)).toMatchObject({
       kind: "not-admitted",
     });
-    expect(drawnDoorCoverHost()).toBeNull();
+    expect(isDoorCoverDrawn(hostB)).toBe(false);
     toastFromHostError(error, failureLine);
     expect(toast.error).toHaveBeenCalledWith(failureLine, {
       id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
@@ -448,7 +448,7 @@ describe("door toasts follow the cover this window actually draws", () => {
   });
 
   it.each(["ready", "degraded"] as const)(
-    "shows A's refusal while its served lease is %s",
+    "keeps A's refusal quiet while its served lease is %s: not being admitted covers even then",
     async (status) => {
       signInForUnaryTest();
       applySnapshot({
@@ -468,16 +468,15 @@ describe("door toasts follow the cover this window actually draws", () => {
       });
       const error = await harness.call();
 
+      await waitFor(() => {
+        expect(narratorSurface()?.getAttribute("data-variant")).toBe(
+          "not-admitted",
+        );
+        expect(isDoorCoverDrawn(hostA)).toBe(true);
+      });
       expect(hostOfFailedCall(error)).toBe(hostA);
-      expect(useHostDoorStateStore.getState().byHost.get(hostA)).toMatchObject({
-        kind: "not-admitted",
-      });
-      expect(drawnDoorCoverHost()).toBeNull();
       toastFromHostError(error, failureLine);
-      expect(toast.error).toHaveBeenCalledWith(failureLine, {
-        id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
-        cancel: null,
-      });
+      expect(toast.error).not.toHaveBeenCalled();
     },
   );
 
@@ -497,9 +496,9 @@ describe("door toasts follow the cover this window actually draws", () => {
 
     await waitFor(() => {
       const card = screen.getByTestId("window-host-startup-card");
-      expect(card.getAttribute("data-cause")).toBe("no-usable-host");
-      expect(card.getAttribute("data-variant")).toBe("offline");
-      expect(drawnDoorCoverHost()).toBe(hostA);
+      expect(card.getAttribute("data-cause")).toBe("door-state");
+      expect(card.getAttribute("data-variant")).toBe("not-admitted");
+      expect(isDoorCoverDrawn(hostA)).toBe(true);
     });
     expect(hostOfFailedCall(error)).toBe(hostA);
     expect(useHostDoorStateStore.getState().byHost.get(hostA)).toMatchObject({

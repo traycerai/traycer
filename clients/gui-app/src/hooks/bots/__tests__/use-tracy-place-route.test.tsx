@@ -611,6 +611,123 @@ describe("the Tracy surface's place on the route", () => {
     });
   });
 
+  describe("a click on a bot's row", () => {
+    const showChannel = () => {
+      act(() => useTracySurfaceStore.getState().showChannel());
+    };
+
+    it("shows Messages over Activity as one step, and Back returns to Activity", async () => {
+      const harness = await mountOnChannel(BOT_A);
+      const activity = { ...NOTHING, view: "activity" } as const;
+      establish(BOT_A, activity);
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(activity));
+      const length = harness.history.length;
+      const index = harness.location().index;
+
+      showChannel();
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(NOTHING));
+      expect(harness.history.length).toBe(length + 1);
+      expect(harness.location().index).toBe(index + 1);
+
+      stepBack(harness);
+      await waitFor(() => {
+        expect(harness.location().index).toBe(index);
+        expect(surfaceOf(BOT_A)).toEqual(activity);
+      });
+    });
+
+    it("closes a session shown in place as one step, and Back shows the session again", async () => {
+      const harness = await mountOnChannel(BOT_A);
+      const inSession = { ...NOTHING, session: CHAT };
+      establish(BOT_A, inSession);
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(inSession));
+      const length = harness.history.length;
+      const index = harness.location().index;
+
+      showChannel();
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(NOTHING));
+      expect(harness.history.length).toBe(length + 1);
+      expect(harness.location().index).toBe(index + 1);
+
+      stepBack(harness);
+      await waitFor(() => {
+        expect(harness.location().index).toBe(index);
+        expect(surfaceOf(BOT_A)).toEqual(inSession);
+      });
+    });
+
+    it("adds no step when the channel already shows Messages", async () => {
+      const harness = await mountOnChannel(BOT_A);
+      const length = harness.history.length;
+      const index = harness.location().index;
+
+      showChannel();
+      // The next real move is the first thing to reach the history: had the
+      // click added a step, the count would be a second one higher.
+      act(() => place().setView(BOT_A, "activity"));
+      await waitForUrl(
+        harness,
+        `/bot/${BOT_A}`,
+        placeOf({ ...NOTHING, view: "activity" }),
+      );
+
+      expect(harness.history.length).toBe(length + 1);
+      expect(harness.location().index).toBe(index + 1);
+    });
+
+    it("on another bot is one step that shows its Messages even where it was left on Activity", async () => {
+      const harness = await mountOnChannel(BOT_A);
+      const activity = { ...NOTHING, view: "activity" } as const;
+      act(() => place().setView(BOT_A, "activity"));
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(activity));
+      const length = harness.history.length;
+      const index = harness.location().index;
+
+      await openChannel(harness, BOT_B);
+      expect(surfaceOf(BOT_B)).toEqual(NOTHING);
+      expect(harness.history.length).toBe(length + 1);
+      expect(harness.location().index).toBe(index + 1);
+
+      stepBack(harness);
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(activity));
+      expect(surfaceOf(BOT_A)).toEqual(activity);
+    });
+
+    it("keeps the thread open beside the channel, whether its own row or another's is clicked first", async () => {
+      const harness = await mountOnChannel(BOT_A);
+      const beside = { ...NOTHING, view: "activity", rail: T1 } as const;
+      establish(BOT_A, beside);
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(beside));
+
+      showChannel();
+      const shown = { ...NOTHING, rail: T1 };
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(shown));
+      expect(surfaceOf(BOT_A)).toEqual(shown);
+
+      act(() => place().setView(BOT_A, "activity"));
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(beside));
+      await openChannel(harness, BOT_B);
+      act(() => {
+        openBotChannel(harness.navigate, BOT_A, {
+          landing: null,
+          isConnectable: null,
+          onRejected: null,
+        });
+      });
+      await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(shown));
+      expect(surfaceOf(BOT_A)).toEqual(shown);
+    });
+
+    it("shows a bot's Messages on arrival, though its view was set while another was selected", async () => {
+      const harness = await mountOnChannel(BOT_A);
+      act(() => place().setView(BOT_B, "activity"));
+
+      await openChannel(harness, BOT_B);
+
+      expect(surfaceOf(BOT_B)).toEqual(NOTHING);
+    });
+  });
+
   describe("an arrival the app wrote", () => {
     it("is corrected over itself to the place the stores hold, which stand", async () => {
       const harness = await mountOnChannel(BOT_A);
