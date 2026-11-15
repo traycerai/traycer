@@ -255,8 +255,8 @@ function withIntersectedRole(
 }
 
 /**
- * Recent order over the composed rows, exactly as the host ordered its merged
- * page: pinned first, then the per-viewer activity key, then id. Any other
+ * Recent or created order over the composed rows, exactly as the host ordered
+ * its merged page: pinned first, then the sort's time key, then id. Any other
  * sort keeps the rows where the composition put them - the order is then
  * honest about the rows present and is not a global ranking, which the
  * completeness statement's `sort: "loaded-union"` says.
@@ -266,26 +266,41 @@ function orderComposedRows(
   sort: ListTasksSort | undefined,
   query: string | undefined,
 ): ListTaskLight[] {
+  if (sort === "created-desc") {
+    return rows.toSorted((left, right) =>
+      compareByTimeKey(left, right, createdAt),
+    );
+  }
   const recent =
     sort === "recent" ||
     ((sort === undefined || sort === "relevance") &&
       (query === undefined || query.trim().length === 0));
   if (!recent) return [...rows];
-  return rows.toSorted(compareRecent);
+  return rows.toSorted((left, right) =>
+    compareByTimeKey(left, right, activityAt),
+  );
 }
 
-function compareRecent(left: ListTaskLight, right: ListTaskLight): number {
+function compareByTimeKey(
+  left: ListTaskLight,
+  right: ListTaskLight,
+  timeKey: (row: ListTaskLight) => number,
+): number {
   const leftPinned = left.pinned === true;
   const rightPinned = right.pinned === true;
   if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
-  const leftAt = activityAt(left);
-  const rightAt = activityAt(right);
+  const leftAt = timeKey(left);
+  const rightAt = timeKey(right);
   if (leftAt !== rightAt) return rightAt - leftAt;
   // Code-unit order, descending, as the host's merged page broke ties.
   const leftId = rowId(left);
   const rightId = rowId(right);
   if (leftId === rightId) return 0;
   return leftId < rightId ? 1 : -1;
+}
+
+function createdAt(row: ListTaskLight): number {
+  return row.epic?.light?.createdAt ?? row.phase?.light?.createdAt ?? 0;
 }
 
 function rowId(row: ListTaskLight): string {

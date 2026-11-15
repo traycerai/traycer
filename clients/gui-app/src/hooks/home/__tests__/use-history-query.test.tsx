@@ -14,6 +14,7 @@ import type {
   ListTasksResponse,
   ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import type {
   TaskLabel,
@@ -108,8 +109,15 @@ const testState = vi.hoisted(() => {
     // exact same search, since the mock below returns a fixed page and
     // reveals nothing else about its argument.
     requestCalls: [] as ListCloudTasksRequest[],
+    // The negotiated `epic.listTasks` version the hook reads; `null` is no
+    // handshake yet.
+    listTasksVersion: null as SchemaVersion | null | false,
   };
 });
+
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => testState.listTasksVersion,
+}));
 
 // The fake cloud applies the request's text query as a title filter, the way
 // the real cloud task index does - so a query that only matches local
@@ -289,6 +297,7 @@ describe("useHistoryQuery", () => {
     testState.queryIsPending = false;
     testState.taskContextsEnabledCalls = [];
     testState.requestCalls = [];
+    testState.listTasksVersion = null;
     testState.organizationRefresh.mockReset();
     testState.organizationView = {
       catalog: [],
@@ -1473,6 +1482,35 @@ describe("useHistoryQuery", () => {
 
     expect(testState.requestCalls).toHaveLength(2);
     expect(testState.requestCalls[0]).toEqual(testState.requestCalls[1]);
+  });
+
+  describe("created-desc sort admission", () => {
+    const createdSearch = patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+      sort: "created-desc",
+      sortExplicit: true,
+    });
+
+    it("requests and returns recent on a host below epic.listTasks 1.10", () => {
+      testState.listTasksVersion = { major: 1, minor: 9 };
+      const { result } = renderHook(() =>
+        useHistoryQuery({ search: createdSearch, nowMs: null }),
+      );
+
+      expect(testState.requestCalls.at(-1)?.sort).toBe("recent");
+      expect(result.current.sort).toBe("recent");
+      expect(result.current.createdSortAvailable).toBe(false);
+    });
+
+    it("requests created-desc on a host at epic.listTasks 1.10", () => {
+      testState.listTasksVersion = { major: 1, minor: 10 };
+      const { result } = renderHook(() =>
+        useHistoryQuery({ search: createdSearch, nowMs: null }),
+      );
+
+      expect(testState.requestCalls.at(-1)?.sort).toBe("created-desc");
+      expect(result.current.sort).toBe("created-desc");
+      expect(result.current.createdSortAvailable).toBe(true);
+    });
   });
 });
 
