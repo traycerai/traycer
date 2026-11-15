@@ -41,14 +41,16 @@ export interface WorktreeDeleteStreamCallbacks {
     code: "WORKTREE_BUSY" | "WORKTREE_HOLDERS_CHANGED" | undefined,
   ) => void;
   /**
-   * Terminal: the connection dropped after the delete request went out and
-   * before a terminal frame arrived. The session is already closed, and
+   * Terminal: the stream dropped or closed after the delete request was sent
+   * and before a terminal frame arrived. The session is already closed, and
    * whether the worktree was removed is unknown.
    */
   readonly onDroppedAfterStart: () => void;
   /**
    * Connection-status changes. `reason` is non-null only on the `closed`
-   * transition (e.g. an unreachable host, or a fatal handshake error).
+   * transition (e.g. an unreachable host, or a fatal handshake error). A
+   * `reconnecting` or `closed` here came before the request was sent, so no
+   * deletion was started.
    */
   readonly onConnectionStatus: StatusChangeHandler;
 }
@@ -84,22 +86,21 @@ export interface WorktreeDeleteStreamClientOptions {
  * a replay deletes again: after a success it reports a failure for a worktree
  * that is gone, and it would remove a new worktree created at the same path.
  *
- * So the first `reconnecting` after `open` closes the session inside that
- * transition (emitted before the redial is armed, so the replay never goes
- * out) and reports {@link WorktreeDeleteStreamCallbacks.onDroppedAfterStart}.
- * `open` fires once the subscribe frame is written, so a drop before it sent
- * nothing and keeps the transport's retry. A `held` reconnect keeps the
- * subscription on the host and is not a drop.
+ * So once the session has sent its open request
+ * ({@link IStreamSession.hasSentOpenRequest}), the first `reconnecting` closes
+ * the session inside that transition (emitted before the transport re-sends,
+ * so the replay never goes out), and it or a terminal `closed` reports
+ * {@link WorktreeDeleteStreamCallbacks.onDroppedAfterStart}. A drop before the
+ * send keeps the transport's retry. A `held` reconnect keeps the subscription
+ * on the host and is not a drop.
  */
 export class WorktreeDeleteStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: WorktreeDeleteStreamCallbacks;
-  private reachedHost: boolean;
   private closed: boolean;
 
   constructor(options: WorktreeDeleteStreamClientOptions) {
     this.callbacks = options.callbacks;
-    this.reachedHost = false;
     this.closed = false;
 
     this.session = options.wsStreamClient.subscribe("worktree.deleteByPath", {
@@ -114,13 +115,10 @@ export class WorktreeDeleteStreamClient {
       if (this.closed) {
         return;
       }
-      if (status === "open") {
-        this.reachedHost = true;
-      }
       if (
-        status === "reconnecting" &&
-        continuity !== "held" &&
-        this.reachedHost
+        ((status === "reconnecting" && continuity !== "held") ||
+          status === "closed") &&
+        this.session.hasSentOpenRequest()
       ) {
         this.close();
         this.callbacks.onDroppedAfterStart();

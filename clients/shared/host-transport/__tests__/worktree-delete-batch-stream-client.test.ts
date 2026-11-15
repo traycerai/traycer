@@ -159,16 +159,17 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     sockets[1].fireText(reason);
 
     expect(onUnsupported).not.toHaveBeenCalled();
-    expect(onConnectionStatus).toHaveBeenLastCalledWith(
-      "closed",
+    expect(onConnectionStatus).toHaveBeenLastCalledWith({
+      status: "closed",
       reason,
-      null,
-      null,
-    );
+      retryCause: null,
+      continuity: null,
+      startSent: true,
+    });
     batch.close();
   });
 
-  it("keeps retrying start while the drop happened before the host ever saw it", () => {
+  it("keeps retrying start while the drop happened before it was sent", () => {
     const { factory, sockets } = makeStubSocketFactory();
     const client = makeStubSocketStreamClient(factory);
     const batch = openBatchClient(client);
@@ -204,7 +205,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
         onUnsupported: () => {
           unsupported += 1;
         },
-        onConnectionStatus: (status) => {
+        onConnectionStatus: ({ status }) => {
           if (status === "closed") statusClosed += 1;
         },
       },
@@ -259,12 +260,13 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     sockets[0].fireText(reason);
 
     expect(onUnsupported).not.toHaveBeenCalled();
-    expect(onConnectionStatus).toHaveBeenLastCalledWith(
-      "closed",
+    expect(onConnectionStatus).toHaveBeenLastCalledWith({
+      status: "closed",
       reason,
-      null,
-      null,
-    );
+      retryCause: null,
+      continuity: null,
+      startSent: true,
+    });
     batch.close();
   });
 
@@ -668,7 +670,7 @@ describe("WorktreeDeleteBatchStreamClient held continuity", () => {
       targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
       callbacks: {
         ...NOOP_CALLBACKS,
-        onConnectionStatus: (status, _reason, _retryCause, continuity) => {
+        onConnectionStatus: ({ status, continuity }) => {
           statuses.push({ status, continuity });
         },
       },
@@ -692,7 +694,7 @@ describe("WorktreeDeleteBatchStreamClient held continuity", () => {
     batch.close();
   });
 
-  it("swaps to observe on a plain reconnect after reaching the host", () => {
+  it("swaps to observe on a plain reconnect after the start was sent", () => {
     const { fake, batch, statuses } = startReached();
     const session = fake.sessions[0];
 

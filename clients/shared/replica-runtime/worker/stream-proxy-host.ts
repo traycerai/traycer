@@ -128,7 +128,14 @@ export function createStreamProxyHost(
       push(
         {
           kind: "stream/status",
-          status: { streamId, status, reason, retryCause, continuity },
+          status: {
+            streamId,
+            status,
+            reason,
+            retryCause,
+            continuity,
+            openRequestSent: session.hasSentOpenRequest(),
+          },
         },
         NO_TRANSFER,
       );
@@ -148,6 +155,8 @@ export function createStreamProxyHost(
           status: "closed",
           retryCause: null,
           continuity: null,
+          // No session was opened, so nothing was sent.
+          openRequestSent: false,
           reason: {
             kind: "fatalError",
             details: {
@@ -252,6 +261,7 @@ export function createStreamProxyHost(
               reason: { kind: "caller" },
               retryCause: null,
               continuity: null,
+              openRequestSent: session.hasSentOpenRequest(),
             },
           },
           NO_TRANSFER,

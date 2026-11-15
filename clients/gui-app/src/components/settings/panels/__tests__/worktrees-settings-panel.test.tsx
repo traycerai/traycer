@@ -19,6 +19,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import type { WorktreeDeleteBatchStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -300,7 +301,13 @@ vi.mock(
               settleTarget(path, false);
             },
             onConnectionStatus: (status, reason) =>
-              options.callbacks.onConnectionStatus(status, reason, null, null),
+              options.callbacks.onConnectionStatus({
+                status,
+                reason,
+                retryCause: null,
+                continuity: null,
+                startSent: status !== "connecting",
+              }),
           };
           streamMock.callbacksByPath.set(path, perTarget);
           streamMock.callbacks = perTarget;
@@ -400,6 +407,13 @@ function entry(
     ...rest,
   };
 }
+
+const STREAM_FATAL: FatalErrorDetails = {
+  code: "UNAUTHORIZED",
+  reason: "bearer rejected",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
 
 const BUSY_HOLDERS: readonly WorktreeBusyHolder[] = [
   {
@@ -2886,6 +2900,48 @@ describe("WorktreesList delete flow", () => {
     screen.getByRole("dialog", { name: "Delete worktree feat-clean?" });
     screen.getByText(
       "Anything working in this worktree when the delete runs will be stopped.",
+    );
+  });
+
+  // The remote carrier reports `open` only with the host's first frame, so a
+  // command can be sent and closed with no `open` at all.
+  it("reports a batch command closed after its start was sent as unconfirmed, never re-sending it", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+
+    act(() => {
+      streamMock.commandCallbacks?.onConnectionStatus({
+        status: "closed",
+        reason: { kind: "fatalError", details: STREAM_FATAL },
+        retryCause: null,
+        continuity: null,
+        startSent: true,
+      });
+    });
+
+    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
+      "Lost connection to the host before this delete was confirmed.",
+    );
+    expect(streamMock.commandCount).toBe(1);
+    expect(streamMock.legacyPaths).toEqual([]);
+  });
+
+  it("reports a batch command closed before its start was sent as a lost connection", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+
+    act(() => {
+      streamMock.commandCallbacks?.onConnectionStatus({
+        status: "closed",
+        reason: { kind: "fatalError", details: STREAM_FATAL },
+        retryCause: null,
+        continuity: null,
+        startSent: false,
+      });
+    });
+
+    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
+      "Lost connection to the host before the delete finished.",
     );
   });
 

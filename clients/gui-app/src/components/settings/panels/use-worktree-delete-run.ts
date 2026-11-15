@@ -81,9 +81,9 @@ const CONNECTION_LOST_MESSAGE =
 // "deleted" or "failed" for it would be a guess presented as a result.
 const REATTACHED_MESSAGE =
   "Reconnected without confirming this delete. Check the refreshed list to see whether this worktree was removed.";
-// The fallback stream's connection dropped after the host received the delete.
-// It is never re-sent (a replay would delete again), so, as above, the
-// refreshed list is the authority on whether this worktree was removed.
+// The stream dropped or closed after the delete request was sent. It is never
+// re-sent (a replay could delete again), so, as above, the refreshed list is
+// the authority on whether this worktree was removed.
 const DROPPED_AFTER_START_MESSAGE =
   "Lost connection to the host before this delete was confirmed. Check the refreshed list to see whether this worktree was removed.";
 
@@ -710,7 +710,7 @@ function startBatchDeleteCommand(
   // A holder rather than a plain `let`: the settle happens inside callbacks the
   // stream client owns, and the post-build guard below has to read the value as
   // of THEN, not as of the last assignment the compiler can see.
-  const command = { settled: false, reachedHost: false };
+  const command = { settled: false, startSent: false };
   /**
    * Ends the command and drives every target that never reported a terminal
    * frame into `unsettledReason`.
@@ -764,7 +764,7 @@ function startBatchDeleteCommand(
    */
   const handOffToFallback = (): void => {
     if (command.settled) return;
-    if (command.reachedHost) {
+    if (command.startSent) {
       settleCommand(REATTACHED_MESSAGE);
       return;
     }
@@ -868,18 +868,20 @@ function startBatchDeleteCommand(
             onCommandComplete: () => settleCommand(REATTACHED_MESSAGE),
             onCommandFailed: (reason) => settleCommand(reason),
             onUnsupported: () => handOffToFallback(),
-            onConnectionStatus: (status, reason) => {
-              if (status === "open") {
-                command.reachedHost = true;
-                return;
-              }
+            onConnectionStatus: ({ status, reason, startSent }) => {
+              command.startSent = startSent;
               // Only a terminal stream close BEFORE the command's terminal
-              // frame is an error. A recoverable drop surfaces as
-              // "reconnecting", and the batch client answers it by re-opening
-              // in observe mode - which can re-attach to a live command but
-              // can never start this one again.
+              // frame ends it. A recoverable drop surfaces as "reconnecting",
+              // and the batch client answers it by re-opening in observe mode
+              // - which can re-attach to a live command but can never start
+              // this one again. Once the start was sent, a close leaves the
+              // targets' outcome unknown rather than failed.
               if (status !== "closed" || reason === null) return;
-              settleCommand(CONNECTION_LOST_MESSAGE);
+              settleCommand(
+                startSent
+                  ? DROPPED_AFTER_START_MESSAGE
+                  : CONNECTION_LOST_MESSAGE,
+              );
             },
           },
         }),

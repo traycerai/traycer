@@ -246,7 +246,7 @@ describe("SessionImportRunClient reconnects", () => {
     client.close();
   });
 
-  it("keeps the selections while the drop happened before the host was reached", () => {
+  it("keeps the selections while the drop happened before they were sent", () => {
     const fake = new FakeStreamClient(false);
     const client = new SessionImportRunClient({
       wsStreamClient: fake,
@@ -278,7 +278,7 @@ describe("SessionImportRunClient over a real stream transport", () => {
     vi.useRealTimers();
   });
 
-  it("never lets the transport replay the selections once the host was reached", () => {
+  it("never lets the transport replay the selections once they were sent", () => {
     const { factory, sockets } = makeFactory();
     const client = new SessionImportRunClient({
       wsStreamClient: makeClient(factory),

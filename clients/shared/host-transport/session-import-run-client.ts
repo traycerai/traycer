@@ -72,7 +72,7 @@ export interface SessionImportRunClientOptions {
  * only stops this client hearing about it, which is why the run's progress is
  * folded into a module-level store rather than a component's state.
  *
- * ## Why this wrapper swaps its session after the first open
+ * ## Why this wrapper swaps its session once the selections were sent
  *
  * `WsStreamClient` re-sends a session's original open request on every
  * reconnect. The host answers a subscribe that carries selections by starting
@@ -81,11 +81,12 @@ export interface SessionImportRunClientOptions {
  * a whole new import of the same selections. Each one streams a progress
  * frame per session to a client that is already behind, which drops it again.
  *
- * So the selections are sent once. The moment a session that reached the host
- * drops, it is closed and replaced by one with `selections: []`, which the
- * host treats as attach-only: it replays a run in flight, or answers an empty
- * run. Every later reconnect re-sends that. A drop before the host was ever
- * reached keeps the original request, which is the import the user asked for.
+ * So the selections are sent once. The moment a session that sent them
+ * ({@link IStreamSession.hasSentOpenRequest}) drops, it is closed and replaced
+ * by one with `selections: []`, which the host treats as attach-only: it
+ * replays a run in flight, or answers an empty run. Every later reconnect
+ * re-sends that. A drop before they were sent keeps the original request,
+ * which is the import the user asked for.
  */
 export class SessionImportRunClient {
   private session: IStreamSession;
@@ -93,8 +94,6 @@ export class SessionImportRunClient {
   private readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
   private readonly permissionMode: PermissionMode;
   private mode: "start" | "attach";
-  /** True once a session reached `open`: the host may have started the run. */
-  private reachedHost: boolean;
   /** The run this client follows, from its first `started` frame. */
   private runId: string | null;
   /** Whether that run's own `complete` arrived. */
@@ -110,7 +109,6 @@ export class SessionImportRunClient {
     this.wsStreamClient = options.wsStreamClient;
     this.permissionMode = options.permissionMode;
     this.mode = "start";
-    this.reachedHost = false;
     this.runId = null;
     this.completed = false;
     this.ended = false;
@@ -138,16 +136,19 @@ export class SessionImportRunClient {
     session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
+    // The session is passed in, not read from `this.session`: a transport
+    // may replay a status while this handler is installed, before the caller
+    // has assigned it.
     session.onStatusChange((status, reason, _retryCause, continuity) => {
-      this.handleStatusChange(status, reason, continuity);
+      this.handleStatusChange(session, status, reason, continuity);
     });
     return session;
   }
 
   /**
-   * Runs inside the `reconnecting` transition, which `WsStreamClient` emits
-   * before it arms the redial - so closing here cancels the pending replay of
-   * the selections rather than racing it.
+   * Runs inside the `reconnecting` transition, which every transport emits
+   * before it re-sends - so closing here cancels the pending replay of the
+   * selections rather than racing it.
    */
   private swapToAttach(): void {
     this.mode = "attach";
@@ -158,6 +159,7 @@ export class SessionImportRunClient {
   }
 
   private handleStatusChange(
+    session: IStreamSession,
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
     continuity: StreamContinuity,
@@ -165,14 +167,11 @@ export class SessionImportRunClient {
     if (this.closed || this.swapping) {
       return;
     }
-    if (status === "open") {
-      this.reachedHost = true;
-    }
     if (
       status === "reconnecting" &&
       continuity !== "held" &&
       this.mode === "start" &&
-      this.reachedHost
+      session.hasSentOpenRequest()
     ) {
       this.swapToAttach();
     }

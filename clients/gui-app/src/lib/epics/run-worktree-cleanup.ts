@@ -206,7 +206,7 @@ function runCleanupCommand(
     const failed: WorktreeCleanupFailure[] = [];
     const pending = new Set(paths);
     const holder = newCloseHolder();
-    const state = { settled: false, reachedHost: false };
+    const state = { settled: false, startSent: false };
 
     /**
      * What the targets still open at settle time become. `failed` carries the
@@ -256,7 +256,7 @@ function runCleanupCommand(
       // Only an initial compatibility rejection has the no-side-effect
       // guarantee. A replacement host rejecting an observe arrives after the
       // command may have started, so its remaining targets stay uncertain.
-      if (state.reachedHost) {
+      if (state.startSent) {
         settle({ kind: "uncertain" });
         return;
       }
@@ -316,23 +316,15 @@ function runCleanupCommand(
                 settle({ kind: "failed", reason });
               },
               onUnsupported: () => reportUnsupported(),
-              onConnectionStatus: (
-                status,
-                _reason,
-                _retryCause,
-                continuity,
-              ) => {
+              onConnectionStatus: ({ status, continuity, startSent }) => {
+                state.startSent = startSent;
                 if (continuity === "held") return;
-                if (status === "open") {
-                  state.reachedHost = true;
-                  return;
-                }
                 if (status !== "reconnecting" && status !== "closed") return;
-                // A drop before the session ever opened means the subscribe
-                // frame never reached the host: nothing was attempted, so the
-                // paths failed rather than being unknown. After it opened the
-                // command exists and keeps running without us.
-                if (!state.reachedHost) {
+                // A drop before the start request was sent means the host
+                // never had it: nothing was attempted, so the paths failed
+                // rather than being unknown. After the send the command may
+                // exist and keeps running without us.
+                if (!startSent) {
                   settle({
                     kind: "failed",
                     reason: NEVER_REACHED_HOST_REASON,
@@ -455,21 +447,12 @@ function deleteOneWorktree(input: {
 }): Promise<DeleteOneOutcome> {
   return new Promise<DeleteOneOutcome>((resolve) => {
     const holder = newCloseHolder();
-    const state = { settled: false, reachedHost: false };
+    const state = { settled: false };
     const finish = (outcome: DeleteOneOutcome): void => {
       if (state.settled) return;
       state.settled = true;
       requestClose(holder);
       resolve(outcome);
-    };
-    const finishUncertain = (status: "reconnecting" | "closed"): void => {
-      if (!state.settled) {
-        appLogger.warn(
-          "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
-          { worktreePath: input.worktreePath, status },
-        );
-      }
-      finish({ kind: "uncertain" });
     };
 
     try {
@@ -493,7 +476,15 @@ function deleteOneWorktree(input: {
                     : { kind: "failed", reason: DECLINED_REASON },
                 ),
               onFailed: (reason) => finish({ kind: "failed", reason }),
-              onDroppedAfterStart: () => finishUncertain("reconnecting"),
+              onDroppedAfterStart: () => {
+                if (!state.settled) {
+                  appLogger.warn(
+                    "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
+                    { worktreePath: input.worktreePath },
+                  );
+                }
+                finish({ kind: "uncertain" });
+              },
               onConnectionStatus: (
                 status,
                 _reason,
@@ -501,21 +492,12 @@ function deleteOneWorktree(input: {
                 continuity,
               ) => {
                 if (continuity === "held") return;
-                // Fail fast on any other end of the stream, so this promise
-                // never waits on the transport's reconnect loop (the summary
-                // toast + cache invalidation would never fire). A drop after
-                // the request went out arrives as `onDroppedAfterStart`, so a
-                // `reconnecting` here came before it: nothing was sent, and
-                // this fails without a retry. `connecting`/`open` are the
-                // normal startup.
-                if (status === "open") {
-                  state.reachedHost = true;
-                  return;
-                }
-                if (status === "closed" && state.reachedHost) {
-                  finishUncertain(status);
-                  return;
-                }
+                // A drop or close after the request was sent arrives as
+                // `onDroppedAfterStart`, so one here came before it: nothing
+                // was started. It fails at once rather than wait on the
+                // transport's retry, so the summary toast and the cache
+                // invalidation still fire. `connecting`/`open` are the normal
+                // startup.
                 if (status !== "reconnecting" && status !== "closed") return;
                 finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON });
               },

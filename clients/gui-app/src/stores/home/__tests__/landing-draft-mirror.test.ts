@@ -156,6 +156,7 @@ function controlledStream(): {
       onFrame = handler;
     },
     onStatusChange: () => undefined,
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => undefined,
     getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),

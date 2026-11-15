@@ -422,6 +422,7 @@ const silentSession: IStreamSession = {
   onServerFrame: () => undefined,
   onStatusChange: () => undefined,
   getNegotiatedSchemaVersion: () => null,
+  hasSentOpenRequest: () => false,
   requestReconnect: () => undefined,
   close: () => undefined,
 };

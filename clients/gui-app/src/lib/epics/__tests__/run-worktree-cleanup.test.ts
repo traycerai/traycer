@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
-import type { WorktreeDeleteBatchStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
+import type {
+  WorktreeDeleteBatchConnectionStatus,
+  WorktreeDeleteBatchStreamCallbacks,
+} from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
+import type {
+  StreamConnectionStatus,
+  StreamContinuity,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { WorktreeDeleteBatchTargetV11 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -165,9 +172,17 @@ function stubOpenStreamTransport(): (hostId: string) => DurableStreamTransport {
   });
 }
 
-/** Drives the command to the point where the host has accepted it. */
+function status(
+  value: StreamConnectionStatus,
+  continuity: StreamContinuity,
+  startSent: boolean,
+): WorktreeDeleteBatchConnectionStatus {
+  return { status: value, reason: null, retryCause: null, continuity, startSent };
+}
+
+/** Drives the command past the send of its start request. */
 function reachHost(): void {
-  commandCallbacks().onConnectionStatus("open", null, null, null);
+  commandCallbacks().onConnectionStatus(status("open", null, true));
 }
 
 function runTaskCleanup(
@@ -324,11 +339,11 @@ describe("runWorktreeCleanup on a current host", () => {
     });
   });
 
-  it("reports a drop after the command reached the host as unconfirmed, without replaying it", async () => {
+  it("reports a drop after the command was sent as unconfirmed, without replaying it", async () => {
     const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
     reachHost();
     commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
-    commandCallbacks().onConnectionStatus("reconnecting", null, null, null);
+    commandCallbacks().onConnectionStatus(status("reconnecting", null, true));
 
     await expect(promise).resolves.toEqual({
       removed: ["/wt/a"],
@@ -343,11 +358,26 @@ describe("runWorktreeCleanup on a current host", () => {
     expect(legacyMock.paths).toEqual([]);
   });
 
-  it("reports a drop BEFORE the command reached the host as failed", async () => {
+  // The remote carrier reports `open` only with the host's first frame, so a
+  // command can be sent and dropped with no `open` at all.
+  it("reports a drop after the start was sent, before any frame, as unconfirmed", async () => {
     const promise = runTaskCleanup(["/wt/a"]);
-    // No `open`: the subscribe frame never got to a live socket, so nothing was
-    // attempted and there is nothing uncertain about it.
-    commandCallbacks().onConnectionStatus("reconnecting", null, null, null);
+    commandCallbacks().onConnectionStatus(status("connecting", null, false));
+    commandCallbacks().onConnectionStatus(status("reconnecting", null, true));
+
+    await expect(promise).resolves.toEqual({
+      removed: [],
+      failed: [],
+      uncertain: ["/wt/a"],
+    });
+    expect(legacyMock.paths).toEqual([]);
+  });
+
+  it("reports a drop BEFORE the command was sent as failed", async () => {
+    const promise = runTaskCleanup(["/wt/a"]);
+    // The subscribe frame never got to a socket, so nothing was attempted and
+    // there is nothing uncertain about it.
+    commandCallbacks().onConnectionStatus(status("reconnecting", null, false));
 
     await expect(promise).resolves.toEqual({
       removed: [],
@@ -377,7 +407,7 @@ describe("runWorktreeCleanup on a current host", () => {
 
   it("ignores normal startup statuses", async () => {
     const promise = runTaskCleanup(["/wt/a"]);
-    commandCallbacks().onConnectionStatus("connecting", null, null, null);
+    commandCallbacks().onConnectionStatus(status("connecting", null, false));
     reachHost();
     commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
     commandCallbacks().onCommandComplete({
@@ -609,7 +639,7 @@ describe("runWorktreeCleanup stopOwners paths", () => {
     });
   });
 
-  it("does not fall back after a pinned force command reached the host", async () => {
+  it("does not fall back after a pinned force command was sent", async () => {
     const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
       hostId: "host-1",
       paths: ["/wt/busy"],
@@ -633,11 +663,11 @@ describe("runWorktreeCleanup stopOwners paths", () => {
 describe("runWorktreeCleanup while the host holds the stream", () => {
   it("keeps a command pending through a held reconnect and settles from the frames after a continued open", async () => {
     const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
-    commandCallbacks().onConnectionStatus("open", null, null, null);
+    commandCallbacks().onConnectionStatus(status("open", null, true));
     commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
 
-    commandCallbacks().onConnectionStatus("reconnecting", null, null, "held");
-    commandCallbacks().onConnectionStatus("open", null, null, "continued");
+    commandCallbacks().onConnectionStatus(status("reconnecting", "held", true));
+    commandCallbacks().onConnectionStatus(status("open", "continued", true));
     commandCallbacks().onTargetComplete("/wt/b", true, undefined, undefined);
     commandCallbacks().onCommandComplete({
       requestedCount: 2,
@@ -655,11 +685,11 @@ describe("runWorktreeCleanup while the host holds the stream", () => {
 
   it("settles a command as unconfirmed when the hold ends in a plain reconnect", async () => {
     const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
-    commandCallbacks().onConnectionStatus("open", null, null, null);
+    commandCallbacks().onConnectionStatus(status("open", null, true));
     commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
 
-    commandCallbacks().onConnectionStatus("reconnecting", null, null, "held");
-    commandCallbacks().onConnectionStatus("reconnecting", null, null, null);
+    commandCallbacks().onConnectionStatus(status("reconnecting", "held", true));
+    commandCallbacks().onConnectionStatus(status("reconnecting", null, true));
 
     await expect(promise).resolves.toEqual({
       removed: ["/wt/a"],

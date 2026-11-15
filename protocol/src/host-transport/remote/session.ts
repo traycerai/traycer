@@ -6732,6 +6732,12 @@ export class RemoteSession<
       return;
     }
     const plaintext = encodeMuxFrame(frame);
+    // Before the seal: a write that fails below may still have reached the
+    // host, and treating an unsent request as sent costs only an attach where
+    // the reverse starts the work twice.
+    if (frame.type === MuxFrameType.SUBSCRIBE) {
+      this.subscriptions.get(frame.streamId)?.noteOpenRequestSent();
+    }
     // Appended before the seal, in pull order: the scheduler runs one write at
     // a time, so ring order is wire order, and a write that fails below leaves
     // the frame in the gap rather than nowhere.
