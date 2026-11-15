@@ -54,7 +54,7 @@ export function useConfigurationPlansQuery(): UseQueryResult<
  * reads afresh. Not kept once the confirm closes, and not retried behind the
  * person's back: a refused read is the query's error, which the confirm
  * offers to read again. The turns running on the plan are the window's own
- * team computer's count (`useEnvironmentPlanWorkNow`).
+ * team computer's count (`useTeamComputerWorkNow`).
  */
 export function useConfigurationPlanUnlinkPreview(
   profileId: string | null,
