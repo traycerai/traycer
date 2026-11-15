@@ -317,6 +317,9 @@ function PanelFromSnapshot(props: {
       initialData: props.initialSnapshot,
     }),
   );
+  if (query.data === undefined) {
+    throw new Error("The bot subscription snapshot was not initialized");
+  }
   return (
     <BotChannelSettingsPanel
       bot={query.data.bot}
