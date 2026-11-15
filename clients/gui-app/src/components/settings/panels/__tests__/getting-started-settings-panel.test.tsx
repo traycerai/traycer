@@ -56,6 +56,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
       args.method === "environment.status"
         ? mocks.status
         : { secrets: mocks.secrets },
+    error: null,
   }),
 }));
 
