@@ -1071,6 +1071,22 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
     expect(harness.set).toHaveBeenCalledTimes(handedOver);
   });
 
+  it("asks the sign-in service once about a rotated token it holds, when main then judges that one bad", async () => {
+    const harness = await startOffline({});
+    harness.setCurrentSession(FRESH_SNAPSHOT);
+    harness.emitOutbound(FRESH_SNAPSHOT);
+    await settle();
+    expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
+
+    harness.answerSetWith(refused("expired"));
+    await tick(RESEND_MS);
+    await tick(RESEND_MS);
+    await tick(RESEND_MS);
+
+    expect(harness.revalidate).toHaveBeenCalledTimes(1);
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+  });
+
   it("holds a rotated token once, with no toast, and resends the new one", async () => {
     const harness = await startOffline({});
     expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
