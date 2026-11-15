@@ -110,7 +110,8 @@ function ownEnvironmentFrom(facts: {
   if (facts.principal.kind === "personal") {
     return {
       environmentId: facts.personal.environmentId,
-      resolved: facts.personal.resolved,
+      resolved:
+        facts.personal.resolved && facts.personal.environmentId !== null,
     };
   }
   if (!facts.listed) return facts.listFailed ? NONE : PENDING;

@@ -10,10 +10,8 @@ export interface PressSignIn {
 }
 
 /**
- * Read in the mutation function before its first await. These writes take no
- * scope and the app's mutations never pause (`networkMode: "always"`), so a
- * mutation function starts in its press's own task and this is the press's
- * sign-in.
+ * Captured synchronously by the public mutate call, before TanStack awaits
+ * its hooks; checked before dispatch as well as after each answer.
  *
  * A write answered after its sign-in ended is abandoned: it publishes
  * nothing, reads nothing again, sends nothing more and says nothing, as an
@@ -22,4 +20,16 @@ export interface PressSignIn {
 export function pressSignIn(auth: AuthService): PressSignIn {
   const generation = auth.getIdentityGeneration();
   return { isCurrent: () => auth.isIdentityCurrent(generation) };
+}
+
+/** The service and sign-in a bot press uses together, even across a rerender. */
+export interface BotWriteOrigin {
+  readonly auth: AuthService;
+  readonly signIn: PressSignIn;
+}
+
+export function captureBotWriteOrigin(
+  auth: AuthService | null,
+): BotWriteOrigin | null {
+  return auth === null ? null : { auth, signIn: pressSignIn(auth) };
 }

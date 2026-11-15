@@ -1,8 +1,6 @@
-import {
-  useMutation,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
 import { turnOnHostRemoteAccess } from "@traycer-clients/shared/environment/host-remote-access";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -82,26 +80,34 @@ export function useRemoteAccessTurnOnMutation(
   const answerRemoteAccess = useHostAccessPromptsStore(
     (state) => state.answerRemoteAccess,
   );
-  return useMutation<void, HostRpcError>({
-    mutationKey: environmentMutationKeys.remoteAccessTurnOn(),
-    mutationFn: () =>
-      withHostQueryErrorBoundary(METHOD, async () => {
-        cloudVerdictPreflight(METHOD)();
-        if (cloud === null || hostId === null)
-          throw hostClientUnavailableError(METHOD);
-        const operation = cloud();
-        try {
-          await turnOnHostRemoteAccess(operation, hostId);
-        } catch (error) {
-          throw environmentCloudHostError(METHOD, error);
-        }
-        if (!operation.onOriginSignIn()) return;
-        await refreshOverOpenConnection(entry, client);
-        if (!operation.onOriginSignIn()) return;
-        answerRemoteAccess(hostId);
-      }),
-    onSettled: () => {
-      void invalidateEnvironmentReads(queryClient, ["environment.status"]);
+  return usePressCapturedMutation<
+    void,
+    HostRpcError,
+    void,
+    EnvironmentCloud | null
+  >(
+    () => (cloud === null ? null : cloud()),
+    {
+      mutationKey: environmentMutationKeys.remoteAccessTurnOn(),
+      mutationFn: (_variables, operation) =>
+        withHostQueryErrorBoundary(METHOD, async () => {
+          cloudVerdictPreflight(METHOD)();
+          if (operation === null || hostId === null)
+            throw hostClientUnavailableError(METHOD);
+          if (!operation.onOriginSignIn()) return;
+          try {
+            await turnOnHostRemoteAccess(operation, hostId);
+          } catch (error) {
+            throw environmentCloudHostError(METHOD, error);
+          }
+          if (!operation.onOriginSignIn()) return;
+          await refreshOverOpenConnection(entry, client);
+          if (!operation.onOriginSignIn()) return;
+          answerRemoteAccess(hostId);
+        }),
+      onSettled: () => {
+        void invalidateEnvironmentReads(queryClient, ["environment.status"]);
+      },
     },
-  });
+  );
 }
