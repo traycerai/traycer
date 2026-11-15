@@ -15,7 +15,6 @@ import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-setting
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
-  mountTeamPage,
   mountTeamPageThroughBoundary,
   mountPersonalProvidersThroughBoundary,
   mountVerifiedTeamProvidersPage,
@@ -239,7 +238,7 @@ describe("TeamProviders profiles", () => {
       body: { enabled: false },
     };
     negotiateMethods({ "providers.list": { major: 10, minor: 11 } });
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [profile(true, 4)]),
       "environment.host.list": () => ({
         hosts: [{ ...reachableHost, hostId: WINDOW_HOST_ID }],

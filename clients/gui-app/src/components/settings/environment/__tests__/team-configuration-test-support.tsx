@@ -887,12 +887,28 @@ interface TeamPageBuildOptions {
   readonly pinBoundaryWindowHost: boolean;
 }
 
+interface TeamPageAssembly {
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+  readonly queryClient: QueryClient;
+  readonly auth: AuthService;
+  readonly runnerHost: MockRunnerHost;
+  readonly paramsOf: (method: string) => unknown[];
+  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
+}
+
 function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
   const queryClient = createTeamPageQueryClient();
   useAuthStore.setState({ status: "signed-in" });
   useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   const authHarness = buildTeamAuthRuntime(queryClient);
-  return assembleTeamPage(options, queryClient, authHarness);
+  const assembly = assembleTeamPage(options, queryClient, authHarness);
+  return createTeamPageHarness(assembly, (props) => (
+    <QueryClientProvider client={queryClient}>
+      <ConfigurationSourceContext.Provider value={options.source}>
+        {props.children}
+      </ConfigurationSourceContext.Provider>
+    </QueryClientProvider>
+  ));
 }
 
 function buildVerifiedTeamProvidersPage(
@@ -904,7 +920,16 @@ function buildVerifiedTeamProvidersPage(
   useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   const authHarness = buildTeamAuthRuntime(queryClient);
   void startVerifiedTeamAuth(authHarness);
-  return assembleTeamPage(options, queryClient, authHarness);
+  const assembly = assembleTeamPage(options, queryClient, authHarness);
+  return createTeamPageHarness(assembly, (props) => (
+    <RunnerHostProvider runnerHost={assembly.runnerHost}>
+      <HostRuntimeContext.Provider value={assembly.binding}>
+        <QueryClientProvider client={queryClient}>
+          {renderConfigurationSource(options, props.children)}
+        </QueryClientProvider>
+      </HostRuntimeContext.Provider>
+    </RunnerHostProvider>
+  ));
 }
 
 function createTeamPageQueryClient(): QueryClient {
@@ -916,20 +941,47 @@ function createTeamPageQueryClient(): QueryClient {
   });
 }
 
+function createTeamPageHarness(
+  assembly: TeamPageAssembly,
+  Wrapper: TeamPageHarness["Wrapper"],
+): TeamPageHarness {
+  return {
+    messenger: assembly.messenger,
+    queryClient: assembly.queryClient,
+    auth: assembly.auth,
+    runnerHost: assembly.runnerHost,
+    paramsOf: assembly.paramsOf,
+    Wrapper,
+  };
+}
+
+function renderConfigurationSource(
+  options: TeamPageBuildOptions,
+  children: ReactNode,
+): ReactNode {
+  if (options.boundarySection === null || options.boundaryTarget === null) {
+    return (
+      <ConfigurationSourceContext.Provider value={options.source}>
+        {children}
+      </ConfigurationSourceContext.Provider>
+    );
+  }
+  return (
+    <ConfigurationSourceBoundary
+      target={options.boundaryTarget}
+      section={options.boundarySection}
+    >
+      {children}
+    </ConfigurationSourceBoundary>
+  );
+}
+
 function assembleTeamPage(
   options: TeamPageBuildOptions,
   queryClient: QueryClient,
   authHarness: TeamAuthRuntime,
-): TeamPageHarness {
-  const {
-    source,
-    handlers,
-    negotiated,
-    withPool,
-    boundarySection,
-    boundaryTarget,
-    pinBoundaryWindowHost,
-  } = options;
+): TeamPageAssembly {
+  const { handlers, negotiated, withPool, pinBoundaryWindowHost } = options;
   let requestCounter = 0;
   const messengerOptions = {
     registry: hostRpcRegistry,
@@ -983,26 +1035,7 @@ function assembleTeamPage(
       messenger.calls
         .filter((call) => call.method === method)
         .map((call) => call.params),
-    Wrapper: (props) => (
-      <RunnerHostProvider runnerHost={authHarness.runnerHost}>
-        <HostRuntimeContext.Provider value={binding}>
-          <QueryClientProvider client={queryClient}>
-            {boundarySection === null || boundaryTarget === null ? (
-              <ConfigurationSourceContext.Provider value={source}>
-                {props.children}
-              </ConfigurationSourceContext.Provider>
-            ) : (
-              <ConfigurationSourceBoundary
-                target={boundaryTarget}
-                section={boundarySection}
-              >
-                {props.children}
-              </ConfigurationSourceBoundary>
-            )}
-          </QueryClientProvider>
-        </HostRuntimeContext.Provider>
-      </RunnerHostProvider>
-    ),
+    binding,
   };
 }
 
