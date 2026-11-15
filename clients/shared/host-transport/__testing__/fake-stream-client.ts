@@ -299,8 +299,19 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     return this.methodSupport;
   }
 
-  subscribeMethodSupport(): () => void {
-    return () => undefined;
+  private readonly methodSupportListeners = new Set<() => void>();
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    this.methodSupportListeners.add(listener);
+    return () => {
+      this.methodSupportListeners.delete(listener);
+    };
+  }
+
+  /** Changes {@link methodSupport} the way a handshake does: then tells every subscriber. */
+  setMethodSupport(next: StreamMethodSupport): void {
+    this.methodSupport = next;
+    for (const listener of [...this.methodSupportListeners]) listener();
   }
 
   subscribeAvailabilityRecovered(): () => void {
