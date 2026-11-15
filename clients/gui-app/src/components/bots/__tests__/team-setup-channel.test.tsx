@@ -700,6 +700,54 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(auth().createSandbox).not.toHaveBeenCalled();
     });
 
+    it("shows Enable cloud as the primary action while the team has no sandbox, beside the secondary Add a computer", async () => {
+      render(surfaceFor(SETUP_BOT_ID));
+
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      expect(enableButton().getAttribute("data-variant")).toBe("default");
+      expect(enableButton().getAttribute("data-size")).toBe("sm");
+      const addComputer = within(
+        screen.getByTestId("team-host-option-machine"),
+      ).getByRole("button", { name: "Add a computer" });
+      expect(addComputer.getAttribute("data-variant")).toBe("outline");
+      expect(addComputer.getAttribute("data-size")).toBe("sm");
+    });
+
+    it("holds Enable cloud, saying so, while the sandbox list is unread, though every other read has answered", async () => {
+      const user = userEvent.setup();
+      auth().listSandboxes.mockImplementation(
+        () => new Promise(() => undefined),
+      );
+      render(surfaceFor(SETUP_BOT_ID));
+
+      // The team may already have its sandbox: only the list can say it has
+      // none, so the answered model and catalogue reads do not free the press.
+      for (const queryKey of [
+        ["auth", "traycer-models"],
+        ["auth", "sandbox-catalogue"],
+      ]) {
+        await waitFor(() =>
+          expect(
+            queryClient
+              .getQueryCache()
+              .findAll({ queryKey })
+              .some((query) => query.state.status === "success"),
+          ).toBe(true),
+        );
+      }
+      await user.click(enableButton());
+
+      expect(enableButton()).toHaveProperty("disabled", true);
+      expect(
+        document.getElementById(
+          enableButton().getAttribute("aria-describedby") ?? "",
+        )?.textContent,
+      ).toBe("Checking the team's cloud setup.");
+      expect(auth().createSandbox).not.toHaveBeenCalled();
+    });
+
     it("says a refusal for want of the team's credit under the button, and lets the person press it again", async () => {
       const user = userEvent.setup();
       auth().createSandbox.mockResolvedValue({

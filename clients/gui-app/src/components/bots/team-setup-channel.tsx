@@ -202,64 +202,85 @@ function TeamHostOptionsCard(props: {
   const { live } = props;
   return (
     <div
-      className="flex min-w-0 flex-col gap-3 rounded-lg border border-border/60 bg-card p-3"
+      className="@container flex min-w-0 flex-col gap-3 rounded-lg border border-border/60 bg-card p-3"
       data-testid="team-host-options"
     >
       <h2 className="text-ui-sm font-semibold text-foreground">
         Give the team a computer
       </h2>
-      <TeamHostOption
-        title="Enable cloud for the team"
-        description="One cloud sandbox hosts the team's bots, using the team's credit while it runs."
-        action={
-          live === null ? null : (
-            <EnableTeamCloudAction
-              environmentId={live.environmentId}
-              teamName={live.teamName}
-              machineJoining={live.machineJoining}
-              testId="team-host-option-cloud"
-            />
-          )
-        }
-        testId="team-host-option-cloud"
-      />
-      <TeamHostOption
-        title="Add a computer"
-        description="A computer the team can open and run agents on."
-        action={
-          live === null || teamHandle === null ? null : (
-            <AddComputerDialog
-              teamName={live.teamName}
-              teamSelector={teamHandle}
-              unattended={
-                <TeamComputerUnattendedSetup
-                  environmentId={live.environmentId}
-                />
-              }
-              testId="team-host-option-machine"
-            />
-          )
-        }
-        testId="team-host-option-machine"
-      />
+      <div className="flex min-w-0 flex-col divide-y divide-border/60">
+        {live === null ? (
+          <TeamHostOption
+            title={ENABLE_CLOUD_TITLE}
+            description={CLOUD_DESCRIPTION}
+            status={null}
+            action={null}
+            testId="team-host-option-cloud"
+          />
+        ) : (
+          <EnableTeamCloudOption
+            environmentId={live.environmentId}
+            teamName={live.teamName}
+            machineJoining={live.machineJoining}
+            testId="team-host-option-cloud"
+          />
+        )}
+        <TeamHostOption
+          title="Add a computer"
+          description="A computer the team can open and run agents on."
+          status={null}
+          action={
+            live === null || teamHandle === null ? null : (
+              <AddComputerDialog
+                teamName={live.teamName}
+                teamSelector={teamHandle}
+                unattended={
+                  <TeamComputerUnattendedSetup
+                    environmentId={live.environmentId}
+                  />
+                }
+                testId="team-host-option-machine"
+              />
+            )
+          }
+          testId="team-host-option-machine"
+        />
+      </div>
     </div>
   );
 }
 
+const ENABLE_CLOUD_TITLE = "Enable cloud for the team";
+const CLOUD_DESCRIPTION =
+  "One cloud sandbox hosts the team's bots, using the team's credit while it runs.";
+
+/**
+ * One way to get a host, as a row: what it is on the left, its button on the
+ * right at the button's own width. Under `@sm` of the card's width the button
+ * drops under the text, start-aligned, so both rows stack the same way.
+ */
 function TeamHostOption(props: {
   readonly title: string;
   readonly description: string;
+  /** Lines under the description: why the button waits, or what failed. */
+  readonly status: ReactNode;
   /** The option's button; `null` in the post kept as history. */
   readonly action: ReactNode;
   readonly testId: string;
 }): ReactNode {
   return (
-    <div className="flex min-w-0 flex-col gap-1.5" data-testid={props.testId}>
+    <div
+      className="grid min-w-0 grid-cols-1 items-start justify-items-start gap-x-4 gap-y-2 py-3 first:pt-0 last:pb-0 @sm:grid-cols-[minmax(0,1fr)_auto]"
+      data-testid={props.testId}
+    >
       <div className="flex min-w-0 flex-col gap-0.5">
         <h3 className="text-ui-sm font-medium text-foreground">
           {props.title}
         </h3>
         <p className="text-ui-xs text-muted-foreground">{props.description}</p>
+        {props.status === null ? null : (
+          <div className="flex min-w-0 flex-col gap-1 pt-1">{props.status}</div>
+        )}
       </div>
       {props.action}
     </div>
@@ -290,13 +311,13 @@ function hostsTeamBots(
   );
 }
 
-/**
- * Why Enable cloud cannot be pressed yet: `note` is the line under it, or
- * `null` while a read it waits on is still out.
- */
+/** Why Enable cloud cannot be pressed yet: `note` is the line under it. */
 interface EnableTeamCloudBlocked {
-  readonly note: string | null;
+  readonly note: string;
 }
+
+/** The line under Enable cloud while a read it waits on is still out. */
+const CHECKING_CLOUD_SETUP = "Checking the team's cloud setup.";
 
 /**
  * What the team's create asks for: the configuration's defaults' shape over
@@ -334,7 +355,7 @@ function enableTeamCloudBlocked(input: {
   const { models, sandboxes, catalogue, shape } = input;
   if (input.machineJoining) return { note: MACHINE_JOINING_NOTE };
   if (models.status === "error") return { note: models.error.message };
-  if (models.data === undefined) return { note: null };
+  if (models.data === undefined) return { note: CHECKING_CLOUD_SETUP };
   if (models.data.length === 0) {
     return { note: "No model is available for team sandboxes yet." };
   }
@@ -342,7 +363,8 @@ function enableTeamCloudBlocked(input: {
   // and a list whose refresh failed may predate it.
   if (sandboxes.status === "error") return { note: sandboxes.error.message };
   const list = sandboxes.data;
-  if (list === undefined || list === null) return { note: null };
+  if (list === undefined || list === null)
+    return { note: CHECKING_CLOUD_SETUP };
   if (
     input.unlisted !== null ||
     list.sandboxes.some((summary) =>
@@ -354,7 +376,7 @@ function enableTeamCloudBlocked(input: {
     };
   }
   if (catalogue.status === "error") return { note: catalogue.error.message };
-  if (shape === undefined) return { note: null };
+  if (shape === undefined) return { note: CHECKING_CLOUD_SETUP };
   if (shape === null) {
     return { note: "Sandboxes aren't available right now. Try again later." };
   }
@@ -371,7 +393,7 @@ function enableTeamCloudBlocked(input: {
  * team to have no kept sandbox, so a second press, or a teammate's, adds
  * none. A refusal is said under the button, `insufficient_credit` included.
  */
-function EnableTeamCloudAction(props: {
+function EnableTeamCloudOption(props: {
   readonly environmentId: string;
   readonly teamName: string;
   readonly machineJoining: boolean;
@@ -446,44 +468,55 @@ function EnableTeamCloudAction(props: {
   const note = pending ? null : (blocked?.note ?? null);
   const refusal = pending ? null : createRefusalLine(create.error);
   return (
-    <div className="flex min-w-0 flex-col items-start gap-1">
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={blocked !== null || pending}
-        aria-describedby={note === null ? undefined : noteId}
-        onClick={enable}
-        data-testid={`${testId}-action`}
-      >
-        {pending ? (
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-        Enable cloud
-      </Button>
-      {note === null ? null : (
-        <p
-          id={noteId}
-          className="text-ui-xs text-muted-foreground"
-          data-testid={`${testId}-note`}
+    <TeamHostOption
+      title={ENABLE_CLOUD_TITLE}
+      description={CLOUD_DESCRIPTION}
+      status={
+        note === null && refusal === null ? null : (
+          <>
+            {note === null ? null : (
+              <p
+                id={noteId}
+                className="text-ui-xs text-muted-foreground"
+                data-testid={`${testId}-note`}
+              >
+                {note}
+              </p>
+            )}
+            {refusal === null ? null : (
+              <p
+                role="alert"
+                className="text-ui-xs text-destructive"
+                data-testid={`${testId}-refusal`}
+              >
+                {refusal}
+              </p>
+            )}
+          </>
+        )
+      }
+      action={
+        <Button
+          type="button"
+          size="sm"
+          variant="default"
+          disabled={blocked !== null || pending}
+          aria-describedby={note === null ? undefined : noteId}
+          onClick={enable}
+          data-testid={`${testId}-action`}
         >
-          {note}
-        </p>
-      )}
-      {refusal === null ? null : (
-        <p
-          role="alert"
-          className="text-ui-xs text-destructive"
-          data-testid={`${testId}-refusal`}
-        >
-          {refusal}
-        </p>
-      )}
-    </div>
+          {pending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Enable cloud
+        </Button>
+      }
+      testId={testId}
+    />
   );
 }
 
