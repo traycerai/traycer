@@ -3,8 +3,12 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
 import {
@@ -15,6 +19,11 @@ import {
   type RemoteSessionAcquirePolicy,
   type RemoteSessionIdentity,
 } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
+import {
+  acquireHostStreamClient,
+  resetHostStreamClientCacheForTest,
+  type HostStreamClientIdentity,
+} from "@/lib/host/host-stream-client-cache";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { refreshConnectedAccountSettings } from "@/lib/host/refresh-connected-account-settings";
@@ -43,6 +52,10 @@ const remoteHost = {
 const remoteSessionPolicy: RemoteSessionAcquirePolicy = {
   proactiveWakeEligible: true,
 };
+const refreshRpcRegistry = defineVersionedRpcRegistry({
+  "host.accountSettings.refresh":
+    hostRpcRegistry["host.accountSettings.refresh"],
+});
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
@@ -66,8 +79,10 @@ function remoteIdentity(userId: string): RemoteSessionIdentity {
   };
 }
 
+type RefreshRpcRegistry = typeof refreshRpcRegistry;
+
 interface FakeRemoteSession extends IRemoteSession<
-  VersionedRpcRegistry,
+  RefreshRpcRegistry,
   VersionedStreamRpcRegistry
 > {
   readonly closeCalls: number;
@@ -163,6 +178,7 @@ function makeBinding(
 
 afterEach(() => {
   retireAllRemoteSessions();
+  resetHostStreamClientCacheForTest();
   vi.restoreAllMocks();
 });
 
@@ -253,6 +269,105 @@ describe("refreshConnectedAccountSettings", () => {
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
     expect(requestedHosts).toEqual([]);
     expect(requestIds).toEqual([]);
+  });
+
+  it("releases an owned remote-session borrow after a successful refresh send", async () => {
+    const requestIds: string[] = [];
+    const requestedHosts: string[] = [];
+    const identity = remoteIdentity("viewer-1");
+    const session = readyRemoteSession();
+    const sendStarted = deferred<void>();
+    const sendGate = deferred<void>();
+    const sendUnary: FakeRemoteSession["sendUnary"] = async <
+      Method extends keyof RefreshRpcRegistry & string,
+    >(
+      _method: Method,
+    ) => {
+      sendStarted.resolve();
+      await sendGate.promise;
+      // The fake registry has only the refresh method. Parsing its concrete
+      // response schema proves the value; TS does not reduce its generic
+      // ResponseOfMethod mapping even with that one-method registry.
+      return hostAccountSettingsRefreshV10.responseSchema.parse(
+        {},
+      ) as ResponseOfMethod<RefreshRpcRegistry, Method>;
+    };
+    const sendSpy = vi.fn(sendUnary);
+    session.sendUnary = sendSpy;
+    const owner = acquireRemoteSession(
+      identity,
+      remoteSessionPolicy,
+      () => session,
+    );
+    const entries = [remoteHost];
+    const binding = makeBinding(
+      entries,
+      () => Promise.resolve(entries),
+      requestIds,
+      requestedHosts,
+    );
+
+    const refresh = refreshConnectedAccountSettings(
+      binding,
+      null,
+      "viewer-1",
+      () => true,
+    );
+    await sendStarted.promise;
+    expect(remoteSessionBorrowCountForTest(identity)).toBe(1);
+
+    owner.close();
+    expect(remoteSessionBorrowCountForTest(identity)).toBe(1);
+    expect(remoteSessionRefCountForTest(identity)).toBe(0);
+    expect(session.isClosed()).toBe(false);
+
+    sendGate.resolve();
+    await refresh;
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
+    expect(session.closeCalls).toBe(1);
+    expect(requestedHosts).toEqual([]);
+    expect(requestIds).toEqual([]);
+  });
+
+  it("sends the ordinary refresh request through an already-connected local host", async () => {
+    const requestIds: string[] = [];
+    const requestedHosts: string[] = [];
+    const localEntries: readonly HostDirectoryEntry[] = [mockLocalHostEntry];
+    const localWebsocketUrl = mockLocalHostEntry.websocketUrl;
+    if (localWebsocketUrl === null)
+      throw new Error("expected the local websocket URL");
+    const binding = makeBinding(
+      localEntries,
+      () => Promise.resolve(localEntries),
+      requestIds,
+      requestedHosts,
+    );
+    const identity: HostStreamClientIdentity = {
+      kind: "local",
+      hostId: mockLocalHostEntry.hostId,
+      userId: "viewer-1",
+      websocketUrl: localWebsocketUrl,
+      publicKey: "",
+      authnBaseUrl: "",
+      authRecovery: "revalidate",
+      openAuth: null,
+    };
+    const client = new FakeStreamClient(true);
+    const lease = acquireHostStreamClient(identity, () => client);
+    if (lease === null) throw new Error("expected the local stream client");
+
+    await refreshConnectedAccountSettings(
+      binding,
+      null,
+      "viewer-1",
+      () => true,
+    );
+
+    expect(requestedHosts).toEqual([mockLocalHostEntry.hostId]);
+    expect(requestIds).toEqual(["local-refresh"]);
+    lease.release();
   });
 
   it("does not refresh a ready remote session owned by another viewer and balances its borrow", async () => {

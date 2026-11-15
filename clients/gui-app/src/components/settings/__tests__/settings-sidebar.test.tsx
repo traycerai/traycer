@@ -783,6 +783,7 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["sandboxes", "personal"],
   ["storage", "personal"],
   ["members", "personal"],
+  ["notification-hooks", "personal"],
   ["agent-definitions", "personal"],
   ["machine-setup", "personal"],
   // Dev-only proof pages: offered whenever `import.meta.env.DEV` holds, which
@@ -935,7 +936,13 @@ describe("<SettingsSidebar /> scope groups", () => {
         Node.DOCUMENT_POSITION_FOLLOWING) !==
       0;
 
-    for (const id of ["providers", "secrets", "devices", "notifications"]) {
+    for (const id of [
+      "providers",
+      "secrets",
+      "devices",
+      "notifications",
+      "notification-hooks",
+    ]) {
       expect(
         follows(screen.getByTestId(`settings-sidebar-item-${id}`), picker),
         id,
@@ -1016,6 +1023,7 @@ describe("<SettingsSidebar /> scope groups", () => {
       "shell",
       "agents",
       "secrets",
+      "notification-hooks",
       "devices",
       "usage",
       "credits",

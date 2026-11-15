@@ -396,6 +396,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       "secrets",
       "costs",
       "simulators",
+      "notifications",
     ]);
   });
 
@@ -468,6 +469,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       "host-overview-tab-secrets",
       "host-overview-tab-costs",
       "host-overview-tab-simulators",
+      "host-overview-tab-notifications",
     ]);
     expect(
       screen
