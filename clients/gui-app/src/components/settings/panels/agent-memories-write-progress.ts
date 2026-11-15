@@ -14,17 +14,15 @@ export type AgentMemoryWriteProgress =
 
 /** Absence is never acceptance; a saved write needs its own revision and value. */
 export function agentMemoryWriteProgress(input: {
-  readonly answer: ConfigAgentMemoriesSetResponse;
+  readonly answer: Exclude<
+    ConfigAgentMemoriesSetResponse,
+    { state: "local_only" }
+  >;
   readonly asked: boolean;
   readonly read: ConfigAgentMemoriesResponse;
   readonly queue: EnvironmentStatusResponseV11 | undefined;
 }): AgentMemoryWriteProgress {
   const { answer, read } = input;
-  // Saved on a computer bound to no configuration: in force here, with no
-  // revision for a read to reach.
-  if (answer.state === "local_only") {
-    return { kind: answer.enabled === input.asked ? "settled" : "unconfirmed" };
-  }
   if (
     read.environmentId !== null &&
     read.environmentId !== answer.environmentId
