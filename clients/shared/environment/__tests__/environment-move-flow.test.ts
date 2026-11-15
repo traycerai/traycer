@@ -84,24 +84,34 @@ function fakeHost(stage: () => Promise<EnvironmentMoveStageResponse>): {
   return { host, calls };
 }
 
-function fakeCloud(answer: { status: number; body: unknown }): {
+function fakeCloud(
+  answer:
+    | { status: number; body: unknown }
+    | ((
+        request: EnvironmentTransportRequest,
+        origin: { current: boolean },
+      ) =>
+        | { status: number; body: unknown }
+        | Promise<{ status: number; body: unknown }>),
+): {
   readonly cloud: EnvironmentCloud;
   readonly sent: EnvironmentTransportRequest[];
+  readonly origin: { current: boolean };
 } {
   const sent: EnvironmentTransportRequest[] = [];
+  const origin = { current: true };
   const cloud: EnvironmentCloud = {
     authnBaseUrl: "https://authn.test",
     bearer: { kind: "cloud", getBearerToken: () => "bearer-1" },
-    onOriginSignIn: () => true,
-    transport: (request) => {
+    onOriginSignIn: () => origin.current,
+    transport: async (request) => {
       sent.push(request);
-      return Promise.resolve({
-        status: answer.status,
-        text: JSON.stringify(answer.body),
-      });
+      const response =
+        typeof answer === "function" ? await answer(request, origin) : answer;
+      return { status: response.status, text: JSON.stringify(response.body) };
     },
   };
-  return { cloud, sent };
+  return { cloud, sent, origin };
 }
 
 describe("runEnvironmentMove", () => {
@@ -241,6 +251,64 @@ describe("runEnvironmentMove", () => {
     await expect(run).rejects.toBeInstanceOf(EnvironmentCloudError);
     await expect(run).rejects.toMatchObject({ kind: "forbidden" });
     expect(calls.start).toEqual([]);
+  });
+
+  it("does not start after authn accepts on a sign-in that has changed", async () => {
+    const { host, calls } = fakeHost(() => Promise.resolve(teamStage({})));
+    const requested = Promise.withResolvers<void>();
+    const acceptance = Promise.withResolvers<{
+      status: number;
+      body: unknown;
+    }>();
+    const { cloud, sent, origin } = fakeCloud((request) => {
+      expect(request.url).toBe(
+        `https://authn.test/api/v3/hosts/${HOST_ID}/move-acceptances`,
+      );
+      requested.resolve();
+      return acceptance.promise;
+    });
+
+    const move = runEnvironmentMove(host, cloud, teamAcceptance);
+    await requested.promise;
+    origin.current = false;
+    acceptance.resolve({
+      status: 201,
+      body: { acceptanceId: ACCEPTANCE_ID },
+    });
+    const result = await move;
+
+    expect(sent).toHaveLength(1);
+    expect(result).toEqual({ kind: "sign_in_changed" });
+    expect(calls.start).toEqual([]);
+  });
+
+  it("returns sign_in_changed when the changed sign-in's start throws", async () => {
+    const { cloud, origin } = fakeCloud({
+      status: 201,
+      body: { acceptanceId: ACCEPTANCE_ID },
+    });
+    const { host: stagedHost, calls } = fakeHost(() =>
+      Promise.resolve(teamStage({})),
+    );
+    const host: EnvironmentMoveHost = {
+      ...stagedHost,
+      start: (request) => {
+        calls.start.push(request);
+        origin.current = false;
+        return Promise.reject(new Error("the start did not reach the host"));
+      },
+    };
+
+    const result = await runEnvironmentMove(host, cloud, teamAcceptance);
+
+    expect(calls.start).toEqual([
+      {
+        attemptId: ATTEMPT_ID,
+        planHash: PLAN_HASH,
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    ]);
+    expect(result).toEqual({ kind: "sign_in_changed" });
   });
 
   it("answers not_awaiting when the computer has no move waiting", async () => {
