@@ -21,21 +21,26 @@ export interface HostNotYetErrors {
 }
 
 export const hostNotYetErrors: HostNotYetErrors = {
-  notYetOnRequest: (method) =>
-    new RetryableTransportError({
+  notYetOnRequest: (method) => {
+    // A request over an admitted session carries the host's refusal both as its
+    // details and as the door refusal; an open's error has only the details.
+    const details = {
+      code: "TEAM_HOST_RECONNECTING",
+      reason: "waiting for the team's host to reconnect",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    };
+    return new RetryableTransportError({
       code: "RPC_ERROR",
       message: "the team's host is reconnecting",
       requestId: "not-yet-request",
       method,
-      fatalDetails: {
-        code: "TEAM_HOST_RECONNECTING",
-        reason: "waiting for the team's host to reconnect",
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-        retryable: true,
-      },
+      fatalDetails: details,
+      doorRefusal: details,
       replaySafetyFromKey: false,
-    }),
+    });
+  },
   notYetAtOpen: (method) =>
     new RetryableTransportError({
       code: "RPC_ERROR",
