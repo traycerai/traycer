@@ -15,7 +15,6 @@ import type {
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { CloudNotificationHook } from "@traycer-clients/shared/environment/notification-hook-values";
 import { NOTIFICATION_HOOKS_ITEM } from "@traycer-clients/shared/environment/notification-hook-item-kind";
-import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   type ConfigurationSource,
@@ -96,8 +95,8 @@ function source(
       : role === "editor"
         ? "editor"
         : role === "viewer"
-          ? grantedEnvironmentRole("viewer")
-          : grantedEnvironmentRole("future-role");
+          ? "viewer"
+          : null;
   return {
     kind: "pool",
     configuration: "team",
@@ -122,7 +121,7 @@ function renderPage(role: "admin" | "editor" | "viewer" | "unknown") {
   return render(<TeamNotificationHooksSettingsPanel />, { wrapper: Wrapper });
 }
 
-function requestBody(index = 0): Record<string, unknown> {
+function requestBody(index: number): Record<string, unknown> {
   const body = fixtures.requests[index]?.body;
   if (typeof body !== "object" || body === null)
     throw new Error("notification hooks PUT had no body");
@@ -185,13 +184,13 @@ describe("team Notification hooks page", () => {
       method: "PUT",
       url: "https://authn.example/api/v3/environments/team-1/items/notification_hooks",
     });
-    expect(requestBody()).toMatchObject({
+    expect(requestBody(0)).toMatchObject({
       key: NOTIFICATION_HOOKS_ITEM.key,
       os: null,
       revision: 7,
       upload: null,
     });
-    const values = requestBody().value as Array<Record<string, unknown>>;
+    const values = requestBody(0).value as Array<Record<string, unknown>>;
     expect(values.map(({ name }) => name)).toEqual([
       "Build alerts",
       "Release alerts",
@@ -217,12 +216,12 @@ describe("team Notification hooks page", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
 
     await waitFor(() => expect(fixtures.requests).toHaveLength(1));
-    const values = requestBody().value as Array<Record<string, unknown>>;
+    const values = requestBody(0).value as Array<Record<string, unknown>>;
     expect(values.map(({ name }) => name)).toEqual([
       "Build alerts revised",
       "Deploy alerts",
     ]);
-    expect(requestBody().revision).toBe(7);
+    expect(requestBody(0).revision).toBe(7);
   });
 
   it("deletes a team hook with the C26 team confirmation sentence", async () => {
@@ -241,7 +240,7 @@ describe("team Notification hooks page", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(fixtures.requests).toHaveLength(1));
-    expect(requestBody()).toMatchObject({
+    expect(requestBody(0)).toMatchObject({
       key: NOTIFICATION_HOOKS_ITEM.key,
       revision: 7,
       value: [],

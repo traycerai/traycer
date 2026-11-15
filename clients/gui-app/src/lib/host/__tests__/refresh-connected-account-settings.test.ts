@@ -82,7 +82,9 @@ function readyRemoteSession(): FakeRemoteSession {
     isClosed: () => closed,
     isReady: () => !closed,
     isSilentFor: () => false,
-    sendUnary: vi.fn(async () => ({}) as never),
+    sendUnary: vi.fn(async () => {
+      throw new Error("remote refresh response is not used by this fake");
+    }),
     forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("refresh must not open a stream subscription");
@@ -210,7 +212,7 @@ describe("refreshConnectedAccountSettings", () => {
     session.sendUnary = vi.fn(async () => {
       sendStarted.resolve();
       await sendGate.promise;
-      return {} as never;
+      throw new Error("remote refresh response is not used by this fake");
     });
     const owner = acquireRemoteSession(
       identity,

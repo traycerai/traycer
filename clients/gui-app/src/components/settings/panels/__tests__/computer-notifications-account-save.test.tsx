@@ -26,6 +26,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const accountCloud = vi.hoisted(() => ({
   requests: [] as EnvironmentTransportRequest[],
   putFailureStatus: null as number | null,
+  deferPut: false,
+  pendingPutResolve: null as
+    | ((response: { readonly status: number; readonly text: string }) => void)
+    | null,
 }));
 
 vi.mock("@/hooks/environment/use-environment-cloud", () => ({
@@ -34,6 +38,14 @@ vi.mock("@/hooks/environment/use-environment-cloud", () => ({
     bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
     transport: async (request: EnvironmentTransportRequest) => {
       accountCloud.requests.push(request);
+      if (request.method === "PUT" && accountCloud.deferPut) {
+        accountCloud.deferPut = false;
+        return await new Promise<{ status: number; text: string }>(
+          (resolve) => {
+            accountCloud.pendingPutResolve = resolve;
+          },
+        );
+      }
       if (request.method === "PUT" && accountCloud.putFailureStatus !== null) {
         return {
           status: accountCloud.putFailureStatus,
@@ -120,20 +132,36 @@ const hostAnsweredHttpHook = {
 
 afterEach(() => {
   cleanup();
+  accountCloud.pendingPutResolve?.({
+    status: 503,
+    text: JSON.stringify({ detail: "private account failure" }),
+  });
   accountCloud.requests = [];
   accountCloud.putFailureStatus = null;
+  accountCloud.deferPut = false;
+  accountCloud.pendingPutResolve = null;
   useAuthStore.setState({ status: "signed-out" });
 });
 
-function makeHostClient(accountHooks: HostHooksSaveResponse["accountHooks"]): {
+function makeHostClient(
+  accountHooks: HostHooksSaveResponse["accountHooks"],
+  options: {
+    readonly initialHooks?: HostHooksStatus["hooks"];
+    readonly deferFirstSave?: boolean;
+  } = {},
+): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly saves: HostHooksSaveRequest[];
+  readonly getStatus: () => HostHooksStatus;
+  readonly rejectPendingHostSave: () => void;
 } {
   const saves: HostHooksSaveRequest[] = [];
+  let rejectPendingHostSave: ((reason: Error) => void) | null = null;
+  let deferNextSave = options.deferFirstSave === true;
   let status: HostHooksStatus = {
     configPath: "/home/test/.traycer/notification-hooks.json",
     configError: null,
-    hooks: commandHooks,
+    hooks: options.initialHooks ?? commandHooks,
     configurationRevision: "host-rev-7",
     pendingRemovalNotices: [],
   };
@@ -155,10 +183,16 @@ function makeHostClient(accountHooks: HostHooksSaveResponse["accountHooks"]): {
           outcome: "ok",
           detail: "delivered",
         }),
-        "host.notificationHooks.save": (
+        "host.notificationHooks.save": async (
           request: HostHooksSaveRequest,
-        ): HostHooksSaveResponse => {
+        ): Promise<HostHooksSaveResponse> => {
           saves.push(request);
+          if (deferNextSave) {
+            deferNextSave = false;
+            await new Promise<never>((_resolve, reject) => {
+              rejectPendingHostSave = reject;
+            });
+          }
           if (request.configurationRevision !== `host-rev-${revision}`) {
             throw new Error("Notification hooks changed on this computer.");
           }
@@ -183,7 +217,18 @@ function makeHostClient(accountHooks: HostHooksSaveResponse["accountHooks"]): {
       bearerToken: "test-bearer",
     }),
   );
-  return { client: spine.createRequester(mockLocalHostEntry), saves };
+  return {
+    client: spine.createRequester(mockLocalHostEntry),
+    saves,
+    getStatus: () => status,
+    rejectPendingHostSave: () => {
+      if (rejectPendingHostSave === null)
+        throw new Error("No deferred host save is pending.");
+      const reject = rejectPendingHostSave;
+      rejectPendingHostSave = null;
+      reject(new Error("The host save failed."));
+    },
+  };
 }
 
 function renderComputerTab(client: HostClient<HostRpcRegistry>) {
@@ -216,9 +261,23 @@ async function convertCommandHookToHttp(): Promise<void> {
   fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
 }
 
-async function addHttpHook(name: string, url: string): Promise<void> {
+async function fillHttpHookDialog(name: string, url: string): Promise<void> {
   const manager = await screen.findByTestId("notification-hooks-manager");
-  fireEvent.click(within(manager).getByRole("button", { name: "Add hook" }));
+  const addButton = await waitFor(() => {
+    const button = within(manager)
+      .getAllByRole("button", { name: "Add hook" })
+      .find((candidate) => !candidate.hasAttribute("disabled"));
+    if (button === undefined) throw new Error("No enabled Add hook button.");
+    return button;
+  });
+  fireEvent.click(addButton);
+  await fillOpenedHttpHookDialog(name, url);
+}
+
+async function fillOpenedHttpHookDialog(
+  name: string,
+  url: string,
+): Promise<void> {
   const dialog = await screen.findByRole("dialog");
   fireEvent.change(within(dialog).getByLabelText("Name"), {
     target: { value: name },
@@ -231,7 +290,49 @@ async function addHttpHook(name: string, url: string): Promise<void> {
   fireEvent.change(within(dialog).getByLabelText("Headers"), {
     target: { value: "x-form: value" },
   });
+}
+
+async function addHttpHook(name: string, url: string): Promise<void> {
+  await fillHttpHookDialog(name, url);
+  const dialog = screen.getByRole("dialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
+}
+
+function settleDeferredAccountPut(status: 200 | 503): void {
+  const resolve = accountCloud.pendingPutResolve;
+  if (resolve === null) throw new Error("No deferred account PUT is pending.");
+  accountCloud.pendingPutResolve = null;
+  resolve({
+    status,
+    text:
+      status === 503
+        ? JSON.stringify({ detail: "private account failure" })
+        : JSON.stringify({
+            settings: {
+              matrix: {
+                needs_action: { renderer: true },
+                failure: { renderer: true },
+                done: { renderer: true },
+                info: { renderer: false },
+              },
+              hooks: [],
+            },
+            revision: 18,
+          }),
+  });
+}
+
+async function reopenAddDialog(name: string, url: string): Promise<void> {
+  const manager = await screen.findByTestId("notification-hooks-manager");
+  const addButton = await waitFor(() => {
+    const button = within(manager)
+      .getAllByRole("button", { name: "Add hook" })
+      .find((candidate) => !candidate.hasAttribute("disabled"));
+    if (button === undefined) throw new Error("No enabled Add hook button.");
+    return button;
+  });
+  fireEvent.click(addButton);
+  await fillOpenedHttpHookDialog(name, url);
 }
 
 describe("computer hook saves and the host's answered account part", () => {
@@ -306,7 +407,10 @@ describe("computer hook saves and the host's answered account part", () => {
       ).toBe(true),
     );
     expect(screen.getByTestId("notification-hooks-manager")).toBeTruthy();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    expect(
+      (await within(screen.getByRole("dialog")).findByRole("alert"))
+        .textContent,
+    ).toBe(
       "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
     );
   });
@@ -321,13 +425,16 @@ describe("computer hook saves and the host's answered account part", () => {
     await waitFor(() => expect(accountCloud.requests).toHaveLength(2));
     expect(accountCloud.requests[0]?.method).toBe("GET");
     expect(accountCloud.requests[1]?.method).toBe("PUT");
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    expect(
+      (await within(screen.getByRole("dialog")).findByRole("alert"))
+        .textContent,
+    ).toBe(
       "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
     );
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(
       within(screen.getByRole("dialog")).getByLabelText("Name"),
-    ).toHaveValue("Draft hook");
+    ).toHaveProperty("value", "Draft hook");
     expect(saves).toHaveLength(1);
     const firstDraft = saves[0]?.hooks.find(
       (hook) => hook.name === "Draft hook",
@@ -363,6 +470,113 @@ describe("computer hook saves and the host's answered account part", () => {
       hooks: [{ ...hostAnsweredHttpHook, held: false }],
       revision: 17,
     });
+  });
+
+  it("keeps a reopened Add at its old revision when the first account PUT fails", async () => {
+    const { client, saves, getStatus } = makeHostClient([], {
+      initialHooks: [],
+    });
+    accountCloud.deferPut = true;
+    renderComputerTab(client);
+
+    await addHttpHook("Draft A", "https://hooks.example/a");
+    await waitFor(() => expect(accountCloud.pendingPutResolve).not.toBeNull());
+    expect(saves).toHaveLength(1);
+    expect(saves[0]?.configurationRevision).toBe("host-rev-7");
+
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await reopenAddDialog("Draft B", "https://hooks.example/b");
+
+    settleDeferredAccountPut(503);
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog")).getByLabelText("Name"),
+      ).toHaveProperty("value", "Draft B"),
+    );
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: "Save hook",
+        }),
+      ).toHaveProperty("disabled", false),
+    );
+
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Save hook",
+      }),
+    );
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1]?.configurationRevision).toBe("host-rev-7");
+    expect(
+      accountCloud.requests.filter((request) => request.method === "PUT"),
+    ).toHaveLength(1);
+    expect(getStatus().configurationRevision).toBe("host-rev-8");
+    expect(getStatus().hooks.map((hook) => hook.name)).toEqual(["Draft A"]);
+  });
+
+  it("does not let a late account success close a newly opened Add", async () => {
+    const { client } = makeHostClient([], { initialHooks: [] });
+    accountCloud.deferPut = true;
+    renderComputerTab(client);
+
+    await addHttpHook("Draft A", "https://hooks.example/a");
+    await waitFor(() => expect(accountCloud.pendingPutResolve).not.toBeNull());
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await reopenAddDialog("Draft B", "https://hooks.example/b");
+
+    settleDeferredAccountPut(200);
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: "Save hook",
+        }),
+      ).toHaveProperty("disabled", false),
+    );
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Name"),
+    ).toHaveProperty("value", "Draft B");
+  });
+
+  it("does not let a late host error close a newly opened Add", async () => {
+    const { client, saves, rejectPendingHostSave } = makeHostClient(null, {
+      initialHooks: [],
+      deferFirstSave: true,
+    });
+    renderComputerTab(client);
+
+    await addHttpHook("Draft A", "https://hooks.example/a");
+    await waitFor(() => expect(saves).toHaveLength(1));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await reopenAddDialog("Draft B", "https://hooks.example/b");
+
+    rejectPendingHostSave();
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: "Save hook",
+        }),
+      ).toHaveProperty("disabled", false),
+    );
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Name"),
+    ).toHaveProperty("value", "Draft B");
+    expect(accountCloud.requests).toEqual([]);
   });
 
   it("sends oversized host-answered HTTP hooks unchanged and treats authn's 400 as a failed save", async () => {
@@ -427,7 +641,8 @@ describe("computer hook saves and the host's answered account part", () => {
 
       await convertCommandHookToHttp();
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(
+      const dialog = screen.getByRole("dialog");
+      expect((await within(dialog).findByRole("alert")).textContent).toBe(
         "The settings request was refused. Review the refreshed hooks before saving again.",
       );
       expect(accountCloud.requests).toEqual([]);

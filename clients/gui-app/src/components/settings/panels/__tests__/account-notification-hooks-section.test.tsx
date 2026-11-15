@@ -59,7 +59,7 @@ const commandHook: AccountNotificationHook = {
     type: "command",
     command: "/usr/local/bin/notify",
     args: [],
-    os: "darwin",
+    os: "macos",
   },
   held: false,
 };
