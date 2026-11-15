@@ -1,3 +1,4 @@
+import type { AuthnSecretsCreateResponse } from "@traycer-clients/shared/environment/configuration-secrets";
 import {
   EnvironmentCloudError,
   SETTINGS_REFUSED_MESSAGE,
@@ -77,10 +78,17 @@ export type EnvironmentCloudMethod =
   | "environment.secrets.rotation"
   | "environment.secrets.consent";
 
+/** Authn's create answers no host-side pending-upload arm. */
+export type EnvironmentCloudResponse<Method extends EnvironmentCloudMethod> =
+  ResponseOfMethod<HostRpcRegistry, Method> &
+    (Method extends "environment.secrets.create"
+      ? AuthnSecretsCreateResponse
+      : unknown);
+
 type EnvironmentCloudCall<Method extends EnvironmentCloudMethod> = (
   cloud: EnvironmentCloud,
   request: RequestOfMethod<HostRpcRegistry, Method>,
-) => Promise<ResponseOfMethod<HostRpcRegistry, Method>>;
+) => Promise<EnvironmentCloudResponse<Method>>;
 
 /**
  * A secrets request names its environment for the app to send it to authn. A
@@ -194,7 +202,7 @@ export function environmentCloudHostError(
 export type EnvironmentCloudSend = <Method extends EnvironmentCloudMethod>(
   method: Method,
   request: RequestOfMethod<HostRpcRegistry, Method>,
-) => Promise<ResponseOfMethod<HostRpcRegistry, Method>>;
+) => Promise<EnvironmentCloudResponse<Method>>;
 
 /** One moved method, sent on the person's sign-in. */
 export async function callEnvironmentCloud<
@@ -203,7 +211,7 @@ export async function callEnvironmentCloud<
   cloud: EnvironmentCloud,
   method: Method,
   request: RequestOfMethod<HostRpcRegistry, Method>,
-): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+): Promise<EnvironmentCloudResponse<Method>> {
   const call: EnvironmentCloudCall<Method> = CALLS[method];
   try {
     return await call(cloud, request);

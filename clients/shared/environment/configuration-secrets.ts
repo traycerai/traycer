@@ -71,6 +71,12 @@ import {
   type EnvironmentHttpMethod,
 } from "./environment-cloud";
 
+/** The app's authn create never queues a host upload. */
+export type AuthnSecretsCreateResponse = Exclude<
+  EnvironmentSecretsCreateResponse,
+  { readonly outcome: "pending" }
+>;
+
 const CONSENT_NOT_OFFERED = "This consent is not offered.";
 const REFUSED = "Your environment did not accept this change.";
 const MAX_MESSAGE_LENGTH = 300;
@@ -258,7 +264,7 @@ export async function createSecret(
   cloud: EnvironmentCloud,
   environmentId: string,
   request: EnvironmentSecretsCreateRequestV11,
-): Promise<EnvironmentSecretsCreateResponse> {
+): Promise<AuthnSecretsCreateResponse> {
   if (
     request.mode !== RETIRED_SECRET_CREATE_FIELDS.mode ||
     request.exportPolicy !== RETIRED_SECRET_CREATE_FIELDS.exportPolicy
