@@ -22,7 +22,6 @@ import { itemLabel } from "@/components/settings/personal/personal-page-status";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentUndoMutation } from "@/hooks/environment/use-environment-undo-mutation";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
@@ -168,11 +167,8 @@ function KeepLocalButton(props: {
   readonly onRefused: (text: string) => void;
 }): ReactNode {
   const current = useCurrentValue(props.client, props.target);
-  const grant = useExecutableWriteGrant();
   const keep = useHostScopedMutationForClient(props.client, {
     method: "config.env.localOverride.set",
-    // The value can select what starts, so it carries the grant.
-    prepareRequest: grant,
     mutationKey: environmentMutationKeys.localOverrideSet(),
     errorMessage: "Couldn't keep the value on this host.",
     scope: { id: "config.env.localOverride" },
