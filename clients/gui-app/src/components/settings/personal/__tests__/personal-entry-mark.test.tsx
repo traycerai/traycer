@@ -437,6 +437,9 @@ function renderPage(
     isPending: options.servedEnvironmentPending === "environment-list",
     isFetching: false,
     isError: false,
+    // `usePersonalEnvironment` reads `error` and destructures `refetch`.
+    error: null,
+    refetch: () => Promise.resolve(undefined),
   };
   const rig: Rig = { sent: [], applied: [...options.applied], mintedFor: [] };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
@@ -548,8 +551,22 @@ function skillsPage(): ReactNode {
   return <ProviderSkillsTab state={skillsState()} />;
 }
 
+/**
+ * A team's computer makes the page read-only: once the frame's status read
+ * answers, it wraps the page in an inert region, which remounts the page. A row
+ * found before that is detached, so on a team the rows are found only after the
+ * region is there. A personal host's page never remounts.
+ */
+async function pageSettled(): Promise<void> {
+  if (!servedEnvironmentPermission.served.team) return;
+  await waitFor(() => {
+    expect(document.querySelector("[inert]")).not.toBeNull();
+  });
+}
+
 /** The MCP row for `name`: the list item around its expand button, once the page has mounted. */
 async function mcpRow(name: string): Promise<HTMLElement> {
+  await pageSettled();
   const row = (
     await screen.findByRole("button", { name: `Expand ${name}` })
   ).closest("li");
@@ -559,6 +576,7 @@ async function mcpRow(name: string): Promise<HTMLElement> {
 
 /** The skill row for `name`: the list item around its open button. */
 async function skillRow(name: string): Promise<HTMLElement> {
+  await pageSettled();
   const row = (
     await screen.findByRole("button", { name: new RegExp(`^Open ${name} `) })
   ).closest("li");
