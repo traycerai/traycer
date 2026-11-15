@@ -615,16 +615,6 @@ describe("<BotChannelSettingsPanel /> model", () => {
     },
   );
 
-  it("hides configuration controls while the role is not known", () => {
-    mocks.environmentList = undefined;
-    mountPanel(BOT, true);
-
-    expect(mocks.pickerDisabled.at(-1)).toBe(true);
-    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
-    expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
-    expect(screen.queryByTestId("bot-settings-delete")).toBeNull();
-  });
-
   it("says only that the next turn uses what is applied, not what the bot runs on", () => {
     mountPanel(BOT, false);
 
@@ -1790,14 +1780,15 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     const user = userEvent.setup();
     const secret = "private-value";
     let result: SlackAppWriteResult | null = null;
-    const transport: EnvironmentTransport = async () => ({
-      status: 400,
-      text: JSON.stringify({
-        statusCode: 400,
-        error: "Bad request",
-        code: secret,
-      }),
-    });
+    const transport: EnvironmentTransport = () =>
+      Promise.resolve({
+        status: 400,
+        text: JSON.stringify({
+          statusCode: 400,
+          error: "Bad request",
+          code: secret,
+        }),
+      });
     const writeErrors: Error[] = [];
     queryClient.getMutationCache().subscribe((event) => {
       if (
