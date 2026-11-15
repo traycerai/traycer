@@ -796,7 +796,10 @@ function BotDeleteSection(props: {
           remove.mutate(
             { botId: bot.botId },
             {
-              onSuccess: () => {
+              // `null`: the sign-in it was pressed under has ended, and an
+              // abandoned delete moves nothing.
+              onSuccess: (answer) => {
+                if (answer === null) return;
                 setOpen(false);
                 onDeleted();
               },

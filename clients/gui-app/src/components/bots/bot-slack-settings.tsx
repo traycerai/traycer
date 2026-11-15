@@ -441,7 +441,9 @@ function BotSlackInstall(props: {
             install.mutate(
               { baselineInstalledAt: app.installedAt },
               {
-                onSuccess: (minted) => void openLink(minted.url, "auth", event),
+                onSuccess: (minted) => {
+                  if (minted !== null) void openLink(minted.url, "auth", event);
+                },
               },
             )
           }
