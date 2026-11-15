@@ -1,4 +1,9 @@
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useRef,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, ImageOff } from "lucide-react";
 import { isClipboardImageMediaType } from "@traycer-clients/shared/images/clipboard-image-media";
@@ -74,9 +79,23 @@ export function ExpandedImageDialogContent(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const contentRef = useRef<HTMLDivElement>(null);
+  const previousRef = useRef<HTMLButtonElement>(null);
+  const nextRef = useRef<HTMLButtonElement>(null);
   const { index, count, onNavigate } = props.navigation;
   const previousIndex = index > 0 ? index - 1 : null;
   const nextIndex = index < count - 1 ? index + 1 : null;
+
+  // Stepping onto either end disables that end's arrow. A disabled button
+  // cannot keep focus, so the browser drops it to the document, where the
+  // arrow keys below never see a key; the dialog takes it first, as on open.
+  function navigate(target: number): void {
+    const focused = document.activeElement;
+    const disablesFocusedArrow =
+      (target === 0 && focused === previousRef.current) ||
+      (target === count - 1 && focused === nextRef.current);
+    if (disablesFocusedArrow) contentRef.current?.focus();
+    onNavigate(target);
+  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     if (event.defaultPrevented) return;
@@ -85,10 +104,10 @@ export function ExpandedImageDialogContent(props: {
     }
     if (event.key === "ArrowLeft" && previousIndex !== null) {
       event.preventDefault();
-      onNavigate(previousIndex);
+      navigate(previousIndex);
     } else if (event.key === "ArrowRight" && nextIndex !== null) {
       event.preventDefault();
-      onNavigate(nextIndex);
+      navigate(nextIndex);
     }
   }
 
@@ -123,12 +142,14 @@ export function ExpandedImageDialogContent(props: {
             <ImageSetArrow
               direction="previous"
               target={previousIndex}
-              onPress={onNavigate}
+              onPress={navigate}
+              buttonRef={previousRef}
             />
             <ImageSetArrow
               direction="next"
               target={nextIndex}
-              onPress={onNavigate}
+              onPress={navigate}
+              buttonRef={nextRef}
             />
           </>
         ) : null}
@@ -141,10 +162,14 @@ export function ExpandedImageDialogContent(props: {
  * One edge arrow, on the same raised plate as the zoom cluster so it stays
  * legible over any image. `target` is null at that end of the set.
  */
-function ImageSetArrow(props: {
+function ImageSetArrow({
+  buttonRef,
+  ...props
+}: {
   readonly direction: "previous" | "next";
   readonly target: number | null;
   readonly onPress: (target: number) => void;
+  readonly buttonRef: RefObject<HTMLButtonElement | null>;
 }): ReactNode {
   const isPrevious = props.direction === "previous";
   const label = isPrevious ? "Previous image" : "Next image";
@@ -163,6 +188,7 @@ function ImageSetArrow(props: {
         align={undefined}
       >
         <Button
+          ref={buttonRef}
           type="button"
           variant="ghost"
           size="icon-sm-touch"

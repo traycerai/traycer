@@ -107,7 +107,7 @@ describe("Layout section placement and digit reassignment", () => {
       "MCP servers",
       "Skills",
       "Permissions",
-      "Agent memories",
+      "Memories",
       "Agents",
       "Model routing",
       "Variables & shells",

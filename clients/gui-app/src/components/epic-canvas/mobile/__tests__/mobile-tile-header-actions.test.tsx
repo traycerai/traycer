@@ -197,10 +197,10 @@ describe("<MobileTileOriginCrumb />", () => {
     const app = await mountApp();
     const tabId = await openTaskFromChannel(app, "bot-1", "epic-1", true);
 
-    act(() => useTracySurfaceStore.getState().forgetBot("bot-2"));
+    act(() => useTracySurfaceStore.getState().forgetBot("bot-2", 1));
     expect(crumbOf(tabId)).not.toBeNull();
 
-    act(() => useTracySurfaceStore.getState().forgetBot("bot-1"));
+    act(() => useTracySurfaceStore.getState().forgetBot("bot-1", 1));
     expect(crumbOf(tabId)).toBeNull();
   });
 

@@ -69,7 +69,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-band",
 }));
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
-  useBotSubscription: () => ({
+  useBotSubscriptionForHost: () => ({
     snapshot: null,
     deleted: false,
     error: null,

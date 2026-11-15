@@ -6,15 +6,11 @@
  * `composer-image-preparation-browser-fallback.test.ts` does: a
  * `createImageBitmap` double plus canvas `getContext`/`toBlob` doubles.
  *
- * Driven through `useComposerHashPaste`, the hook the chat composer, the
- * edit composer and the new-conversation modal actually run. These pins used to
- * go through `useComposerPasteAdapter`, whose base64 ingest lost its last
- * caller
- * when those surfaces went hash-first and was deleted with it; the preparation
- * path underneath — `collectImages`, the per-mount session, the serial `for`
- * loop that keeps one bitmap alive at a time, and the prepared size/type/name
- * the node ends up carrying — is the same code under either ingest, which is why
- * every assertion below is unchanged.
+ * Driven through `useComposerHashPaste`, the hook the chat composer, the edit
+ * composer and the new-conversation modal run. What these pin is the
+ * preparation path under its image ingest: `collectImages`, the per-mount
+ * session that decodes one image at a time, and the prepared size, type and
+ * name the node carries.
  *
  * `putImage` is doubled rather than driven against IndexedDB: these are
  * preparation pins, and the store has its own suite.
@@ -70,6 +66,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
   },
   mentionRoots: [],
   beginPathInsertion: () => null,
+  pathsReachTarget: true,
 };
 
 /**
@@ -95,12 +92,12 @@ function renderPasteHook(inserted: ImageAttachmentAttrs[][]) {
   };
   const editorRef = { current: handle };
   return renderHook(() =>
-    useComposerHashPaste(
-      editorRef,
-      NOOP_FILE_PATHS.fileDrops,
-      NOOP_FILE_PATHS.mentionRoots,
-      null,
-    ),
+    useComposerHashPaste(editorRef, {
+      fileDrops: NOOP_FILE_PATHS.fileDrops,
+      mentionRoots: NOOP_FILE_PATHS.mentionRoots,
+      fileRoute: null,
+      pathsReachTarget: NOOP_FILE_PATHS.pathsReachTarget,
+    }),
   );
 }
 

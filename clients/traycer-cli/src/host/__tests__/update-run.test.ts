@@ -8265,6 +8265,39 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
   // The rule has two halves and the pins below are one per half: a REFUSAL
   // short-circuits, and a host that is merely not answering yet does not.
 
+  it("two refusals that follow a rejected sign-in end the leg as an expected sign-in error", async () => {
+    // The host runs the target and the refresh of the CLI's stored sign-in was
+    // rejected, so what failed is the credential. The CLI must say so with the
+    // sign-in remedy and an expected code, not blame the host and ask for a
+    // newer host. The durable record keeps the refusal code the GUI card reads.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "sign-in-rejected";
+      world.runningRefusal = "UNAUTHORIZED: Token expired";
+    });
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(mocks.observeAttemptRecoveryEvidence).toHaveBeenCalledTimes(2);
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      message: expect.stringContaining("traycer login"),
+    });
+    expect(failure).not.toMatchObject({
+      message: expect.stringContaining("updating forward to a newer host"),
+    });
+    const record = await requireRecord();
+    expect(record.error).toMatchObject({
+      code: "host-refuses-rpc",
+      phase: "verifying",
+    });
+  });
+
   it("Q19: two consecutive refusals end the leg early, and say so", async () => {
     // The poll count is the assertion that matters. With `verifyBudgetMs: 200`
     // and `verifyPollIntervalMs: 5` the deadline arm takes ~40 observations;

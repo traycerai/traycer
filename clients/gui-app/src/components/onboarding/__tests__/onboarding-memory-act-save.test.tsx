@@ -382,7 +382,7 @@ describe("the Memory act: the report and the switch after a save", () => {
     expect(isOn(traycer)).toBe(true);
     expect(traycer.hasAttribute("disabled")).toBe(true);
     expect(row.textContent).toContain(
-      "Waiting for your configuration. Change this later in Settings → Agent memories.",
+      "Waiting for your configuration. Change this later in Settings → Memories.",
     );
   });
 
@@ -489,7 +489,7 @@ describe("the Memory act: a write the host has not read back, and one overturned
     expect(
       screen.getByTestId("onboarding-memory-traycer").textContent,
     ).toContain(
-      "Waiting for your configuration. Change this later in Settings → Agent memories.",
+      "Waiting for your configuration. Change this later in Settings → Memories.",
     );
     expect(switchOf("onboarding-memory-traycer").hasAttribute("disabled")).toBe(
       true,

@@ -205,9 +205,10 @@ interface BotOpenThreadState {
 /**
  * What each bot tab's rail holds, held above the tab's views so it survives
  * a switch between the channel's tabs (an announcement's thread nobody has
- * started yet still opens as the box that starts it). Closing the tab drops
- * its entry (`closeBotTab`). Not persisted: a restart opens the channel with
- * nothing beside it.
+ * started yet still opens as the box that starts it). Closing the surface
+ * drops its entry. Not persisted: after a restart the rail is what the
+ * surface's route names for the channel (`useTracyPlaceRoute`), and nothing
+ * where it names none.
  */
 export const useBotOpenThreadStore = create<BotOpenThreadState>()((set) => ({
   byBotId: {},

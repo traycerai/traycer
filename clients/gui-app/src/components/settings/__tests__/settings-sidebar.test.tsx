@@ -1100,7 +1100,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     "MCP servers",
     "Skills",
     "Permissions",
-    "Agent memories",
+    "Memories",
     "Agents",
     "Model routing",
     "Variables & shells",

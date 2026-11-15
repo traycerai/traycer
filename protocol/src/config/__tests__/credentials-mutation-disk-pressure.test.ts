@@ -291,6 +291,9 @@ function fail(
   filesystemMock.faults.push({ operation, fragment, code, remaining: count });
 }
 
+// The lock wait the desktop and CLI stores pass in production.
+const PRODUCTION_LOCK_WAIT_MS = 12_000;
+
 describe("credentials store disk pressure", () => {
   let workDir: string;
   let credentialsPath: string;
@@ -302,6 +305,13 @@ describe("credentials store disk pressure", () => {
   let onClearPressure: (() => void) | null = null;
 
   function makeStore(refresh: RefreshFn): CredentialsMutationStore {
+    return makeStoreWaiting(refresh, 500);
+  }
+
+  function makeStoreWaiting(
+    refresh: RefreshFn,
+    lockWaitMs: number,
+  ): CredentialsMutationStore {
     const store = createCredentialsMutationStore({
       paths: { credentialsPath, metaPath, lockPath },
       onDiskPressure: (pressure) => {
@@ -309,7 +319,7 @@ describe("credentials store disk pressure", () => {
         if (pressure === "clear") onClearPressure?.();
       },
       refresh,
-      lockWaitMs: 500,
+      lockWaitMs,
       lockPollIntervalMs: 10,
       continuationRetryMs: 60_000,
     });
@@ -789,7 +799,7 @@ describe("credentials store disk pressure", () => {
     const mutationIsWaiting = new Promise<void>((resolve) => {
       filesystemMock.onMutationLockBusy = resolve;
     });
-    const store = makeStore(refreshOk);
+    const store = makeStoreWaiting(refreshOk, PRODUCTION_LOCK_WAIT_MS);
     await statIsHeld;
     const signingIn = store.signIn(CREDS, false, null);
     await mutationIsWaiting;
@@ -1010,14 +1020,43 @@ describe("credentials store disk pressure", () => {
   });
 
   it("lets concurrent stores release reserve pieces without failing either operation", async () => {
-    const storeA = makeStore(refreshOk);
+    let spends = 0;
+    let spendEntered: () => void = () => {};
+    const winnerInsideLock = new Promise<void>((resolve) => {
+      spendEntered = resolve;
+    });
+    let secondSpendEntered: () => void = () => {};
+    const loserEnteredSpend = new Promise<void>((resolve) => {
+      secondSpendEntered = resolve;
+    });
+    let releaseSpend: () => void = () => {};
+    const spendGate = new Promise<void>((resolve) => {
+      releaseSpend = resolve;
+    });
+    const heldRefresh: RefreshFn = async (args) => {
+      spends += 1;
+      if (spends === 1) spendEntered();
+      else secondSpendEntered();
+      await spendGate;
+      return refreshOk(args);
+    };
+    const storeA = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS);
     await seed(storeA);
-    const storeB = makeStore(refreshOk);
+    const storeB = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS);
     fail("writeFile", ".space-check.", "ENOSPC", 2);
 
-    const results = await Promise.all([rotate(storeA), rotate(storeB)]);
+    const winning = rotate(storeA);
+    await winnerInsideLock;
+    const loserFoundLockBusy = new Promise<void>((resolve) => {
+      filesystemMock.onMutationLockBusy = resolve;
+    });
+    const losing = rotate(storeB);
+    await Promise.race([loserFoundLockBusy, loserEnteredSpend]);
+    expect(spends).toBe(1);
+    releaseSpend();
+    const results = await Promise.all([winning, losing]);
 
-    expect(results.map((result) => result.outcome).sort()).toEqual([
+    expect(results.map((result) => result.outcome)).toEqual([
       "applied",
       "superseded",
     ]);

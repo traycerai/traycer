@@ -26,6 +26,7 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
@@ -163,6 +164,7 @@ function openSurfaceOn(botId: string): void {
     hostId: TAB_HOST,
     botId,
     visitedBotIds: [],
+    goneReports: {},
   });
   useBotDraftsStore.getState().typeThreadBox(botId, "post-1", {
     text: "unsent",
@@ -323,6 +325,7 @@ export function resetBotTabSurfaceMocks(): void {
     ownDraftsRead: true,
   });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
   mocks.unreadTaskIds.clear();

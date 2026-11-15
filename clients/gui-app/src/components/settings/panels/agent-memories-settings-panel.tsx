@@ -59,7 +59,7 @@ function confirmationData<T>(
 }
 
 /**
- * Settings ▸ Agent memories: whether the configuration's agents are shown its
+ * Settings ▸ Memories: whether the configuration's agents are shown its
  * shared memories and keep them current.
  *
  * The memories belong to the configuration, not to a computer, so the switch
@@ -89,7 +89,7 @@ export function AgentMemoriesSettingsPanel(): ReactNode {
 
   return (
     <SettingsPanelShell
-      title="Agent memories"
+      title={AGENT_MEMORIES.page.label}
       description={
         source.kind === "pool" && !personal
           ? `What ${teamName}'s agents carry from one task to the next, on every host running ${teamName}.`
@@ -132,7 +132,7 @@ function HostAgentMemoriesRow(props: {
         <Switch
           checked={false}
           disabled
-          aria-label="Use Traycer memories for agents"
+          aria-label={AGENT_MEMORIES.definitions.traycerMemories.label}
         />
       }
     />
@@ -155,7 +155,7 @@ function hostRowStatus(input: {
   readonly progress: AgentMemoryWriteProgress;
 }): string {
   if (input.readFailed)
-    return "Couldn't read this host's agent memories setting. Check the host connection and reopen Settings.";
+    return "Couldn't read this host's memories setting. Check the host connection and reopen Settings.";
   switch (input.progress.kind) {
     case "queued":
       return "Waiting to reach your configuration. This computer will send the change when it is online.";
@@ -189,7 +189,7 @@ function AgentMemoriesRow(): ReactNode {
   const setEnabled = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
     mutationKey: configMutationKeys.agentMemoriesSet(),
-    errorMessage: "Couldn't update agent memories",
+    errorMessage: "Couldn't update memories",
     // The observer owns sequential confirmation reads. Mark this exact entry
     // stale without launching a parallel fetch; reopening before confirmation
     // must re-read even inside the normal cache freshness window.
@@ -552,7 +552,7 @@ function AgentMemoriesRow(): ReactNode {
           <Switch
             checked={read?.enabled === true}
             disabled={query.isPending || query.isError || setEnabled.isPending}
-            aria-label="Use Traycer memories for agents"
+            aria-label={AGENT_MEMORIES.definitions.traycerMemories.label}
             onCheckedChange={(next) => {
               trackSettingChanged("agent-memories", "useTraycerMemories");
               submit(next);
@@ -594,7 +594,7 @@ function TeamAgentMemoriesRow(): ReactNode {
         <Switch
           checked={data.enabled}
           disabled={put.isPending}
-          aria-label="Use Traycer memories for agents"
+          aria-label={AGENT_MEMORIES.definitions.traycerMemories.label}
           onCheckedChange={(enabled) => {
             if (source.kind !== "pool") return;
             put.mutate({
@@ -628,10 +628,7 @@ function TeamAgentMemoriesRow(): ReactNode {
         row={AGENT_MEMORIES.definitions.traycerMemories}
         status={
           read.failed ? (
-            <ConfigurationReadFailed
-              page="agent memories"
-              onRetry={read.retry}
-            />
+            <ConfigurationReadFailed page="memories" onRetry={read.retry} />
           ) : (
             SETTING_STATUS
           )

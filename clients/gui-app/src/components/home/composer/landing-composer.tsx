@@ -52,6 +52,7 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
+import { useStagedTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
 import {
   composerAttachmentsHoldSend,
   useComposerFileRoute,
@@ -594,6 +595,10 @@ export function LandingComposer(props: LandingComposerProps) {
     putFileBlob,
     settleDraft: settleDraftFile,
   });
+  const pathsReachTarget = useStagedTypedPathsReach(
+    composerSurfaceKey,
+    resolvedHostId,
+  );
   const paste = useLandingComposerPaste({
     editorRef,
     draftId,
@@ -601,6 +606,7 @@ export function LandingComposer(props: LandingComposerProps) {
     fileDrops: runnerHost.fileDrops,
     mentionRoots,
     fileRoute,
+    pathsReachTarget,
   });
   // The SHARED pending-image ingest, the same one the chat composer, the inline
   // edit and the new-conversation modal use. This surface grew the logic first

@@ -8,6 +8,7 @@ import type { AppRouter } from "@/router";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 export interface HistoryPruneProviderProps {
   /**
@@ -81,9 +82,11 @@ export function HistoryPruneProvider(
       subscribeStores: (onChange) => {
         const unsubscribeCanvas = useEpicCanvasStore.subscribe(onChange);
         const unsubscribeDrafts = useLandingDraftStore.subscribe(onChange);
+        const unsubscribeTracy = useTracySurfaceStore.subscribe(onChange);
         return () => {
           unsubscribeCanvas();
           unsubscribeDrafts();
+          unsubscribeTracy();
         };
       },
       isLoadInFlight: () => isRouterLoadInFlight(router),

@@ -85,9 +85,11 @@ function takeImages<Image>(
 }
 
 /**
- * The agent composer's paste and drop adapter for a message box: the same
- * preparation and the same size refusal. An image lands in the editor; a file
- * that is no image is refused, where the agent composer would write its path.
+ * The agent composer's paste, drop and pick adapter for a message box: the
+ * same preparation and the same size refusal. An image lands in the editor; an
+ * image a message cannot carry is refused before it is read, and a file that
+ * is no image is refused, where the agent composer would write its path or
+ * upload it.
  */
 export function useBotBoxImageIngest(
   editorRef: RefObject<ComposerPromptEditorHandle | null>,
@@ -118,10 +120,29 @@ export function useBotBoxImageIngest(
         if (paths.length > 0) refuseAsNoImage();
         return true;
       },
+      // Every resolved file is refused above, so where it would land never
+      // matters here.
+      pathsReachTarget: true,
     }),
     [runnerHost.fileDrops],
   );
-  return useComposerPasteAdapter(insert, filePaths);
+  const adapter = useComposerPasteAdapter(insert, filePaths, carriedImages);
+  return { ...adapter, attachFiles: refuseFiles };
+}
+
+function refuseFiles(files: ReadonlyArray<File>): void {
+  if (files.length > 0) refuseAsNoImage();
+}
+
+/**
+ * What the box lets the image adapter read: the images a message can carry.
+ * Any other image a paste, a drop or a pick brings is refused here, whatever
+ * its size: a picker's `accept` is only a hint the person can lift.
+ */
+function carriedImages(files: ReadonlyArray<File>): ReadonlyArray<File> {
+  const carried = files.filter((file) => isCarriedType(file.type));
+  if (carried.length < files.length) refuseAsNoImage();
+  return carried;
 }
 
 /**

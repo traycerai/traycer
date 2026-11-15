@@ -177,7 +177,7 @@ function MemoryChoices(props: {
       {memory.chosen === true ? <ProviderMemories memory={memory} /> : null}
       <p className="text-ui-xs text-muted-foreground">
         Applies to agents you run through Traycer. Saved memories are kept.
-        Change these later in Settings → Agent memories and Providers.
+        Change these later in Settings → Memories and Providers.
       </p>
     </div>
   );
@@ -187,8 +187,8 @@ function traycerDescription(memory: OnboardingAgentMemories): string {
   if (!memory.traycerLocked)
     return "Agents can read, add, update and remove shared memories.";
   return memory.traycerStanding === "on"
-    ? "On. Turn it off later in Settings → Agent memories."
-    : "Waiting for your configuration. Change this later in Settings → Agent memories.";
+    ? "On. Turn it off later in Settings → Memories."
+    : "Waiting for your configuration. Change this later in Settings → Memories.";
 }
 
 function ProviderMemories(props: {

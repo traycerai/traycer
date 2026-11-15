@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { normalizeTracyPlaceSearch } from "@/lib/bots/tracy-place";
 import { requireSignedIn } from "@/lib/router-auth";
+import { TracyChannelPlaceRoute } from "./tracy-route-components";
 
 /**
  * A channel of the Tracy surface (decision 150), deep-linkable. The tab-kind
@@ -9,8 +11,10 @@ import { requireSignedIn } from "@/lib/router-auth";
  * and selects the channel.
  */
 export const Route = createFileRoute("/bot/$botId")({
+  validateSearch: (search: Record<string, unknown>) =>
+    normalizeTracyPlaceSearch(search),
   beforeLoad: ({ context }) => {
     requireSignedIn(context);
   },
-  component: () => null,
+  component: TracyChannelPlaceRoute,
 });
