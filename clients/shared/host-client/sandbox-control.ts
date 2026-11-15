@@ -30,6 +30,7 @@ import {
   type GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
@@ -258,11 +259,20 @@ async function callWithSignal(
   let response: Response;
   try {
     response = await untilAborted(
-      fetch(url, { method: init.method, headers, body: init.body, signal }),
+      fetch(url, {
+        method: init.method,
+        headers,
+        body: init.body,
+        redirect: "manual",
+        signal,
+      }),
       signal,
     );
   } catch (error: unknown) {
     return neverCompleted(error);
+  }
+  if (isRedirectAnswer(response.status)) {
+    return { kind: "response", status: response.status, body: null };
   }
   let body: unknown = null;
   try {

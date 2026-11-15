@@ -13,6 +13,7 @@ import {
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import type { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import type { EnvironmentTransport } from "../environment/environment-cloud";
 
@@ -30,8 +31,8 @@ import type { EnvironmentTransport } from "../environment/environment-cloud";
  * so it crosses the Electron IPC boundary unchanged. Nothing here logs, and a
  * failure never echoes a body: the register request carries the app's
  * secrets, so it alone goes through the shell's `EnvironmentTransport`, sent
- * once and following no redirect (a 3xx is an answered non-success), with a
- * failure's body capped. The other calls carry no credential in a body.
+ * once with a failure's body capped. Every call carries the bearer, so none
+ * follows a redirect: a 3xx is an answered non-success.
  */
 
 /**
@@ -126,19 +127,24 @@ type PostResult<T> =
 
 /**
  * The platform `fetch` as the calls with no credential in their body send:
- * a redirect followed, the answer read whole.
+ * no redirect followed, a redirect's body never read, any other answer read
+ * whole.
  */
-const followingFetchTransport: EnvironmentTransport = async (request) => {
+const platformFetchTransport: EnvironmentTransport = async (request) => {
   const response = await fetch(request.url, {
     method: request.method,
     headers: request.headers,
     body: request.body === null ? undefined : JSON.stringify(request.body),
+    redirect: "manual",
     signal: request.signal,
   });
   // A late answer to a request already given up (a `fetch` that ignores its
   // signal, as the phone's patched one does) is never read.
   if (request.signal.aborted) {
     throw new Error("The request was given up before it answered.");
+  }
+  if (isRedirectAnswer(response.status)) {
+    return { status: response.status, text: "" };
   }
   return { status: response.status, text: await response.text() };
 };
@@ -277,7 +283,7 @@ export async function readSlackAppViaHttp(
     proxyToken,
     SLACK_APP_READ_TIMEOUT_MS,
     slackAppReadResponseSchema,
-    followingFetchTransport,
+    platformFetchTransport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }
@@ -297,7 +303,7 @@ export async function fetchSlackAppManifestViaHttp(
     proxyToken,
     SLACK_APP_READ_TIMEOUT_MS,
     slackAppManifestResponseSchema,
-    followingFetchTransport,
+    platformFetchTransport,
   );
   return result.kind === "ok"
     ? { kind: "ok", manifest: result.value.manifest }
@@ -319,7 +325,7 @@ export async function mintSlackAppInstallUrlViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppInstallUrlResponseSchema,
-    followingFetchTransport,
+    platformFetchTransport,
   );
   return result.kind === "ok"
     ? { kind: "ok", url: result.value.url, expiresAt: result.value.expiresAt }
@@ -341,7 +347,7 @@ export async function disconnectSlackAppViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppResponseSchema,
-    followingFetchTransport,
+    platformFetchTransport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }
@@ -361,7 +367,7 @@ export async function setSlackAppDmsViaHttp(
     proxyToken,
     SLACK_APP_WRITE_TIMEOUT_MS,
     slackAppResponseSchema,
-    followingFetchTransport,
+    platformFetchTransport,
   );
   return result.kind === "ok" ? { kind: "ok", app: result.value.app } : result;
 }

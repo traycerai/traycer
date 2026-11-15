@@ -923,6 +923,7 @@ async function exchangeCodeForTokensWithSignal(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ code, code_verifier: codeVerifier }),
+        redirect: "manual",
         signal,
       },
     );

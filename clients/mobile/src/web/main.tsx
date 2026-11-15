@@ -40,6 +40,7 @@ import {
   type DevHostSignIn,
 } from "./dev-host-discovery";
 import { installNativeHttpToken } from "./native-http-token";
+import { installManualRedirectFetch } from "../manual-redirect-fetch";
 import { AuthSession, MobileAuthSheet } from "../auth-sheet";
 import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { MobileRunnerHost } from "../mobile-runner-host";
@@ -188,6 +189,9 @@ function bootstrap(): void {
       "[mobile] native HTTP token or server URL missing: native HTTP requests will fail",
     );
   }
+  // Before the app's first request: a request that carries a credential
+  // says `redirect: "manual"`, which Capacitor's patched `fetch` drops.
+  if (Capacitor.isNativePlatform()) installManualRedirectFetch(window);
   document.documentElement.classList.add("traycer-mobile-client");
   restrictFramesToSandboxLoader();
   // LAYOUT policy: the installed app runs the phone layout at every width, an
