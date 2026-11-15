@@ -165,7 +165,7 @@ export function BotChannelSettingsPanel(props: {
         {personal || environmentBots === null ? null : (
           <BotsInChannel bots={environmentBots} />
         )}
-        <BotSlackSettings botId={bot.botId} />
+        <BotSlackSettings botId={bot.botId} environmentId={bot.environmentId} />
         <BotUsageSection botId={bot.botId} onClose={onClose} />
         <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
       </div>
