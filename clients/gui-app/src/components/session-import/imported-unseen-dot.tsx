@@ -1,7 +1,7 @@
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useStatusGlyphTooltipOpen } from "@/components/notifications/status-glyph-focus";
 import { harnessDisplayName } from "@/components/session-import/session-import-model";
-import { useImportedUnseen } from "@/stores/session-import/imported-unseen-store";
+import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
 
 /**
  * The task list's unread dot: an imported task the user has not opened yet.
@@ -19,7 +19,7 @@ import { useImportedUnseen } from "@/stores/session-import/imported-unseen-store
  * the quiet unread dot it is by design (`HistoryRowStatusSlot`).
  */
 export function ImportedUnseenDot(props: { readonly epicId: string }) {
-  const harness = useImportedUnseen(props.epicId);
+  const harness = useImportedUnseenStore((state) => state.unseen[props.epicId]);
   const tooltipOpen = useStatusGlyphTooltipOpen();
   if (harness === undefined) return null;
   // `null` means the task holds imported work from more than one provider,

@@ -569,7 +569,8 @@ function seedMessageHits(
 
 function resetImportedUnseenStore(): void {
   act(() => {
-    useImportedUnseenStore.getState().markSeen("epic-from-history");
+    const state = useImportedUnseenStore.getState();
+    for (const epicId of Object.keys(state.unseen)) state.markSeen(epicId);
   });
 }
 

@@ -1,14 +1,12 @@
 import { create } from "zustand";
-import { z } from "zod";
 import {
-  guiHarnessIdSchema,
-  type GuiHarnessId,
-} from "@traycer/protocol/host/index";
-import { persistKey, STORE_KEYS } from "@/lib/persist";
-import {
-  recordMapStorageKey,
-  recordMapStoragePrefix,
-} from "@/lib/persist/keys";
+  createJSONStorage,
+  persist,
+  type PersistStorage,
+  type StorageValue,
+} from "zustand/middleware";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
 /**
  * Imported tasks the user has not opened yet, keyed by epic id with the source
@@ -30,131 +28,134 @@ import {
  *
  * Persisted so a restart between importing and looking does not erase the
  * hint; entries clear the first time the task is opened (the epic surface
- * mounting is the one funnel every open path goes through).
- *
- * Every entry is its own storage key, and a mark or an open touches only its
- * own. An import marks one entry per session, and an unopened task keeps its
- * entry across runs, so the set reaches thousands: rewriting all of it on
- * each mark made an import's cost grow with every task it had already made.
+ * mounting is the one funnel every open path goes through). The state changes
+ * at once, so a dot appears and clears on the same frame; the stored copy
+ * follows within a second, or when the window hides or closes.
  */
-type UnseenHarness = GuiHarnessId | null;
-
 interface ImportedUnseenState {
   /**
-   * Moves on every change to the set, which lives outside the state so a mark
-   * is not a copy of it. Read an entry with {@link useImportedUnseen}.
+   * Sparse by nature: most epics have no entry, so indexed reads are
+   * `undefined`. The three states are distinct and all three are read:
+   * `undefined` = no unseen import, `null` = several providers, a harness id =
+   * that one.
+   *
+   * `null` was added WITHOUT a persist-version bump, and that has one known
+   * cost. A build older than this one reads the value as a harness id, and
+   * its dot passes it to `harnessDisplayName`, which falls through to its
+   * argument: after a DOWNGRADE, a multi-provider task's dot reads "Imported
+   * from null - not opened yet" until the task is opened. The current build
+   * cannot produce that, because `ImportedUnseenDot` handles `null` before
+   * any name lookup. A bump was the worse trade: `basePersistOptions` has no
+   * `migrate`, so an older build would discard the whole store and erase
+   * every legitimate dot. Weigh this before the next version change here.
    */
-  readonly revision: number;
+  readonly unseen: Readonly<Record<string, GuiHarnessId | null | undefined>>;
   readonly markImported: (epicId: string, harness: GuiHarnessId) => void;
   readonly markSeen: (epicId: string) => void;
 }
 
-const UNSEEN_KEY = persistKey(STORE_KEYS.sessionImportUnseen);
-const entrySchema = z.object({ harness: guiHarnessIdSchema.nullable() });
-const legacySnapshotSchema = z.object({
-  state: z.object({ unseen: z.record(z.string(), z.unknown()) }),
-});
+const IMPORTED_UNSEEN_PERSIST_KEY = persistKey(STORE_KEYS.sessionImportUnseen);
 
-function parseEntry(raw: string | null): UnseenHarness | undefined {
-  if (raw === null) return undefined;
+type PersistedUnseen = Pick<ImportedUnseenState, "unseen">;
+
+/**
+ * At most one write of the set per interval. An import marks one entry per
+ * session it imports, and the set reaches thousands, so writing the whole set
+ * on every mark made an import's cost grow with every task it had made.
+ */
+const WRITE_INTERVAL_MS = 1_000;
+
+const writer: {
+  /** The latest snapshot not yet written; only the newest is kept. */
+  pending: {
+    readonly name: string;
+    readonly value: StorageValue<PersistedUnseen>;
+  } | null;
+  timer: number | null;
+  /** Set for good by a wipe. */
+  stopped: boolean;
+} = { pending: null, timer: null, stopped: false };
+
+function dropPendingWrite(): void {
+  if (writer.timer !== null) window.clearTimeout(writer.timer);
+  writer.timer = null;
+  writer.pending = null;
+}
+
+/** Writes the waiting snapshot now, if there is one. */
+function flushImportedUnseenWrite(): void {
+  const pending = writer.pending;
+  dropPendingWrite();
+  if (pending === null || writer.stopped) return;
   try {
-    const parsed = entrySchema.safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data.harness : undefined;
+    localStorage.setItem(pending.name, JSON.stringify(pending.value));
   } catch {
-    return undefined;
+    // Storage full or unavailable: the dots still show for this session.
   }
 }
 
 /**
- * The single record every earlier build kept under {@link UNSEEN_KEY}, moved
- * to one key per entry and then removed. An entry the new layout already holds
- * wins over the old record's.
+ * Drops the waiting write and refuses every later one, so a wipe's sweep is
+ * not undone by this store's timer or by the reload's page hide.
  */
-function migrateLegacySnapshot(): void {
-  const raw = localStorage.getItem(UNSEEN_KEY);
-  if (raw === null) return;
-  let entries: Record<string, unknown> = {};
-  try {
-    const parsed = legacySnapshotSchema.safeParse(JSON.parse(raw));
-    if (parsed.success) entries = parsed.data.state.unseen;
-  } catch {
-    // An unreadable record has nothing to move.
-  }
-  for (const [epicId, value] of Object.entries(entries)) {
-    const harness = guiHarnessIdSchema.nullable().safeParse(value);
-    if (!harness.success) continue;
-    const key = recordMapStorageKey(UNSEEN_KEY, epicId);
-    if (localStorage.getItem(key) === null)
-      localStorage.setItem(key, JSON.stringify({ harness: harness.data }));
-  }
-  localStorage.removeItem(UNSEEN_KEY);
+export function stopImportedUnseenWrites(): void {
+  dropPendingWrite();
+  writer.stopped = true;
 }
 
-function loadUnseen(): Map<string, UnseenHarness> {
-  const unseen = new Map<string, UnseenHarness>();
-  try {
-    migrateLegacySnapshot();
-    const prefix = recordMapStoragePrefix(UNSEEN_KEY);
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (key === null || !key.startsWith(prefix)) continue;
-      const harness = parseEntry(localStorage.getItem(key));
-      if (harness !== undefined)
-        unseen.set(decodeURIComponent(key.slice(prefix.length)), harness);
-    }
-  } catch {
-    // Storage unavailable: the dots start empty, as a fresh profile's do.
-  }
-  return unseen;
-}
+const jsonStorage = createJSONStorage<PersistedUnseen>(() => localStorage);
 
-function writeEntry(epicId: string, harness: UnseenHarness): void {
-  try {
-    localStorage.setItem(
-      recordMapStorageKey(UNSEEN_KEY, epicId),
-      JSON.stringify({ harness }),
+const coalescedStorage: PersistStorage<PersistedUnseen> = {
+  getItem: (name) => jsonStorage?.getItem(name) ?? null,
+  setItem: (name, value) => {
+    if (writer.stopped) return;
+    writer.pending = { name, value };
+    writer.timer ??= window.setTimeout(
+      flushImportedUnseenWrite,
+      WRITE_INTERVAL_MS,
     );
-  } catch {
-    // Storage full or unavailable: the dot still shows for this session.
-  }
-}
-
-function removeEntry(epicId: string): void {
-  try {
-    localStorage.removeItem(recordMapStorageKey(UNSEEN_KEY, epicId));
-  } catch {
-    // Storage unavailable: the entry is already gone from this session.
-  }
-}
-
-const unseen = loadUnseen();
-
-export const useImportedUnseenStore = create<ImportedUnseenState>()((set) => ({
-  revision: 0,
-  markImported: (epicId, harness) => {
-    const known = unseen.has(epicId);
-    const existing = unseen.get(epicId);
-    // Already neutral stays neutral, and a second provider landing on a
-    // task the first one marked goes neutral: the dot names a provider only
-    // while that is the whole truth about the task.
-    const next = !known || existing === harness ? harness : null;
-    if (known && existing === next) return;
-    unseen.set(epicId, next);
-    writeEntry(epicId, next);
-    set((state) => ({ revision: state.revision + 1 }));
   },
-  markSeen: (epicId) => {
-    if (!unseen.delete(epicId)) return;
-    removeEntry(epicId);
-    set((state) => ({ revision: state.revision + 1 }));
+  removeItem: (name) => {
+    dropPendingWrite();
+    jsonStorage?.removeItem(name);
   },
-}));
+};
 
-/**
- * One task's unseen import: `undefined` when there is none, `null` when it
- * holds several providers' work, else that provider. A mark re-renders only
- * the readers whose entry it changed.
- */
-export function useImportedUnseen(epicId: string): UnseenHarness | undefined {
-  return useImportedUnseenStore(() => unseen.get(epicId));
+// A closing or hidden window writes what is waiting: the renderer may not
+// get another turn to run the timer.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushImportedUnseenWrite);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushImportedUnseenWrite();
+  });
 }
+
+export const useImportedUnseenStore = create<ImportedUnseenState>()(
+  persist(
+    (set, get) => ({
+      unseen: {},
+      markImported: (epicId, harness) => {
+        const unseen = get().unseen;
+        const existing = unseen[epicId];
+        // Already neutral stays neutral, and a second provider landing on a
+        // task the first one marked goes neutral: the dot names a provider only
+        // while that is the whole truth about the task.
+        const next =
+          existing === undefined || existing === harness ? harness : null;
+        set({ unseen: { ...unseen, [epicId]: next } });
+      },
+      markSeen: (epicId) => {
+        const unseen = get().unseen;
+        if (!(epicId in unseen)) return;
+        const next = { ...unseen };
+        delete next[epicId];
+        set({ unseen: next });
+      },
+    }),
+    {
+      ...basePersistOptions(IMPORTED_UNSEEN_PERSIST_KEY),
+      storage: coalescedStorage,
+      partialize: (state) => ({ unseen: state.unseen }),
+    },
+  ),
+);

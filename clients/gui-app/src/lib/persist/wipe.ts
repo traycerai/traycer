@@ -33,6 +33,7 @@ import {
 } from "@/lib/appearance/appearance-cache";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { stopBotBoxDraftWrites } from "@/lib/bots/bot-box-draft-storage";
+import { stopImportedUnseenWrites } from "@/stores/session-import/imported-unseen-store";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { FILE_EDIT_RECOVERY_DB_SUFFIX } from "@/lib/workspace/file-edit-recovery-store";
@@ -249,9 +250,11 @@ export async function clearAllPersistedStores(args: {
   // pagehide handler, since this remains ordered before the journal delete.
   await fileEditRuntimeRegistry.teardown();
 
-  // The bot boxes write their drafts after a pause in typing, and on the
-  // reload's pagehide: neither may land after the sweep.
+  // The bot boxes write their drafts after a pause in typing, and the
+  // imported-unseen dots within a second of a change; both also write on the
+  // reload's pagehide. None of those may land after the sweep.
   stopBotBoxDraftWrites();
+  stopImportedUnseenWrites();
 
   // 2. Blanket-prefix sweep across BOTH storages.
   const localStorageCount = sweepStorage(window.localStorage);

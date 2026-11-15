@@ -2,7 +2,12 @@ import { createElement, type ReactNode } from "react";
 import type { RequiredHostMethodVersion } from "@traycer-clients/shared/host-transport/host-messenger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type QueryObserverResult,
+  queryOptions,
+} from "@tanstack/react-query";
 import type {
   ListTaskLight,
   ListTasksRequest,
@@ -912,6 +917,133 @@ describe("useCloudEpicTasksQuery", () => {
     await waitFor(() => {
       expect(taskLightIds(result.current.tasks)).toEqual(["fresh-cloud"]);
     });
+  });
+
+  it("does not render its consumer when a settled page refetches unchanged", async () => {
+    const page: ListTasksResponse = {
+      tasks: [taskLight("unchanged", "Unchanged task")],
+      hasMore: false,
+      completeness: {
+        cloudPage: "settled",
+        facets: "server",
+        localRows: "none",
+        sort: "server",
+      },
+    };
+    mockHostClient.request.mockResolvedValueOnce(page);
+    const refetchedPage = createDeferred<ListTasksResponse>();
+    mockHostClient.request.mockReturnValue(refetchedPage.promise);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    let renders = 0;
+    const { result } = renderHook(
+      () => {
+        renders += 1;
+        const query = useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, {
+          enabled: true,
+        });
+        return { tasks: query.tasks, refetch: query.query.refetch };
+      },
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    await waitFor(() =>
+      expect(taskLightIds(result.current.tasks)).toEqual(["unchanged"]),
+    );
+    const settledRenderCount = renders;
+    let refetchPromise:
+      | Promise<QueryObserverResult<ListTasksResponse>>
+      | undefined;
+    act(() => {
+      refetchPromise = result.current.refetch();
+    });
+    await waitFor(() => expect(listTasksCalls()).toHaveLength(2));
+    await act(async () => {
+      refetchedPage.resolve(page);
+      if (refetchPromise === undefined) {
+        throw new Error("Expected the refetch to start before resolving it.");
+      }
+      await refetchPromise;
+    });
+
+    expect(renders).toBe(settledRenderCount);
+  });
+
+  it("waits for a pending local-first page refetch before revalidating", async () => {
+    const pendingPage: ListTasksResponse = {
+      tasks: [taskLight("pending-local", "Pending local task")],
+      hasMore: false,
+      completeness: {
+        cloudPage: "pending",
+        facets: "partial",
+        localRows: "present",
+        sort: "loaded-union",
+      },
+    };
+    const settledPage: ListTasksResponse = {
+      tasks: pendingPage.tasks,
+      hasMore: false,
+    };
+    const resolveRefetch = createDeferred<ListTasksResponse>();
+    const resolveRevalidation = createDeferred<ListTasksResponse>();
+    mockHostClient.request.mockImplementation((_method, params) =>
+      params.localFirstPhase === "revalidate"
+        ? resolveRevalidation.promise
+        : resolveRefetch.promise,
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      HOST_ID,
+      USER_ID,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(queryKey, pendingPage);
+    const refetchPromise = queryClient.fetchQuery(
+      queryOptions({
+        queryKey,
+        queryFn: () =>
+          mockHostClient.request("epic.listTasks", LIST_CLOUD_TASKS_REQUEST),
+        staleTime: 0,
+      }),
+    );
+    await waitFor(() => expect(listTasksCalls()).toHaveLength(1));
+    const { result } = renderHook(
+      () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    expect(taskLightIds(result.current.tasks)).toEqual(["pending-local"]);
+    expect(
+      listTasksCalls().filter(([, params]) =>
+        hasLocalFirstPhase(params, "revalidate"),
+      ),
+    ).toHaveLength(0);
+    await act(async () => {
+      resolveRefetch.resolve(pendingPage);
+      await refetchPromise;
+    });
+    await waitFor(() => {
+      expect(
+        listTasksCalls().filter(([, params]) =>
+          hasLocalFirstPhase(params, "revalidate"),
+        ),
+      ).toHaveLength(1);
+    });
+    act(() => {
+      resolveRevalidation.resolve(settledPage);
+    });
+    await waitFor(() =>
+      expect(result.current.completeness?.cloudPage).toBe("settled"),
+    );
   });
 
   it("starts a fresh bounded episode after the active pin mutation invalidates History", async () => {

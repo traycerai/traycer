@@ -441,8 +441,8 @@ export const PERSIST_STORES = [
   // Imported tasks the user has not opened yet: the task list's unread dot.
   // Epic ids are cloud entities, so no host scoping; entries clear on first
   // open. One import makes one task per session and an unopened task keeps
-  // its entry across runs, so the set reaches thousands: each entry is its
-  // own `recordMapStorageKey` under this name, never one record.
+  // its entry across runs, so the set reaches thousands: the store writes the
+  // record at most once a second, never once per mark.
   {
     camelName: "sessionImportUnseen",
     leaf: "session-import-unseen",

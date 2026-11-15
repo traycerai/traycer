@@ -59,9 +59,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
 }
 
 function resetUnseen(): void {
-  const { markSeen } = useImportedUnseenStore.getState();
-  for (const epicId of ["cloud-epic", "legacy-epic", "local-epic", "epic-1"])
-    markSeen(epicId);
+  useImportedUnseenStore.setState({ unseen: {} });
 }
 
 beforeEach(() => {
