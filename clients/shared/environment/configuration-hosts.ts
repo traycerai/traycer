@@ -12,7 +12,10 @@ import type {
   EnvironmentHostListResponseV12,
 } from "@traycer/protocol/host/environment/contracts";
 import {
+  EnvironmentCloudError,
+  SETTINGS_REFUSED_MESSAGE,
   environmentPath,
+  errorBodyCode,
   parseSettings,
   sendSettings,
   type EnvironmentCloud,
@@ -59,22 +62,28 @@ function reportedItemState(
 /**
  * Every host authn lists for the environment, less those removed and not
  * seen since (`purgePending`). A failure is the settings mapping of every
- * other read here: an environment the person cannot read answers 404, which
- * is the settings refusal.
+ * other read here, except authn's answer that the person may not read the
+ * environment (404 `environment_not_found`: no accepted seat, another
+ * person's Personal, or no such environment), which is `not_found` rather
+ * than a malformed request, so the last list is not kept through it.
  */
 export async function listConfigurationHosts(
   cloud: EnvironmentCloud,
   environmentId: string,
 ): Promise<EnvironmentHostListResponseV12> {
-  const { hosts } = parseSettings(
-    await sendSettings(
-      cloud,
-      "GET",
-      `${environmentPath(environmentId)}/hosts?include=localRow,binding`,
-      null,
-    ),
-    authnHostsSchema,
+  const answer = await sendSettings(
+    cloud,
+    "GET",
+    `${environmentPath(environmentId)}/hosts?include=localRow,binding`,
+    null,
   );
+  if (
+    answer.status === 404 &&
+    errorBodyCode(answer.body) === "environment_not_found"
+  ) {
+    throw new EnvironmentCloudError("not_found", SETTINGS_REFUSED_MESSAGE);
+  }
+  const { hosts } = parseSettings(answer, authnHostsSchema);
   return {
     hosts: hosts
       .filter((row) => !row.purgePending)
