@@ -13,9 +13,9 @@ import {
   mockLocalHostEntry,
   mockRemoteHostEntry,
 } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentTransportAnswer } from "@traycer-clients/shared/environment/environment-cloud";
 import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
-import type { RpcErrorCode } from "@traycer/protocol/framework/index";
+import { TeamContentNeedsHost } from "@/components/settings/environment/team-content-needs-host";
 import { TeamViewingHostPicker } from "@/components/settings/environment/team-viewing-host-picker";
 import {
   canSwitchViewingHost,
@@ -92,14 +92,12 @@ function mountTeamHarness(hosts: readonly EnvironmentHostRecordV12[]) {
   return harness;
 }
 
-function rpcFailure(code: RpcErrorCode): HostRpcError {
-  return new HostRpcError({
-    code,
-    message: "The team host list could not be read.",
-    requestId: "req-team-host-list",
-    method: "environment.host.list",
-    fatalDetails: null,
-  });
+/** authn's answer: a status and the body it sends with it. */
+function authnAnswer(
+  status: number,
+  body: unknown,
+): EnvironmentTransportAnswer {
+  return { status, text: JSON.stringify(body) };
 }
 
 function mountMutableTeamHarness(
@@ -125,12 +123,68 @@ function mountMutableTeamHarness(
       "environment.list": () => teamEnvironments,
     },
   );
+  const hostsRoute = `GET /api/v3/environments/${environmentId}/hosts`;
   return {
     ...harness,
     setFailure: (next: Error | null): void => {
       failure = next;
     },
+    /** What authn answers the host list read from now on; null is no answer. */
+    answerHosts: (next: EnvironmentTransportAnswer | null): void => {
+      harness.cloudResponses.set(hostsRoute, () => {
+        if (next === null) throw new Error("The transport did not answer.");
+        return next;
+      });
+    },
   };
+}
+
+function studioAndLaptop(): EnvironmentHostRecordV12[] {
+  return [
+    lapsed(mockLocalHostEntry.hostId, "Studio"),
+    {
+      ...reachableHost,
+      hostId: mockRemoteHostEntry.hostId,
+      hostLabel: "Laptop",
+    },
+  ];
+}
+
+/**
+ * The window views Laptop, the picker is drawn, then authn answers the next
+ * host list read with `answer` and the read is made again.
+ */
+async function viewLaptopThenReadHosts(
+  environmentId: string,
+  answer: EnvironmentTransportAnswer | null,
+) {
+  const harness = mountMutableTeamHarness(
+    studioAndLaptop(),
+    environmentId,
+    null,
+  );
+  const hook = renderHook(() => useTeamViewingHost(), {
+    wrapper: harness.Wrapper,
+  });
+  const { result } = hook;
+  await waitFor(() =>
+    expect(result.current.viewingHost?.hostId).toBe(mockLocalHostEntry.hostId),
+  );
+  act(() => result.current.selectHost(mockRemoteHostEntry.hostId));
+  const picker = render(
+    <TeamViewingHostPicker open={false} onOpenChange={() => {}} />,
+    { wrapper: harness.Wrapper },
+  );
+  expect(await screen.findByText("as reported by Laptop")).toBeTruthy();
+
+  harness.answerHosts(answer);
+  let refetchFailed = false;
+  await act(async () => {
+    refetchFailed = (await result.current.hosts.refetch()).isError;
+  });
+  expect(refetchFailed).toBe(true);
+  await waitFor(() => expect(result.current.hosts.isError).toBe(true));
+  return { harness, result, picker };
 }
 
 function mountHook(hosts: readonly EnvironmentHostRecordV12[]) {
@@ -225,43 +279,89 @@ describe("useTeamViewingHost, the window's own host", () => {
   });
 
   it("drops cached hosts after an authority refusal", async () => {
-    const hosts = [
-      lapsed(mockLocalHostEntry.hostId, "Studio"),
-      {
-        ...reachableHost,
-        hostId: mockRemoteHostEntry.hostId,
-        hostLabel: "Laptop",
-      },
-    ];
-    const harness = mountMutableTeamHarness(
-      hosts,
+    const { result, picker } = await viewLaptopThenReadHosts(
       "env-host-list-forbidden",
-      null,
+      authnAnswer(403, { code: "environment_action_forbidden" }),
     );
-    const { result } = renderHook(() => useTeamViewingHost(), {
-      wrapper: harness.Wrapper,
-    });
 
-    await waitFor(() =>
-      expect(result.current.viewingHost?.hostId).toBe(
-        mockLocalHostEntry.hostId,
-      ),
-    );
-    act(() => result.current.selectHost(mockRemoteHostEntry.hostId));
-    harness.setFailure(rpcFailure("FORBIDDEN"));
-    let refetchFailed = false;
-    await act(async () => {
-      refetchFailed = (await result.current.hosts.refetch()).isError;
-    });
-
-    expect(refetchFailed).toBe(true);
-    await waitFor(() => expect(result.current.hosts.isError).toBe(true));
     expect(result.current.viewingHost).toBeNull();
     expect(result.current.client).toBeNull();
     expect(result.current.canSelectHost(mockRemoteHostEntry.hostId)).toBe(
       false,
     );
     expect(canSwitchViewingHost(result.current)).toBe(false);
+    expect(picker.container.textContent).toBe("");
+  });
+
+  it("drops cached hosts when authn says the team is not the person's to read", async () => {
+    const { result, picker } = await viewLaptopThenReadHosts(
+      "env-host-list-not-found",
+      authnAnswer(404, { code: "environment_not_found" }),
+    );
+
+    expect(result.current.viewingHost).toBeNull();
+    expect(result.current.client).toBeNull();
+    expect(result.current.canSelectHost(mockRemoteHostEntry.hostId)).toBe(
+      false,
+    );
+    expect(canSwitchViewingHost(result.current)).toBe(false);
+    expect(picker.container.textContent).toBe("");
+  });
+
+  // Each case has an environment of its own: the viewing host the person
+  // picked is remembered per environment for the whole file.
+  it.each([
+    ["a 403 without authn's code", "kept-403", authnAnswer(403, {})],
+    ["a 404 without authn's code", "kept-404", authnAnswer(404, {})],
+    [
+      "a malformed request",
+      "kept-400",
+      authnAnswer(400, { error: "environmentId must be an environment id" }),
+    ],
+    [
+      "a 503",
+      "kept-503",
+      authnAnswer(503, { error: "temporarily unavailable" }),
+    ],
+    ["no answer", "kept-no-answer", null],
+  ])("keeps cached hosts through %s", async (_label, slug, answer) => {
+    const { result } = await viewLaptopThenReadHosts(
+      `env-host-list-${slug}`,
+      answer,
+    );
+
+    expect(result.current.viewingHost?.hostId).toBe(mockRemoteHostEntry.hostId);
+    expect(result.current.client).not.toBeNull();
+    expect(result.current.canSelectHost(mockRemoteHostEntry.hostId)).toBe(true);
+    expect(canSwitchViewingHost(result.current)).toBe(true);
+    expect(screen.getByText("as reported by Laptop")).toBeTruthy();
+    expect(screen.getByText("Use another host")).toBeTruthy();
+  });
+
+  it("tells a page that needs a host that the team's hosts could not be read after a refusal", async () => {
+    const harness = mountMutableTeamHarness(
+      studioAndLaptop(),
+      "env-host-list-needs-host",
+      null,
+    );
+    render(
+      <TeamContentNeedsHost
+        content="guide"
+        teamName="Acme"
+        onPickHost={() => {}}
+      />,
+      { wrapper: harness.Wrapper },
+    );
+    expect(await screen.findByText("Pick one.")).toBeTruthy();
+
+    harness.answerHosts(
+      authnAnswer(403, { code: "environment_action_forbidden" }),
+    );
+    await act(() => harness.queryClient.refetchQueries());
+
+    expect(await screen.findByText("Couldn't read Acme's hosts.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText("Pick one.")).toBeNull();
   });
 
   it("starts without selectable hosts when the first list read fails", async () => {
