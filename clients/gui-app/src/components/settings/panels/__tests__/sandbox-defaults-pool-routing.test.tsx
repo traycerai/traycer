@@ -183,9 +183,9 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     });
     const itemReads = harness.paramsOf("environment.configuration.items");
     expect(itemReads.length).toBeGreaterThan(0);
-    expect(
-      itemReads.every(({ environmentId }) => environmentId === "env-acme"),
-    ).toBe(true);
+    for (const params of itemReads) {
+      expect(params).toEqual({ environmentId: "env-acme" });
+    }
     expect(hostIdsOf(harness, "environment.configuration.items")).toHaveLength(
       0,
     );
