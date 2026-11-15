@@ -14,29 +14,41 @@ import type { HistorySortOption } from "@/components/home/data/home-page.data";
 interface EpicsSortMenuProps {
   value: HistorySortOption;
   onChange: (next: HistorySortOption) => void;
+  /** False on a host that cannot order by creation date. */
+  createdSortAvailable: boolean;
 }
 
-const SORT_OPTIONS: ReadonlyArray<{
-  value: HistorySortOption;
-  label: string;
-}> = [
-  { value: "recent", label: "Most recent" },
-  { value: "last-viewed", label: "Last viewed" },
-  { value: "relevance", label: "Relevance" },
-  { value: "oldest", label: "Oldest" },
-  { value: "title-asc", label: "Title A → Z" },
-  { value: "title-desc", label: "Title Z → A" },
+const SORT_LABELS: Readonly<Record<HistorySortOption, string>> = {
+  recent: "Most recent",
+  "last-viewed": "Last viewed",
+  relevance: "Relevance",
+  "created-desc": "Newest created",
+  oldest: "Oldest",
+  "title-asc": "Title A → Z",
+  "title-desc": "Title Z → A",
+};
+
+// `oldest` is no longer offered. A saved `oldest` still applies and keeps its
+// label on the trigger until another sort is picked.
+const MENU_SORTS: ReadonlyArray<HistorySortOption> = [
+  "recent",
+  "last-viewed",
+  "relevance",
+  "created-desc",
+  "title-asc",
+  "title-desc",
 ];
 
 export function EpicsSortMenu(props: EpicsSortMenuProps) {
-  const { value, onChange } = props;
-  const currentLabel =
-    SORT_OPTIONS.find((option) => option.value === value)?.label ?? "Sort";
+  const { value, onChange, createdSortAvailable } = props;
+  const options = createdSortAvailable
+    ? MENU_SORTS
+    : MENU_SORTS.filter((sort) => sort !== "created-desc");
 
   const trigger = (
     <Button type="button" variant="muted" size="sm">
       <ArrowDownUp className="size-4" />
-      {currentLabel}
+      {SORT_LABELS[value]}
     </Button>
   );
   return (
@@ -48,15 +60,15 @@ export function EpicsSortMenu(props: EpicsSortMenuProps) {
         <DropdownMenuRadioGroup
           value={value}
           onValueChange={(next) => {
-            const match = SORT_OPTIONS.find((option) => option.value === next);
+            const match = options.find((sort) => sort === next);
             if (match !== undefined) {
-              onChange(match.value);
+              onChange(match);
             }
           }}
         >
-          {SORT_OPTIONS.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value}>
-              {option.label}
+          {options.map((sort) => (
+            <DropdownMenuRadioItem key={sort} value={sort}>
+              {SORT_LABELS[sort]}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

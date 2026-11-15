@@ -25,7 +25,9 @@ import {
   simulatorScreenshotV10,
   simulatorSetKeepRunningV10,
   simulatorShutdownV10,
+  simulatorStatusUpgradeV10ToV11,
   simulatorStatusV10,
+  simulatorStatusV11,
 } from "@traycer/protocol/host/simulator/contracts";
 import {
   simulatorActionV10,
@@ -38,7 +40,6 @@ const V11 = { major: 1, minor: 1 } as const;
 const UNCHANGED_METHODS = {
   "simulator.shutdown": simulatorShutdownV10,
   "simulator.screenshot": simulatorScreenshotV10,
-  "simulator.status": simulatorStatusV10,
   "simulator.removeTools": simulatorRemoveToolsV10,
   "simulator.detail": simulatorDetailV10,
   "simulator.action": simulatorActionV10,
@@ -74,6 +75,13 @@ const NEW_V11_ENTRIES = [
     upgrade: simulatorCloseUpgradeV10ToV11,
   },
   {
+    method: "simulator.status",
+    entry: hostRpcRegistry["simulator.status"],
+    v10: simulatorStatusV10,
+    v11: simulatorStatusV11,
+    upgrade: simulatorStatusUpgradeV10ToV11,
+  },
+  {
     method: "config.simulator.get",
     entry: hostRpcRegistry["config.simulator.get"],
     v10: configSimulatorGetV10,
@@ -107,7 +115,7 @@ describe("simulator contracts", () => {
     }
   });
 
-  it("opens a 1.1 minor on the five verbs that grew, with the 1.0 contract kept", () => {
+  it("opens a 1.1 minor on the six verbs that grew, with the 1.0 contract kept", () => {
     for (const { method, entry, v10, v11, upgrade } of NEW_V11_ENTRIES) {
       expect(entry.degrade, method).toEqual({ kind: "unsupported" });
       expect(entry[1].latestMinor, method).toBe(1);

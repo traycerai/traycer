@@ -46,6 +46,7 @@ async function teamComputersRequest(
           Accept: "application/json",
           "Content-Type": "application/json",
         },
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,

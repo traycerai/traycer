@@ -460,6 +460,62 @@ describe("useEpicCreateForClient", () => {
     ]);
   });
 
+  it("lands a new task atop a created-desc page below pinned rows, whatever an existing row's updatedAt", () => {
+    const queryClient = new QueryClient();
+    const task = (id: string, createdAt: number, updatedAt: number) => {
+      const base = makeTask({
+        id,
+        title: id,
+        createdBy: "user-1",
+        updatedAt,
+        repos: [],
+        workspaces: [],
+      });
+      const epic = base.epic;
+      if (epic === null || epic === undefined || !epic.light) {
+        throw new Error("no epic");
+      }
+      return {
+        ...base,
+        epic: { ...epic, light: { ...epic.light, createdAt } },
+      };
+    };
+    const pinnedOld = { ...task("pinned", 1, 1), pinned: true };
+    // Created before the new task but touched long after it.
+    const lateEdit = task("late-edit", 5, 1000);
+    const request = {
+      ...LIST_CLOUD_TASKS_REQUEST,
+      sort: "created-desc" as const,
+    };
+    const queryKey = cloudEpicTasksQueryKey("host-1", "user-1", request);
+    queryClient.setQueryData<ListTasksResponse>(queryKey, {
+      tasks: [pinnedOld, lateEdit],
+      hasMore: false,
+    });
+    renderHook(() => useEpicCreateForClient(useHostClient()), {
+      wrapper: makeWrapper(queryClient),
+    });
+    const options = testState.capturedOptions;
+    if (options === null) throw new Error("expected mutation options");
+
+    const stagedVariables = {
+      epic: { id: "epic-1" },
+      chat: null,
+      workspaces: [],
+    };
+    options.onSuccess(
+      { task: task("new", 10, 10) },
+      stagedVariables,
+      options.onMutate(stagedVariables),
+    );
+
+    expect(taskIds(queryClient.getQueryData(queryKey))).toEqual([
+      "pinned",
+      "new",
+      "late-edit",
+    ]);
+  });
+
   it("patches cached facets only when the created task matches the cache request", () => {
     const queryClient = new QueryClient({
       defaultOptions: {
