@@ -1,8 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { tabNavigationController } from "@/lib/tab-navigation";
 import { isStartupNavigationIntent } from "@/lib/host/startup-navigation-intent";
 import { declareTracyPlaceLanding } from "@/lib/bots/tracy-place-traversal";
+import { appLogger } from "@/lib/logger";
+import { captureReportIssueError } from "@/lib/report-issue-error-capture";
 import { runWhenRouterSettled } from "@/lib/router-settled";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import {
@@ -57,6 +59,14 @@ export function TabNavigationRouteBridge(): null {
   const startupIntentBeforeHydrationRef = useRef(false);
   const skipRestoredRouteObservationRef = useRef(false);
   const restoredRouteRef = useRef<{ route: string | null } | null>(null);
+  // The synchronization below runs in the router's settle queue, which only
+  // logs a throw. Its failure is handed back here and thrown in render, so it
+  // reaches the same error boundary, and crash report, a throw from this
+  // effect reached before the queue existed.
+  const [synchronizationFailure, setSynchronizationFailure] = useState<{
+    readonly error: unknown;
+  } | null>(null);
+  if (synchronizationFailure !== null) throw synchronizationFailure.error;
 
   useEffect(() => {
     hydrationReadyRef.current = hydrationReady;
@@ -134,6 +144,27 @@ export function TabNavigationRouteBridge(): null {
     // load is in flight, as it is when the shell is admitted during a reload
     // (`runWhenRouterSettled`).
     const cancelReplay = runWhenRouterSettled(router, () => {
+      try {
+        replayRestoredRoute();
+      } catch (error) {
+        // The window keeps the route it booted on and the synchronization
+        // below still runs; the throw goes to the error log and the crash
+        // report, as it did from this effect before the settle queue, without
+        // drawing the error card over a window that works.
+        appLogger.error(
+          "[tab-navigation] restored route replay threw",
+          {},
+          error,
+        );
+        captureReportIssueError({
+          error,
+          componentStack: null,
+          errorCode: null,
+          sourceAction: "Restore window route",
+        });
+      }
+    });
+    function replayRestoredRoute(): void {
       const pendingRestoredRoute = restored.route;
       restored.route = null;
       // Read the marker off the CURRENT location as well as the observed
@@ -176,15 +207,19 @@ export function TabNavigationRouteBridge(): null {
       // The restored entry says where the Tracy surface was: it is read as a
       // landing, not as an entry the app wrote for where the surface is now.
       declareTracyPlaceLanding(router.history.location);
-    });
+    }
     const cancelSynchronization = runWhenRouterSettled(router, () => {
-      // Subscribe before synchronizing so no committed entry can fall into the
-      // setup window. This bridge remains mounted outside HostReadyGate.
-      tabNavigationController.synchronizeInitialLocation();
-      updateDesktopTabsActiveRoute(
-        `${router.state.location.pathname}${router.state.location.searchStr}`,
-      );
-      tabNavigationController.setHydrationReady(true, router.navigate);
+      try {
+        // Subscribe before synchronizing so no committed entry can fall into
+        // the setup window. This bridge remains mounted outside HostReadyGate.
+        tabNavigationController.synchronizeInitialLocation();
+        updateDesktopTabsActiveRoute(
+          `${router.state.location.pathname}${router.state.location.searchStr}`,
+        );
+        tabNavigationController.setHydrationReady(true, router.navigate);
+      } catch (error) {
+        setSynchronizationFailure({ error });
+      }
     });
     return () => {
       cancelReplay();

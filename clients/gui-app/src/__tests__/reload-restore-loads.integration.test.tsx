@@ -23,7 +23,11 @@ import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-naviga
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import { requireSignedIn } from "@/lib/router-auth";
-import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  __resetTabNavigationControllerForTesting,
+  tabNavigationController,
+} from "@/lib/tab-navigation";
+import { runWhenRouterSettled } from "@/lib/router-settled";
 import { bindAuthInvalidation } from "@/router";
 import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -135,6 +139,8 @@ function createReloadRouter(input: {
   readonly initialRoute: string;
   /** The shell with its tab bridge, as on the reload path, or the bare outlet. */
   readonly withBridge: boolean;
+  /** What reaches the router's error boundary; `null` for the default one. */
+  readonly onRouteError: ((error: unknown) => void) | null;
   readonly persisted: boolean;
   readonly layoutChunk: Promise<void>;
   readonly taskChunk: Promise<void>;
@@ -180,6 +186,14 @@ function createReloadRouter(input: {
     context: { getAuthSnapshot: () => useAuthStore.getState() },
     defaultPendingMs: 50,
     defaultPendingComponent: TrivialPendingComponent,
+    ...(input.onRouteError === null
+      ? {}
+      : {
+          defaultErrorComponent: ({ error }: { readonly error: unknown }) => {
+            input.onRouteError?.(error);
+            return null;
+          },
+        }),
   });
 }
 
@@ -279,6 +293,7 @@ describe("a sign-in applied before the router's first load", () => {
     const router = createReloadRouter({
       initialRoute: route,
       withBridge: false,
+      onRouteError: null,
       persisted: false,
       layoutChunk: OPEN,
       taskChunk: OPEN,
@@ -306,6 +321,7 @@ describe("a sign-in applied before the router's first load", () => {
     const router = createReloadRouter({
       initialRoute: route,
       withBridge: false,
+      onRouteError: null,
       persisted: false,
       layoutChunk: OPEN,
       taskChunk: OPEN,
@@ -336,6 +352,8 @@ describe("the reload path restores the open task with no load started under anot
       const router = createReloadRouter({
         initialRoute: route,
         withBridge: true,
+        onRouteError: null,
+        onRouteError: null,
         persisted: true,
         layoutChunk: layoutChunk.promise,
         taskChunk: taskChunk.promise,
@@ -387,6 +405,7 @@ describe("the reload path restores the open task with no load started under anot
     const router = createReloadRouter({
       initialRoute: route,
       withBridge: true,
+      onRouteError: null,
       persisted: true,
       layoutChunk: layoutChunk.promise,
       taskChunk: taskChunk.promise,
@@ -442,6 +461,7 @@ describe("the fix changes nothing else about sign-in", () => {
     const router = createReloadRouter({
       initialRoute: `/epics/${EPIC_ID}/tab-1`,
       withBridge: false,
+      onRouteError: null,
       persisted: false,
       layoutChunk: OPEN,
       taskChunk: OPEN,
@@ -462,6 +482,7 @@ describe("the fix changes nothing else about sign-in", () => {
     const router = createReloadRouter({
       initialRoute: "/",
       withBridge: false,
+      onRouteError: null,
       persisted: false,
       layoutChunk: OPEN,
       taskChunk: OPEN,
@@ -491,6 +512,7 @@ describe("the fix changes nothing else about sign-in", () => {
     const router = createReloadRouter({
       initialRoute: route,
       withBridge: false,
+      onRouteError: null,
       persisted: false,
       layoutChunk: OPEN,
       taskChunk: OPEN,
@@ -519,5 +541,56 @@ describe("the fix changes nothing else about sign-in", () => {
       "/:signed-out",
     ]);
     expect(router.state.location.pathname).toBe("/");
+  });
+});
+
+describe("a throw in the tab bridge's synchronization", () => {
+  it("reaches the error boundary as a throw from that effect did, and a task queued behind it still runs", async () => {
+    const fault = new Error("synchronization failed");
+    vi.spyOn(
+      tabNavigationController,
+      "synchronizeInitialLocation",
+    ).mockImplementation(() => {
+      throw fault;
+    });
+    const route = seedRestoredTask();
+    const layoutChunk = createDeferred();
+    const taskChunk = createDeferred();
+    const routeErrors = new Set<unknown>();
+    const router = createReloadRouter({
+      initialRoute: route,
+      withBridge: true,
+      onRouteError: (error) => routeErrors.add(error),
+      persisted: true,
+      layoutChunk: layoutChunk.promise,
+      taskChunk: taskChunk.promise,
+      guardReads: [],
+    });
+    onTestFinished(bindAuthInvalidation(router));
+    act(() => {
+      signIn("user-a");
+    });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => {
+      expect(router.state.status).toBe("pending");
+      expect(router.state.matches.length).toBeGreaterThan(0);
+    });
+    // Behind the bridge's replay and synchronization.
+    const ran: Array<string> = [];
+    runWhenRouterSettled(router, () => {
+      ran.push("behind");
+    });
+
+    act(() => {
+      layoutChunk.resolve();
+    });
+    act(() => {
+      taskChunk.resolve();
+    });
+
+    await waitFor(() => {
+      expect([...routeErrors]).toEqual([fault]);
+    });
+    expect(ran).toEqual(["behind"]);
   });
 });

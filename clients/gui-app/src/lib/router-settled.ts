@@ -20,11 +20,19 @@
  * so a caller withdraws what must not stay on screen before it queues the
  * navigation, and queues only the navigation.
  *
- * A task that throws is written to the app's error log (`appLogger.error`:
- * the console, and in the desktop build `traycer-desktop.log`) and the
- * tasks behind it still run. It reaches neither the root error boundary nor
- * its crash report, where a throw from the same work inside a React effect
- * went before this queue existed.
+ * A task that throws strands nothing: the tasks behind it still run. The
+ * queue itself only writes the throw to the app's error log
+ * (`appLogger.error`: the console, and in the desktop build
+ * `traycer-desktop.log`). Each task is as visible as it was before the queue,
+ * declared where the task is given:
+ * - the tab bridge's synchronization hands its failure back to React, so it
+ *   reaches the error boundary and its crash report, as the same throw from
+ *   that effect did;
+ * - the tab bridge's replay writes the error log and the crash report, with
+ *   no card, since the window it leaves works;
+ * - an invalidate (`bindAuthInvalidation`) and a refusal's navigation call
+ *   async router methods whose failures are rejections the caller has always
+ *   left unhandled, before the queue as now; neither throws synchronously.
  */
 import { appLogger } from "@/lib/logger";
 
