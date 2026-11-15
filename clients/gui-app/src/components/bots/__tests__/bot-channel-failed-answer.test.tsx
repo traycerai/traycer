@@ -32,6 +32,7 @@ import {
   HostClient,
   type HostRequester,
 } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
@@ -1659,7 +1660,7 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     const ACME = { id: "team-acme", name: "Acme" };
 
     /** The line under the post, with the bot's sandbox described by `rows`. */
-    function frozenLine(rows: Parameters<typeof installHostDirectoryRows>[0]) {
+    function frozenLine(rows: ReadonlyArray<HostDirectoryEntry>): HTMLElement {
       installHostDirectoryRows(rows);
       activityStore.setState({
         activity: trunkWithReason("failed", {
