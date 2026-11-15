@@ -320,6 +320,45 @@ describe("useClaimedComputerNotice", () => {
     ).toHaveLength(2);
   });
 
+  it("reads again when a team computer leaves the list while the sign-in read is still out", async () => {
+    mocks.hosts.current = { hosts: [teamHost("host-1")] };
+    let finishSignIn: (result: ClaimedComputersResult) => void = () =>
+      undefined;
+    mocks.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSignIn = resolve;
+        }),
+    );
+    let finishDeparture: (result: ClaimedComputersResult) => void = () =>
+      undefined;
+    mocks.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishDeparture = resolve;
+        }),
+    );
+    const view = mount();
+    await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));
+
+    // A teammate claims host-1 after the sign-in read took its snapshot.
+    mocks.hosts.current = { hosts: [] };
+    mocks.hosts.updatedAt = 2;
+    view.rerender();
+    await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      finishSignIn({ kind: "ok", claims: [] });
+    });
+    act(() => {
+      finishDeparture({ kind: "ok", claims: [CLAIM] });
+    });
+    await waitFor(() =>
+      expect(mocks.toastInfo).toHaveBeenCalledExactlyOnceWith(ADA_SENTENCE, {
+        id: "claimed-computer:host-1@2026-11-14T10:00:00.000Z",
+      }),
+    );
+  });
   it("tells nothing, and records nothing, when the account switches while the read waits", async () => {
     let finish: (result: ClaimedComputersResult) => void = () => undefined;
     mocks.read.mockImplementationOnce(
