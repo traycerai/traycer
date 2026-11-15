@@ -12,6 +12,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type {
   BotConversationListResponse,
+  BotConversationSendRequest,
   BotThreadListResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -74,6 +75,8 @@ export interface HostScript {
   threadListCalls: number;
   /** What the host's `bot.readCursor.read` answers next. */
   readCursor: () => BotReadCursorReadResponse;
+  /** The `bot.conversation.send` asks the host took, in order. */
+  sends: BotConversationSendRequest[];
   /** The `bot.readCursor.advance` asks the host took, in order. */
   advances: BotReadCursorAdvanceRequest[];
 }
@@ -85,6 +88,7 @@ export function freshScript(): HostScript {
     conversationListCalls: 0,
     threadListCalls: 0,
     readCursor: () => UNREAD_CURSORS,
+    sends: [],
     advances: [],
   };
 }
@@ -106,6 +110,15 @@ export function hostClientAnswering(
       "bot.thread.list": () => {
         script.threadListCalls += 1;
         return script.threadList();
+      },
+      "bot.conversation.send": (params) => {
+        script.sends.push(params);
+        return {
+          messageId: "message-new",
+          requestId: "request-new",
+          delivery: "written",
+          threadId: params.threadId,
+        };
       },
       "bot.readCursor.read": () => script.readCursor(),
       "bot.readCursor.advance": (params) => {

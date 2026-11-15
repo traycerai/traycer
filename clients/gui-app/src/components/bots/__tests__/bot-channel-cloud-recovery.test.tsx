@@ -51,6 +51,8 @@ import {
   hostFailure,
 } from "@/lib/host/test-support/cloud-failure-reads";
 import type { HostRpcRegistry } from "@/lib/host";
+import { sweepTransientCloudFailures } from "@/lib/host/cloud-recovery-sweep";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { CloudRecoveryDoorbellMount } from "@/providers/cloud-recovery-doorbell-mount";
 
 const mocks = vi.hoisted(() => ({
@@ -131,7 +133,7 @@ function mountRealChannel(args: {
   readonly extra: ReactElement | null;
 }): void {
   mocks.client = hostClientAnswering(script, args.queryClient);
-  renderRealChannel(args);
+  renderRealChannel({ ...args, tiles: null });
 }
 
 function mountWithDoorbell(): void {
@@ -400,9 +402,29 @@ describe("<BotChannelView /> when the host answers the channel's read with a ser
   const serverError = (): Error =>
     hostFailure("RPC_ERROR", "bot.conversation.list");
 
-  /** The asks are over: nothing is in flight, so a ring's re-ask would have shown. */
-  const quiet = (): Promise<void> =>
-    waitFor(() => expect(queryClient.isFetching()).toBe(0));
+  /**
+   * A ring, as the doorbell's handler runs it: the sweep itself, which settles
+   * once every re-ask it chose has answered, so a re-ask a ring wrongly chose
+   * shows in the asks before the call returns.
+   */
+  const ring = (): Promise<void> =>
+    sweepTransientCloudFailures(queryClient, TAB_HOST_ID);
+
+  /** The channel's read has answered its last ask: it is not fetching. */
+  const channelAnswered = (): Promise<void> =>
+    waitFor(() =>
+      expect(
+        queryClient
+          .getQueryCache()
+          .findAll({
+            queryKey: hostQueryKeys.methodScope(
+              TAB_HOST_ID,
+              "bot.conversation.list",
+            ),
+          })
+          .map((query) => query.state.fetchStatus),
+      ).toEqual(["idle"]),
+    );
 
   it("asks again once when the host rings, leaves it at the next ring, and asks once more when Retry failed the same way", async () => {
     // The doorbell is held for a host while one of its reads is stranded by
@@ -425,20 +447,17 @@ describe("<BotChannelView /> when the host answers the channel's read with a ser
 
     ringDoorbell(TAB_HOST_ID);
     await waitFor(() => expect(script.conversationListCalls).toBe(2));
-    await quiet();
-    ringDoorbell(TAB_HOST_ID);
-    await quiet();
+    await channelAnswered();
+    await ring();
     expect(script.conversationListCalls).toBe(2);
 
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
     await waitFor(() => expect(script.conversationListCalls).toBe(3));
     await screen.findByTestId("bot-channel-error");
-    await quiet();
-    ringDoorbell(TAB_HOST_ID);
-    await waitFor(() => expect(script.conversationListCalls).toBe(4));
-    await quiet();
-    ringDoorbell(TAB_HOST_ID);
-    await quiet();
+    await channelAnswered();
+    await ring();
+    expect(script.conversationListCalls).toBe(4);
+    await ring();
 
     expect(script.conversationListCalls).toBe(4);
   });

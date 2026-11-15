@@ -188,7 +188,7 @@ let queryClient: QueryClient;
 function mount(openThread: BotOpenThread | null): void {
   queryClient = appClientWithoutRetries();
   mocks.client = hostClientAnswering(script, queryClient);
-  renderRealChannel({ queryClient, openThread, extra: null });
+  renderRealChannel({ queryClient, openThread, tiles: null, extra: null });
 }
 
 function channelSend(): HTMLElement {

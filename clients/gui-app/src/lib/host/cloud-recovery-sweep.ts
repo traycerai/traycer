@@ -3,6 +3,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { isBotRead } from "@/lib/bots/bot-read-readability";
 import { queryKeys } from "@/lib/query-keys";
 import {
   attemptInFlightHasNotFailed,
@@ -34,10 +35,8 @@ export function isTransientlyFailedRead(query: Query): boolean {
  * availability sweep re-asks; never a bot stream's slot.
  */
 function isRingMendableBotFailure(query: Query, error: unknown): boolean {
-  const method = query.queryKey[2];
   return (
-    typeof method === "string" &&
-    method.startsWith("bot.") &&
+    isBotRead(query.queryKey) &&
     error instanceof HostRpcError &&
     !(error instanceof HostTransportFailureError) &&
     !isTransientCloudFailure(error) &&

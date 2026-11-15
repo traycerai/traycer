@@ -94,6 +94,7 @@ import {
   BotThreadPanel,
   type BotThreadPanelThread,
 } from "@/components/bots/bot-thread-panel";
+import { BotThreadBoxWaitsContext } from "@/components/bots/bot-thread-box-waits-context";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -147,7 +148,6 @@ import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
 import { useChannelBackground } from "@/hooks/bots/use-bot-appearance";
 import {
-  hidesRows,
   sendWaitsOn,
   staleFailureOf,
   type BotReadFailing,
@@ -389,6 +389,8 @@ export function BotChannelView(props: {
   const {
     supported: threadListSupported,
     threadList,
+    threadRead,
+    listed,
     threadsByPost,
     isUnread,
     unreadCountOf,
@@ -717,7 +719,7 @@ export function BotChannelView(props: {
     tiles,
     section: channelSection,
     threadListSupported,
-    threadList,
+    threadList: { data: listed, isError: threadList.isError },
     railHeld: railHolds(threadOpen, openMemory, openExchange),
     setLanding,
   });
@@ -749,7 +751,9 @@ export function BotChannelView(props: {
   });
   const threadLanding = useThreadPanelLanding(props.landOn, drawnThreadId);
   const { refetch: refetchThreads, isFetching: threadsFetching } = threadList;
-  const threadRead = useBotReadView(threadList);
+  // The channel's box and the thread's take the same host: a box waits while
+  // either read says a send would not arrive.
+  const threadBoxWaits = channelSendWaits || sendWaitsOn(threadRead);
   // The row the open thread hangs off, as the channel's session has it: the
   // panel's own read of it fetches it when cold. Read beside the panel, not
   // around it, so the panel keeps its place while the session comes and goes.
@@ -765,21 +769,16 @@ export function BotChannelView(props: {
       retry: () => void refetchThreads(),
       retrying: threadsFetching,
     });
-    // The person must stop seeing the thread, or no re-ask can show it.
-    if (threadRead.kind === "failed" && hidesRows(threadRead.failure)) {
+    // The person must see nothing of the thread, or no re-ask can show it.
+    if (threadRead.kind === "failed" && threadRead.rowsWithheld) {
       return { kind: "failed", retry: noticeOf(threadRead) };
     }
-    // The channel's box and the thread's take the same host: a send waits
-    // while either read says it would not arrive.
-    const sendable =
-      anchorSendable({
-        open,
-        listed: openThread,
-        post: anchorRow,
-        threadAnchorKinds,
-      }) &&
-      !channelSendWaits &&
-      !sendWaitsOn(threadRead);
+    const sendable = anchorSendable({
+      open,
+      listed: openThread,
+      post: anchorRow,
+      threadAnchorKinds,
+    });
     // One line per cause: the channel's line already says the list's.
     const retry =
       threadRead.kind === "ok" || threadRead.failure === channelStale
@@ -800,13 +799,16 @@ export function BotChannelView(props: {
     if (threadRead.kind !== "ok") {
       return {
         kind: "failed",
-        retry: noticeOf({ kind: "failed", failure: threadRead.failure }),
+        retry: noticeOf({
+          kind: "failed",
+          failure: threadRead.failure,
+          rowsWithheld: false,
+        }),
       };
     }
     return { kind: "pending" };
   }, [
     anchorRow,
-    channelSendWaits,
     channelStale,
     open,
     openThread,
@@ -889,8 +891,18 @@ export function BotChannelView(props: {
   return (
     <BotSurfaceCardsContext.Provider value={surfaceCards}>
       <QuoteSinkContext value={quoteIntoChannelBox}>
-        <div className="@container flex min-h-0 flex-1">
-          <div className="flex min-h-0 w-full">
+        <div className="@container flex min-h-0 flex-1 flex-col">
+          {/* Above the channel and the rail, not in either: on a narrow pane
+              one covers the other, and a waiting box is never shown without
+              the line saying why, with Retry. A thread's own line says only
+              a cause this one does not. */}
+          <ChannelReadNotice
+            view={channelRead}
+            read={conversations}
+            hostId={hostId}
+            className="shrink-0 px-4 pt-2"
+          />
+          <div className="flex min-h-0 w-full flex-1">
             <section
               ref={setChannelSection}
               aria-label={botTitle}
@@ -917,12 +929,6 @@ export function BotChannelView(props: {
                   botId={botId}
                   shown={search.showing}
                   on="channel"
-                />
-                <ChannelReadNotice
-                  view={channelRead}
-                  read={conversations}
-                  hostId={hostId}
-                  className="shrink-0 px-4 pt-2"
                 />
                 <BotExchangeLinesContext value={exchangeLines.channel}>
                   <BotChatTranscript
@@ -985,7 +991,7 @@ export function BotChannelView(props: {
                   botTitle={botTitle}
                   channelId={channel.conversationId}
                   trunkChatId={trunkChatId}
-                  threads={threadList.data?.threads ?? null}
+                  threads={listed?.threads ?? null}
                   botNameOf={botNameOf}
                   back={memory.back}
                   onBack={
@@ -1024,33 +1030,36 @@ export function BotChannelView(props: {
               render={(postId) => (
                 <BotExchangeLinesContext value={exchangeLines.thread}>
                   <QuoteSinkContext value={quoteIntoThreadBox}>
-                    <BotThreadPanel
-                      key={postId}
-                      botId={botId}
-                      hostId={hostId}
-                      boundHostId={boundHostId}
-                      botTitle={botTitle}
-                      imageReach={imageReach}
-                      answerReach={answerReach}
-                      conversationId={channel.conversationId}
-                      originMessageId={postId}
-                      sent={open?.sent ?? null}
-                      thread={panelThread}
-                      tasks={tasks}
-                      anchorSenderLabel={anchorSenderLabel}
-                      resolveMember={resolveMember}
-                      landOn={
-                        threadLanding.landing ?? search.threadLandingOn(postId)
-                      }
-                      onClose={() => {
-                        threadLanding.spend();
-                        onOpenThread(null);
-                      }}
-                      onEditPost={editPostFromThread}
-                      onOpenTurn={onOpenTurn}
-                      onOpenSession={onOpenSession}
-                      quote={quoteFor(postId)}
-                    />
+                    <BotThreadBoxWaitsContext value={threadBoxWaits}>
+                      <BotThreadPanel
+                        key={postId}
+                        botId={botId}
+                        hostId={hostId}
+                        boundHostId={boundHostId}
+                        botTitle={botTitle}
+                        imageReach={imageReach}
+                        answerReach={answerReach}
+                        conversationId={channel.conversationId}
+                        originMessageId={postId}
+                        sent={open?.sent ?? null}
+                        thread={panelThread}
+                        tasks={tasks}
+                        anchorSenderLabel={anchorSenderLabel}
+                        resolveMember={resolveMember}
+                        landOn={
+                          threadLanding.landing ??
+                          search.threadLandingOn(postId)
+                        }
+                        onClose={() => {
+                          threadLanding.spend();
+                          onOpenThread(null);
+                        }}
+                        onEditPost={editPostFromThread}
+                        onOpenTurn={onOpenTurn}
+                        onOpenSession={onOpenSession}
+                        quote={quoteFor(postId)}
+                      />
+                    </BotThreadBoxWaitsContext>
                   </QuoteSinkContext>
                 </BotExchangeLinesContext>
               )}
@@ -1429,6 +1438,10 @@ function useChannelThreads(args: {
 }): {
   readonly supported: boolean;
   readonly threadList: UseQueryResult<BotThreadListResponse, HostRpcError>;
+  /** What the list draws (`botReadView`). */
+  readonly threadRead: BotReadView;
+  /** What the list says for the person to see: nothing behind its failure. */
+  readonly listed: BotThreadListResponse | undefined;
   readonly threadsByPost: ReadonlyMap<string, BotThreadSummary>;
   readonly isUnread: (threadId: string) => boolean;
   /** `null` where the host does not count. */
@@ -1447,7 +1460,9 @@ function useChannelThreads(args: {
   const threadList = useBotThreadListQuery(client, botId, {
     enabled: supported,
   });
-  const threads = threadList.data?.threads ?? EMPTY_THREADS;
+  const threadRead = useBotReadView(threadList);
+  const listed = threadRead.kind === "failed" ? undefined : threadList.data;
+  const threads = listed?.threads ?? EMPTY_THREADS;
   const threadsByPost = useMemo(() => {
     const byPost = new Map<string, BotThreadSummary>();
     for (const thread of threads) {
@@ -1488,7 +1503,7 @@ function useChannelThreads(args: {
   // under an earlier binding - cached, or answered after the bot moved -
   // says nothing for this one until it is read again. A direct reply then
   // opens its post's thread, and any other row of the bot none.
-  const anchors = threadList.data?.threadAnchors ?? null;
+  const anchors = listed?.threadAnchors ?? null;
   const threadAnchorKinds = useMemo(
     () =>
       supported
@@ -1522,6 +1537,8 @@ function useChannelThreads(args: {
   return {
     supported,
     threadList,
+    threadRead,
+    listed,
     threadsByPost,
     isUnread,
     unreadCountOf,

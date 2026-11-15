@@ -15,6 +15,7 @@ import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-h
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
@@ -29,6 +30,8 @@ const resolveMember: BotMemberResolver = () => null;
 export function renderRealChannel(args: {
   readonly queryClient: QueryClient;
   readonly openThread: BotOpenThread | null;
+  /** How many tiles the installed app shows; `null` where the container decides. */
+  readonly tiles: MobileTileCount | null;
   readonly extra: ReactElement | null;
 }): void {
   render(
@@ -38,7 +41,7 @@ export function renderRealChannel(args: {
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotChannelView
-              tiles={null}
+              tiles={args.tiles}
               botId={BOT_ID}
               hostId={TAB_HOST_ID}
               boundHostId={TAB_HOST_ID}

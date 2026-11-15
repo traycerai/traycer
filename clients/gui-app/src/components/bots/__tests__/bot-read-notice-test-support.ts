@@ -15,7 +15,7 @@ export function staleNotice(retry: () => void): BotReadNotice {
 /** A failing read of the thread list with no replies to keep. */
 export function failedNotice(retry: () => void): BotReadNotice {
   return {
-    view: { kind: "failed", failure: "server" },
+    view: { kind: "failed", failure: "server", rowsWithheld: false },
     retry,
     retrying: false,
   };

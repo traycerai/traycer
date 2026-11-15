@@ -19,6 +19,7 @@ import {
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { lastingHostRefusal } from "@/lib/host/lasting-host-refusal";
+import { installBotReadReadability } from "@/lib/bots/bot-read-readability";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { worktreeQuerySuccessOrderFor } from "@/lib/worktree/worktree-query-success-order";
@@ -122,6 +123,7 @@ export function createAppQueryClient(): QueryClient {
   });
   worktreeQuerySuccessOrderFor(client);
   installConditionPollEpisodeCoordinator(client);
+  installBotReadReadability(client);
   return client;
 }
 

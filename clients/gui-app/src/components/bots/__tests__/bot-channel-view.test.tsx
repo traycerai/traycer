@@ -42,10 +42,13 @@ import {
 } from "vitest";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostFailure } from "@/lib/host/test-support/cloud-failure-reads";
+import { createAppQueryClient } from "@/lib/query-client";
+import { isDeepStrictEqual } from "node:util";
 import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
   BotThreadAnchors,
+  BotThreadListResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
@@ -181,6 +184,48 @@ vi.mock(
     usePaneVisible: () => mocks.state.paneVisible,
   }),
 );
+/** Has the app's own query client fetch the state's thread list, as a host answers it. */
+async function fetchThreadList(): Promise<void> {
+  const client = createAppQueryClient();
+  const queryKey = ["host", "host-bound", "bot.thread.list", {}];
+  const answer = await client.fetchQuery({
+    queryKey,
+    queryFn: () => currentThreadList(),
+  });
+  // The mock must hand out the object the cache holds, which it marked.
+  if (client.getQueryData(queryKey) !== answer) {
+    throw new Error("the fetched answer is not the one the cache holds");
+  }
+  fetched.answer = answer;
+}
+
+/** The thread list's answer as the mock hands it out: what the state says now. */
+function currentThreadList(): BotThreadListResponse {
+  return {
+    threads: mocks.state.threads,
+    threadAnchors: mocks.state.threadAnchors,
+  } as BotThreadListResponse;
+}
+
+/**
+ * The answer a real fetch of the thread list returned, which the app's cache
+ * marks as readable by the person it was fetched for; `null` until a case
+ * fetches one.
+ */
+const fetched: { answer: BotThreadListResponse | null } = { answer: null };
+
+/**
+ * What the thread list holds: the fetched answer while the state still says
+ * the same, so a failed refetch keeps rows the person may read, and the
+ * state's own answer otherwise.
+ */
+function answeredThreadList(): BotThreadListResponse {
+  const now = currentThreadList();
+  return fetched.answer !== null && isDeepStrictEqual(fetched.answer, now)
+    ? fetched.answer
+    : now;
+}
+
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: mocks.state.conversations },
@@ -199,12 +244,7 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   ) => {
     mocks.threadListCalls.push({ botId, ...args });
     return {
-      data: mocks.state.threadListAnswered
-        ? {
-            threads: mocks.state.threads,
-            threadAnchors: mocks.state.threadAnchors,
-          }
-        : undefined,
+      data: mocks.state.threadListAnswered ? answeredThreadList() : undefined,
       isError: mocks.state.threadListError,
       error: null,
       dataUpdatedAt: 1_700_000_000_000,
@@ -661,6 +701,7 @@ function lastThreadListCall(): ThreadListCall {
 }
 
 beforeEach(() => {
+  fetched.answer = null;
   vi.clearAllMocks();
   mocks.sendAsync.mockReset();
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {}, unsentBoxes: {} });
@@ -1282,6 +1323,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
     mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    await fetchThreadList();
     const { reopen } = mount({ openThreadPostId: null });
     reopen(ANSWER_THREAD);
     const box = screen.getByTestId("stub-bot-thread-composer");
@@ -1426,6 +1468,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
         lastReplyAt: 8_000,
       }),
     ];
+    await fetchThreadList();
     const { reopen } = mount({ openThreadPostId: null });
     reopen(ANSWER_THREAD);
 

@@ -7,7 +7,9 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   botReadFailureKind,
+  botReadView,
   type BotReadFailureKind,
+  type BotReadView,
 } from "@/lib/bots/bot-read-view";
 
 const METHOD = "bot.conversation.list";
@@ -84,5 +86,69 @@ describe("botReadFailureKind", () => {
     },
   ])("$name", ({ error, kind }) => {
     expect(botReadFailureKind(error)).toBe(kind);
+  });
+});
+
+describe("botReadView", () => {
+  const LOADED_AT = 1_700_000_000_000;
+  const ANSWER = { threads: [] };
+
+  function failing(
+    error: unknown,
+    data: unknown,
+    retainedReadable: boolean,
+  ): BotReadView {
+    return botReadView(
+      { isError: true, data, error, dataUpdatedAt: LOADED_AT },
+      retainedReadable,
+    );
+  }
+
+  it.each<{
+    readonly name: string;
+    readonly error: Error;
+    readonly data: unknown;
+    readonly retainedReadable: boolean;
+    readonly view: BotReadView;
+  }>([
+    {
+      name: "keeps readable rows through a recoverable failure",
+      error: hostError("RPC_ERROR", null),
+      data: ANSWER,
+      retainedReadable: true,
+      view: { kind: "stale", failure: "server", loadedAt: LOADED_AT },
+    },
+    {
+      name: "withholds kept rows the person may not read",
+      error: hostError("RPC_ERROR", null),
+      data: ANSWER,
+      retainedReadable: false,
+      view: { kind: "failed", failure: "server", rowsWithheld: true },
+    },
+    {
+      name: "withholds the rows of a lasting refusal even when they are readable",
+      error: hostError("FORBIDDEN", null),
+      data: ANSWER,
+      retainedReadable: true,
+      view: { kind: "failed", failure: "access-refused", rowsWithheld: true },
+    },
+    {
+      name: "withholds nothing when nothing has loaded",
+      error: hostError("RPC_ERROR", null),
+      data: undefined,
+      retainedReadable: false,
+      view: { kind: "failed", failure: "server", rowsWithheld: false },
+    },
+  ])("$name", ({ error, data, retainedReadable, view }) => {
+    expect(failing(error, data, retainedReadable)).toEqual(view);
+  });
+
+  it("is ok while the read has not failed", () => {
+    expect(
+      botReadView(
+        { isError: false, data: ANSWER, error: null, dataUpdatedAt: LOADED_AT },
+        false,
+      ),
+    ).toEqual({ kind: "ok" });
   });
 });

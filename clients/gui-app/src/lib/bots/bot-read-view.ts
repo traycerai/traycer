@@ -38,7 +38,9 @@ export function botReadFailureKind(error: unknown): BotReadFailureKind {
  * - `failed`: the failure in place of the rows, because there are none to
  *   keep, or because the person must stop seeing them (signed out, no
  *   access) or no re-ask can bring them back (a host that cannot serve the
- *   bot).
+ *   bot), or because the person may not read the ones kept: a lasting
+ *   refusal met them since their last answer, or another account fetched
+ *   them (`retainedReadableBy`).
  */
 export type BotReadView =
   | { readonly kind: "ok" }
@@ -48,23 +50,44 @@ export type BotReadView =
       /** When the kept answer loaded. */
       readonly loadedAt: number;
     }
-  | { readonly kind: "failed"; readonly failure: BotReadFailureKind };
+  | {
+      readonly kind: "failed";
+      readonly failure: BotReadFailureKind;
+      /**
+       * The person must see nothing of this read: a lasting refusal, or kept
+       * rows they may not read. Otherwise only nothing has loaded to show.
+       */
+      readonly rowsWithheld: boolean;
+    };
 
 /** A read view with a failure to say. */
 export type BotReadFailing = Exclude<BotReadView, { readonly kind: "ok" }>;
 
 const OK: BotReadView = { kind: "ok" };
 
-export function botReadView(read: {
-  readonly isError: boolean;
-  readonly data: unknown;
-  readonly error: unknown;
-  readonly dataUpdatedAt: number;
-}): BotReadView {
+/**
+ * `retainedReadable`: whether the person reading now may read what the read
+ * retains (`retainedReadableBy`).
+ */
+export function botReadView(
+  read: {
+    readonly isError: boolean;
+    readonly data: unknown;
+    readonly error: unknown;
+    readonly dataUpdatedAt: number;
+  },
+  retainedReadable: boolean,
+): BotReadView {
   if (!read.isError) return OK;
   const failure = botReadFailureKind(read.error);
-  if (read.data === undefined || hidesRows(failure)) {
-    return { kind: "failed", failure };
+  if (hidesRows(failure)) {
+    return { kind: "failed", failure, rowsWithheld: true };
+  }
+  if (read.data === undefined) {
+    return { kind: "failed", failure, rowsWithheld: false };
+  }
+  if (!retainedReadable) {
+    return { kind: "failed", failure, rowsWithheld: true };
   }
   return { kind: "stale", failure, loadedAt: read.dataUpdatedAt };
 }
@@ -73,9 +96,7 @@ export function botReadView(read: {
  * Whether a failure takes away rows already loaded: the person must stop
  * seeing them (signed out, no access), or no re-ask can bring them back.
  */
-export function hidesRows(
-  failure: BotReadFailureKind,
-): failure is LastingHostRefusal {
+function hidesRows(failure: BotReadFailureKind): failure is LastingHostRefusal {
   return (
     failure === "signed-out" ||
     failure === "access-refused" ||

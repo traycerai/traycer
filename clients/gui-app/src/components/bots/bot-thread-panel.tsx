@@ -1,4 +1,5 @@
 import {
+  use,
   useCallback,
   useEffect,
   useMemo,
@@ -37,6 +38,7 @@ import {
   BotReadNoticeView,
   type BotReadNotice,
 } from "@/components/bots/bot-read-failure";
+import { BotThreadBoxWaitsContext } from "@/components/bots/bot-thread-box-waits-context";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotTaskList } from "@/components/bots/bot-task-list";
@@ -745,6 +747,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   const origin = useMemo(() => <ThreadOrigin {...props} />, [props]);
   const { kept, seed, keptDraft } = useKeptBoxDraft(botId, originMessageId);
   const seedThreadBox = useBotDraftsStore((state) => state.seedThreadBox);
+  const boxWaits = use(BotThreadBoxWaitsContext);
   // A draft Discuss puts in the box is a new message: an edit the box held
   // ends, so the draft replaces nothing.
   const [heldSeedId, setHeldSeedId] = useState(kept?.seedId ?? null);
@@ -769,6 +772,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     );
   }
   const box = boxOf(thread, props.originMessageId, props.conversationId);
+  const boxSendable = thread.sendable && !boxWaits;
   return (
     <>
       {box.threadId === null ? (
@@ -802,7 +806,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         conversationId={box.conversationId}
         threadId={box.threadId}
         announcementId={box.announcementId}
-        sendable={thread.sendable}
+        sendable={boxSendable}
         imageReach={props.imageReach}
         placeholder="Reply…"
         label={edit === null ? box.label : IN_THREAD_LABEL}
