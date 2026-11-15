@@ -22,6 +22,7 @@ import { sandboxSummaryFixture } from "./sandbox-fixtures";
 
 const HOST_ID = "host-sbx-1";
 const TEAM: HostOwnerPrincipal = { kind: "team", id: "team-a", name: "Alpha" };
+const PERSONAL_OWNER: HostOwnerPrincipal = { kind: "user", id: "user-a" };
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
@@ -248,7 +249,7 @@ describe("useSandboxWakeForOpenedTile on a frozen sandbox", () => {
   });
 
   it("keeps the personal message on a personal sandbox", async () => {
-    await openFrozen(undefined);
+    await openFrozen(PERSONAL_OWNER);
 
     expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
     expect(mocks.toastWarning).toHaveBeenCalledWith(
