@@ -520,20 +520,14 @@ describe("sandbox confirm dialogs", () => {
       },
     );
 
-    it("ends a team Destroy dialog's sessions block at the caption, with no sentence about who is told", () => {
-      mocks.configuration = {
-        kind: "team",
-        teamId: "team-1",
-        teamName: "acme",
-        environmentId: TEAM_ENVIRONMENT_ID,
-      };
+    it("ends the Destroy dialog's sessions block at the caption, with no sentence about who is told", () => {
       mocks.report = liveSessionReport(
         { agents: [agentSessionFixture({})], terminals: [] },
         true,
       );
       render(
         <SandboxDestroyDialog
-          sandbox={TEAM_SANDBOX}
+          sandbox={SANDBOX}
           open
           onOpenChange={vi.fn()}
           onDestroyed={null}

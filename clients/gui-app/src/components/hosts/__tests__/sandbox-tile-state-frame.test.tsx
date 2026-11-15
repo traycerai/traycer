@@ -32,6 +32,7 @@ import {
   installHostDirectoryRows,
   resetHostDirectoryRows,
   sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { sandboxMutationKeys } from "@/lib/query-keys";
@@ -269,6 +270,9 @@ describe("<SandboxTileStateFrame /> around a chat tile", () => {
 describe("<SandboxTileStateFrame />", () => {
   it("tells the shortfall as nobody's own and offers no top-up while the row names no owner", async () => {
     setSandboxEntry("suspended", false);
+    // The failure line reads the payer from the host directory: a sandbox row
+    // that names no owner.
+    installHostDirectoryRows([sandboxHostEntryWithoutOwner(HOST_ID)]);
     mocks.binding?.auth.runSandboxVerb.mockResolvedValue({
       ...refusal(402, "insufficient_credit"),
       shortfallMc: 210,

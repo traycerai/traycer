@@ -97,7 +97,7 @@ describe("<ConsequencesBlock />", () => {
     render(block(value));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     for (const kind of ["audience", "reach", "team", "resting-storage"]) {
       expect(screen.getByTestId(`consequences-clause-${kind}`)).toBeDefined();
@@ -138,15 +138,16 @@ describe("<ConsequencesBlock />", () => {
     render(block(value));
     const summaryPrice = screen.getByTestId("consequences-price").textContent;
     expect(summaryPrice).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     const summaryText = screen.getByTestId("consequences-block").textContent;
     expect(summaryText.match(/\$0\.12 an hour/g)).toHaveLength(1);
-    expect(summaryText.match(/Acme credits/g)).toHaveLength(1);
+    expect(summaryText.match(/Acme's credits/g)).toHaveLength(1);
+    expect(summaryText).not.toContain("your Acme");
 
     fireEvent.click(screen.getByTestId("consequences-what-this-means"));
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     const fullText = screen.getByTestId("consequences-block").textContent;
     const team = screen.getByTestId("consequences-clause-team").textContent;
@@ -162,7 +163,7 @@ describe("<ConsequencesBlock />", () => {
       "consequences-clause-resting-storage",
     ).textContent;
     expect(storage).toBe(
-      "Storage while it's suspended or stopped, on the same credits until another member wakes it.",
+      "Storage while it's suspended or stopped, on the same credits.",
     );
     expect(
       fullText.match(/Storage while it's suspended or stopped/g),
@@ -200,7 +201,7 @@ describe("<ConsequencesBlock />", () => {
       expected,
     );
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     first.unmount();
 
@@ -211,7 +212,7 @@ describe("<ConsequencesBlock />", () => {
       expected,
     );
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
   });
 
@@ -310,7 +311,7 @@ describe("<ConsequencesBlock />", () => {
     render(block(input({ needsCredits: true, shortfallMc: 120 })));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "Your Acme allowance is short $0.12. $0.12 more starts this sandbox for an hour.",
+      "Acme's credits are short $0.12. $0.12 more starts this sandbox for an hour.",
     );
     const link = within(screen.getByTestId("consequences-block")).getByRole(
       "button",
@@ -361,7 +362,7 @@ describe("<ConsequencesBlock />", () => {
   it("says who takes over payment before a task wakes a team sandbox", () => {
     render(block(input({ wakingName: "e2e-sbx-t1" })));
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "Waking e2e-sbx-t1 uses your Acme allowance and makes you the payer.",
+      "Waking e2e-sbx-t1 uses Acme's credits.",
     );
   });
 
@@ -384,7 +385,7 @@ describe("<ConsequencesBlock />", () => {
       ),
     );
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "from $0.12 an hour while awake · uses your Acme credits",
+      "from $0.12 an hour while awake · uses Acme's credits",
     );
   });
 
@@ -406,7 +407,7 @@ describe("<ConsequencesBlock />", () => {
     );
     expect(screen.queryByTestId("consequences-what-this-means")).toBeNull();
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
   });
 
@@ -422,10 +423,12 @@ describe("<ConsequencesBlock />", () => {
     );
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     expect(
-      screen.queryByText(/allowance is short|Not enough credits/),
+      screen.queryByText(
+        /allowance is short|credits are short|Not enough credits/,
+      ),
     ).toBeNull();
   });
 

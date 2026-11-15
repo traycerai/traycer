@@ -42,7 +42,12 @@ import type { SandboxCreditSource } from "@traycer/protocol/host/sandbox-control
 import type { SandboxRowVerb } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
-import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import {
+  installHostDirectoryRows,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import {
   SandboxBillingRuntime,
   type SandboxBillingEnvironmentAnswer,
@@ -681,8 +686,9 @@ describe("sandbox row operations", () => {
     const { answer, binding, client, main } = setup(testCase, {
       environmentId: "env-personal",
     });
-    const receiptUserId = useAuthStore.getState().profile?.userId ?? null;
-    if (receiptUserId === null) throw new Error("Expected a signed-in reader");
+    // The runner host the strip mounts under signs in as the fixture user; a
+    // receipt belongs to the person signed in when the strip draws.
+    const receiptUserId = AUTHENTICATED_USER_FIXTURE_ID;
     await screen.findByRole("region", { name: "build-box" });
     useNewConversationModalStore.getState().setContent("receipt-epic", {
       type: "doc",
@@ -724,6 +730,9 @@ describe("sandbox row operations", () => {
       <StoppedSandboxSendReceiptStrip epicId="receipt-epic" tabId="tab" />,
       client,
     );
+    // The strip's failure line reads whose sandbox it is from the person's
+    // host directory; this row names them as its owner.
+    installHostDirectoryRows([sandboxHostEntry(main.hostId, null)]);
     const strip = screen.getByTestId("sandbox-stopped-line");
     await userEvent.click(within(strip).getByRole("button", { name: "Start" }));
     await act(async () => {
