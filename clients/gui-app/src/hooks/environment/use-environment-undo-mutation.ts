@@ -1,7 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { undoNotice } from "@traycer-clients/shared/environment/environment-review";
+import {
+  undoNotice,
+  type UndoOutcome,
+} from "@traycer-clients/shared/environment/environment-review";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentWriteOutcome } from "@traycer/protocol/host/environment-schemas";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import {
   invalidateEnvironmentReads,
@@ -33,11 +35,7 @@ export function useEnvironmentUndoMutation() {
   const queryClient = useQueryClient();
   const cloud = useEnvironmentCloud();
   const { environmentId } = usePersonalEnvironment(true);
-  return useMutation<
-    EnvironmentWriteOutcome,
-    HostRpcError,
-    { readonly noticeId: string }
-  >({
+  return useMutation<UndoOutcome, HostRpcError, { readonly noticeId: string }>({
     mutationKey: environmentMutationKeys.undo(),
     mutationFn: ({ noticeId }) =>
       withHostQueryErrorBoundary(METHOD, async () => {

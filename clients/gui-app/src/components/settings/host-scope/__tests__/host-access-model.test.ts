@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
+import type {
+  ReviewHeldEntry,
+  UndoOutcome,
+} from "@traycer-clients/shared/environment/environment-review";
 import type {
   EnvironmentNotice,
   EnvironmentStatusResponse,
-  EnvironmentWriteOutcome,
   LocalOverride,
   LocalOverrideTarget,
   RemoteAccessState,
@@ -554,31 +556,18 @@ describe("keepLocalTarget", () => {
 });
 
 describe("undoRefusalText", () => {
-  const saved: EnvironmentWriteOutcome = { outcome: "saved", revision: 3 };
-  const pending: EnvironmentWriteOutcome = {
-    outcome: "pending",
-    uploadId: "upload-1",
-  };
-  const stale: EnvironmentWriteOutcome = {
+  const saved: UndoOutcome = { outcome: "saved", revision: 3 };
+  const stale: UndoOutcome = {
     outcome: "stale",
     currentRevision: 4,
     changedBy: { kind: "dashboard" },
   };
-  const needsGrant: EnvironmentWriteOutcome = { outcome: "needs_grant" };
+  const needsGrant: UndoOutcome = { outcome: "needs_grant" };
   const kept = { hostName: "dev-box" } as const;
 
   it("says nothing for an undo that went through, kept or not", () => {
     expect(undoRefusalText(saved, "LOG_LEVEL", null)).toBeNull();
     expect(undoRefusalText(saved, "LOG_LEVEL", kept)).toBeNull();
-  });
-
-  it("says the undo waits for a reconnect", () => {
-    expect(undoRefusalText(pending, "LOG_LEVEL", null)).toBe(
-      "Undo applies when this host reconnects.",
-    );
-    expect(undoRefusalText(pending, "LOG_LEVEL", kept)).toBe(
-      "Kept on dev-box. The change everywhere is undone when this host reconnects.",
-    );
   });
 
   it("says the value was changed again since", () => {

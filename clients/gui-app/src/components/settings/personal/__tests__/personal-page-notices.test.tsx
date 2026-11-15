@@ -424,23 +424,6 @@ describe("Undo on a notice", () => {
     ).toBe("Couldn't undo: LOG_LEVEL was changed again since.");
   });
 
-  it("says the undo waits for a reconnect when the host queued it", async () => {
-    const host = hostWith(
-      {},
-      {
-        notices: [noticeFixture({})],
-        undoAnswer: { outcome: "pending", uploadId: "upload-1" },
-      },
-    );
-    renderPage(host, SHELL_PAGE);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
-
-    expect(
-      (await screen.findByTestId("personal-notice-refusal")).textContent,
-    ).toBe("Undo applies when this host reconnects.");
-  });
-
   it("asks the person to sign in again when the host needs a confirmation", async () => {
     const host = hostWith(
       {},
