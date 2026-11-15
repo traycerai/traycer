@@ -5,6 +5,11 @@ import type { ReactNode } from "react";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import { createRequestContext } from "@traycer/protocol/auth/request-context";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  hostTokenBearerFor,
+  type HostTokenAccess,
+} from "@traycer-clients/shared/auth/host-token-lease";
+import type { HostTokenMintOutcome } from "@traycer-clients/shared/auth/host-token-source";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   HostRpcError,
@@ -13,14 +18,16 @@ import {
 import {
   TEAM_MEMBERSHIP_REQUIRED,
   TEAM_MEMBERSHIP_REQUIRED_MESSAGE,
-  TEAM_MEMBERSHIP_UNAVAILABLE,
-  TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE,
 } from "@traycer-clients/shared/host-transport/local-open-auth";
 import type { ActivateResult } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useMakeActiveHost } from "@/components/settings/host-scope/use-host-scope";
 import { hostMaintenanceMutationKeys } from "@/lib/query-keys";
+import { noteHostTokenRefusal } from "@/lib/host/host-door-observer";
+import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
+import { DOOR_STATE_TITLES } from "@/lib/host/door-state-titles";
+import { useHostDoorStateStore } from "@/stores/host/host-door-state-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 
 interface RecordedRequest {
@@ -48,6 +55,7 @@ const mocks = vi.hoisted(() => {
     createdEntries: [] as HostDirectoryEntry[],
     activationCalls: [] as string[],
     toastCalls: [] as RecordedToast[],
+    hostTokenMintCalls: 0,
     requestResult: (_method: string, _params: unknown): Promise<unknown> =>
       Promise.resolve({}),
     activateResult: (_hostId: string): Promise<ActivateResult> =>
@@ -178,7 +186,6 @@ function admissionFailure(code: string): HostRpcError {
     reason: "membership check result",
     incompatibleMethods: null,
     upgradeGuidance: null,
-    ...(code === TEAM_MEMBERSHIP_UNAVAILABLE ? { retryable: true } : {}),
   };
   return new HostRpcError({
     code: "RPC_ERROR",
@@ -195,6 +202,37 @@ function transportFailure(): HostTransportFailureError {
     message: "local endpoint did not answer",
     requestId: "local-admission-probe",
     method: "host.identity.get",
+    fatalDetails: null,
+  });
+}
+
+async function rejectAfterLocalHostTokenMint(
+  outcome: HostTokenMintOutcome,
+  method: string,
+): Promise<never> {
+  const tokens: HostTokenAccess = {
+    current: () => null,
+    obtain: (_userId, _hostId, _fresh, _signal) => {
+      mocks.state.hostTokenMintCalls += 1;
+      return Promise.resolve(outcome);
+    },
+  };
+  const hostBearerFor = hostTokenBearerFor(
+    localDoorHostTokens(tokens),
+    noteHostTokenRefusal,
+  );
+  const context = mocks.state.activeContext;
+  if (context === null) throw new Error("expected the active request context");
+  const bearer = await hostBearerFor(LOCAL_HOST_ID, context.credentials);
+  if (bearer !== null) throw new Error("expected the local mint to refuse");
+
+  // This is WsRpcClient.withHostBearer's rejection when that real bearer path
+  // cannot supply a token for the request.
+  throw new HostRpcError({
+    code: "RPC_ERROR",
+    message: "No host-only token is held for this host",
+    requestId: "local-host-token-refused",
+    method,
     fatalDetails: null,
   });
 }
@@ -220,6 +258,8 @@ beforeEach(() => {
   mocks.state.createdEntries.length = 0;
   mocks.state.activationCalls.length = 0;
   mocks.state.toastCalls.length = 0;
+  mocks.state.hostTokenMintCalls = 0;
+  useHostDoorStateStore.setState({ byHost: new Map() });
   mocks.state.requestResult = (_method: string, _params: unknown) =>
     Promise.resolve({});
   mocks.state.activateResult = (_hostId: string) =>
@@ -231,6 +271,7 @@ afterEach(() => {
   cleanup();
   queryClient.clear();
   useSignOutConfirmStore.getState().setOpen(false);
+  useHostDoorStateStore.setState({ byHost: new Map() });
 });
 
 describe("useMakeActiveHost local team admission", () => {
@@ -261,8 +302,8 @@ describe("useMakeActiveHost local team admission", () => {
   });
 
   it("shows the fixed nonmember toast and only opens sign-out confirmation for the original account", async () => {
-    mocks.state.requestResult = (_method: string, _params: unknown) =>
-      Promise.reject<unknown>(admissionFailure(TEAM_MEMBERSHIP_REQUIRED));
+    mocks.state.requestResult = (method: string, _params: unknown) =>
+      rejectAfterLocalHostTokenMint({ kind: "not-a-member" }, method);
     const { result } = renderMakeActiveHost([localOption()]);
     let activated = true;
 
@@ -272,6 +313,10 @@ describe("useMakeActiveHost local team admission", () => {
 
     expect(activated).toBe(false);
     expect(mocks.state.activationCalls).toEqual([]);
+    expect(mocks.state.hostTokenMintCalls).toBe(1);
+    expect(
+      useHostDoorStateStore.getState().byHost.get(LOCAL_HOST_ID)?.kind,
+    ).toBe("not-a-member");
     expect(mocks.state.toastCalls).toHaveLength(1);
     expect(mocks.state.toastCalls[0]?.message).toBe(
       TEAM_MEMBERSHIP_REQUIRED_MESSAGE,
@@ -288,8 +333,11 @@ describe("useMakeActiveHost local team admission", () => {
   });
 
   it("shows the fixed unavailable toast for a typed membership lookup failure", async () => {
-    mocks.state.requestResult = (_method: string, _params: unknown) =>
-      Promise.reject<unknown>(admissionFailure(TEAM_MEMBERSHIP_UNAVAILABLE));
+    mocks.state.requestResult = (method: string, _params: unknown) =>
+      rejectAfterLocalHostTokenMint(
+        { kind: "unavailable", detail: "authn did not answer" },
+        method,
+      );
     const { result } = renderMakeActiveHost([localOption()]);
     let activated = true;
 
@@ -299,8 +347,15 @@ describe("useMakeActiveHost local team admission", () => {
 
     expect(activated).toBe(false);
     expect(mocks.state.activationCalls).toEqual([]);
-    expect(mocks.state.toastCalls.map(({ message }) => message)).toEqual([
-      TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE,
+    expect(mocks.state.hostTokenMintCalls).toBe(1);
+    expect(
+      useHostDoorStateStore.getState().byHost.get(LOCAL_HOST_ID)?.kind,
+    ).toBe("token-unavailable");
+    expect(mocks.state.toastCalls).toEqual([
+      {
+        message: DOOR_STATE_TITLES["token-unavailable"],
+        options: undefined,
+      },
     ]);
   });
 
@@ -316,8 +371,16 @@ describe("useMakeActiveHost local team admission", () => {
 
     expect(activated).toBe(false);
     expect(mocks.state.activationCalls).toEqual([]);
-    expect(mocks.state.toastCalls.map(({ message }) => message)).toEqual([
-      TEAM_MEMBERSHIP_UNAVAILABLE_MESSAGE,
+    expect(mocks.state.hostTokenMintCalls).toBe(0);
+    expect(useHostDoorStateStore.getState().byHost.has(LOCAL_HOST_ID)).toBe(
+      false,
+    );
+    expect(mocks.state.toastCalls).toEqual([
+      {
+        message:
+          "Couldn't confirm Local team computer as the app's machine. Check which machine is active, then try again.",
+        options: undefined,
+      },
     ]);
   });
 

@@ -1,5 +1,5 @@
 import { createElement, type ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   GetTaskContextsResponse,
@@ -11,6 +11,8 @@ import {
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -59,14 +61,31 @@ function renderUseEpicUpdateTitle(queryClient: QueryClient) {
   renderHook(() => useEpicUpdateTitle(), { wrapper: makeWrapper(queryClient) });
 }
 
+const AUTH_PROFILE = {
+  userId: "user-1",
+  userName: "U",
+  email: "u@example.com",
+};
+const AUTH_CONTEXT = { userId: "user-1", username: "U" };
+
 describe("useEpicUpdateTitle", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.getState().setSignedOut();
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
   it("shows 'Epic renamed' on success", () => {
     renderUseEpicUpdateTitle(new QueryClient());
+    vi.mocked(toast.success).mockClear();
     capturedOptions.onSuccess?.(
       {},
       { epicDelta: { id: "epic-1", title: "Renamed", updatedAt: 1 } },
       capturedOptions.onMutate?.() ?? { hostId: null, userId: null },
     );
+    expect(toast.success).toHaveBeenCalledTimes(1);
     expect(toast.success).toHaveBeenCalledWith("Epic renamed");
   });
 
@@ -134,23 +153,37 @@ describe("useEpicUpdateTitle", () => {
     ).toBe("Renamed");
   });
 
-  it("shows fallback on generic error", () => {
+  it("shows the caller fallback on a generic error while signed in", () => {
+    useAuthStore.getState().setSignedIn(AUTH_PROFILE, AUTH_CONTEXT, []);
     renderUseEpicUpdateTitle(new QueryClient());
-    capturedOptions.onError?.({
-      code: "RPC_ERROR",
-      message: "test",
-      fatalDetails: null,
-    });
+    vi.mocked(toast.error).mockClear();
+    capturedOptions.onError?.(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "test",
+        requestId: "request-epic-title-generic",
+        method: "epic.updateTitle",
+        fatalDetails: null,
+      }),
+    );
+    expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename epic.");
   });
 
-  it("shows sign-in copy for UNAUTHORIZED", () => {
+  it("shows the caller fallback for UNAUTHORIZED while signed in", () => {
+    useAuthStore.getState().setSignedIn(AUTH_PROFILE, AUTH_CONTEXT, []);
     renderUseEpicUpdateTitle(new QueryClient());
-    capturedOptions.onError?.({
-      code: "UNAUTHORIZED",
-      message: "test",
-      fatalDetails: null,
-    });
-    expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
+    vi.mocked(toast.error).mockClear();
+    capturedOptions.onError?.(
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "test",
+        requestId: "request-epic-title-unauthorized",
+        method: "epic.updateTitle",
+        fatalDetails: null,
+      }),
+    );
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith("Couldn't rename epic.");
   });
 });

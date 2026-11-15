@@ -15,6 +15,7 @@ import {
   buildRuntimeHostMessenger,
   type RuntimeHostMessengerBinding,
 } from "../host-messenger";
+import { heldHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 
 const echoV10 = defineRpcContract({
   method: "host.echo",
@@ -211,6 +212,10 @@ describe("runtime host messenger release during dial", () => {
         hostId === localEntry.hostId ? localEntry : null,
       auth: null,
       authnBaseUrl: "https://authn.invalid",
+      hostTokens: await heldHostTokenSource(
+        bearer.identity.userId,
+        localEntry.hostId,
+      ),
       requestId: () => {
         issued += 1;
         return `req-${issued}`;
@@ -319,6 +324,10 @@ describe("runtime host messenger release during dial", () => {
         hostId === localEntry.hostId ? localEntry : null,
       auth: null,
       authnBaseUrl: "https://authn.invalid",
+      hostTokens: await heldHostTokenSource(
+        bearer.identity.userId,
+        localEntry.hostId,
+      ),
       requestId: () => {
         issued += 1;
         return `req-${issued}`;

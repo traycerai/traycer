@@ -18,7 +18,8 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { environmentMutationKeys } from "@/lib/query-keys";
 
-const METHOD = "environment.review.heldApply";
+// The app's own call to authn; no host method of this name.
+const METHOD = "environment.review.applyChoice";
 
 /**
  * Applies one retrospective held-row choice, the app's own call to authn on
@@ -38,7 +39,7 @@ export function useEnvironmentReviewHeldApplyMutation(
     HostRpcError,
     { readonly heldId: string; readonly choice: HeldApplyChoice }
   >({
-    mutationKey: environmentMutationKeys.reviewHeldApply(),
+    mutationKey: environmentMutationKeys.reviewApplyChoice(),
     mutationFn: ({ heldId, choice }) =>
       withHostQueryErrorBoundary(METHOD, async () => {
         cloudVerdictPreflight(METHOD)();

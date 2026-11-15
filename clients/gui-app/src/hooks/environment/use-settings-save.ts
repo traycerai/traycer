@@ -8,7 +8,6 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { AuthnItemRow } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import type {
   EnvironmentCloud,
@@ -33,58 +32,25 @@ import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
+import type { PendingSettingsSave } from "@/lib/environment/settings-save-follow";
 import { environmentQueryKeys } from "@/lib/query-keys";
 import { useSettingsSaveCoordinator } from "@/providers/settings-save-coordinator-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/** One save about to be sent to a host, as the coordinator follows it. */
-export type PendingSettingsSave =
-  | {
-      readonly kind: "send";
-      /** The host answered the save. */
-      readonly answered: () => void;
-      /** The save failed, or nothing answered it. */
-      readonly failed: () => void;
-    }
-  /**
-   * The account changed while the save was prepared: it is not sent, and
-   * ends as an aborted request, which no notice reports.
-   */
-  | { readonly kind: "abandoned"; readonly method: string };
-
 /**
- * Called just before a save is sent, with the host it is sent on: remembers
- * what the save will propose, so the app applies its own hold. A save sent
- * on any host but the requester's own is not followed.
+ * Called just before a save is sent, with the host it is sent on and the
+ * sign-in the person acted on (`pressedOn`, taken in the mutation's
+ * `onMutate`; null with no session service): remembers what the save will
+ * propose, so the app applies its own hold. A save sent on any host but the
+ * requester's own is not followed. Once the sign-in it was pressed on has
+ * ended, by a switch or by signing in again as the same person, the save is
+ * not sent.
  */
 export type PrepareSettingsSave = (
   save: SettingsSave,
   sentOn: string | null,
+  pressedOn: EnvironmentCloud | null,
 ) => Promise<PendingSettingsSave>;
-
-/** Sends a followed save and tells `pending` whether the host answered it. */
-export async function sendFollowedSave<T>(
-  pending: PendingSettingsSave,
-  send: () => Promise<T>,
-): Promise<T> {
-  if (pending.kind === "abandoned") {
-    throw new HostRequestAbortedError({
-      message: "The account changed before the save was sent",
-      requestId: crypto.randomUUID(),
-      method: pending.method,
-      mayHaveDispatched: false,
-    });
-  }
-  let answer: T;
-  try {
-    answer = await send();
-  } catch (cause) {
-    pending.failed();
-    throw cause;
-  }
-  pending.answered();
-  return answer;
-}
 
 /** Who is signed in now, as {@link useCloudChatViewerId} names them. */
 function signedInViewer(): string {
@@ -118,9 +84,30 @@ interface EditBaseScope {
   readonly session: string;
 }
 
+/**
+ * `read` on one sign-in of the viewer `base` names, for that viewer's cache:
+ * a read begun once anyone else is signed in, or answered after the sign-in
+ * it went out on ended, throws, and nothing is cached.
+ */
+async function readForViewer<T>(
+  source: EnvironmentCloudSource,
+  viewerId: string,
+  read: (cloud: EnvironmentCloud) => Promise<T>,
+): Promise<T> {
+  if (signedInViewer() !== viewerId) {
+    throw new Error("Another account is signed in");
+  }
+  const cloud = source();
+  const answer = await read(cloud);
+  if (!cloud.onOriginSignIn()) {
+    throw new Error("The sign-in the read went out on has ended");
+  }
+  return answer;
+}
+
 /** authn's listing of the host a save is made on. */
 function saveHostQuery(base: EditBaseScope, hostId: string) {
-  const { source, environmentId } = base;
+  const { source, environmentId, viewerId } = base;
   // `source` is the sign-in of the viewer the key already names; adding it
   // would refetch on its identity alone.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
@@ -129,19 +116,22 @@ function saveHostQuery(base: EditBaseScope, hostId: string) {
     queryKey: environmentQueryKeys.settingsSaveHost(
       environmentId,
       hostId,
-      base.viewerId,
+      viewerId,
       base.session,
     ),
     queryFn:
       source === null
         ? skipToken
-        : () => readSettingsSaveHost(source(), environmentId, hostId),
+        : () =>
+            readForViewer(source, viewerId, (cloud) =>
+              readSettingsSaveHost(cloud, environmentId, hostId),
+            ),
   });
 }
 
 /** authn's rows of `kind`, as the person's edit is made over them. */
 function saveItemsQuery(base: EditBaseScope, kind: string) {
-  const { source, environmentId } = base;
+  const { source, environmentId, viewerId } = base;
   // `source` is the sign-in of the viewer the key already names.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   return queryOptions({
@@ -149,13 +139,16 @@ function saveItemsQuery(base: EditBaseScope, kind: string) {
     queryKey: environmentQueryKeys.settingsSaveItems(
       environmentId,
       kind,
-      base.viewerId,
+      viewerId,
       base.session,
     ),
     queryFn:
       source === null
         ? skipToken
-        : () => readSettingsItemRows(source(), environmentId, kind),
+        : () =>
+            readForViewer(source, viewerId, (cloud) =>
+              readSettingsItemRows(cloud, environmentId, kind),
+            ),
   });
 }
 
@@ -274,7 +267,7 @@ async function keepOwnWrite(
 
 /** One save of an editor session, from its preparation to its apply. */
 interface SaveOperation {
-  /** The sign-in the save is made on. */
+  /** The sign-in the save was pressed on. */
   readonly cloud: EnvironmentCloud;
   /** Its place among the session's saves ({@link SaveLedger}). */
   readonly order: number;
@@ -291,11 +284,13 @@ async function followSave(
   accountId: string,
 ): Promise<PendingSettingsSave> {
   const { coordinator, queryClient, environmentId, hostId } = scope;
+  // A base read this save makes goes out on the save's own sign-in.
+  const reads: EditBaseScope = { ...scope, source: () => operation.cloud };
   const rowsOf = async (kind: string, key: string) =>
-    (await queryClient.fetchQuery(saveItemsQuery(scope, kind))).filter(
+    (await queryClient.fetchQuery(saveItemsQuery(reads, kind))).filter(
       (row) => row.key === key,
     );
-  const host = await queryClient.fetchQuery(saveHostQuery(scope, hostId));
+  const host = await queryClient.fetchQuery(saveHostQuery(reads, hostId));
   if (host === null) return NOTHING_TO_FOLLOW;
   const address = settingsSaveBaseAddress(save);
   const baseRows =
@@ -310,6 +305,10 @@ async function followSave(
     address?.kind === edit.kind && address.key === edit.key
       ? baseRows
       : await rowsOf(edit.kind, edit.key);
+  // Nothing is remembered for a press whose sign-in has ended.
+  if (!operation.cloud.onOriginSignIn()) {
+    return { kind: "abandoned", method: save.method };
+  }
   const beginning = await coordinator.begin(
     mapping,
     {
@@ -429,8 +428,14 @@ export function useSettingsSave(
     async (
       save: SettingsSave,
       sentOn: string | null,
+      pressedOn: EnvironmentCloud | null,
     ): Promise<PendingSettingsSave> => {
-      if (scope === null) return NOTHING_TO_FOLLOW;
+      // The save was pressed on `pressedOn`: once that sign-in has ended it
+      // is not sent, wherever it was going, followed or not.
+      if (pressedOn !== null && !pressedOn.onOriginSignIn()) {
+        return { kind: "abandoned", method: save.method };
+      }
+      if (scope === null || pressedOn === null) return NOTHING_TO_FOLLOW;
       // The editor, and whatever the caller read from authn for this save,
       // belong to `scope.viewerId`: a save prepared once anyone else is
       // signed in is not sent, wherever it was going.
@@ -443,7 +448,7 @@ export function useSettingsSave(
       const accountId = scope.coordinator.account();
       if (accountId === null) return NOTHING_TO_FOLLOW;
       const operation: SaveOperation = {
-        cloud: scope.source(),
+        cloud: pressedOn,
         order: scope.ledger.take(),
       };
       let pending: PendingSettingsSave;
@@ -452,11 +457,15 @@ export function useSettingsSave(
       } catch {
         pending = NOTHING_TO_FOLLOW;
       }
-      if (isEditorsAccount() && scope.coordinator.account() === accountId) {
+      if (
+        pressedOn.onOriginSignIn() &&
+        isEditorsAccount() &&
+        scope.coordinator.account() === accountId
+      ) {
         return pending;
       }
-      // Made for an account that is no longer here: it is not sent, and its
-      // record, if remembered in that account's memory, is not out.
+      // Pressed on a sign-in that has ended: it is not sent, and its record,
+      // if remembered in that account's memory, is not out.
       if (pending.kind === "send") pending.failed();
       return { kind: "abandoned", method: save.method };
     },

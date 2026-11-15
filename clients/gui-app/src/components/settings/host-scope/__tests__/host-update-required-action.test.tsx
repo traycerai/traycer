@@ -31,8 +31,8 @@ import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-
  * The action renders "Update now" from the shared skew copy when updating the
  * host can fix the skew. The component owns the update hook: a presentation
  * test supplies that hook. The control locks only while its own update is in
- * flight. A remote pending row shows "Update pending" and leaves the button
- * usable.
+ * flight. A remote pending row replaces the update action with its check-in
+ * notice until the directory says the update is no longer pending.
  */
 
 afterEach(() => {
@@ -114,15 +114,18 @@ describe("<HostUpdateRequiredAction />", () => {
     expect(olderHostUpdate.update).not.toHaveBeenCalled();
   });
 
-  it("shows Update pending for a remote pending row and still runs the hook", () => {
+  it("replaces Update now with both pending lines for a remote pending row", () => {
     appVersion.current = "1.5.0";
     renderAction({ hostVersion: "1.1.4", remotePending: true });
 
-    const button = updateButton();
     expect(screen.getByText("Update pending")).toBeTruthy();
-    expect(button.disabled).toBe(false);
-    button.click();
-    expect(olderHostUpdate.update).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByText(
+        "Applied on this host's next check-in — within ~10 minutes, and only when no sessions are running.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("host-scope-update-host")).toBeNull();
+    expect(olderHostUpdate.update).not.toHaveBeenCalled();
   });
 
   it("still offers the update when neither version can be compared", () => {

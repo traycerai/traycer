@@ -20,6 +20,8 @@ import {
   RetryableTransportError,
   type RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import {
   installHostDirectoryRows,
@@ -1858,6 +1860,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         mayHaveDispatched: false,
       }),
+      [],
     ],
     [
       "a recoverable sign-in check",
@@ -1868,11 +1871,12 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         fatalDetails: null,
       }),
+      [errorToast(NOT_SENT_LINE)],
     ],
   ] as const)(
-    "says nothing and saves no draft when the attachment is silent and nothing was returned (%s)",
-    async (_label, error) => {
-      expect(await toastsFromRefusal("nowhere", error)).toEqual([]);
+    "%s and saves no draft when no sandbox was returned",
+    async (_label, error, expectedToasts) => {
+      expect(await toastsFromRefusal("nowhere", error)).toEqual(expectedToasts);
       expect(useLandingDraftStore.getState().drafts).toEqual([]);
     },
   );
@@ -2026,16 +2030,17 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
 
   it.each([
     [
-      "an aborted request",
+      "an aborted request stays silent",
       new HostRequestAbortedError({
         message: "authority replaced",
         requestId: "request-attach-abort",
         method: "epic.attachEnvironment",
         mayHaveDispatched: false,
       }),
+      [],
     ],
     [
-      "a recoverable sign-in check",
+      "a recoverable sign-in check reports the caller's existing line",
       new HostRpcError({
         code: "UNAUTHORIZED",
         message: "token refresh in flight",
@@ -2043,11 +2048,14 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         fatalDetails: null,
       }),
+      [errorToast(BACK_IN_COMPOSER_LINE)],
     ],
   ] as const)(
-    "says nothing from the attachment for %s, the message back in the composer",
-    async (_label, error) => {
-      expect(await toastsFromRefusal("composer", error)).toEqual([]);
+    "%s when the message is back in the composer",
+    async (_label, error, expectedToasts) => {
+      expect(await toastsFromRefusal("composer", error)).toEqual(
+        expectedToasts,
+      );
     },
   );
 
@@ -2261,6 +2269,24 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       queryClient.clear();
     },
   );
+
+  it("shows the host update title and returns the message when the attachment is refused below the minimum", async () => {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+
+    await refuseAttach(
+      new HostBelowMinimumError({
+        requestId: "request-attach-floor",
+        method: "epic.attachEnvironment",
+      }),
+    );
+    await refusalSettled(queryClient);
+
+    expect(toastLog.map(({ message }) => message)).toContain(
+      HOST_UPDATE_SKEW_COPY.title,
+    );
+    expectMessageBackUnsent();
+    queryClient.clear();
+  });
 
   it("deletes nothing when the account changes while the task's agents are being read", async () => {
     const reads = new Map<string, Deferred<unknown>>();

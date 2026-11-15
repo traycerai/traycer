@@ -4,7 +4,6 @@ import { heldFactsOf } from "@traycer/protocol/host/environment/held-facts";
 describe("heldFactsOf", () => {
   const NO_FACTS = {
     command: null,
-    event: null,
     description: null,
     harness: null,
     value: null,
