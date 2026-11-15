@@ -15,6 +15,8 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
@@ -298,27 +300,59 @@ function remoteRow(
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 const emitRowChanged = vi.hoisted(() => ({ run: () => undefined }));
 
-/** Streams the session's worker opened, and how many it closed. */
-function installStreams(): { readonly opened: () => number } {
+/** The session worker's streams: opened and closed counts, and a snapshot to each. */
+function installStreams(): {
+  readonly opened: () => number;
+  readonly closed: () => number;
+  readonly deliverSnapshot: (index: number) => void;
+} {
   let opened = 0;
+  let closed = 0;
+  const callbacks: EpicStreamCallbacks[] = [];
   previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createInProcessEpicRuntimeWorker({
-      streamClientFactory: () => {
+      streamClientFactory: (_epicId, streamCallbacks) => {
         opened += 1;
+        callbacks.push(streamCallbacks);
         return {
           applyUpdate: () => undefined,
           awareness: () => undefined,
           applyArtifactRoomUpdate: () => undefined,
           artifactRoomAwareness: () => undefined,
           retryMigration: () => undefined,
-          close: () => undefined,
+          close: () => {
+            closed += 1;
+          },
         };
       },
       laneSelection: null,
     }).createWorker(),
   );
-  return { opened: () => opened };
+  return {
+    opened: () => opened,
+    closed: () => closed,
+    deliverSnapshot: (index) => {
+      const stream = callbacks[index];
+      if (stream === undefined) throw new Error("expected that stream");
+      const meta: SnapshotMetaEpic = {
+        schemaVersion: "2.0.0",
+        roomId: "room-older-host",
+        epicLight: null,
+        permissionRole: "editor",
+        repos: [],
+        workspaces: [],
+        repoMapping: [],
+        workspaceFolders: [],
+        unresolvedRepos: [],
+        hostStateVectorBase64: "AA==",
+      };
+      act(() => {
+        stream.onConnectionStatus("open", null, false, null);
+        stream.onSnapshot(meta, new Uint8Array([0, 0]));
+      });
+    },
+  };
 }
 
 function publishTabRow(appVersion: string): void {
@@ -556,16 +590,25 @@ describe("a task tab whose computer falls below the minimum host version", () =>
   });
 
   it("keeps Open on original host for a tab re-pointed away, and it goes back there", async () => {
-    installStreams();
+    const streams = installStreams();
     publishTabRow("2.0.0");
     seams.effectiveHostId = WINDOW_HOST_ID;
     const view = renderFollowingTab();
+    await waitFor(() => {
+      expect(streams.opened()).toBe(1);
+    });
+    streams.deliverSnapshot(0);
     await waitForTaskShown();
+    // The effective computer moves: the tab is re-pointed to it, leaving the
+    // first computer as its original host.
     view.moveTo(TAB_HOST_ID);
     await waitFor(() => {
-      expect(seams.openAttempts).toContain(TAB_HOST_ID);
+      expect(streams.opened()).toBe(2);
     });
-    await waitForTaskShown();
+    streams.deliverSnapshot(1);
+    await waitFor(() => {
+      expect(streams.closed()).toBe(1);
+    });
 
     publishTabRow("1.5.4");
 
