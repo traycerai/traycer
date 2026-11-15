@@ -5012,7 +5012,10 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     ).toBe(true);
   });
 
-  it("binds the failed line's actions to the sandbox's host in a tile bound elsewhere, without opening a draft mirror for it", async () => {
+  // Which host the failed line's own environment read goes out on is pinned in
+  // `stopped-receipt-failed-actions-host.test.tsx`, which keeps the real host
+  // client this file mocks.
+  it("draws the failed line in a tile bound elsewhere without opening a draft mirror for the sandbox's host", async () => {
     const TILE_HOST = "tile-host";
     // The billing runtime signs in as the fixture user, so the held send is
     // theirs: another person's send is not drawn.
@@ -5040,7 +5043,6 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     answerSandboxRows([rowIn("awake")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     mirrorMountHosts.length = 0;
-    environmentListClientHosts.length = 0;
     mountInTileBoundToWithBillingRuntime(TILE_HOST);
     await screen.findByTestId("sandbox-setup-line");
 
@@ -5049,11 +5051,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     const line = await screen.findByTestId("sandbox-stopped-line");
     expect(line.textContent).toContain("Couldn't start build-box");
     expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
-    // The actions' own host-scoped read went out on the sandbox's host client,
-    // not the tile's...
-    expect(environmentListClientHosts).toContain(SANDBOX_HOST);
-    expect(environmentListClientHosts).not.toContain(TILE_HOST);
-    // ...and no mirror of this tile's drafts was mounted for it.
+    // No mirror of this tile's drafts was mounted for the sandbox's host.
     expect(mirrorMountHosts).not.toContain(SANDBOX_HOST);
   });
 
