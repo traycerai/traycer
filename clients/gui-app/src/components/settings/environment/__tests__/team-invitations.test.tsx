@@ -20,9 +20,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
-import type { HostRpcRegistry } from "@/lib/host";
-import { HostRuntimeContext } from "@/lib/host/runtime";
-import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -104,19 +101,19 @@ function invitationAuth(): InvitationAuth {
 }
 
 function wrapperWithInvitationAuth(
-  wrapper: TeamPageHarness["Wrapper"],
+  harness: TeamPageHarness,
   auth: InvitationAuth,
 ): TeamPageHarness["Wrapper"] {
-  const binding = Object.create(null) as HostRuntimeBinding<HostRpcRegistry>;
-  Object.defineProperty(binding, "auth", { value: auth });
-  const PageWrapper = wrapper;
-  return wrapperWithRunnerHost(({ children }) => (
-    <PageWrapper>
-      <HostRuntimeContext.Provider value={binding}>
-        {children}
-      </HostRuntimeContext.Provider>
-    </PageWrapper>
-  ));
+  vi.spyOn(harness.auth, "listEnvironmentInvitations").mockImplementation(
+    auth.listEnvironmentInvitations,
+  );
+  vi.spyOn(harness.auth, "acceptEnvironmentInvitation").mockImplementation(
+    auth.acceptEnvironmentInvitation,
+  );
+  vi.spyOn(harness.auth, "getRequestContextProvider").mockImplementation(
+    auth.getRequestContextProvider,
+  );
+  return wrapperWithRunnerHost(harness.Wrapper);
 }
 
 function wrapperWithRunnerHost(
@@ -247,7 +244,7 @@ async function assertExplicitHttpInvitationFlow(
 ): Promise<void> {
   const calls = stubInvitationHttp(undefined);
   const onAccepted = vi.fn();
-  const wrapper = wrapperWithInvitationAuth(harness.Wrapper, invitationAuth());
+  const wrapper = wrapperWithInvitationAuth(harness, invitationAuth());
   render(<InvitationFlow onAccepted={onAccepted} />, { wrapper });
 
   const row = await screen.findByTestId("environment-invitation-env-beta");
@@ -363,7 +360,7 @@ describe("the invited rows of the Environment dropdown", () => {
       vi.fn(),
       onConnectComputer,
       "defaultOpen",
-    )(wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()));
+    )(wrapperWithInvitationAuth(harness, invitationAuth()));
 
     expect(
       await screen.findByText("Your teams couldn't be read from here."),
@@ -398,7 +395,7 @@ describe("the invited rows of the Environment dropdown", () => {
       vi.fn(),
       () => undefined,
       "controlled",
-    )(wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()));
+    )(wrapperWithInvitationAuth(harness, invitationAuth()));
 
     await waitFor(() => {
       expect(harness.paramsOf("environment.list")).toHaveLength(1);
@@ -559,7 +556,7 @@ describe("the invited rows of the Environment dropdown", () => {
       vi.fn(),
       () => undefined,
       "controlled",
-    )(wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()));
+    )(wrapperWithInvitationAuth(harness, invitationAuth()));
 
     await waitFor(() => {
       expect(harness.paramsOf("environment.list")).toHaveLength(1);
@@ -600,7 +597,7 @@ describe("the invited rows of the Environment dropdown", () => {
       vi.fn(),
       () => undefined,
       "controlled",
-    )(wrapperWithInvitationAuth(harness.Wrapper, invitationAuth()));
+    )(wrapperWithInvitationAuth(harness, invitationAuth()));
 
     expect(
       await screen.findByTestId("environment-invitation-env-beta"),
@@ -620,10 +617,7 @@ describe("the invited rows of the Environment dropdown", () => {
       viewerUserId.current === "user-me" ? [INVITATION] : [],
     );
     const onReview = vi.fn();
-    const wrapper = wrapperWithInvitationAuth(
-      harness.Wrapper,
-      invitationAuth(),
-    );
+    const wrapper = wrapperWithInvitationAuth(harness, invitationAuth());
     const view = renderRows(onReview, () => undefined, "controlled")(wrapper);
     expect(
       await screen.findByTestId("environment-invitation-env-beta"),

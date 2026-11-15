@@ -31,6 +31,7 @@ import type {
   AuthnSecretRow,
 } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import {
   environmentMembersInviteRequestSchema,
@@ -112,6 +113,18 @@ export function createTeamEnvironmentCloudHandlers(
   const calls: TeamEnvironmentCloudCall[] = [];
   const requests: EnvironmentTransportRequest[] = [];
   const conflictHistory = new Map<string, EnvironmentHistoryResponse>();
+  let environments: readonly EnvironmentDescriptorV11[] = [];
+
+  function viewerRole(environmentId: string): "admin" | "editor" | "viewer" {
+    const row = environments.find(
+      (environment) => environment.environmentId === environmentId,
+    );
+    const role =
+      row?.effectiveRole ??
+      (source.kind === "pool" ? source.effectiveRole : null);
+    if (role === "owner" || role === "admin") return "admin";
+    return role ?? "viewer";
+  }
   async function invoke<Method extends keyof HostRpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<HostRpcRegistry, Method>,
@@ -121,7 +134,9 @@ export function createTeamEnvironmentCloudHandlers(
   }
   async function listEnvironments(): Promise<EnvironmentDirectoryResult | null> {
     const response = await invoke("environment.list", {});
-    return response === undefined ? null : { kind: "ok", list: response };
+    if (response === undefined) return null;
+    environments = response.environments;
+    return { kind: "ok", list: response };
   }
   const readRoutes = new Map<
     string,
@@ -320,10 +335,7 @@ export function createTeamEnvironmentCloudHandlers(
             invitedAddress: member.invitedAddress,
           })),
           viewer: {
-            effectiveRole:
-              source.kind === "pool" && source.effectiveRole !== "owner"
-                ? (source.effectiveRole ?? "viewer")
-                : "admin",
+            effectiveRole: viewerRole(environmentId),
             legacyRoleNoticeSeenAt: response.legacyRoleNoticeSeenAt,
             legacyMembers: response.legacyMembers,
           },
