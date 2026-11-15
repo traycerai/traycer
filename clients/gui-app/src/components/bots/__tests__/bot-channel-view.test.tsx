@@ -329,7 +329,9 @@ vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
 }));
 /** The channel surface's option pick, or a mark that none can be sent now. */
 function ChannelChoice(props: {
-  readonly chooseOption: ((choice: string) => void) | null;
+  readonly chooseOption:
+    | ((messageId: string | null, choice: string) => void)
+    | null;
 }): ReactNode {
   if (props.chooseOption === null) {
     return <span data-testid="stub-choose-unavailable" />;
@@ -387,14 +389,14 @@ vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
 });
 
 function ChooseStub(props: {
-  readonly chooseOption: (choice: string) => void;
+  readonly chooseOption: (messageId: string | null, choice: string) => void;
 }): ReactNode {
   const { chooseOption } = props;
   return (
     <button
       type="button"
       data-testid="stub-choose"
-      onClick={() => chooseOption("Ship it")}
+      onClick={() => chooseOption("answer-1", "Ship it")}
     />
   );
 }

@@ -220,9 +220,13 @@ export interface ChatBotPresentation {
   /**
    * Posts one of a bot reply's options as the person's next message: in the
    * thread, or a new post in the channel for a direct reply's; `null` where
-   * nothing can post it.
+   * nothing can post it. `messageId` names the reply that offered it; where
+   * the bot's host takes replies, the post replies to it (T357), and a row
+   * not stored yet (`null`) is answered by a post that replies to nothing.
    */
-  readonly chooseOption: ((choice: string) => void) | null;
+  readonly chooseOption:
+    | ((messageId: string | null, choice: string) => void)
+    | null;
   /**
    * Replies to a row where it stands (T166): the box of the row's own
    * conversation, the channel's or the thread's, names the message, and its

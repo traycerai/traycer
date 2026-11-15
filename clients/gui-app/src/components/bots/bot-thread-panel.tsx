@@ -920,6 +920,7 @@ function KnownThread(
     hostId,
     boundHostId,
     answerReach,
+    replyReach,
     botTitle,
     conversationId,
     originMessageId,
@@ -1033,13 +1034,15 @@ function KnownThread(
   // A reply's option, clicked, is the person's next message in the thread:
   // offered only while no earlier pick is still being sent and the thread
   // takes a send, and a pick that fails says so where a failed message does.
+  // Where the bot's host takes replies, it replies to the reply that offered
+  // it (T357).
   const surface = useMemo(
     () => ({
       kind: "thread" as const,
       chooseOption:
         sending || !sendable
           ? null
-          : (choice: string) => {
+          : (messageId: string | null, choice: string) => {
               clearSendFailure();
               send(
                 {
@@ -1051,6 +1054,9 @@ function KnownThread(
                   redeliver: null,
                   supersedes: null,
                   answer: null,
+                  ...(replyReach === "delivered" && messageId !== null
+                    ? { replyTo: messageId }
+                    : {}),
                 },
                 { onError: () => failSend(null) },
               );
@@ -1080,6 +1086,7 @@ function KnownThread(
       onReply,
       originMessageId,
       opening,
+      replyReach,
       send,
       sendable,
       sending,

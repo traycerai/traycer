@@ -100,8 +100,10 @@ export type BotTranscriptSurface =
         | null;
       /** The rows of the bot its host opens their own thread under. */
       readonly threadAnchorKinds: readonly string[];
-      /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
-      readonly chooseOption: ((choice: string) => void) | null;
+      /** Posts a direct reply's chosen option as a new post, replying to the reply where the bot's host takes replies; `null` while one is being sent. */
+      readonly chooseOption:
+        | ((messageId: string | null, choice: string) => void)
+        | null;
       /** Names a row of the channel in the channel's box as the message its send replies to (T166); `null` where none can. */
       readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
@@ -132,8 +134,10 @@ export type BotTranscriptSurface =
     }
   | {
       readonly kind: "thread";
-      /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
-      readonly chooseOption: ((choice: string) => void) | null;
+      /** Posts a reply's chosen option in the thread, replying to the reply where the bot's host takes replies; `null` while one is being sent. */
+      readonly chooseOption:
+        | ((messageId: string | null, choice: string) => void)
+        | null;
       /** Names a row of the thread in the thread's box as the message its send replies to (T166); `null` where none can. */
       readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer in the thread; `null` where the thread takes no send. */

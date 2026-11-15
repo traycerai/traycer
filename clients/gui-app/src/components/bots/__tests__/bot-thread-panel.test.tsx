@@ -418,6 +418,18 @@ const SEND_RESPONSE: BotConversationSendResponse = {
   threadId: THREAD_ID,
 };
 
+/** What a click on the "Hold" choice sends into the thread, replying to no message. */
+const HOLD_PICK: BotConversationSendRequest = {
+  botId: BOT_ID,
+  conversationId: CONVERSATION_ID,
+  text: "Hold",
+  threadId: THREAD_ID,
+  announcementId: null,
+  redeliver: null,
+  supersedes: null,
+  answer: null,
+};
+
 /** The channel's own rows, where the anchor's text is read from. */
 let channelMessages: ReadonlyArray<Message>;
 
@@ -1002,18 +1014,53 @@ describe("<BotThreadPanel /> a listed thread", () => {
 
     await user.click(within(group).getByRole("button", { name: "Hold" }));
 
-    expect(sent).toEqual([
-      {
-        botId: BOT_ID,
-        conversationId: CONVERSATION_ID,
-        text: "Hold",
-        threadId: THREAD_ID,
-        announcementId: null,
-        redeliver: null,
-        supersedes: null,
-        answer: null,
-      },
-    ]);
+    expect(sent).toEqual([HOLD_PICK]);
+  });
+
+  it("posts the option a person clicks as a reply to the message that offered it where the reply reach is delivered", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "delivered";
+    const offered = botReply(["Ship it", "Hold"]);
+    mountPanel(listed("user-teammate"), [offered]);
+    const group = screen.getByRole("group", { name: "Choices" });
+
+    await user.click(within(group).getByRole("button", { name: "Hold" }));
+
+    expect(sent).toEqual([{ ...HOLD_PICK, replyTo: offered.messageId }]);
+  });
+
+  it("posts the option a person clicks as a reply to no message where the reply reach is held back", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "held-back";
+    mountPanel(listed("user-teammate"), [botReply(["Ship it", "Hold"])]);
+    const group = screen.getByRole("group", { name: "Choices" });
+
+    await user.click(within(group).getByRole("button", { name: "Hold" }));
+
+    expect(sent).toStrictEqual([HOLD_PICK]);
+  });
+
+  it("posts a choice once when its button is double clicked while the reply reach is delivered", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "delivered";
+    let land: (response: BotConversationSendResponse) => void = () => {};
+    sendAnswer = () => {
+      sendAnswer = () => Promise.resolve(SEND_RESPONSE);
+      return new Promise<BotConversationSendResponse>((resolve) => {
+        land = resolve;
+      });
+    };
+    const offered = botReply(["Ship it", "Hold"]);
+    mountPanel(listed("user-teammate"), [offered]);
+    const group = screen.getByRole("group", { name: "Choices" });
+
+    await user.dblClick(within(group).getByRole("button", { name: "Hold" }));
+    land(SEND_RESPONSE);
+    await waitFor(() => {
+      expect(panelQueryClient.isMutating()).toBe(0);
+    });
+
+    expect(sent).toEqual([{ ...HOLD_PICK, replyTo: offered.messageId }]);
   });
 
   it("offers no second pick while the first is still being sent, and offers the choices again once it lands", async () => {

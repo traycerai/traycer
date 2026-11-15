@@ -496,6 +496,18 @@ describe("Reply on a row of a bot's channel", () => {
   const WITH_REPLIES = ["answer", "message", "replies"];
   /** The first `bot.conversation.send` line that carries a reply. */
   const REPLIES_MINOR = 6;
+  const REPLY_NOT_DELIVERED: ReadonlyArray<[string, number, string[]]> = [
+    [
+      "another host than the tab's, whose thread list does not say it takes replies",
+      REPLIES_MINOR,
+      ["answer", "message"],
+    ],
+    [
+      "a tab host that negotiated bot.conversation.send below the line that carries a reply",
+      REPLIES_MINOR - 1,
+      WITH_REPLIES,
+    ],
+  ];
   let sent: ReadonlyArray<BotConversationSendRequest>;
 
   /** The tab's host client: it records each send, and locates no turn. */
@@ -585,27 +597,19 @@ describe("Reply on a row of a bot's channel", () => {
     expect(screen.queryByTestId("bot-channel-composer-reply")).toBeNull();
   });
 
-  it.each([
-    [
-      "another host than the tab's, whose thread list does not say it takes replies",
-      REPLIES_MINOR,
-      ["answer", "message"],
-    ],
-    [
-      "a tab host that negotiated bot.conversation.send below the line that carries a reply",
-      REPLIES_MINOR - 1,
-      WITH_REPLIES,
-    ],
-  ])("is offered on no row of a bot bound to %s", (_label, minor, kinds) => {
-    mocks.threadAnchors = anchorsNaming(kinds);
-    negotiateBotSend(HOST_ID, { major: 1, minor });
-    render(<MountedChannel />);
+  it.each(REPLY_NOT_DELIVERED)(
+    "is offered on no row of a bot bound to %s",
+    (_label, minor, kinds) => {
+      mocks.threadAnchors = anchorsNaming(kinds);
+      negotiateBotSend(HOST_ID, { major: 1, minor });
+      render(<MountedChannel />);
 
-    for (const messageId of EVERY_ROW) {
-      expect(replyOn(messageId), messageId).toBeNull();
-    }
-    expect(createThreadOn(POST_ID)).not.toBeNull();
-  });
+      for (const messageId of EVERY_ROW) {
+        expect(replyOn(messageId), messageId).toBeNull();
+      }
+      expect(createThreadOn(POST_ID)).not.toBeNull();
+    },
+  );
 
   it("puts the strip in the open thread's box, not the channel's, when Reply is chosen on a row of the thread", async () => {
     mocks.sessions[THREAD_ID] = scriptedSession(THREAD_ID, [
@@ -738,5 +742,59 @@ describe("Reply on a row of a bot's channel", () => {
     expect(
       screen.getByTestId("bot-channel-composer-reply-line").textContent,
     ).toBe("Is CI green?");
+  });
+
+  describe("the option a person picks under a reply of the bot", () => {
+    const CHOICE_ID = "choice-1";
+
+    const HOLD_PICK: BotConversationSendRequest = {
+      botId: BOT_ID,
+      conversationId: CHANNEL_ID,
+      text: "Hold",
+      threadId: null,
+      announcementId: null,
+      redeliver: null,
+      supersedes: null,
+      answer: null,
+    };
+
+    async function pickHold(): Promise<void> {
+      mocks.sessions[CHANNEL_ID].store.setState((state) => ({
+        messages: [
+          ...state.messages,
+          {
+            ...botReply({
+              messageId: CHOICE_ID,
+              text: "Which way should I go?",
+              timestamp: 5_000,
+            }),
+            options: ["Ship it", "Hold"],
+          },
+        ],
+      }));
+      render(<MountedChannel />);
+
+      await userEvent
+        .setup()
+        .click(within(rowOf(CHOICE_ID)).getByRole("button", { name: "Hold" }));
+    }
+
+    it("posts it as a reply to the row that offered it where the bot's host takes replies", async () => {
+      await pickHold();
+
+      expect(sent).toEqual([{ ...HOLD_PICK, replyTo: CHOICE_ID }]);
+    });
+
+    it.each(REPLY_NOT_DELIVERED)(
+      "posts it as a reply to no row on a bot bound to %s",
+      async (_label, minor, kinds) => {
+        mocks.threadAnchors = anchorsNaming(kinds);
+        negotiateBotSend(HOST_ID, { major: 1, minor });
+
+        await pickHold();
+
+        expect(sent).toStrictEqual([HOLD_PICK]);
+      },
+    );
   });
 });

@@ -605,6 +605,7 @@ function BotRow(props: {
   readonly timeLink: (() => void) | null;
 }): ReactElement {
   const { message, presentation, sentAt, body, hoverActions, timeLink } = props;
+  const { chooseOption } = presentation;
   const announcement = message.announcement ?? null;
   const question = message.question ?? null;
   const questions = question === null ? null : presentation.questions;
@@ -660,7 +661,11 @@ function BotRow(props: {
       {message.options === undefined || questions !== null ? null : (
         <ReplyOptions
           options={message.options}
-          onChoose={presentation.chooseOption}
+          onChoose={
+            chooseOption === null
+              ? null
+              : (choice) => chooseOption(message.persistentMessageId, choice)
+          }
         />
       )}
       {receipt === null ? null : <TurnReceiptLine receipt={receipt} />}

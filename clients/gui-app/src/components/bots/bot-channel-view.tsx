@@ -428,8 +428,15 @@ export function BotChannelView(props: {
   } = useBotConversationSendMutation(client);
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
+  // Whether a send here can reply to a message (T166). A pick replies to the
+  // reply that offered it where it can, and is a plain post where it cannot.
+  const replyReach = useBotReplyReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
   const chooseOption = useCallback(
-    (choice: string) => {
+    (messageId: string | null, choice: string) => {
       if (channelId === null) return;
       clearSendFailure();
       send(
@@ -442,11 +449,14 @@ export function BotChannelView(props: {
           redeliver: null,
           supersedes: null,
           answer: null,
+          ...(replyReach === "delivered" && messageId !== null
+            ? { replyTo: messageId }
+            : {}),
         },
         { onError: () => failSend(null) },
       );
     },
-    [botId, channelId, clearSendFailure, failSend, send],
+    [botId, channelId, clearSendFailure, failSend, replyReach, send],
   );
   // A question card's answer or Skip, on a question the bot asked at the
   // channel's top level: the person's message goes to the bot itself and
@@ -507,11 +517,6 @@ export function BotChannelView(props: {
   // Reply on a row of the channel names it in the channel's box, which takes
   // the focus; none while the box edits a failed message, whose send replaces
   // it and replies to nothing (T166).
-  const replyReach = useBotReplyReach({
-    hostId,
-    boundHostId,
-    boundHostTakes: threadAnchorKinds,
-  });
   const { setReplyTarget } = useBotDraftActions();
   const [replyChosen, setReplyChosen] = useState(0);
   const replyInChannel = useMemo(

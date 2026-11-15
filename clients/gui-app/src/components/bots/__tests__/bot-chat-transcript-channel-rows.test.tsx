@@ -317,7 +317,7 @@ describe("<BotChatTranscript /> in the channel", () => {
 
   function channelSurface(
     openAnnouncementThread: ((announcementId: string) => void) | null,
-    chooseOption: ((choice: string) => void) | null,
+    chooseOption: ((messageId: string | null, choice: string) => void) | null,
   ): BotTranscriptSurface {
     return {
       kind: "channel",
@@ -399,7 +399,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
   }
 
   function channel(
-    chooseOption: ((choice: string) => void) | null,
+    chooseOption: ((messageId: string | null, choice: string) => void) | null,
     threadLine: (postMessageId: string) => ChatBotThreadLine | null,
   ): BotTranscriptSurface {
     return {
@@ -501,9 +501,10 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(screen.queryByTestId("conversation-request")).toBeNull();
   });
 
-  it("posts the option a person clicks under a direct reply through the channel surface", async () => {
+  it("posts the option a person clicks under a direct reply through the channel surface, naming the reply's own message", async () => {
     const user = userEvent.setup();
-    const chooseOption = vi.fn<(choice: string) => void>();
+    const chooseOption =
+      vi.fn<(messageId: string | null, choice: string) => void>();
     mountTranscript(
       [directPost(DIRECT_REQUEST), directReply(["Staging", "Production"])],
       channel(chooseOption, () => null),
@@ -512,7 +513,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     await user.click(screen.getByRole("button", { name: "Production" }));
 
     expect(chooseOption).toHaveBeenCalledTimes(1);
-    expect(chooseOption).toHaveBeenCalledWith("Production");
+    expect(chooseOption).toHaveBeenCalledWith(REPLY_ID, "Production");
   });
 
   it("badges a reply with its post's writer and first line when another row sits between them", () => {

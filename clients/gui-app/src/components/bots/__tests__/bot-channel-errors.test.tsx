@@ -191,13 +191,13 @@ vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
 /** The option "Ship it" the surface offers, once per surface. */
 function ChoiceStub(props: {
   readonly kind: BotTranscriptSurface["kind"];
-  readonly pick: (choice: string) => void;
+  readonly pick: (messageId: string | null, choice: string) => void;
 }): ReactNode {
   return (
     <button
       type="button"
       data-testid={`stub-choose-${props.kind}`}
-      onClick={() => props.pick("Ship it")}
+      onClick={() => props.pick("answer-1", "Ship it")}
     />
   );
 }
