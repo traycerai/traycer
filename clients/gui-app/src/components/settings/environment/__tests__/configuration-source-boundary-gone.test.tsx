@@ -58,6 +58,7 @@ import {
 import {
   mountTeamPage,
   poolSource,
+  requireTeamCloudAuth,
   requireTeamHostClient,
   requireViewingHostClient,
   resetTeamPageHarness,
@@ -156,10 +157,17 @@ vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
   rememberSettingsTabSection: surface.remember,
 }));
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => requireTeamHostClient(),
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => requireTeamHostClient(),
+    useHostBinding: () => ({
+      ...actual.useHostBinding(),
+      auth: requireTeamCloudAuth(),
+    }),
+  };
+});
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
