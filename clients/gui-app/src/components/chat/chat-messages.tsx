@@ -221,6 +221,8 @@ interface ChatMessagesProps {
   epicId: string;
   /** Host this chat tab is bound to for its full lifetime. */
   hostId: string | null;
+  /** See `ChatTranscriptIdentity.payerHostId`. */
+  payerHostId: string | null;
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;
   /**
@@ -1139,8 +1141,12 @@ export function ChatMessages(props: ChatMessagesProps) {
     () =>
       props.hostId === null
         ? null
-        : { chatId: props.taskId, hostId: props.hostId },
-    [props.hostId, props.taskId],
+        : {
+            chatId: props.taskId,
+            hostId: props.hostId,
+            payerHostId: props.payerHostId,
+          },
+    [props.hostId, props.payerHostId, props.taskId],
   );
   // Opening a chat clears its own tombstone (a
   // prior deletion is over; this is the SAME chatId only if the host has

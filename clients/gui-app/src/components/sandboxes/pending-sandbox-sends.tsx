@@ -1,6 +1,7 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
+import { unnamedTeamCreditsRanOut } from "@/components/hosts/sandbox-card-model";
 import {
   useComposerSurfaceHostKey,
   useComposerSurfaceHostPin,
@@ -102,7 +103,8 @@ import {
   useSandboxVerb,
   type SandboxVerbOutcome,
 } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
-import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useBillingUrlOf } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import {
   sandboxConfigurationOf,
   useSandboxConfigurations,
@@ -170,6 +172,7 @@ import {
   RETRY,
   STOP,
   DETAILS,
+  teamCreditsRanOutLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
 import { sandboxMutationKeys } from "@/lib/query-keys";
@@ -2407,9 +2410,15 @@ function PendingDispatchItem(props: {
           />
         )}
         <span>
-          {view.line === "settings"
-            ? pendingSettingsTitle(row.row, settings.data)
-            : pendingDispatchLineCopy(send.request.kind, view.line)}
+          {view.line === "settings" ? (
+            pendingSettingsTitle(row.row, settings.data)
+          ) : (
+            <PendingDispatchLine
+              kind={send.request.kind}
+              line={view.line}
+              row={row.row}
+            />
+          )}
         </span>
         {view.line === "settings" ? (
           <PendingDispatchSettingsDetail row={row.row} status={settings.data} />
@@ -2508,6 +2517,43 @@ function pendingDispatchLineCopy(
   return copy[line];
 }
 
+/**
+ * The dispatch's line. Out of credits on a team's sandbox, anyone who cannot
+ * buy the team's credits is told whose ran out, not to add them. Nothing
+ * while whose sandbox it is is not known.
+ */
+function PendingDispatchLine(props: {
+  readonly kind: PendingSandboxSendRequest["kind"];
+  readonly line: Exclude<PendingSendView["line"], "settings">;
+  readonly row: SandboxSummary | null;
+}): ReactNode {
+  if (props.line === "credits")
+    return <PendingDispatchCreditsLine kind={props.kind} row={props.row} />;
+  return pendingDispatchLineCopy(props.kind, props.line);
+}
+
+function PendingDispatchCreditsLine(props: {
+  readonly kind: PendingSandboxSendRequest["kind"];
+  readonly row: SandboxSummary | null;
+}): ReactNode {
+  const configurations = useSandboxConfigurations();
+  const configuration =
+    props.row === null
+      ? null
+      : sandboxConfigurationOf(props.row, configurations);
+  const offersAddCredits = useOffersAddCredits(configuration);
+  // Not known whose: a team's row (only a team agent sandbox names a creator)
+  // reads as the sandbox page's header does for a team it cannot name; a row
+  // not in hand, or one that may be the person's own, has no line.
+  if (configuration === null)
+    return props.row !== null && props.row.createdBy !== null
+      ? unnamedTeamCreditsRanOut(configurations.complete)
+      : null;
+  if (configuration.kind === "team" && !offersAddCredits)
+    return teamCreditsRanOutLine(configuration.teamName);
+  return pendingDispatchLineCopy(props.kind, "credits");
+}
+
 /** Repairs a live sandbox without releasing a possibly accepted request. */
 function PendingDispatchRemedy(props: {
   readonly id: string;
@@ -2515,15 +2561,17 @@ function PendingDispatchRemedy(props: {
   readonly row: SandboxSummary | null;
   readonly failure: "credits" | "settings";
 }): ReactNode {
-  const { configurations } = useSandboxConfigurations();
+  const configurations = useSandboxConfigurations();
   const configuration =
     props.row === null
       ? null
       : sandboxConfigurationOf(props.row, configurations);
-  const billingUrl = useConfigurationBillingUrl(
-    configuration ?? { kind: "personal" },
-  );
+  const billingUrlOf = useBillingUrlOf();
   const openLink = useOpenLink();
+  // A team's credits are offered to its Admin only, and nothing is offered
+  // while whose sandbox it is is not known; anyone else gets Details.
+  const addCredits =
+    useOffersAddCredits(configuration) && props.failure === "credits";
   if (props.failure === "settings" && props.row !== null)
     return (
       <SandboxRetryApplyingButton
@@ -2539,12 +2587,12 @@ function PendingDispatchRemedy(props: {
       onClick={() => {
         if ((useAuthStore.getState().profile?.userId ?? null) !== props.userId)
           return;
-        if (props.failure === "credits" && configuration !== null)
-          void openLink(billingUrl, "account", null);
+        if (addCredits && configuration !== null)
+          void openLink(billingUrlOf(configuration), "account", null);
         else openSandboxDetails(props.id);
       }}
     >
-      {props.failure === "credits" ? "Add credits" : "Details"}
+      {addCredits ? "Add credits" : "Details"}
     </Button>
   );
 }

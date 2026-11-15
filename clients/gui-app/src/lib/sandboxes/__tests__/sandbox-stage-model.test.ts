@@ -53,9 +53,9 @@ describe("priceClause", () => {
     expect(priceClause(input({})).text).toBe(
       "$0.12 an hour while awake · uses your credits",
     );
-    expect(priceClause(input({ configuration: ACME })).text).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
-    );
+    const team = priceClause(input({ configuration: ACME })).text;
+    expect(team).toBe("$0.12 an hour while awake · uses Acme's credits");
+    expect(team).not.toContain("your Acme");
   });
 
   it("prefixes `from` for a price that is only a lower bound", () => {
@@ -80,27 +80,27 @@ describe("priceClause", () => {
   });
 
   it("names the team's credits when a team is short, and Personal's without a name", () => {
-    expect(
-      priceClause(
-        input({
-          configuration: {
-            kind: "team",
-            teamId: "team-pool",
-            teamName: "pool-e2e-fixture",
-          },
-          price: {
-            awakeMcPerHour: 210,
-            suspendedMcPerHour: 4,
-            stoppedMcPerHour: 2,
-            exact: false,
-          },
-          needsCredits: true,
-          shortfallMc: 210,
-        }),
-      ).text,
-    ).toBe(
-      "Your pool-e2e-fixture allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
+    const team = priceClause(
+      input({
+        configuration: {
+          kind: "team",
+          teamId: "team-pool",
+          teamName: "pool-e2e-fixture",
+        },
+        price: {
+          awakeMcPerHour: 210,
+          suspendedMcPerHour: 4,
+          stoppedMcPerHour: 2,
+          exact: false,
+        },
+        needsCredits: true,
+        shortfallMc: 210,
+      }),
+    ).text;
+    expect(team).toBe(
+      "pool-e2e-fixture's credits are short $0.21. $0.21 more starts this sandbox for an hour.",
     );
+    expect(team).not.toContain("allowance");
     expect(
       priceClause(
         input({
@@ -184,7 +184,8 @@ describe("consequenceClauses", () => {
     const clauses = consequenceClauses(
       input({ configuration: ACME, needsCredits: true }),
     );
-    expect(clauses[0].text).toMatch(/^Your Acme allowance is short/);
+    expect(clauses[0].text).toMatch(/^Acme's credits are short/);
+    expect(clauses[0].text).not.toContain("allowance");
     expect(clauses).toHaveLength(3);
   });
 });
