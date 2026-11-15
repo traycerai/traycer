@@ -8,6 +8,7 @@ import type {
   EnvironmentMembersRemovePreviewResponse,
 } from "@traycer/protocol/host/environment/contracts";
 import {
+  authnAnswer,
   mountTeamPage as mountTeamHarness,
   mountTeamPageNegotiating,
   requireTeamEnvironmentAuthnBinding,
@@ -972,5 +973,180 @@ describe("MembersPage refused writes", () => {
     expect(
       (await screen.findByTestId("members-invite-refusal")).textContent,
     ).toBe("Couldn't send that invitation.");
+  });
+});
+
+/**
+ * authn's members answer for `members` as it is on the wire, where a seat
+ * stored on the retired Viewer role answers `effectiveRole: null`: on the row of
+ * `nullRoleUserIds`, and on the reader's own role when `readerRole` is `null`.
+ */
+function wireMembers(
+  members: readonly EnvironmentMemberV12[],
+  nullRoleUserIds: readonly string[],
+  readerRole: "admin" | null,
+) {
+  return {
+    members: members.map((entry) => ({
+      id: entry.userId,
+      email: entry.email ?? "",
+      user: {
+        id: entry.userId,
+        name: entry.displayName,
+        avatarUrl: entry.avatarUrl,
+      },
+      effectiveRole: nullRoleUserIds.includes(entry.userId)
+        ? null
+        : entry.effectiveRole,
+      linkedPlan: entry.linkedPlan,
+      inviteState: entry.inviteState,
+      invitedAddress: entry.invitedAddress,
+    })),
+    viewer: {
+      effectiveRole: readerRole,
+      legacyRoleNoticeSeenAt: null,
+      legacyMembers: [],
+    },
+  };
+}
+
+describe("MembersPage with a seat stored on the Viewer role", () => {
+  const RAE = member("u-rae", "Rae", "viewer");
+  const SAM = member("u-sam", "Sam", "viewer");
+  const MEMBERS_ROUTE = "GET /api/v3/environments/env-a/members";
+
+  /** A row's text with its member's name and id made the same, to compare two rows. */
+  function rowShape(userId: string, name: string): string {
+    return rowOf(userId)
+      .textContent.replaceAll(name, "<name>")
+      .replaceAll(userId, "<id>");
+  }
+
+  function mountServing(
+    roster: { current: readonly EnvironmentMemberV12[] },
+    handlers: Parameters<typeof mountTeamHarness>[1],
+    readerRole: "admin" | null,
+  ): TeamPageHarness {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      { "environment.list": () => ({ environments: [TEAM] }), ...handlers },
+    );
+    harness.cloudResponses.set(MEMBERS_ROUTE, () =>
+      authnAnswer(200, wireMembers(roster.current, ["u-rae"], readerRole)),
+    );
+    return harness;
+  }
+
+  it("draws a member whose role answers null as it draws one whose role answers viewer", async () => {
+    const harness = mountServing(
+      { current: [ADA, PRIYA, RAE, SAM] },
+      {},
+      "admin",
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(await screen.findByText("Acme · 4 people")).toBeTruthy();
+    expect(rowShape("u-rae", "Rae")).toBe(rowShape("u-sam", "Sam"));
+  });
+
+  it("changes another member's role with that seat on the page, and shows no failure", async () => {
+    const roster = {
+      current: [ADA, GRACE, RAE] as readonly EnvironmentMemberV12[],
+    };
+    const harness = mountServing(
+      roster,
+      {
+        "environment.members.setRole": () => {
+          roster.current = roster.current.map((entry) =>
+            entry.userId === "u-grace"
+              ? { ...entry, effectiveRole: "editor" }
+              : entry,
+          );
+          return { outcome: "changed" };
+        },
+      },
+      "admin",
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "Role for Grace" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("option", { name: "Editor" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Change to editor" }),
+    );
+
+    expect(
+      within(
+        await screen.findByRole("combobox", { name: "Role for Grace" }),
+      ).getByText("Editor"),
+    ).toBeTruthy();
+    expect(harness.paramsOf("environment.members.setRole")).toEqual([
+      { environmentId: "env-a", userId: "u-grace", role: "editor" },
+    ]);
+    expect(screen.queryByTestId("members-banner")).toBeNull();
+    expect(toasts.error).not.toHaveBeenCalled();
+    expect(rowOf("u-rae")).toBeTruthy();
+  });
+
+  it("removes another member with that seat on the page, and shows it done", async () => {
+    const roster = {
+      current: [ADA, PRIYA, RAE] as readonly EnvironmentMemberV12[],
+    };
+    const harness = mountServing(
+      roster,
+      {
+        "environment.members.removePreview": () => PREVIEW,
+        "environment.members.remove": () => {
+          roster.current = roster.current.filter(
+            (entry) => entry.userId !== "u-priya",
+          );
+          return { outcome: "pending", receiptId: "receipt-1" };
+        },
+      },
+      "admin",
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Priya");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    await screen.findByTestId("members-remove-preview-table");
+    await userEvent.click(screen.getByTestId("members-remove-confirm"));
+
+    expect(await screen.findByText("Acme · 2 people")).toBeTruthy();
+    expect(screen.queryByText("Priya")).toBeNull();
+    expect(toasts.success.mock.calls[0]?.[0]).toBe("Member removed");
+    expect(toasts.error).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("members-banner")).toBeNull();
+    expect(screen.queryByTestId("members-remove-refusal")).toBeNull();
+    expect(rowOf("u-rae")).toBeTruthy();
+  });
+
+  it("draws a reader stored on the Viewer role the page without admin controls", async () => {
+    const harness = mountServing({ current: [ADA, PRIYA] }, {}, null);
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Acme · 2 people");
+    expect(screen.queryByTestId("members-read-failed")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+    expect(
+      within(rowOf("u-priya")).queryByRole("button", { name: "Remove" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("combobox", { name: "Role for Priya" }),
+    ).toBeNull();
   });
 });
