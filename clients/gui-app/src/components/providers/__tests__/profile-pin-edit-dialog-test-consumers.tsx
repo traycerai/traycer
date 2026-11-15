@@ -2,7 +2,6 @@ import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-
 import { useProfileRecordEnvironmentId } from "@/hooks/providers/use-profile-record-environment-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { RefObject } from "react";
 
