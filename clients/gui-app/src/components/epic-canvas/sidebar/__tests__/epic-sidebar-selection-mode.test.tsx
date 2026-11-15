@@ -1608,6 +1608,7 @@ describe("epic sidebar selection mode", () => {
     );
     expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        cloudChats: [],
         chatIdsAuthoritative: false,
         chatRecordListFailed: false,
       }),
@@ -1617,6 +1618,7 @@ describe("epic sidebar selection mode", () => {
     rendered.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        cloudChats: [],
         chatIdsAuthoritative: false,
         chatRecordListFailed: true,
       }),
@@ -1627,6 +1629,7 @@ describe("epic sidebar selection mode", () => {
     rendered.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        cloudChats: [],
         chatIdsAuthoritative: true,
         chatRecordListFailed: false,
       }),

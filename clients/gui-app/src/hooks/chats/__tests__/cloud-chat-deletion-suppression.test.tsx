@@ -26,7 +26,7 @@
  * have caught it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createElement, useMemo, type ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
@@ -446,15 +446,11 @@ function renderChannel(withPublicationTargets: boolean) {
       });
       const chatIdsAuthoritative = useEpicChatRecordListAuthoritative();
       const chatRecordListFailed = useEpicChatRecordListFailed();
-      const cloudChatIds = useMemo(
-        () => (cloudList.data?.chats ?? []).map((chat) => chat.identity.chatId),
-        [cloudList.data],
-      );
       const publicationTargets = useChatPublicationTargets({
         client: fixture.client,
         epicId: EPIC_ID,
         chatIds,
-        cloudChatIds,
+        cloudChats: cloudList.data?.chats ?? [],
         chatIdsAuthoritative,
         chatRecordListFailed,
         enabled: withPublicationTargets,

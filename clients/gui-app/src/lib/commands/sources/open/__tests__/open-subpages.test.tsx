@@ -390,7 +390,7 @@ vi.mock(
       ...actual,
       useChatPublicationTargets: (args: {
         readonly chatIds: readonly string[];
-        readonly cloudChatIds: readonly string[];
+        readonly cloudChats: readonly CloudChatSummary[];
         readonly chatIdsAuthoritative: boolean;
         readonly chatRecordListFailed: boolean;
       }) => {
@@ -829,7 +829,7 @@ afterEach(() => {
 });
 
 describe("Agents opener sub-page", () => {
-  it("forwards projection readiness and the cloud list IDs to publication targets", () => {
+  it("forwards projection readiness and cloud rows to publication targets", () => {
     activeEpicProjectionMock.current = {
       ...FAKE_PROJECTION,
       chatRecordListAuthoritative: false,
@@ -851,7 +851,7 @@ describe("Agents opener sub-page", () => {
       client: { mockHostId: "default-host" },
       epicId: "epic-1",
       chatIds: FAKE_PROJECTION.chats.allIds,
-      cloudChatIds: ["cloud-row"],
+      cloudChats: cloudChatsMock.current,
       chatIdsAuthoritative: false,
       chatRecordListFailed: true,
       enabled: true,

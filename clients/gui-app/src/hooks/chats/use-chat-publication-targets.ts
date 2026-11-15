@@ -1,23 +1,57 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useQueryClient,
+  type Query,
   type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type {
+import {
   HostRpcError,
-  ResponseOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   useHostQueryEntryHash,
   useHostQueryWithResponseMap,
 } from "@/hooks/host/use-host-query";
 import { queryKeys } from "@/lib/query-keys";
 import { appLogger } from "@/lib/logger";
+import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 
 const PUBLICATION_TARGETS_METHOD = "epic.listChatPublicationTargets" as const;
+const UNEXPLAINED_ROW_RECHECK_MS = 60_000;
+
+interface PublicationTargetsRefreshState {
+  mounts: number;
+  lastRefresh: string | null;
+  readonly recheckedRows: Set<string>;
+}
+
+interface PublicationTargetsRechecks {
+  readonly seen: Set<string>;
+  readonly pending: Map<string, number>;
+  timer: number | null;
+}
+
+// Share claims between observers without retaining a query after cache GC.
+// The last observer's cleanup resets the limits for the next task mount.
+const refreshStates = new WeakMap<Query, PublicationTargetsRefreshState>();
+
+function publicationTargetsRefreshState(
+  query: Query,
+): PublicationTargetsRefreshState {
+  const held = refreshStates.get(query);
+  if (held !== undefined) return held;
+  const state: PublicationTargetsRefreshState = {
+    mounts: 0,
+    lastRefresh: null,
+    recheckedRows: new Set(),
+  };
+  refreshStates.set(query, state);
+  return state;
+}
 
 interface PublicationTargetsAnswer extends ResponseOfMethod<
   HostRpcRegistry,
@@ -56,7 +90,7 @@ export interface UseChatPublicationTargetsArgs {
    * The full current local id set, sent at dispatch rather than keyed.
    */
   readonly chatIds: readonly string[];
-  readonly cloudChatIds: readonly string[];
+  readonly cloudChats: readonly CloudChatSummary[];
   readonly chatIdsAuthoritative: boolean;
   readonly chatRecordListFailed: boolean;
   readonly enabled: boolean;
@@ -80,8 +114,8 @@ export function useChatPublicationTargets(
  * comment saying the answer is immutable. A redirect is minted ONCE - but it is
  * minted by a fork, which is precisely the event that happens while a sidebar is
  * already mounted and already holding the pre-fork answer. Without this, the
- * fold goes on matching post-fork cloud rows against the old `chatId` for up to
- * five minutes: the forked chat's own lineage renders as a second, phantom row -
+ * fold can keep matching cloud rows against the old `chatId` until remount or
+ * the next refresh trigger: the forked chat's own lineage renders as a phantom row -
  * the exact symptom `useLogUnsupportedDegrade` describes for a host that cannot
  * answer at all.
  *
@@ -165,6 +199,13 @@ function useChatPublicationTargetsQuery(
     [args.epicId],
   );
   const queryClient = useQueryClient();
+  const ownCloudChatIds = useMemo(
+    () =>
+      args.cloudChats
+        .filter(cloudRowIsViewersOwn)
+        .map((chat) => chat.identity.chatId),
+    [args.cloudChats],
+  );
   const entry = {
     cacheKeyIdentity: undefined,
     client: args.client,
@@ -179,17 +220,13 @@ function useChatPublicationTargetsQuery(
     boolean
   >({
     ...entry,
-    // New chats use the fold's own-id fallback. Unexplained cloud rows refresh
-    // the map on every host; addressable-host fork edges refresh it earlier.
     buildRequest: (base) => ({ ...base, chatIds: [...args.chatIds] }),
     captureRequestContext: () => args.chatIdsAuthoritative,
     mapResponse: ({ response, requestContext }) => ({
       ...response,
       chatIdsAuthoritative: requestContext === true,
-      unexplainedCloudChatIdsKey: unexplainedCloudChatIdsKey(
-        args.chatIds,
-        args.cloudChatIds,
-        response,
+      unexplainedCloudChatIdsKey: JSON.stringify(
+        unexplainedCloudChatIds(args.chatIds, ownCloudChatIds, response),
       ),
     }),
     options: {
@@ -199,76 +236,156 @@ function useChatPublicationTargetsQuery(
         (args.chatIdsAuthoritative || args.chatRecordListFailed) &&
         args.epicId.length > 0 &&
         args.chatIds.length > 0,
-      // A redirect is minted once in a chat's life, so a long stale window
-      // costs nothing and saves a request per sidebar mount. The matching
-      // `poll: null` in the policy table carries the same reasoning.
+      // Reuse successful maps across mounts for five minutes. Mounted changes
+      // use the explicit refresh/re-check triggers below; the policy stays
+      // `poll: null`.
       staleTime: 5 * 60_000,
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
   });
   const { data, dataUpdatedAt, isEnabled, isFetching, refetch } = query;
-  const unexplainedKey = useMemo(
-    () => unexplainedCloudChatIdsKey(args.chatIds, args.cloudChatIds, data),
-    [args.chatIds, args.cloudChatIds, data],
-  );
-  const lastRefresh = useRef<string | null>(null);
+  const unexplained = useMemo(() => {
+    const ids = unexplainedCloudChatIds(args.chatIds, ownCloudChatIds, data);
+    return { ids, key: JSON.stringify(ids) };
+  }, [args.chatIds, ownCloudChatIds, data]);
+  const rechecks = useRef<PublicationTargetsRechecks>({
+    seen: new Set<string>(),
+    pending: new Map<string, number>(),
+    timer: null,
+  });
+  const [recheckTick, setRecheckTick] = useState(0);
+  const unsupported = query.error?.code === "E_HOST_UNSUPPORTED";
+  const partial =
+    data !== undefined &&
+    args.chatIdsAuthoritative &&
+    !data.chatIdsAuthoritative;
+  const changed =
+    data !== undefined &&
+    (partial || unexplained.key !== data.unexplainedCloudChatIdsKey);
+
   useEffect(() => {
-    if (!isEnabled || isFetching || data === undefined) {
+    const cached = queryClient.getQueryCache().get(queryHash);
+    if (cached === undefined) return;
+    const schedule = rechecks.current;
+    const state = publicationTargetsRefreshState(cached);
+    state.mounts += 1;
+    return () => {
+      if (schedule.timer !== null) window.clearTimeout(schedule.timer);
+      schedule.seen.clear();
+      schedule.pending.clear();
+      state.mounts -= 1;
+      if (state.mounts === 0) {
+        state.recheckedRows.clear();
+        state.lastRefresh = null;
+      }
+    };
+  }, [queryClient, queryHash]);
+
+  useEffect(() => {
+    const schedule = rechecks.current;
+    if (schedule.timer !== null) window.clearTimeout(schedule.timer);
+    schedule.timer = null;
+    if (!isEnabled || unsupported) return;
+    const now = Date.now();
+    const current = new Set(unexplained.ids);
+    for (const id of schedule.pending.keys()) {
+      if (!current.has(id)) schedule.pending.delete(id);
+    }
+    for (const id of unexplained.ids) {
+      if (schedule.seen.has(id)) continue;
+      schedule.seen.add(id);
+      schedule.pending.set(id, now + UNEXPLAINED_ROW_RECHECK_MS);
+    }
+    let next = Infinity;
+    for (const deadline of schedule.pending.values()) {
+      if (deadline > now) next = Math.min(next, deadline);
+    }
+    if (next !== Infinity) {
+      schedule.timer = window.setTimeout(() => {
+        schedule.timer = null;
+        setRecheckTick((tick) => tick + 1);
+      }, next - now);
+    }
+    return () => {
+      if (schedule.timer !== null) window.clearTimeout(schedule.timer);
+    };
+  }, [isEnabled, queryHash, recheckTick, unexplained, unsupported]);
+
+  // Refresh when the unexplained own-row set differs from the last answer's
+  // set. A newly unexplained row is re-checked once about 60 s later. Until
+  // the clone is listed, the other host's row can remain folded under the
+  // local id; listing the clone triggers refresh. Fork edges on the
+  // addressable host can refresh the map sooner.
+  useEffect(() => {
+    if (!isEnabled || isFetching) {
       return;
     }
-    const partial = args.chatIdsAuthoritative && !data.chatIdsAuthoritative;
-    if (!partial && unexplainedKey === data.unexplainedCloudChatIdsKey) return;
     const cached = queryClient.getQueryCache().get(queryHash);
     // Check the shared entry too: another observer's effect can start the
-    // refresh before this observer renders its fetching state. Failed refreshes
-    // wait for an external retry rather than looping over the retained answer.
+    // refresh before this observer renders its fetching state. Unsupported
+    // hosts do not retry; other failures can recover on a new trigger.
     if (
       cached?.state.fetchStatus !== "idle" ||
-      cached.state.status === "error" ||
+      (cached.state.error instanceof HostRpcError &&
+        cached.state.error.code === "E_HOST_UNSUPPORTED") ||
       cached.state.dataUpdatedAt !== dataUpdatedAt
     ) {
       return;
     }
+    const state = publicationTargetsRefreshState(cached);
+    const now = Date.now();
+    const dueRows = unexplained.ids.filter((id) => {
+      const deadline = rechecks.current.pending.get(id);
+      return (
+        deadline !== undefined &&
+        deadline <= now &&
+        !state.recheckedRows.has(id)
+      );
+    });
+    if (!changed && dueRows.length === 0) return;
     const refreshKey = JSON.stringify([
       queryHash,
       dataUpdatedAt,
-      unexplainedKey,
+      unexplained.key,
       partial,
     ]);
-    if (lastRefresh.current === refreshKey) return;
-    lastRefresh.current = refreshKey;
+    if (state.lastRefresh === refreshKey && dueRows.length === 0) return;
+    state.lastRefresh = refreshKey;
+    for (const id of dueRows) {
+      state.recheckedRows.add(id);
+      rechecks.current.pending.delete(id);
+    }
     // Settling an in-flight partial read re-arms this effect even when Query's
     // structural sharing preserves `data`. Never join that read as recovery.
     void refetch({ cancelRefetch: false });
   }, [
-    args.chatIdsAuthoritative,
-    data,
+    changed,
     dataUpdatedAt,
     isEnabled,
     isFetching,
+    partial,
     queryClient,
     queryHash,
+    recheckTick,
     refetch,
-    unexplainedKey,
+    unexplained,
   ]);
   return query;
 }
 
-function unexplainedCloudChatIdsKey(
+function unexplainedCloudChatIds(
   chatIds: readonly string[],
   cloudChatIds: readonly string[],
   data:
     | ResponseOfMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>
     | undefined,
-): string {
+): readonly string[] {
   const explained = new Set(chatIds);
   for (const entry of data?.redirected ?? []) {
     explained.add(entry.publicationChatId);
   }
-  return JSON.stringify(
-    [...new Set(cloudChatIds)].filter((id) => !explained.has(id)).sort(),
-  );
+  return [...new Set(cloudChatIds)].filter((id) => !explained.has(id)).sort();
 }
 
 /**
