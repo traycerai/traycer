@@ -508,6 +508,8 @@ export async function replaceEnvironmentApiKeyViaHttp(
       null,
       bearer,
     );
+    if (list.kind === "response" && list.status === 403)
+      return { kind: "forbidden" };
     if (list.kind !== "response" || list.status !== 200)
       return { kind: "failed" };
     const parsed = connectionBindingsSchema.safeParse(list.body);
