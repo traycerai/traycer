@@ -20,6 +20,7 @@ import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate"
 import { useHostsRunningConfiguration } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 const facts = vi.hoisted(() => ({
   cachedReady: false,
@@ -80,6 +81,21 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
             ? [{ ownerKind: "user", environmentId: "personal-env" }]
             : [],
         },
+    error: facts.failedEnvironment
+      ? new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Environment read is temporarily unavailable",
+          requestId: "request-environment-list",
+          method: "environment.list",
+          fatalDetails: {
+            code: "HOST_RESTARTING",
+            reason: "The host is temporarily unavailable.",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: true,
+          },
+        })
+      : null,
     isError: facts.failedEnvironment,
     refetch: () => Promise.resolve(),
   }),

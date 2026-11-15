@@ -7,37 +7,17 @@ import {
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import { createLocalOpenAuth } from "../../../shared/host-transport/create-local-open-auth";
 import type { LocalOpenAuth } from "../../../shared/host-transport/local-open-auth";
-import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
-import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
-import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
-/** Local transport policy shared by every CLI unary and stream composition. */
+/**
+ * Local admission for the one CLI connection that still opens with the stored
+ * sign-in: a running host's own credential provisioning. It mints no member
+ * credential; every other host connection presents this CLI's host-only
+ * token instead.
+ */
 export function createCliLocalOpenAuth(authnBaseUrl: string): LocalOpenAuth {
   return createLocalOpenAuth({
     authnBaseUrl: authnBaseUrl,
     cloudAuthorized: () => true,
-    webSocketFactory: createWhatwgStreamWebSocketFactory(),
-    clientIdentity: CLI_CLIENT_IDENTITY,
-    clock: null,
-    mintMemberCredential: async (hostId, bearer, signal) => {
-      const mint = createCliHostCredentialMintFlow({
-        authnBaseUrl: authnBaseUrl,
-        bearer: () => bearer.getBearerToken(),
-        signal,
-        diag: () => undefined,
-        unavailableNote: "team membership could not be checked.",
-        onUnauthorized: null,
-      });
-      const outcome = await mint({ hostId, reason: "missing" });
-      if (outcome.kind !== "provisioned") return null;
-      return {
-        token: outcome.token,
-        refreshToken: outcome.refreshToken,
-        familyId: outcome.familyId,
-        provisionedAt: outcome.provisionedAt,
-      };
-    },
-    onMemberCredentialAdopted: () => undefined,
   });
 }
 
