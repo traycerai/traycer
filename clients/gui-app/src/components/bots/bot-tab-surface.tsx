@@ -1654,6 +1654,7 @@ function BotTabContent(props: {
                     key={session.chatId}
                     botId={botId}
                     hostId={hostId}
+                    boundHostId={snapshot.boundHost.hostId}
                     botTitle={snapshot.bot.title}
                     session={session}
                     threads={threads}

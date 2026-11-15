@@ -17,6 +17,12 @@ import { createContext, use } from "react";
 export interface ChatTranscriptIdentity {
   readonly chatId: string;
   readonly hostId: string;
+  /**
+   * The host whose credits the transcript's turns ran on: the tab's own host
+   * for a chat tile, the bot's bound host for a bot transcript, `null` for a
+   * bot no host runs.
+   */
+  readonly payerHostId: string | null;
 }
 
 export const ChatTranscriptContext =

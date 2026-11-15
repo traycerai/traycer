@@ -225,7 +225,9 @@ export function ErrorSegment({
   // Whose credits the chat's sandbox is on, from the person's host directory:
   // a team's one out of credits names the team, and while it is not known no
   // remedy is told as the reader's.
-  const payer = useSandboxHostPayer(useMaybeChatTranscript()?.hostId ?? null);
+  const payer = useSandboxHostPayer(
+    useMaybeChatTranscript()?.payerHostId ?? null,
+  );
   // Built at CLICK time, never at render. This row is durable transcript: it
   // mounts whenever the chat is opened, which is one or more commits BEFORE
   // `SupportContextRegistryBridge`'s effects publish that chat's own
