@@ -13,7 +13,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
 import type { BotMember, BotMemberResolver } from "@/lib/bots/bot-member-names";
-import { useHostBinding, useOptionalHostClient } from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
 import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
 import { authQueryKeys } from "@/lib/query-keys";
 import {
@@ -49,10 +49,6 @@ export function HostTeamPeopleProvider(props: {
 function useHostTeamMembers(hostId: string): BotMemberResolver {
   const outer = use(PersonMembersContext);
   const teamId = useHostOwnerTeamId(hostId);
-  // The directory and the list are pool-tier reads, so any client of this
-  // runtime reaches them; optional, because a tile under test renders with no
-  // runtime.
-  const client = useOptionalHostClient();
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
@@ -61,7 +57,7 @@ function useHostTeamMembers(hostId: string): BotMemberResolver {
   const readsTeam = teamId !== null && cloudAuthorized && membersSupported;
   // A team's environment is not the team: both reads below are addressed by
   // the environment, which the viewer's environment list names for the team.
-  const environments = useEnvironmentListQuery(client, readsTeam);
+  const environments = useEnvironmentListQuery(readsTeam);
   // A failed refetch keeps the last answer's data; it names no environment,
   // so neither read below is sent with the id that answer gave.
   const listed = environments.isError
@@ -74,7 +70,6 @@ function useHostTeamMembers(hostId: string): BotMemberResolver {
         environment.ownerId === teamId,
     )?.environmentId ?? null;
   const directory = useEnvironmentMemberDirectory(
-    client,
     environmentId,
     readsTeam && environmentId !== null,
   );
