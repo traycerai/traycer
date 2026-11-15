@@ -538,6 +538,7 @@ describe("useAutoPolicySetMutation - refresh after the sign-in's PUT", () => {
       defaultOptions: { mutations: { retry: false } },
     });
     mocks.getActiveHostId.mockReturnValue(POOL_HOST_ID);
+    mocks.request.mockResolvedValue(undefined);
     const fixture = await createDirectAuthFixture(queryClient);
     connectLocalComputer(fixture);
     recordNegotiatedHostManifest(POOL_HOST_ID, {
