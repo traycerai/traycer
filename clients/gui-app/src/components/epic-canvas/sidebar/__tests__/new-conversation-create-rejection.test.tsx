@@ -322,9 +322,7 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   });
   return {
     ...actual,
-    useComposerPaste: stubPasteResult,
-    // The modal calls `useComposerHashPaste` (the hash-only adapter), not
-    // `useComposerPaste` above - without this the real hook ran underneath.
+    // The modal's paste hook, stubbed so no real ingest runs underneath.
     useComposerHashPaste: stubPasteResult,
   };
 });

@@ -94,6 +94,7 @@ async function postPushTokens(
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,

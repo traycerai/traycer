@@ -492,7 +492,6 @@ function mountChannelWith(
                 appConversationChatId={namedConversationId}
                 trunkChatId="trunk-chat"
                 onOpenTurn={vi.fn()}
-                onOpenSession={vi.fn()}
                 landOn={null}
                 openMemory={null}
                 onOpenMemory={vi.fn()}

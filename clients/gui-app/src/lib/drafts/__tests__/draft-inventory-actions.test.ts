@@ -461,6 +461,27 @@ describe("deleteLandingDraftRow", () => {
     expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
   });
 
+  it("Undo keeps the host the draft was opened for", () => {
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((entry) =>
+        entry.id === id ? { ...entry, namedHostId: "host-a" } : entry,
+      ),
+    }));
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === id);
+    if (draft === undefined) throw new Error("expected a draft");
+    const outcome = deleteLandingDraftRow(draft, null, null);
+    if (!outcome.deleted || outcome.undo === null) {
+      throw new Error("expected an undoable delete");
+    }
+    expect(outcome.undo()).toBe(true);
+    expect(useLandingDraftStore.getState().drafts[0]?.namedHostId).toBe(
+      "host-a",
+    );
+  });
+
   it("deletes nothing when there is no host to route through and the row is not ours alone", () => {
     const id = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore.getState().setDraftContent(id, typed("kept"), null);
