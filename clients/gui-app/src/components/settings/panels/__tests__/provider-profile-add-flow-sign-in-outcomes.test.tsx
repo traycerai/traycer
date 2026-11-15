@@ -116,6 +116,11 @@ const LIST_KEY = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
 );
 
 type Offers = true | false | "absent";
+type ProfileNameReply =
+  | "accepted"
+  | "unauthorized"
+  | "forbidden"
+  | "untyped-failure";
 type ListResponse = ResponseOfMethod<HostRpcRegistry, "providers.list">;
 type StartResponse = ResponseOfMethod<HostRpcRegistry, "providers.startLogin">;
 type AwaitResponse = ResponseOfMethod<HostRpcRegistry, "providers.awaitLogin">;
@@ -157,6 +162,7 @@ const ADD_FLOW_DEFAULTS = {
   holdListRefresh: false,
   unknownProfileOutcome: false,
   failRecolor: false,
+  failRename: false,
   freshlyLinkedProfile: false,
   awaitAnswers: [],
   authService: null,
@@ -172,6 +178,7 @@ const ADD_FLOW_DEFAULTS = {
   readonly holdListRefresh: boolean;
   readonly unknownProfileOutcome: boolean;
   readonly failRecolor: boolean;
+  readonly failRename: boolean;
   readonly freshlyLinkedProfile: boolean;
   readonly awaitAnswers: readonly AwaitResponse[];
   readonly authService: AuthService | null;
@@ -234,40 +241,40 @@ function sameEmailRenameProfiles(): {
   };
 }
 
-async function createAddProfileNameAuthFixture(denied: boolean) {
+async function createAddProfileNameAuthFixture(reply: ProfileNameReply) {
   return createProfileRecordAuthFixture((request) => {
     if (request.url !== PROFILE_RECORD_URL) {
       return Promise.resolve(new Response(null, { status: 404 }));
     }
-    if (denied) {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            statusCode: 403,
-            error: "private response detail",
-            code: "environment_action_forbidden",
-          }),
-          {
-            status: 403,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-      );
-    }
-    profileNameTransport.onAccepted("Personal");
+    if (reply === "accepted") profileNameTransport.onAccepted("Personal");
+    const status =
+      reply === "accepted"
+        ? 200
+        : reply === "unauthorized"
+          ? 401
+          : reply === "forbidden"
+            ? 403
+            : 500;
+    const body =
+      reply === "accepted"
+        ? {
+            profileId: MINTED_PROFILE_ID,
+            harnessId: "claude",
+            recordRevision: "18",
+            name: "Personal",
+          }
+        : reply === "forbidden"
+          ? {
+              statusCode: 403,
+              error: "private response detail",
+              code: "environment_action_forbidden",
+            }
+          : { error: "private response detail" };
     return Promise.resolve(
-      new Response(
-        JSON.stringify({
-          profileId: MINTED_PROFILE_ID,
-          harnessId: "claude",
-          recordRevision: "18",
-          name: "Personal",
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
     );
   });
 }
@@ -398,6 +405,7 @@ function renderAddFlow(input: {
   readonly holdListRefresh: boolean;
   readonly unknownProfileOutcome: boolean;
   readonly failRecolor: boolean;
+  readonly failRename: boolean;
   readonly freshlyLinkedProfile: boolean;
   readonly awaitAnswers: readonly AwaitResponse[];
   readonly authService: AuthService | null;
@@ -469,6 +477,7 @@ function renderAddFlow(input: {
         calls.push({ method: "providers.setEnabled", params });
         const profileAction = params.profileAction;
         if (profileAction?.type === "rename") {
+          if (input.failRename) throw new Error("synthetic rename failure");
           profilesAfter = profilesAfter.map((profile) =>
             profile.profileId === profileAction.profileId
               ? { ...profile, label: profileAction.label }
@@ -913,7 +922,7 @@ describe("Add a profile around one sign-in", () => {
 
   it("says signed in when the profile color save fails after naming", async () => {
     const { existing, created } = sameEmailRenameProfiles();
-    const auth = await createAddProfileNameAuthFixture(false);
+    const auth = await createAddProfileNameAuthFixture("accepted");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1015,7 +1024,7 @@ describe("Add a profile around one sign-in", () => {
 
   it("names a same-email signed-in profile through the app with exactly two providers.list reads", async () => {
     const { existing, created } = sameEmailRenameProfiles();
-    const auth = await createAddProfileNameAuthFixture(false);
+    const auth = await createAddProfileNameAuthFixture("accepted");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1077,7 +1086,7 @@ describe("Add a profile around one sign-in", () => {
 
   it("names and recolors a same-email signed-in profile with exactly three providers.list reads", async () => {
     const { existing, created } = sameEmailRenameProfiles();
-    const auth = await createAddProfileNameAuthFixture(false);
+    const auth = await createAddProfileNameAuthFixture("accepted");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1153,7 +1162,7 @@ describe("Add a profile around one sign-in", () => {
 
   it("keeps a legacy authenticated profile name on the computer rename path", async () => {
     const { existing, created } = sameEmailRenameProfiles();
-    const auth = await createAddProfileNameAuthFixture(true);
+    const auth = await createAddProfileNameAuthFixture("forbidden");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1194,19 +1203,95 @@ describe("Add a profile around one sign-in", () => {
     );
   });
 
-  it("shows the existing name refusal without exposing the response detail", async () => {
+  it.each([
+    { reply: "unauthorized" as const, message: "Please sign in again." },
+    {
+      reply: "forbidden" as const,
+      message: "You don't have permission to do that.",
+    },
+    {
+      reply: "untyped-failure" as const,
+      message: "Couldn't rename profile.",
+    },
+  ])(
+    "shows the safe $reply name failure and keeps naming available",
+    async ({ reply, message }) => {
+      const { existing, created } = sameEmailRenameProfiles();
+      const auth = await createAddProfileNameAuthFixture(reply);
+      const harness = renderAddFlow({
+        ...ADD_FLOW_DEFAULTS,
+        offers: true,
+        profilesBefore: [existing],
+        profilesAfter: [existing, created],
+        outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
+        echoedProfiles: [existing, created],
+        seedCache: true,
+        authService: auth.service,
+        recordEnvironment: true,
+      });
+      await pressAccount(true);
+      expect(
+        await screen.findByText(
+          "Terminal account already uses this email. Name this profile so you can tell them apart.",
+        ),
+      ).toBeTruthy();
+      fireEvent.change(screen.getByLabelText("Profile name"), {
+        target: { value: "Personal" },
+      });
+      const listReadsBeforeSave = methodCount(
+        harness.messenger.calls,
+        "providers.list",
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(screen.queryByText("private response detail")).toBeNull();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(
+        screen.getByRole<HTMLInputElement>("textbox", {
+          name: "Profile name",
+        }).value,
+      ).toBe("Personal");
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Save profile" })
+          .disabled,
+      ).toBe(false);
+      expect(harness.created).not.toHaveBeenCalled();
+      expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+        0,
+      );
+      expect(auth.requests).toEqual([
+        {
+          url: PROFILE_RECORD_URL,
+          method: "POST",
+          body: JSON.stringify({ harnessId: "claude", name: "Personal" }),
+        },
+      ]);
+      await waitFor(() => {
+        expect(
+          methodCount(harness.messenger.calls, "providers.list"),
+        ).toBeGreaterThan(listReadsBeforeSave);
+      });
+      expect(harness.created).not.toHaveBeenCalled();
+      expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+        0,
+      );
+    },
+  );
+
+  it("keeps the legacy local naming error sentence after a failed computer rename", async () => {
     const { existing, created } = sameEmailRenameProfiles();
-    const auth = await createAddProfileNameAuthFixture(true);
+    const auth = await createAddProfileNameAuthFixture("accepted");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
       profilesBefore: [existing],
       profilesAfter: [existing, created],
-      outcome: { kind: "signed-in", profileId: MINTED_PROFILE_ID },
+      outcome: null,
       echoedProfiles: [existing, created],
+      freshlyLinkedProfile: true,
       seedCache: true,
+      failRename: true,
       authService: auth.service,
-      recordEnvironment: true,
     });
     await pressAccount(true);
     expect(
@@ -1221,27 +1306,32 @@ describe("Add a profile around one sign-in", () => {
     expect(
       await screen.findByText("Couldn't save the name. Try again."),
     ).toBeTruthy();
-    expect(screen.queryByText("private response detail")).toBeNull();
-    expect(screen.getByRole("textbox", { name: "Profile name" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save profile" })).toBeTruthy();
+    expect(screen.queryByText("synthetic rename failure")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLInputElement>("textbox", {
+        name: "Profile name",
+      }).value,
+    ).toBe("Personal");
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save profile" })
+        .disabled,
+    ).toBe(false);
     expect(harness.created).not.toHaveBeenCalled();
-    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
+    expect(
+      harness.calls
+        .filter((call) => call.method === "providers.setEnabled")
+        .map((call) => renamedLabel(call.params)),
+    ).toEqual(["Personal"]);
+    expect(auth.requests).toEqual([]);
+    expect(methodCount(harness.messenger.calls, "environment.status")).toBe(0);
+    expect(methodCount(harness.messenger.calls, "environment.host.read")).toBe(
       0,
     );
-    expect(auth.requests).toEqual([
-      {
-        url: PROFILE_RECORD_URL,
-        method: "POST",
-        body: JSON.stringify({ harnessId: "claude", name: "Personal" }),
-      },
-    ]);
-    await waitFor(() => {
-      expect(methodCount(harness.messenger.calls, "providers.list")).toBe(2);
-    });
   });
 
   it("waits, with Done, when the signed-in id is still absent after one re-read", async () => {
-    const auth = await createAddProfileNameAuthFixture(true);
+    const auth = await createAddProfileNameAuthFixture("forbidden");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1265,7 +1355,7 @@ describe("Add a profile around one sign-in", () => {
 
   it("offers Use for an account that already has a profile, without recoloring it", async () => {
     const row = workProfile();
-    const auth = await createAddProfileNameAuthFixture(true);
+    const auth = await createAddProfileNameAuthFixture("forbidden");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1418,7 +1508,7 @@ describe("Add a profile around one sign-in", () => {
   });
 
   it("does not offer naming for an already-signed-in profile from the answer's own rows", async () => {
-    const auth = await createAddProfileNameAuthFixture(true);
+    const auth = await createAddProfileNameAuthFixture("forbidden");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -1661,7 +1751,7 @@ describe("Add a profile around one sign-in", () => {
 
   it("keeps unknown envelope and projection fields through the await overlay before its refresh settles", async () => {
     const projected = projectedWorkProfile();
-    const auth = await createAddProfileNameAuthFixture(true);
+    const auth = await createAddProfileNameAuthFixture("forbidden");
     const removedProfiles = [
       {
         providerId: "claude-code",

@@ -95,38 +95,51 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
 const PROFILE_RECORD_URL =
   "http://localhost:5005/api/v3/environments/environment-profile-fixture/profile-records/work-row/name";
 
+type ProfileRecordReply =
+  | "accepted"
+  | "unauthorized"
+  | "forbidden"
+  | "untyped-failure";
+
 const recordNameTransport = {
   onNameAccepted: (_name: string): void => undefined,
 };
 
 async function signedInAuthService(
-  denied: boolean,
+  reply: ProfileRecordReply,
 ): Promise<ProfileRecordAuthFixture> {
   const fixture = await createProfileRecordAuthFixture((request) => {
-    if (!denied && request.url === PROFILE_RECORD_URL) {
+    if (reply === "accepted" && request.url === PROFILE_RECORD_URL) {
       recordNameTransport.onNameAccepted("Desk");
     }
+    const status =
+      reply === "accepted"
+        ? 200
+        : reply === "unauthorized"
+          ? 401
+          : reply === "forbidden"
+            ? 403
+            : 500;
+    const body =
+      reply === "accepted"
+        ? {
+            profileId: "work-row",
+            harnessId: "opencode",
+            recordRevision: "18",
+            name: "Desk",
+          }
+        : reply === "forbidden"
+          ? {
+              statusCode: 403,
+              error: "private response detail",
+              code: "environment_action_forbidden",
+            }
+          : { error: "private response detail" };
     return Promise.resolve(
-      new Response(
-        JSON.stringify(
-          denied
-            ? {
-                statusCode: 403,
-                error: "private response detail",
-                code: "environment_action_forbidden",
-              }
-            : {
-                profileId: "work-row",
-                harnessId: "opencode",
-                recordRevision: "18",
-                name: "Desk",
-              },
-        ),
-        {
-          status: denied ? 403 : 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
     );
   });
   AUTH.service = fixture.service;
@@ -180,7 +193,7 @@ describe("ProfileEditDialog rename", () => {
   });
 
   it("a record with empty aliases uses the app name route when sign-in offers are absent", async () => {
-    const auth = await signedInAuthService(false);
+    const auth = await signedInAuthService("accepted");
     const named = managedProfileForTest({
       profileId: "work-row",
       label: "Work",
@@ -245,7 +258,7 @@ describe("ProfileEditDialog rename", () => {
   });
 
   it("a record with other names also uses the app name route", async () => {
-    const auth = await signedInAuthService(false);
+    const auth = await signedInAuthService("accepted");
     const named = managedProfileForTest({
       profileId: "work-row",
       label: "Work",
@@ -307,7 +320,7 @@ describe("ProfileEditDialog rename", () => {
   });
 
   it("a local row keeps its computer rename call", async () => {
-    const auth = await signedInAuthService(false);
+    const auth = await signedInAuthService("accepted");
     const local = legacyProfile({
       profileId: "work-row",
       label: "Work",
@@ -348,7 +361,7 @@ describe("ProfileEditDialog rename", () => {
   });
 
   it("a local row without answerProfileName keeps the rename fallback", async () => {
-    const auth = await signedInAuthService(false);
+    const auth = await signedInAuthService("accepted");
     const local = {
       ...legacyProfile({
         profileId: "work-row",
@@ -382,7 +395,7 @@ describe("ProfileEditDialog rename", () => {
   });
 
   it("shows the existing refusal sentence without exposing the server error", async () => {
-    const auth = await signedInAuthService(true);
+    const auth = await signedInAuthService("forbidden");
     const named = managedProfileForTest({
       profileId: "work-row",
       label: "Work",
@@ -421,4 +434,56 @@ describe("ProfileEditDialog rename", () => {
     ]);
     expect(host.listCalls.length).toBeGreaterThan(1);
   });
+
+  it.each([
+    { reply: "unauthorized" as const, message: "Please sign in again." },
+    { reply: "untyped-failure" as const, message: "Couldn't rename profile." },
+  ])(
+    "shows the safe $reply name failure and keeps editing available",
+    async ({ reply, message }) => {
+      const auth = await signedInAuthService(reply);
+      const named = managedProfileForTest({
+        profileId: "work-row",
+        label: "Work",
+        otherNames: [],
+      });
+      const host = mount({
+        profiles: [side, named],
+        profile: named,
+        methods: ["providers.list", "providers.answerProfileName"],
+        offersSignIns: false,
+      });
+      await screen.findByText("environment-profile-fixture");
+      await screen.findByRole("textbox", { name: "Profile name" });
+      const listReadsBeforeSave = host.listCalls.length;
+      fireEvent.change(nameField(), { target: { value: "Desk" } });
+      fireEvent.click(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" }),
+      );
+      await screen.findByText(message);
+      expect(screen.queryByText("private response detail")).toBeNull();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(nameField().value).toBe("Desk");
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Save changes" })
+          .disabled,
+      ).toBe(false);
+      expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+        "providers.setEnabled",
+      );
+      expect(host.rpcCalls.map((call) => call.method)).not.toContain(
+        "providers.answerProfileName",
+      );
+      expect(auth.requests).toEqual([
+        {
+          url: PROFILE_RECORD_URL,
+          method: "POST",
+          body: JSON.stringify({ harnessId: "opencode", name: "Desk" }),
+        },
+      ]);
+      await waitFor(() =>
+        expect(host.listCalls.length).toBeGreaterThan(listReadsBeforeSave),
+      );
+    },
+  );
 });
