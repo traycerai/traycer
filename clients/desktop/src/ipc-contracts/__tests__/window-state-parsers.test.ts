@@ -165,6 +165,22 @@ describe("parseLandingDraft", () => {
     expect(parsed?.content).toEqual(content);
   });
 
+  it("keeps the host a draft was opened for, and reads a missing one as none", () => {
+    const base = {
+      id: "draft-named",
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+      selection: null,
+      lastTouchedAt: 1,
+      settings: null,
+      composerMode: null,
+      workspace: null,
+    };
+    expect(
+      parseLandingDraft({ ...base, namedHostId: "host-a" })?.namedHostId,
+    ).toBe("host-a");
+    expect(parseLandingDraft(base)?.namedHostId).toBeUndefined();
+  });
+
   it("defaults a missing/non-finite `lastTouchedAt` to 0 and a missing `selection` to null", () => {
     expect(
       parseLandingDraft({
