@@ -1276,6 +1276,7 @@ function fakeEpicStoreState() {
     // so the real `useEpicNodeHostIds`/`useSurfaceHostPin` selector can see
     // this task's GUI hosts alongside `tuiAgents`' TUI ones.
     chatRecordHeads: {},
+    chatRecordStarters: {},
     chats: {
       allIds: chatRecords.map((record) => record.id),
       byId: Object.fromEntries(

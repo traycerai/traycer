@@ -22,6 +22,8 @@ import type {
   ChatRecordHeadStamp,
   ChatRecordSummaryV11,
   ChatRecordSummaryV12,
+  ChatRecordSummaryV15,
+  ChatRecordSummaryStreamV15,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -1599,6 +1601,156 @@ describe("chatRecordHeads merges on publishedAt, independently of revision", () 
     });
 
     expect(store.getState().chatRecordHeads).toEqual({});
+    session.handle.dispose();
+  });
+});
+
+describe("chatRecordStarters follows the served chat rows", () => {
+  function starterRecord(input: {
+    readonly chatId: string;
+    readonly ownerUserId: string;
+    readonly revision: number;
+    readonly starterUserId: string | null;
+  }): ChatRecordSummaryV12 & Pick<ChatRecordSummaryV15, "starterUserId"> {
+    const { starterUserId, ...overrides } = input;
+    return {
+      ...record(overrides),
+      head: null,
+      ...(starterUserId === null ? {} : { starterUserId }),
+    };
+  }
+
+  function starterStreamRecord(input: {
+    readonly chatId: string;
+    readonly ownerUserId: string;
+    readonly revision: number;
+    readonly starterUserId: string;
+  }): ChatRecordSummaryStreamV15 {
+    return {
+      chatId: input.chatId,
+      ownerUserId: input.ownerUserId,
+      originHostId: "host-1",
+      title: "A chat",
+      isTitleEditedByUser: false,
+      parentChatId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      archived: false,
+      archivedAt: null,
+      runSettingsSummary: "claude",
+      revision: input.revision,
+      visibility: "private",
+      origin: "own",
+      head: null,
+      starterUserId: input.starterUserId,
+    };
+  }
+
+  const keyOf = (ownerUserId: string, chatId: string): string =>
+    `${ownerUserId}\u001f${chatId}`;
+
+  it("folds starter ids from both the list answer and a stream upsert", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().applyChatRecords(
+      [
+        starterRecord({
+          chatId: "listed",
+          ownerUserId: "owner-list",
+          revision: 1,
+          starterUserId: "u-priya",
+        }),
+      ],
+      null,
+    );
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: starterStreamRecord({
+        chatId: "streamed",
+        ownerUserId: "owner-stream",
+        revision: 1,
+        starterUserId: "u-kai",
+      }),
+    });
+
+    expect(store.getState().chatRecordStarters).toEqual({
+      [keyOf("owner-list", "listed")]: "u-priya",
+      [keyOf("owner-stream", "streamed")]: "u-kai",
+    });
+    session.handle.dispose();
+  });
+
+  it("keeps a held starter when a later row omits it and reuses the table for the same starter", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    const first = starterRecord({
+      chatId: "chat-1",
+      ownerUserId: "owner-a",
+      revision: 1,
+      starterUserId: "u-priya",
+    });
+    store.getState().applyChatRecords([first], null);
+    const held = store.getState().chatRecordStarters;
+
+    store.getState().applyChatRecords(
+      [
+        starterRecord({
+          chatId: "chat-1",
+          ownerUserId: "owner-a",
+          revision: 2,
+          starterUserId: null,
+        }),
+      ],
+      null,
+    );
+    expect(store.getState().chatRecordStarters).toBe(held);
+
+    store.getState().applyChatRecords(
+      [
+        starterRecord({
+          chatId: "chat-1",
+          ownerUserId: "owner-a",
+          revision: 3,
+          starterUserId: "u-priya",
+        }),
+      ],
+      null,
+    );
+    expect(store.getState().chatRecordStarters).toBe(held);
+    session.handle.dispose();
+  });
+
+  it("drops every owner's starter for a chat when its stream removes that chat", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store.getState().applyChatRecords(
+      [
+        starterRecord({
+          chatId: "shared-chat-id",
+          ownerUserId: "owner-a",
+          revision: 1,
+          starterUserId: "u-priya",
+        }),
+        starterRecord({
+          chatId: "shared-chat-id",
+          ownerUserId: "owner-b",
+          revision: 1,
+          starterUserId: "u-kai",
+        }),
+      ],
+      null,
+    );
+
+    store.getState().applyChatRecordDelta({
+      kind: "remove",
+      epicId: "epic-test",
+      chatId: "shared-chat-id",
+      reason: "deleted",
+    });
+
+    expect(store.getState().chatRecordStarters).toEqual({});
     session.handle.dispose();
   });
 });

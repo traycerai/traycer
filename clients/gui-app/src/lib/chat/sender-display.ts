@@ -9,6 +9,10 @@ import type {
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { EpicCollaboratorView } from "@/hooks/epics/use-epic-collaborators-query";
 import type { GuiHarnessId } from "@traycer/protocol/host";
+import {
+  SYSTEM_ACTOR_ID,
+  type PersonIdentity,
+} from "@/lib/identity/person-identity";
 
 export interface SenderDisplayContext {
   readonly profile: AuthProfile | null;
@@ -41,6 +45,36 @@ export function resolveSenderLabel(
       (collaborator) => collaborator.userId === sender.userId,
     )?.displayName ?? sender.userId
   );
+}
+
+/**
+ * A user row's sender in a task chat: the viewer as "You", anyone else by the
+ * name `identify` gives (the team's directory on a team host, a member who has
+ * left included), else as {@link resolveSenderLabel}. `"system"` names no one,
+ * so its label is empty: never a member, never an id.
+ */
+export function resolvePersonSenderLabel(
+  sender: OpenUserMessageSender,
+  context: SenderDisplayContext,
+  identify: (userId: string) => PersonIdentity | null,
+): string {
+  if (sender.type === "user" && sender.userId === SYSTEM_ACTOR_ID) return "";
+  const other = otherPersonSenderId(sender, context.profile);
+  const name = other === null ? null : (identify(other)?.displayName ?? null);
+  return name ?? resolveSenderLabel(sender, context);
+}
+
+/**
+ * The person a user row draws a picture of: a person other than the viewer,
+ * never an agent and never `"system"`.
+ */
+export function otherPersonSenderId(
+  sender: OpenUserMessageSender,
+  profile: AuthProfile | null,
+): string | null {
+  if (sender.type !== "user") return null;
+  if (sender.userId === SYSTEM_ACTOR_ID) return null;
+  return profile?.userId === sender.userId ? null : sender.userId;
 }
 
 export interface AgentSenderDisplay {

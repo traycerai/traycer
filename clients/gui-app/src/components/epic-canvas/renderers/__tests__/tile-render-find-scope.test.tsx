@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { renderTile } from "@/components/epic-canvas/renderers/tile-render";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import {
   useTileFindStore,
@@ -179,6 +180,7 @@ describe("renderTile tile find scope", () => {
             isActive: true,
           })}
         </>,
+        { wrapper: WithTestQueryClient },
       );
 
       const scope = screen.getByTestId("tile-find-scope");
@@ -211,6 +213,7 @@ describe("renderTile tile find scope", () => {
           isActive: false,
         })}
       </>,
+      { wrapper: WithTestQueryClient },
     );
 
     await waitFor(() => {
@@ -233,6 +236,7 @@ describe("renderTile tile find scope", () => {
           isActive: true,
         })}
       </>,
+      { wrapper: WithTestQueryClient },
     );
 
     await waitFor(() => {
