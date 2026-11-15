@@ -322,7 +322,7 @@ export function useHostQueryWithResponseMap<
     withHostQueryErrorBoundary(method, async () => {
       try {
         if (client === null) {
-          return Promise.reject<TData>(hostClientUnavailableError(method));
+          throw hostClientUnavailableError(method);
         }
         args.preflight?.();
         // The payload, which is `params` unless a caller derives one per
@@ -352,7 +352,7 @@ export function useHostQueryWithResponseMap<
         } else {
           response = await client.requestWithSignal(method, payload, signal);
         }
-        return mapResponse({
+        return await mapResponse({
           response,
           queryClient,
           queryKey,
