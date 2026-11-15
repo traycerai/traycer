@@ -34,7 +34,9 @@ function currentSelection(
 
 /**
  * A switch to `path`, or new arguments for the current shell (`path: null`).
- * A switch that names no arguments takes the remembered ones.
+ * A switch that names no arguments takes the remembered ones. New arguments
+ * while the computer follows the system default are saved on this computer
+ * and propose nothing.
  */
 export function shellSetSelection(
   request: ConfigShellSetRequestV10,
@@ -45,7 +47,9 @@ export function shellSetSelection(
   }
   if (config === undefined) return NOT_STATED;
   if (request.path === null) {
-    return { kind: "shell", path: config.path, args: [...request.args] };
+    return config.synthesised
+      ? NOT_STATED
+      : { kind: "shell", path: config.path, args: [...request.args] };
   }
   return {
     kind: "shell",
