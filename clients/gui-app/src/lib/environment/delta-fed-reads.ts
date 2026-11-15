@@ -11,10 +11,10 @@ export const SECRET_READS = [
  * settings. A read joins only once it is shown stale without it:
  * `config.env.list` answers the shared value of a variable this host keeps
  * its own value for, which a new revision moves while this host's own env
- * stays as it is.
+ * stays as it is. The secrets reads are not host reads: the app reads them
+ * from authn, and the same triggers re-read them as {@link SECRET_READS}.
  */
 export const DELTA_FED_READS = [
-  ...SECRET_READS,
   "providers.list",
   "config.env.list",
   "config.agentMemories.get",
