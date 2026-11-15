@@ -1037,20 +1037,22 @@ describe("local auth-session restore", () => {
       }
       expect(sentTokens()).toContain("host-only-token");
 
-      const requestMethodsFor = (socket: FakeNativeWebSocket): string[] =>
-        sentFramesOfKind(socket, "request").flatMap((frame) =>
+      const subscriptionMethodsFor = (socket: FakeNativeWebSocket): string[] =>
+        sentFramesOfKind(socket, "subscribe").flatMap((frame) =>
           typeof frame.method === "string" ? [frame.method] : [],
         );
       await vi.waitFor(() => {
-        const methods = initialSockets.flatMap(requestMethodsFor);
+        const methods = initialSockets.flatMap(subscriptionMethodsFor);
         expect(methods).toContain("host.hostInventory.subscribe");
         expect(methods).toContain("host.browserPreparation.subscribe");
       });
       const inventorySockets = initialSockets.filter((socket) =>
-        requestMethodsFor(socket).includes("host.hostInventory.subscribe"),
+        subscriptionMethodsFor(socket).includes("host.hostInventory.subscribe"),
       );
       const browserPreparationSockets = initialSockets.filter((socket) =>
-        requestMethodsFor(socket).includes("host.browserPreparation.subscribe"),
+        subscriptionMethodsFor(socket).includes(
+          "host.browserPreparation.subscribe",
+        ),
       );
       expect(inventorySockets).toHaveLength(1);
       expect(browserPreparationSockets).toHaveLength(1);
@@ -1080,7 +1082,9 @@ describe("local auth-session restore", () => {
       expect(FakeNativeWebSocket.instances).toHaveLength(2);
       const inventorySocketsAfterReconnect =
         FakeNativeWebSocket.instances.filter((socket) =>
-          requestMethodsFor(socket).includes("host.hostInventory.subscribe"),
+          subscriptionMethodsFor(socket).includes(
+            "host.hostInventory.subscribe",
+          ),
         );
       expect(inventorySocketsAfterReconnect).toHaveLength(1);
       expect(inventorySocketsAfterReconnect.at(0)).toBe(initialSocket);
