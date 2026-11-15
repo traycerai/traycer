@@ -74,10 +74,7 @@ import { threadOriginRow, type ThreadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
-import type {
-  BotSessionOpen,
-  BotTurnOpen,
-} from "@/stores/bots/bot-open-thread-store";
+import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
@@ -163,9 +160,8 @@ const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
  * channel's box (`onEditPost`), since its replacement is a new post.
  *
  * A reply's receipt, and a failed post's, opens its turn's session in place
- * of the channel (`onOpenTurn`), and "Thread session" in the header opens the
- * thread's session there (`onOpenSession`), read-only. The thread
- * session's routing card sits above the panel's box.
+ * of the channel (`onOpenTurn`). The thread session's routing card sits above
+ * the panel's box.
  *
  * A question card in the thread answers in the thread. A member whose answer
  * someone else's overtook takes it to the discussion: the thread's box, with
@@ -200,14 +196,12 @@ export function BotThreadPanel(props: {
   readonly onEditPost: (edit: BotComposerEdit) => void;
   /** Opens a turn of the bot: its session, in place of the channel. */
   readonly onOpenTurn: BotTurnOpen;
-  /** Opens the thread's session in place of the channel. */
-  readonly onOpenSession: BotSessionOpen;
   /** A message of the thread its replies land on as they open; `null` keeps where they open. */
   readonly landOn: BotTranscriptLanding | null;
   /** A quote for the panel's box to add to what it shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
 }): ReactNode {
-  const { botTitle, onClose, onOpenSession } = props;
+  const { botTitle, onClose } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
   const threadId =
     props.thread.kind === "posted"
@@ -254,24 +248,6 @@ export function BotThreadPanel(props: {
           </span>
         </div>
         <div hidden={focusLayout} className="contents">
-          {thread === null ? null : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              data-testid="bot-thread-session"
-              onClick={() =>
-                onOpenSession({
-                  chatId: thread.sessionChatId,
-                  threadId: thread.threadId,
-                  messageId: null,
-                  sendPostId: null,
-                })
-              }
-            >
-              Thread session
-            </Button>
-          )}
           {threadId === null ? null : (
             <BotThreadFollowControl
               botId={props.botId}
