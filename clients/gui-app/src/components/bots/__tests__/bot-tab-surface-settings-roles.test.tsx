@@ -38,6 +38,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
+import type { LastFailedAttempt } from "@traycer/protocol/host/agent/gui/subscribe";
+import { ManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
+import {
+  FAILED_CLAUDE_TUPLE,
+  lastFailedAttempt,
+} from "@/components/chat/fallback/__tests__/fallback-fixtures";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import {
@@ -56,6 +62,46 @@ const panel = vi.hoisted(() => ({
   /** What a write of the run settings is refused with; `null` is accepted. */
   runSettingsRefusal: null as Error | null,
 }));
+
+// The failed turn's card reads the chat's session store; the tab's channel
+// view below draws the real card for it.
+const failed = vi.hoisted(() => {
+  type Slice = {
+    lastFailedAttempt: LastFailedAttempt | undefined;
+    access: { readonly canAct: boolean };
+    connectionStatus: "open";
+    chat: null;
+    publishConfirmedManualFallbackAction: () => void;
+    publishUnattendedFallbackOutcome: () => void;
+  };
+  let state: Slice = {
+    lastFailedAttempt: undefined,
+    access: { canAct: true },
+    connectionStatus: "open",
+    chat: null,
+    publishConfirmedManualFallbackAction: () => undefined,
+    publishUnattendedFallbackOutcome: () => undefined,
+  };
+  const listeners = new Set<() => void>();
+  return {
+    shown: false,
+    store: {
+      getState: (): Slice => state,
+      getInitialState: (): Slice => state,
+      setState: (next: Partial<Slice>): Slice => {
+        state = { ...state, ...next };
+        for (const listener of listeners) listener();
+        return state;
+      },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    },
+  };
+});
 
 vi.mock(
   "@/hooks/bots/use-environment-host-lists-query",
@@ -149,8 +195,35 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => botThreadListQueryMock);
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
 }));
+// The real card of the failed turn is drawn where the channel would draw it: for
+// the bot's own chat (its id is the epic id, as `bot-failed-recovery.tsx` passes
+// it), and for a chat that is not a bot's.
 vi.mock("@/components/bots/bot-channel-view", () => ({
-  BotChannelView: () => null,
+  BotChannelView: (props: {
+    botId: string;
+    hostId: string;
+    trunkChatId: string;
+  }) =>
+    failed.shown ? (
+      <>
+        <div data-testid="bot-failed-card">
+          <ManualRungActions
+            turnId={FAILED_TURN_ID}
+            epicId={props.botId}
+            chatId={props.trunkChatId}
+            hostId={props.hostId}
+          />
+        </div>
+        <div data-testid="other-chat-failed-card">
+          <ManualRungActions
+            turnId={FAILED_TURN_ID}
+            epicId="epic-not-a-bot"
+            chatId="chat-not-a-bot"
+            hostId={props.hostId}
+          />
+        </div>
+      </>
+    ) : null,
 }));
 vi.mock("@/components/bots/bot-session-view", () => ({
   BotSessionView: () => null,
@@ -160,6 +233,49 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
   BotThreadsView: () => null,
+}));
+
+// The failed-turn card's own boundaries, as its suite
+// (`fallback-manual-rungs.test.tsx`) doubles them.
+vi.mock("sonner", () => ({ toast: vi.fn() }));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: undefined }),
+}));
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/chat/fallback/fallback-identity")
+    >()),
+    useFallbackModelLabels: () => (_harnessId: string, model: string) => model,
+  }),
+);
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
+  useExistingChatSessionHandle: () => ({ store: failed.store }),
+}));
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: () => 0,
+}));
+vi.mock("@/components/chat/fallback/routing-destination-picker", () => ({
+  RoutingDestinationPicker: (props: { triggerLabel: string }) => (
+    <button type="button">{props.triggerLabel}</button>
+  ),
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => ({ label: "Studio" }),
+}));
+vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
+  useHostScopedMutationForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    variables: undefined,
+  }),
+}));
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: vi.fn() }),
 }));
 
 // The panel's own boundaries.
@@ -257,6 +373,9 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 
+const FAILED_TURN_ID = "turn-failed";
+const RESETS_AT = new Date(2026, 5, 15, 15, 0, 0).getTime();
+
 let queryClient = new QueryClient();
 
 beforeEach(() => {
@@ -267,6 +386,8 @@ beforeEach(() => {
   panel.stores.length = 0;
   panel.applied.length = 0;
   panel.runSettingsRefusal = null;
+  failed.shown = false;
+  failed.store.setState({ lastFailedAttempt: undefined });
 });
 
 afterEach(() => {
@@ -417,5 +538,81 @@ describe("a bot's settings panel by the reader's role", () => {
         "Your role no longer lets you change this bot.",
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("a bot's failed turn by the reader's role", () => {
+  function failTurn(): void {
+    failed.shown = true;
+    failed.store.setState({
+      lastFailedAttempt: lastFailedAttempt({
+        userMessageId: "user-message-failed",
+        turnId: FAILED_TURN_ID,
+        failure: {
+          reason: "rate_limit",
+          resetsAt: RESETS_AT,
+          resetsAtSource: "provider",
+        },
+        eligibleRungs: ["retry", "switch", "wait_once"],
+        waitDisposition: "eligible",
+        switchDisposition: "eligible",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+    });
+  }
+
+  async function mountTab(): Promise<void> {
+    failTurn();
+    render(
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+    await screen.findByTestId("bot-failed-card");
+  }
+
+  function buttonLabels(testId: string): string[] {
+    return within(screen.getByTestId(testId))
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+  }
+
+  it("offers a team's Viewer Retry and Wait until, and no Switch to…", async () => {
+    listAnswers("organization", "viewer", "env-team");
+
+    await mountTab();
+
+    expect(buttonLabels("bot-failed-card")).toEqual([
+      expect.stringMatching(/^Wait until /),
+      "Retry",
+    ]);
+  });
+
+  it("offers a team's Editor Switch to…", async () => {
+    listAnswers("organization", "editor", "env-team");
+
+    await mountTab();
+
+    expect(buttonLabels("bot-failed-card")).toContain("Switch to…");
+  });
+
+  it("offers Switch to… while the environment list has not answered", async () => {
+    mocks.state.environmentsStatus = "error";
+    mocks.state.environmentsKept = false;
+
+    await mountTab();
+
+    expect(buttonLabels("bot-failed-card")).toContain("Switch to…");
+  });
+
+  it("leaves a chat that is not the bot's own its Switch to… for the same Viewer", async () => {
+    listAnswers("organization", "viewer", "env-team");
+
+    await mountTab();
+
+    expect(buttonLabels("bot-failed-card")).not.toContain("Switch to…");
+    expect(buttonLabels("other-chat-failed-card")).toContain("Switch to…");
   });
 });
