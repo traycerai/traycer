@@ -15,7 +15,6 @@ import {
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
-import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { useSecretsRead } from "@/hooks/environment/use-environment-secrets-calls";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -115,7 +114,6 @@ function LocalEnvironmentReaders(): ReactNode {
 }
 
 function FocusReaders(): ReactNode {
-  useRereadHostReadsOnFocus(LOCAL_HOST_ID);
   const localClient = requireTeamHostClient();
   const remoteClient = requireViewingHostClient();
   useHostQuery<HostRpcRegistry, "providers.list">({
