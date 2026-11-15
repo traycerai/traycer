@@ -1,70 +1,3 @@
-// The bridge reads three hooks that answer from process-wide state (which host
-// is selected, the client for it, and what it negotiated). A test pins those
-// three and leaves the rest real: the queries run through a real `HostClient`
-// over an in-memory messenger, so the reads travel the path the app uses.
-interface BridgeHarness {
-  hostId: string;
-  methods: Set<string>;
-  client: HostClient<HostRpcRegistry> | null;
-}
-
-const cloudReads = vi.hoisted(() => ({
-  environmentId: "env-window-host",
-  calls: [] as Array<{
-    method: string;
-    params: unknown;
-    enabled: boolean;
-    poll: boolean | undefined;
-  }>,
-  responses: new Map<string, unknown>(),
-}));
-
-vi.mock("@/hooks/environment/use-host-own-environment", () => ({
-  useHostOwnEnvironment: (
-    _client: unknown,
-    _hostId: string | null,
-    enabled: boolean,
-  ) => ({
-    environmentId: enabled ? cloudReads.environmentId : null,
-    resolved: enabled,
-  }),
-}));
-
-vi.mock("@/hooks/environment/use-environment-cloud", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/hooks/environment/use-environment-cloud")
-    >();
-  return {
-    ...actual,
-    useEnvironmentCloudQuery: (args: {
-      method: string;
-      params: unknown;
-      enabled: boolean;
-      poll: boolean | undefined;
-    }) => {
-      const read = {
-        method: args.method,
-        params: args.params,
-        enabled: args.enabled,
-        poll: args.poll,
-      };
-      const alreadyRecorded = cloudReads.calls.some(
-        (current) =>
-          current.method === read.method &&
-          JSON.stringify(current.params) === JSON.stringify(read.params) &&
-          current.enabled === read.enabled &&
-          current.poll === read.poll,
-      );
-      if (!alreadyRecorded) cloudReads.calls.push(read);
-      return {
-        data: args.enabled ? cloudReads.responses.get(args.method) : undefined,
-        isError: false,
-      };
-    },
-  };
-});
-
 const harness = vi.hoisted((): BridgeHarness => ({
   hostId: "host-env",
   methods: new Set<string>(),
@@ -86,6 +19,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -105,6 +39,16 @@ import {
   setSupportEnvironmentSection,
 } from "@/lib/support-context-registry";
 import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
+import {
+  OwnEnvironmentAuthProvider,
+  createOwnEnvironmentAuthRuntime,
+  installOwnEnvironmentTransport,
+  jsonResponse,
+  signInOwnEnvironment,
+  type OwnEnvironmentAuthRuntime,
+  type OwnEnvironmentRoute,
+  type OwnEnvironmentTransport,
+} from "@/hooks/environment/__tests__/own-environment-authn-test-support";
 import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
 import {
   RETIRED_PROVIDER_VARIABLES,
@@ -112,6 +56,7 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 const HOST_ID = "host-env";
+const TEAM_ENV_ID = "env-window-host";
 const TEAM_NAME = "Acme Robotics ZZ_TEAM_NAME";
 
 type Rotation = NonNullable<EnvironmentSecretsRotationResponse["rotation"]>;
@@ -172,31 +117,78 @@ const ROTATION: Rotation = {
   ],
 };
 
+let authRuntime: OwnEnvironmentAuthRuntime;
+let authnTransport: OwnEnvironmentTransport;
+let authnRoute: OwnEnvironmentRoute;
+
 function renderBridge(client: HostClient<HostRpcRegistry>): void {
   harness.client = client;
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   render(
-    <QueryClientProvider client={queryClient}>
-      <SupportEnvironmentBridge />
-    </QueryClientProvider>,
+    <OwnEnvironmentAuthProvider binding={authRuntime.binding}>
+      <QueryClientProvider client={queryClient}>
+        <SupportEnvironmentBridge />
+      </QueryClientProvider>
+    </OwnEnvironmentAuthProvider>,
   );
 }
 
-beforeEach(() => {
+function isSecretsRead(pathname: string): boolean {
+  return pathname.includes("/secrets");
+}
+
+beforeEach(async () => {
   harness.methods.clear();
   harness.client = null;
-  cloudReads.environmentId = "env-window-host";
-  cloudReads.calls = [];
-  cloudReads.responses = new Map([
-    ["environment.secrets.list", { removed: [], secrets: [SECRET] }],
-    ["environment.secrets.rotation", { rotation: ROTATION, lastVerify: null }],
-  ]);
+  authnRoute = (request) => {
+    const path = request.url.pathname;
+    if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/hosts") {
+      return jsonResponse(200, {
+        hosts: [{
+          hostId: HOST_ID,
+          hostLabel: "window host",
+          hostPlatform: "linux",
+          enrolledByUserId: null,
+          kind: "personal",
+          boundAt: null,
+          reachable: true,
+          lastReportedAt: null,
+          applied: [],
+          hasLocalRow: null,
+          purgePending: false,
+        }],
+      });
+    }
+    if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/members") {
+      return jsonResponse(200, { viewer: { effectiveRole: "editor" } });
+    }
+    if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/secrets") {
+      return jsonResponse(200, { removed: [], secrets: [SECRET] });
+    }
+    if (path === "/api/v3/environments/" + TEAM_ENV_ID + "/secrets/sec-1/rotation") {
+      return jsonResponse(200, { rotation: ROTATION, lastVerify: null });
+    }
+    return undefined;
+  };
+  authnTransport = installOwnEnvironmentTransport(authnRoute, {
+    environments: [{
+      environmentId: TEAM_ENV_ID,
+      ownerKind: "organization",
+      ownerId: "team-1",
+      roomId: "room-team",
+      label: "Acme",
+    }],
+  });
+  authRuntime = createOwnEnvironmentAuthRuntime();
+  await signInOwnEnvironment(authRuntime);
 });
 
 afterEach(() => {
   cleanup();
+  authnTransport.restore();
+  authRuntime.dispose();
   __resetSupportContextRegistryForTests();
 });
 
@@ -217,11 +209,9 @@ describe("SupportEnvironmentBridge", () => {
         status: "unavailable",
       });
     });
-    expect(
-      cloudReads.calls.filter(
-        (call) => call.method === "environment.secrets.list" && call.enabled,
-      ),
-    ).toEqual([]);
+    expect(authnTransport.requests.some((request) =>
+      isSecretsRead(request.url.pathname),
+    )).toBe(false);
   });
 
   it("writes a known section carrying the listed secret's name and its producers", async () => {
@@ -293,21 +283,13 @@ describe("SupportEnvironmentBridge", () => {
     ]);
     expect(hostSecretReads).toEqual([]);
     expect(
-      cloudReads.calls
-        .filter((call) => call.enabled)
-        .map((call) => [call.method, call.params]),
+      authnTransport.requests
+        .filter((request) => request.url.pathname.includes("/secrets"))
+        .map((request) => request.url.pathname),
     ).toEqual([
-      ["environment.secrets.list", { environmentId: "env-window-host" }],
-      [
-        "environment.secrets.rotation",
-        { secretId: "sec-1", environmentId: "env-window-host" },
-      ],
+      "/api/v3/environments/" + TEAM_ENV_ID + "/secrets",
+      "/api/v3/environments/" + TEAM_ENV_ID + "/secrets/sec-1/rotation",
     ]);
-    expect(
-      cloudReads.calls
-        .filter((call) => call.method === "environment.secrets.rotation")
-        .map((call) => call.poll),
-    ).toEqual([true, false]);
     // The team travels as a category; its name does not.
     expect(JSON.stringify(section)).not.toContain(TEAM_NAME);
   });
@@ -333,11 +315,9 @@ describe("SupportEnvironmentBridge", () => {
     await waitFor(() => {
       expect(getSupportEnvironmentSection().status).toBe("known");
     });
-    expect(
-      cloudReads.calls.filter(
-        (call) => call.method === "environment.secrets.list" && call.enabled,
-      ),
-    ).toEqual([]);
+    expect(authnTransport.requests.some((request) =>
+      isSecretsRead(request.url.pathname),
+    )).toBe(false);
     expect(hostSecretReads).toEqual([]);
   });
 

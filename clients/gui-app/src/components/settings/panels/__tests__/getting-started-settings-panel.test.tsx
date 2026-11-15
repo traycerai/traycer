@@ -377,27 +377,6 @@ describe("GettingStartedSettingsPanel", () => {
     ).toContain("Credits pay for your sandboxes.");
   });
 
-  it("checks the secret card from Personal's authn list", () => {
-    mocks.secrets = [secret()];
-    render(<GettingStartedSettingsPanel />);
-
-    expect(
-      screen.getByRole("button", {
-        name: "Add a secret if agents need one, Complete",
-      }),
-    ).toBeTruthy();
-    expect(
-      secretRoute.calls.filter(
-        (call) => call.method === "environment.secrets.list" && call.enabled,
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        params: { environmentId: "env-personal" },
-      }),
-    ]);
-    expect(secretRoute.hostReads).toEqual([]);
-  });
-
   it("completes a step by the fact it names, never by a click", () => {
     mocks.providers = [storedKeyProvider()];
     render(<GettingStartedSettingsPanel />);

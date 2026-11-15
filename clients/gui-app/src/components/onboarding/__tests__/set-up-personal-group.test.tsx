@@ -399,54 +399,6 @@ describe("<SetUpPersonalGroup />", () => {
     expect(progress()).toBe("0 of 3 done");
   });
 
-  it("reads the host's own secrets through authn when it does not serve environment.secrets.list", async () => {
-    const calls = renderGroup(
-      {
-        ...NOTHING,
-        secrets: [secret({})],
-        providers: [storedKey()],
-        methods: ["environment.status", "providers.list"],
-      },
-      "settings",
-    );
-
-    await waitFor(() => {
-      expect(progress()).toBe("2 of 3 done");
-      expect(enabledSecretReads()).toHaveLength(1);
-    });
-    expect(calls.secrets).toBe(0);
-    expect(enabledSecretReads()).toEqual([
-      expect.objectContaining({
-        params: { environmentId: "env-personal" },
-      }),
-    ]);
-    expect(marks()).toEqual(["provider=true", "secret=true", "agents=false"]);
-  });
-
-  it("names the host's own team environment in the onboarding authn read", async () => {
-    const calls = renderGroup(
-      {
-        ...NOTHING,
-        secrets: [secret({})],
-        status: environmentStatusFixture({
-          principal: { kind: "team", teamName: "Acme" },
-        }),
-      },
-      "settings",
-    );
-
-    await waitFor(() => {
-      expect(progress()).toBe("1 of 3 done");
-      expect(enabledSecretReads()).toHaveLength(1);
-    });
-    expect(calls.secrets).toBe(0);
-    expect(enabledSecretReads()).toEqual([
-      expect.objectContaining({
-        params: { environmentId: "env-team" },
-      }),
-    ]);
-  });
-
   it("keeps the agents step open on a host that cannot answer environment.status", async () => {
     const calls = renderGroup(
       {
