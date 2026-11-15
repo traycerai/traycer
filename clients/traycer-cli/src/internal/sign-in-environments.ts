@@ -10,14 +10,17 @@ import {
 import type { RevalidateOutcome } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { validateAuthTokenIdentityAccessOnly } from "../../../shared/auth/auth-validation";
 import { config } from "../config";
-import type { CliError } from "../runner/errors";
+import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
 } from "../store/credentials-store";
 import type { SignInRevalidator } from "./cli-host-tokens";
 import { resolveHostAuth } from "./host-auth";
-import { hostTokenFailureCliError } from "./host-door-words";
+import {
+  AUTHN_UNREACHABLE_MESSAGE,
+  hostTokenFailureCliError,
+} from "./host-door-words";
 
 /** One environment the sign-in lists, as the server describes it. */
 export type SignInEnvironment = Pick<
@@ -135,8 +138,10 @@ function rejected(): CliError {
 }
 
 function unreachable(): CliError {
-  return hostTokenFailureCliError({
-    kind: "unavailable",
-    detail: "the sign-in's environments could not be read",
+  return cliError({
+    code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+    message: AUTHN_UNREACHABLE_MESSAGE,
+    details: null,
+    exitCode: 1,
   });
 }

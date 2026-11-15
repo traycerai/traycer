@@ -1,6 +1,6 @@
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
-import { CliError, CLI_ERROR_CODES } from "../runner/errors";
+import { CliError, cliError, CLI_ERROR_CODES } from "../runner/errors";
 import {
   listBots,
   openLocalStreamClient,
@@ -9,6 +9,7 @@ import {
 } from "../internal/bot-host";
 import { resolveHostAuth } from "../internal/host-auth";
 import {
+  HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
   hostTokenFailureCliError,
   signedOutCliError,
   storedCredentialRejectedCliError,
@@ -133,9 +134,11 @@ async function environmentsOnThisComputer(
     case "unauthorized":
       throw storedCredentialRejectedCliError();
     case "network-error":
-      throw hostTokenFailureCliError({
-        kind: "unavailable",
-        detail: "this computer's owner could not be read",
+      throw cliError({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+        details: null,
+        exitCode: 1,
       });
     case "not-found":
       return signedIn;

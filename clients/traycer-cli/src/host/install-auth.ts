@@ -18,6 +18,7 @@ import {
   type StoredCredentials,
 } from "@traycer/protocol/config/credentials";
 import { cliCredentialsPath } from "../store/paths";
+import { HOST_OWNERSHIP_UNCONFIRMED_MESSAGE } from "../internal/host-door-words";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 import { runDeviceAuthFlow } from "../auth/login-flow";
 import {
@@ -546,7 +547,7 @@ export async function useInstalledHostTeam(
   if (host === undefined) {
     throw cliError({
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-      message: "This computer's ownership could not be confirmed. Try again.",
+      message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
       details: null,
       exitCode: 1,
     });
