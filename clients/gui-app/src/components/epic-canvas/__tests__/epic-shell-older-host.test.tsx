@@ -333,7 +333,7 @@ function installStreams(): {
     opened: () => opened,
     closed: () => closed,
     deliverSnapshot: (index) => {
-      const stream = callbacks[index];
+      const stream = callbacks.at(index);
       if (stream === undefined) throw new Error("expected that stream");
       const meta: SnapshotMetaEpic = {
         schemaVersion: "2.0.0",
