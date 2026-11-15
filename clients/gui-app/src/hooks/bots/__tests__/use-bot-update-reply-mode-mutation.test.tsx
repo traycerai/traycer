@@ -54,10 +54,10 @@ describe("useBotUpdateReplyModeMutation", () => {
       auth: {
         getIdentityGeneration: () => 1,
         isIdentityCurrent: (generation) => generation === 1,
-        updateBotReplyMode: async (request) => {
+        updateBotReplyMode: (request) => {
           sent.push(request);
-          return {
-            kind: "ok",
+          return Promise.resolve({
+            kind: "ok" as const,
             bot: {
               botId: request.botId,
               harness: "claude",
@@ -66,7 +66,7 @@ describe("useBotUpdateReplyModeMutation", () => {
               profile: null,
               replyMode: request.replyMode,
             },
-          };
+          });
         },
       },
     };
@@ -98,11 +98,12 @@ describe("useBotUpdateReplyModeMutation", () => {
       auth: {
         getIdentityGeneration: () => 1,
         isIdentityCurrent: (generation) => generation === 1,
-        updateBotReplyMode: async () => ({
-          kind: "refused",
-          status: 422,
-          message: "Replies must stay in threads",
-        }),
+        updateBotReplyMode: () =>
+          Promise.resolve({
+            kind: "refused" as const,
+            status: 422,
+            message: "Replies must stay in threads",
+          }),
       },
     };
     const local = listKey("host-local");

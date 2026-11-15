@@ -1,4 +1,4 @@
-import { useState, type ComponentProps } from "react";
+import { useState, type ComponentProps, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -16,6 +16,12 @@ import type {
 import type { FallbackRungRefusalDetail } from "@traycer/protocol/host/chat-fallback";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { useBotMayChange } from "@/hooks/bots/use-bot-may-change";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import {
+  BotMayChangeContext,
+  readerMayChangeBot,
+} from "@/hooks/bots/use-reader-may-change-bot";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { REASON_ELIGIBLE_RUNGS } from "@traycer/protocol/host/fallback-policy";
 import { AGENT_FAILURE_REASONS } from "@traycer/protocol/persistence/epic/content-blocks";
 import { recordFailedTurnRefusal } from "@/components/chat/fallback/failed-turn-actions";
@@ -177,37 +183,8 @@ const modelLabelOverride = vi.hoisted(() => ({
 }));
 
 const botSwitchGate = vi.hoisted(() => ({
-  botList: undefined as
-    | {
-        readonly bots: ReadonlyArray<{
-          readonly botId: string;
-          readonly environmentId: string;
-        }>;
-      }
-    | undefined,
-  environments: undefined as
-    | {
-        readonly environments: ReadonlyArray<{
-          readonly environmentId: string;
-          readonly ownerKind: "team" | "user";
-          readonly effectiveRole:
-            | "admin"
-            | "editor"
-            | "viewer"
-            | "owner"
-            | null;
-        }>;
-      }
-    | undefined,
-  botListReads: 0,
+  environments: undefined as EnvironmentListResponseV11 | undefined,
   environmentListEnabled: [] as boolean[],
-}));
-
-vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: (_client: unknown, enabled: boolean) => {
-    if (enabled) botSwitchGate.botListReads += 1;
-    return { data: botSwitchGate.botList };
-  },
 }));
 
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
@@ -488,16 +465,36 @@ function renderActions(turnId: string) {
   );
 }
 
+const BOT_ENVIRONMENT_ID = "env-a";
+
+/**
+ * What a bot's surface does for the chats under it: the reader's right to
+ * change the bot's environment, from the account's environment list, as the
+ * context the failed turn's Switch reads.
+ */
+function BotSurfaceRole(props: { readonly children: ReactNode }): ReactNode {
+  const environments = useEnvironmentListQuery(true);
+  return (
+    <BotMayChangeContext
+      value={readerMayChangeBot(environments.data, BOT_ENVIRONMENT_ID)}
+    >
+      {props.children}
+    </BotMayChangeContext>
+  );
+}
+
 function botActionsTree(turnId: string, surfaceBotId: string) {
   return (
     <BotIdentityContext
       value={{ botId: surfaceBotId, title: "Release Bot", owner: null }}
     >
-      <TabHostProvider hostId={HOST_ID}>
-        <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
-          <FallbackManualRungActions turnId={turnId} />
-        </ChatTranscriptProvider>
-      </TabHostProvider>
+      <BotSurfaceRole>
+        <TabHostProvider hostId={HOST_ID}>
+          <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>
+            <FallbackManualRungActions turnId={turnId} />
+          </ChatTranscriptProvider>
+        </TabHostProvider>
+      </BotSurfaceRole>
     </BotIdentityContext>
   );
 }
@@ -514,12 +511,30 @@ function MayChangeProbe(props: { readonly environmentId: string | null }) {
   );
 }
 
+function environmentRow(
+  environmentId: string,
+  ownerKind: "organization" | "user",
+  effectiveRole: "admin" | "editor" | "viewer" | "owner",
+): EnvironmentListResponseV11["environments"][number] {
+  return {
+    environmentId,
+    ownerKind,
+    ownerId: "owner-1",
+    roomId: "room-1",
+    label: "Acme",
+    effectiveRole,
+    kind: ownerKind === "user" ? "personal" : "team",
+    hostCount: 1,
+    providerHandle: null,
+  };
+}
+
 function setBotEnvironmentRole(
   environmentId: string,
   role: "admin" | "editor" | "viewer",
 ): void {
   botSwitchGate.environments = {
-    environments: [{ environmentId, ownerKind: "team", effectiveRole: role }],
+    environments: [environmentRow(environmentId, "organization", role)],
   };
 }
 
@@ -550,9 +565,7 @@ describe("FallbackManualRungActions", () => {
     // Pass-through by default, so every model string pinned below reads back
     // the tuple it was seeded with.
     modelLabelOverride.value = null;
-    botSwitchGate.botList = undefined;
     botSwitchGate.environments = undefined;
-    botSwitchGate.botListReads = 0;
     botSwitchGate.environmentListEnabled.length = 0;
   });
 
@@ -591,38 +604,11 @@ describe("FallbackManualRungActions", () => {
     expect(text).not.toContain("rate_limit");
     // The retired text-link entry into settings is gone from this card.
     expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
-    expect(botSwitchGate.botListReads).toBe(0);
     expect(botSwitchGate.environmentListEnabled).toEqual([]);
   });
 
-  it("offers Switch and retry to an Editor on the bot's chat", () => {
-    botSwitchGate.botList = {
-      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
-    };
-    setBotEnvironmentRole("env-a", "editor");
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
-      }),
-    );
-    renderBotActions(TURN_ID);
-
-    expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
-    expect(lastPickerProps().triggerLabel).toBe("Switch to…");
-    expect(botSwitchGate.botListReads).toBe(1);
-    expect(botSwitchGate.environmentListEnabled).toEqual([true]);
-  });
-
   it("hides Switch for a Viewer while Retry and Wait stay, with the first remaining action filled", () => {
-    botSwitchGate.botList = {
-      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
-    };
-    setBotEnvironmentRole("env-a", "viewer");
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "viewer");
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -650,46 +636,28 @@ describe("FallbackManualRungActions", () => {
     expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
   });
 
-  it("keeps Switch hidden while the bot list or the environment role is unresolved", () => {
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
-      }),
-    );
-    renderBotActions(TURN_ID);
-
-    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
-    expect(botSwitchGate.botListReads).toBe(1);
-    expect(botSwitchGate.environmentListEnabled).toEqual([false]);
-  });
-
-  it("does not ask for an environment when the answered bot list has no matching bot", () => {
-    botSwitchGate.botList = { bots: [] };
-    seedAttempt(
-      positiveAttempt({
-        userMessageId: USER_MESSAGE_ID,
-        turnId: TURN_ID,
-        reason: "rate_limit",
-        eligibleRungs: ALL_RUNGS,
-        resetsAt: RESETS_AT,
-        waitDisposition: "eligible",
-      }),
-    );
-    renderBotActions(TURN_ID);
-
-    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
-    expect(botSwitchGate.environmentListEnabled).toEqual([false]);
-  });
-
-  it("treats a different surface bot as an ordinary chat and makes no role reads", () => {
-    botSwitchGate.botList = {
-      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
+  it("hides Switch when the answered environment list does not name the bot's environment", () => {
+    botSwitchGate.environments = {
+      environments: [environmentRow("env-other", "organization", "admin")],
     };
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderBotActions(TURN_ID);
+
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("treats a different surface bot as an ordinary chat, whatever the reader's role", () => {
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "viewer");
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -703,14 +671,9 @@ describe("FallbackManualRungActions", () => {
     render(botActionsTree(TURN_ID, "different-bot"));
 
     expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
-    expect(botSwitchGate.botListReads).toBe(0);
-    expect(botSwitchGate.environmentListEnabled).toEqual([]);
   });
 
-  it("hides Switch for an unknown environment role and follows a late role change", () => {
-    botSwitchGate.botList = {
-      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
-    };
+  it("offers Switch before the list answers and follows a later change of the reader's role", () => {
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -723,33 +686,23 @@ describe("FallbackManualRungActions", () => {
     );
     const view = renderBotActions(TURN_ID);
 
-    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
-    botSwitchGate.environments = {
-      environments: [
-        {
-          environmentId: "env-other",
-          ownerKind: "team",
-          effectiveRole: "admin",
-        },
-      ],
-    };
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
+
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "viewer");
     view.rerender(botActionsTree(TURN_ID, EPIC_ID));
     expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
 
-    setBotEnvironmentRole("env-a", "editor");
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "editor");
     view.rerender(botActionsTree(TURN_ID, EPIC_ID));
     expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
 
-    setBotEnvironmentRole("env-a", "viewer");
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "viewer");
     view.rerender(botActionsTree(TURN_ID, EPIC_ID));
     expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
   });
 
   it("does not let an Editor's role restore Switch after the refusal removes it", () => {
-    botSwitchGate.botList = {
-      bots: [{ botId: EPIC_ID, environmentId: "env-a" }],
-    };
-    setBotEnvironmentRole("env-a", "editor");
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "editor");
     seedAttempt(
       positiveAttempt({
         userMessageId: USER_MESSAGE_ID,
@@ -782,9 +735,7 @@ describe("FallbackManualRungActions", () => {
     expect(botSwitchGate.environmentListEnabled).toEqual([false]);
 
     botSwitchGate.environments = {
-      environments: [
-        { environmentId: "env-a", ownerKind: "user", effectiveRole: "owner" },
-      ],
+      environments: [environmentRow("env-a", "user", "owner")],
     };
     view.rerender(<MayChangeProbe environmentId="env-a" />);
     expect(screen.getByTestId("may-change-answer").textContent).toBe("true");

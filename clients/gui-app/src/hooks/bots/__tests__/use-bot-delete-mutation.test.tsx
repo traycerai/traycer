@@ -52,9 +52,9 @@ describe("useBotDeleteMutation", () => {
         auth: {
           getIdentityGeneration: () => 1,
           isIdentityCurrent: (generation) => generation === 1,
-          deleteBot: async (request) => {
+          deleteBot: (request) => {
             sent.push(request);
-            return { kind: "ok", deleted };
+            return Promise.resolve({ kind: "ok" as const, deleted });
           },
         },
       };
@@ -87,11 +87,12 @@ describe("useBotDeleteMutation", () => {
       auth: {
         getIdentityGeneration: () => 1,
         isIdentityCurrent: (generation) => generation === 1,
-        deleteBot: async () => ({
-          kind: "refused",
-          status: 404,
-          message: "Not found",
-        }),
+        deleteBot: () =>
+          Promise.resolve({
+            kind: "refused" as const,
+            status: 404,
+            message: "Not found",
+          }),
       },
     };
     const local = listKey("host-local");
