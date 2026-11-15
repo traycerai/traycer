@@ -226,7 +226,6 @@ describe("MembersPage members read", () => {
       {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () => membersPage([ADA, PRIYA]),
-        "environment.members.removePreview": () => PREVIEW,
       },
     );
     render(<MembersPage environmentId="env-a" />, {
@@ -919,7 +918,6 @@ describe("MembersPage refused writes", () => {
       {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () => membersPage([ADA, PRIYA]),
-        "environment.members.removePreview": () => PREVIEW,
         "environment.members.setRole": () => ({ outcome: "forbidden" }),
       },
     );
