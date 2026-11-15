@@ -5,10 +5,6 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
-import type {
-  EnvironmentDescriptorV11,
-  EnvironmentListResponseV11,
-} from "@traycer/protocol/host/environment/contracts";
 import {
   AUTHENTICATED_USER_FIXTURE_ID,
   createAuthenticatedUserFixture,
@@ -22,6 +18,12 @@ import {
 import { useHostBinding } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  serveEnvironmentList,
+  type SandboxBillingEnvironmentAnswer,
+} from "./sandbox-environment-list-fixture";
+
+export type { SandboxBillingEnvironmentAnswer };
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 // The fixture user's own name and email, as the sign-in wants them (non-null).
@@ -32,11 +34,6 @@ const BILLING_TOKENS = {
   token: "sandbox-billing-test-token",
   refreshToken: "sandbox-billing-test-refresh-token",
 };
-
-export type SandboxBillingEnvironmentAnswer =
-  | { readonly kind: "ready"; readonly role: "admin" | "editor" | "viewer" }
-  | { readonly kind: "loading" }
-  | { readonly kind: "failed" };
 
 function localHost(hostId: string): LocalHostSnapshot {
   return {
@@ -69,52 +66,14 @@ function buildRunnerHost(hostId: string): MockRunnerHost {
   return runnerHost;
 }
 
-function buildEnvironment(
-  environmentId: string,
-  role: "admin" | "editor" | "viewer",
-): EnvironmentDescriptorV11 {
-  return {
-    environmentId,
-    ownerKind: "organization",
-    ownerId: "team-a",
-    roomId: "room-team-a",
-    label: "Acme",
-    effectiveRole: role,
-    kind: "team",
-    hostCount: 0,
-    providerHandle: "acme",
-  };
-}
-
-function messengerFactory(
-  answer: SandboxBillingEnvironmentAnswer,
-  environmentId: string,
-  onEnvironmentListRequest: ((hostId: string | null) => void) | null,
-): (args: {
+function messengerFactory(): (args: {
   readonly registry: HostRpcRegistry;
 }) => IHostMessenger<HostRpcRegistry> {
   return (args) => {
-    let messenger: MockHostMessenger<HostRpcRegistry> | null = null;
-    messenger = new MockHostMessenger<HostRpcRegistry>({
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: args.registry,
-      requestId: () => "sandbox-billing-environment-list",
+      requestId: () => "sandbox-billing-host-status",
       handlers: {
-        "environment.list": () => {
-          if (onEnvironmentListRequest !== null) {
-            onEnvironmentListRequest(
-              messenger?.calls.at(-1)?.authority.endpoint.hostId ?? null,
-            );
-          }
-          if (answer.kind === "loading") {
-            return new Promise<EnvironmentListResponseV11>(() => undefined);
-          }
-          if (answer.kind === "failed") {
-            throw new Error("environment.list failed");
-          }
-          return {
-            environments: [buildEnvironment(environmentId, answer.role)],
-          };
-        },
         "host.status": () => ({
           ready: true,
           hostVersion: "1.2.3",
@@ -182,7 +141,8 @@ export function SandboxBillingRuntime(props: {
   readonly hostId: string;
   readonly children: ReactNode;
   readonly queryClient: QueryClient | undefined;
-  readonly onEnvironmentListRequest: ((hostId: string | null) => void) | null;
+  /** Called each time the account's environment list is read. */
+  readonly onEnvironmentListRead: (() => void) | null;
   readonly onBinding:
     | ((binding: HostRuntimeBinding<HostRpcRegistry>) => void)
     | null;
@@ -199,14 +159,21 @@ export function SandboxBillingRuntime(props: {
       }),
   );
   const [runnerHost] = useState(() => buildRunnerHost(props.hostId));
-  const factory = useMemo(
-    () =>
-      messengerFactory(
-        props.answer,
-        props.environmentId,
-        props.onEnvironmentListRequest,
-      ),
-    [props.answer, props.environmentId, props.onEnvironmentListRequest],
+  const factory = useMemo(() => messengerFactory(), []);
+  const { answer, environmentId, onEnvironmentListRead, onBinding } = props;
+  // The account's environment list is the app's own authn read, not a host
+  // method: serve it at the auth service, so the real list hook, role join and
+  // billing-Admin check run over it.
+  const prepareBinding = useMemo(
+    () => (binding: HostRuntimeBinding<HostRpcRegistry>) => {
+      serveEnvironmentList(binding.auth, {
+        answer,
+        environmentId,
+        onRead: onEnvironmentListRead,
+      });
+      onBinding?.(binding);
+    },
+    [answer, environmentId, onEnvironmentListRead, onBinding],
   );
   useEffect(() => {
     let cancelled = false;
@@ -238,7 +205,7 @@ export function SandboxBillingRuntime(props: {
           fallback={<div data-testid="host-runtime-loading" />}
         >
           {selectionReady ? (
-            <SandboxBillingBindingGate onBinding={props.onBinding}>
+            <SandboxBillingBindingGate onBinding={prepareBinding}>
               {props.children}
             </SandboxBillingBindingGate>
           ) : null}

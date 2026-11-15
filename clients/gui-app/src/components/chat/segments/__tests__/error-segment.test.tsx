@@ -29,6 +29,7 @@ import {
   SandboxBillingRuntime,
   type SandboxBillingEnvironmentAnswer,
 } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
+import { serveEnvironmentList } from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
 import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
@@ -44,7 +45,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostBinding: () => billing.binding,
 }));
 
-const environmentListRequests: Array<string | null> = [];
+const environmentListRequests: number[] = [];
 
 describe("<ErrorSegment />", () => {
   afterEach(() => {
@@ -836,6 +837,15 @@ describe("<ErrorSegment /> sandbox refusals", () => {
     });
     const binding = createFakeSandboxBinding();
     billing.binding = binding;
+    // This file reads the sandbox binding as the host binding, so the list is
+    // served on it as well as on the runtime's own.
+    serveEnvironmentList(binding.auth, {
+      answer: input.answer,
+      environmentId: "env-acme",
+      onRead: () => {
+        environmentListRequests.push(1);
+      },
+    });
     if (input.team !== null) {
       binding.auth.getTeamEnvironment.mockResolvedValue({
         kind: "ok",
@@ -862,8 +872,8 @@ describe("<ErrorSegment /> sandbox refusals", () => {
             sandboxHostEntry(TRANSCRIPT_HOST_ID, input.team),
           ]);
         }}
-        onEnvironmentListRequest={(hostId) => {
-          environmentListRequests.push(hostId);
+        onEnvironmentListRead={() => {
+          environmentListRequests.push(1);
         }}
       >
         <ChatTranscriptProvider
@@ -916,9 +926,9 @@ describe("<ErrorSegment /> sandbox refusals", () => {
           };
         });
       expect(
-        environmentListRequests,
+        environmentListRequests.length,
         JSON.stringify({ cache, environmentListRequests }),
-      ).toContain("billing-host");
+      ).toBeGreaterThan(0);
     });
   }
 

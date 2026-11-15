@@ -66,7 +66,7 @@ const mocks = vi.hoisted(() => ({
   environmentListLoading: false,
   environmentListFailed: false,
 }));
-const environmentListClientHosts: Array<string | null> = [];
+const environmentListClientHosts: number[] = [];
 let billingBinding: HostRuntimeBinding<HostRpcRegistry> | null = null;
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
@@ -383,8 +383,8 @@ function setup(testCase: VerbCase, overrides: Partial<SandboxSummary> | null) {
             fakeBinding.auth.destroySandbox(sandboxId, onlyIfIdle),
         );
       }}
-      onEnvironmentListRequest={(hostId) => {
-        environmentListClientHosts.push(hostId);
+      onEnvironmentListRead={() => {
+        environmentListClientHosts.push(1);
       }}
     >
       <Rows />
@@ -400,7 +400,7 @@ async function waitForEnvironmentList(
 ): Promise<void> {
   await waitFor(
     () => {
-      expect(environmentListClientHosts).toContain("billing-host");
+      expect(environmentListClientHosts.length).toBeGreaterThan(0);
       if (result !== null) {
         expect(
           client

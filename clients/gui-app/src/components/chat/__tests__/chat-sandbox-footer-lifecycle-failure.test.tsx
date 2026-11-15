@@ -62,7 +62,7 @@ const LOCAL_HOST: LocalHostSnapshot = {
   availability: "available",
 };
 
-const environmentListRequests: (string | null)[] = [];
+const environmentListRequests: number[] = [];
 
 function signedInAs(userId: string): void {
   useAuthStore.setState({
@@ -115,8 +115,8 @@ function renderFooter(state: ChatSandboxState): QueryClient {
             ),
         );
       }}
-      onEnvironmentListRequest={(hostId) => {
-        environmentListRequests.push(hostId);
+      onEnvironmentListRead={() => {
+        environmentListRequests.push(1);
       }}
     >
       <ChatSandboxFooter
@@ -196,7 +196,7 @@ function frozenTeam(state: "stopped" | "suspended"): ChatSandboxState {
 
 async function waitForEnvironmentList(queryClient: QueryClient): Promise<void> {
   await waitFor(() => {
-    expect(environmentListRequests).toContain("billing-host");
+    expect(environmentListRequests.length).toBeGreaterThan(0);
     expect(
       queryClient
         .getQueryCache()

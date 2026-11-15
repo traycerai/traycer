@@ -665,7 +665,6 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 
 // The failed line's actions read it through their tab host's client: it
 // records the host of each client it is handed.
-const environmentListClientHosts = vi.hoisted(() => [] as Array<string | null>);
 export const environmentListAnswer = {
   role: null as "admin" | "editor" | "viewer" | null,
   loading: false,
@@ -1193,9 +1192,7 @@ export function mountWithBillingRuntime() {
           hostBinding.auth.getTeamEnvironment(),
         );
       }}
-      onEnvironmentListRequest={(hostId) => {
-        environmentListClientHosts.push(hostId);
-      }}
+      onEnvironmentListRead={null}
     >
       <PendingSandboxSendsDriver />
       <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
@@ -1237,9 +1234,7 @@ export function mountInTileBoundToWithBillingRuntime(tileHostId: string) {
           return hostBinding.auth.getTeamEnvironment();
         });
       }}
-      onEnvironmentListRequest={(hostId) => {
-        environmentListClientHosts.push(hostId);
-      }}
+      onEnvironmentListRead={null}
     >
       <TabHostContext.Provider value={tileHostId}>
         <PendingSandboxSendsDriver />
@@ -1283,9 +1278,7 @@ export function mountInChatWithBillingRuntime(chatId: string) {
           hostBinding.auth.getTeamEnvironment(),
         );
       }}
-      onEnvironmentListRequest={(hostId) => {
-        environmentListClientHosts.push(hostId);
-      }}
+      onEnvironmentListRead={null}
     >
       <PendingSandboxSendForChat
         epicId="epic-1"
@@ -1743,11 +1736,4 @@ export function openTask(
   return handle;
 }
 
-export {
-  mirrorMountHosts,
-  environmentListClientHosts,
-  mocks,
-  handoffHold,
-  sessionBridge,
-  toastSpies,
-};
+export { mirrorMountHosts, mocks, handoffHold, sessionBridge, toastSpies };

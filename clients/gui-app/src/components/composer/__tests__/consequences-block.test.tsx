@@ -339,7 +339,7 @@ describe("<ConsequencesBlock />", () => {
             environmentId: "env-acme",
           });
         }}
-        onEnvironmentListRequest={null}
+        onEnvironmentListRead={null}
       >
         {block(input({ needsCredits: true, shortfallMc: 120 }))}
       </SandboxBillingRuntime>,

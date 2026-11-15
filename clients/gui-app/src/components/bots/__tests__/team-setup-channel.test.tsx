@@ -55,10 +55,11 @@ import {
   TAB_HOST,
 } from "./bot-tab-surface-harness";
 import { SandboxBillingRuntime } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
+import { serveEnvironmentList } from "@/hooks/sandboxes/__tests__/sandbox-environment-list-fixture";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
 
 const billingRoleRead = vi.hoisted(() => ({ viaTransport: false }));
-const environmentListRequests: Array<string | null> = [];
+const environmentListRequests: number[] = [];
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
@@ -143,11 +144,10 @@ vi.mock("@/hooks/bots/use-environment-list-query", async (importOriginal) => {
   return {
     ...environmentListMock,
     useEnvironmentListQuery: (
-      client: Parameters<typeof actual.useEnvironmentListQuery>[0],
-      enabled: Parameters<typeof actual.useEnvironmentListQuery>[1],
+      enabled: Parameters<typeof actual.useEnvironmentListQuery>[0],
     ) =>
       billingRoleRead.viaTransport
-        ? actual.useEnvironmentListQuery(client, enabled)
+        ? actual.useEnvironmentListQuery(enabled)
         : environmentListMock.useEnvironmentListQuery(),
   };
 });
@@ -193,6 +193,17 @@ function teamSetupForBillingRole(
   role: "admin" | "editor" | "viewer",
 ): ReactNode {
   billingRoleRead.viaTransport = true;
+  // The surface reads the scripted binding as the host binding, so the list
+  // is served on its auth.
+  if (mocks.binding !== null) {
+    serveEnvironmentList(mocks.binding.auth, {
+      answer: { kind: "ready", role },
+      environmentId: "env-new",
+      onRead: () => {
+        environmentListRequests.push(1);
+      },
+    });
+  }
   return (
     <SandboxBillingRuntime
       answer={{ kind: "ready", role }}
@@ -200,8 +211,8 @@ function teamSetupForBillingRole(
       hostId="billing-host"
       queryClient={queryClient}
       onBinding={null}
-      onEnvironmentListRequest={(hostId) => {
-        environmentListRequests.push(hostId);
+      onEnvironmentListRead={() => {
+        environmentListRequests.push(1);
       }}
     >
       <StrictMode>
@@ -777,7 +788,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       await user.click(enableButton());
 
       const alert = await within(cloudOption()).findByRole("alert");
-      expect(environmentListRequests).toContain("billing-host");
+      expect(environmentListRequests.length).toBeGreaterThan(0);
       expect(alert.textContent).toBe(
         "The team's credits don't cover an hour of this sandbox.",
       );
@@ -802,7 +813,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       await user.click(enableButton());
 
       const alert = await within(cloudOption()).findByRole("alert");
-      expect(environmentListRequests).toContain("billing-host");
+      expect(environmentListRequests.length).toBeGreaterThan(0);
       expect(alert.textContent).toBe(
         "The team's credits don't cover an hour of this sandbox. Add $0.12 and try again.",
       );

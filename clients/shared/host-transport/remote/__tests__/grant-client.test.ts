@@ -3,6 +3,7 @@ import {
   type AttachGrantProvision,
   createAttachGrantProvider,
   createSandboxAttachGrantProvider,
+  mintRelayPassWithHostTokenViaHttp,
   mintAttachGrantViaHttp,
 } from "../grant-client";
 import {
@@ -1082,6 +1083,37 @@ describe("attach grant providers on a frozen sandbox", () => {
       stub402({ code: "sandbox_frozen" });
       resetHostConnectionRegistryForTest();
       expectFatal(await refusedProvision(), SANDBOX_OUT_OF_CREDITS);
+    });
+  });
+
+  describe("mintRelayPassWithHostTokenViaHttp, a remote open's one call", () => {
+    async function refusedMint(): Promise<AttachGrantProvision> {
+      const outcome = await mintRelayPassWithHostTokenViaHttp(
+        AUTHN,
+        HOST_ID,
+        BEARER,
+      );
+      if (outcome.kind === "ok") throw new Error("the mint was not refused");
+      return outcome.provision;
+    }
+
+    function expectReason(provision: AttachGrantProvision, reason: string) {
+      expect(provision).toMatchObject({
+        kind: "refused",
+        fatal: { code: "SANDBOX_FROZEN", reason },
+      });
+    }
+
+    it("keeps the paused-credits sentence for a frozen sandbox its row names as the reader's own", async () => {
+      stub402({ code: "sandbox_frozen" });
+      installRows([PERSONAL_ROW]);
+      expectReason(await refusedMint(), SANDBOX_FROZEN_MESSAGE);
+    });
+
+    it("says the sandbox is out of credits when the directory has no row for the host", async () => {
+      stub402({ code: "sandbox_frozen" });
+      installRows([{ ...PERSONAL_ROW, hostId: "another-host" }]);
+      expectReason(await refusedMint(), SANDBOX_OUT_OF_CREDITS);
     });
   });
 

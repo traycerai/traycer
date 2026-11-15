@@ -35,7 +35,7 @@ const TEAM_CONFIGURATION: SandboxPageConfiguration = {
 };
 
 const PERSONAL_CONFIGURATION: SandboxPageConfiguration = { kind: "personal" };
-const environmentListRequests: Array<string | null> = [];
+const environmentListRequests: number[] = [];
 
 function refusedCreate(): Extract<
   SandboxCreateFetchResult,
@@ -111,8 +111,8 @@ async function retryAndExpectToast(
           (request) => fakeBinding.auth.createSandbox(request),
         );
       }}
-      onEnvironmentListRequest={(hostId) => {
-        environmentListRequests.push(hostId);
+      onEnvironmentListRead={() => {
+        environmentListRequests.push(1);
       }}
     >
       <SandboxFailedRowActions
@@ -128,7 +128,7 @@ async function retryAndExpectToast(
   );
   if (configuration.kind === "team") {
     await waitFor(() => {
-      expect(environmentListRequests).toContain("billing-host");
+      expect(environmentListRequests.length).toBeGreaterThan(0);
       expect(
         queryClient
           .getQueryCache()

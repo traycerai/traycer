@@ -13,7 +13,6 @@ import {
   NO_AGENT_SENTENCE,
   type HostAnswers,
   mocks,
-  environmentListClientHosts,
   environmentListAnswer,
   sandboxListState,
   mirrorMountHosts,
@@ -4918,7 +4917,6 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     return sandboxSummaryFixture({
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
-      environmentId: "env-team",
       state,
       environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
@@ -5014,9 +5012,6 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     ).toBe(true);
   });
 
-  // Which host the failed line's own environment read goes out on is pinned in
-  // `stopped-receipt-failed-actions-host.test.tsx`, which keeps the real host
-  // client this file mocks.
   it("draws the failed line in a tile bound elsewhere without opening a draft mirror for the sandbox's host", async () => {
     const TILE_HOST = "tile-host";
     // The billing runtime signs in as the fixture user, so the held send is
@@ -6050,7 +6045,6 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       environmentListAnswer.failed = environmentFailed;
       environmentListAnswer.personalEnvironmentId =
         configuration.kind === "personal" ? PERSONAL_ENVIRONMENT_ID : null;
-      environmentListClientHosts.length = 0;
       const input: PendingSandboxSendDispatch["input"] = {
         epicId: "epic-1",
         hostId: SANDBOX_HOST,
@@ -6110,11 +6104,6 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       mountInChatWithBillingRuntime(input.chatId);
       const dispatch = await screen.findByTestId("pending-sandbox-dispatch");
       answerSandboxRows([sandboxRow], Date.now() + 60_000);
-      if (configuration.kind === "team") {
-        await waitFor(() => {
-          expect(environmentListClientHosts).toContain(SANDBOX_HOST);
-        });
-      }
       await waitFor(() => {
         expect(within(dispatch).getByText(expected)).toBeTruthy();
       });
