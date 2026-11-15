@@ -136,7 +136,9 @@ export function useProvidersPromoteToPersonal(
     () => new WeakMap<PromoteToEnvironmentVariables, CapturedPromoteRequest>(),
   );
   const mutationFn = useCallback(
-    (variables: PromoteToEnvironmentVariables) =>
+    (
+      variables: PromoteToEnvironmentVariables,
+    ): Promise<PromoteToEnvironmentOutcome> =>
       withHostQueryErrorBoundary(METHOD, async () => {
         const captured = capturedRequests.get(variables);
         if (captured === undefined)

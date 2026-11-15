@@ -7,7 +7,7 @@ import type {
   EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostReadResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { McpPromoteIntentState } from "@traycer-clients/shared/environment/mcp-promote-intent";
 import type { ProvidersNativeMutateResponseV15 } from "@traycer/protocol/host/provider-schemas";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -74,7 +74,7 @@ function deferred<Value>(): {
   return { promise, resolve };
 }
 
-function binding(sharingGeneration: number | null): EnvironmentHostBinding {
+function binding(sharingGeneration: number | null): EnvironmentHostReadResponseV11 {
   return {
     hostId: WINDOW_HOST_ID,
     environment: {
@@ -375,7 +375,7 @@ describe("useProvidersPromoteToPersonal", () => {
       },
       () => account.current === "B",
     );
-    const bindingRead = deferred<EnvironmentHostBinding>();
+    const bindingRead = deferred<EnvironmentHostReadResponseV11>();
     const bindingStarted = deferred<void>();
     const nativeRequests: unknown[] = [];
     const result = await runPromote({

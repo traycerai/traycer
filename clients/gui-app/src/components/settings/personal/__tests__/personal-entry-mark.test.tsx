@@ -549,7 +549,7 @@ function renderPage(
       ? {
           "providers.list": () => {
             rig.appliedAtRead.providers.push(rig.applied.length);
-            return { providers: [] };
+            return { providers: [], native: null };
           },
         }
       : {}),
