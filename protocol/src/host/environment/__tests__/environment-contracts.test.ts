@@ -144,6 +144,19 @@ describe("environment.list protocol contract", () => {
   });
 });
 
+describe("retired team provider profile methods", () => {
+  it("does not register retired provider profile calls on the real host registry", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(Object.hasOwn(hostRpcRegistry, method)).toBe(false);
+    }
+  });
+});
+
 describe("environment.host.read / .bind / .list protocol contracts", () => {
   it("answer the host id, its environment and whether the binding is explicit", () => {
     const unbound = {
@@ -1464,9 +1477,10 @@ describe("the environments redesign's new @1.0 methods", () => {
         "1",
       ]);
       expect(entry[1].latestMinor).toBe(
-        wire.method === "environment.move.plan"
+        wire.method === "environment.move.plan" ||
+          wire.method === "environment.move.stopPreview"
           ? 2
-          : wire.method === "environment.move.stopPreview" ||
+          : wire.method === "environment.move.stop" ||
               wire.method === "environment.configuration.mcpServers.put" ||
               wire.method === "environment.configuration.guide.get" ||
               wire.method === "environment.configuration.skills.list" ||
