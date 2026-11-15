@@ -298,45 +298,62 @@ describe("MembersPage members read", () => {
     expect(screen.getByText("Grace")).toBeTruthy();
     expect(screen.getByText("u-noname@acme.test")).toBeTruthy();
     expect(screen.getByText("u-admin@acme.test")).toBeTruthy();
+    // Authn's read names a member with neither a name nor an email "Member"
+    // (since d42de7c79, which mirrors #9264's memberDisplayName), so the
+    // unloaded line with Retry is not reachable for an accepted member.
     const ghost = rowOf("u-ghost");
-    expect(ghost.textContent).toContain("Couldn't load this member");
+    expect(within(ghost).getByText("Member")).toBeTruthy();
     expect(ghost.textContent).not.toContain("u-ghost");
-    expect(within(ghost).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(within(ghost).queryByTestId("members-row-unloaded")).toBeNull();
+    expect(within(ghost).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it.each([
-    {
-      displayName: " Alice ",
-      email: "alice@acme.test",
-      legacyName: " Alice ",
-    },
-    {
-      displayName: null,
-      email: " alice@acme.test ",
-      legacyName: "alice@acme.test",
-    },
-  ])(
-    "keeps the gained editing badge for whitespace-padded identities: $legacyName",
-    async ({ displayName, email, legacyName }) => {
-      const harness = mountTeamPage(
-        { kind: "host" },
-        {
-          "environment.list": () => ({ environments: [TEAM] }),
-          "environment.members": () => ({
-            ...membersPage([ADA, { ...PRIYA, displayName, email }]),
-            legacyMembers: [legacyName],
-          }),
-        },
-      );
-      render(<MembersPage environmentId="env-a" />, {
-        wrapper: harness.Wrapper,
-      });
+  it("keeps the gained editing badge for a whitespace-padded name", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => ({
+          ...membersPage([
+            ADA,
+            { ...PRIYA, displayName: " Alice ", email: "alice@acme.test" },
+          ]),
+          legacyMembers: [" Alice "],
+        }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
 
-      await screen.findByText("Acme · 2 people");
-      expect(within(rowOf("u-priya")).getByText("gained editing")).toBeTruthy();
-      expect(within(rowOf("u-admin")).queryByText("gained editing")).toBeNull();
-    },
-  );
+    await screen.findByText("Acme · 2 people");
+    expect(within(rowOf("u-priya")).getByText("gained editing")).toBeTruthy();
+    expect(within(rowOf("u-admin")).queryByText("gained editing")).toBeNull();
+  });
+
+  it("gives a nameless member the legacy list names by email no gained editing tag, since their name reads Member", async () => {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => ({
+          ...membersPage([
+            ADA,
+            { ...PRIYA, displayName: null, email: " alice@acme.test " },
+          ]),
+          legacyMembers: ["alice@acme.test"],
+        }),
+      },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Acme · 2 people");
+    expect(within(rowOf("u-priya")).getByText("Member")).toBeTruthy();
+    expect(within(rowOf("u-priya")).queryByText("gained editing")).toBeNull();
+    expect(within(rowOf("u-admin")).queryByText("gained editing")).toBeNull();
+  });
 
   it("adds the step-down remedy to the last admin's own line", async () => {
     useAuthStore.setState({
@@ -524,7 +541,7 @@ describe("MembersPage offboarding previews", () => {
     ).not.toContain("u-priya@acme.test");
   });
 
-  it("names a member with no name by email everywhere, and shows None. rows and null work as no count", async () => {
+  it("names a member with no name Member everywhere, and shows None. rows and null work as no count", async () => {
     const harness = mountTeamPage(
       { kind: "host" },
       {
@@ -556,23 +573,23 @@ describe("MembersPage offboarding previews", () => {
     );
     expect(
       within(dialog).getByRole("heading", {
-        name: "Remove m@acme.dev from Acme",
+        name: "Remove Member (m@acme.dev) from Acme",
       }),
     ).toBeTruthy();
     expect(
       within(dialog).getByTestId("members-remove-confirm").textContent,
-    ).toBe("Remove m@acme.dev");
+    ).toBe("Remove Member");
     const cells = table.querySelectorAll("tr");
     const valueOf = (label: string): string | undefined =>
       Array.from(cells)
         .find((row) => row.querySelector("th")?.textContent === label)
         ?.querySelector("td")?.textContent;
-    expect(valueOf("m@acme.dev's work now")).toBe(
+    expect(valueOf("Member's work now")).toBe(
       "Their connections close. Work they started keeps running for Acme under their name.",
     );
     expect(valueOf("Shared sign-ins")).toBe("None.");
     expect(valueOf("Can't be recalled")).toBe(
-      'Files m@acme.dev already copied off a host and work already done upstream with Acme\'s services. What m@acme.dev started stays, labelled "started by a former member".',
+      'Files Member already copied off a host and work already done upstream with Acme\'s services. What Member started stays, labelled "started by a former member".',
     );
     expect(valueOf("Linked plan")).toBeUndefined();
     expect(dialog.textContent).not.toContain("u-priya");
