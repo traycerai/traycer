@@ -625,6 +625,16 @@ function runInboxSubscription(
       if (settled) {
         return;
       }
+      // The shared client reports retryable host fatals as reconnecting,
+      // without a close reason. A capability's refusal is terminal there too.
+      if (presented === "agent-capability" && retryCause !== null) {
+        fail(
+          new Error(
+            `traycer monitor: host closed the stream: ${retryCause.reason}`,
+          ),
+        );
+        return;
+      }
       const admissionError = retryCause
         ? localTeamAdmissionCliError(retryCause)
         : null;
