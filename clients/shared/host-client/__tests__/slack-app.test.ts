@@ -20,6 +20,7 @@ import {
   registerSlackAppViaHttp,
   setSlackAppDmsViaHttp,
 } from "../slack-app";
+import { fetchEnvironmentTransport } from "../../environment/environment-cloud";
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
@@ -113,7 +114,14 @@ describe("Slack app transport requests", () => {
     },
     {
       route: "register",
-      call: () => registerSlackAppViaHttp(BASE, BEARER, null, REGISTER_REQUEST),
+      call: () =>
+        registerSlackAppViaHttp(
+          BASE,
+          BEARER,
+          null,
+          fetchEnvironmentTransport,
+          REGISTER_REQUEST,
+        ),
       body: { app: APP },
       sent: REGISTER_REQUEST,
     },
@@ -180,7 +188,13 @@ describe("Slack app transport results", () => {
     stubFetch(async () => jsonResponse(200, { app: APP }));
 
     await expect(
-      registerSlackAppViaHttp(BASE, BEARER, null, REGISTER_REQUEST),
+      registerSlackAppViaHttp(
+        BASE,
+        BEARER,
+        null,
+        fetchEnvironmentTransport,
+        REGISTER_REQUEST,
+      ),
     ).resolves.toEqual({ kind: "ok", app: APP });
   });
 
@@ -334,6 +348,7 @@ describe("Slack app transport results", () => {
       BASE,
       BEARER,
       null,
+      fetchEnvironmentTransport,
       REGISTER_REQUEST,
     );
 

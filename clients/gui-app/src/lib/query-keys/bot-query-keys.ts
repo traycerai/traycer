@@ -16,6 +16,12 @@ export const botQueryKeys = {
       "subscription",
       args.botId,
     ] as const,
+  /** Whether `queryKey` is {@link botQueryKeys.subscription}'s slot for `botId`, under any host. */
+  isSubscriptionOf: (queryKey: readonly unknown[], botId: string) =>
+    queryKey[0] === "host" &&
+    queryKey[2] === "bot" &&
+    queryKey[3] === "subscription" &&
+    queryKey[4] === botId,
   /**
    * The `bot.memory.subscribe` stream's slot (T87): the bot's memory as one
    * host reads it from one environment's room.

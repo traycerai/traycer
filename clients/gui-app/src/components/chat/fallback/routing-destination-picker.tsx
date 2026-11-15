@@ -175,7 +175,9 @@ function routingProviderSwitchModel(): string {
  * rung on them. On a bot's failed turn (the surface's bot is the chat's
  * epic), Switch writes the pick to the bot's row - what the Channel settings'
  * Model group writes - and only once the host takes it sends `retry` on the
- * attempt, which reads the row afresh. It never sends `switch` there.
+ * attempt, which reads the row afresh. It never sends `switch` there. The
+ * failed-turn row offers this chooser on a bot's chat only where the role may
+ * change the bot (`useBotChatMaySwitch`).
  */
 export function RoutingDestinationPicker(props: {
   readonly entry: RoutingDestinationEntry;
@@ -740,7 +742,7 @@ function useRoutingVerbs(input: {
     publishConfirmed,
     reporting,
   );
-  const writeBot = useBotUpdateRunSettingsMutation(client);
+  const writeBot = useBotUpdateRunSettingsMutation();
   const sendRung = (
     rung: "switch" | "retry",
     target: ChatRunSettings | null,
@@ -781,12 +783,21 @@ function useRoutingVerbs(input: {
         // A promise rather than per-call handlers, which TanStack drops once
         // this surface unmounts (its thread panel or tab closed mid-write):
         // a confirmed Switch and retry finishes either way. The retry reads
-        // the row, so it goes only once the host took the write, and its
+        // the row, so it goes only once the server took the write, and its
         // answer finds the announcer through the verb's own reporting when
         // nothing here is left to show it. A refused write leaves the row as
         // it was and is said inline; unmounted, there is no line to say it.
+        // The write is the app's own call to the server; only the retry
+        // needs this chat's host.
+        //
+        // Both steps belong to the sign-in of the press. A write answered
+        // after it ended comes back `null` and publishes nothing; the retry is
+        // sent only while that same sign-in is current, so a sign-out, an
+        // account switch or a sign-in again in between drops it silently. A
+        // token rotation of the same sign-in keeps it.
         void writeBot.mutateAsync(request.write).then(
-          () => {
+          (written) => {
+            if (written === null || !written.signIn.isCurrent()) return;
             sendRung("retry", null, attempt);
           },
           (error: Error) => {

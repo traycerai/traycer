@@ -262,6 +262,11 @@ function createBaseRunnerHost(): IRunnerHost {
     disconnectSlackApp: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     setSlackAppDms: () => Promise.resolve({ kind: "unauthorized" as const }),
+    updateBotRunSettings: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    updateBotReplyMode: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    deleteBot: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),

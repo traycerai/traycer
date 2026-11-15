@@ -143,6 +143,10 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     setSlackAppDms: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    updateBotRunSettings: () =>
+      Promise.resolve({ kind: "no_response" as const }),
+    updateBotReplyMode: () => Promise.resolve({ kind: "no_response" as const }),
+    deleteBot: () => Promise.resolve({ kind: "no_response" as const }),
     getSandboxGrants: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getTeamEnvironment: () =>

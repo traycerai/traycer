@@ -85,8 +85,8 @@ const mocks = vi.hoisted(() => ({
   // Every `maxModeContext` the (stubbed) picker was rendered with, one per render.
   pickerContexts: [] as MaxModeContext[],
   updateRunSettings: vi.fn<(variables: object) => void>(),
-  // The client each `useBotUpdateRunSettingsMutation` call was handed.
-  runSettingsClients: [] as Array<object | null>,
+  // What `useBotMayChange` answers: whether the role may change the bot.
+  mayChange: true as boolean,
   updateTitle: vi.fn<(variables: object) => void>(),
   deleteBot: vi.fn<(variables: object) => void>(),
   updateReplyMode: vi.fn<(variables: object) => void>(),
@@ -100,8 +100,6 @@ const mocks = vi.hoisted(() => ({
   notificationWriteError: null as string | null,
   // Whether the level write is in flight.
   notificationPending: false,
-  // What it answers for `bot.updateReplyMode`.
-  replyModeSupport: true as boolean | null,
   // Whether the reply-mode write is in flight.
   replyModePending: false,
   // What it answers for `bot.updateAppearance` (the appearance section).
@@ -146,8 +144,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     if (method.startsWith("bot.notificationLevel.")) {
       return mocks.notificationSupport;
     }
-    if (method === "bot.updateAppearance") return mocks.appearanceSupport;
-    return method === "bot.updateReplyMode" ? mocks.replyModeSupport : null;
+    return method === "bot.updateAppearance" ? mocks.appearanceSupport : null;
   },
 }));
 vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
@@ -198,14 +195,11 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     error: refusalOf(mocks.refusal.remove),
     mutate: mocks.deleteBot,
   }),
-  useBotUpdateRunSettingsMutation: (client: object | null) => {
-    mocks.runSettingsClients.push(client);
-    return {
-      isPending: false,
-      error: refusalOf(mocks.refusal.runSettings),
-      mutate: mocks.updateRunSettings,
-    };
-  },
+  useBotUpdateRunSettingsMutation: () => ({
+    isPending: false,
+    error: refusalOf(mocks.refusal.runSettings),
+    mutate: mocks.updateRunSettings,
+  }),
   useBotUpdateReplyModeMutation: () => ({
     isPending: mocks.replyModePending,
     error: refusalOf(mocks.refusal.replyMode),
@@ -220,6 +214,9 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     error: null,
     mutate: vi.fn(),
   }),
+}));
+vi.mock("@/hooks/bots/use-bot-may-change", () => ({
+  useBotMayChange: () => mocks.mayChange,
 }));
 vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
   useBotNotificationLevelsQuery: (
@@ -337,6 +334,9 @@ function newSlackHost(): MockRunnerHost {
 
 function newSlackAuth(host: MockRunnerHost): object {
   return {
+    // One sign-in for the whole case: every write's answer is read.
+    getIdentityGeneration: () => 1,
+    isIdentityCurrent: (generation: number) => generation === 1,
     readSlackApp: async (botId: string) =>
       slackOverrides.read ?? host.readSlackApp(SLACK_BEARER, botId),
     getSlackAppManifest: async (botId: string) =>
@@ -410,12 +410,11 @@ beforeEach(() => {
   mocks.seeds.length = 0;
   mocks.stores.length = 0;
   mocks.pickerContexts.length = 0;
-  mocks.runSettingsClients.length = 0;
+  mocks.mayChange = true;
   mocks.refusal.title = null;
   mocks.refusal.runSettings = null;
   mocks.refusal.remove = null;
   mocks.refusal.replyMode = null;
-  mocks.replyModeSupport = true;
   mocks.appearanceSupport = null;
   mocks.replyModePending = false;
   mocks.supportQueries.length = 0;
@@ -502,7 +501,6 @@ describe("<BotChannelSettingsPanel /> model", () => {
       effort: "high",
       profile: "profile-1",
     });
-    expect(mocks.runSettingsClients.at(-1)).toBe(mocks.hostClient);
   });
 
   it("disables Apply again when the person picks the bot's own model back", () => {
@@ -659,10 +657,6 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
     ).toBeTruthy();
     expect(radio("In the channel").getAttribute("aria-checked")).toBe("true");
     expect(radio("In a thread").getAttribute("aria-checked")).toBe("false");
-    expect(mocks.supportQueries).toContainEqual({
-      hostId: "host-1",
-      method: "bot.updateReplyMode",
-    });
   });
 
   it("checks the thread option for a bot that answers in threads", () => {
@@ -722,15 +716,12 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
     expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
   });
 
-  it.each([false, null])(
-    "draws no reply mode section for a host whose support for bot.updateReplyMode is %s",
-    (support) => {
-      mocks.replyModeSupport = support;
-      mountPanel(BOT, true);
+  it("draws no reply mode section for a role that may not change the bot", () => {
+    mocks.mayChange = false;
+    mountPanel(BOT, true);
 
-      expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
-    },
-  );
+    expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
+  });
 });
 
 // The bot's next turn runs its stored harness/model/effort/profile with NO

@@ -144,6 +144,46 @@ function subscriptionKeyFor(
   return `${client.instanceId}|${args.hostId}|${args.botId}`;
 }
 
+/**
+ * Lays a bot write's answer over every view this app holds of the bot, through
+ * whichever host it is served: the cached snapshot each surface reads, and the
+ * last frame a later reader joins on. A host re-sends a snapshot only for a
+ * change it made itself, and this write reached the server with no host in
+ * the path.
+ */
+export function applyBotSettingsToViews(
+  queryClient: QueryClient,
+  settings: Pick<
+    BotRecord,
+    "botId" | "harness" | "model" | "effort" | "profile" | "replyMode"
+  >,
+): void {
+  const { botId, ...fields } = settings;
+  const apply = (bot: BotRecord): BotRecord => ({ ...bot, ...fields });
+  for (const [key, shared] of subscriptions) {
+    if (!key.endsWith(`|${botId}`)) continue;
+    const last = shared.lastEvent;
+    if (last?.kind === "snapshot") {
+      shared.lastEvent = { ...last, bot: apply(last.bot) };
+    } else if (last?.kind === "stale" && last.baseline !== null) {
+      shared.lastEvent = {
+        ...last,
+        baseline: { ...last.baseline, bot: apply(last.baseline.bot) },
+      };
+    }
+  }
+  queryClient.setQueriesData<BotSubscriptionSnapshot | null>(
+    {
+      predicate: (query) =>
+        botQueryKeys.isSubscriptionOf(query.queryKey, botId),
+    },
+    (cached) =>
+      cached === null || cached === undefined
+        ? cached
+        : { ...cached, bot: apply(cached.bot) },
+  );
+}
+
 /** Test helper: tear every session down and empty the registry. */
 export function __resetBotSubscriptionsForTesting(): void {
   resetSharedStreamSubscriptions(subscriptions);
