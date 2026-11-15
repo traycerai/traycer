@@ -5,10 +5,7 @@ import type {
   HostTokenRenewal,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-token-sign-out";
-import {
-  listTeamComputersViaHttp,
-  setEnvironmentBotHostViaHttp,
-} from "@traycer-clients/shared/host-client/team-computers";
+import { listTeamComputersViaHttp } from "@traycer-clients/shared/host-client/team-computers";
 import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
 import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/sandbox-control";
@@ -909,33 +906,6 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         bridge.options.authnBaseUrl,
         bearer,
         environmentId,
-      );
-    },
-  );
-  bridge.handleInvoke(
-    RunnerHostInvoke.setEnvironmentBotHost,
-    async (
-      _event,
-      bearer: unknown,
-      environmentId: unknown,
-      hostId: unknown,
-      sharingGeneration: unknown,
-    ) => {
-      assertString(bearer, "setEnvironmentBotHost.bearer");
-      assertString(environmentId, "setEnvironmentBotHost.environmentId");
-      assertString(hostId, "setEnvironmentBotHost.hostId");
-      if (
-        typeof sharingGeneration !== "number" ||
-        !Number.isSafeInteger(sharingGeneration) ||
-        sharingGeneration < 0
-      )
-        throw new Error("Invalid computer arrangement.");
-      return setEnvironmentBotHostViaHttp(
-        bridge.options.authnBaseUrl,
-        bearer,
-        environmentId,
-        hostId,
-        sharingGeneration,
       );
     },
   );
