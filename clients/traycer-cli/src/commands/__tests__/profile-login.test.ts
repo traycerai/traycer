@@ -33,6 +33,18 @@ import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext, CommandResult } from "../../runner/runner";
 import {
+  ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+  noAnswerReply,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  type SignInRequestFetchHarness,
+  type SignInRequestFetchReply,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
+import {
   buildProfileLoginCommand,
   PROCESS_PROFILE_LOGIN_IO,
   type ProfileLoginIo,
@@ -208,6 +220,13 @@ function awaitResult(fields: Partial<AwaitSpec>): ProvidersAwaitLoginResponse {
   return providersAwaitLoginResponseSchema.parse({
     ...spec,
     state: spec.state === null ? null : stateInput(spec.state),
+  });
+}
+
+function asksToRecordSignIn(): ProvidersAwaitLoginResponse {
+  return providersAwaitLoginResponseSchema.parse({
+    ...awaitResult({ state: null }),
+    signInRequest: SIGN_IN_REQUEST_FIXTURE,
   });
 }
 
@@ -407,6 +426,19 @@ function touchCalls(): DispatchCall[] {
   return callsTo("providers.touchLogin");
 }
 
+function setAwaitResults(
+  answers: readonly ProvidersAwaitLoginResponse[],
+): void {
+  let index = 0;
+  scenario.awaitLogin = () => {
+    if (index >= answers.length)
+      throw new Error("scenario has no await answer");
+    const answer = answers[index];
+    index += 1;
+    return Promise.resolve(answer);
+  };
+}
+
 const LIST_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
   requiredHostMethodVersion: null,
@@ -478,6 +510,15 @@ interface FakeIo {
   readonly stopReading: Mock<() => void>;
 }
 
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+function currentSignInRequestFetch(): SignInRequestFetchHarness {
+  if (activeSignInFetch === null) {
+    throw new Error("sign-in request fetch harness is missing");
+  }
+  return activeSignInFetch;
+}
+
 const HOLDER_ID = "holder-1";
 
 function makeIo(hasTerminal: boolean): FakeIo {
@@ -505,6 +546,7 @@ function makeIo(hasTerminal: boolean): FakeIo {
       wait,
       onInterrupt,
       readLines,
+      signInRequests: currentSignInRequestFetch().client,
     },
     stdinIsTerminal,
     openUrl,
@@ -584,6 +626,7 @@ function deferred<T>(): Deferred<T> {
 }
 
 beforeEach(() => {
+  activeSignInFetch = installSignInRequestFetchHarness();
   vi.clearAllMocks();
   scenario = defaultScenario();
   startIndex = 0;
@@ -618,6 +661,11 @@ beforeEach(() => {
         return Promise.reject(new Error(`unexpected dispatch ${method}`));
     }
   });
+});
+
+afterEach(() => {
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
 });
 
 // ---------------------------------------------------------------------------
@@ -2358,6 +2406,120 @@ describe("code paste", () => {
   });
 });
 
+describe("profile sign-in request recording", () => {
+  it("records a matching 200 receipt and returns the final sign-in answer", async () => {
+    setAwaitResults([
+      asksToRecordSignIn(),
+      awaitResult({ state: signedInState([NEW_PROFILE]) }),
+    ]);
+    currentSignInRequestFetch().enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    const fake = makeIo(false);
+
+    const result = await runLogin(create("Work"), fake, makeCtx(false, false));
+
+    const awaits = callsTo("providers.awaitLogin");
+    expect(awaits).toHaveLength(2);
+    expect(awaits[0]?.[1]).toEqual({
+      providerId: "claude-code",
+      profileId: "prof_new",
+    });
+    expect(awaits[1]?.[1]).toEqual({
+      providerId: "claude-code",
+      profileId: "prof_new",
+      recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+    });
+    expect(currentSignInRequestFetch().fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toMatchObject({ status: "signed-in", created: true });
+  });
+
+  it.each([
+    { name: "a 403", reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY },
+    { name: "a 404", reply: ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY },
+    { name: "no answer", reply: noAnswerReply() },
+    { name: "a 401", reply: UNAUTHORIZED_SIGN_IN_REQUEST_REPLY },
+  ] satisfies ReadonlyArray<{
+    readonly name: string;
+    readonly reply: SignInRequestFetchReply;
+  }>)("prints today's incomplete result after $name", async ({ reply }) => {
+    setAwaitResults([asksToRecordSignIn()]);
+    currentSignInRequestFetch().enqueue(reply);
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("The sign-in did not complete.");
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "not-completed",
+    });
+    expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+    expect(currentSignInRequestFetch().fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prints today's incomplete result and stops after a duplicate id refusal", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    setAwaitResults([asksToRecordSignIn()]);
+    currentSignInRequestFetch().enqueue(
+      MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+    );
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("The sign-in did not complete.");
+    expect(result.exitCode).toBe(1);
+    expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+    expect(currentSignInRequestFetch().fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prints today's incomplete result when the host repeats the request after a matching 200", async () => {
+    setAwaitResults([asksToRecordSignIn(), asksToRecordSignIn()]);
+    currentSignInRequestFetch().enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("The sign-in did not complete.");
+    expect(result.exitCode).toBe(1);
+    expect(callsTo("providers.awaitLogin")).toHaveLength(2);
+    expect(currentSignInRequestFetch().fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older computer's request and output unchanged without fetching", async () => {
+    scenario.awaitLogin = () => Promise.resolve(awaitResult({ state: null }));
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe("The sign-in did not complete.");
+    expect(result.exitCode).toBe(1);
+    expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+    expect(onlyCallTo("providers.awaitLogin")[1]).toEqual({
+      providerId: "claude-code",
+      profileId: "prof_new",
+    });
+    expect(currentSignInRequestFetch().fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("PROCESS_PROFILE_LOGIN_IO.wait", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -3668,6 +3830,59 @@ describe("profile login outcomes", () => {
       status: "already-exists",
       profile: rowOf(WORK_PROFILE, "Work"),
     });
+    expectOutcomeCalls([
+      "providers.list",
+      "providers.startLogin",
+      "providers.awaitLogin",
+    ]);
+  });
+
+  it("does not record a sign-in request for an already-signed-in login outcome", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        providersAwaitLoginResponseSchema.parse({
+          ...awaitResult({
+            state: signedInState([WORK_PROFILE]),
+            existingProfileId: "prof_work",
+            profileOutcome: {
+              kind: "already-signed-in",
+              profileId: "prof_work",
+            },
+          }),
+          signInRequest: SIGN_IN_REQUEST_FIXTURE,
+        }),
+      );
+    const fetchHarness = currentSignInRequestFetch();
+    const recordSignInRequest = vi.spyOn(
+      fetchHarness.client,
+      "recordSignInRequest",
+    );
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.human).toBe(
+      'That account is already claude (Claude Code) profile prof_work "Work". No profile was added.',
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "already-exists",
+      profile: rowOf(WORK_PROFILE, "Work"),
+    });
+    expect(recordSignInRequest).not.toHaveBeenCalled();
+    expect(fetchHarness.fetchMock).not.toHaveBeenCalled();
+    expect(onlyCallTo("providers.awaitLogin")[1]).not.toHaveProperty(
+      "recordedOperationId",
+    );
     expectOutcomeCalls([
       "providers.list",
       "providers.startLogin",

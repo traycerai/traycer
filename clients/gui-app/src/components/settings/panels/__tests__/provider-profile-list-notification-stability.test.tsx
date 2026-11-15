@@ -30,6 +30,10 @@ const streamClientStub = vi.hoisted((): { readonly stub: true } => ({
   stub: true,
 }));
 
+const authServiceStub = vi.hoisted(() => ({
+  recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+}));
+
 vi.mock(
   "@traycer-clients/shared/host-transport/providers-changed-stream-client",
   () => ({
@@ -55,12 +59,20 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: () => authServiceStub,
+  };
 });
 
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: () => authServiceStub,
+  };
 });
 
 vi.mock("@/lib/links/open-link", async (importOriginal) => {

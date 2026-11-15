@@ -11,7 +11,7 @@ import { PATH_ID_PATTERN } from "./path-id";
  * a change to this file.
  */
 
-/** Bounds either call; each is a single write or read of one row. */
+/** Bounds the record call, a single write of one row. */
 const SIGN_IN_REQUEST_FETCH_TIMEOUT_MS = 15_000;
 
 const PROVIDER_SIGN_IN_KIND = "provider_sign_in";
@@ -125,10 +125,9 @@ function isPathSafe(request: ProviderLoginSignInRequest): boolean {
   );
 }
 
-async function call(
+async function post(
   url: string,
-  method: "GET" | "POST",
-  body: string | null,
+  body: string,
   bearerToken: string,
   callerSignal: AbortSignal,
 ): Promise<RawCall> {
@@ -137,37 +136,36 @@ async function call(
     SIGN_IN_REQUEST_FETCH_TIMEOUT_MS,
   );
   try {
-    const response = await untilAborted(
-      fetch(url, {
-        method,
-        headers:
-          body === null
-            ? {
-                Authorization: `Bearer ${bearerToken}`,
-                Accept: "application/json",
-              }
-            : {
-                Authorization: `Bearer ${bearerToken}`,
-                Accept: "application/json",
-                "Content-Type": "application/json",
-              },
-        body,
-        redirect: "error",
-        signal: abort.signal,
-      }),
-      abort.signal,
-    );
-    const text = await untilAborted(response.text(), abort.signal);
+    let response: Response;
+    try {
+      response = await untilAborted(
+        fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${bearerToken}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body,
+          redirect: "error",
+          signal: abort.signal,
+        }),
+        abort.signal,
+      );
+    } catch {
+      return { kind: "no-answer" };
+    }
+    // The status is the answer once it has arrived: a body that cannot be
+    // read or parsed (a proxy's page, a dropped stream, an empty body) reads
+    // as no body, so a 401 or a 403 is still classified as one.
     let parsed: unknown = null;
     try {
+      const text = await untilAborted(response.text(), abort.signal);
       parsed = text.length === 0 ? null : JSON.parse(text);
     } catch {
-      // A proxy's page or an empty body reads as no body; only the status
-      // and a parsed body are ever read.
+      parsed = null;
     }
     return { kind: "response", status: response.status, body: parsed };
-  } catch {
-    return { kind: "no-answer" };
   } finally {
     abort.clear();
   }
@@ -181,9 +179,8 @@ export async function recordSignInRequestViaHttp(
   signal: AbortSignal,
 ): Promise<SignInRequestRecordAnswer> {
   if (!isPathSafe(request)) return { kind: "failed" };
-  const raw = await call(
+  const raw = await post(
     intentsUrl(authnBaseUrl, request.environmentId),
-    "POST",
     JSON.stringify({
       operationId: request.operationId,
       kind: PROVIDER_SIGN_IN_KIND,
