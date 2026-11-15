@@ -195,6 +195,7 @@ function panel(bot: BotRecord): ReactNode {
         <BotChannelSettingsPanel
           bot={bot}
           personal={false}
+          mayChange
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
