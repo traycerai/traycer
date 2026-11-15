@@ -29,7 +29,6 @@ import {
   useSystemTabModalActions,
 } from "@/stores/tabs/use-system-tab-modal";
 import type { SideTabRowVariant } from "./side-tab-row";
-import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import {
   SIDE_STRIP_NAV_TILE_CLASS,
   SIDE_STRIP_NAV_TILE_COUNT_CLASS,
@@ -202,15 +201,11 @@ function InboxNavRow(props: {
   // Tasks, as the Needs you header counts them; the drawer lists requests.
   const needsYouCount = useNotificationsNeedsYouCount();
   const unreadCount = useMergedNotificationUnreadCount();
-  // The Activity view's To review lists what else there is, so its pill is
-  // the Needs you count alone; the Layered view's says the rest as the bell
-  // does.
-  const needsYouOnly = useLiveAgentsInStrip();
+  const attentionCount = bellState.kind === "attention" ? bellState.count : 0;
   const pill = inboxPillOf({
     needsYou: needsYouCount,
-    attention: bellState.kind === "attention" ? bellState.count : 0,
+    attention: attentionCount,
     unread: unreadCount,
-    needsYouOnly,
   });
   // The bell's `unknown`: a summary is unavailable, so zero counts are not a
   // claim that nothing is waiting (see `useNotificationBellState`).
@@ -249,6 +244,7 @@ function InboxNavRow(props: {
             {collapsed ? (
               <InboxTileMark
                 needsYouCount={needsYouCount}
+                attentionCount={attentionCount}
                 unavailable={unavailable}
               />
             ) : (
@@ -354,27 +350,27 @@ const INBOX_PILL_VARIANT: Readonly<
 /**
  * The Notifications row's one count, as the header's bell picks its mark:
  * amber, tasks and actionable notices that need the person; else red,
- * what needs attention, failures among it; else muted, the unread total. The
- * Activity view shows the amber count alone. `null` with nothing to count.
+ * what needs attention, failures among it; else muted, the unread total.
+ * `null` with nothing to count.
  */
 function inboxPillOf(input: {
   readonly needsYou: number;
   readonly attention: number;
   readonly unread: number;
-  readonly needsYouOnly: boolean;
 }): { readonly tone: InboxPillTone; readonly count: number } | null {
   if (input.needsYou > 0) return { tone: "needs-you", count: input.needsYou };
-  if (input.needsYouOnly) return null;
   if (input.attention > 0) return { tone: "attention", count: input.attention };
   return input.unread > 0 ? { tone: "unread", count: input.unread } : null;
 }
 
 /**
  * The collapsed Notifications tile's corner: the needs-you count, else the
- * status-unavailable dot, else nothing.
+ * red count of what needs attention, else the status-unavailable dot, else
+ * nothing.
  */
 function InboxTileMark(props: {
   readonly needsYouCount: number;
+  readonly attentionCount: number;
   readonly unavailable: boolean;
 }): ReactNode {
   if (props.needsYouCount > 0) {
@@ -388,6 +384,20 @@ function InboxTileMark(props: {
         )}
       >
         {props.needsYouCount}
+      </span>
+    );
+  }
+  if (props.attentionCount > 0) {
+    return (
+      <span
+        aria-hidden
+        data-testid="side-strip-inbox-attention-badge"
+        className={cn(
+          SIDE_STRIP_NAV_TILE_COUNT_CLASS,
+          "bg-destructive text-center font-semibold text-destructive-foreground tabular-nums",
+        )}
+      >
+        {props.attentionCount}
       </span>
     );
   }

@@ -341,19 +341,22 @@ describe("SideStripNavRows", () => {
     ).toBe("Notifications, 2 need attention, 5 unread");
   });
 
-  it("Activity view: the pill is the Needs you task count, not the unread total, and is absent at 0", async () => {
+  it("Activity view: with no task waiting, the pill is the red attention count, as in the Layered view", async () => {
     activateActivityView();
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
-    // Unread with nothing waiting: the Layered view would show a muted "3".
-    seedFeed(0, 3);
-    expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 5, attentionCount: 2 },
+      });
+    });
 
-    seedFeed(2, 5);
-    const badge = screen.getByTestId("side-strip-inbox-count");
-    expect(badge.textContent).toBe("2");
-    expect(badge.dataset.needsYou).toBe("true");
+    const pill = screen.getByTestId("side-strip-inbox-count");
+    expect(pill.textContent).toBe("2");
+    expect(pill.dataset.tone).toBe("attention");
   });
 
   it("collapsed: shows one amber corner badge sized by the Needs you task count", async () => {
@@ -366,6 +369,25 @@ describe("SideStripNavRows", () => {
       screen.getByTestId("side-strip-inbox-needs-you-badge").textContent,
     ).toBe("3");
     expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
+  });
+
+  it("collapsed: with no task waiting, the corner badge is the red attention count", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 5, attentionCount: 2 },
+      });
+    });
+
+    expect(
+      screen.getByTestId("side-strip-inbox-attention-badge").textContent,
+    ).toBe("2");
+    expect(screen.queryByTestId("side-strip-inbox-needs-you-badge")).toBeNull();
   });
 
   it("collapsed: shows no badge with nothing waiting", async () => {
