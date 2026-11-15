@@ -20,6 +20,7 @@ import {
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type {
   CredentialsMigrationOutcome,
@@ -601,7 +602,7 @@ interface Snapshot {
   readonly preferredHostId: string | null;
   readonly targetHostId: string | null;
   readonly effectiveHostId: string | null;
-  readonly leases: readonly unknown[];
+  readonly leases: readonly HostLeaseSnapshot[];
 }
 
 type AttachResult =
