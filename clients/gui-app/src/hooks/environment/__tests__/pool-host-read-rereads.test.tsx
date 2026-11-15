@@ -63,21 +63,18 @@ function LocalEnvironmentReaders(): ReactNode {
   const client = requireTeamHostClient();
   const status = useEnvironmentStatusRead(client, LOCAL_HOST_ID, true);
   useSecretsRead({
-    client,
     method: "environment.secrets.list",
     params: { environmentId: "env-personal" },
     enabled: true,
     poll: false,
   });
   useSecretsRead({
-    client,
     method: "environment.secrets.versions",
     params: { environmentId: "env-personal", secretId: "sec-1" },
     enabled: true,
     poll: false,
   });
   useSecretsRead({
-    client,
     method: "environment.secrets.rotation",
     params: { environmentId: "env-personal", secretId: "sec-1" },
     enabled: true,
@@ -134,21 +131,18 @@ function FocusReaders(): ReactNode {
     options: {},
   });
   useSecretsRead({
-    client: localClient,
     method: "environment.secrets.list",
     params: { environmentId: "env-personal" },
     enabled: true,
     poll: false,
   });
   useSecretsRead({
-    client: localClient,
     method: "environment.secrets.versions",
     params: { environmentId: "env-personal", secretId: "sec-1" },
     enabled: true,
     poll: false,
   });
   useSecretsRead({
-    client: localClient,
     method: "environment.secrets.rotation",
     params: { environmentId: "env-personal", secretId: "sec-1" },
     enabled: true,
