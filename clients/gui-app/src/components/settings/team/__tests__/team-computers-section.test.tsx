@@ -242,7 +242,7 @@ describe("TeamComputersSection", () => {
   });
 
   it("prints install and use commands with the team's provider handle", async () => {
-    mountSection(ENVIRONMENT_ID, "owner", `handle-${ENVIRONMENT_ID}`);
+    mountSection(ENVIRONMENT_ID, "admin", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
     await user.click(
@@ -258,7 +258,7 @@ describe("TeamComputersSection", () => {
   });
 
   it("does not offer a command when the team has no provider handle", async () => {
-    mountSection(ENVIRONMENT_ID, "owner", null);
+    mountSection(ENVIRONMENT_ID, "admin", null);
 
     await waitFor(() =>
       expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID),
