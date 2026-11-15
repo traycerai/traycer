@@ -3,7 +3,6 @@ import {
   type SignInRequestClient,
 } from "@traycer-clients/shared/host-client/provider-sign-in-request";
 import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
-import { Response } from "undici";
 import { vi, type Mock } from "vitest";
 
 // Route body and strict request schema checked at internal commit
