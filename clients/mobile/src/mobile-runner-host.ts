@@ -43,6 +43,13 @@ import {
 } from "@traycer-clients/shared/auth/device-auth";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import {
+  createHostTokenSource,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
+import { createSecureStorageHostTokenPersistence } from "@traycer-clients/shared/auth/host-token-secure-storage";
+import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-token-sign-out";
+import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
+import {
   credentialsIdentityFromAuthenticatedUser,
   refreshOnceAbortable,
   validateAuthTokenIdentityAccessOnceAbortable,
@@ -369,6 +376,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly hasLocalHost = false;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
   readonly tokenStore: ITokenStore;
+  readonly hostTokens: HostTokenSource;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState = new MobileNoopTrayState();
   readonly workspaceFolders: IWorkspaceFoldersHost = {
@@ -479,6 +487,29 @@ export class MobileRunnerHost implements IRunnerHost {
     this.tokenStore = new MobileTokenStore(
       this.secureStorage,
       options.authnBaseUrl,
+    );
+    this.hostTokens = createHostTokenSource({
+      persistence: createSecureStorageHostTokenPersistence(
+        this.secureStorage,
+        MOBILE_HOST_TOKENS_KEY,
+      ),
+      mint: (hostId, signInToken, signal) =>
+        mintHostTokenViaHttp(options.authnBaseUrl, hostId, signInToken, signal),
+      signIn: null,
+      now: Date.now,
+    });
+    const tokenStore = this.tokenStore;
+    forgetHostTokensOnSignOut(
+      {
+        current: async () => (await tokenStore.get())?.user.id ?? null,
+        onChange: (listener) => {
+          const subscription = tokenStore.subscribe((change) => {
+            listener(change.present ? change.userId : null);
+          });
+          return () => subscription.dispose();
+        },
+      },
+      this.hostTokens,
     );
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
@@ -1444,6 +1475,7 @@ class MobileDeviceFlowSession implements DeviceFlowSession {
 // as the retired legacy per-window slots and wipes them at startup after its
 // migration pre-step, which would destroy this store's credentials.
 const MOBILE_TOKEN_STORE_KEY = "traycer.credentials";
+const MOBILE_HOST_TOKENS_KEY = "traycer.host-tokens";
 const MISSING_STORAGE_ITEM = "Item with given key does not exist";
 
 function buildSecureStorage(): ISecureStorage {

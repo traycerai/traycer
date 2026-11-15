@@ -38,6 +38,7 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import {
   buildRuntimeHostMessenger,
   type RuntimeHostMessengerBinding,
@@ -282,6 +283,7 @@ function harness(): {
       hostId === REMOTE_HOST_ID ? remoteEntry : localEntry,
     auth: null,
     authnBaseUrl: "https://authn.invalid",
+    hostTokens: inertHostTokenSource(),
     requestId: () => "req-1",
     onRemoteAvailabilityRecovered: (hostId) => {
       recovered.push(hostId);
@@ -916,6 +918,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
         resolveTarget: () => remoteEntry,
         auth: null,
         authnBaseUrl: "https://authn.invalid",
+        hostTokens: inertHostTokenSource(),
         requestId: () => "req-1",
         onRemoteAvailabilityRecovered: () => undefined,
         onRemoteSessionTerminal: () => undefined,
@@ -1060,6 +1063,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
         hostId === REMOTE_HOST_ID ? currentRemoteEntry : localEntry,
       auth: null,
       authnBaseUrl: "https://authn.invalid",
+      hostTokens: inertHostTokenSource(),
       requestId: () => "req-1",
       onRemoteAvailabilityRecovered: () => undefined,
       onRemoteSessionTerminal: () => undefined,
@@ -1101,10 +1105,10 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     binding.dispose();
   });
 
-  it("rebuilds its remote transport with a session grant when a personal-looking entry is corrected to a sandbox, and not for a same-content re-emit", async () => {
-    // A sandbox first projected as a personal host (a list read before the
-    // sandbox facts arrived) built a user-bearer transport. Once the entry is
-    // corrected that transport must not be kept.
+  it("keeps its host-token transport when a personal-looking entry gains sandbox facts, and for a same-content re-emit", async () => {
+    // Sandbox facts used to switch the open from the user bearer to a session
+    // grant. Every remote host now opens with the host-only token, and those
+    // facts are not part of the transport key, so the live session stays.
     const session = controllableSession();
     mocks.createRemoteHostTransport.mockImplementation(() => ({
       session,
@@ -1115,12 +1119,14 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       streamClient: {},
     }));
     let currentRemoteEntry: RemoteHostDirectoryEntry = remoteEntry;
+    const hostTokens = inertHostTokenSource();
     const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       resolveTarget: (hostId) =>
         hostId === REMOTE_HOST_ID ? currentRemoteEntry : localEntry,
       auth: null,
       authnBaseUrl: "https://authn.invalid",
+      hostTokens,
       requestId: () => "req-1",
       onRemoteAvailabilityRecovered: () => undefined,
       onRemoteSessionTerminal: () => undefined,
@@ -1145,7 +1151,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
     expect(mocks.createRemoteHostTransport).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ openAuth: "user-bearer" }),
+      expect.objectContaining({ hostTokens }),
     );
 
     // Same content, re-emitted as a new object: the live transport is kept.
@@ -1153,7 +1159,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     await requestRemote();
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
 
-    // The same host, now carrying its sandbox facts: rebuilt on a grant.
+    // The same host, now carrying its sandbox facts: still the one transport.
     currentRemoteEntry = {
       ...remoteEntry,
       sandbox: {
@@ -1165,11 +1171,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       },
     };
     await requestRemote();
-    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
-    expect(mocks.createRemoteHostTransport).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ openAuth: "session-grant" }),
-    );
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
 
     // And a same-content re-emit of the corrected entry keeps that one.
     currentRemoteEntry = {
@@ -1183,7 +1185,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       },
     };
     await requestRemote();
-    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
 
     binding.dispose();
   });
@@ -1240,6 +1242,7 @@ function sandboxVerdictRig(first: HostDirectoryEntry): SandboxVerdictRig {
     resolveTarget: () => current,
     auth: null,
     authnBaseUrl: "https://authn.invalid",
+    hostTokens: inertHostTokenSource(),
     requestId: () => "req-1",
     onRemoteAvailabilityRecovered: () => undefined,
     onRemoteSessionTerminal: () => undefined,

@@ -53,6 +53,7 @@ export async function mintTeamComputerInstallTokenViaHttp(
           accept: "application/json",
         },
         body: JSON.stringify({ environmentId }),
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,

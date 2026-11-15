@@ -92,12 +92,12 @@ const mocks = vi.hoisted(() => ({
   },
   refreshDirectory: vi.fn<() => Promise<unknown>>(),
 }));
-const invalidateLocalTeamAdmissionAfterClaim = vi.hoisted(() =>
-  vi.fn<(hostId: string, runnerHost: IRunnerHost) => Promise<void>>(),
+const noteHostMembershipChanged = vi.hoisted(() =>
+  vi.fn<(hostId: string) => void>(),
 );
 
-vi.mock("@/lib/host/app-local-open-auth", () => ({
-  invalidateLocalTeamAdmissionAfterClaim,
+vi.mock("@/lib/host/local-admission-invalidation", () => ({
+  noteHostMembershipChanged,
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => {
@@ -272,8 +272,7 @@ beforeEach(() => {
   mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(PERSON_OWNER));
   mocks.auth.releaseTeamComputer.mockReset();
   mocks.auth.releaseTeamComputer.mockResolvedValue({ kind: "ok" });
-  invalidateLocalTeamAdmissionAfterClaim.mockReset();
-  invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
+  noteHostMembershipChanged.mockReset();
   mocks.refreshDirectory.mockReset();
   mocks.refreshDirectory.mockResolvedValue(undefined);
   recordNegotiatedHostManifest("host-a", {
@@ -570,11 +569,7 @@ describe("HostEnvironmentSection", () => {
       .mockResolvedValueOnce(ownershipResult(TEAM_OWNER))
       .mockResolvedValue(ownershipResult(PERSON_OWNER));
     const claim = Promise.withResolvers<TeamComputerReleaseResult>();
-    const admissionCheck = Promise.withResolvers<void>();
     mocks.auth.releaseTeamComputer.mockReturnValue(claim.promise);
-    invalidateLocalTeamAdmissionAfterClaim.mockReturnValue(
-      admissionCheck.promise,
-    );
     const stopRequests: unknown[] = [];
     let stopPreviewCalls = 0;
     const queryClient = renderSection("personal", {
@@ -618,11 +613,13 @@ describe("HostEnvironmentSection", () => {
       await claim.promise;
     });
     await waitFor(() => {
-      expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledWith(
-        "host-a",
-        runnerHost,
-      );
+      expect(noteHostMembershipChanged).toHaveBeenCalledWith("host-a");
     });
+    expect(
+      await screen.findByText(
+        "This computer is now yours. The team can no longer run work on it.",
+      ),
+    ).toBeTruthy();
 
     await act(async () => {
       await queryClient.invalidateQueries({
@@ -634,22 +631,6 @@ describe("HostEnvironmentSection", () => {
         screen.queryByRole("button", { name: "Claim this computer" }),
       ).toBeNull();
     });
-    expect(
-      screen.queryByText(
-        "This computer is now yours. The team can no longer run work on it.",
-      ),
-    ).toBeNull();
-
-    await act(async () => {
-      admissionCheck.resolve();
-      await admissionCheck.promise;
-    });
-
-    expect(
-      await screen.findByText(
-        "This computer is now yours. The team can no longer run work on it.",
-      ),
-    ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Claim this computer" }),
     ).toBeNull();

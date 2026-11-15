@@ -1,4 +1,3 @@
-import { appLocalOpenAuthFor } from "@/lib/host/app-local-open-auth";
 import { useHostCredentialStatusStore } from "@/stores/host/host-credential-status-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -22,8 +21,6 @@ import {
 import {
   createPoolHostTransport,
   createRemoteHostTransport,
-  remoteOpenAuthFor,
-  type RemoteOpenAuth,
 } from "@traycer-clients/shared/host-transport/remote/index";
 import type {
   HostStatusDTO,
@@ -36,12 +33,21 @@ import {
 } from "@traycer/protocol/host/registry";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  hostTokenBearer,
+  hostTokenSessionAuth,
+} from "@traycer-clients/shared/auth/host-token-lease";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import {
+  appHostDoorObserver,
+  noteHostTokenRefusal,
+} from "@/lib/host/host-door-observer";
+import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   appHostCredentialMintFlow,
-  mintAppMemberCredential,
   noteHostCredentialState,
 } from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
@@ -52,6 +58,7 @@ import {
 } from "@/stores/auth/auth-store";
 import { useHostBinding } from "@/lib/host/runtime";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
@@ -112,7 +119,6 @@ interface RemoteEndpointIdentity {
   readonly ownerId: string | null;
   readonly ownerName: string | null;
   readonly hasSandbox: boolean;
-  readonly openAuth: RemoteOpenAuth | null;
 }
 
 /** Primitive identity keeps equivalent directory publications on one client. */
@@ -128,7 +134,6 @@ function remoteEndpointIdentity(
     ownerId: owner?.id ?? null,
     ownerName: owner?.kind === "team" ? owner.name : null,
     hasSandbox: remote !== null && remote.sandbox !== null,
-    openAuth: remote === null ? null : remoteOpenAuthFor(remote),
   };
 }
 
@@ -259,7 +264,13 @@ export function buildHostStreamClient(params: {
    */
   readonly cloudAuthorized: () => boolean;
   readonly authnBaseUrl: string;
+  /**
+   * The sign-in's own recovery: reached only when authn refuses the sign-in
+   * token on a mint. A host's refusal never starts it.
+   */
   readonly auth: StreamAuthRevalidator | null;
+  /** The host-only tokens every non-pool branch opens with. */
+  readonly hostTokens: HostTokenSource;
   /**
    * The signed-in user this transport is built for: part of the shared
    * `(hostId, userId)` remote-session cache key (S1) on the remote and pool
@@ -336,11 +347,12 @@ export function buildHostStreamClient(params: {
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
-      openAuth: remoteOpenAuthFor(params.target),
+      hostTokens: params.hostTokens,
+      door: appHostDoorObserver(params.target.hostId),
+      onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
-      // Same UNAUTHORIZED recovery the local branch wires below: an expired
-      // bearer at a wake-time re-attach revalidates + redials instead of
-      // terminally closing the shared session (`RemoteSessionOptions.auth`).
+      // The sign-in's recovery, for authn refusing the sign-in token on a mint;
+      // a host's refusal recovers through the host-only token.
       auth: params.auth,
       // The same app-wide verdict the local branch passes below. A wrong wall
       // clock wedges a remote session identically - it is the machine's clock,
@@ -354,7 +366,6 @@ export function buildHostStreamClient(params: {
       evidence: transportEvidenceRelay,
       clientIdentity: getGuiClientIdentity(),
       proactiveWakeEligible: params.proactiveWakeEligible,
-      mintMemberCredential: mintAppMemberCredential,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {
@@ -363,15 +374,16 @@ export function buildHostStreamClient(params: {
     return remoteTransport.streamClient;
   }
   // An allowlist, not a fall-through: the plain per-socket client presents
-  // the initial credential to its named endpoint. Only local socket kinds
-  // reach it; a typed team challenge changes the next OPEN to a session grant.
+  // the host-only token to its named endpoint. Only local socket kinds reach
+  // it.
   if (params.target.kind !== "local" && params.target.kind !== "mock") {
     return null;
   }
 
+  const hostId = params.target.hostId;
+  const localTokens = localDoorHostTokens(params.hostTokens);
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
-    localOpenAuth: appLocalOpenAuthFor(params.authnBaseUrl),
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
     // leg too. It was previously consulted only for the remote attach-grant
     // mint, which made "local, and therefore indifferent to cloud
@@ -386,13 +398,31 @@ export function buildHostStreamClient(params: {
     // for it again. The Epic's client is minted per session, so before this the
     // answer was re-derived - and paid for with a serial lane probe - on every
     // Epic open. See `stream-method-support-registry.ts`.
-    hostId: params.target.hostId,
+    hostId,
     endpoint: params.endpoint,
-    bearer: params.bearer,
+    bearer: hostTokenBearer(
+      localTokens,
+      params.bearer,
+      hostId,
+      noteHostTokenRefusal,
+    ),
     // The user every owner builds this client for: the tile cache key, the
     // app-wide stream's effect dependency, the transport key at open.
     userId: params.userId,
-    auth: params.auth,
+    // Every client recovers its host-only token, a one-shot included: a
+    // refused open ran nothing. `params.auth === null` keeps a one-shot from
+    // starting the sign-in's recovery.
+    ...hostTokenSessionAuth(
+      {
+        tokens: localTokens,
+        currentUserId: () => params.bearer()?.identity.userId ?? null,
+        hostId,
+        signInRecovery: params.auth,
+        onState: noteHostTokenRefusal,
+        now: Date.now,
+      },
+      appHostDoorObserver(hostId),
+    ),
     // App-wide for the same reason the mint flow below is: the wall clock is a
     // property of the machine, so every stream in the renderer parks and
     // resumes on ONE verdict. Without it, a bearer that reads "expired" only
@@ -473,7 +503,7 @@ export function useHostStreamClientBindingFor(
     );
   }
   const globalClient = runtimeBinding.hostClient;
-  const authnBaseUrl = useRunnerHost().authnBaseUrl;
+  const { authnBaseUrl, hostTokens } = useRunnerHost();
   // `null` when signed out or the credential lease was released - the
   // "no bound user" / "no auth" gate.
   const userId = useRequestContextUserId(globalClient);
@@ -487,7 +517,6 @@ export function useHostStreamClientBindingFor(
     ownerId: endpointOwnerId,
     ownerName: endpointOwnerName,
     hasSandbox: endpointHasSandbox,
-    openAuth: endpointOpenAuth,
   } = remoteEndpointIdentity(target);
 
   const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
@@ -602,7 +631,6 @@ export function useHostStreamClientBindingFor(
         publicKey: endpointPublicKey ?? "",
         authnBaseUrl,
         authRecovery: auth === null ? "terminal" : "revalidate",
-        openAuth: endpointOpenAuth,
       },
       () =>
         buildHostStreamClient({
@@ -615,6 +643,7 @@ export function useHostStreamClientBindingFor(
             authorizesCloudCapability(useAuthStore.getState().status),
           authnBaseUrl,
           auth,
+          hostTokens,
           userId,
           // A render-path durable client (chat/terminal/epic tiles): its
           // streams are snapshot-shaped, so a swept reconnect only
@@ -668,10 +697,10 @@ export function useHostStreamClientBindingFor(
     endpointOwnerId,
     endpointOwnerName,
     endpointHasSandbox,
-    endpointOpenAuth,
     endpointPublicKey,
     endpointWebsocketUrl,
     globalClient,
+    hostTokens,
     rebuildBackoff,
     rebuildNonce,
     frozenParkReleases,
@@ -743,16 +772,30 @@ export function useHostStreamClientBindingFor(
         setRebuildNonce((nonce) => nonce + 1);
       }, delayMs);
     };
+    // The person's Retry runs a waiting rebuild now; the streak it earned
+    // stays, so a rebuild refused again waits as long as it would have.
+    const stopRetry =
+      endpointHostId === null
+        ? () => undefined
+        : onHostDoorRetry(endpointHostId, () => {
+            if (backoffTimer === null) return;
+            clearBackoffTimer();
+            setRebuildNonce((nonce) => nonce + 1);
+          });
     if (client.isClosed()) {
       rebuild();
-      return clearBackoffTimer;
+      return () => {
+        stopRetry();
+        clearBackoffTimer();
+      };
     }
     const unsubscribe = client.onClosed(rebuild);
     return () => {
       unsubscribe();
+      stopRetry();
       clearBackoffTimer();
     };
-  }, [client, rebuildBackoff, parkIfFrozen]);
+  }, [client, endpointHostId, rebuildBackoff, parkIfFrozen]);
 
   // Wake a binding whose backoff was earned entirely under a cloud capability
   // that has since come back. Both halves are needed and neither is sufficient:

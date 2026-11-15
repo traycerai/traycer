@@ -33,6 +33,7 @@ export async function releaseTeamComputerViaHttp(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ environmentId }),
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,

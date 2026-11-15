@@ -22,6 +22,7 @@ import {
   clientHandshakeIdentitySchema,
   type ClientHandshakeIdentity,
 } from "../framework/client-identity";
+import { doorReasonWireFieldSchema } from "../framework/door-reason";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
 
@@ -390,6 +391,13 @@ export interface WireRpcErrorDetails {
   readonly holders?: readonly WorktreeBusyHolder[];
   readonly holdersRevision?: string;
   readonly staleWrite?: EnvironmentStaleWrite;
+  /** A transient refusal: the call may be sent again unchanged. */
+  readonly retryable?: boolean;
+  /**
+   * Why the host refused this one call at its door, as on a local `/rpc`
+   * reply (`HostResponseError.doorReason`). Absent from an older host.
+   */
+  readonly doorReason?: string;
 }
 
 export interface UnaryResponsePayload {
@@ -533,6 +541,8 @@ export const unaryResponsePayloadSchema: z.ZodType<UnaryResponsePayload> =
           holders: worktreeBusyHoldersWireFieldSchema,
           holdersRevision: holdersRevisionWireFieldSchema,
           staleWrite: staleWriteWireFieldSchema,
+          retryable: z.boolean().optional(),
+          doorReason: doorReasonWireFieldSchema,
         })
         .nullable(),
     }),

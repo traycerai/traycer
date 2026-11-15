@@ -40,20 +40,7 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { TeamReadFailed } from "./team-read-failed";
 import { useConfigurationRevision } from "@/hooks/environment/use-configuration-revision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
-
-/** A row arriving and a same-user admission change both update transport policy. */
-function subscribeConfigurationTransport(onChange: () => void): () => void {
-  const unsubscribeHost = subscribeAnyHostRowChanged(onChange);
-  const unsubscribeAdmission = useLocalTeamAdmissionStore.subscribe(onChange);
-  const unsubscribeAuth = useAuthStore.subscribe(onChange);
-  return () => {
-    unsubscribeHost();
-    unsubscribeAdmission();
-    unsubscribeAuth();
-  };
-}
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 
 /** The team is gone from the person's memberships: they were removed from it. */
 function noLongerInLine(teamName: string): string {
@@ -139,26 +126,28 @@ export function ConfigurationSourceBoundary(props: {
   const { target } = props;
   const viewerId = useCloudChatViewerId();
   const client = useHostClient();
+  const registered = useRegisteredHosts();
+  // This computer is a team's when the registry says so; the person reaches it
+  // as a member, never as its owner.
+  const teamComputerIds = useMemo(
+    () =>
+      new Set(
+        (registered.data?.hosts ?? [])
+          .filter((host) => host.owner?.kind === "team")
+          .map((host) => host.hostId),
+      ),
+    [registered.data],
+  );
   const readTransportReadOnly = useCallback(() => {
     const entry = client.getActiveHost();
     if (entry === null) return false;
     if (isRemoteHostDirectoryEntry(entry)) {
       return entry.sandbox === null && entry.owner?.kind === "team";
     }
-    if (entry.kind !== "local") return false;
-    const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
-    const admission = useLocalTeamAdmissionStore
-      .getState()
-      .byHost.get(entry.hostId);
-    return (
-      admission?.userId === userId &&
-      (admission.state === "admitted" ||
-        admission.state === "required" ||
-        admission.state === "unavailable")
-    );
-  }, [client]);
+    return entry.kind === "local" && teamComputerIds.has(entry.hostId);
+  }, [client, teamComputerIds]);
   const transportReadOnly = useSyncExternalStore(
-    subscribeConfigurationTransport,
+    subscribeAnyHostRowChanged,
     readTransportReadOnly,
     readTransportReadOnly,
   );
