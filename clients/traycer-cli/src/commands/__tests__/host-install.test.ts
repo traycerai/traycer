@@ -1257,7 +1257,9 @@ describe("buildHostInstallCommand", () => {
       expect(
         JSON.stringify(vi.mocked(ctx.output.human).mock.calls),
       ).not.toContain(MINTED_TOKEN);
-      expect(ctx.output.humanRequired).not.toHaveBeenCalled();
+      expect(ctx.output.humanRequired).not.toHaveBeenCalledWith(
+        RETAINED_SIGN_IN_WARNING,
+      );
     });
 
     it.each(MINT_FAILURES)(
@@ -1297,6 +1299,9 @@ describe("buildHostInstallCommand", () => {
         user: signedInAcmeUser(),
       });
       const mintRequests = stubMintAnswer(mintedAnswer);
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(
+        sampleLifecycleHandle(),
+      );
       mocks.stageHostInstallSourceMock.mockRejectedValue(
         new Error("host download staging failed"),
       );
@@ -1309,7 +1314,7 @@ describe("buildHostInstallCommand", () => {
       expect(mintRequests).toHaveLength(1);
       expect(mocks.callOrder).toContain("stage");
       expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
-      expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.createServiceInstallLifecycleMock).toHaveBeenCalledTimes(1);
       expect(mocks.waitForTeamTokenInstallMock).not.toHaveBeenCalled();
       expect(stagedTeamTokenFile()).toBeNull();
       expect(ctx.output.humanRequired).toHaveBeenCalledWith(
