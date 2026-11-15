@@ -10,7 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
-  EnvironmentListResponse,
+  EnvironmentListResponseV11,
   EnvironmentMembersResponseV12,
 } from "@traycer/protocol/host/environment/contracts";
 import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
@@ -78,7 +78,7 @@ afterEach(() => {
   useAuthStore.setState({ profile: null });
 });
 
-const TEAM_ENVIRONMENTS: EnvironmentListResponse = {
+const TEAM_ENVIRONMENTS: EnvironmentListResponseV11 = {
   environments: [
     {
       environmentId: ENVIRONMENT_ID,
