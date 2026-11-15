@@ -634,6 +634,10 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       );
       expect(localQuery.result.current.error).toBeNull();
       expect(remoteQuery.result.current.error).toBeNull();
+      await waitFor(() => {
+        expect(localQuery.result.current.fetchStatus).toBe("idle");
+        expect(remoteQuery.result.current.fetchStatus).toBe("idle");
+      });
       expect(FakeNativeWebSocket.instances).toHaveLength(0);
       expect(mocks.createRemoteHostTransport).not.toHaveBeenCalled();
       expect(h.remoteRequests.value).toBe(0);
