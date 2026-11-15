@@ -137,10 +137,11 @@ function SetupScriptEditor(props: {
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
   const put = useHostScopedMutationForClient(client, {
     method: "environment.setup.put",
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: "environment.setup.put", request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     mutationKey: environmentMutationKeys.setupPut(),
     errorMessage: "Couldn't save the setup script.",

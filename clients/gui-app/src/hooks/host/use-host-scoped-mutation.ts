@@ -19,6 +19,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import type { PendingSettingsSave } from "@/hooks/environment/use-settings-save";
 import {
   agentMutationKeys,
@@ -150,6 +151,7 @@ interface UseHostScopedMutationArgs<
     | ((
         request: RequestOfMethod<HostRpcRegistry, Method>,
         client: HostRequester<HostRpcRegistry>,
+        pressedOn: EnvironmentCloud | null,
       ) => Promise<PendingSettingsSave>)
     | undefined;
   /**

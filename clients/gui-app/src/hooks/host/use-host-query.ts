@@ -1,8 +1,10 @@
+import { useState } from "react";
 import {
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
+  type MutationFunctionContext,
   type QueryClient,
   type QueryFunctionContext,
   type QueryKey,
@@ -32,6 +34,8 @@ import {
 } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import {
   sendFollowedSave,
   type PendingSettingsSave,
@@ -443,10 +447,7 @@ export interface UseHostMutationOptions<
    * will propose (`useSettingsSave`). Told whether the host answered.
    */
   readonly followSettingsSave?:
-    | ((
-        request: RequestOfMethod<Registry, Method>,
-        client: HostRequester<Registry>,
-      ) => Promise<PendingSettingsSave>)
+    | FollowSettingsSave<Registry, Method>
     | undefined;
   /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
   readonly onResponse?: (
@@ -530,6 +531,28 @@ export interface UseHostMutationOptions<
 }
 
 /**
+ * {@link UseHostMutationOptions.followSettingsSave}; `pressedOn` is the
+ * sign-in the person acted on, as `useSettingsSave`'s preparation takes it.
+ */
+type FollowSettingsSave<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> = (
+  request: RequestOfMethod<Registry, Method>,
+  client: HostRequester<Registry>,
+  pressedOn: EnvironmentCloud | null,
+) => Promise<PendingSettingsSave>;
+
+/** A followed save as the person pressed it: the render's follow, on the sign-in then. */
+interface PressedSettingsSave<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+> {
+  readonly follow: FollowSettingsSave<Registry, Method>;
+  readonly pressedOn: EnvironmentCloud | null;
+}
+
+/**
  * Thin typed wrapper over TanStack `useMutation` that dispatches the
  * caller's params straight into `HostClient.request`.
  */
@@ -546,7 +569,39 @@ export function useHostMutation<
   TVariables,
   TContext
 > {
-  const baseOptions = args.options ?? {};
+  // TanStack gives a pending mutation each newer render's options and runs
+  // its function with them, so a save made before an account switch, and
+  // started after it, would be followed by the next account's editor.
+  // `onMutate` runs as the person acts, with the options of the render they
+  // acted in, and keeps that render's follow and the sign-in current then for
+  // the function, which TanStack hands the same context. A followed save with
+  // no press recorded is not sent.
+  const [pressedIn] = useState(
+    () =>
+      new WeakMap<
+        MutationFunctionContext,
+        PressedSettingsSave<Registry, Method>
+      >(),
+  );
+  const cloudSource = useEnvironmentCloud();
+  const follow = args.followSettingsSave;
+  const { onMutate } = args.options ?? {};
+  const baseOptions =
+    follow === undefined || onMutate === undefined
+      ? (args.options ?? {})
+      : {
+          ...args.options,
+          onMutate: (
+            variables: TVariables,
+            context: MutationFunctionContext,
+          ) => {
+            pressedIn.set(context, {
+              follow,
+              pressedOn: cloudSource === null ? null : cloudSource(),
+            });
+            return onMutate(variables, context);
+          },
+        };
   return useMutation<
     ResponseOfMethod<Registry, Method>,
     HostRpcError,
@@ -556,7 +611,7 @@ export function useHostMutation<
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
-    mutationFn: (variables) =>
+    mutationFn: (variables, mutationContext) =>
       withHostMutationErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
@@ -609,11 +664,14 @@ export function useHostMutation<
                 dispatch().catch((cause: unknown) => {
                   throw mapDispatchError(cause);
                 });
+        const pressed = pressedIn.get(mutationContext);
         const dispatched =
-          args.followSettingsSave === undefined
+          follow === undefined
             ? await mappedDispatch()
             : await sendFollowedSave(
-                await args.followSettingsSave(params, client),
+                pressed === undefined
+                  ? { kind: "abandoned", method: args.method }
+                  : await pressed.follow(params, client, pressed.pressedOn),
                 mappedDispatch,
               );
         // Between the dispatch and `onResponse`, so a substituted response is

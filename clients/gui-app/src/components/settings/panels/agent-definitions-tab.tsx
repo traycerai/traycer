@@ -74,10 +74,11 @@ function useAgentDefinitionWrites() {
     void invalidateEnvironmentReads(queryClient, ["environment.review"]);
   const put = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.put",
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: "environment.agentDefinitions.put", request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     mutationKey: environmentMutationKeys.agentDefinitionsPut(),
     errorMessage: "Couldn't save the agent definition.",
@@ -87,10 +88,11 @@ function useAgentDefinitionWrites() {
   });
   const remove = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.delete",
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: "environment.agentDefinitions.delete", request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     mutationKey: environmentMutationKeys.agentDefinitionsDelete(),
     errorMessage: "Couldn't delete the agent definition.",

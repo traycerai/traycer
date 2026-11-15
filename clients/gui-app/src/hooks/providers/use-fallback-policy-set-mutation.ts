@@ -53,10 +53,11 @@ export function useFallbackPolicySetMutation(): UseMutationResult<
     client,
     method: "providers.fallbackPolicy.set",
     mapVariables: (variables) => variables,
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: "providers.fallbackPolicy.set", request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     options: {
       mutationKey: providersMutationKeys.setFallbackPolicy(),
