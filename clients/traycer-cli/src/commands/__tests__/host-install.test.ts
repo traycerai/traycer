@@ -247,7 +247,14 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
     >();
   return {
     ...actual,
-    validateAuthTokenIdentityAccessOnly: mocks.validateIdentityMock,
+    // The sign-in's own record of the person's teams is read through this
+    // call; the order records when a command reads it.
+    validateAuthTokenIdentityAccessOnly: (
+      ...callArgs: Parameters<typeof mocks.validateIdentityMock>
+    ) => {
+      mocks.callOrder.push("sign-in-list-read");
+      return mocks.validateIdentityMock(...callArgs);
+    },
   };
 });
 
@@ -423,6 +430,18 @@ function signedInAcmeUser() {
     ],
   };
 }
+/** The same sign-in, not a member of any team. */
+function signedInNonMemberUser() {
+  return {
+    ...signedInAcmeUser(),
+    environments: { personal: null, teams: [] },
+    teamSubscriptions: [],
+  };
+}
+
+const TEAM_SLUG_SENTENCE =
+  "Enter the slug of a team you belong to, as shown in its dashboard address.";
+
 beforeAll(() => {
   expect(osHome.current).not.toBe("");
   expect(hostHomeDir("production").startsWith(osHome.current)).toBe(true);
@@ -646,6 +665,11 @@ describe("buildHostInstallCommand", () => {
       acceptStoreFormatLoss: false,
       site: "host install",
     });
+    // The signed-in person belongs to the acme team unless a case says not.
+    mocks.validateIdentityMock.mockResolvedValue({
+      kind: "valid",
+      user: signedInAcmeUser(),
+    });
     mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
     mocks.teamTokenPreparationMock.mockResolvedValue(null);
     mocks.waitForTeamTokenInstallMock.mockResolvedValue({
@@ -729,7 +753,58 @@ describe("buildHostInstallCommand", () => {
       }),
       ctx.progress,
     );
+    // A member's team is found in the sign-in's list before anything is staged.
+    expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeLessThan(
+      mocks.callOrder.indexOf("stage"),
+    );
   });
+
+  it.each([
+    {
+      label: "a person who belongs to no team",
+      user: signedInNonMemberUser,
+      team: "team/acme",
+    },
+    {
+      label: "a member who mistypes the slug",
+      user: signedInAcmeUser,
+      team: "team/acmee",
+    },
+  ])(
+    "stops --team for $label before anything is installed",
+    async ({ user, team }) => {
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: user(),
+      });
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(
+        sampleLifecycleHandle(),
+      );
+
+      await expect(
+        buildHostInstallCommand(baseArgs({ team }))(fakeCtx()),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: TEAM_SLUG_SENTENCE,
+        exitCode: 1,
+      });
+
+      // Nothing was staged, started or asked of a host.
+      expect(mocks.callOrder).not.toContain("stage");
+      expect(mocks.callOrder).not.toContain("commit");
+      expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.createBytesOnlyInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+      expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
+      expect(mocks.legacyHost).toBeNull();
+    },
+  );
 
   it("uses a prepared team token before auth, waits after commit, and returns only the target receipt", async () => {
     const prepared = {
