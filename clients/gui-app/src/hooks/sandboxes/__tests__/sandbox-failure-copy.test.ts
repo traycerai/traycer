@@ -110,6 +110,21 @@ describe("sandboxFailureMessage", () => {
     );
   });
 
+  it("says the server's sentence for a credit refusal that carries one, and the team allowance copy without it", () => {
+    const seatWaiting =
+      "Your seat on this team is waiting on payment. You can use team credits once the payment goes through.";
+    const teamAllowance: SandboxControlFailure = {
+      ...refused("insufficient_credit", { reason: "denied", shortfallMc: null }),
+      creditSource: "team-allowance",
+    };
+    expect(
+      sandboxFailureMessage({ ...teamAllowance, message: seatWaiting }),
+    ).toBe(seatWaiting);
+    expect(sandboxFailureMessage(teamAllowance)).toBe(
+      "Your team allowance doesn't cover an hour of this sandbox.",
+    );
+  });
+
   it("reads the gate's other verdicts as what they are", () => {
     expect(
       sandboxFailureMessage(
