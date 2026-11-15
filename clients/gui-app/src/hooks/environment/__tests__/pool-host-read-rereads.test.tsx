@@ -14,7 +14,9 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -35,6 +37,33 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 const LOCAL_HOST_ID = mockLocalHostEntry.hostId;
 const REMOTE_HOST_ID = mockRemoteHostEntry.hostId;
 
+// A personal page reads its hosts from the host list; this window's own host
+// scope has no hosts here (the same stand-in as `team-page-frame-rereads`).
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const WINDOW_HOST_SELECTION = {
+    scopedHostId: null,
+    setScopedHostId: () => undefined,
+  };
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const scope = hostScopeFixture({ host: null });
+  const useHostScope = () => scope;
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
+    WINDOW_HOST_SELECTION,
+  };
+});
+// The runtime client and the client lookup by host id answer the harness's host.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : requireTeamHostClient(),
+}));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -284,11 +313,30 @@ describe("a Personal host on a build with a server pool", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "local", hostId: LOCAL_HOST_ID, hostName: "This Mac" },
     });
+    // The page's host options read the runner host, so the real provider
+    // wraps it inside the harness.
+    const runnerHost = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
     render(
       <PersonalPageFrame section="secrets">
         <FocusReaders />
       </PersonalPageFrame>,
-      { wrapper: harness.Wrapper },
+      {
+        wrapper: ({ children }) => (
+          <harness.Wrapper>
+            <RunnerHostProvider runnerHost={runnerHost}>
+              {children}
+            </RunnerHostProvider>
+          </harness.Wrapper>
+        ),
+      },
     );
 
     await waitFor(() => {

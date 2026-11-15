@@ -8,6 +8,7 @@ import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { busyWorkPhrase } from "@/components/host/host-restart-copy";
 import { deriveUpdateAffordance } from "@/components/settings/panels/my-hosts-model";
+import { HOST_UPDATE_PENDING_LABEL } from "@/lib/host/version-skew-copy";
 
 /**
  * The auto-update policy switch.
@@ -85,20 +86,26 @@ export function HostAutoUpdateRow(props: {
               cannot tell from this row which case they are in, so the copy
               promises the slower one and lets the faster one be a pleasant
               surprise. */}
-        <p className="text-ui-xs text-muted-foreground">
-          Applied on this host&apos;s next check-in — within ~10 minutes, and
-          only when no sessions are running.
-        </p>
+        <HostUpdateCheckInLine />
       </div>
       {updatePending ? (
         <span
           className="shrink-0 rounded-sm border border-warning/30 bg-warning/10 px-1.5 py-px text-ui-xs text-warning-foreground"
           data-testid={`host-update-pill-${item.hostId}`}
         >
-          Update pending
+          {HOST_UPDATE_PENDING_LABEL}
         </span>
       ) : null}
     </div>
+  );
+}
+
+export function HostUpdateCheckInLine(): ReactNode {
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      Applied on this host&apos;s next check-in — within ~10 minutes, and only
+      when no sessions are running.
+    </p>
   );
 }
 
