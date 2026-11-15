@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import {
   cleanup,
   render,
@@ -10,6 +10,8 @@ import userEvent from "@testing-library/user-event";
 import {
   QueryClient,
   QueryClientProvider,
+  queryOptions,
+  skipToken,
   useQuery,
 } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +37,7 @@ import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import { createAppQueryClient } from "@/lib/query-client";
+import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { AuthService } from "@/lib/auth/auth-service";
@@ -147,17 +150,20 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       },
     ): ComposerToolbarStore => {
       const settings = seedSource.kind === "none" ? null : seedSource.settings;
-      const values = {
-        ultracode: false,
-        permission: "supervised" as const,
-        selection: {
-          harnessId: settings?.harnessId ?? "claude",
-          modelSlug: settings?.model ?? "model-a",
-          profileId: settings?.profileId ?? null,
-        },
-        reasoning: settings?.reasoningEffort ?? "",
-        serviceTier: "",
-      };
+      const harnessId = settings?.harnessId ?? "claude";
+      const modelSlug = settings?.model ?? "model-a";
+      const profileId = settings?.profileId ?? null;
+      const reasoning = settings?.reasoningEffort ?? "";
+      const values = useMemo(
+        () => ({
+          ultracode: false,
+          permission: "supervised" as const,
+          selection: { harnessId, modelSlug, profileId },
+          reasoning,
+          serviceTier: "",
+        }),
+        [harnessId, modelSlug, profileId, reasoning],
+      );
       const seedKey = JSON.stringify(values.selection);
       const [store] = useState(() =>
         createComposerToolbarStore({
@@ -243,6 +249,11 @@ function personalEnvironmentList(): EnvironmentListResponseV11 {
   };
 }
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  return input instanceof URL ? input.href : input.url;
+}
+
 function response(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -299,12 +310,13 @@ function PanelFromSnapshot(props: {
   readonly initialSnapshot: BotSubscriptionSnapshot;
   readonly onDeleted: () => void;
 }): ReactNode {
-  const query = useQuery<BotSubscriptionSnapshot>({
-    queryKey: BOT_SNAPSHOT_KEY,
-    queryFn: () => Promise.resolve(props.initialSnapshot),
-    initialData: props.initialSnapshot,
-    enabled: false,
-  });
+  const query = useQuery(
+    queryOptions<BotSubscriptionSnapshot>({
+      queryKey: BOT_SNAPSHOT_KEY,
+      queryFn: skipToken,
+      initialData: props.initialSnapshot,
+    }),
+  );
   return (
     <BotChannelSettingsPanel
       bot={query.data.bot}
@@ -374,8 +386,11 @@ describe("bot settings controls with an unavailable tab host", () => {
   it("saves model and reply settings through the verified app session, then deletes without a host request", async () => {
     const requests: EnvironmentTransportRequest[] = [];
     let currentRow = INITIAL_SETUP_ROW;
-    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      const url = String(input);
+    const answer = (
+      input: RequestInfo | URL,
+      init: RequestInit | undefined,
+    ): Response => {
+      const url = requestUrl(input);
       if (!url.startsWith("https://server.test.invalid/")) {
         return signedInProfileResponse();
       }
@@ -384,7 +399,7 @@ describe("bot settings controls with an unavailable tab host", () => {
         url,
         method: "POST",
         headers: Object.fromEntries(headers.entries()),
-        body: JSON.parse(String(init?.body ?? "null")),
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
         signal: init?.signal ?? new AbortController().signal,
       };
       requests.push(request);
@@ -410,7 +425,10 @@ describe("bot settings controls with an unavailable tab host", () => {
         });
       }
       return response(404, { error: "Unexpected test route" });
-    });
+    };
+    const fetchMock = vi.fn<typeof fetch>((input, init) =>
+      Promise.resolve(answer(input, init)),
+    );
     vi.stubGlobal("fetch", fetchMock);
     restoreFetch = () => vi.unstubAllGlobals();
 
@@ -439,6 +457,23 @@ describe("bot settings controls with an unavailable tab host", () => {
     queryClient.setQueryData(localList, { bots: [BOT], mainBotIds: {} });
     queryClient.setQueryData(secondList, { bots: [BOT], mainBotIds: {} });
     queryClient.setQueryData(BOT_SNAPSHOT_KEY, snapshot);
+    // The Usage group's thread list (#3900) is read from the tab's host, which
+    // is asleep here: the fixture answers it from the cache, so no request
+    // reaches the host and the sweep below reads an answered entry.
+    queryClient.setQueryData(
+      hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+        mockLocalHostEntry.hostId,
+        "bot.thread.list",
+        botThreadListParams(BOT_ID),
+      ),
+      {
+        threads: [],
+        trunkCostUsd: null,
+        threadAnchors: null,
+        nextCursor: null,
+        total: 0,
+      },
+    );
     const tabHost = hostAsleepClient();
     harness.tabClient = tabHost.client;
     const user = userEvent.setup();
