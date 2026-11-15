@@ -1061,17 +1061,21 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       await settle();
       expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
 
-      // The first answers late and is ignored; the second forms the hold.
+      // The first answers late and is ignored: the second is still the one in
+      // flight, so a further refusal starts no third restore.
       harness.resolveRestore("superseded");
       await settle();
+      harness.emitOutbound(SIGNED_IN_SNAPSHOT);
+      await settle();
+      expect(harness.restoreLocal).toHaveBeenCalledTimes(2);
       await tick(RESEND_MS * 3);
-      expect(harness.set).toHaveBeenCalledTimes(2);
+      expect(harness.set).toHaveBeenCalledTimes(3);
 
       harness.resolveRestore("restored");
       await settle();
       await tick(RESEND_MS);
 
-      expect(harness.set).toHaveBeenCalledTimes(3);
+      expect(harness.set).toHaveBeenCalledTimes(4);
       expect(toast.warning).not.toHaveBeenCalled();
     });
 
