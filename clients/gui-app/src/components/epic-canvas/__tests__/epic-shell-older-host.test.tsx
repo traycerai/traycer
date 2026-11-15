@@ -602,6 +602,9 @@ describe("a task tab whose computer falls below the minimum host version", () =>
       });
       publishTabRow("1.5.4");
 
+      await waitFor(() => {
+        expect(document.body.textContent).toContain("Host update needed");
+      });
       const cover = await screen.findByTestId(testCase.cover);
       expect(within(cover).getByText("Host update needed")).toBeTruthy();
       await waitFor(() => {
