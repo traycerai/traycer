@@ -26,6 +26,7 @@ import { useConfigurationMcpServerMutations } from "@/hooks/environment/team/use
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { createAppQueryClient } from "@/lib/query-client";
 import { isRecord } from "@/lib/editor/prosemirror-json";
+import { environmentMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -307,6 +308,14 @@ function requestContainsTeamPat(request: unknown): boolean {
   );
 }
 
+function personalPatRequestMatches(request: unknown): boolean {
+  return (
+    isRecord(request) &&
+    request.serverId === null &&
+    requestContainsTeamPat(request)
+  );
+}
+
 describe("The MCP server dialog", () => {
   it.each([
     {
@@ -516,9 +525,9 @@ describe("The MCP server dialog", () => {
       const requests = harness.paramsOf(
         "environment.configuration.mcpServers.put",
       );
-      expect(requests.length === 1 && requestContainsTeamPat(requests[0])).toBe(
-        true,
-      );
+      expect(
+        requests.length === 1 && personalPatRequestMatches(requests[0]),
+      ).toBe(true);
     });
   });
 
@@ -536,19 +545,26 @@ describe("The MCP server dialog", () => {
     await fillPersonalPatTarget(dialog);
     await submitPersonalPat(dialog, FAKE_TEAM_MCP_PAT);
 
-    await waitFor(() => {
-      const requests = harness.paramsOf(
-        "environment.configuration.mcpServers.put",
-      );
-      const secretInput =
-        within(dialog).queryByLabelText<HTMLInputElement>("Secret value");
+    await waitFor(() =>
       expect(
-        requests.length === 1 &&
-          requestContainsTeamPat(requests[0]) &&
-          secretInput instanceof HTMLInputElement &&
-          secretInput.value === FAKE_TEAM_MCP_PAT,
-      ).toBe(true);
-    });
+        harness.queryClient
+          .getMutationCache()
+          .findAll({
+            mutationKey: environmentMutationKeys.configurationMcpServersPut(),
+          })
+          .at(-1)?.state.status,
+      ).toBe("error"),
+    );
+    const requests = harness.paramsOf(
+      "environment.configuration.mcpServers.put",
+    );
+    const secretInput =
+      within(dialog).getByLabelText<HTMLInputElement>("Secret value");
+    expect({
+      requestMatches:
+        requests.length === 1 && personalPatRequestMatches(requests[0]),
+      draftUnchanged: secretInput.value === FAKE_TEAM_MCP_PAT,
+    }).toEqual({ requestMatches: true, draftUnchanged: true });
   });
 
   it.each([
