@@ -321,6 +321,7 @@ function createFixture(
           listCalls.value += 1;
           const response = () => ({
             kind: "snapshot" as const,
+            publicationRedirectRevision: null,
             listStamp: null,
             chats: records.map((row) => ({ ...row })),
           });

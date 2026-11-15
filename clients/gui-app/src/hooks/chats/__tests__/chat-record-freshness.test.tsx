@@ -246,6 +246,7 @@ function createFixture(
           }
           return Promise.resolve({
             kind: "snapshot" as const,
+            publicationRedirectRevision: null,
             listStamp: null,
             chats: records.map((row) => ({ ...row })),
           });

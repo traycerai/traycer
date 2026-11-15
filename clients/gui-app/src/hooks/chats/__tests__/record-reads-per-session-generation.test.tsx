@@ -274,6 +274,7 @@ function createFixture(): Fixture {
           chatListCalls.value += 1;
           return Promise.resolve({
             kind: "snapshot" as const,
+            publicationRedirectRevision: null,
             listStamp: null,
             chats: chatRows.map((row) => ({ ...row })),
           });

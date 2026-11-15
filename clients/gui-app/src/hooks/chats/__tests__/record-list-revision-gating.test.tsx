@@ -306,7 +306,12 @@ function useBothRecordSyncHooks(): void {
 
 function createFixture(): Fixture {
   const chatHandler: HandlerBox<ChatListRequest, ChatListResponse> = {
-    impl: () => ({ kind: "snapshot", listStamp: null, chats: [] }),
+    impl: () => ({
+      kind: "snapshot",
+      publicationRedirectRevision: null,
+      listStamp: null,
+      chats: [],
+    }),
   };
   const tuiHandler: HandlerBox<TuiListRequest, TuiListResponse> = {
     impl: () => ({ kind: "snapshot", listStamp: null, tuiAgents: [] }),
@@ -399,6 +404,7 @@ describe("R1 - the first dispatch holds nothing, and a snapshot's stamp is sent 
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: chatStamp,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -448,6 +454,7 @@ describe("R2 - an unchanged answer's patches move only the rows they name", () =
   it("moves the touched rows' updatedAt, retracts nothing, and leaves other rows' identity untouched", async () => {
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: { epoch: "E", revision: 1, touchRevision: 1 },
       chats: [
         chatRow({ chatId: "chat-a", revision: 1, updatedAt: 10 }),
@@ -489,6 +496,7 @@ describe("R2 - an unchanged answer's patches move only the rows they name", () =
     ];
     fixture.chatHandler.impl = () => ({
       kind: "unchanged",
+      publicationRedirectRevision: null,
       listStamp: { epoch: "E", revision: 1, touchRevision: 2 },
       touched: chatPatches,
     });
@@ -545,6 +553,7 @@ describe("R3 - a new touchRevision is what the next dispatch carries", () => {
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: chatStampV1,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -585,6 +594,7 @@ describe("R3 - a new touchRevision is what the next dispatch carries", () => {
     // sequence the THIRD invalidate below after this answer actually landed.
     fixture.chatHandler.impl = () => ({
       kind: "unchanged",
+      publicationRedirectRevision: null,
       listStamp: chatStampV2,
       touched: [
         { id: "chat-a", ownerUserId: VIEWER_ID, updatedAt: 123, revision: 2 },
@@ -635,6 +645,7 @@ describe("R4 - a snapshot with no revision to report keeps the client on knownRe
   it("holds null after a snapshot whose listStamp is null (the @1.2 upgrade path)", async () => {
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: null,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -684,6 +695,7 @@ describe("R5 - an epic reopen starts the new generation on knownRevision: null",
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: chatStamp,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -775,6 +787,7 @@ describe("R7 - a session-handle swap under a MOUNTED hook also resets to null", 
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: stamp,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -865,6 +878,7 @@ describe("R8 - an answer the store did not take whole does not license `unchange
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: stampBefore,
       chats: [chatRow({ chatId: "chat-seed", docResident: false })],
     });
@@ -903,6 +917,7 @@ describe("R8 - an answer the store did not take whole does not license `unchange
       }
       return {
         kind: "snapshot",
+        publicationRedirectRevision: null,
         listStamp: stampAfter,
         chats: [
           chatRow({
@@ -928,6 +943,7 @@ describe("R8 - an answer the store did not take whole does not license `unchange
     // stamp is not this client's to send.
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: stampRepaired,
       chats: [
         chatRow({
@@ -1077,6 +1093,7 @@ describe("R10 - the push stream's stamp", () => {
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: chatStamp,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -1159,6 +1176,7 @@ describe("R10 - the push stream's stamp", () => {
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: chatStamp,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -1192,6 +1210,7 @@ describe("R10 - the push stream's stamp", () => {
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: chatStamp,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -1220,6 +1239,7 @@ describe("R10 - the push stream's stamp", () => {
     // snapshot on every dispatch - a delta has nothing to tell it.
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: null,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -1253,6 +1273,7 @@ describe("R10 - the push stream's stamp", () => {
     const refetchLatch: { resolve: (() => void) | null } = { resolve: null };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: chatStamp,
       chats: [chatRow({ chatId: "chat-a" })],
     });
@@ -1271,6 +1292,7 @@ describe("R10 - the push stream's stamp", () => {
         refetchLatch.resolve = () => {
           resolve({
             kind: "snapshot",
+            publicationRedirectRevision: null,
             listStamp: { epoch: "E", revision: 3, touchRevision: 1 },
             chats: [chatRow({ chatId: "chat-a" })],
           });
@@ -1319,6 +1341,7 @@ describe("R10 - the push stream's stamp", () => {
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: stampBefore,
       chats: [chatRow({ chatId: "chat-seed", docResident: false })],
     });
@@ -1352,6 +1375,7 @@ describe("R10 - the push stream's stamp", () => {
       }
       return {
         kind: "snapshot",
+        publicationRedirectRevision: null,
         listStamp: { epoch: "E", revision: 5, touchRevision: 1 },
         chats: [
           chatRow({
@@ -1414,6 +1438,7 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: stampBefore,
       chats: [chatRow({ chatId: "chat-seed" })],
     });
@@ -1432,6 +1457,7 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
     // its home stated at last.
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: { epoch: "E", revision: 5, touchRevision: 1 },
       chats: [
         chatRow({ chatId: "chat-seed" }),
@@ -1499,6 +1525,7 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
     };
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: stampBefore,
       chats: [chatRow({ chatId: "chat-a", docResident: false })],
     });
@@ -1550,6 +1577,7 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
   it("a read dispatched with the advanced stamp cannot state the home, so the repair cancels it and re-reads", async () => {
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: { epoch: "E", revision: 4, touchRevision: 1 },
       chats: [chatRow({ chatId: "chat-seed" })],
     });
@@ -1572,6 +1600,7 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
       if (params.knownRevision === null) {
         return {
           kind: "snapshot",
+          publicationRedirectRevision: null,
           listStamp: { epoch: "E", revision: 5, touchRevision: 1 },
           chats: [
             chatRow({ chatId: "chat-seed" }),
@@ -1583,6 +1612,7 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
         held.resolve = () => {
           resolve({
             kind: "unchanged",
+            publicationRedirectRevision: null,
             listStamp: { epoch: "E", revision: 5, touchRevision: 1 },
             touched: [],
           });
@@ -1675,6 +1705,7 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
     // entry.
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
+      publicationRedirectRevision: null,
       listStamp: { epoch: "E", revision: 5, touchRevision: 1 },
       chats: [chatRow({ chatId: "chat-early", docResident: false })],
     });

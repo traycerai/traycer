@@ -429,6 +429,7 @@ function createRoutingFixture(): RoutingFixture {
         if (hostId === LOCAL.hostId) {
           return {
             kind: "snapshot" as const,
+            publicationRedirectRevision: null,
             listStamp: null,
             chats: [
               ...localRecords.map((row) => ({ ...row })),
@@ -448,12 +449,14 @@ function createRoutingFixture(): RoutingFixture {
           }
           return {
             kind: "snapshot" as const,
+            publicationRedirectRevision: null,
             listStamp: null,
             chats: remoteRecords.map((row) => ({ ...row })),
           };
         }
         return {
           kind: "snapshot" as const,
+          publicationRedirectRevision: null,
           listStamp: null,
           chats: otherRecords.map((row) => ({ ...row })),
         };

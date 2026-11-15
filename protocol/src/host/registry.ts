@@ -941,11 +941,13 @@ import {
   epicListChatRecordsUpgradeV11ToV12,
   epicListChatRecordsUpgradeV12ToV13,
   epicListChatRecordsUpgradeV13ToV14,
+  epicListChatRecordsUpgradeV14ToV15,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
   epicListChatRecordsV14,
+  epicListChatRecordsV15,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsDowngradeV30ToV10,
   epicGetChatRunSettingsDowngradeV30ToV20,
@@ -10856,7 +10858,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // rows upgrade with `false`, which is what every older host's chats are.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
@@ -10931,6 +10933,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // No `responseGrowthProjectionGated`: `evicted` is a plain added
           // key on the `snapshot` arm's rows, which zod strips for a 1.3
           // peer, and the root union is 1.3's unchanged.
+        },
+        5: {
+          contract: epicListChatRecordsV15,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV14ToV15,
+          // Both existing arms gain a key that older schemas strip.
         },
       },
       downgradePathsFromLatest: {},
