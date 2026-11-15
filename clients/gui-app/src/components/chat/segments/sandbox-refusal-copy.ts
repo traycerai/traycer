@@ -12,6 +12,7 @@
  * so an error raised from a typed host error renders the same either way.
  */
 import { SANDBOX_EGRESS_REFUSAL_CODES } from "@traycer/protocol/host/sandbox-egress";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   NO_EGRESS_REFUSAL_SUBJECT,
   sandboxEgressRefusalCopyFor,
@@ -105,13 +106,18 @@ export function teamFrozenRefusalCopy(
 }
 
 /**
- * That turn's copy while whose sandbox it is is not known: no remedy is told
- * as the reader's to take.
+ * That turn's copy while whose sandbox it is is not known: the neutral
+ * out-of-credits line names no account, and no remedy is told as the
+ * reader's to take.
  */
 export function unknownPayerFrozenRefusalCopy(
   copy: SandboxRefusalCopy,
 ): SandboxRefusalCopy {
-  return { ...copy, description: FROZEN_ENDED_TURN };
+  return {
+    ...copy,
+    headline: SANDBOX_OUT_OF_CREDITS,
+    description: FROZEN_ENDED_TURN,
+  };
 }
 
 export function sandboxRefusalCopyFor(

@@ -329,7 +329,7 @@ export function BotChatTranscript(props: {
   readonly botId: string;
   readonly chatId: string;
   readonly hostId: string;
-  /** The host that runs the bot, whose credits its turns ran on; `null` when none does. */
+  /** The bot's current bound host, whose payer the transcript's rows read; `null` when no host runs the bot. */
   readonly boundHostId: string | null;
   readonly title: string;
   readonly instanceId: string;
