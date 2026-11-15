@@ -221,7 +221,6 @@ const RESTING: RestingChatSandbox = {
     displayName: "e2e-sbx-rest",
   }),
   configuration: { kind: "personal" },
-  wakeChangesPayer: false,
 };
 
 function lastComposer() {

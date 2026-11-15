@@ -898,6 +898,7 @@ export function BotChannelView(props: {
                     botId={botId}
                     chatId={channel.conversationId}
                     hostId={hostId}
+                    boundHostId={boundHostId}
                     title={botTitle}
                     instanceId={`bot-channel:${botId}`}
                     surface={surface}

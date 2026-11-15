@@ -211,7 +211,9 @@ function renderRows(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <TabHostProvider hostId={HOST_ID}>
-          <ChatTranscriptProvider value={{ chatId: "chat-1", hostId: HOST_ID }}>
+          <ChatTranscriptProvider
+            value={{ chatId: "chat-1", hostId: HOST_ID, payerHostId: HOST_ID }}
+          >
             {turnIds.map((turnId) => (
               <ErrorSegment
                 hostTimestamp={null}

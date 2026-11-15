@@ -10,8 +10,13 @@
  *
  * Real hooks and the real host directory; only the host reads are answered.
  */
-import type { QueryObserverResult } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type QueryObserverResult,
+} from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
+import { renderHookWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import {
@@ -62,6 +67,10 @@ const answers = vi.hoisted(() => ({
         Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
       >
     >(),
+  /** A team's own balance in millicredits as the cached read has it; unnamed is unknown. */
+  teamBalancesMc: new Map<string, number>(),
+  /** What a fresh read of each team's balance answers at Send; unnamed is unknown. */
+  freshTeamBalancesMc: new Map<string, number>(),
   catalogueError: false,
   catalogueFetching: false,
   refetchCatalogue: vi.fn<() => Promise<unknown>>(),
@@ -92,6 +101,18 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: answers.user, refetch: answers.refetchUser }),
 }));
+vi.mock(
+  "@/hooks/sandboxes/use-team-bundle-balances",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-team-bundle-balances")
+    >()),
+    useTeamBundleBalances: () => (teamId: string) =>
+      answers.teamBalancesMc.get(teamId) ?? null,
+    useReadTeamBundleBalance: () => (teamId: string) =>
+      Promise.resolve(answers.freshTeamBalancesMc.get(teamId) ?? null),
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://billing.test",
 }));
@@ -179,6 +200,8 @@ const PACKS_INSTALLED: ReadonlyArray<ProviderCliState> = [
 
 beforeEach(() => {
   answers.user = null;
+  answers.teamBalancesMc = new Map();
+  answers.freshTeamBalancesMc = new Map();
   answers.refetchUser.mockReset();
   answers.refetchUser.mockResolvedValue({ data: null, isError: false });
   answers.harnesses = CODEX_SIGNED_OUT;
@@ -212,7 +235,7 @@ function gateOn(
   hostId: string | null,
   harnessId: "codex" | "claude" | "traycer" | null,
 ) {
-  return renderHook(() =>
+  return renderHookWithQueryClient(() =>
     useSandboxAgentGate({
       hostId,
       client: CLIENT,
@@ -237,7 +260,7 @@ describe("useSandboxAgentGate", () => {
   it("holds Send until Traycer's actual engine is ready, including missing line facts", () => {
     answers.harnesses = [harnessRow("traycer", {})];
     answers.providers = [providerRow("traycer", { status: "installed" })];
-    const { result, rerender } = renderHook(() =>
+    const { result, rerender } = renderHookWithQueryClient(() =>
       useSandboxAgentGate({
         hostId: SANDBOX_HOST,
         client: CLIENT,
@@ -301,6 +324,9 @@ describe("useSandboxAgentGate", () => {
     ];
     expect(gateOn(SANDBOX_HOST, "traycer").blocked).toBe(true);
 
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
     const { result } = renderHook(
       () =>
         useSandboxAgentGate({
@@ -311,9 +337,11 @@ describe("useSandboxAgentGate", () => {
         }),
       {
         wrapper: ({ children }: { readonly children: ReactNode }) => (
-          <ChatOpencodeLineContext value={1}>
-            {children}
-          </ChatOpencodeLineContext>
+          <QueryClientProvider client={client}>
+            <ChatOpencodeLineContext value={1}>
+              {children}
+            </ChatOpencodeLineContext>
+          </QueryClientProvider>
         ),
       },
     );
@@ -552,7 +580,7 @@ function stageIn(
 }
 
 function checkFor(harnessId: "codex" | "claude" | null) {
-  return renderHook(() =>
+  return renderHookWithQueryClient(() =>
     useStagedSendSignInCheck({
       harnessId,
       modelSlug: "",
@@ -620,12 +648,14 @@ describe("useStagedSendSignInCheck", () => {
       [teamSubscription(0)],
     );
     answers.catalogue = QUOTED_CATALOGUE;
+    // A team's sandbox is checked against the team's own balance.
+    answers.teamBalancesMc.set("team-1", 0);
     const stage = stageIn({ kind: "team", teamId: "team-1", teamName: "Acme" });
     const notice = checkFor("codex")(stage);
     expect(notice).toMatchObject({
       kind: "refused",
       message:
-        "Your Acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
+        "Acme's credits are short $0.21. $0.21 more starts this sandbox for an hour.",
     });
     expect(notice?.secondaryActions?.map((action) => action.label)).toEqual([
       "Use This computer",
@@ -653,12 +683,15 @@ describe("useStagedSendSignInCheck", () => {
         data: user(stillShort ? 0 : 10),
         isError: false,
       });
+      // The team's own balance, as cached at the check and as read afresh.
+      answers.teamBalancesMc.set("team-1", stillShort ? 10_000 : 0);
+      answers.freshTeamBalancesMc.set("team-1", stillShort ? 0 : 10_000);
       const stage = stageIn({
         kind: "team",
         teamId: "team-1",
         teamName: "Acme",
       });
-      const gate = renderHook(() =>
+      const gate = renderHookWithQueryClient(() =>
         useStagedSendSignInCheck({
           harnessId: "codex",
           modelSlug: "",
@@ -670,7 +703,7 @@ describe("useStagedSendSignInCheck", () => {
       const refusal = await gate.beforeSend(stage);
       if (stillShort)
         expect(refusal?.message).toBe(
-          "Your Acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
+          "Acme's credits are short $0.21. $0.21 more starts this sandbox for an hour.",
         );
       else expect(refusal).toBeNull();
       expect(answers.refetchUser).toHaveBeenCalledOnce();

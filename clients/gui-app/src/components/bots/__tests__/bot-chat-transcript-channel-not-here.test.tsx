@@ -185,6 +185,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         botId={BOT_ID}
         chatId={CHAT_ID}
         hostId="host-1"
+        boundHostId={null}
         title="Tracy"
         instanceId="bot-channel:test"
         surface={surface}
