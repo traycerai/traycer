@@ -76,6 +76,17 @@ export interface TerminalStreamCallbacks {
       { readonly kind: "sessionUpdated" }
     >,
   ) => void;
+  /**
+   * `terminal.subscribe@1.8`: the people who have the terminal on screen, the
+   * whole set each time (it replaces the last). Never called on an older
+   * connection, whose set stays unknown.
+   */
+  readonly onViewers: (
+    frame: Extract<
+      TerminalSubscribeServerFrameOnWire,
+      { readonly kind: "viewers" }
+    >,
+  ) => void;
   readonly onConnectionStatus: StatusChangeHandler;
 }
 
@@ -286,8 +297,7 @@ export class TerminalStreamClient {
         return;
       }
       case "viewers": {
-        // Accepted so a 1.8 host's frame is not dropped with a warning; who
-        // is looking is not yet shown anywhere.
+        this.callbacks.onViewers(frame);
         return;
       }
     }
