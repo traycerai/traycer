@@ -163,6 +163,16 @@ function mountSection(
     }),
     "environment.previewLocalFacts": () => previewLocalFacts.answer(),
   });
+  vi.spyOn(harness.auth, "listTeamComputers").mockImplementation(
+    auth.listTeamComputers,
+  );
+  vi.spyOn(harness.auth, "setEnvironmentBotHost").mockImplementation(
+    auth.setEnvironmentBotHost,
+  );
+  vi.spyOn(harness.auth, "releaseTeamComputer").mockImplementation(
+    auth.releaseTeamComputer,
+  );
+  hostBinding.value = { auth: harness.auth, directory };
   const runnerHost = dashboardRunnerHost();
   const view = render(
     sectionTree(harness, environmentId, effectiveRole, runnerHost),
