@@ -47,13 +47,11 @@ export interface ProfileListHost {
   readonly setEnabledCalls: SetEnabledRequest[];
   readonly rpcCalls: MockHostMessenger<HostRpcRegistry>["calls"];
   readonly exposeEnvironmentBinding: () => void;
+  readonly setOffersSignIns: (value: boolean | undefined) => void;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
-/**
- * A fake host whose `providers.list` returns `answer` on every read, including
- * the refetch a successful `providers.answerProfileName` invalidates.
- */
+/** A fake host whose `providers.list` returns the current answer on every read. */
 export function createProfileListHost(input: {
   readonly answer: ProfileListAnswer;
   readonly answerProfileName: (
@@ -67,6 +65,7 @@ export function createProfileListHost(input: {
   const listCalls: unknown[] = [];
   const answerNameCalls: AnswerProfileNameRequest[] = [];
   const setEnabledCalls: SetEnabledRequest[] = [];
+  let offersSignIns: boolean | undefined;
   const handlers = {
     "providers.list": (
       params: RequestOfMethod<HostRpcRegistry, "providers.list">,
@@ -76,6 +75,7 @@ export function createProfileListHost(input: {
         providers: input.answer.providers,
         native: null,
         removedProfiles: input.answer.removedProfiles,
+        ...(offersSignIns === undefined ? {} : { offersSignIns }),
       };
     },
     "providers.answerProfileName": (params: AnswerProfileNameRequest) => {
@@ -125,6 +125,20 @@ export function createProfileListHost(input: {
               },
         );
       }
+      if (action !== null && action.type === "recolor") {
+        input.answer.providers = input.answer.providers.map((provider) =>
+          provider.providerId !== params.providerId
+            ? provider
+            : {
+                ...provider,
+                profiles: provider.profiles.map((profile) =>
+                  profile.profileId === action.profileId
+                    ? { ...profile, accentColor: action.accentColor }
+                    : profile,
+                ),
+              },
+        );
+      }
       return setEnabledEcho(params.providerId);
     },
   };
@@ -164,6 +178,9 @@ export function createProfileListHost(input: {
       }),
     });
   }
+  function setOffersSignIns(value: boolean | undefined): void {
+    offersSignIns = value;
+  }
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -193,6 +210,7 @@ export function createProfileListHost(input: {
     setEnabledCalls,
     rpcCalls: messenger.calls,
     exposeEnvironmentBinding,
+    setOffersSignIns,
     Wrapper,
   };
 }
