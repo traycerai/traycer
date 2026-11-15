@@ -26,7 +26,10 @@ vi.mock("@capacitor/keyboard", () => ({ Keyboard: {} }));
 vi.mock("@capacitor/push-notifications", () => ({ PushNotifications: {} }));
 vi.mock("@sentry/browser", () => ({ init: vi.fn() }));
 vi.mock("capacitor-native-settings", () => ({
-  AndroidSettings: { AppNotification: "notifications", ApplicationDetails: "app" },
+  AndroidSettings: {
+    AppNotification: "notifications",
+    ApplicationDetails: "app",
+  },
   IOSSettings: { AppNotification: "notifications", App: "app" },
   NativeSettings: { openAndroid: vi.fn(), openIOS: vi.fn() },
 }));
@@ -80,7 +83,9 @@ vi.mock("../src/file-save", () => ({
   MobileFileSave: class {},
   supportsDirectDownload: async () => false,
 }));
-vi.mock("../src/link-code-scanner", () => ({ MobileLinkCodeScanner: class {} }));
+vi.mock("../src/link-code-scanner", () => ({
+  MobileLinkCodeScanner: class {},
+}));
 vi.mock("../src/link-login-deep-links", () => ({
   MobileLinkLoginDeepLinks: class {
     start(): void {}
@@ -144,8 +149,8 @@ describe("mobile entry fetch installation", () => {
         headers: { location: "https://elsewhere.example.invalid/" },
         data: "redirect body",
       });
-      const nativePlatformFetch = vi.fn<typeof fetch>(async () =>
-        new Response("platform"),
+      const nativePlatformFetch = vi.fn<typeof fetch>(
+        async () => new Response("platform"),
       );
       globalThis.fetch = nativePlatformFetch;
       window.fetch = nativePlatformFetch;
@@ -177,8 +182,8 @@ describe("mobile entry fetch installation", () => {
       vi.resetModules();
       boot.native = false;
       boot.platform = "web";
-      const webPlatformFetch = vi.fn<typeof fetch>(async () =>
-        new Response("web"),
+      const webPlatformFetch = vi.fn<typeof fetch>(
+        async () => new Response("web"),
       );
       globalThis.fetch = webPlatformFetch;
       window.fetch = webPlatformFetch;
