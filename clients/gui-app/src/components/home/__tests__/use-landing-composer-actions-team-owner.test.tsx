@@ -217,10 +217,6 @@ const STAGED_TEAM_ENVIRONMENT = {
   label: "Team",
 };
 
-type AttachTaskAnswer = Awaited<
-  ReturnType<MockRunnerHost["attachTaskEnvironment"]>
->;
-
 interface LandingAttachmentFixture {
   readonly auth: AuthService;
   readonly runnerHost: MockRunnerHost;
