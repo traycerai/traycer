@@ -9,7 +9,7 @@
  */
 
 import { useRef, useState, type ReactNode } from "react";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -34,6 +34,17 @@ import type {
 } from "@/components/composer/use-staged-sandbox-send";
 import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { AuthService } from "@/lib/auth/auth-service";
+import * as environmentArms from "@/hooks/environment/use-environment-arms";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 import {
@@ -683,8 +694,205 @@ function QueryWrapper({ children }: { readonly children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
-function renderModal(): RenderResult {
-  const view = render(<Harness />, { wrapper: QueryWrapper });
+const MODAL_TEAM_ENVIRONMENT = {
+  environmentId: "env-team-9",
+  ownerKind: "organization" as const,
+  ownerId: "team-9",
+  roomId: "room-team-9",
+  label: "Team",
+  effectiveRole: "editor" as const,
+  kind: "team" as const,
+  hostCount: 1,
+  providerHandle: "team-9",
+};
+
+type AttachTaskAnswer = Awaited<
+  ReturnType<MockRunnerHost["attachTaskEnvironment"]>
+>;
+
+interface AttachmentAuthFixture {
+  readonly auth: AuthService;
+  readonly runnerHost: MockRunnerHost;
+  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
+  readonly authnCalls: Array<
+    | { readonly kind: "list"; readonly bearer: string }
+    | {
+        readonly kind: "attach";
+        readonly bearer: string;
+        readonly request: {
+          readonly taskId: string;
+          readonly environmentId: string;
+        };
+      }
+  >;
+  readonly dispose: () => void;
+}
+
+const attachmentFixtureDisposers: Array<() => void> = [];
+
+function signedInResponse(userId: string): Response {
+  return new Response(
+    JSON.stringify({
+      user: {
+        id: userId,
+        name: userId,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "x-traycer-user-record-version": "2.0",
+      },
+    },
+  );
+}
+
+async function createAttachmentAuthBinding(
+  heldPost: Promise<AttachTaskAnswer> | null = null,
+): Promise<AttachmentAuthFixture> {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  vi.stubGlobal("fetch", async () => signedInResponse("modal-user"));
+  const auth = new AuthService({ runnerHost });
+  await runnerHost.tokenStore.signIn(
+    { token: "modal-token-a", refreshToken: "modal-token-a-refresh" },
+    { id: "modal-user", email: "modal-user@example.com", name: "Modal User" },
+  );
+  await auth.start();
+  const directory = new HostDirectoryService({
+    runnerHost,
+    remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+    onRegistryPollTick: null,
+    authContextId: () => auth.currentAuthEra().identity,
+    credentialGeneration: () => auth.getCredentialGeneration(),
+    localHostIdSeeder: () => Promise.resolve("host-modal"),
+  });
+  const queryClient = new QueryClient();
+  const authnCalls: AttachmentAuthFixture["authnCalls"] = [];
+  vi.spyOn(runnerHost, "listEnvironments").mockImplementation((bearer) => {
+    authnCalls.push({ kind: "list", bearer });
+    return Promise.resolve({
+      kind: "ok",
+      list: { environments: [MODAL_TEAM_ENVIRONMENT] },
+    });
+  });
+  vi.spyOn(runnerHost, "attachTaskEnvironment").mockImplementation(
+    (bearer, request) => {
+      authnCalls.push({ kind: "attach", bearer, request });
+      return heldPost ?? Promise.resolve({ kind: "ok" });
+    },
+  );
+  let requestId = 0;
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    registry: hostRpcRegistry,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `modal-auth-${++requestId}`,
+      handlers: {},
+    }),
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    connectionRegistry: null,
+    selectedHostId: () => "host-modal",
+  });
+  const fixture: AttachmentAuthFixture = {
+    auth,
+    runnerHost,
+    authnCalls,
+    binding: {
+      runtime,
+      hostClient: runtime.hostClient,
+      directory,
+      auth,
+      hostId: "host-modal",
+    },
+    dispose: () => {
+      runtime.dispose();
+      directory.dispose();
+      auth.dispose();
+      queryClient.clear();
+    },
+  };
+  attachmentFixtureDisposers.push(fixture.dispose);
+  return fixture;
+}
+
+async function signInAs(
+  fixture: AttachmentAuthFixture,
+  userId: string,
+  token: string,
+): Promise<void> {
+  await fixture.auth.signIn();
+  fixture.runnerHost.deviceFlow.emitResult({
+    kind: "authorized",
+    token,
+    refreshToken: `${token}-refresh`,
+  });
+  await waitFor(() => {
+    expect(fixture.auth.getCurrentSessionSnapshot().token).toBe(token);
+  });
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId, userName: userId, email: `${userId}@example.com` },
+      { userId, username: userId },
+      [],
+    );
+}
+
+function renderModal(
+  binding: HostRuntimeBinding<HostRpcRegistry> | null = null,
+): RenderResult {
+  const body =
+    binding === null ? (
+      <Harness />
+    ) : (
+      <HostRuntimeContext.Provider value={binding}>
+        <Harness />
+      </HostRuntimeContext.Provider>
+    );
+  const view = render(body, { wrapper: QueryWrapper });
   act(() => {
     testState.installEditor?.();
   });
@@ -717,6 +925,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  for (const dispose of attachmentFixtureDisposers.splice(0)) dispose();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   useAuthStore.getState().setSignedOut();
   testState.createChat.mockClear();
   testState.attachEnvironment.mockReset();
@@ -1297,6 +1508,118 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     expect(draftSurvived()).toBe(true);
     expect(testState.createChat).not.toHaveBeenCalled();
     expect(testState.onSubmitted).not.toHaveBeenCalled();
+  });
+
+  it("does not continue or reopen the team arms when the same account signs in again while the attachment POST is out", async () => {
+    toastLog.length = 0;
+    const post = deferred<AttachTaskAnswer>();
+    const fixture = await createAttachmentAuthBinding(post.promise);
+    const reopenArms = vi.spyOn(environmentArms, "reopenEnvironmentArms");
+    const pressedIdentityGeneration = fixture.auth.getIdentityGeneration();
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "modal-user",
+        userName: "Modal User",
+        email: "modal-user@example.com",
+      },
+      { userId: "modal-user", username: "Modal User" },
+      [],
+    );
+    renderModal(fixture.binding);
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
+      });
+    });
+    await fixture.auth.signOut();
+    useAuthStore.getState().setSignedOut();
+    await signInAs(fixture, "modal-user", "modal-token-a-again");
+    expect(fixture.auth.getIdentityGeneration()).not.toBe(
+      pressedIdentityGeneration,
+    );
+
+    await act(async () => {
+      post.resolve({ kind: "ok" });
+      await post.promise;
+    });
+    await waitFor(() => expect(testState.bodySubmitting).toBe(false));
+
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+    expect(toastLog).toEqual([]);
+    expect(reopenArms).not.toHaveBeenCalled();
+  });
+
+  it("continues the staged modal handoff when the bearer rotates on the same sign-in during the attachment POST", async () => {
+    toastLog.length = 0;
+    const post = deferred<AttachTaskAnswer>();
+    const fixture = await createAttachmentAuthBinding(post.promise);
+    const reopenArms = vi.spyOn(environmentArms, "reopenEnvironmentArms");
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "modal-user",
+        userName: "Modal User",
+        email: "modal-user@example.com",
+      },
+      { userId: "modal-user", username: "Modal User" },
+      [],
+    );
+    renderModal(fixture.binding);
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
+      });
+    });
+    const identityGeneration = fixture.auth.getIdentityGeneration();
+    const session = fixture.auth.getCurrentSessionSnapshot();
+    await fixture.auth.ingestProjectedSessionSnapshot({
+      ...session,
+      token: "modal-token-a-rotated",
+    });
+    expect(fixture.auth.getIdentityGeneration()).toBe(identityGeneration);
+
+    await act(async () => {
+      post.resolve({ kind: "ok" });
+      await post.promise;
+    });
+    await waitFor(() => {
+      expect(
+        Object.values(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1);
+    });
+
+    expect(onlyPendingSend()).toMatchObject({
+      epicId: "epic-1",
+      request: { kind: "chat", parentId: null, placement: null },
+    });
+    expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
+    expect(toastLog).toEqual([]);
+    expect(reopenArms).toHaveBeenCalledOnce();
   });
 
   it("hands the send to this task and closes, though this host's workspace folder is unresolved", async () => {

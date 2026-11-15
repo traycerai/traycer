@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentDescriptorV11,
+  EnvironmentHostRecordV12,
   EnvironmentMemberV12,
   EnvironmentMembersRemovePreviewResponse,
 } from "@traycer/protocol/host/environment/contracts";
@@ -44,7 +45,9 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useOptionalHostClient: () => requireTeamHostClient(),
   useHostDirectory: () => ({
     findById: (hostId: string) =>
-      hostId === "host-local" ? { label: "This Mac" } : null,
+      hostId === "host-local" || hostId === "mock-local"
+        ? { label: "This Mac" }
+        : null,
   }),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
@@ -53,6 +56,32 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   >()),
   useCloudChatViewerId: () => "u-admin",
 }));
+// The host's handshake is the external boundary: it serves every Members
+// method, `environment.members` at @1.1, unless a test says otherwise.
+const handshake = vi.hoisted(() => ({
+  servesMembers: true,
+  servesSeats: true,
+  servesRemovePreview: true,
+  membersVersion: { major: 1, minor: 1 },
+}));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSupport: (_hostId: string | null, method: string) => {
+    if (method === "environment.members") return handshake.servesMembers;
+    if (method === "environment.members.seats") return handshake.servesSeats;
+    if (method === "environment.members.removePreview")
+      return handshake.servesRemovePreview;
+    return true;
+  },
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
+    method === "environment.members" && handshake.servesMembers
+      ? handshake.membersVersion
+      : null,
+  useHostSupportsMethod: (_hostId: string | null, method: string) =>
+    method === "environment.members.removePreview"
+      ? handshake.servesRemovePreview
+      : true,
+}));
+
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
@@ -61,6 +90,10 @@ afterEach(() => {
   useHostNotificationsStore.setState({ byId: {} });
   toasts.success.mockReset();
   toasts.error.mockReset();
+  handshake.servesMembers = true;
+  handshake.servesSeats = true;
+  handshake.servesRemovePreview = true;
+  handshake.membersVersion = { major: 1, minor: 1 };
 });
 
 const TEAM: EnvironmentDescriptorV11 = {
@@ -170,6 +203,19 @@ const PREVIEW: EnvironmentMembersRemovePreviewResponse = {
   sharedSignIns: [],
   paidSandboxes: [],
   linkedPlan: null,
+};
+
+const TEAM_COMPUTER: EnvironmentHostRecordV12 = {
+  hostId: mockLocalHostEntry.hostId,
+  hostLabel: "This Mac",
+  hostPlatform: "darwin",
+  enrolledByUserId: "u-admin",
+  kind: "personal",
+  boundAt: 1,
+  reachable: true,
+  lastReportedAt: 1,
+  hasLocalRow: false,
+  applied: [],
 };
 
 function rowOf(userId: string): HTMLElement {
@@ -475,6 +521,384 @@ describe("MembersPage members read", () => {
 });
 
 describe("MembersPage offboarding previews", () => {
+  it("keeps the removal rows loading until the team's computer count answers", async () => {
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    let resolveWork:
+      | ((value: EnvironmentMembersRemovePreviewResponse) => void)
+      | null = null;
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.host.list": () => ({ hosts: [TEAM_COMPUTER] }),
+        "environment.members.removePreview": () =>
+          new Promise((resolve) => {
+            resolveWork = resolve;
+          }),
+      },
+    );
+    harness.cloudResponses.set(
+      "POST /api/v3/environments/env-a/members/removal-preview",
+      () => ({ status: 200, text: JSON.stringify({ sandboxesToRekey: 0 }) }),
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Priya");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    const dialog = await screen.findByTestId("members-remove-preview");
+    await vi.waitFor(() => {
+      expect(harness.paramsOf("environment.members.removePreview")).toEqual([
+        { environmentId: "env-a", userId: "u-priya" },
+      ]);
+    });
+    expect(
+      within(dialog).getByTestId("members-remove-preview-busy"),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByTestId<HTMLButtonElement>("members-remove-confirm")
+        .disabled,
+    ).toBe(true);
+    expect(
+      within(dialog).queryByTestId("members-remove-preview-table"),
+    ).toBeNull();
+    expect(dialog.textContent).not.toContain(
+      "Their connections close. Work they started keeps running for Acme under their name.",
+    );
+
+    if (resolveWork === null) throw new Error("work count was not held");
+    await act(async () => resolveWork?.(PREVIEW));
+    const table = await within(dialog).findByTestId(
+      "members-remove-preview-table",
+    );
+    expect(table.textContent).toContain("2 turns and 1 terminal on This Mac");
+  });
+
+  it("shows a removal preview failure while its work count is still pending", async () => {
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    let resolveWork:
+      | ((value: EnvironmentMembersRemovePreviewResponse) => void)
+      | null = null;
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.host.list": () => ({ hosts: [TEAM_COMPUTER] }),
+        "environment.members.removePreview": () =>
+          new Promise((resolve) => {
+            resolveWork = resolve;
+          }),
+      },
+    );
+    harness.cloudResponses.set(
+      "POST /api/v3/environments/env-a/members/removal-preview",
+      () => ({ status: 500, text: "{}" }),
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Priya");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    const dialog = await screen.findByTestId("members-remove-preview");
+    const failure = await within(dialog).findByTestId(
+      "members-remove-preview-failed",
+    );
+    expect(failure.textContent).toContain(
+      "Couldn't load what removing Priya interrupts",
+    );
+    expect(
+      within(dialog).getByTestId<HTMLButtonElement>("members-remove-confirm")
+        .disabled,
+    ).toBe(true);
+    if (resolveWork === null) throw new Error("work count was not held");
+    await act(async () => resolveWork?.(PREVIEW));
+    expect(
+      within(dialog).getByTestId("members-remove-preview-failed"),
+    ).toBeTruthy();
+  });
+
+  it("shows None. when the team's computer counts no active turns or terminals", async () => {
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.host.list": () => ({ hosts: [TEAM_COMPUTER] }),
+        "environment.members.removePreview": () => ({
+          ...PREVIEW,
+          activeTurns: 0,
+          terminals: 0,
+        }),
+      },
+    );
+    harness.cloudResponses.set(
+      "POST /api/v3/environments/env-a/members/removal-preview",
+      () => ({ status: 200, text: JSON.stringify({ sandboxesToRekey: 0 }) }),
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Priya");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    const dialog = await screen.findByTestId("members-remove-preview");
+    const table = await within(dialog).findByTestId(
+      "members-remove-preview-table",
+    );
+    const workRow = Array.from(table.querySelectorAll("tr")).find(
+      (row) => row.querySelector("th")?.textContent === "Priya's work now",
+    );
+    expect(workRow?.querySelector("td")?.textContent).toBe("None.");
+  });
+
+  it("does not wait for a computer that is not in the team's host list", async () => {
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    const workRead = vi.fn(() => PREVIEW);
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.host.list": () => ({ hosts: [] }),
+        "environment.members.removePreview": workRead,
+      },
+    );
+    harness.cloudResponses.set(
+      "POST /api/v3/environments/env-a/members/removal-preview",
+      () => ({ status: 200, text: JSON.stringify({ sandboxesToRekey: 0 }) }),
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Priya");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    const dialog = await screen.findByTestId("members-remove-preview");
+    const table = await within(dialog).findByTestId(
+      "members-remove-preview-table",
+    );
+    const workRow = Array.from(table.querySelectorAll("tr")).find(
+      (row) => row.querySelector("th")?.textContent === "Priya's work now",
+    );
+    expect(workRow?.querySelector("td")?.textContent).toBe(
+      "Their connections close. Work they started keeps running for Acme under their name.",
+    );
+    expect(
+      within(dialog).queryByTestId("members-remove-preview-busy"),
+    ).toBeNull();
+    expect(
+      within(dialog).getByTestId<HTMLButtonElement>("members-remove-confirm")
+        .disabled,
+    ).toBe(false);
+    expect(workRead).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "host-list-failed",
+    "host-not-ready",
+    "unsupported",
+    "refused",
+    "null-count",
+  ] as const)(
+    "draws the work sentence without waiting when the count is unavailable (%s)",
+    async (scenario) => {
+      const selectedHostId =
+        scenario === "host-not-ready"
+          ? "host-not-ready"
+          : mockLocalHostEntry.hostId;
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: selectedHostId,
+      });
+      if (scenario === "unsupported") {
+        handshake.servesRemovePreview = false;
+      }
+      const workRead = vi.fn(() => {
+        if (scenario === "refused") throw new Error("host refused the count");
+        if (scenario === "null-count") {
+          return {
+            ...PREVIEW,
+            activeTurns: null,
+            terminals: null,
+            localHostId: null,
+          };
+        }
+        return PREVIEW;
+      });
+      const listedComputer =
+        scenario === "host-not-ready"
+          ? { ...TEAM_COMPUTER, hostId: selectedHostId }
+          : TEAM_COMPUTER;
+      const harness = mountTeamPage(
+        { kind: "host" },
+        {
+          "environment.list": () => ({ environments: [TEAM] }),
+          "environment.members": () => membersPage([ADA, PRIYA]),
+          "environment.host.list": () => ({ hosts: [listedComputer] }),
+          "environment.members.removePreview": workRead,
+        },
+      );
+      if (scenario === "host-list-failed") {
+        harness.cloudResponses.set(
+          "GET /api/v3/environments/env-a/hosts",
+          () => ({ status: 500, text: "{}" }),
+        );
+      }
+      harness.cloudResponses.set(
+        "POST /api/v3/environments/env-a/members/removal-preview",
+        () => ({ status: 200, text: JSON.stringify({ sandboxesToRekey: 0 }) }),
+      );
+      render(<MembersPage environmentId="env-a" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      await screen.findByText("Priya");
+      await userEvent.click(
+        within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+      );
+      const dialog = await screen.findByTestId("members-remove-preview");
+      const table = await within(dialog).findByTestId(
+        "members-remove-preview-table",
+      );
+      const workRow = Array.from(table.querySelectorAll("tr")).find(
+        (row) => row.querySelector("th")?.textContent === "Priya's work now",
+      );
+      expect(workRow?.querySelector("td")?.textContent).toBe(
+        "Their connections close. Work they started keeps running for Acme under their name.",
+      );
+      expect(
+        within(dialog).queryByTestId("members-remove-preview-busy"),
+      ).toBeNull();
+      expect(
+        within(dialog).getByTestId<HTMLButtonElement>("members-remove-confirm")
+          .disabled,
+      ).toBe(false);
+      if (
+        scenario === "host-list-failed" ||
+        scenario === "host-not-ready" ||
+        scenario === "unsupported"
+      ) {
+        expect(workRead).not.toHaveBeenCalled();
+      } else {
+        expect(workRead).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it("reads once per opening and never draws a previous opening's count", async () => {
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
+    const resolvers: Array<
+      (preview: EnvironmentMembersRemovePreviewResponse) => void
+    > = [];
+    const settledReads = new Set<number>();
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.host.list": () => ({ hosts: [TEAM_COMPUTER] }),
+        "environment.members.removePreview": () => {
+          const index = resolvers.length;
+          return new Promise<EnvironmentMembersRemovePreviewResponse>(
+            (resolve) => {
+              resolvers.push((preview) => {
+                settledReads.add(index);
+                resolve(preview);
+              });
+            },
+          );
+        },
+      },
+    );
+    harness.cloudResponses.set(
+      "POST /api/v3/environments/env-a/members/removal-preview",
+      () => ({ status: 200, text: JSON.stringify({ sandboxesToRekey: 0 }) }),
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await screen.findByText("Priya");
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    const firstDialog = await screen.findByTestId("members-remove-preview");
+    await vi.waitFor(() => expect(resolvers).toHaveLength(1));
+    expect(
+      within(firstDialog).getByTestId("members-remove-preview-busy"),
+    ).toBeTruthy();
+
+    await userEvent.click(
+      within(firstDialog).getByRole("button", { name: "Cancel" }),
+    );
+    await userEvent.click(
+      within(rowOf("u-priya")).getByRole("button", { name: "Remove" }),
+    );
+    const secondDialog = await screen.findByTestId("members-remove-preview");
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2));
+
+    await act(async () => {
+      resolvers[0]?.(PREVIEW);
+    });
+    await vi.waitFor(() => expect(settledReads.has(0)).toBe(true));
+    expect(
+      within(secondDialog).getByTestId("members-remove-preview-busy"),
+    ).toBeTruthy();
+    expect(
+      within(secondDialog).queryByTestId("members-remove-preview-table"),
+    ).toBeNull();
+
+    await act(async () => {
+      resolvers[1]?.({ ...PREVIEW, activeTurns: 7, terminals: 2 });
+    });
+    const table = await within(secondDialog).findByTestId(
+      "members-remove-preview-table",
+    );
+    expect(table.textContent).toContain("7 turns and 2 terminals on This Mac");
+
+    await act(async () => {
+      await harness.queryClient.invalidateQueries();
+      window.dispatchEvent(new Event("focus"));
+      requireTeamHostClient().notifyHostAvailabilityRecovered(
+        mockLocalHostEntry.hostId,
+        "reconnect",
+      );
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: "host-not-ready",
+      });
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: mockLocalHostEntry.hostId,
+      });
+    });
+
+    expect(harness.paramsOf("environment.members.removePreview")).toHaveLength(
+      2,
+    );
+    expect(table.textContent).toContain("7 turns and 2 terminals on This Mac");
+  });
+
   it("keeps a failed remove preview as a failure with Retry, and Remove stays off until one loads", async () => {
     let fail = true;
     const harness = mountTeamPage(

@@ -11,6 +11,11 @@ import type {
   AutoJudgeSetResponse,
   AutoPolicySetResponse,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -24,6 +29,17 @@ import {
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { UseHostMutationOptions } from "@/hooks/host/use-host-query";
+import { AuthService } from "@/lib/auth/auth-service";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import type { HostRpcRegistry } from "@/lib/host";
 
 // ─── shared boundary mocks ──────────────────────────────────────────────
 //
@@ -40,12 +56,14 @@ const mocks = vi.hoisted(() => ({
   getActiveHostId: vi.fn((): string | null => "host-1"),
   request: vi.fn(),
   useHostMutationCalls: [] as unknown[],
+  binding: null as HostRuntimeBinding<HostRpcRegistry> | null,
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
+    useHostBinding: () => mocks.binding,
     useHostClient: () => ({
       getActiveHostId: mocks.getActiveHostId,
       request: mocks.request,
@@ -122,6 +140,135 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+interface DirectAuthFixture {
+  readonly auth: AuthService;
+  readonly runnerHost: MockRunnerHost;
+  readonly runtime: HostRuntime<HostRpcRegistry>;
+  readonly directory: HostDirectoryService;
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+}
+
+let directAuthFixture: DirectAuthFixture | null = null;
+
+function signedInResponse(userId: string): Response {
+  return new Response(
+    JSON.stringify({
+      user: {
+        id: userId,
+        name: userId,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "x-traycer-user-record-version": "2.0",
+      },
+    },
+  );
+}
+
+async function createDirectAuthFixture(
+  queryClient: QueryClient,
+): Promise<DirectAuthFixture> {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  vi.stubGlobal("fetch", async (_input: RequestInfo | URL) =>
+    signedInResponse("user-a"),
+  );
+  const auth = new AuthService({ runnerHost });
+  await runnerHost.tokenStore.signIn(
+    { token: "token-a", refreshToken: "token-a-refresh" },
+    { id: "user-a", email: "user-a@example.com", name: "user-a" },
+  );
+  await auth.start();
+  const directory = new HostDirectoryService({
+    runnerHost,
+    remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+    onRegistryPollTick: null,
+    authContextId: () => auth.currentAuthEra().identity,
+    credentialGeneration: () => auth.getCredentialGeneration(),
+    localHostIdSeeder: () => Promise.resolve(null),
+  });
+  let requestId = 0;
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => `auto-policy-auth-${++requestId}`,
+    handlers: {},
+  });
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    registry: hostRpcRegistry,
+    messenger,
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    selectedHostId: () => POOL_HOST_ID,
+    connectionRegistry: null,
+  });
+  const fixture: DirectAuthFixture = {
+    auth,
+    runnerHost,
+    runtime,
+    directory,
+    messenger,
+  };
+  directAuthFixture = fixture;
+  mocks.binding = {
+    runtime,
+    hostClient: runtime.hostClient,
+    directory,
+    auth,
+    hostId: POOL_HOST_ID,
+  };
+  return fixture;
+}
+
+function connectLocalComputer(fixture: DirectAuthFixture): void {
+  vi.spyOn(fixture.directory, "list").mockResolvedValue([mockLocalHostEntry]);
+  vi.spyOn(fixture.directory, "findById").mockImplementation((hostId) =>
+    hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+  );
+}
+
 afterEach(() => {
   cleanup();
   // `useAuthStore` is a real global store, so a signed-in viewer set by one
@@ -130,10 +277,17 @@ afterEach(() => {
   // skipped whenever an earlier assertion or `waitFor` throws, and the leaked
   // viewer then reaches every later test in this file and in the worker.
   useAuthStore.getState().setSignedOut();
+  directAuthFixture?.runtime.dispose();
+  directAuthFixture?.directory.dispose();
+  directAuthFixture?.auth.dispose();
+  directAuthFixture = null;
+  mocks.binding = null;
   mocks.getActiveHostId.mockReset();
   mocks.getActiveHostId.mockReturnValue("host-1");
   mocks.request.mockReset();
   mocks.useHostMutationCalls.length = 0;
+  resetNegotiatedManifests();
+  vi.unstubAllGlobals();
 });
 
 // ─── 4a: the headline serialization test ───────────────────────────────────
@@ -318,6 +472,121 @@ describe("useAutoPolicySetMutation - client-side write ordering", () => {
       autoJudgeWriteScope("host-1").id,
     );
     expect(autoPolicyWriteScope().id).not.toBe(autoJudgeWriteScope(null).id);
+  });
+});
+
+describe("useAutoPolicySetMutation - refresh after the sign-in's PUT", () => {
+  it("does not refresh the pool computer when account A changes to B during the PUT", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    mocks.getActiveHostId.mockReturnValue(POOL_HOST_ID);
+    const fixture = await createDirectAuthFixture(queryClient);
+    connectLocalComputer(fixture);
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "host.accountSettings.refresh": { major: 1, minor: 0 },
+    });
+    const pendingPut =
+      deferred<Awaited<ReturnType<MockRunnerHost["saveAutoPolicy"]>>>();
+    const puts: Array<{ readonly bearer: string; readonly body: string }> = [];
+    vi.spyOn(fixture.runnerHost, "saveAutoPolicy").mockImplementation(
+      (bearer, body) => {
+        puts.push({ bearer, body });
+        return pendingPut.promise;
+      },
+    );
+    const { result } = renderHook(() => useAutoPolicySetMutation(), {
+      wrapper: wrapperWith(queryClient),
+    });
+
+    result.current.mutate({
+      request: { body: "Allow the task to run" },
+      operation: fixture.auth.environmentCloud(),
+    });
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(mocks.request).not.toHaveBeenCalled();
+
+    await fixture.auth.signOut();
+    await fixture.runnerHost.tokenStore.signIn(
+      { token: "token-b", refreshToken: "token-b-refresh" },
+      { id: "user-b", email: "user-b@example.com", name: "user-b" },
+    );
+    await waitFor(() => {
+      expect(fixture.auth.getCurrentSessionSnapshot().token).toBe("token-b");
+    });
+    pendingPut.resolve({ kind: "ok", updatedAt: 1 });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(puts).toEqual([
+      { bearer: "token-a", body: "Allow the task to run" },
+    ]);
+    expect(mocks.request).not.toHaveBeenCalledWith(
+      "host.accountSettings.refresh",
+      {},
+    );
+    expect(
+      fixture.messenger.calls.filter(
+        (call) => call.method === "host.accountSettings.refresh",
+      ),
+    ).toEqual([]);
+  });
+
+  it("refreshes after the PUT when only the sign-in's bearer rotates", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    mocks.getActiveHostId.mockReturnValue(POOL_HOST_ID);
+    const fixture = await createDirectAuthFixture(queryClient);
+    connectLocalComputer(fixture);
+    recordNegotiatedHostManifest(POOL_HOST_ID, {
+      "host.accountSettings.refresh": { major: 1, minor: 0 },
+    });
+    const pendingPut =
+      deferred<Awaited<ReturnType<MockRunnerHost["saveAutoPolicy"]>>>();
+    const puts: Array<{ readonly bearer: string; readonly body: string }> = [];
+    vi.spyOn(fixture.runnerHost, "saveAutoPolicy").mockImplementation(
+      (bearer, body) => {
+        puts.push({ bearer, body });
+        return pendingPut.promise;
+      },
+    );
+    const { result } = renderHook(() => useAutoPolicySetMutation(), {
+      wrapper: wrapperWith(queryClient),
+    });
+    const operation = fixture.auth.environmentCloud();
+    const identityGeneration = fixture.auth.getIdentityGeneration();
+
+    result.current.mutate({
+      request: { body: "Allow the task to run" },
+      operation,
+    });
+    await waitFor(() => expect(puts).toHaveLength(1));
+    const session = fixture.auth.getCurrentSessionSnapshot();
+    await fixture.auth.ingestProjectedSessionSnapshot({
+      ...session,
+      token: "token-a-rotated",
+    });
+    expect(fixture.auth.getIdentityGeneration()).toBe(identityGeneration);
+    expect(mocks.request).not.toHaveBeenCalled();
+
+    pendingPut.resolve({ kind: "ok", updatedAt: 1 });
+
+    await waitFor(() => {
+      expect(mocks.request).toHaveBeenCalledWith(
+        "host.accountSettings.refresh",
+        {},
+      );
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(puts).toEqual([
+      { bearer: "token-a", body: "Allow the task to run" },
+    ]);
+    expect(mocks.request).toHaveBeenCalledTimes(1);
+    expect(
+      fixture.messenger.calls.filter(
+        (call) => call.method === "host.accountSettings.refresh",
+      ),
+    ).toHaveLength(1);
   });
 });
 
