@@ -398,6 +398,26 @@ export function classifyProfileAwaitResult(
   return { kind: "notAuthenticated" };
 }
 
+function classifyAwaitResultForAttempt(
+  result: AwaitLoginResult,
+  attempt: {
+    readonly target: ProviderLoginTarget | null;
+    readonly mode: ProviderProfileLoginFlowMode;
+    readonly existingProfileId: string | null;
+    readonly nextProfileId: string | null;
+    readonly awaitProfileId: string | null;
+  },
+): AwaitLoginResolution {
+  const { target, mode, existingProfileId, nextProfileId, awaitProfileId } =
+    attempt;
+  return target === null && mode === "reauth" && existingProfileId === null
+    ? classifyAmbientAwaitResult(result)
+    : classifyProfileAwaitResult(
+        result,
+        target === null ? nextProfileId : awaitProfileId,
+      );
+}
+
 /**
  * Why a final `providers.startLogin` answer is not a started sign-in, or null
  * when it is one.
@@ -1394,13 +1414,13 @@ export function useProviderDestinationLoginFlow(
               awaitOnce();
               return;
             }
-            const resolution =
-              target === null && mode === "reauth" && existingProfileId === null
-                ? classifyAmbientAwaitResult(result)
-                : classifyProfileAwaitResult(
-                    result,
-                    target === null ? nextProfileId : awaitProfileId,
-                  );
+            const resolution = classifyAwaitResultForAttempt(result, {
+              target,
+              mode,
+              existingProfileId,
+              nextProfileId,
+              awaitProfileId,
+            });
             if (resolution.kind === "codeRejected") {
               restart("codeRejected");
               return;

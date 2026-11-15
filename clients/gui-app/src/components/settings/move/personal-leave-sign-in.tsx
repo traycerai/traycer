@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -51,6 +51,21 @@ export function PersonalLeaveSignIn(props: {
   readonly onClose: () => void;
 }): ReactNode {
   const localHostId = useReactiveLocalHostId();
+  const renderTargetResult = useCallback(
+    (
+      result: ProviderTargetLoginResult,
+      controls: ProviderTargetLoginControls,
+    ): ReactNode => (
+      <PersonalLeaveOutcome
+        row={props.row}
+        result={result}
+        controls={controls}
+        onSettled={props.onSettled}
+        onClose={props.onClose}
+      />
+    ),
+    [props.row, props.onSettled, props.onClose],
+  );
   const provider = props.providers.find(
     (entry) => entry.providerId === props.row.providerId,
   );
@@ -103,15 +118,7 @@ export function PersonalLeaveSignIn(props: {
       isLocalHost={props.hostId !== null && props.hostId === localHostId}
       open
       target={{ kind: "leave-to-local", profileId: props.row.profileId }}
-      targetResult={(result, controls) => (
-        <PersonalLeaveOutcome
-          row={props.row}
-          result={result}
-          controls={controls}
-          onSettled={props.onSettled}
-          onClose={props.onClose}
-        />
-      )}
+      targetResult={renderTargetResult}
       onOpenChange={(open) => {
         if (!open) props.onClose();
       }}
