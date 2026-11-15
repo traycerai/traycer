@@ -14,6 +14,14 @@ import type {
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import { AuthService } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  installSignInRequestFetchHarness,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  unreadableBodyReply,
+  type SignInRequestFetchHarness,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 
 // The identity route the sign-in validation hits; every fixture answers it.
 const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
@@ -112,6 +120,7 @@ function okWithProfile(): Promise<Response> {
 }
 
 const trackedServices: AuthService[] = [];
+let activeSignInRequestHarness: SignInRequestFetchHarness | null = null;
 
 function makeService(): { service: AuthService; host: MockRunnerHost } {
   const host = new MockRunnerHost({
@@ -154,6 +163,8 @@ describe("AuthService secrets-broker calls", () => {
   });
 
   afterEach(() => {
+    activeSignInRequestHarness?.restore();
+    activeSignInRequestHarness = null;
     while (trackedServices.length > 0) {
       trackedServices.pop()?.dispose();
     }
@@ -331,6 +342,85 @@ describe("AuthService secrets-broker calls", () => {
       await expect(
         service.decideSecretRequest("env-1", "req-1", "approve_default"),
       ).resolves.toBe(conflict);
+    });
+  });
+
+  describe("recordSignInRequest", () => {
+    it("sends the verified session bearer with the sign-in request", async () => {
+      const { service } = await signedInService();
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+      fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "recorded" });
+
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchHarness.fetchMock.mock.calls[0];
+      expect(url).toBe(
+        `http://localhost:5005/api/v3/environments/${SIGN_IN_REQUEST_FIXTURE.environmentId}/profile-records/intents`,
+      );
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    });
+
+    it("answers unauthorized without a verified session and makes no fetch", async () => {
+      const { service } = makeService();
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "unauthorized" });
+      expect(fetchHarness.fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("revalidates the current context once after a 401", async () => {
+      const { service } = await signedInService();
+      const revalidate = vi
+        .spyOn(service, "revalidateCurrentContext")
+        .mockResolvedValue(null);
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+      fetchHarness.enqueue(UNAUTHORIZED_SIGN_IN_REQUEST_REPLY);
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "unauthorized" });
+
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("revalidates the current context once after a 401 with an unreadable body", async () => {
+      const { service } = await signedInService();
+      const revalidate = vi
+        .spyOn(service, "revalidateCurrentContext")
+        .mockResolvedValue(null);
+      const fetchHarness = installSignInRequestFetchHarness();
+      activeSignInRequestHarness = fetchHarness;
+      fetchHarness.enqueue(unreadableBodyReply(401));
+
+      await expect(
+        service.recordSignInRequest(
+          SIGN_IN_REQUEST_FIXTURE,
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ kind: "unauthorized" });
+
+      expect(revalidate).toHaveBeenCalledTimes(1);
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 
