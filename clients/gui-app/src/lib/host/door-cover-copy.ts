@@ -1,3 +1,7 @@
+import {
+  claimedComputerDetail,
+  claimedComputerTitle,
+} from "@/hooks/teams/claimed-computer-notice-model";
 import type { DoorStateCoverVariant } from "@/lib/host/window-narration";
 
 export interface DoorCoverCopy {
@@ -10,7 +14,7 @@ export interface DoorCoverCopy {
  * cover and on a tile whose computer is not the window's own.
  */
 const DOOR_COVER_COPY: Readonly<
-  Record<DoorStateCoverVariant["kind"], DoorCoverCopy>
+  Record<Exclude<DoorStateCoverVariant["kind"], "host-claimed">, DoorCoverCopy>
 > = {
   "token-unavailable": {
     title: "We can't confirm access to this computer right now",
@@ -51,5 +55,13 @@ const DOOR_COVER_COPY: Readonly<
 };
 
 export function doorCoverCopy(variant: DoorStateCoverVariant): DoorCoverCopy {
+  // A claimed computer's lines are the claimed notice's own, with the names
+  // authn's claim gives.
+  if (variant.kind === "host-claimed") {
+    return {
+      title: claimedComputerTitle(variant.claimantName),
+      description: claimedComputerDetail(variant.teamName),
+    };
+  }
   return DOOR_COVER_COPY[variant.kind];
 }
