@@ -9,6 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { describe, expect, it } from "vitest";
+import { environmentPlansListRequestSchema } from "@traycer/protocol/host/environment/configuration-contracts";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -195,7 +196,7 @@ describe("TeamProviders profiles", () => {
     const unreadable = screen.getByText(PROVIDER_STATE_UNREADABLE_COPY);
     const readFailureLine = unreadable.closest('[role="status"]');
     expect(readFailureLine).not.toBeNull();
-    if (readFailureLine === null)
+    if (!(readFailureLine instanceof HTMLElement))
       throw new Error("expected the provider read status line");
     const retry = within(readFailureLine).getByRole("button", {
       name: "Retry",
@@ -240,7 +241,7 @@ describe("TeamProviders profiles", () => {
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => [profile(true, 4)]),
       "environment.host.list": () => ({
-        hosts: [{ ...reachableHost, hostId: WINDOW_HOST_ID, kind: "team" }],
+        hosts: [{ ...reachableHost, hostId: WINDOW_HOST_ID }],
       }),
       "providers.list": () => ({
         providers: [
@@ -382,7 +383,11 @@ describe("TeamProviders profiles", () => {
     const planRequests = harness.paramsOf("environment.plans.list");
     expect(planRequests.length).toBeGreaterThan(0);
     expect(
-      planRequests.every((request) => request.environmentId === "env-a"),
+      planRequests.every(
+        (request) =>
+          environmentPlansListRequestSchema.parse(request).environmentId ===
+          "env-a",
+      ),
     ).toBe(true);
   });
 

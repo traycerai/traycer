@@ -459,7 +459,7 @@ describe("Team Providers boundary and sign-in", () => {
           ],
         }),
       },
-      "mcp",
+      "mcp-servers",
     );
     await waitFor(() => {
       expect(useAuthStore.getState().contextMetadata?.userId).toBe(
