@@ -38,6 +38,7 @@ async function requestInvitations<T>(
           },
           body:
             environmentId === null ? null : JSON.stringify({ environmentId }),
+          redirect: "manual",
           signal: abort.signal,
         },
       ),
