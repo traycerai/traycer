@@ -45,7 +45,7 @@ export function useProvidersSetNativeMemory(
   return useHostScopedMutationForClient(client, {
     method: "providers.setNativeMemory",
     mutationKey: providersMutationKeys.setNativeMemory(),
-    errorMessage: "Couldn't save the memories setting.",
+    errorMessage: "Couldn't save the provider memories setting.",
     invalidateMethods: NATIVE_MEMORY_INVALIDATIONS,
     scope: providerNativeMemoryWriteScope(requesterHostId, harnessId),
   });
