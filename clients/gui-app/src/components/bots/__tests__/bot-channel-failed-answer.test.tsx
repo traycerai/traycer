@@ -64,6 +64,13 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
 import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
+import {
+  installHostDirectoryRows,
+  plainHostEntry,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
@@ -102,6 +109,8 @@ const mocks = vi.hoisted(() => ({
   /** The client of the host that runs the bot, which takes an Update. */
   boundClient: null as HostRequester<HostRpcRegistry> | null,
   threads: [] as BotThreadSummary[],
+  /** Whether the viewer is the Admin of the team the bot's sandbox is on. */
+  billingAdmin: false,
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
 }));
 
@@ -114,6 +123,15 @@ vi.mock(
   () => emptyBotMentionHostListsMock,
 );
 
+// Who may buy a team's credits is the environment list's answer, read by its
+// own hook; here a case says it.
+vi.mock("@/hooks/sandboxes/use-team-billing-admin", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/sandboxes/use-team-billing-admin")
+  >()),
+  useTeamBillingAdmin: (teamId: string | null) =>
+    teamId !== null && mocks.billingAdmin,
+}));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
 }));
@@ -534,6 +552,7 @@ beforeEach(() => {
   mocks.openSettings.mockClear();
   useProvidersFocusStore.getState().clearFocusHarnessId();
   mocks.threads = [];
+  mocks.billingAdmin = false;
   activityStore.setState({ activity: null });
   mocks.client = hostClientRecordingSends();
   ensured = [];
@@ -547,6 +566,7 @@ afterEach(() => {
   // What a box held unsent is kept under the bot, past its view.
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
+  resetHostDirectoryRows();
   resetBotFailedRequestSupport();
   mocks.channelHandle = null;
   mocks.threadHandle = null;
@@ -1598,6 +1618,8 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     const raw = "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
     const copy = sandboxRefusalCopyFor("SANDBOX_FROZEN", raw);
     if (copy === null) throw new Error("SANDBOX_FROZEN has a refusal row");
+    // The bot's sandbox is the viewer's own.
+    installHostDirectoryRows([sandboxHostEntry(BOUND_HOST_ID, null)]);
     activityStore.setState({
       activity: trunkWithReason("failed", {
         summary: raw,
@@ -1627,6 +1649,72 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     expect(lineOf(screen.getByTestId("bot-member-row")).textContent).toBe(
       `Not answered: ${GROK_OUTDATED} · Retry · Edit`,
     );
+  });
+
+  describe("a turn the bot's sandbox ran out of credits on", () => {
+    const FROZEN_RAW =
+      "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
+    const ENDED_TURN = "This sandbox ran out of credits, which ended the turn.";
+    const ACME = { id: "team-acme", name: "Acme" };
+
+    /** The line under the post, with the bot's sandbox described by `rows`. */
+    function frozenLine(rows: Parameters<typeof installHostDirectoryRows>[0]) {
+      installHostDirectoryRows(rows);
+      activityStore.setState({
+        activity: trunkWithReason("failed", {
+          summary: FROZEN_RAW,
+          code: "SANDBOX_FROZEN",
+          harnessId: "claude",
+          action: "none",
+        }),
+      });
+      mountChannel(null, memberPost(VIEWER_USER_ID));
+      return lineOf(screen.getByTestId("bot-member-row"));
+    }
+
+    it("tells a team's member to wait for the team's credits, not to add any", () => {
+      const line = frozenLine([sandboxHostEntry(BOUND_HOST_ID, ACME)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} Once Acme has credits again, send a message to pick up where it stopped. · Retry · Edit`,
+      );
+      expect(line.textContent).not.toContain("Add credits");
+    });
+
+    it("tells the team's billing Admin to add credits", () => {
+      mocks.billingAdmin = true;
+      const line = frozenLine([sandboxHostEntry(BOUND_HOST_ID, ACME)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} Add credits, then send a message to pick up where it stopped. · Retry · Edit`,
+      );
+    });
+
+    it("tells no remedy for a sandbox whose row names no owner", () => {
+      const line = frozenLine([sandboxHostEntryWithoutOwner(BOUND_HOST_ID)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} · Retry · Edit`,
+      );
+      expect(line.textContent).not.toContain("Add credits");
+    });
+
+    it("tells no remedy while no host runs the bot", () => {
+      boundHostId = null;
+      const line = frozenLine([sandboxHostEntry(BOUND_HOST_ID, null)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} · Retry · Edit`,
+      );
+    });
+
+    it("tells no remedy when the bot runs on a computer that is not a sandbox", () => {
+      const line = frozenLine([plainHostEntry(BOUND_HOST_ID)]);
+
+      expect(line.textContent).toBe(
+        `Not answered: ${ENDED_TURN} · Retry · Edit`,
+      );
+    });
   });
 
   it("adds Sign in for a sign-out, which opens Settings ▸ Providers at that provider on the host that runs the bot, not the one serving the tab", async () => {
