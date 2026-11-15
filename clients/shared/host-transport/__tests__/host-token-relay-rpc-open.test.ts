@@ -194,10 +194,14 @@ const RELAY_GRANT_BODY = JSON.stringify({
 
 /**
  * A relay dial whose attach-grant mint authn answers by `answer` (the 1-based
- * call number), with a sign-in refresh that rotates the lease and answers
- * `rotated`. Records the sign-in each mint carried.
+ * call number). With `recovers`, a sign-in refresh rotates the lease and
+ * answers `rotated`; without it there is none, as on desktop main's relay.
+ * Records the sign-in each mint carried.
  */
-function signInRelayHarness(answer: (call: number) => Response) {
+function signInRelayHarness(
+  answer: (call: number) => Response,
+  recovers: boolean,
+) {
   const peer = new RemoteMuxTestPeer();
   const entry = directoryEntryFor(
     {
@@ -236,13 +240,15 @@ function signInRelayHarness(answer: (call: number) => Response) {
     door: null,
     onState: (hostId, kind) => states.push({ hostId, kind }),
     cloudAuthorized: () => true,
-    auth: {
-      revalidateForReconnect: () => {
-        refreshes += 1;
-        lease.rotate(`sign-in-refreshed-${refreshes}`);
-        return Promise.resolve("rotated");
-      },
-    },
+    auth: recovers
+      ? {
+          revalidateForReconnect: () => {
+            refreshes += 1;
+            lease.rotate(`sign-in-refreshed-${refreshes}`);
+            return Promise.resolve("rotated");
+          },
+        }
+      : null,
     clock: null,
     rpcRegistry: hostRpcRegistry,
     streamRegistry: hostStreamRpcRegistry,
@@ -255,6 +261,7 @@ function signInRelayHarness(answer: (call: number) => Response) {
   if (transport === null) throw new Error("remote transport did not build");
 
   return {
+    entry,
     peer,
     sentSignIns,
     states,
@@ -271,13 +278,15 @@ describe("relay door sign-in refusal", () => {
   });
 
   it("refreshes the sign-in once after a 401 and opens on the next mint", async () => {
-    const test = signInRelayHarness((call) =>
-      call === 1
-        ? new Response("", { status: 401 })
-        : new Response(RELAY_GRANT_BODY, {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
+    const test = signInRelayHarness(
+      (call) =>
+        call === 1
+          ? new Response("", { status: 401 })
+          : new Response(RELAY_GRANT_BODY, {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+      true,
     );
 
     try {
@@ -305,7 +314,10 @@ describe("relay door sign-in refusal", () => {
   });
 
   it("backs off after a second 401, refreshing once on each dial, with no state and no end", async () => {
-    const test = signInRelayHarness(() => new Response("", { status: 401 }));
+    const test = signInRelayHarness(
+      () => new Response("", { status: 401 }),
+      true,
+    );
 
     try {
       test.transport.session.start();
@@ -330,8 +342,60 @@ describe("relay door sign-in refusal", () => {
     }
   });
 
+  it("keeps a 401 as today where there is no sign-in recovery (desktop main): one mint per dial, backoff", async () => {
+    const test = signInRelayHarness(
+      () => new Response("", { status: 401 }),
+      false,
+    );
+
+    try {
+      test.transport.session.start();
+      // A call parked before ready settles when a dial ends without a grant,
+      // so it marks the end of the first dial.
+      const firstDialEnded = await test.transport.messenger
+        .request(
+          "host.status",
+          {},
+          {
+            idempotencyKey: null,
+            replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
+            authority: {
+              endpoint: {
+                hostId: test.entry.hostId,
+                websocketUrl: test.entry.websocketUrl,
+              },
+              bearer: new MutableBearerLease(SIGN_IN_TOKEN, USER_ID),
+              abortSignal: new AbortController().signal,
+            },
+          },
+        )
+        .then(
+          () => "answered",
+          () => "refused",
+        );
+      expect(firstDialEnded).toBe("refused");
+      expect(test.sentSignIns).toEqual([`Bearer ${SIGN_IN_TOKEN}`]);
+      await vi.waitFor(() => expect(test.sentSignIns).toHaveLength(2), WAIT);
+
+      expect(test.sentSignIns).toEqual([
+        `Bearer ${SIGN_IN_TOKEN}`,
+        `Bearer ${SIGN_IN_TOKEN}`,
+      ]);
+      expect(test.transport.session.terminalFatal()).toBeNull();
+      expect(test.states).toEqual([]);
+      expect(test.peer.openCount).toBe(0);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
+  });
+
   it("keeps an unreachable authn as today: no refresh, token-unavailable, backoff", async () => {
-    const test = signInRelayHarness(() => new Response("", { status: 503 }));
+    const test = signInRelayHarness(
+      () => new Response("", { status: 503 }),
+      true,
+    );
 
     try {
       test.transport.session.start();
