@@ -518,6 +518,7 @@ async function createModalHostRuntimeFixture(
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
     onHostTokenRenewal: () => undefined,
+    singleAttemptMessenger: null,
     registry: hostRpcRegistry,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
