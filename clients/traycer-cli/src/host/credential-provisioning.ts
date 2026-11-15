@@ -286,10 +286,8 @@ export async function provisionInstalledHostCredential(
   // because the terminal fallback is `unreachable`, whose copy says the host
   // never came up - false on its face once the host has spoken to us.
   let hostAnswered = false;
-  // The door's last word on this run was a retryable refusal: it answered
-  // the dial and has not admitted the open since. Cleared by an admitted
-  // open, so only a door that kept refusing to the bound reads as one that
-  // did not take the credential in time.
+  // The door refused with its reason, retryably, and has admitted no open
+  // since. Cleared by an admitted open; set again by the next such refusal.
   let doorRetried = false;
   // CONSECUTIVE silent opens - reset by any ack that carries a state, so an
   // occasional ack losing the race with the grace timer cannot accumulate
@@ -523,9 +521,9 @@ export async function provisionInstalledHostCredential(
       if (mintWithheld || sawSilentOpen) {
         return { kind: "unsupported" };
       }
-      // The door answered every dial with a retryable refusal up to the bound
-      // (a claimed host that has not read its owner yet): the host answered
-      // and did not take the credential in time.
+      // The door refused with its reason (a claimed host that has not read
+      // its owner yet) and has admitted no open since: the host answered and
+      // did not take the credential in time.
       if (doorRetried) {
         return { kind: "not-adopted" };
       }
