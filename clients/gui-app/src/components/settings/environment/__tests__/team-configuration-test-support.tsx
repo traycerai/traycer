@@ -47,7 +47,10 @@ import {
   createFakeEnvironmentCloudServices,
   createFakeEnvironmentCloudTransport,
 } from "../../../../../__tests__/create-fake-runner-host";
-import { createTeamEnvironmentCloudHandlers } from "./team-environment-cloud-handlers";
+import {
+  createTeamEnvironmentCloudHandlers,
+  type TeamEnvironmentCloudResponses,
+} from "./team-environment-cloud-handlers";
 
 /**
  * The shared host client a page under test reads through `useHostClient()`.
@@ -152,6 +155,7 @@ export interface TeamPageHarness {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly auth: AuthService;
   readonly cloudRequests: readonly EnvironmentTransportRequest[];
+  readonly cloudResponses: TeamEnvironmentCloudResponses;
   /** The params of every request the host received for `method`, in order. */
   readonly paramsOf: (method: string) => unknown[];
 }
@@ -373,6 +377,7 @@ function buildTeamPage(
     queryClient,
     auth,
     cloudRequests: cloudHandlers.requests,
+    cloudResponses: cloudHandlers.responses,
     paramsOf: (method) => [
       ...messenger.calls
         .filter((call) => call.method === method)
