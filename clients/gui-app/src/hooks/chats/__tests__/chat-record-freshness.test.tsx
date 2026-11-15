@@ -52,7 +52,10 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
+import {
+  invalidateEpicChatRecords,
+  useEpicSyncChatRecords,
+} from "@/hooks/chats/use-epic-chat-records";
 import {
   useEpicArchiveChat,
   useEpicCreateChatForHostClient,
@@ -99,6 +102,9 @@ interface Fixture {
   readonly queryClient: QueryClient;
   readonly handle: OpenedStoreForTest;
   readonly listCalls: { value: number };
+  readonly listFailureCode: {
+    value: "E_HOST_UNSUPPORTED" | "RPC_ERROR" | null;
+  };
   readonly records: ChatRecordSummaryV14[];
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
@@ -199,13 +205,16 @@ function newSession(): OpenedStoreForTest {
   return handle;
 }
 
-function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
+function createFixture(
+  initialListFailureCode: "E_HOST_UNSUPPORTED" | "RPC_ERROR" | null,
+): Fixture {
   const records: ChatRecordSummaryV14[] = [];
   const listCalls = { value: 0 };
+  const listFailureCode = { value: initialListFailureCode };
   const requestSeq = { value: 0 };
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: { retry: false },
+      queries: { retry: false, retryDelay: 0 },
       mutations: { retry: false },
     },
   });
@@ -223,11 +232,12 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
       handlers: {
         "epic.listChatRecords": () => {
           listCalls.value += 1;
-          if (listFailureCode !== null) {
+          const errorCode = listFailureCode.value;
+          if (errorCode !== null) {
             return Promise.reject(
               new HostRpcError({
-                code: listFailureCode,
-                message: "record list unsupported",
+                code: errorCode,
+                message: "record list request failed",
                 requestId: `req-${String(requestSeq.value)}`,
                 method: "epic.listChatRecords",
                 fatalDetails: null,
@@ -327,7 +337,15 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
         ),
       ),
     );
-  return { client, queryClient, handle, listCalls, records, Wrapper };
+  return {
+    client,
+    queryClient,
+    handle,
+    listCalls,
+    listFailureCode,
+    records,
+    Wrapper,
+  };
 }
 
 let fixture: Fixture;
@@ -373,21 +391,64 @@ async function settleFirstRead(): Promise<void> {
 }
 
 describe("record-list deletion authority", () => {
-  it("treats E_HOST_UNSUPPORTED as an authoritative doc-only answer", async () => {
+  it("clears the failure latch when an unsupported response becomes authoritative", async () => {
     fixture.handle.store.getState().dispose();
-    fixture = createFixture("E_HOST_UNSUPPORTED");
+    fixture = createFixture("RPC_ERROR");
 
     renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
       wrapper: fixture.Wrapper,
     });
 
+    await waitFor(
+      () => {
+        expect(fixture.listCalls.value).toBeGreaterThanOrEqual(3);
+        expect(fixture.handle.store.getState().chatRecordListFailed).toBe(true);
+      },
+      { timeout: 6_000 },
+    );
+    expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+      false,
+    );
+
+    fixture.listFailureCode.value = "E_HOST_UNSUPPORTED";
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+
     await waitFor(() => {
-      expect(fixture.listCalls.value).toBe(1);
+      expect(fixture.listCalls.value).toBeGreaterThanOrEqual(4);
       expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
         true,
       );
+      expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
     });
     expect(fixture.handle.store.getState().chats.allIds).toEqual([]);
+  });
+
+  it("clears the failure latch after a later successful record-list read", async () => {
+    fixture.handle.store.getState().dispose();
+    fixture = createFixture("RPC_ERROR");
+
+    renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(
+      () => {
+        expect(fixture.listCalls.value).toBeGreaterThanOrEqual(3);
+        expect(fixture.handle.store.getState().chatRecordListFailed).toBe(true);
+      },
+      { timeout: 6_000 },
+    );
+
+    fixture.listFailureCode.value = null;
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+
+    await waitFor(() => {
+      expect(fixture.listCalls.value).toBeGreaterThanOrEqual(4);
+      expect(fixture.handle.store.getState().chatRecordListAuthoritative).toBe(
+        true,
+      );
+      expect(fixture.handle.store.getState().chatRecordListFailed).toBe(false);
+    });
   });
 });
 

@@ -103,8 +103,8 @@ export interface UseHostQueryWithResponseMapOptions<
    *
    * `params` is both the query KEY and the payload everywhere else, and for
    * almost every method that identity is the right one: what you asked for is
-   * what identifies the answer. The seam exists for a field that is neither -
-   * a REVISION THE CLIENT ALREADY HOLDS, which says nothing about which
+   * what identifies the answer. One use is a REVISION THE CLIENT ALREADY
+   * HOLDS, which says nothing about which
    * resource is being read and everything about how much of it needs to come
    * back. The revision-gated record lists (`epic.listChatRecords@1.3`,
    * `epic.listTuiAgents@1.3`) send their last answer's list stamp this way:
@@ -112,6 +112,12 @@ export interface UseHostQueryWithResponseMapOptions<
    * so the 20s cadence would refetch from scratch forever and the gating would
    * never fire - while a stamp frozen into the key at mount would be stale by
    * the second tick.
+   *
+   * Publication targets also send their current local chat-id set here. The
+   * initial read waits for the full record list (or refreshes once on recovery
+   * from a failed list). Later new chats use the fold's own-id fallback; only a
+   * fork decision mints a redirect, and its episode edge invalidates the task's
+   * cached map. Changing membership therefore does not require a new key.
    *
    * Called once per dispatch, inside the queryFn, AFTER `preflight` and before
    * `captureRequestContext` - so the ordering fence stays the last thing read
@@ -121,7 +127,8 @@ export interface UseHostQueryWithResponseMapOptions<
    * What must NOT go through here: anything that changes which answer is
    * correct for this key. The cache slot is shared by every dispatch that
    * agrees on `params`, so a payload difference this seam introduces has to be
-   * one the cached representation is indifferent to.
+   * one the cached representation is indifferent to, or have an explicit
+   * completeness gate and invalidation contract as above.
    */
   readonly buildRequest?: (
     params: RequestOfMethod<Registry, Method>,

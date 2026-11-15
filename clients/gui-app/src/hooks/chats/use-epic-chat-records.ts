@@ -322,6 +322,12 @@ export function useEpicSyncChatRecords(epicId: string): void {
   const recordListAuthoritative =
     query.isSuccess ||
     (query.isError && query.error.code === "E_HOST_UNSUPPORTED");
+  const recordListFailed = query.isError && !recordListAuthoritative;
+  useEffect(() => {
+    if (recordListFailed || recordListAuthoritative) {
+      store?.getState().setChatRecordListFailed(recordListFailed);
+    }
+  }, [recordListFailed, recordListAuthoritative, store]);
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
     if (answer !== null) {

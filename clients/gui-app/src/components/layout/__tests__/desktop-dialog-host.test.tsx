@@ -539,6 +539,7 @@ function createDirtyEpicHandle(
     chatRecordHeads: {},
     evictedChatIds: new Set(),
     chatRecordListAuthoritative: true,
+    chatRecordListFailed: false,
     tuiAgentRecordListAuthoritative: true,
     tuiAgentRecordListFailed: false,
     chatRetractions: {},
@@ -615,6 +616,9 @@ function createDirtyEpicHandle(
     applyChatRecordEvictions: () => undefined,
     peekChatIngestSeq: () => 0,
     markChatRecordListAuthoritative: () => undefined,
+    setChatRecordListFailed: (failed) => {
+      set({ chatRecordListFailed: failed });
+    },
     markTuiAgentRecordListAuthoritative: () => undefined,
     markTuiAgentRecordListFailed: () => undefined,
     applyChatRecordDelta: () => undefined,

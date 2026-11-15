@@ -139,14 +139,12 @@ export function useChatsOpenerItems(ctx: CommandContext): ChatsOpenerItems {
     enabled: cloudReadsEnabled,
   });
   const localChatIds = projection?.chats.allIds ?? EMPTY_IDS;
-  const sortedLocalChatIds = useMemo(
-    () => [...localChatIds].sort(),
-    [localChatIds],
-  );
   const publicationTargets = useChatPublicationTargets({
     client: sessionHostClient,
     epicId,
-    chatIds: sortedLocalChatIds,
+    chatIds: localChatIds,
+    chatIdsAuthoritative: projection?.chatRecordListAuthoritative ?? false,
+    chatRecordListFailed: projection?.chatRecordListFailed ?? false,
     enabled: cloudReadsEnabled,
   });
   const cloudOnlyChats = useMemo(

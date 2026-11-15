@@ -875,6 +875,10 @@ export function useEpicChatRecordListAuthoritative(): boolean {
   return useEpicStore((s) => s.chatRecordListAuthoritative);
 }
 
+export function useEpicChatRecordListFailed(): boolean {
+  return useEpicStore((s) => s.chatRecordListFailed);
+}
+
 export function useEpicTuiAgentRecordListAuthoritative(): boolean {
   return useEpicStore((s) => s.tuiAgentRecordListAuthoritative);
 }

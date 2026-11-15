@@ -6,11 +6,18 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { queryKeys } from "@/lib/query-keys";
 import { appLogger } from "@/lib/logger";
 
 const PUBLICATION_TARGETS_METHOD = "epic.listChatPublicationTargets" as const;
+
+interface PublicationTargetsAnswer extends ResponseOfMethod<
+  HostRpcRegistry,
+  typeof PUBLICATION_TARGETS_METHOD
+> {
+  readonly chatIdsAuthoritative: boolean;
+}
 
 /**
  * Which cloud row each of this task's local chats publishes into.
@@ -38,10 +45,11 @@ export interface UseChatPublicationTargetsArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   /**
-   * The local chat ids to resolve. SORTED by the caller so the query identity
-   * is stable across the projection churn that does not change the id set.
+   * The full current local id set, sent at dispatch rather than keyed.
    */
   readonly chatIds: readonly string[];
+  readonly chatIdsAuthoritative: boolean;
+  readonly chatRecordListFailed: boolean;
   readonly enabled: boolean;
 }
 
@@ -57,8 +65,7 @@ export function useChatPublicationTargets(
 }
 
 /**
- * Drops every cached redirect map for `hostId`, whatever epic or id set it was
- * keyed by.
+ * Drops every cached redirect map for `hostId`, across all its tasks.
  *
  * The five-minute `staleTime` below is the reason this exists rather than a
  * comment saying the answer is immutable. A redirect is minted ONCE - but it is
@@ -69,13 +76,9 @@ export function useChatPublicationTargets(
  * the exact symptom `useLogUnsupportedDegrade` describes for a host that cannot
  * answer at all.
  *
- * Host-scoped rather than epic-scoped on purpose. A fork episode names the chats
- * it touched, but those chats' epics are not what this query is keyed by
- * (`{ epicId, chatIds }` - an id set that churns with the sidebar's projection),
- * so a precise filter would have to re-derive an epic set from an episode and
- * would silently miss any epic whose chat set had drifted since. One host's
- * redirect maps are a handful of cache entries; re-reading them after a fork is
- * cheaper than being subtly wrong about which ones to keep.
+ * Host-scoped rather than epic-scoped on purpose. A fork episode names chats,
+ * not their tasks. Re-reading the host's handful of maps avoids deriving a
+ * task set from an episode and missing a task it touched.
  *
  * The owner of this key format is {@link useChatPublicationTargetsQuery} below,
  * through `queryKeys.hostMethod`; this uses the same builder's method SCOPE so
@@ -98,23 +101,19 @@ export function readCachedChatPublicationId(
   chatId: string,
 ): string | null {
   if (hostId === null) return null;
-  // TanStack partial matching: an empty chatIds array matches every cached
-  // id set for this epic. Prefer the latest answer across those sets.
-  const queries = queryClient.getQueryCache().findAll({
-    queryKey: queryKeys.hostMethod<
-      HostRpcRegistry,
-      typeof PUBLICATION_TARGETS_METHOD
-    >(hostId, PUBLICATION_TARGETS_METHOD, { epicId, chatIds: [] }),
-  });
-  queries.sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt);
-  for (const query of queries) {
-    const data = queryClient.getQueryData<
-      ResponseOfMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>
-    >(query.queryKey);
-    const redirect = data?.redirected.find((entry) => entry.chatId === chatId);
-    if (redirect !== undefined) return redirect.publicationChatId;
-  }
-  return null;
+  const data = queryClient.getQueryData<
+    ResponseOfMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>
+  >(
+    queryKeys.hostMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>(
+      hostId,
+      PUBLICATION_TARGETS_METHOD,
+      { epicId, chatIds: [] },
+    ),
+  );
+  return (
+    data?.redirected.find((entry) => entry.chatId === chatId)
+      ?.publicationChatId ?? null
+  );
 }
 
 /**
@@ -153,17 +152,34 @@ function useChatPublicationTargetsQuery(
   HostRpcError
 > {
   const params = useMemo(
-    () => ({ epicId: args.epicId, chatIds: [...args.chatIds] }),
-    [args.epicId, args.chatIds],
+    () => ({ epicId: args.epicId, chatIds: [] }),
+    [args.epicId],
   );
-  return useHostQuery<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>({
+  const query = useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    typeof PUBLICATION_TARGETS_METHOD,
+    PublicationTargetsAnswer,
+    boolean
+  >({
     cacheKeyIdentity: undefined,
     client: args.client,
     method: PUBLICATION_TARGETS_METHOD,
     params,
+    // New chats publish under their own id (the fold's fallback). Only a fork
+    // decision mints a redirect, and its episode edge invalidates this key.
+    // Wait for the initial full list, except when its read has failed.
+    buildRequest: (base) => ({ ...base, chatIds: [...args.chatIds] }),
+    captureRequestContext: () => args.chatIdsAuthoritative,
+    mapResponse: ({ response, requestContext }) => ({
+      ...response,
+      chatIdsAuthoritative: requestContext === true,
+    }),
     options: {
       enabled:
-        args.enabled && args.epicId.length > 0 && args.chatIds.length > 0,
+        args.enabled &&
+        (args.chatIdsAuthoritative || args.chatRecordListFailed) &&
+        args.epicId.length > 0 &&
+        args.chatIds.length > 0,
       // A redirect is minted once in a chat's life, so a long stale window
       // costs nothing and saves a request per sidebar mount. The matching
       // `poll: null` in the policy table carries the same reasoning.
@@ -172,6 +188,16 @@ function useChatPublicationTargetsQuery(
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
   });
+  const { data, refetch } = query;
+  useEffect(() => {
+    if (!args.enabled || !args.chatIdsAuthoritative) return;
+    if (data?.chatIdsAuthoritative !== false) return;
+    // The error fallback may have covered only part of the list. Completeness
+    // travels with the cached answer so both callers (and remounts) agree;
+    // joining an in-flight refresh keeps their recovery to one request.
+    void refetch({ cancelRefetch: false });
+  }, [args.enabled, args.chatIdsAuthoritative, data, refetch]);
+  return query;
 }
 
 /**
