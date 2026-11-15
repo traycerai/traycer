@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type {
   AuthorityIdentitySource,
   HostFleetSnapshot,
@@ -1744,6 +1745,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
         localHost: () => ({
           hostId: "local-host",
           websocketUrl: "ws://local-host",
+          version: MINIMUM_HOST_VERSION,
         }),
         onLocalHostChanged: () => () => undefined,
         identity: () => ({
@@ -2273,7 +2275,11 @@ describe("DesktopHostFleetSource merges the registry by scope", () => {
     const coverage: boolean[] = [];
     const streamClient = new FakeStreamClient(true);
     const subscription = startLocalHostInventorySubscription({
-      localHost: () => ({ hostId: "local-host", websocketUrl: "ws://local" }),
+      localHost: () => ({
+        hostId: "local-host",
+        websocketUrl: "ws://local",
+        version: MINIMUM_HOST_VERSION,
+      }),
       onLocalHostChanged: () => () => undefined,
       identity: () => ({
         userId: identity.current().identityKey,

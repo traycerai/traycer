@@ -13,6 +13,23 @@ import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-tab
 import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { useGitSubmoduleSnapshotRefresh } from "../use-git-submodule-snapshot-refresh";
+import { installHostUpdateGestureDirectory } from "@/hooks/host/__tests__/host-update-gesture-directory";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+
+const toast = vi.hoisted(() => vi.fn());
+
+vi.mock("sonner", () => ({ toast }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 
 const testState = vi.hoisted(() => ({
   client: {
@@ -45,6 +62,7 @@ function snapshot(fingerprint: string): GitListChangedFilesResponseV11 {
 
 describe("useGitSubmoduleSnapshotRefresh", () => {
   beforeEach(() => {
+    toast.mockReset();
     __resetRichSlotOrderingForTesting();
     testState.client.request.mockReset();
   });
@@ -58,6 +76,58 @@ describe("useGitSubmoduleSnapshotRefresh", () => {
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
   }
+
+  it("preflights a manual refresh against the live host row and admits the floor", async () => {
+    const liveDirectory = await installHostUpdateGestureDirectory(
+      "host-1",
+      "2.0.0",
+      "1.0.0",
+    );
+    const queryClient = createAppQueryClient();
+
+    try {
+      testState.client.request.mockResolvedValue(snapshot("floor"));
+      const { result } = renderHook(
+        () =>
+          useGitSubmoduleSnapshotRefresh({
+            hostId: "host-1",
+            rootRunningDir: "/repo",
+            ignoreWhitespace: false,
+          }),
+        { wrapper: wrapperFor(queryClient) },
+      );
+
+      await liveDirectory.refreshVersions("1.5.4", "9.9.9");
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(testState.client.request).not.toHaveBeenCalled();
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(toast.mock.calls[0]?.[0]).toBe(HOST_UPDATE_SKEW_COPY.title);
+
+      await liveDirectory.refreshVersions("2.0.0", "1.0.0");
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(testState.client.request).toHaveBeenCalledTimes(1);
+      expect(testState.client.request).toHaveBeenCalledWith(
+        "git.listChangedFiles",
+        {
+          hostId: "host-1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          includeSubmodules: true,
+        },
+      );
+    } finally {
+      getConditionPollEpisodeCoordinator(queryClient).dispose();
+      queryClient.clear();
+      liveDirectory.dispose();
+    }
+  });
 
   it("fetches and writes the rich slot even when cached data is fresh", async () => {
     const queryClient = createAppQueryClient();

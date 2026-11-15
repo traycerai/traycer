@@ -370,6 +370,7 @@ function buildTeamPage(
     requestCoordinator: null,
     connectionRegistry: null,
     selectedHostId: () => null,
+    onHostTokenRenewal: () => undefined,
   });
   const spine = runtime.hostClient;
   spine.setRequestContext(

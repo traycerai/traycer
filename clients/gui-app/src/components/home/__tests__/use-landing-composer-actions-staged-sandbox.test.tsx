@@ -20,6 +20,8 @@ import {
   RetryableTransportError,
   type RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import {
   installHostDirectoryRows,
@@ -2261,6 +2263,24 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       queryClient.clear();
     },
   );
+
+  it("shows the host update title and returns the message when the attachment is refused below the minimum", async () => {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+
+    await refuseAttach(
+      new HostBelowMinimumError({
+        requestId: "request-attach-floor",
+        method: "epic.attachEnvironment",
+      }),
+    );
+    await refusalSettled(queryClient);
+
+    expect(toastLog.map(({ message }) => message)).toContain(
+      HOST_UPDATE_SKEW_COPY.title,
+    );
+    expectMessageBackUnsent();
+    queryClient.clear();
+  });
 
   it("deletes nothing when the account changes while the task's agents are being read", async () => {
     const reads = new Map<string, Deferred<unknown>>();

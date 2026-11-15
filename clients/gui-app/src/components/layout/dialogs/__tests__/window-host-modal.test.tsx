@@ -199,7 +199,7 @@ describe("<WindowHostModal />", () => {
     expect(olderHostUpdate.update).toHaveBeenCalledTimes(1);
   });
 
-  it("update-host: a NON-target incompatible host retains its existing description", () => {
+  it("update-host: a remote host gets the remote description", () => {
     const detail: SelectionIncompatibility = {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
@@ -217,11 +217,8 @@ describe("<WindowHostModal />", () => {
       }),
     );
     const description = screen.getByTestId("window-host-modal-description");
-    expect(description.textContent).toContain("Another host on this account");
-    expect(description.textContent).toContain("can't be updated from here");
-    // The description must not also tell the reader to update the host.
-    expect(description.textContent).not.toContain(
-      "Update the host to continue",
+    expect(description.textContent).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
     );
   });
 
@@ -281,6 +278,31 @@ describe("<WindowHostModal />", () => {
       screen.getByTestId("window-host-modal-update-host").textContent,
     ).toBe("Update now");
     expect(screen.queryByText("Your app is too old")).toBeNull();
+  });
+
+  it("older-host cover: a remote pending update replaces Update now", () => {
+    olderHostUpdate.remotePending = true;
+    const props = baseProps({
+      variant: olderHostUpdateVariant("host-a", true, "1.5.4"),
+    });
+    renderModal(props);
+
+    expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+    expect(screen.getByText("Update pending")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Applied on this host's next check-in — within ~10 minutes, and only when no sessions are running.",
+      ),
+    ).toBeTruthy();
+
+    olderHostUpdate.remotePending = false;
+    cleanup();
+    renderModal(props);
+
+    expect(
+      screen.getByTestId("window-host-modal-update-host").textContent,
+    ).toBe("Update now");
+    expect(screen.queryByText("Update pending")).toBeNull();
   });
 
   it("renders heading and percent - never the byte count or the lane's message - in window-host-modal-progress when progress is set and bootBody is null", () => {

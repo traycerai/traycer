@@ -44,6 +44,25 @@ describe("isTransientHostRpcFailure", () => {
     ).toBe(true);
   });
 
+  it("classifies a retryable door refusal without fatalDetails as transient", () => {
+    expect(
+      isTransientHostRpcFailure(
+        new HostRpcError({
+          ...base,
+          code: "UNAUTHORIZED",
+          fatalDetails: null,
+          doorRefusal: {
+            code: "UNAUTHORIZED",
+            reason: "membership check unavailable",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: true,
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps host-originated rejections non-transient", () => {
     expect(isTransientHostRpcFailure(new HostRpcError(base))).toBe(false);
     expect(
