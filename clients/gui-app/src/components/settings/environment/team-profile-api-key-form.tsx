@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useId, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
@@ -41,19 +42,21 @@ export function TeamProfileApiKeyForm(props: {
     null,
   );
   const harnessId = providerIdToGuiHarnessId(props.providerId);
+  const submittedKey = useSubmittedSecretInput<string>(
+    "Profile key input is unavailable.",
+  );
   const replace = useMutation({
     mutationKey: environmentMutationKeys.providersReplaceKey(),
-    // No variables: the key never enters the mutation cache or error hooks.
     mutationFn: async (): Promise<EnvironmentApiKeyReplaceResult> => {
+      if (auth === null) return { kind: "unauthorized" };
+      const key = submittedKey.read();
       try {
-        return auth === null
-          ? { kind: "unauthorized" }
-          : await auth.replaceEnvironmentApiKey({
-              environmentId: props.environmentId,
-              profileId: props.profile.profileId,
-              harnessId,
-              key: draft.trim(),
-            });
+        return await auth.replaceEnvironmentApiKey({
+          environmentId: props.environmentId,
+          profileId: props.profile.profileId,
+          harnessId,
+          key,
+        });
       } catch {
         return { kind: "failed" };
       }
@@ -64,6 +67,7 @@ export function TeamProfileApiKeyForm(props: {
       if (answer.kind === "ok") setDraft("");
     },
     onSettled: async () => {
+      submittedKey.clear();
       try {
         await props.reread();
       } catch {
@@ -79,6 +83,7 @@ export function TeamProfileApiKeyForm(props: {
     return null;
   const save = (): void => {
     if (pending || draft.trim().length === 0) return;
+    submittedKey.set(draft.trim());
     replace.mutate();
   };
   return (
