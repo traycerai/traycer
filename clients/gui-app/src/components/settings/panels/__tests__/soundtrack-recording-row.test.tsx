@@ -88,6 +88,7 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup();
   Reflect.deleteProperty(navigator, "locks");
+  open.mockResolvedValue({ kind: "refused" });
   useSoundtrackStore.getState().disable();
   // A recording still opening would stay the store's, and block the next one.
   for (const answer of unanswered.splice(0)) answer({ kind: "refused" });
