@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import {
   afterEach,
   beforeEach,
@@ -40,6 +41,13 @@ import {
 } from "@/components/chat/fallback/fallback-copy";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
+import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { AuthService } from "@/lib/auth/auth-service";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { createAppQueryClient } from "@/lib/query-client";
+import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
+import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -65,7 +73,6 @@ import {
   ATTEMPT_MESSAGE_ID,
   ATTEMPT_TURN_ID,
   CHOOSING_PENDING,
-  chooser,
   FAILED,
   FAILED_PROFILE,
   HOLD_PENDING,
@@ -110,9 +117,24 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
     await import("@/components/settings/host-scope/host-scope-fixture");
   return { useHostOptions: () => hostOptionsFixture({ hosts: [] }) };
 });
-vi.mock("@/hooks/host/use-host-client-for-host-id", async () =>
-  (await import("./routing-picker-kit")).hostClientModule(),
-);
+vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/hooks/host/use-host-client-for-host-id")
+  >("@/hooks/host/use-host-client-for-host-id");
+  return {
+    ...actual,
+    ...(await import("./routing-picker-kit")).hostClientModule(),
+  };
+});
+vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
+  TabDraftMirrorMount: () => null,
+}));
+vi.mock("@/hooks/host/use-host-credential-refusal", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/hooks/host/use-host-credential-refusal")
+  >("@/hooks/host/use-host-credential-refusal");
+  return { ...actual, useHostCredentialRefusal: () => null };
+});
 // The picker's cloud read of Traycer's models, made only when a sandbox
 // refusal opens it; nothing here opens one.
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
@@ -184,6 +206,11 @@ vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) =>
     await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
   ),
 );
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  const { kit } = await import("./routing-picker-kit");
+  return { ...actual, useHostBinding: () => kit.botWriteBinding };
+});
 vi.mock("@/stores/tabs/use-system-tab-modal", async () =>
   (await import("./routing-picker-kit")).systemTabModalModule(),
 );
@@ -1888,17 +1915,39 @@ describe("RoutingDestinationPicker", () => {
     /** The error row's chooser inside a bot tab whose bot is `botId`. */
     function mountInBotTab(input: {
       readonly botId: string;
+      readonly epicId: string;
       readonly opener: (() => void) | null;
     }) {
-      return render(
+      const content = (
         <BotIdentityContext
           value={{ botId: input.botId, title: BOT_TITLE, owner: null }}
         >
           <BotSettingsOpenerContext value={input.opener}>
-            {chooser(failedTurn(["retry", "switch"]), true)}
+            <TooltipProvider>
+              <TabHostProvider hostId={TAB_HOST_ID}>
+                <RoutingDestinationPicker
+                  entry={failedTurn(["retry", "switch"])}
+                  triggerLabel="Choose differently…"
+                  triggerVariant="outline"
+                  triggerAriaLabel={null}
+                  triggerDisabled={false}
+                  canAct={true}
+                  epicId={input.epicId}
+                  chatId={CHAT_ID}
+                  hostId={SESSION_HOST_ID}
+                />
+              </TabHostProvider>
+            </TooltipProvider>
           </BotSettingsOpenerContext>
-        </BotIdentityContext>,
+        </BotIdentityContext>
       );
+      return kit.realBotWrite && kit.queryClient !== null
+        ? render(
+            <QueryClientProvider client={kit.queryClient}>
+              {content}
+            </QueryClientProvider>,
+          )
+        : render(content);
     }
 
     function switchAndRetry(): HTMLElement {
@@ -1919,9 +1968,236 @@ describe("RoutingDestinationPicker", () => {
       },
     };
 
+    function deferred<T>() {
+      let resolve: (value: T) => void = () => undefined;
+      const promise = new Promise<T>((accept) => {
+        resolve = accept;
+      });
+      return { promise, resolve };
+    }
+
+    function observeWriteAndPickerContinuation(
+      queryClient: QueryClient,
+    ): Promise<void> {
+      return new Promise<void>((resolve) => {
+        let unsubscribe = (): void => undefined;
+        unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+          if (
+            event.type !== "updated" ||
+            event.mutation.state.status !== "success" ||
+            event.mutation.options.mutationKey?.[0] !== "bot.updateRunSettings"
+          ) {
+            return;
+          }
+          unsubscribe();
+          // MutationCache reports success before mutateAsync's promise
+          // continuation runs. Two queued microtasks place the test after the
+          // picker's attached .then handler has either retried or returned.
+          queueMicrotask(() => queueMicrotask(() => resolve()));
+        });
+      });
+    }
+
+    function identityResponse(userId: string): Response {
+      return new Response(
+        JSON.stringify({
+          user: {
+            id: userId,
+            name: `${userId} display`,
+            providerId: `gh-${userId}`,
+            providerHandle: userId,
+            providerType: "GITHUB",
+            email: `${userId}@example.com`,
+            avatarUrl: null,
+            activatedAt: null,
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z",
+            lastSeenAt: null,
+            privacyMode: false,
+            isLearningEnabled: true,
+          },
+          userSubscription: {
+            id: `sub-${userId}`,
+            userID: userId,
+            orgID: null,
+            teamID: null,
+            customerId: `cus-${userId}`,
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z",
+            subscriptionExpiry: null,
+            trialEndsAt: null,
+            subscriptionStatus: "FREE",
+            hasPaymentMethod: false,
+            isInTrial: false,
+            rechargeRateSeconds: 0,
+          },
+          teamSubscriptions: [],
+          payAsYouGoUsage: { allowPayAsYouGo: false },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-traycer-user-record-version": "2.0",
+          },
+        },
+      );
+    }
+
+    function jsonResponse(status: number, body: unknown): Response {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    async function prepareHeldRealWrite() {
+      const pendingWrite = deferred<Response>();
+      const writeStarted = deferred<void>();
+      const requests: Array<{
+        readonly url: string;
+        readonly method: string;
+        readonly authorization: string | null;
+        readonly body: string | null;
+      }> = [];
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/api/v3/user/negotiated")) {
+          const authorization = new Headers(init?.headers).get("Authorization");
+          return identityResponse(
+            authorization === "Bearer token-user-b" ? "user-b" : "user-a",
+          );
+        }
+        if (url.endsWith("/api/v3/auth/refresh")) {
+          return jsonResponse(200, {
+            token: "rotated-user-a-token",
+            refreshToken: "rotated-user-a-refresh",
+          });
+        }
+        if (url.endsWith("/api/bots/update-run-settings")) {
+          requests.push({
+            url,
+            method: init?.method ?? "GET",
+            authorization: new Headers(init?.headers).get("Authorization"),
+            body: typeof init?.body === "string" ? init.body : null,
+          });
+          writeStarted.resolve(undefined);
+          return pendingWrite.promise;
+        }
+        return jsonResponse(404, { error: "Unexpected test route" });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const host = new MockRunnerHost({
+        signInUrl: "https://auth.traycer.invalid/sign-in",
+        authnBaseUrl: "https://authn.traycer.invalid",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: undefined,
+      });
+      await host.tokenStore.signIn(
+        { token: "token-user-a", refreshToken: "refresh-user-a" },
+        { id: "user-a", email: "user-a@example.com", name: "User A" },
+      );
+      const auth = new AuthService({ runnerHost: host });
+      await auth.start();
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      const queryClient = createAppQueryClient();
+      const botId = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+      const bot: BotRecord = {
+        botId,
+        environmentId: "env-team",
+        createdByUserId: "user-a",
+        title: BOT_TITLE,
+        harness: "claude",
+        model: FAILED.model,
+        effort: FAILED.reasoningEffort,
+        profile: FAILED_PROFILE,
+        trunkChatId: "trunk-bot",
+        boundHostId: TAB_HOST_ID,
+        hostEpoch: 1,
+        createdAt: 1_000,
+        archivedAt: null,
+        directive: null,
+        replyMode: "thread",
+        appConversationChatId: null,
+      };
+      const botSnapshot: BotSubscriptionSnapshot = {
+        bot,
+        tasks: [],
+        openRequestCount: 1,
+        conversationsRevision: 2,
+        boundHost: { hostId: TAB_HOST_ID, epoch: 1, isThisHost: true },
+        activity: null,
+        notificationSubscriptions: null,
+        surfaceActions: null,
+        stoppedNotificationWatches: null,
+      };
+      const snapshotKey = botQueryKeys.subscription({
+        hostId: TAB_HOST_ID,
+        botId,
+      });
+      queryClient.setQueryData(snapshotKey, botSnapshot);
+      kit.realBotWrite = true;
+      kit.queryClient = queryClient;
+      kit.botWriteBinding = { auth };
+
+      mountInBotTab({ botId, epicId: botId, opener: null });
+      await open();
+      fireEvent.click(option(/Claude Opus 4/));
+      fireEvent.click(switchAndRetry());
+      await writeStarted.promise;
+
+      return {
+        auth,
+        bot,
+        botId,
+        botSnapshot,
+        host,
+        pendingWrite,
+        queryClient,
+        requests,
+        snapshotKey,
+      };
+    }
+
+    async function completeDeviceSignIn(
+      auth: AuthService,
+      host: MockRunnerHost,
+      token: string,
+      userId: string,
+    ): Promise<void> {
+      await auth.signIn();
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token,
+        refreshToken: `${token}-refresh`,
+      });
+      await vi.waitFor(() => {
+        expect(auth.getCurrentSessionSnapshot().token).toBe(token);
+        expect(useAuthStore.getState().profile?.userId).toBe(userId);
+      });
+    }
+
+    function acceptedBotSettingsResponse(botId: string): Response {
+      return jsonResponse(200, {
+        bot: {
+          botId,
+          harness: "claude",
+          model: "claude-opus-4",
+          effort: null,
+          profile: FAILED_PROFILE,
+          replyMode: "thread",
+        },
+      });
+    }
+
     it("writes the picked tuple to the bot's row, and sends retry only once the server took it - never switch", async () => {
       kit.deferResponses = true;
-      mountInBotTab({ botId: EPIC_ID, opener: null });
+      mountInBotTab({ botId: EPIC_ID, epicId: EPIC_ID, opener: null });
       await open();
 
       fireEvent.click(option(/Claude Opus 4/));
@@ -1960,7 +2236,7 @@ describe("RoutingDestinationPicker", () => {
     it("a refused write states the server's sentence under the footer and sends no retry", async () => {
       const sentence = "Not found";
       kit.botWriteRefusal = sentence;
-      mountInBotTab({ botId: EPIC_ID, opener: null });
+      mountInBotTab({ botId: EPIC_ID, epicId: EPIC_ID, opener: null });
       await open();
 
       fireEvent.click(option(/Claude Opus 4/));
@@ -1977,7 +2253,11 @@ describe("RoutingDestinationPicker", () => {
 
     it("finishes a confirmed Switch and retry after the surface unmounts mid-write", async () => {
       kit.deferResponses = true;
-      const view = mountInBotTab({ botId: EPIC_ID, opener: null });
+      const view = mountInBotTab({
+        botId: EPIC_ID,
+        epicId: EPIC_ID,
+        opener: null,
+      });
       await open();
       fireEvent.click(option(/Claude Opus 4/));
       fireEvent.click(switchAndRetry());
@@ -1996,6 +2276,164 @@ describe("RoutingDestinationPicker", () => {
         ]);
       });
       expect(kit.mutations[1]).toEqual(RETRY);
+    });
+
+    it("drops the held write after switching from A to B without publishing or retrying", async () => {
+      const held = await prepareHeldRealWrite();
+      try {
+        expect(held.requests).toHaveLength(1);
+        expect(held.requests[0]).toMatchObject({
+          method: "POST",
+          authorization: "Bearer token-user-a",
+          body: JSON.stringify({
+            botId: held.botId,
+            harness: "claude",
+            model: "claude-opus-4",
+            effort: null,
+            profile: FAILED_PROFILE,
+          }),
+        });
+        expect(
+          held.queryClient
+            .getMutationCache()
+            .getAll()
+            .some(
+              (mutation) =>
+                mutation.options.mutationKey?.[0] === "bot.updateRunSettings" &&
+                mutation.state.status === "pending",
+            ),
+        ).toBe(true);
+        expect(kit.mutations).toEqual([]);
+        expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
+          held.botSnapshot,
+        );
+
+        await completeDeviceSignIn(
+          held.auth,
+          held.host,
+          "token-user-b",
+          "user-b",
+        );
+        const writeAndPickerContinuation = observeWriteAndPickerContinuation(
+          held.queryClient,
+        );
+        held.pendingWrite.resolve(acceptedBotSettingsResponse(held.botId));
+        await writeAndPickerContinuation;
+
+        expect(kit.mutations).toEqual([]);
+        expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
+          held.botSnapshot,
+        );
+      } finally {
+        held.auth.dispose();
+        held.queryClient.clear();
+        vi.unstubAllGlobals();
+        useAuthStore.getState().setSignedOut();
+      }
+    });
+
+    it("drops the held write after signing out and back in as A without publishing or retrying", async () => {
+      const held = await prepareHeldRealWrite();
+      try {
+        expect(held.requests).toHaveLength(1);
+        expect(
+          held.queryClient
+            .getMutationCache()
+            .getAll()
+            .some(
+              (mutation) =>
+                mutation.options.mutationKey?.[0] === "bot.updateRunSettings" &&
+                mutation.state.status === "pending",
+            ),
+        ).toBe(true);
+        expect(kit.mutations).toEqual([]);
+        expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
+          held.botSnapshot,
+        );
+        await held.auth.signOut();
+        await completeDeviceSignIn(
+          held.auth,
+          held.host,
+          "token-user-a-again",
+          "user-a",
+        );
+        const writeAndPickerContinuation = observeWriteAndPickerContinuation(
+          held.queryClient,
+        );
+        held.pendingWrite.resolve(acceptedBotSettingsResponse(held.botId));
+        await writeAndPickerContinuation;
+
+        expect(kit.mutations).toEqual([]);
+        expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
+          held.botSnapshot,
+        );
+      } finally {
+        held.auth.dispose();
+        held.queryClient.clear();
+        vi.unstubAllGlobals();
+        useAuthStore.getState().setSignedOut();
+      }
+    });
+
+    it("keeps a held write through A's token rotation, publishing it and retrying", async () => {
+      const held = await prepareHeldRealWrite();
+      try {
+        const identityGeneration = held.auth.getIdentityGeneration();
+        const credentialGeneration = held.auth.getCredentialGeneration();
+        const rotation = await held.host.tokenStore.rotate({
+          userId: "user-a",
+          token: "token-user-a",
+        });
+        expect(rotation.outcome).toBe("applied");
+        await vi.waitFor(() => {
+          expect(held.auth.getCredentialGeneration()).toBeGreaterThan(
+            credentialGeneration,
+          );
+        });
+        expect(held.auth.getIdentityGeneration()).toBe(identityGeneration);
+        expect(
+          held.queryClient
+            .getMutationCache()
+            .getAll()
+            .some(
+              (mutation) =>
+                mutation.options.mutationKey?.[0] === "bot.updateRunSettings" &&
+                mutation.state.status === "pending",
+            ),
+        ).toBe(true);
+        expect(kit.mutations).toEqual([]);
+        expect(held.queryClient.getQueryData(held.snapshotKey)).toEqual(
+          held.botSnapshot,
+        );
+
+        const writeAndPickerContinuation = observeWriteAndPickerContinuation(
+          held.queryClient,
+        );
+        held.pendingWrite.resolve(acceptedBotSettingsResponse(held.botId));
+        await writeAndPickerContinuation;
+
+        expect(kit.mutations).toHaveLength(1);
+        expect(kit.mutations[0]).toMatchObject({
+          method: "chat.fallback.runManualRung",
+          variables: { epicId: held.botId, rung: "retry" },
+        });
+        expect(
+          held.queryClient.getQueryData<BotSubscriptionSnapshot>(
+            held.snapshotKey,
+          )?.bot,
+        ).toMatchObject({
+          botId: held.botId,
+          model: "claude-opus-4",
+          harness: "claude",
+          effort: null,
+          profile: FAILED_PROFILE,
+        });
+      } finally {
+        held.auth.dispose();
+        held.queryClient.clear();
+        vi.unstubAllGlobals();
+        useAuthStore.getState().setSignedOut();
+      }
     });
 
     it("writes the effort picked, where a listed destination names it as the model's default", async () => {
@@ -2018,7 +2456,7 @@ describe("RoutingDestinationPicker", () => {
           }),
         ],
       });
-      mountInBotTab({ botId: EPIC_ID, opener: null });
+      mountInBotTab({ botId: EPIC_ID, epicId: EPIC_ID, opener: null });
       await open();
 
       fireEvent.click(option(/Claude Haiku 4/));
@@ -2040,7 +2478,7 @@ describe("RoutingDestinationPicker", () => {
 
     it("the footer says the bot's model moves for all its chats, and Bot settings opens the tab's settings", async () => {
       const opener = vi.fn<() => void>();
-      mountInBotTab({ botId: EPIC_ID, opener });
+      mountInBotTab({ botId: EPIC_ID, epicId: EPIC_ID, opener });
       const dialog = await open();
 
       expect(
@@ -2064,7 +2502,7 @@ describe("RoutingDestinationPicker", () => {
     });
 
     it("draws no Bot settings link where the surface has no settings to open", async () => {
-      mountInBotTab({ botId: EPIC_ID, opener: null });
+      mountInBotTab({ botId: EPIC_ID, epicId: EPIC_ID, opener: null });
       const dialog = await open();
 
       expect(
@@ -2074,7 +2512,7 @@ describe("RoutingDestinationPicker", () => {
 
     it("an agent chat inside a bot tab keeps Switch and the switch rung", async () => {
       const opener = vi.fn<() => void>();
-      mountInBotTab({ botId: "bot-other", opener });
+      mountInBotTab({ botId: "bot-other", epicId: EPIC_ID, opener });
       const dialog = await open();
 
       expect(
