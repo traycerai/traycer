@@ -123,20 +123,16 @@ const directory = vi.hoisted(() => ({
   getLocalHostId: (): string | null => null,
 }));
 
-vi.mock("@/lib/host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host")>();
-  return {
-    ...actual,
-    useHostClient: () => hostClient,
-    useHostRuntimeClient: () => hostClient,
-    useOptionalHostClient: () => hostClient,
-    useHostBinding: () => ({ hostClient, directory }),
-    useHostDirectory: () => directory,
-    useAuthService: () => ({
-      revalidateCurrentContext: () => Promise.resolve({ kind: "valid" }),
-    }),
-  };
-});
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => hostClient,
+  useHostRuntimeClient: () => hostClient,
+  useOptionalHostClient: () => hostClient,
+  useHostBinding: () => ({ hostClient, directory }),
+  useHostDirectory: () => directory,
+  useAuthService: () => ({
+    revalidateCurrentContext: () => Promise.resolve({ kind: "valid" }),
+  }),
+}));
 
 // One client per host, answering the row the case published: the controller
 // reads the session host's floor off `getActiveHost()`.
