@@ -193,14 +193,24 @@ describe("team pages on a build with a server pool", () => {
     await waitFor(() => {
       expect(harness.paramsOf("environment.list")).not.toHaveLength(0);
     });
-    expect(harness.paramsOf("environment.plans.list")).toEqual([
-      { environmentId: "env-a" },
-    ]);
+    // The mount's reads, and the one the configuration's first revision adds,
+    // are settled before the reads are counted.
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    expect(
+      harness
+        .paramsOf("environment.plans.list")
+        .every(
+          (params) =>
+            JSON.stringify(params) ===
+            JSON.stringify({ environmentId: "env-a" }),
+        ),
+    ).toBe(true);
     expect(hostIdsOf(harness, "environment.plans.list")).toEqual([]);
-    const listReadsBefore = harness.paramsOf("environment.list").length;
-    const planReadsBefore = harness.paramsOf("environment.plans.list").length;
     await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
     const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    const listReadsBefore = harness.paramsOf("environment.list").length;
+    const planReadsBefore = harness.paramsOf("environment.plans.list").length;
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Unlink" }),
     );
@@ -224,10 +234,11 @@ describe("team pages on a build with a server pool", () => {
     expect(hostIdsOf(harness, "environment.plans.unlinkPreview")).toEqual([]);
     expect(hostIdsOf(harness, "environment.previewLocalFacts")).toEqual([]);
     expect(hostIdsOf(harness, "environment.list")).toEqual([]);
-    expect(harness.paramsOf("environment.plans.list")).toEqual([
-      { environmentId: "env-a" },
-      { environmentId: "env-a" },
-    ]);
+    expect(harness.paramsOf("environment.plans.list")).toEqual(
+      Array.from({ length: planReadsBefore + 1 }, () => ({
+        environmentId: "env-a",
+      })),
+    );
     expect(hostIdsOf(harness, "environment.plans.list")).toEqual([]);
     expect(
       harness.cloudRequests.filter((request) => request.method === "DELETE"),

@@ -15,6 +15,7 @@ import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   HostRpcError,
@@ -208,8 +209,8 @@ async function createDirectAuthFixture(
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
-  vi.stubGlobal("fetch", async (_input: RequestInfo | URL) =>
-    signedInResponse("user-a"),
+  vi.stubGlobal("fetch", (_input: RequestInfo | URL) =>
+    Promise.resolve(signedInResponse("user-a")),
   );
   const auth = new AuthService({ runnerHost });
   await runnerHost.tokenStore.signIn(
@@ -233,6 +234,7 @@ async function createDirectAuthFixture(
   });
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: () => undefined,
     registry: hostRpcRegistry,
     messenger,
     requestContextProvider: auth.getRequestContextProvider(),
@@ -243,6 +245,7 @@ async function createDirectAuthFixture(
     requestCoordinator: null,
     selectedHostId: () => POOL_HOST_ID,
     connectionRegistry: null,
+    singleAttemptMessenger: null,
   });
   const fixture: DirectAuthFixture = {
     auth,
@@ -486,8 +489,7 @@ describe("useAutoPolicySetMutation - refresh after the sign-in's PUT", () => {
     recordNegotiatedHostManifest(POOL_HOST_ID, {
       "host.accountSettings.refresh": { major: 1, minor: 0 },
     });
-    const pendingPut =
-      deferred<Awaited<ReturnType<MockRunnerHost["saveAutoPolicy"]>>>();
+    const pendingPut = deferred<AutoPolicySaveResult>();
     const puts: Array<{ readonly bearer: string; readonly body: string }> = [];
     vi.spyOn(fixture.runnerHost, "saveAutoPolicy").mockImplementation(
       (bearer, body) => {
@@ -541,8 +543,7 @@ describe("useAutoPolicySetMutation - refresh after the sign-in's PUT", () => {
     recordNegotiatedHostManifest(POOL_HOST_ID, {
       "host.accountSettings.refresh": { major: 1, minor: 0 },
     });
-    const pendingPut =
-      deferred<Awaited<ReturnType<MockRunnerHost["saveAutoPolicy"]>>>();
+    const pendingPut = deferred<AutoPolicySaveResult>();
     const puts: Array<{ readonly bearer: string; readonly body: string }> = [];
     vi.spyOn(fixture.runnerHost, "saveAutoPolicy").mockImplementation(
       (bearer, body) => {

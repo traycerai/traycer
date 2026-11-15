@@ -82,7 +82,7 @@ afterEach(() => {
 });
 
 const host: EnvironmentHostRecordV12 = {
-  hostId: "host-a",
+  hostId: mockLocalHostEntry.hostId,
   hostLabel: "Mac mini",
   hostPlatform: "darwin",
   enrolledByUserId: "u-1",
@@ -241,7 +241,9 @@ describe("TeamPlans", () => {
       within(card).getByRole<HTMLButtonElement>("button", { name: "Unlink" })
         .disabled,
     ).toBe(true);
-    expect(screen.queryByText("Active turns could not be counted.")).toBeNull();
+    expect(
+      screen.queryByText(/Active turns could not be counted\./),
+    ).toBeNull();
     expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
 
     act(() => {
@@ -311,10 +313,12 @@ describe("TeamPlans", () => {
     });
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByText("Active turns could not be counted.")).toBeNull();
+    expect(
+      screen.queryByText(/Active turns could not be counted\./),
+    ).toBeNull();
     expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(0);
 
-    await act(async () => {
+    act(() => {
       if (resolveHostList === null) {
         throw new Error("team host list was not held");
       }
@@ -332,9 +336,11 @@ describe("TeamPlans", () => {
     });
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByText("Active turns could not be counted.")).toBeNull();
+    expect(
+      screen.queryByText(/Active turns could not be counted\./),
+    ).toBeNull();
 
-    await act(async () => {
+    act(() => {
       if (resolveLocalFacts === null) {
         throw new Error("local facts request was not held");
       }
@@ -371,12 +377,12 @@ describe("TeamPlans", () => {
         }
         return { activeTurns: null, terminals: null };
       });
-      const listedHostId =
-        scenario === "not-in-team-list"
-          ? null
-          : scenario === "not-ready"
-            ? selectedHostId
-            : mockLocalHostEntry.hostId;
+      let listedHostId: string | null = mockLocalHostEntry.hostId;
+      if (scenario === "not-in-team-list") {
+        listedHostId = null;
+      } else if (scenario === "not-ready") {
+        listedHostId = selectedHostId;
+      }
       const harness = mountTeamPage(poolSource("admin"), {
         "environment.plans.list": () => plans,
         "environment.list": () => environmentList,
@@ -404,7 +410,7 @@ describe("TeamPlans", () => {
       );
       const dialog = await screen.findByRole("dialog");
       expect(
-        within(dialog).getByText("Active turns could not be counted."),
+        within(dialog).getByText(/Active turns could not be counted\./),
       ).toBeTruthy();
       expect(
         within(dialog).queryByRole("button", { name: "Retry" }),
@@ -453,7 +459,7 @@ describe("TeamPlans", () => {
     );
     const dialog = await screen.findByRole("dialog");
     expect(
-      within(dialog).getByText("Active turns could not be counted."),
+      within(dialog).getByText(/Active turns could not be counted\./),
     ).toBeTruthy();
     expect(previewLocalFacts).not.toHaveBeenCalled();
     expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(0);
@@ -499,16 +505,19 @@ describe("TeamPlans", () => {
         name: "Retry",
       }),
     ).toBeTruthy();
-    expect(screen.queryByText("Active turns could not be counted.")).toBeNull();
+    expect(
+      screen.queryByText(/Active turns could not be counted\./),
+    ).toBeNull();
     expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(1);
     expect(screen.queryByRole("dialog")).toBeNull();
 
-    await act(async () => {
+    act(() => {
       if (resolveLocalFacts === null) {
         throw new Error("local facts request was not held");
       }
       resolveLocalFacts({ activeTurns: 3, terminals: null });
     });
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
     expect(
       screen.getByText("Couldn't preview unlinking this plan."),
     ).toBeTruthy();
@@ -552,23 +561,39 @@ describe("TeamPlans", () => {
     );
     await waitFor(() => expect(resolvers).toHaveLength(2));
     expect(screen.queryByRole("dialog")).toBeNull();
-    await act(async () => {
-      const resolveFirst = resolvers[0];
-      if (resolveFirst === undefined) {
-        throw new Error("the first opening's count was not held");
-      }
-      resolveFirst({ activeTurns: 3, terminals: null });
+    act(() => {
+      resolvers[0]({ activeTurns: 3, terminals: null });
+    });
+    await waitFor(() => {
+      expect(
+        harness.queryClient
+          .getQueryCache()
+          .getAll()
+          .filter(
+            (query) =>
+              query.queryKey.includes("environment.previewLocalFacts") &&
+              query.state.fetchStatus === "idle",
+          ),
+      ).toHaveLength(1);
     });
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText(/3 active turns/)).toBeNull();
 
-    await act(async () => {
-      const resolveSecond = resolvers[1];
-      if (resolveSecond === undefined) {
-        throw new Error("the second opening's count was not held");
-      }
-      resolveSecond({ activeTurns: 7, terminals: null });
+    act(() => {
+      resolvers[1]({ activeTurns: 7, terminals: null });
+    });
+    await waitFor(() => {
+      expect(
+        harness.queryClient
+          .getQueryCache()
+          .getAll()
+          .filter(
+            (query) =>
+              query.queryKey.includes("environment.previewLocalFacts") &&
+              query.state.fetchStatus === "idle",
+          ),
+      ).toHaveLength(2);
     });
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/7 active turns/)).toBeTruthy();
@@ -898,6 +923,11 @@ describe("TeamGuide", () => {
 
 describe("TeamPlans' unlink sheet when authn answers the host list again", () => {
   async function openUnlinkNamingMacMini() {
+    // The turns running on the plan are counted by the window's own computer,
+    // which authn's host list names Mac mini.
+    useSelectionAuthorityStore.setState({
+      effectiveHostId: mockLocalHostEntry.hostId,
+    });
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.plans.list": () => ({
         plans: [
@@ -911,11 +941,12 @@ describe("TeamPlans' unlink sheet when authn answers the host list again", () =>
         ],
       }),
       "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.configuration.items": () => ({ items: [] }),
       "environment.host.list": () => ({ hosts: [host] }),
-      "environment.plans.unlinkPreview": () => ({
+      "environment.previewLocalFacts": () => ({
         activeTurns: 2,
-        localHostId: host.hostId,
-        keepsWorking: [],
+        terminals: null,
       }),
     });
     render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {

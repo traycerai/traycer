@@ -37,6 +37,7 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { TaskEnvironmentAttachmentResult } from "@traycer-clients/shared/host-client/task-environment-attachment";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { AuthService } from "@/lib/auth/auth-service";
 import * as environmentArms from "@/hooks/environment/use-environment-arms";
@@ -706,10 +707,6 @@ const MODAL_TEAM_ENVIRONMENT = {
   providerHandle: "team-9",
 };
 
-type AttachTaskAnswer = Awaited<
-  ReturnType<MockRunnerHost["attachTaskEnvironment"]>
->;
-
 interface AttachmentAuthFixture {
   readonly auth: AuthService;
   readonly runnerHost: MockRunnerHost;
@@ -777,7 +774,7 @@ function signedInResponse(userId: string): Response {
 }
 
 async function createAttachmentAuthBinding(
-  heldPost: Promise<AttachTaskAnswer> | null = null,
+  heldPost: Promise<TaskEnvironmentAttachmentResult> | null,
 ): Promise<AttachmentAuthFixture> {
   const runnerHost = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
@@ -788,7 +785,7 @@ async function createAttachmentAuthBinding(
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
-  vi.stubGlobal("fetch", async () => signedInResponse("modal-user"));
+  vi.stubGlobal("fetch", () => Promise.resolve(signedInResponse("modal-user")));
   const auth = new AuthService({ runnerHost });
   await runnerHost.tokenStore.signIn(
     { token: "modal-token-a", refreshToken: "modal-token-a-refresh" },
@@ -821,6 +818,7 @@ async function createAttachmentAuthBinding(
   let requestId = 0;
   const runtime = new HostRuntime<HostRpcRegistry>({
     runnerHost,
+    onHostTokenRenewal: () => undefined,
     registry: hostRpcRegistry,
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
@@ -835,6 +833,7 @@ async function createAttachmentAuthBinding(
     requestCoordinator: null,
     connectionRegistry: null,
     selectedHostId: () => "host-modal",
+    singleAttemptMessenger: null,
   });
   const fixture: AttachmentAuthFixture = {
     auth,
@@ -882,7 +881,7 @@ async function signInAs(
 }
 
 function renderModal(
-  binding: HostRuntimeBinding<HostRpcRegistry> | null = null,
+  binding: HostRuntimeBinding<HostRpcRegistry> | null,
 ): RenderResult {
   const body =
     binding === null ? (
@@ -897,6 +896,24 @@ function renderModal(
     testState.installEditor?.();
   });
   return view;
+}
+
+/** The modal under a signed-in account whose authn accepts the team attachment. */
+async function renderSignedInModal(
+  heldPost: Promise<TaskEnvironmentAttachmentResult> | null,
+): Promise<AttachmentAuthFixture> {
+  const fixture = await createAttachmentAuthBinding(heldPost);
+  useAuthStore.getState().setSignedIn(
+    {
+      userId: "modal-user",
+      userName: "Modal User",
+      email: "modal-user@example.com",
+    },
+    { userId: "modal-user", username: "Modal User" },
+    [],
+  );
+  renderModal(fixture.binding);
+  return fixture;
 }
 
 function draftSurvived(): boolean {
@@ -981,7 +998,7 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
   });
 
   it("creates once when the selected chat harness is not blocked (control)", () => {
-    renderModal();
+    renderModal(null);
     act(() => {
       testState.bodySubmit?.();
     });
@@ -992,7 +1009,7 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
 
   it("creates no chat, shows the refused notice and keeps the draft when the selected chat harness is blocked", () => {
     gateState.blockedIds.add("claude");
-    renderModal();
+    renderModal(null);
     act(() => {
       testState.bodySubmit?.();
     });
@@ -1007,7 +1024,7 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
     useNewConversationModalStore
       .getState()
       .setComposerMode("epic-1", "terminal");
-    renderModal();
+    renderModal(null);
     act(() => {
       testState.bodyStartTerminal?.(terminalLaunch("claude"), "host-a");
     });
@@ -1023,7 +1040,7 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
     // The toolbar's own selection ("claude") is NOT blocked: the launch's
     // harness is the one the rule has to read.
     gateState.blockedIds.add("codex");
-    renderModal();
+    renderModal(null);
     act(() => {
       testState.bodyStartTerminal?.(terminalLaunch("codex"), "host-a");
     });
@@ -1097,7 +1114,7 @@ describe("new-conversation modal refusals at Send", () => {
       SENTENCE,
       "Open Personal's Providers",
     );
-    renderModal();
+    renderModal(null);
 
     act(() => {
       testState.bodySubmit?.();
@@ -1120,7 +1137,7 @@ describe("new-conversation modal refusals at Send", () => {
       "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
       "Choose a model",
     );
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -1155,7 +1172,7 @@ describe("new-conversation modal refusals at Send", () => {
       "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
       "Choose a model",
     );
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -1187,7 +1204,7 @@ describe("new-conversation modal refusals at Send", () => {
   });
 
   it("hands the same staged send over when the agent is signed in", async () => {
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -1209,7 +1226,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   it("keeps a changed selection while the staged Send check is pending", async () => {
     const checked = deferred<ComposerHostNoticeState | null>();
     testState.beforeStagedSend.mockReturnValue(checked.promise);
-    renderModal();
+    renderModal(null);
     act(() =>
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX),
     );
@@ -1242,7 +1259,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   it("attaches a team-staged chat before handing its draft to the sandbox", async () => {
     const attach = deferred<{ readonly attached: true }>();
     testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
+    const fixture = await renderSignedInModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
       testState.bodySubmit?.();
@@ -1251,7 +1268,6 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     await waitFor(() => {
       expect(testState.attachEnvironment).toHaveBeenCalledWith({
         epicId: "epic-1",
-        teamId: "team-9",
       });
     });
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -1265,6 +1281,16 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     await act(async () => {
       attach.resolve({ attached: true });
       await attach.promise;
+    });
+    await waitFor(() => {
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
+      });
     });
     await waitFor(() => {
       expect(
@@ -1281,7 +1307,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   it("attaches a team-staged terminal request before taking the stage", async () => {
     const attach = deferred<{ readonly attached: true }>();
     testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
+    const fixture = await renderSignedInModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
     });
@@ -1296,7 +1322,6 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     await waitFor(() => {
       expect(testState.attachEnvironment).toHaveBeenCalledWith({
         epicId: "epic-1",
-        teamId: "team-9",
       });
     });
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -1307,6 +1332,16 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     await act(async () => {
       attach.resolve({ attached: true });
       await attach.promise;
+    });
+    await waitFor(() => {
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
+      });
     });
     await waitFor(() => {
       expect(
@@ -1321,32 +1356,25 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   });
 
   it("keeps the staged chat and draft when its team attachment is refused", async () => {
-    const attach = deferred<{ readonly attached: true }>();
-    testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
+    const fixture = await renderSignedInModal(
+      Promise.resolve({ kind: "forbidden" }),
+    );
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
       testState.bodySubmit?.();
     });
 
     await waitFor(() => {
-      expect(testState.attachEnvironment).toHaveBeenCalledWith({
-        epicId: "epic-1",
-        teamId: "team-9",
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
       });
     });
-    await act(async () => {
-      attach.reject(
-        new HostRpcError({
-          code: "FORBIDDEN",
-          message: "This task cannot be attached to that team.",
-          requestId: "request-attach-refused",
-          method: "epic.attachEnvironment",
-          fatalDetails: null,
-        }),
-      );
-      await attach.promise.catch(() => undefined);
-    });
+    await waitFor(() => expect(testState.bodySubmitting).toBe(false));
 
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
@@ -1434,7 +1462,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
       toastLog.length = 0;
       const attach = deferred<{ readonly attached: true }>();
       testState.attachEnvironment.mockReturnValue(attach.promise);
-      renderModal();
+      const fixture = await renderSignedInModal(null);
       act(() => {
         useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
         testState.bodySubmit?.();
@@ -1473,16 +1501,20 @@ describe("new-conversation modal's send on a staged sandbox", () => {
       );
     const attach = deferred<{ readonly attached: true }>();
     testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
+    const fixture = await renderSignedInModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
       testState.bodySubmit?.();
     });
 
     await waitFor(() => {
-      expect(testState.attachEnvironment).toHaveBeenCalledWith({
-        epicId: "epic-1",
-        teamId: "team-9",
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
       });
     });
     act(() => {
@@ -1512,7 +1544,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
 
   it("does not continue or reopen the team arms when the same account signs in again while the attachment POST is out", async () => {
     toastLog.length = 0;
-    const post = deferred<AttachTaskAnswer>();
+    const post = deferred<TaskEnvironmentAttachmentResult>();
     const fixture = await createAttachmentAuthBinding(post.promise);
     const reopenArms = vi.spyOn(environmentArms, "reopenEnvironmentArms");
     const pressedIdentityGeneration = fixture.auth.getIdentityGeneration();
@@ -1567,7 +1599,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
 
   it("continues the staged modal handoff when the bearer rotates on the same sign-in during the attachment POST", async () => {
     toastLog.length = 0;
-    const post = deferred<AttachTaskAnswer>();
+    const post = deferred<TaskEnvironmentAttachmentResult>();
     const fixture = await createAttachmentAuthBinding(post.promise);
     const reopenArms = vi.spyOn(environmentArms, "reopenEnvironmentArms");
     useAuthStore.getState().setSignedIn(
@@ -1626,7 +1658,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     // The sandbox starts empty: the chip reads Empty sandbox and the
     // workspace controls are hidden.
     testState.workspaceReady = false;
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -1677,7 +1709,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   ] as const)(
     "sends to %s on the model the person picked, not the one the toolbar shows",
     async (_label, target) => {
-      renderModal();
+      renderModal(null);
       act(() => {
         useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, target);
       });
@@ -1697,7 +1729,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   );
 
   it("opens a terminal on the staged sandbox from Open terminal instead, with no agent sent", () => {
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -1736,7 +1768,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
         },
       ],
     );
-    renderModal();
+    renderModal(null);
     const input = testState.stagedHandoffInput;
     if (input === null) throw new Error("expected the staged handoff");
 
@@ -1757,7 +1789,7 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
       .getState()
       .setComposerMode("epic-1", "terminal");
     testState.staged = true;
-    const view = renderModal();
+    const view = renderModal(null);
     const surfaceKey = testState.stagedSendInput?.surfaceKey ?? null;
     if (surfaceKey === null) throw new Error("expected a staging surface");
     useStagedSandboxStore.getState().stage(surfaceKey, {
@@ -1791,7 +1823,7 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
 
     // The modal closes while the sandbox boots, and opens again.
     view.unmount();
-    renderModal();
+    renderModal(null);
     const staged = () => {
       const input = testState.stagedHandoffInput;
       if (input === null) throw new Error("expected the staged handoff");
