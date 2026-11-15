@@ -27,6 +27,7 @@ import {
   validateAuthTokenIdentityAccessOnceAbortable,
   validateAuthTokenIdentityAccessOnly,
 } from "../auth-validation";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const AUTHN_BASE_URL = "https://authn.example.test";
 const EXCHANGE_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/auth/exchange-code`;
@@ -354,6 +355,26 @@ describe("refreshOnceAbortable", () => {
       });
     },
   );
+
+  it("treats an opaque refresh redirect as network-error without resending the bearer", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      createOpaqueRedirectResponse(),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "stale-refresh",
+      rotationCode: null,
+      clientKind: null,
+      signal: null,
+    });
+
+    expect(result).toEqual({ kind: "network-error" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]?.redirect).toBe("manual");
+  });
 
   it("maps a 401 to rejected (dead refresh credential) in a single attempt", async () => {
     installMockFetch([{ status: 401, body: { error: "Unauthorized" } }]);
@@ -995,6 +1016,48 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     // fallback that multiplied with the retry ceiling would produce).
     expect(result.kind).toBe("network-error");
     expect(urlCalls).toHaveLength(2 * AUTH_FETCH_MAX_ATTEMPTS);
+  });
+  describe("an identity read answered with a redirect", () => {
+    const redirects = [
+      {
+        name: "a 307 with a Location",
+        answer: (body: unknown) =>
+          new Response(JSON.stringify(body), {
+            status: 307,
+            headers: { location: "https://elsewhere.test/collect" },
+          }),
+        status: 307,
+      },
+      {
+        name: "a browser's opaque redirect",
+        answer: () => createOpaqueRedirectResponse(),
+        status: 0,
+      },
+    ];
+
+    it.each(redirects)(
+      "reads $name as a network error, never as the user, with the bearer sent once and never followed",
+      async ({ answer }) => {
+        const fetchMock = vi.fn<typeof fetch>(async () =>
+          answer(authenticatedUserRawBody("GITHUB")),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const result = await validateAuthTokenIdentityAccessOnceAbortable({
+          authnBaseUrl: AUTHN_BASE_URL,
+          token: "token",
+          signal: null,
+        });
+
+        expect(result.kind).toBe("network-error");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [, init] = fetchMock.mock.calls[0];
+        expect(init?.redirect).toBe("manual");
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          "Bearer token",
+        );
+      },
+    );
   });
 });
 

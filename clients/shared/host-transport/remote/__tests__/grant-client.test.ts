@@ -3,7 +3,10 @@ import {
   createAttachGrantProvider,
   createSandboxAttachGrantProvider,
   mintAttachGrantViaHttp,
+  mintHostTokenViaHttp,
+  mintRelayPassWithHostTokenViaHttp,
 } from "../grant-client";
+import { createOpaqueRedirectResponse } from "../../../test-fixtures/opaque-redirect";
 import {
   removeNativeAbortHelpers,
   signalOfLastFetch,
@@ -1018,4 +1021,101 @@ describe("attach grant providers on a frozen sandbox", () => {
       await createSandboxAttachGrantProvider(deps).provider(),
     ).toMatchObject({ kind: "unavailable" });
   });
+});
+
+describe("a grant request answered with a redirect", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+      status: 307,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+      status: 0,
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name on the attach grant mint as a network error, never as a grant, with the bearer sent once and never followed",
+    async ({ answer, status }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({ grant: "grant-word", role: "client", expires_in: 300 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+
+      expect(result).toMatchObject({
+        kind: "network-error",
+        detail: `authn answered HTTP ${status}`,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the host-only token mint as unavailable, never as a refusal of the person, with the sign-in sent once and never followed",
+    async ({ answer, status }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({
+          session_grant: "session-word",
+          session_grant_expires_in: 300,
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await mintHostTokenViaHttp(AUTHN, HOST_ID, BEARER, null);
+
+      expect(result).toEqual({
+        kind: "unavailable",
+        detail: `authn answered HTTP ${status}`,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the relay pass mint as today's refusal, never as a pass, with the sign-in sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({
+          grant: "grant-word",
+          expires_in: 300,
+          session_grant: "session-word",
+          session_grant_expires_in: 300,
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await mintRelayPassWithHostTokenViaHttp(
+        AUTHN,
+        HOST_ID,
+        BEARER,
+      );
+
+      expect(result.kind).toBe("as-today");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
 });

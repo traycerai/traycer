@@ -19,6 +19,7 @@ import {
   startDeviceAuthorization,
   withReturnScheme,
 } from "../device-auth";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const AUTHN_BASE_URL = "https://authn.example.test";
 const AUTHORIZE_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/auth/device/authorize`;
@@ -816,4 +817,56 @@ describe("withReturnScheme", () => {
     expect(withReturnScheme("not-a-url", "traycer")).toBe("not-a-url");
     expect(withReturnScheme("", "traycer")).toBe("");
   });
+});
+
+describe("pollDeviceToken answered with a redirect", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+      status: 307,
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+      status: 0,
+    },
+  ];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(redirects)(
+    "reads $name as a transient failure naming the status, never as a token, with the device code sent once and never followed",
+    async ({ answer, status }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({ token: "access-word", refreshToken: "refresh-word" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await pollDeviceToken(
+        AUTHN_BASE_URL,
+        "dev-code",
+        "cli",
+        REQUEST_OPTIONS,
+      );
+
+      expect(result).toEqual({
+        kind: "network-error",
+        cause: { kind: "http-status", status },
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        device_code: "dev-code",
+        client_id: "cli",
+      });
+    },
+  );
 });

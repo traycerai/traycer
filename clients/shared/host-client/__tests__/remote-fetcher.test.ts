@@ -24,6 +24,7 @@ import {
   RELAY_FUSE_MAX_CLOCK_SKEW_MS,
   type HostListFetchResult,
 } from "../remote-fetcher";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const AUTHN = "https://authn.example.test";
 
@@ -754,4 +755,42 @@ describe("the refusal and death gates", () => {
     expect(isConfirmedHostDeath(entry, true)).toBe(false);
     expect(isConfirmedHostDeath(entry, false)).toBe(true);
   });
+});
+
+describe("fetchRegisteredHostsViaHttp answered with a redirect", () => {
+  const redirects = [
+    {
+      name: "a 307 with a Location",
+      answer: (body: unknown) =>
+        new Response(JSON.stringify(body), {
+          status: 307,
+          headers: { location: "https://elsewhere.test/collect" },
+        }),
+    },
+    {
+      name: "a browser's opaque redirect",
+      answer: () => createOpaqueRedirectResponse(),
+    },
+  ];
+
+  it.each(redirects)(
+    "reads $name as a network error, never as the host list, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => answer(envelope()));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        fetchRegisteredHostsViaHttp(AUTHN, "jwt-abc"),
+      ).resolves.toEqual({
+        kind: "network-error",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
 });
