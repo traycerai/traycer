@@ -22,6 +22,12 @@ import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { environmentCloudHostError } from "@/lib/environment/environment-cloud-calls";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import {
+  notificationWriteIsCurrent,
+  requireNotificationWriteOrigin,
+  useNotificationMutationOrigin,
+} from "@/hooks/notifications/notification-mutation-origin";
+import type { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
   useConfigurationItemsQuery,
   type ConfigurationItem,
 } from "./use-configuration-items-query";
@@ -62,22 +68,32 @@ export function useTeamNotificationHooks() {
     NOTIFICATION_HOOKS_ITEM.kind,
     hooksOf,
   );
+  const origin = useNotificationMutationOrigin(() => ({
+    cloud: cloud?.() ?? null,
+    environmentId,
+    canEdit,
+  }));
   const put = useMutation<
     EnvironmentConfigurationItemWriteResponse,
-    EnvironmentCloudError,
+    EnvironmentCloudError | HostRequestAbortedError,
     TeamHooksWrite
   >({
     mutationKey: environmentMutationKeys.configurationItemsPut(),
     mutationFn: (request) => {
-      if (!canEdit || environmentId === null)
+      const captured = origin.contextOf(request);
+      requireNotificationWriteOrigin(
+        captured,
+        "environment.configuration.items",
+      );
+      if (!captured.canEdit || captured.environmentId === null)
         throw new EnvironmentCloudError("forbidden", NEEDS_PERMISSION_MESSAGE);
-      if (cloud === null)
+      if (captured.cloud === null)
         throw new EnvironmentCloudError(
           "no_response",
           NEEDS_CONNECTION_MESSAGE.settings,
         );
-      return putConfigurationItem(cloud(), {
-        environmentId,
+      return putConfigurationItem(captured.cloud, {
+        environmentId: captured.environmentId,
         kind: NOTIFICATION_HOOKS_ITEM.kind,
         key: NOTIFICATION_HOOKS_ITEM.key,
         os: null,
@@ -85,15 +101,21 @@ export function useTeamNotificationHooks() {
         revision: request.revision,
       });
     },
-    onSettled: () =>
-      environmentId === null
-        ? Promise.resolve()
-        : queries.invalidateQueries({
-            predicate: (query) =>
-              configurationReadMatches(query.queryKey, environmentId, [
-                "environment.configuration.items",
-              ]),
-          }),
+    onSettled: (_data, _error, request) => {
+      const captured = origin.contextOf(request);
+      if (!notificationWriteIsCurrent(captured)) {
+        put.reset();
+        return;
+      }
+      const targetEnvironmentId = captured.environmentId;
+      if (targetEnvironmentId === null) return;
+      return queries.invalidateQueries({
+        predicate: (query) =>
+          configurationReadMatches(query.queryKey, targetEnvironmentId, [
+            "environment.configuration.items",
+          ]),
+      });
+    },
   });
-  return { read, put, canEdit };
+  return { read, put: origin.wrap(put), canEdit };
 }

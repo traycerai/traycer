@@ -38,6 +38,11 @@ import {
 } from "@/hooks/host/use-host-scoped-mutation";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
+  notificationWriteIsCurrent,
+  requireNotificationWriteOrigin,
+  useNotificationMutationOrigin,
+} from "@/hooks/notifications/notification-mutation-origin";
+import {
   notificationsMutationKeys,
   notificationsQueryKeys,
 } from "@/lib/query-keys";
@@ -109,10 +114,20 @@ export function useNotificationHooksSaveForClient(
   const stream = use(StreamRuntimeContext);
   const viewerId = useCloudChatViewerId();
   const queries = useQueryClient();
-  return useHostScopedMutationForClient(client, {
+  const origin = useNotificationMutationOrigin((): AccountHooksSaveContext => ({
+    cloud: source?.() ?? null,
+    binding,
+    stream,
+    viewerId,
+  }));
+  const mutation = useHostScopedMutationForClient(client, {
     method: "host.notificationHooks.save",
     // The list is saved whole, against the revision it was read at.
     prepareRequest: (request, requester) => {
+      requireNotificationWriteOrigin(
+        origin.contextOf(request),
+        "host.notificationHooks.save",
+      );
       const hostId = requester.getActiveHostId();
       const version =
         hostId === null
@@ -133,13 +148,9 @@ export function useNotificationHooksSaveForClient(
       }
       return Promise.resolve(request);
     },
-    captureContext: () => ({
-      cloud: source?.() ?? null,
-      binding,
-      stream,
-      viewerId,
-    }),
+    captureContext: origin.contextOf,
     onSuccess: async (response, _request, _hostId, captured) => {
+      if (!notificationWriteIsCurrent(captured)) return;
       try {
         if (response.accountHooks !== null) {
           if (captured.cloud === null)
@@ -177,6 +188,7 @@ export function useNotificationHooksSaveForClient(
           );
         }
       } catch (error) {
+        if (!notificationWriteIsCurrent(captured)) return;
         throw new NotificationHooksAccountSaveError(
           error,
           response.configurationRevision,
@@ -184,6 +196,10 @@ export function useNotificationHooksSaveForClient(
       }
     },
     onSettled: (_hostId, captured) => {
+      if (!notificationWriteIsCurrent(captured)) {
+        mutation.reset();
+        return;
+      }
       void queries.invalidateQueries({
         queryKey: notificationsQueryKeys.accountSettings(captured.viewerId),
       });
@@ -192,4 +208,5 @@ export function useNotificationHooksSaveForClient(
     errorMessage: "Couldn't save notification hooks.",
     invalidateMethods: ["host.notificationHooks.status"],
   });
+  return origin.wrap(mutation);
 }

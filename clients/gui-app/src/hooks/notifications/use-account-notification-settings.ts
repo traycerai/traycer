@@ -26,6 +26,12 @@ import { useHostBinding } from "@/lib/host";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { refreshConnectedAccountSettings } from "@/lib/host/refresh-connected-account-settings";
 import {
+  notificationWriteIsCurrent,
+  requireNotificationWriteOrigin,
+  useNotificationMutationOrigin,
+} from "./notification-mutation-origin";
+import type { HostRequestAbortedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
   notificationsQueryKeys,
   notificationsMutationKeys,
 } from "@/lib/query-keys";
@@ -60,7 +66,7 @@ export function useAccountNotificationSettings() {
 }
 
 /** Save on one sign-in, then ask its already-connected computers to refresh once. */
-function useAccountNotificationWrite<Request>(
+function useAccountNotificationWrite<Request extends object>(
   mutationKey: readonly string[],
   write: (
     cloud: EnvironmentCloud,
@@ -73,34 +79,49 @@ function useAccountNotificationWrite<Request>(
   const stream = use(StreamRuntimeContext);
   const queries = useQueryClient();
   const queryKey = notificationsQueryKeys.accountSettings(viewerId);
-  return useMutation<
+  const origin = useNotificationMutationOrigin(() => ({
+    cloud: source?.() ?? null,
+    binding,
+    stream,
+    viewerId,
+    queryKey,
+  }));
+  const mutation = useMutation<
     AccountNotificationSettingsResponse,
-    EnvironmentCloudError,
+    EnvironmentCloudError | HostRequestAbortedError,
     Request
   >({
     mutationKey,
     mutationFn: async (request) => {
-      if (source === null)
+      const captured = origin.contextOf(request);
+      requireNotificationWriteOrigin(captured, "notification-settings");
+      if (captured.cloud === null)
         throw new EnvironmentCloudError(
           "no_response",
           NEEDS_CONNECTION_MESSAGE.settings,
         );
-      const cloud = source();
+      const { cloud } = captured;
       const answer = await write(cloud, request);
-      if (binding !== null && cloud.onOriginSignIn()) {
+      if (captured.binding !== null && notificationWriteIsCurrent(captured)) {
         await refreshConnectedAccountSettings(
-          binding,
-          stream,
-          viewerId,
+          captured.binding,
+          captured.stream,
+          captured.viewerId,
           cloud.onOriginSignIn,
         );
       }
       return answer;
     },
-    onSettled: () => {
-      return queries.invalidateQueries({ queryKey });
+    onSettled: (_data, _error, request) => {
+      const captured = origin.contextOf(request);
+      if (!notificationWriteIsCurrent(captured)) {
+        mutation.reset();
+        return;
+      }
+      return queries.invalidateQueries({ queryKey: captured.queryKey });
     },
   });
+  return origin.wrap(mutation);
 }
 
 export function useAccountNotificationMatrixSave() {
