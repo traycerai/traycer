@@ -319,24 +319,6 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       await refreshing;
     });
     await screen.findByRole("button", { name: "Turn on" });
-    host.state.remoteAccessError = new HostRpcError({
-      code: "FORBIDDEN",
-      message: "private refusal detail",
-      requestId: "refused-access",
-      method: "host.remoteAccess.set",
-      fatalDetails: null,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "You don't have permission to change remote access on this computer.",
-    );
-    expect(host.paramsOf("host.remoteAccess.set")).toEqual([{ enabled: true }]);
-    expect(await shownState()).toBe(
-      "Off. Team members and agents can't reach this computer.",
-    );
-    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
-      {},
-    );
 
     environments = environmentListUpgradeV10ToV11.upgradeResponse({
       environments: [TEAM_ENVIRONMENT],
@@ -365,6 +347,30 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       await harness.queryClient.invalidateQueries();
     });
     noSwitch();
+
+    failEnvironmentList = false;
+    await act(async () => {
+      await harness.queryClient.invalidateQueries();
+    });
+    await screen.findByRole("button", { name: "Turn on" });
+    host.state.remoteAccessError = new HostRpcError({
+      code: "FORBIDDEN",
+      message: "private refusal detail",
+      requestId: "refused-access",
+      method: "host.remoteAccess.set",
+      fatalDetails: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "You don't have permission to change remote access on this computer.",
+    );
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([{ enabled: true }]);
+    expect(await shownState()).toBe(
+      "Off. Team members and agents can't reach this computer.",
+    );
+    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
+      {},
+    );
   });
 
   it("shows the unanswered prompt inside the Remote access group without a second row label", async () => {
