@@ -209,9 +209,9 @@ export async function updateBotReplyModeViaHttp(
 
 /**
  * `POST /api/bots/delete`: archives the bot; a repeat answers
- * `deleted: false`. The server's notices for the automations the bot set up
- * are not staged here: the bot's own computer repeats the delete when it
- * next runs, and stages them then.
+ * `deleted: false`. The answer's notices for the automations the bot set up
+ * are not staged here: they come back to the bot's bound computer on its
+ * bots read.
  */
 export async function deleteBotViaHttp(
   serverBaseUrl: string,
