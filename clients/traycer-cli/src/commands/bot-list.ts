@@ -10,7 +10,6 @@ import {
 import { resolveHostAuth } from "../internal/host-auth";
 import {
   HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
-  hostTokenFailureCliError,
   signedOutCliError,
   storedCredentialRejectedCliError,
 } from "../internal/host-door-words";
