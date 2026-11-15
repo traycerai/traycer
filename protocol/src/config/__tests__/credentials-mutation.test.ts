@@ -114,6 +114,32 @@ describe("credentials mutation store", () => {
     return store;
   }
 
+  const timerSpies: { mockRestore: () => void }[] = [];
+
+  // Parks every timer armed with exactly `intervalMs`, which is the store's
+  // continuation retry interval and no other timer on these paths (the lock
+  // polls at 25 ms and retries a release at 15 ms, the WAL retries a commit at
+  // 20 ms). A parked callback never runs and its handle is already cleared, so
+  // the store's own clearTimeout on it is a no-op. Everything else keeps the
+  // real clock.
+  function holdContinuationRetries(intervalMs: number): {
+    heldCount: () => number;
+  } {
+    const realSetTimeout = globalThis.setTimeout;
+    const held: Parameters<typeof setTimeout>[0][] = [];
+    const spy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((handler, delay) => {
+        if (delay !== intervalMs) return realSetTimeout(handler, delay);
+        held.push(handler);
+        const handle = realSetTimeout(() => undefined, 0);
+        clearTimeout(handle);
+        return handle;
+      });
+    timerSpies.push(spy);
+    return { heldCount: () => held.length };
+  }
+
   // Refresh stub: records call count, mints a deterministic distinct pair.
   function refreshStub(behavior: (token: string) => RefreshResult): {
     fn: RefreshFn;
@@ -178,6 +204,8 @@ describe("credentials mutation store", () => {
 
   afterEach(() => {
     lockContention.onLockBusy = null;
+    for (const spy of timerSpies) spy.mockRestore();
+    timerSpies.length = 0;
     for (const store of stores) store.dispose();
     stores.length = 0;
     chmodSync(workDir, 0o700);
@@ -1002,6 +1030,7 @@ describe("credentials mutation store", () => {
           chmodSync(workDir, 0o500);
           return rotateOk(token);
         });
+        const held = holdContinuationRetries(PRODUCTION_CONTINUATION_RETRY_MS);
         const store = makeStoreTimed(
           refresh.fn,
           PRODUCTION_LOCK_WAIT_MS,
@@ -1022,8 +1051,11 @@ describe("credentials mutation store", () => {
           "tok-0",
         );
         expect((await store.read())?.token).toBe("tok-0::r");
-        // Unfreeze and let the continuation land the pair.
+        // Unfreeze. The armed background retry is parked, so only signIn's
+        // preamble can land the pair.
         chmodSync(workDir, 0o700);
+        expect(held.heldCount()).toBeGreaterThanOrEqual(1);
+        expect(store.hasPendingContinuation()).toBe(true);
         let lockBusyCount = 0;
         lockContention.onLockBusy = () => {
           lockBusyCount += 1;
@@ -1049,7 +1081,12 @@ describe("credentials mutation store", () => {
           }
           return rotateOk(token);
         });
-        const store = makeStore(refresh.fn);
+        const held = holdContinuationRetries(PRODUCTION_CONTINUATION_RETRY_MS);
+        const store = makeStoreTimed(
+          refresh.fn,
+          PRODUCTION_LOCK_WAIT_MS,
+          PRODUCTION_CONTINUATION_RETRY_MS,
+        );
         await seedSignedIn(store);
         const failed = await store.rotate({
           expectedUserId: CREDS.user.id,
@@ -1065,6 +1102,8 @@ describe("credentials mutation store", () => {
         // with it as the expected base. The disk still has the spent base until
         // the continuation lands, so a naive raw CAS would read `superseded` and
         // adopt the spent base back. The first-gate rule must prevent that.
+        expect(held.heldCount()).toBeGreaterThanOrEqual(1);
+        expect(store.hasPendingContinuation()).toBe(true);
         const next = await store.rotate({
           expectedUserId: CREDS.user.id,
           expectedToken: mintedToken,
@@ -1086,7 +1125,12 @@ describe("credentials mutation store", () => {
           chmodSync(workDir, 0o500);
           return rotateOk(token);
         });
-        const store = makeStore(refresh.fn);
+        const held = holdContinuationRetries(PRODUCTION_CONTINUATION_RETRY_MS);
+        const store = makeStoreTimed(
+          refresh.fn,
+          PRODUCTION_LOCK_WAIT_MS,
+          PRODUCTION_CONTINUATION_RETRY_MS,
+        );
         await seedSignedIn(store);
         const first = await store.rotate({
           expectedUserId: CREDS.user.id,
@@ -1100,6 +1144,8 @@ describe("credentials mutation store", () => {
         // must NOT run its body against the spent base on disk (which would
         // return `superseded` with the base, or re-spend it): it is refused as
         // commit-failed carrying the still-pending minted pair.
+        expect(held.heldCount()).toBeGreaterThanOrEqual(1);
+        expect(store.hasPendingContinuation()).toBe(true);
         const second = await store.rotate({
           expectedUserId: CREDS.user.id,
           expectedToken: "tok-0::r",
