@@ -55,6 +55,13 @@ export interface TeamProfileRecordHttpRequest {
   readonly body: string | null;
 }
 
+export interface TeamProviderKeyHttpRequest {
+  readonly action: "set" | "clear";
+  readonly routeMatches: boolean;
+  readonly authorized: boolean;
+  readonly keyMatches: boolean | null;
+}
+
 export const TEAM_PROFILE_KEY_CANARY = "synthetic-profile-key";
 
 export interface TeamProfileRecordHttpAnswer {
@@ -278,6 +285,20 @@ export const teamProfileRecordHttpBoundary: {
   calls: [],
 };
 
+export const teamProviderKeyHttpBoundary: {
+  status: number;
+  matchesKey: (key: string) => boolean;
+  calls: TeamProviderKeyHttpRequest[];
+} = {
+  status: 200,
+  matchesKey: () => false,
+  calls: [],
+};
+
+type TeamProviderKeyResponseArm = "sk-provider-record" | "s3-key-action";
+
+let teamProviderKeyResponseArm: TeamProviderKeyResponseArm = "s3-key-action";
+
 export function teamProfileRecordReadCount(): number {
   return teamProfileRecordHttpBoundary.calls.filter(
     (call) =>
@@ -438,6 +459,7 @@ interface TeamAuthRuntime {
 
 const activeTeamAuthRuntimes: TeamAuthRuntime[] = [];
 let restoreTeamFetch: (() => void) | null = null;
+let teamIntentsFetch: typeof fetch | null = null;
 
 function installTeamFetch(): void {
   if (restoreTeamFetch !== null) return;
@@ -465,6 +487,37 @@ function teamFetch(
   const method = init?.method ?? "GET";
   const headers = new Headers(init?.headers);
   const rawBody = typeof init?.body === "string" ? init.body : null;
+  const providerKeyResponse = handleProviderKeyTransport(
+    url,
+    method,
+    headers,
+    rawBody,
+  );
+  if (providerKeyResponse !== null) {
+    if (teamProviderKeyResponseArm === "s3-key-action") {
+      recordTeamProfileRequest(url, method, headers, null);
+    }
+    return providerKeyResponse;
+  }
+  recordTeamProfileRequest(url, method, headers, rawBody);
+  if (
+    url.pathname.endsWith("/profile-records/intents") &&
+    teamIntentsFetch !== null
+  ) {
+    return teamIntentsFetch(input, init);
+  }
+  return (
+    teamAuthnResponse(url) ??
+    Promise.resolve(new Response(null, { status: 500 }))
+  );
+}
+
+function recordTeamProfileRequest(
+  url: URL,
+  method: string,
+  headers: Headers,
+  rawBody: string | null,
+): void {
   if (
     url.pathname.includes("/harness-connections/") &&
     url.pathname.endsWith("/connect") &&
@@ -486,9 +539,64 @@ function teamFetch(
       headers.get("authorization")?.startsWith("Bearer ") === true,
     body,
   });
-  return (
-    teamAuthnResponse(url) ??
-    Promise.resolve(new Response(null, { status: 500 }))
+}
+
+function providerKeyMatchesBody(body: string | null): boolean | null {
+  if (body === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("key" in parsed) ||
+    typeof parsed.key !== "string"
+  ) {
+    return null;
+  }
+  return teamProviderKeyHttpBoundary.matchesKey(parsed.key);
+}
+
+function handleProviderKeyTransport(
+  url: URL,
+  method: string,
+  headers: Headers,
+  body: string | null,
+): Promise<Response> | null {
+  if (!url.pathname.includes("/provider-keys/")) return null;
+  const action = method === "PUT" ? "set" : "clear";
+  const keyMatches = action === "set" ? providerKeyMatchesBody(body) : null;
+  teamProviderKeyHttpBoundary.calls.push({
+    action,
+    routeMatches:
+      url.pathname === "/api/v3/environments/env-a/provider-keys/cursor" &&
+      method === (action === "set" ? "PUT" : "DELETE"),
+    authorized: headers.get("authorization") === "Bearer team-test-app-session",
+    keyMatches,
+  });
+  if (teamProviderKeyHttpBoundary.status !== 200) {
+    return Promise.resolve(
+      new Response(null, { status: teamProviderKeyHttpBoundary.status }),
+    );
+  }
+  if (teamProviderKeyResponseArm === "s3-key-action") {
+    return teamHttpResponse(teamProfileRecordHttpBoundary.keyAction);
+  }
+  return Promise.resolve(
+    new Response(
+      JSON.stringify({
+        profileId: "team-provider-key-record",
+        providerId: "cursor",
+        state: action === "set" ? "live" : "removed",
+        signInNumber: "3",
+        recordRevision: "5",
+        personIntentNumber: "2",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
   );
 }
 
@@ -651,6 +759,18 @@ async function startVerifiedTeamAuth(harness: TeamAuthRuntime): Promise<void> {
   await harness.auth.start();
 }
 
+export async function createVerifiedTeamAuthService(
+  queryClient: QueryClient,
+  intentsFetch: typeof fetch | null,
+): Promise<AuthService> {
+  teamIntentsFetch = intentsFetch;
+  teamProviderKeyResponseArm = "sk-provider-record";
+  installTeamFetch();
+  const harness = buildTeamAuthRuntime(queryClient);
+  await startVerifiedTeamAuth(harness);
+  return harness.auth;
+}
+
 export function mountTeamPage(
   source: ConfigurationSource,
   handlers: MockHandlerMap<HostRpcRegistry>,
@@ -670,15 +790,18 @@ export function mountVerifiedTeamProvidersPage(
   source: ConfigurationSource,
   handlers: MockHandlerMap<HostRpcRegistry>,
 ): TeamPageHarness {
-  return buildVerifiedTeamProvidersPage({
-    source,
-    handlers,
-    negotiated: null,
-    withPool: false,
-    boundarySection: null,
-    boundaryTarget: null,
-    pinBoundaryWindowHost: false,
-  });
+  return buildVerifiedTeamProvidersPage(
+    {
+      source,
+      handlers,
+      negotiated: null,
+      withPool: false,
+      boundarySection: null,
+      boundaryTarget: null,
+      pinBoundaryWindowHost: false,
+    },
+    "s3-key-action",
+  );
 }
 
 type TeamPageBoundaryTarget =
@@ -692,19 +815,22 @@ export function mountTeamPageThroughBoundary(
   section: SettingsSectionId,
 ): TeamBoundaryPageHarness {
   const environmentListState = { currentRole: role };
-  const harness = buildVerifiedTeamProvidersPage({
-    source: poolSource(role),
-    handlers: {
-      ...handlers,
-      "environment.list": () =>
-        teamEnvironmentList(environmentListState.currentRole),
+  const harness = buildVerifiedTeamProvidersPage(
+    {
+      source: poolSource(role),
+      handlers: {
+        ...handlers,
+        "environment.list": () =>
+          teamEnvironmentList(environmentListState.currentRole),
+      },
+      negotiated: null,
+      withPool: false,
+      boundarySection: section,
+      boundaryTarget: { kind: "team", environmentId: "env-a" },
+      pinBoundaryWindowHost: true,
     },
-    negotiated: null,
-    withPool: false,
-    boundarySection: section,
-    boundaryTarget: { kind: "team", environmentId: "env-a" },
-    pinBoundaryWindowHost: true,
-  });
+    "s3-key-action",
+  );
   return {
     ...harness,
     environmentListState,
@@ -766,15 +892,35 @@ export function mountPersonalProvidersThroughBoundary(
       },
     ],
   };
-  return buildVerifiedTeamProvidersPage({
-    source: personalPoolSource(),
-    handlers: { ...handlers, "environment.list": () => list },
-    negotiated: null,
-    withPool: false,
-    boundarySection: "providers",
-    boundaryTarget: { kind: "personal" },
-    pinBoundaryWindowHost: true,
-  });
+  return buildVerifiedTeamProvidersPage(
+    {
+      source: personalPoolSource(),
+      handlers: { ...handlers, "environment.list": () => list },
+      negotiated: null,
+      withPool: false,
+      boundarySection: "providers",
+      boundaryTarget: { kind: "personal" },
+      pinBoundaryWindowHost: true,
+    },
+    "s3-key-action",
+  );
+}
+
+export function mountTeamPageWithRealBoundary(
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): TeamPageHarness {
+  return buildVerifiedTeamProvidersPage(
+    {
+      source: null,
+      handlers,
+      negotiated: null,
+      withPool: false,
+      boundarySection: null,
+      boundaryTarget: null,
+      pinBoundaryWindowHost: false,
+    },
+    "sk-provider-record",
+  );
 }
 
 export function admitCurrentUserToTeamWindow(): void {
@@ -876,7 +1022,7 @@ class FloorEnforcingMessenger extends MockHostMessenger<HostRpcRegistry> {
 }
 
 interface TeamPageBuildOptions {
-  readonly source: ConfigurationSource;
+  readonly source: ConfigurationSource | null;
   readonly handlers: MockHandlerMap<HostRpcRegistry>;
   readonly negotiated: Readonly<
     Record<string, { major: number; minor: number }>
@@ -897,6 +1043,7 @@ interface TeamPageAssembly {
 }
 
 function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
+  teamProviderKeyResponseArm = "s3-key-action";
   const queryClient = createTeamPageQueryClient();
   useAuthStore.setState({ status: "signed-in" });
   useLocalTeamAdmissionStore.setState({ byHost: new Map() });
@@ -909,9 +1056,13 @@ function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
   return createTeamPageHarness(assembly, (props) => (
     <HostRuntimeContext.Provider value={assembly.binding}>
       <QueryClientProvider client={queryClient}>
-        <ConfigurationSourceContext.Provider value={options.source}>
-          {props.children}
-        </ConfigurationSourceContext.Provider>
+        {options.source === null ? (
+          props.children
+        ) : (
+          <ConfigurationSourceContext.Provider value={options.source}>
+            {props.children}
+          </ConfigurationSourceContext.Provider>
+        )}
       </QueryClientProvider>
     </HostRuntimeContext.Provider>
   ));
@@ -919,7 +1070,9 @@ function buildTeamPage(options: TeamPageBuildOptions): TeamPageHarness {
 
 function buildVerifiedTeamProvidersPage(
   options: TeamPageBuildOptions,
+  providerKeyResponseArm: TeamProviderKeyResponseArm,
 ): TeamPageHarness {
+  teamProviderKeyResponseArm = providerKeyResponseArm;
   installTeamFetch();
   const queryClient = createTeamPageQueryClient();
   useAuthStore.setState({ status: "signed-out" });
@@ -966,7 +1119,9 @@ function renderConfigurationSource(
   children: ReactNode,
 ): ReactNode {
   if (options.boundarySection === null || options.boundaryTarget === null) {
-    return (
+    return options.source === null ? (
+      children
+    ) : (
       <ConfigurationSourceContext.Provider value={options.source}>
         {children}
       </ConfigurationSourceContext.Provider>
@@ -1053,6 +1208,8 @@ export function resetTeamPageHarness(): void {
   }
   restoreTeamFetch?.();
   restoreTeamFetch = null;
+  teamIntentsFetch = null;
+  teamProviderKeyResponseArm = "s3-key-action";
   teamHostBoundary.client = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
@@ -1105,4 +1262,7 @@ export function resetTeamPageHarness(): void {
   teamProfileRecordHttpBoundary.itemWriteStatus = 200;
   teamProfileRecordHttpBoundary.keyCanaryForwarded = false;
   teamProfileRecordHttpBoundary.calls.length = 0;
+  teamProviderKeyHttpBoundary.status = 200;
+  teamProviderKeyHttpBoundary.matchesKey = () => false;
+  teamProviderKeyHttpBoundary.calls.length = 0;
 }
