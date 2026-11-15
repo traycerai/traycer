@@ -6056,9 +6056,13 @@ wrap`). Each row names the account its first usable match runs on, the
     another. While a write is pending, every control shows the value being
     saved, is disabled, and the changed control has a spinner beside it.
     Once the write is saved, its item's controls keep that value, disabled,
-    with the spinner, until the read reports the item at a revision other
-    than the one the write addressed; the other item's controls are free
-    again, and a read still at the old revision never shows the old value. A
+    with the spinner, until the read of that environment reports the item at
+    the saved revision or a later one; the other item's controls are free
+    again. An older revision, no item or no data keeps the value. A hold
+    is kept per environment, so picking another and coming back still shows
+    it, and it lasts at most the configuration read bound (15 seconds), after
+    which the controls show the read and the page reads once more. A remount
+    of the section forgets its holds. A
     refused write drops back to the value read, and the shared mutation's
     toast says why. A stale or refused outcome shows
     `ConfigurationWriteFeedback` under the groups. A viewer of a team

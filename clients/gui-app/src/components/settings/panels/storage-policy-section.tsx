@@ -2,8 +2,10 @@
  * Docs: see ../SETTINGS.md (Environment ▸ Storage).
  * Update that file whenever this settings surface changes.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
 import type { z } from "zod";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   EnvironmentConfigurationItemPutRequest,
   EnvironmentConfigurationItemWriteResponse,
@@ -28,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { READ_BOUND_MS } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import {
   SNAPSHOT_POLICY_DEFAULTS,
@@ -46,6 +49,7 @@ import {
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { useHostClient } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
@@ -119,7 +123,7 @@ function StoragePolicySectionBody(props: {
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
   const policy = read.data;
-  const held = useHeldSaves(environment?.environmentId ?? null, policy);
+  const held = useHeldSaves(environment?.environmentId ?? null, read);
   const pending = put.isPending ? put.variables : null;
   const shown = shownValue(
     storagePolicyValueSchema,
@@ -143,7 +147,7 @@ function StoragePolicySectionBody(props: {
   const snapshotsDisabled = disabled || held.snapshots !== null;
   const save = (
     field: StorageControl,
-    item: keyof HeldSaves,
+    item: HeldItem,
     request: EnvironmentConfigurationItemPutRequest,
   ): void => {
     trackSettingChanged("storage", ANALYTICS_SETTING[field]);
@@ -334,18 +338,23 @@ function windowLabel(group: string, row: string): string {
   return `${group}: ${row}`;
 }
 
+/** One of the page's two items. */
+type HeldItem = keyof ConfigurationStoragePolicy;
+
 /**
- * A saved item's value, held from the save's answer until the read reports
- * the item past the revision the save addressed: the save's own revision or
- * any later one. A read still at the addressed revision is the state the save
- * replaced, whenever its fetch began, so it never ends the hold.
+ * A saved item's value, held from the save's answer until the read of its
+ * environment reports the item at the saved revision or a later one. Any
+ * other read (an older revision, the addressed one, no item, no data yet) is
+ * not evidence of the save, so it keeps the hold.
  */
 interface HeldSave {
+  readonly id: number;
+  readonly environmentId: string;
+  readonly item: HeldItem;
   /** The control the save was made from, for its spinner. */
   readonly field: StorageControl;
-  readonly environmentId: string;
   readonly value: unknown;
-  readonly addressed: number | null;
+  readonly saved: number;
 }
 
 interface HeldSaves {
@@ -353,64 +362,110 @@ interface HeldSaves {
   readonly snapshots: HeldSave | null;
 }
 
-const NO_HELD_SAVES: HeldSaves = { storage: null, snapshots: null };
-
-/** The hold while the read of its environment still reports the old state. */
-function heldSaveInForce(
-  held: HeldSave | null,
-  environmentId: string | null,
-  readRevision: number | null | undefined,
-): HeldSave | null {
-  if (held === null || held.environmentId !== environmentId) return null;
-  return readRevision === held.addressed ? held : null;
+function confirmedBy(
+  held: HeldSave,
+  policy: ConfigurationStoragePolicy | undefined,
+): boolean {
+  const revision = policy?.[held.item].revision ?? null;
+  return revision !== null && revision >= held.saved;
 }
 
 /**
- * Each item's held save in force, and `hold` to start one from a save's
- * answer. Only a `saved` answer that moved the revision holds: a conflict,
- * a refusal or a failed save shows the read as it did before.
+ * The shown environment's held save of each item, and `hold` to start one
+ * from a save's answer. Only a `saved` answer that moved the revision holds:
+ * a conflict, a refusal or a failed save shows the read as it did before.
+ * Holds of an environment not shown are kept for when it is shown again. A
+ * hold the read never confirms ends after {@link READ_BOUND_MS}: the item then
+ * shows the read, and the read is asked once more.
  */
 function useHeldSaves(
   environmentId: string | null,
-  policy: ConfigurationStoragePolicy | undefined,
+  read: Pick<
+    UseQueryResult<ConfigurationStoragePolicy, HostRpcError>,
+    "data" | "refetch"
+  >,
 ): HeldSaves & {
   readonly hold: (
-    item: keyof HeldSaves,
+    item: HeldItem,
     field: StorageControl,
     request: EnvironmentConfigurationItemPutRequest,
     result: EnvironmentConfigurationItemWriteResponse,
   ) => void;
 } {
-  const [held, setHeld] = useState<HeldSaves>(NO_HELD_SAVES);
-  const storage = heldSaveInForce(
-    held.storage,
-    environmentId,
-    policy?.storage.revision,
+  const [holds, setHolds] = useState<readonly HeldSave[]>([]);
+  const nextId = useRef(0);
+  const timers = useRef(new Map<number, number>());
+  // What the bound's timer reads when it fires: the last committed render.
+  const latest = useRef({ holds, environmentId, refetch: read.refetch });
+  useEffect(() => {
+    latest.current = { holds, environmentId, refetch: read.refetch };
+  });
+  // A released hold's bound is cancelled.
+  useEffect(() => {
+    for (const [id, timer] of timers.current) {
+      if (holds.some((held) => held.id === id)) continue;
+      window.clearTimeout(timer);
+      timers.current.delete(id);
+    }
+  }, [holds]);
+  useEffect(() => {
+    const pendingTimers = timers.current;
+    return () => {
+      for (const timer of pendingTimers.values()) window.clearTimeout(timer);
+      pendingTimers.clear();
+    };
+  }, []);
+  const shownHolds = holds.filter(
+    (held) => held.environmentId === environmentId,
   );
-  const snapshots = heldSaveInForce(
-    held.snapshots,
-    environmentId,
-    policy?.snapshots.revision,
-  );
-  // A hold the read has moved past is done: forget it, so it never comes back.
-  if (storage !== held.storage || snapshots !== held.snapshots) {
-    setHeld({ storage, snapshots });
+  const confirmed = shownHolds.filter((held) => confirmedBy(held, read.data));
+  if (confirmed.length > 0) {
+    setHolds(holds.filter((held) => !confirmed.includes(held)));
   }
+  const inForce = (item: HeldItem): HeldSave | null =>
+    shownHolds.find(
+      (held) => held.item === item && !confirmed.includes(held),
+    ) ?? null;
+  const expire = (id: number): void => {
+    timers.current.delete(id);
+    const now = latest.current;
+    const held = now.holds.find((candidate) => candidate.id === id);
+    if (held === undefined) return;
+    setHolds((current) => current.filter((candidate) => candidate.id !== id));
+    if (held.environmentId === now.environmentId)
+      void now.refetch().catch(ignoreError);
+  };
   return {
-    storage,
-    snapshots,
+    storage: inForce("storage"),
+    snapshots: inForce("snapshots"),
     hold: (item, field, request, result) => {
-      if (result.outcome !== "saved" || result.revision === request.revision)
+      if (
+        result.outcome !== "saved" ||
+        result.revision === null ||
+        result.revision === request.revision
+      )
         return;
-      setHeld((current) => ({
-        ...current,
-        [item]: {
-          field,
-          environmentId: request.environmentId,
-          value: request.value,
-          addressed: request.revision,
-        },
-      }));
+      const id = nextId.current;
+      nextId.current += 1;
+      const held: HeldSave = {
+        id,
+        environmentId: request.environmentId,
+        item,
+        field,
+        value: request.value,
+        saved: result.revision,
+      };
+      setHolds((current) => [
+        ...current.filter(
+          (other) =>
+            other.environmentId !== held.environmentId || other.item !== item,
+        ),
+        held,
+      ]);
+      timers.current.set(
+        id,
+        window.setTimeout(() => expire(id), READ_BOUND_MS),
+      );
     },
   };
 }
