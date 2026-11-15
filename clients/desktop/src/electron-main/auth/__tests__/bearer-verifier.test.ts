@@ -266,6 +266,7 @@ describe("JWKS refresh failure logging", () => {
     {
       name: "timeout",
       fetchImpl: () => {
+        // This realm's DOMException isn't an Error, so set Error.name directly.
         const timeoutError = new Error(sensitiveFailure);
         timeoutError.name = "TimeoutError";
         return Promise.reject(timeoutError);
