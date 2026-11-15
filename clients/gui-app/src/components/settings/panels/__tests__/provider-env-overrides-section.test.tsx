@@ -27,7 +27,15 @@ vi.mock("@/lib/settings-navigation", () => ({
 }));
 
 const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
+  (): {
+    current: {
+      readonly hostClient: unknown;
+      readonly auth: {
+        readonly environmentCloud: () => EnvironmentCloud;
+        readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
+      } | null;
+    } | null;
+  } => ({
     current: null,
   }),
 );
@@ -97,6 +105,14 @@ import type {
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
+import {
+  createFakeEnvironmentAuthn,
+  type FakeEnvironmentAuthn,
+} from "@/components/settings/environment/__tests__/environment-authn-test-support";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
@@ -165,11 +181,16 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  fakeAuthn?.restore();
+  fakeAuthn = null;
   vi.clearAllMocks();
   mocks.credentialRefusal = null;
   hostsRunningPersonalMock.current = { hosts: [], state: "ready" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
+
+/** Personal's secrets are read from authn; the fake serves them. */
+let fakeAuthn: FakeEnvironmentAuthn | null = null;
 
 /** The bare section reads and writes through the query client the app provides. */
 function withQueryClient(children: ReactNode): ReactNode {
@@ -372,49 +393,50 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     facts: HostFacts,
     section: ReactNode,
   ): RenderResult {
-    const { client } = buildEnvironmentClient({
-      hostId: HOST_ID,
-      handlers: {
-        "environment.status": () => environmentStatusFixture({}),
-        "environment.localOverrides": () => ({
-          overrides: [...facts.localOverrides],
-        }),
-        "config.env.localOverride.clear": clearOverride,
-        "environment.list": () => ({
-          environments: [
-            {
-              environmentId: "env-personal",
-              ownerKind: "user" as const,
-              ownerId: "user-me",
-              roomId: "room-personal",
-              label: "Personal",
-              effectiveRole: "owner" as const,
-              kind: "personal" as const,
-              hostCount: 1,
-              providerHandle: null,
-            },
-          ],
-        }),
-        "environment.secrets.list": () => ({
-          secrets: [...facts.secrets],
-          removed: [],
-        }),
-        "environment.review": () => ({
-          // The `@1.2` facts each row carries, none of them known here.
-          entries: review.map((entry) => ({
-            command: null,
-            event: null,
-            description: null,
-            harness: null,
-            value: null,
-            ...entry,
-          })),
-          shownAt: null,
-          acknowledgedAt: null,
-          evidence: { version: null, at: null },
-        }),
-      },
-    });
+    const environmentList = {
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user" as const,
+          ownerId: "user-me",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner" as const,
+          kind: "personal" as const,
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    };
+    const handlers: MockHandlerMap<HostRpcRegistry> = {
+      "environment.status": () => environmentStatusFixture({}),
+      "environment.localOverrides": () => ({
+        overrides: [...facts.localOverrides],
+      }),
+      "config.env.localOverride.clear": clearOverride,
+      "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({
+        secrets: [...facts.secrets],
+        removed: [],
+      }),
+      "environment.review": () => ({
+        // The `@1.2` facts each row carries, none of them known here.
+        entries: review.map((entry) => ({
+          command: null,
+          event: null,
+          description: null,
+          harness: null,
+          value: null,
+          ...entry,
+        })),
+        shownAt: null,
+        acknowledgedAt: null,
+        evidence: { version: null, at: null },
+      }),
+    };
+    const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
+    const authn = createFakeEnvironmentAuthn(handlers);
+    fakeAuthn = authn;
     // On the Personal pick the page keeps this host's pages once it knows the
     // host's environment.status version and that the host runs Personal.
     recordNegotiatedHostManifest(HOST_ID, {
@@ -431,7 +453,14 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       status: "ready",
       client,
     };
-    hostBindingMock.current = { hostClient: client };
+    hostBindingMock.current = {
+      hostClient: client,
+      auth: {
+        environmentCloud: () => authn.cloud,
+        listEnvironments: () =>
+          Promise.resolve({ kind: "ok" as const, list: environmentList }),
+      },
+    };
     return render(
       <QueryClientProvider
         client={
@@ -884,7 +913,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         secretId: "sec-shadow",
         name: "R2 access",
         kind: "api_key",
-        protocol: null,
+        // authn's secret row always names its protocol.
+        protocol: "https",
         destinations: [],
         currentVersionId: "ver-shadow",
         revoked: false,
