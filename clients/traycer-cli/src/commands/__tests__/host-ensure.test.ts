@@ -640,7 +640,7 @@ describe("buildHostEnsureCommand", () => {
     }
   });
 
-  it.each(["ensure", "bind", "not-running", "unreadable"] as const)(
+  it.each(["ensure", "transfer", "not-running", "unreadable"] as const)(
     "warns about the retained sign-in when team %s fails through the real credentials file",
     async (failure) => {
       const directory = mkdtempSync(join(tmpdir(), "team-ensure-sign-in-"));
@@ -680,9 +680,9 @@ describe("buildHostEnsureCommand", () => {
           mkdirSync(mocks.credentialsPath);
           throw new Error("unreadable failed");
         });
-      if (failure === "bind")
+      if (failure === "transfer")
         mocks.completeTeamInstallMock.mockRejectedValue(
-          new Error("bind failed"),
+          new Error("transfer failed"),
         );
       if (failure === "not-running")
         mocks.ensureHostMock.mockResolvedValue(

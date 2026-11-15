@@ -685,6 +685,9 @@ describe("buildHostInstallCommand", () => {
     for (const fixtureRoot of stagedFixtureRoots.splice(0)) {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
+    // A case that signs in writes the credentials file under the file's one
+    // shared HOME; the next case starts signed out.
+    rmSync(cliCredentialsPath("production"), { force: true });
     // Unconditional: a test that never touched `isTTY` restores a no-op
     // descriptor identical to the original, so this can't leak either way.
     if (originalStdoutIsTTYDescriptor === undefined) {
@@ -1137,7 +1140,7 @@ describe("buildHostInstallCommand", () => {
     );
   });
 
-  it.each(["stage", "bind", "post-swap"] as const)(
+  it.each(["stage", "transfer", "post-swap"] as const)(
     "warns about the retained sign-in when team install fails at %s through the real credentials file",
     async (failure) => {
       const token = `retained-install-${failure}`;
@@ -1170,9 +1173,9 @@ describe("buildHostInstallCommand", () => {
           new Error("stage failed"),
         );
       else mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
-      if (failure === "bind")
+      if (failure === "transfer")
         mocks.completeTeamInstallMock.mockRejectedValue(
-          new Error("bind failed"),
+          new Error("transfer failed"),
         );
       if (failure === "post-swap") handle.state.postSwapError = "start failed";
       mocks.createServiceInstallLifecycleMock.mockReturnValue(handle);
