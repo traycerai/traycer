@@ -1,5 +1,5 @@
 import { providerApiKeyRefusal } from "@traycer/protocol/host/provider-api-key-issuer";
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -9,7 +9,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
-import { ProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
+import { takeProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
 import { useProvidersClearApiKey } from "@/hooks/providers/use-providers-clear-api-key-mutation";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
@@ -135,7 +135,14 @@ export function ProviderApiKeySection({
   readonly environmentName: string | null;
 }) {
   const inputId = useId();
-  const setApiKey = useProvidersSetApiKey(expectedEnvironmentId);
+  const sentApiKey = useRef<string | null>(null);
+  const setApiKey = useProvidersSetApiKey(
+    expectedEnvironmentId,
+    () => takeProviderApiKeyInput(sentApiKey),
+    () => {
+      sentApiKey.current = null;
+    },
+  );
   const clearApiKey = useProvidersClearApiKey(expectedEnvironmentId);
   const openLink = useOpenLink();
   // A sandbox never takes a key: the field is disabled and the save is never
@@ -161,11 +168,8 @@ export function ProviderApiKeySection({
     keyRefusal !== null;
   const onSave = (): void => {
     if (saveDisabled) return;
-    const trimmed = draft.trim();
-    setApiKey.mutate(
-      { providerId, apiKey: new ProviderApiKeyInput(trimmed) },
-      { onSuccess: () => onDraftChange("") },
-    );
+    sentApiKey.current = draft.trim();
+    setApiKey.mutate({ providerId }, { onSuccess: () => onDraftChange("") });
   };
 
   return (

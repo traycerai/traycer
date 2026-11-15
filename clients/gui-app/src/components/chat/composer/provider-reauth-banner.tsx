@@ -1,7 +1,7 @@
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useId, useMemo, useState } from "react";
+import { type ReactNode, useId, useMemo, useRef, useState } from "react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
@@ -43,7 +43,7 @@ import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-
 import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
-import { ProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
+import { takeProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
@@ -1104,7 +1104,14 @@ function TokenReauthForm({
   const [probing, setProbing] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const setEnvOverride = useProvidersSetEnvOverride();
-  const setApiKey = useProvidersSetApiKey(null);
+  const sentApiKey = useRef<string | null>(null);
+  const setApiKey = useProvidersSetApiKey(
+    null,
+    () => takeProviderApiKeyInput(sentApiKey),
+    () => {
+      sentApiKey.current = null;
+    },
+  );
   const refreshProviders = useTabRefreshProviders();
   const queryClient = useQueryClient();
   const tabHostId = useTabHostId();
@@ -1167,8 +1174,9 @@ function TokenReauthForm({
     }
     setTokenError(null);
     if (apiKeySupported) {
+      sentApiKey.current = trimmed;
       setApiKey.mutate(
-        { providerId, apiKey: new ProviderApiKeyInput(trimmed) },
+        { providerId },
         {
           onSuccess: ({ keyChangeResult }) => {
             if (
