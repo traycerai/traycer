@@ -743,7 +743,7 @@ function renderNotificationsSettings(
               localOnly: true,
             })),
           };
-          return hooksStatus;
+          return { ...hooksStatus, accountHooks: null };
         },
         "host.notificationHooks.test": (params) => {
           testRequests.push(params);

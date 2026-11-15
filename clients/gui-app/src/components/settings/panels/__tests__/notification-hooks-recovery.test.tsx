@@ -29,6 +29,10 @@ type SaveRequest = RequestOfMethod<
   HostRpcRegistry,
   "host.notificationHooks.save"
 >;
+type SaveResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "host.notificationHooks.save"
+>;
 
 const CONFIG_PATH = "/Users/me/.traycer/notification-hooks.json";
 
@@ -43,7 +47,7 @@ function hook(
     severities: ["failure"],
     action: { type: "command", command: "/bin/echo", args: [] },
     lastResult: null,
-    localOnly: null,
+    localOnly: true,
     ...overrides,
   };
 }
@@ -96,7 +100,7 @@ class FakeHooksHost {
     };
   }
 
-  save(request: SaveRequest): HooksStatus {
+  save(request: SaveRequest): SaveResponse {
     this.saveRequests.push(request);
     if (request.configurationRevision !== this.currentRevision) {
       throw new Error("Notification hooks changed on this computer.");
@@ -110,7 +114,7 @@ class FakeHooksHost {
       localOnly: previous.has(next.id) ? (previous.get(next.id) ?? null) : true,
     }));
     this.revision += 1;
-    return this.status();
+    return { ...this.status(), accountHooks: null };
   }
 }
 
@@ -204,7 +208,7 @@ describe("hook removal notices in Notifications settings", () => {
     expect(within(manager()).queryByRole("alert")).toBeNull();
   });
 
-  it("marks only a hook that stays on this computer", async () => {
+  it("shows only hooks that stay on this computer", async () => {
     renderPanel(
       new FakeHooksHost(
         [
@@ -219,11 +223,7 @@ describe("hook removal notices in Notifications settings", () => {
     const mine = await screen.findByTestId("notification-hook-row-mine");
     expect(within(mine).getByText("On this computer")).toBeTruthy();
     for (const id of ["synced", "unknown"]) {
-      expect(
-        within(screen.getByTestId(`notification-hook-row-${id}`)).queryByText(
-          "On this computer",
-        ),
-      ).toBeNull();
+      expect(screen.queryByTestId(`notification-hook-row-${id}`)).toBeNull();
     }
   });
 });

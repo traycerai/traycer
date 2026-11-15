@@ -25,7 +25,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const accountCloud = vi.hoisted(() => ({
   requests: [] as EnvironmentTransportRequest[],
-  failPut: false,
+  putFailureStatus: null as number | null,
 }));
 
 vi.mock("@/hooks/environment/use-environment-cloud", () => ({
@@ -34,10 +34,13 @@ vi.mock("@/hooks/environment/use-environment-cloud", () => ({
     bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
     transport: async (request: EnvironmentTransportRequest) => {
       accountCloud.requests.push(request);
-      if (request.method === "PUT" && accountCloud.failPut) {
+      if (request.method === "PUT" && accountCloud.putFailureStatus !== null) {
         return {
-          status: 503,
-          text: JSON.stringify({ detail: "private account failure" }),
+          status: accountCloud.putFailureStatus,
+          text:
+            accountCloud.putFailureStatus === 503
+              ? JSON.stringify({ detail: "private account failure" })
+              : JSON.stringify({ statusCode: 400, error: "Bad Request" }),
         };
       }
       const matrix = {
@@ -118,7 +121,7 @@ const hostAnsweredHttpHook = {
 afterEach(() => {
   cleanup();
   accountCloud.requests = [];
-  accountCloud.failPut = false;
+  accountCloud.putFailureStatus = null;
   useAuthStore.setState({ status: "signed-out" });
 });
 
@@ -134,6 +137,7 @@ function makeHostClient(accountHooks: HostHooksSaveResponse["accountHooks"]): {
     configurationRevision: "host-rev-7",
     pendingRemovalNotices: [],
   };
+  let revision = 7;
   const registry = hostRpcRegistry;
   const spine = new HostClient<HostRpcRegistry>({
     registry,
@@ -155,8 +159,13 @@ function makeHostClient(accountHooks: HostHooksSaveResponse["accountHooks"]): {
           request: HostHooksSaveRequest,
         ): HostHooksSaveResponse => {
           saves.push(request);
+          if (request.configurationRevision !== `host-rev-${revision}`) {
+            throw new Error("Notification hooks changed on this computer.");
+          }
+          revision += 1;
           status = {
             ...status,
+            configurationRevision: `host-rev-${revision}`,
             hooks: request.hooks.map((hook) => ({
               ...hook,
               lastResult: null,
@@ -203,6 +212,24 @@ async function convertCommandHookToHttp(): Promise<void> {
   });
   fireEvent.change(within(dialog).getByLabelText("Headers"), {
     target: { value: "authorization: Bearer literal-value" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
+}
+
+async function addHttpHook(name: string, url: string): Promise<void> {
+  const manager = await screen.findByTestId("notification-hooks-manager");
+  fireEvent.click(within(manager).getByRole("button", { name: "Add hook" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Name"), {
+    target: { value: name },
+  });
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Action" }));
+  fireEvent.click(await screen.findByRole("option", { name: "POST to a URL" }));
+  fireEvent.change(within(dialog).getByLabelText("URL"), {
+    target: { value: url },
+  });
+  fireEvent.change(within(dialog).getByLabelText("Headers"), {
+    target: { value: "x-form: value" },
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
 }
@@ -268,7 +295,7 @@ describe("computer hook saves and the host's answered account part", () => {
 
   it("keeps the computer tab open and shows its failed-save words when the account PUT fails", async () => {
     const { client } = makeHostClient([hostAnsweredHttpHook]);
-    accountCloud.failPut = true;
+    accountCloud.putFailureStatus = 503;
     renderComputerTab(client);
 
     await convertCommandHookToHttp();
@@ -283,4 +310,128 @@ describe("computer hook saves and the host's answered account part", () => {
       "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
     );
   });
+
+  it("retries an Add with the same draft once at the host's answered revision after the account PUT fails", async () => {
+    const { client, saves } = makeHostClient([hostAnsweredHttpHook]);
+    accountCloud.putFailureStatus = 503;
+    renderComputerTab(client);
+
+    await addHttpHook("Draft hook", "https://hooks.example/from-form");
+
+    await waitFor(() => expect(accountCloud.requests).toHaveLength(2));
+    expect(accountCloud.requests[0]?.method).toBe("GET");
+    expect(accountCloud.requests[1]?.method).toBe("PUT");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
+    );
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Name"),
+    ).toHaveValue("Draft hook");
+    expect(saves).toHaveLength(1);
+    const firstDraft = saves[0]?.hooks.find(
+      (hook) => hook.name === "Draft hook",
+    );
+    expect(firstDraft).toBeDefined();
+    expect(saves[0]?.configurationRevision).toBe("host-rev-7");
+    expect(
+      (accountCloud.requests[1]?.body as { hooks: unknown[] }).hooks,
+    ).toEqual([{ ...hostAnsweredHttpHook, held: false }]);
+
+    accountCloud.putFailureStatus = null;
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Save hook",
+      }),
+    );
+
+    await waitFor(() => expect(saves).toHaveLength(2));
+    await waitFor(() =>
+      expect(
+        accountCloud.requests.filter((request) => request.method === "PUT"),
+      ).toHaveLength(2),
+    );
+    expect(saves[1]?.configurationRevision).toBe("host-rev-8");
+    const retriedDrafts = saves[1]?.hooks.filter(
+      (hook) => hook.id === firstDraft?.id,
+    );
+    expect(retriedDrafts).toHaveLength(1);
+    expect(retriedDrafts?.[0]).toEqual(firstDraft);
+    expect(saves[1]?.hooks).toHaveLength(commandHooks.length + 1);
+    expect(accountCloud.requests[2]?.method).toBe("GET");
+    expect(accountCloud.requests[3]?.body).toEqual({
+      hooks: [{ ...hostAnsweredHttpHook, held: false }],
+      revision: 17,
+    });
+  });
+
+  it("sends oversized host-answered HTTP hooks unchanged and treats authn's 400 as a failed save", async () => {
+    const oversizedHostAnswer = {
+      id: "hook-" + "i".repeat(300),
+      name: "n".repeat(300),
+      enabled: true,
+      severities: ["failure" as const],
+      action: {
+        type: "http" as const,
+        url: `https://hooks.example/${"u".repeat(3000)}`,
+        headers: { "x-long-header": "v".repeat(1200) },
+      },
+    };
+    const { client } = makeHostClient([oversizedHostAnswer]);
+    accountCloud.putFailureStatus = 400;
+    renderComputerTab(client);
+
+    await convertCommandHookToHttp();
+
+    await waitFor(() =>
+      expect(
+        accountCloud.requests.some((request) => request.method === "PUT"),
+      ).toBe(true),
+    );
+    const put = accountCloud.requests.find(
+      (request) => request.method === "PUT",
+    );
+    expect(put?.body).toEqual({
+      hooks: [{ ...oversizedHostAnswer, held: false }],
+      revision: 17,
+    });
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByTestId("notification-hooks-manager")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it.each([
+    {
+      label: "a command hook",
+      hook: {
+        ...hostAnsweredHttpHook,
+        action: { type: "command" as const, command: "/bin/notify", args: [] },
+      },
+    },
+    {
+      label: "an interpolating HTTP hook",
+      hook: {
+        ...hostAnsweredHttpHook,
+        action: {
+          type: "http" as const,
+          url: "https://hooks.example/converted",
+          headers: { authorization: "Bearer $TOKEN" },
+        },
+      },
+    },
+  ])(
+    "refuses a host-answer contract violation for $label without an account write",
+    async ({ hook }) => {
+      const { client } = makeHostClient([hook]);
+      renderComputerTab(client);
+
+      await convertCommandHookToHttp();
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "The settings request was refused. Review the refreshed hooks before saving again.",
+      );
+      expect(accountCloud.requests).toEqual([]);
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    },
+  );
 });
