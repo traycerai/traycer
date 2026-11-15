@@ -119,8 +119,9 @@ const MOCK_HOST_ENTRY = {
 };
 const MOCK_HOST_DIRECTORY = {
   onChange: () => ({ dispose() {} }),
-  getLocalEntry: () => null,
-  getLocalHostId: () => null,
+  // The one row is this machine's: the app's directory answers it as such.
+  getLocalEntry: () => MOCK_HOST_ENTRY,
+  getLocalHostId: () => MOCK_HOST_ENTRY.hostId,
   findById: (hostId: string) => {
     if (hostId === MOCK_HOST_ENTRY.hostId) return MOCK_HOST_ENTRY;
     return hostId === poolEntry.hostId ? poolEntry : null;
