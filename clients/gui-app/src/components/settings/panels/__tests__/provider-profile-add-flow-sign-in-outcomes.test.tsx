@@ -510,7 +510,7 @@ function renderAddFlow(input: {
       },
       "providers.touchLogin": (params) => {
         calls.push({ method: "providers.touchLogin", params });
-        return { touched: true };
+        return { extended: true };
       },
     },
   });
@@ -1461,12 +1461,11 @@ describe("Add a profile around one sign-in", () => {
             methodCount(harness.messenger.calls, "providers.startLogin"),
           ).toBe(2);
         });
-        const retry = harness.calls.filter(
+        const retries = harness.calls.filter(
           (call) => call.method === "providers.startLogin",
-        )[1];
-        if (retry === undefined) {
-          throw new Error("Expected a second start login call.");
-        }
+        );
+        expect(retries).toHaveLength(2);
+        const retry = retries[1];
         expect(retry.params).toMatchObject({
           providerId: "claude-code",
           profileId: null,
