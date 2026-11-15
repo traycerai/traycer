@@ -659,7 +659,9 @@ describe("sandbox row operations", () => {
   it("keeps a stopped receipt and its draft when Start fails, then clears it after a successful Retry", async () => {
     const testCase = CASES.find((entry) => entry.verb === "start");
     if (testCase === undefined) throw new Error("Expected the Start case");
-    const { answer, binding, client, main } = setup(testCase, null);
+    const { answer, binding, client, main } = setup(testCase, {
+      environmentId: "env-personal",
+    });
     const receiptUserId = useAuthStore.getState().profile?.userId ?? null;
     if (receiptUserId === null) throw new Error("Expected a signed-in reader");
     await screen.findByRole("region", { name: "build-box" });
