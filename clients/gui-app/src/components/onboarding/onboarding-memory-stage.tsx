@@ -343,7 +343,10 @@ function saveReportLines(
   ];
 }
 
-/** Traycer memories in the configuration the host serves now. */
+/**
+ * Traycer memories in the configuration the host serves now, or on this
+ * computer while it serves none.
+ */
 function traycerReportLine(standing: TraycerStanding | null): string {
   if (standing === "on") return "Traycer memories are on.";
   if (standing === "held")

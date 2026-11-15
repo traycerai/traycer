@@ -42,8 +42,10 @@ export type TraycerWriteEvidence =
 /**
  * Everything the act knows about its Traycer memories write, by
  * `environmentId`, so leaving a configuration and coming back finds it again.
+ * `null` is this computer while it is bound to no configuration, where a
+ * write is saved on the computer itself and is never held or written.
  */
-export type SaveEvidence = ReadonlyMap<string, TraycerWriteEvidence>;
+export type SaveEvidence = ReadonlyMap<string | null, TraycerWriteEvidence>;
 export const NO_SAVE_EVIDENCE: SaveEvidence = new Map();
 
 /** Where Traycer memories stand in the configuration a read is about. */
@@ -116,9 +118,10 @@ export interface MemorySaveIo {
 
 /**
  * - `done`: every write landed, and the read just before said Traycer
- *   memories are on in the configuration the host serves.
+ *   memories are on in the configuration the host serves, or on this
+ *   computer while it serves none.
  * - `short`: the save stopped with something unsaved.
- * - `unreached`: a read failed, or the host serves no configuration.
+ * - `unreached`: a read failed.
  * - `moved`: the act's host changed, and the save sent nothing more.
  * - `undiscovered`: the host had not yet said which providers it can switch,
  *   and the save sent nothing.
@@ -146,11 +149,13 @@ export interface MemorySaveProgress {
   /**
    * The read the next request rests on: `null` before the first and again
    * after every other request, so no write and no "done" rests on a read
-   * older than the save's last request.
+   * older than the save's last request. A write saved on this computer while
+   * it is bound to none answers with this computer's own reading, which
+   * stands as the read.
    */
   readonly read: ConfigAgentMemoriesResponse | "failed" | null;
   /** Configurations whose held edit this save has looked up. */
-  readonly lookedUp: ReadonlySet<string>;
+  readonly lookedUp: ReadonlySet<string | null>;
   /** This save has sent its one Traycer memories write. */
   readonly sent: boolean;
   /** Providers this save has written, whether the write landed or not. */
@@ -170,11 +175,14 @@ export type MemorySaveStep =
   | { readonly kind: "read" }
   | {
       readonly kind: "look-up";
-      readonly environmentId: string;
+      readonly environmentId: string | null;
       readonly uploadId: string;
     }
-  /** Write Traycer memories on, to the configuration the last read named. */
-  | { readonly kind: "set"; readonly environmentId: string }
+  /**
+   * Write Traycer memories on, to the configuration the last read named, or
+   * on this computer (`null`) when it named none.
+   */
+  | { readonly kind: "set"; readonly environmentId: string | null }
   | { readonly kind: "provider"; readonly row: OnboardingMemoryRow }
   | { readonly kind: "done" }
   | {
@@ -189,9 +197,10 @@ const SHORT: MemorySaveStep = { kind: "stop", result: "short" };
 
 /**
  * The save's next request. Every provider write and "done" follows a read
- * that finds Traycer memories on in the configuration the host serves. A
- * configuration with this act's write held or written there is never sent
- * another; a save whose host changed sends nothing.
+ * that finds Traycer memories on in the configuration the host serves, or on
+ * this computer while it serves none. A configuration with this act's write
+ * held or written there is never sent another, and one save sends at most
+ * one; a save whose host changed sends nothing.
  */
 export function nextMemorySaveStep(input: {
   readonly current: boolean;
@@ -204,8 +213,7 @@ export function nextMemorySaveStep(input: {
   if (!input.current) return { kind: "stop", result: "moved" };
   const { read } = progress;
   if (read === null) return { kind: "read" };
-  if (read === "failed" || read.environmentId === null)
-    return { kind: "stop", result: "unreached" };
+  if (read === "failed") return { kind: "stop", result: "unreached" };
   const environmentId = read.environmentId;
   const entry = input.evidence.get(environmentId);
   if (entry?.kind === "held")
@@ -291,9 +299,7 @@ async function takeStep(
     if (answer === "unsent") return "unsent";
     if (answer === null) file(io, step.environmentId, { kind: "failed" });
     // Filed against the configuration the write was addressed to, which the
-    // host names: it may have been rebound since the read. A write saved on a
-    // computer bound to none since the read has nothing to file against, and
-    // the next read finds the host serves none.
+    // host names: it may have been rebound since the read.
     else if (answer.state !== "local_only")
       file(
         io,
@@ -302,6 +308,19 @@ async function takeStep(
           ? { kind: "held", uploadId: answer.uploadId }
           : { kind: "written", revision: answer.revision },
       );
+    // Saved on this computer, still bound to none as the read found it: the
+    // answer is this computer's own reading, and the next step rests on it.
+    // One that leaves the setting off is a failed write.
+    else if (step.environmentId === null) {
+      if (!answer.enabled) file(io, null, { kind: "failed" });
+      return {
+        ...progress,
+        read: { enabled: answer.enabled, revision: null, environmentId: null },
+        sent: true,
+      };
+    }
+    // Otherwise the read named a configuration and the computer has been
+    // bound to none since: nothing is filed, and the next read decides.
     return { ...progress, read: null, sent: true };
   }
   const landed = await io.writeProvider(step.row);
@@ -315,7 +334,7 @@ async function takeStep(
 
 function file(
   io: MemorySaveIo,
-  environmentId: string,
+  environmentId: string | null,
   entry: TraycerWriteEvidence,
 ): void {
   io.record(new Map(io.evidence()).set(environmentId, entry));
@@ -328,7 +347,7 @@ function file(
  */
 function lookedUpEvidence(
   uploadId: string,
-  environmentId: string,
+  environmentId: string | null,
   status: UploadStatus,
 ): TraycerWriteEvidence | null {
   const receipt = status.acceptedUploads.find(

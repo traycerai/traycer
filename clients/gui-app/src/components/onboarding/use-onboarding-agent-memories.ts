@@ -71,7 +71,8 @@ export interface OnboardingAgentMemories extends OnboardingMemoryView {
   /**
    * Writes what is still unsaved and answers whether everything has landed.
    * Traycer first, and each provider only after a read finds Traycer
-   * memories on in the configuration the host serves: a failure can leave a
+   * memories on in the configuration the host serves, or on this computer
+   * while it serves none: a failure can leave a
    * provider's memories on beside Traycer's. Both end up off only when the
    * host moves or the setting changes after the read a write or "done"
    * rested on.
@@ -246,7 +247,7 @@ export function useOnboardingAgentMemories(input: {
   const view = memoryViewFor({
     draft,
     traycerStanding:
-      read === undefined || read.environmentId === null
+      read === undefined
         ? null
         : traycerStanding(
             read,

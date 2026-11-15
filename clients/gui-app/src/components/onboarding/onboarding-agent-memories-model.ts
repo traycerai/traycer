@@ -44,8 +44,7 @@ export interface OnboardingMemoryDraft {
    */
   readonly providers: ReadonlyMap<ProviderId, boolean>;
   /**
-   * The last save stopped on a read that failed, or found no configuration.
-   * What it knows of its Traycer write is kept per configuration, outside
+   * The last save stopped on a read that failed. What it knows of its Traycer write is kept per configuration, outside
    * the draft, because it outlives the choices.
    */
   readonly traycerUnreached: boolean;
@@ -194,9 +193,9 @@ export interface OnboardingMemoryView {
    */
   readonly chosen: boolean | null;
   /**
-   * Traycer memories in the configuration the host serves, as last read,
-   * with what the act knows of its own write there. `null` before a read
-   * names a configuration.
+   * Traycer memories in the configuration the host serves, or on this
+   * computer while it serves none, as last read, with what the act knows of
+   * its own write there. `null` before the first read.
    */
   readonly traycerStanding: TraycerStanding | null;
   /**
