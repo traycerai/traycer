@@ -81,16 +81,21 @@ const BOT_TITLE_MAX = 500;
  *   pane the bot's card opens (decision 148);
  * - deleting the bot, behind a confirmation.
  *
- * Every write goes through the tab host's client - the host `bot.open` chose
- * to serve the tab - with nothing gated on which host that is: a host that
- * cannot make the change refuses it, and the refusal is shown in place,
- * under the control. The stream snapshot, not the mutation's answer, is what
- * the header re-renders from.
+ * The Model group's Apply and Delete are drawn only for a reader who may
+ * change the bot's environment (`mayChange`): a team's Viewer sees what the
+ * bot runs on in the same picker, disabled, and no Delete. Every write goes
+ * through the tab host's client - the host `bot.open` chose to serve the tab
+ * - with nothing gated on which host that is: a host that cannot make the
+ * change refuses it, and the refusal is shown in place, under the control, as
+ * it is when the reader's role changed after the panel opened. The stream
+ * snapshot, not the mutation's answer, is what the header re-renders from.
  */
 export function BotChannelSettingsPanel(props: {
   readonly bot: BotRecord;
   /** Whether the bot is a personal environment's; a team's always answers in threads. */
   readonly personal: boolean;
+  /** The reader may change the bot's environment: its run settings and Delete. */
+  readonly mayChange: boolean;
   /** The bot's channel, whose notification level the panel sets; `null` from a host that names none. */
   readonly channelId: string | null;
   /** The bots of the bot's environment; `null` until the list answers. */
@@ -99,7 +104,8 @@ export function BotChannelSettingsPanel(props: {
   /** The bot was deleted: the surface moves to its default channel. */
   readonly onDeleted: () => void;
 }): ReactNode {
-  const { bot, personal, channelId, environmentBots, onClose } = props;
+  const { bot, personal, mayChange, channelId, environmentBots, onClose } =
+    props;
   const panelRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   // Opening the panel takes focus into it, and Escape inside it closes it.
@@ -154,7 +160,7 @@ export function BotChannelSettingsPanel(props: {
           {personal ? <BotReplyModeSection bot={bot} /> : null}
           {personal ? null : <BotTeamMembers />}
         </SettingsGroup>
-        <BotRunSettingsForm bot={bot} />
+        <BotRunSettingsForm bot={bot} mayChange={mayChange} />
         {channelId === null ? null : (
           <BotNotificationsSection botId={bot.botId} channelId={channelId} />
         )}
@@ -163,7 +169,9 @@ export function BotChannelSettingsPanel(props: {
         )}
         <BotSlackSettings botId={bot.botId} />
         <BotUsageSection botId={bot.botId} onClose={onClose} />
-        <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
+        {mayChange ? (
+          <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
+        ) : null}
       </div>
     </aside>
   );
@@ -530,8 +538,16 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
   );
 }
 
-function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
-  const { bot } = props;
+/**
+ * What the bot runs on. A reader who may not change it sees the picker
+ * disabled on the bot's own harness, model, effort and profile, with nothing
+ * to apply.
+ */
+function BotRunSettingsForm(props: {
+  readonly bot: BotRecord;
+  readonly mayChange: boolean;
+}): ReactNode {
+  const { bot, mayChange } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const update = useBotUpdateRunSettingsMutation(client);
@@ -585,9 +601,11 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
     !unchanged && selection.modelSlug.length > 0 && !update.isPending;
   return (
     <SettingsGroup title="Model" testId="bot-settings-model">
-      <p className="text-ui-xs text-muted-foreground">
-        The next turn uses what you apply here.
-      </p>
+      {mayChange ? (
+        <p className="text-ui-xs text-muted-foreground">
+          The next turn uses what you apply here.
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <HarnessModelPicker
           withUltracode={false}
@@ -598,7 +616,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
           withReasoning
           tuiOnly={false}
           lockedHarnessId={null}
-          disabled={update.isPending}
+          disabled={!mayChange || update.isPending}
           registerActivation={false}
           createProfileHostId={hostId}
           runTargetHostId={hostId}
@@ -606,30 +624,32 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
           profileAdmission={null}
           embedding={null}
         />
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={!canApply}
-          onClick={() =>
-            update.mutate({
-              botId: bot.botId,
-              harness: selection.harnessId,
-              model: selection.modelSlug,
-              effort,
-              profile: selection.profileId,
-            })
-          }
-        >
-          Apply
-          {update.isPending ? (
-            <AgentSpinningDots
-              className="ml-1"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
+        {mayChange ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!canApply}
+            onClick={() =>
+              update.mutate({
+                botId: bot.botId,
+                harness: selection.harnessId,
+                model: selection.modelSlug,
+                effort,
+                profile: selection.profileId,
+              })
+            }
+          >
+            Apply
+            {update.isPending ? (
+              <AgentSpinningDots
+                className="ml-1"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+          </Button>
+        ) : null}
       </div>
       <BotSettingsRefusal
         message={update.error === null ? null : update.error.message}

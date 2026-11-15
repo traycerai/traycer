@@ -50,6 +50,7 @@ import {
 } from "@/hooks/bots/use-bot-appearance";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
+import { configurationRoleOf } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
@@ -507,6 +508,25 @@ function useTracyChannelUpkeep(input: {
     select(defaultBotId);
   }, [botId, defaultBotId, navigationPending, select]);
   return { forget, unavailable };
+}
+
+/**
+ * The reader may change the bot's environment: its Personal, or a team where
+ * they are an Admin or Editor. A list that has answered without that role (a
+ * Viewer, or a team not listed) takes the bot's Model form and Delete away.
+ * Until the list answers, personal or team is not known either, so the panel
+ * draws them as before and the host refuses a write the reader may not make,
+ * under the control.
+ */
+function readerMayChangeBot(
+  environments: EnvironmentListResponseV11 | undefined,
+  environmentId: string,
+): boolean {
+  if (environments === undefined) return true;
+  const environment = environments.environments.find(
+    (entry) => entry.environmentId === environmentId,
+  );
+  return environment !== undefined && configurationRoleOf(environment) !== null;
 }
 
 /** The channel column's groups; `null` until both lists answer. */
@@ -1494,6 +1514,10 @@ function BotTabContent(props: {
   // Only a personal environment's bot may answer posts itself; a list not
   // read yet draws no reply-mode control.
   const personal = environment?.ownerKind === "user";
+  const mayChangeBot = readerMayChangeBot(
+    environments.data,
+    snapshot.bot.environmentId,
+  );
   const setupHistory = useChannelSetupHistory({
     client,
     hostId,
@@ -1763,6 +1787,7 @@ function BotTabContent(props: {
               <BotChannelSettingsPanel
                 bot={snapshot.bot}
                 personal={personal}
+                mayChange={mayChangeBot}
                 channelId={snapshot.bot.appConversationChatId}
                 environmentBots={environmentBots}
                 onClose={closeSettings}
