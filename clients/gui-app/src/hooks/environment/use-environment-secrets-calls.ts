@@ -1,5 +1,10 @@
 import {
   useMutation,
+  useQueryClient,
+  type MutateOptions,
+  type UseMutateFunction,
+  type UseMutateAsyncFunction,
+  type UseMutationOptions,
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -19,7 +24,10 @@ import {
   type HostOwnEnvironment,
 } from "@/hooks/environment/use-host-own-environment";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
-import type { EnvironmentCloudMethod } from "@/lib/environment/environment-cloud-calls";
+import type {
+  EnvironmentCloudMethod,
+  EnvironmentCloudSend,
+} from "@/lib/environment/environment-cloud-calls";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -68,11 +76,114 @@ export function useSecretsRead<Method extends SecretsMethod>(args: {
   });
 }
 
+type SecretsPress<TVariables> = { readonly variables: TVariables } & (
+  | { readonly kind: "ready"; readonly send: EnvironmentCloudSend }
+  | { readonly kind: "failed"; readonly error: unknown }
+);
+
 /**
- * A secrets write, to authn. Its operation begins when the mutation runs,
- * which is the press: these writes take no `scope`, and a mutation never
- * pauses (`networkMode: "always"`, `lib/query-client.ts`).
+ * Captures the sign-in synchronously with each Secrets press, before TanStack
+ * awaits its mutation hooks. Each invocation owns a separate envelope even
+ * for void or reused variables; values supplied by a reader stay at dispatch.
  */
+export function useSecretsOperationMutation<
+  TData,
+  TVariables,
+  TContext = unknown,
+>(
+  args: Omit<
+    UseMutationOptions<TData, HostRpcError, TVariables, TContext>,
+    "mutationFn"
+  > & {
+    readonly mutationFn: (
+      variables: TVariables,
+      send: EnvironmentCloudSend,
+    ) => Promise<TData>;
+  },
+): UseMutationResult<TData, HostRpcError, TVariables, TContext> {
+  const begin = useEnvironmentCloudOperation();
+  const queryClient = useQueryClient();
+  const { mutationFn, ...provided } = args;
+  const { onMutate, onSuccess, onError, onSettled, ...options } =
+    queryClient.defaultMutationOptions(provided);
+  const mutation = useMutation<
+    TData,
+    HostRpcError,
+    SecretsPress<TVariables>,
+    TContext
+  >({
+    ...options,
+    mutationFn: (press) =>
+      press.kind === "failed"
+        ? Promise.reject<TData>(press.error)
+        : mutationFn(press.variables, press.send),
+    onMutate:
+      onMutate === undefined
+        ? undefined
+        : (press, context) => onMutate(press.variables, context),
+    onSuccess:
+      onSuccess === undefined
+        ? undefined
+        : (data, press, result, context) =>
+            onSuccess(data, press.variables, result, context),
+    onError:
+      onError === undefined
+        ? undefined
+        : (error, press, result, context) =>
+            onError(error, press.variables, result, context),
+    onSettled:
+      onSettled === undefined
+        ? undefined
+        : (data, error, press, result, context) =>
+            onSettled(data, error, press.variables, result, context),
+  });
+  const capture = (variables: TVariables): SecretsPress<TVariables> => {
+    try {
+      return { kind: "ready", variables, send: begin() };
+    } catch (error) {
+      // Capture failures still go through the mutation's error callbacks.
+      return { kind: "failed", variables, error };
+    }
+  };
+  const callbacks = (
+    perCall: MutateOptions<TData, HostRpcError, TVariables, TContext> | undefined,
+  ):
+    | MutateOptions<TData, HostRpcError, SecretsPress<TVariables>, TContext>
+    | undefined =>
+    perCall === undefined
+      ? undefined
+      : {
+          ...perCall,
+          onSuccess: (data, press, result, context) =>
+            perCall.onSuccess?.(data, press.variables, result, context),
+          onError: (error, press, result, context) =>
+            perCall.onError?.(error, press.variables, result, context),
+          onSettled: (data, error, press, result, context) =>
+            perCall.onSettled?.(data, error, press.variables, result, context),
+        };
+  const mutate: UseMutateFunction<TData, HostRpcError, TVariables, TContext> = (
+    variables,
+    perCall,
+  ) => mutation.mutate(capture(variables), callbacks(perCall));
+  const mutateAsync: UseMutateAsyncFunction<
+    TData,
+    HostRpcError,
+    TVariables,
+    TContext
+  > = (variables, perCall) =>
+    mutation.mutateAsync(capture(variables), callbacks(perCall));
+  if (mutation.isIdle) {
+    return { ...mutation, variables: undefined, mutate, mutateAsync };
+  }
+  return {
+    ...mutation,
+    variables: mutation.variables.variables,
+    mutate,
+    mutateAsync,
+  };
+}
+
+/** A secrets write to authn, bound to the sign-in current at the press. */
 export function useSecretsWrite<
   Method extends SecretsMethod,
   TContext = unknown,
@@ -93,16 +204,14 @@ export function useSecretsWrite<
   RequestOfMethod<HostRpcRegistry, Method>,
   TContext
 > {
-  const begin = useEnvironmentCloudOperation();
   const { method } = args;
-  return useMutation<
+  return useSecretsOperationMutation<
     ResponseOfMethod<HostRpcRegistry, Method>,
-    HostRpcError,
     RequestOfMethod<HostRpcRegistry, Method>,
     TContext
   >({
     mutationKey: args.mutationKey,
-    mutationFn: (request) => begin()(method, request),
+    mutationFn: (request, send) => send(method, request),
     onMutate: args.onMutate,
     onSuccess: args.onSuccess,
   });

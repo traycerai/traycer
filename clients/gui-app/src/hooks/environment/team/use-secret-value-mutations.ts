@@ -1,19 +1,15 @@
-import {
-  useMutation,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import {
-  invalidateEnvironmentReads,
-  useEnvironmentCloudOperation,
-} from "@/hooks/environment/use-environment-cloud";
-import { useSecretsEnvironment } from "@/hooks/environment/use-environment-secrets-calls";
+  useSecretsEnvironment,
+  useSecretsOperationMutation,
+} from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
@@ -27,8 +23,8 @@ import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
  *
  * Each is the app's own call to authn on the person's sign-in, naming the
  * environment the page's secrets calls name (`useSecretsEnvironment`). Its
- * operation begins when the mutation runs, which is the press: these writes
- * take no `scope`, and a mutation never pauses.
+ * sign-in is captured at the press, before the mutation can yield; the typed
+ * value is still read only when its request is dispatched.
  */
 
 interface CapturedHost {
@@ -49,16 +45,14 @@ export function useEnvironmentSecretsCreateMutation(
 > {
   const { environmentId } = useSecretsEnvironment(client);
   const queryClient = useQueryClient();
-  const begin = useEnvironmentCloudOperation();
-  return useMutation<
+  return useSecretsOperationMutation<
     ResponseOfMethod<HostRpcRegistry, "environment.secrets.create">,
-    HostRpcError,
     void,
     CapturedHost
   >({
     mutationKey: settingsDetailsMutationKeys.secretCreate(),
-    mutationFn: () =>
-      begin()("environment.secrets.create", {
+    mutationFn: (_variables, send) =>
+      send("environment.secrets.create", {
         ...readRequest(),
         environmentId,
       }),
@@ -83,14 +77,13 @@ export function useEnvironmentSecretsVerifyCandidateMutation(
   void
 > {
   const { environmentId } = useSecretsEnvironment(client);
-  const begin = useEnvironmentCloudOperation();
-  return useMutation<
+  return useSecretsOperationMutation<
     ResponseOfMethod<HostRpcRegistry, "environment.secrets.verify">,
-    HostRpcError
+    void
   >({
     mutationKey: settingsDetailsMutationKeys.secretVerifyCandidate(),
-    mutationFn: () =>
-      begin()("environment.secrets.verify", {
+    mutationFn: (_variables, send) =>
+      send("environment.secrets.verify", {
         ...readRequest(),
         environmentId,
       }),
@@ -114,16 +107,14 @@ export function useEnvironmentSecretsReplaceValueMutation(
 > {
   const { environmentId } = useSecretsEnvironment(client);
   const queryClient = useQueryClient();
-  const begin = useEnvironmentCloudOperation();
-  return useMutation<
+  return useSecretsOperationMutation<
     ResponseOfMethod<HostRpcRegistry, "environment.secrets.replaceValue">,
-    HostRpcError,
     SecretReplaceTarget,
     CapturedHost
   >({
     mutationKey: settingsDetailsMutationKeys.secretReplaceValue(),
-    mutationFn: (target) =>
-      begin()("environment.secrets.replaceValue", {
+    mutationFn: (target, send) =>
+      send("environment.secrets.replaceValue", {
         ...target,
         value: readValue(),
         environmentId,
