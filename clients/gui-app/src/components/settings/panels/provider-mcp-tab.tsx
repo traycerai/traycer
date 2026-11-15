@@ -531,7 +531,7 @@ export function ProviderMcpTab(props: {
     );
   }, [effectiveScope, projectListForShadow.data?.servers]);
 
-  const mutate = useProvidersMcpMutate();
+  const mutate = useProvidersMcpMutate(null);
   const confirmationMutate = useProvidersMcpApplyRemedy();
   const discover = useProvidersMcpDiscover();
   const auth = useProvidersMcpAuth();

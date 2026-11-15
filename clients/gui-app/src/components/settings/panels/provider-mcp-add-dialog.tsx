@@ -291,7 +291,13 @@ export function ProviderMcpAddDialog(props: {
     [defaultAuth, initialServer, mode, remoteTransports, supportsRemote],
   );
   const [formError, setFormError] = useState<string | null>(null);
-  const mutate = useProvidersMcpMutate();
+  const mutate = useProvidersMcpMutate(() => {
+    const submission = submissionFromValues(form.state.values);
+    if (submission.error !== undefined) {
+      throw new Error("MCP transport input is unavailable.");
+    }
+    return submission.transport;
+  });
   // A server whose definition carries a secret (an auth header's value, a
   // stdio env value) is never written to a sandbox. One with none (a bare
   // command, an OAuth or env-name server) still is: that is configuration,
@@ -314,9 +320,6 @@ export function ProviderMcpAddDialog(props: {
     if (!next) {
       form.reset();
       setFormError(null);
-      // M8: clear the TanStack mutation cache immediately on close so a
-      // submitted secret (header/env value) doesn't linger in
-      // `mutate.variables` after the user is done with the dialog.
       mutate.reset();
     }
     onOpenChange(next);
@@ -483,12 +486,10 @@ export function ProviderMcpAddDialog(props: {
             ? {
                 action: "update",
                 name: submission.name,
-                transport: submission.transport,
               }
             : {
                 action: "add",
                 name: submission.name,
-                transport: submission.transport,
               },
         suppressToast: true,
       },

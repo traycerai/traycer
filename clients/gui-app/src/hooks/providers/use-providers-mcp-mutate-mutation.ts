@@ -4,6 +4,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type {
   ProvidersMcpMutateAction,
   ProviderNativeScope,
+  ProviderMcpServerTransportWrite,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
@@ -33,7 +34,9 @@ export type McpMutateVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
-  readonly mutation: ProvidersMcpMutateAction;
+  readonly mutation:
+    | Exclude<ProvidersMcpMutateAction, { action: "add" | "update" }>
+    | { readonly action: "add" | "update"; readonly name: string };
   /**
    * When true, the hook skips the global toast so the caller can render a
    * row-local native error. Default toast still fires for non-native errors
@@ -83,7 +86,9 @@ function listChangedDuringMutation(
  * optimistic list writes would clear refresh errors, and rolling them back
  * could overwrite a newer full-list response or another server's discovery.
  */
-export function useProvidersMcpMutate(): UseMutationResult<
+export function useProvidersMcpMutate(
+  readTransport: (() => ProviderMcpServerTransportWrite) | null,
+): UseMutationResult<
   McpMutateResult,
   HostRpcError,
   McpMutateVariables,
@@ -123,6 +128,16 @@ export function useProvidersMcpMutate(): UseMutationResult<
         listParams,
         listData: queryClient.getQueryData<McpListData>(listKey),
       };
+      const target = variables.mutation;
+      let mutation: ProvidersMcpMutateAction;
+      if (target.action === "add" || target.action === "update") {
+        if (readTransport === null) {
+          throw new Error("MCP transport input is unavailable.");
+        }
+        mutation = { ...target, transport: readTransport() };
+      } else {
+        mutation = target;
+      }
       const response = await client.request(
         "providers.nativeMutate",
         await grant(
@@ -134,7 +149,7 @@ export function useProvidersMcpMutate(): UseMutationResult<
               kind: "mcp",
               scope: variables.scope,
               workspaceRoot: variables.workspaceRoot,
-              mutation: variables.mutation,
+              mutation,
             },
           },
           client,
@@ -227,5 +242,5 @@ export function useProvidersMcpApplyRemedy(): UseMutationResult<
   McpMutateVariables,
   McpMutateContext
 > {
-  return useProvidersMcpMutate();
+  return useProvidersMcpMutate(null);
 }
