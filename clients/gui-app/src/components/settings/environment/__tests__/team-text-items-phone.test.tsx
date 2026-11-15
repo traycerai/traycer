@@ -30,7 +30,8 @@ import {
   configurationItem,
   mountTeamPage,
   poolSource,
-  requireTeamEnvironmentAuthnBinding,
+  rejectNextTeamEnvironmentItemPut,
+  requireTeamHostBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -39,7 +40,12 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
+  useHostBinding: () => requireTeamHostBinding(),
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamHostBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -498,36 +504,19 @@ describe("TeamTextItems on a phone", () => {
     fireEvent.change(within(dialog).getByLabelText("Value for NODE_ENV"), {
       target: { value: "draft" },
     });
-    const requestStart = vi.mocked(globalThis.fetch).mock.calls.length;
-    const authnFetch = vi.mocked(globalThis.fetch).getMockImplementation();
-    if (authnFetch === undefined)
-      throw new Error("The authn fetch fixture is absent.");
-    let rejectFirstPut = true;
-    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-      const target = new URL(input instanceof Request ? input.url : input);
-      const method =
-        init?.method ?? (input instanceof Request ? input.method : "GET");
-      if (
-        rejectFirstPut &&
-        method === "PUT" &&
-        target.pathname.endsWith("/items/variable")
-      ) {
-        rejectFirstPut = false;
-        throw new Error("The transport did not answer.");
-      }
-      return authnFetch(input, init);
-    });
+    const failedRequests = rejectNextTeamEnvironmentItemPut(harness);
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     expect(
       await within(screen.getByRole("dialog")).findByRole("alert"),
     ).toHaveProperty("textContent", "Connect to manage settings.");
-    expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeGreaterThan(
-      requestStart,
-    );
-    const failedRequest = vi.mocked(globalThis.fetch).mock.calls[requestStart];
-    expect(failedRequest[1]?.method).toBe("PUT");
-    expect(failedRequest[1]?.body).toContain('"revision":1');
+    expect(failedRequests).toHaveLength(1);
+    expect(failedRequests[0]?.method).toBe("PUT");
+    expect(failedRequests[0]?.body).toMatchObject({
+      key: "NODE_ENV",
+      revision: 1,
+      value: { value: "draft" },
+    });
 
     items = [variable("teammate", 2, "any")];
     await act(async () => {
@@ -914,7 +903,7 @@ describe("TeamTextItems on a phone", () => {
     const refused = screen.getByRole("dialog");
     expect(within(refused).getByRole("alert")).toHaveProperty(
       "textContent",
-      "Cloud service is temporarily unavailable. Please try again shortly.",
+      "Connect to manage settings.",
     );
     expect(within(refused).getByLabelText("Value for NODE_ENV")).toHaveProperty(
       "value",

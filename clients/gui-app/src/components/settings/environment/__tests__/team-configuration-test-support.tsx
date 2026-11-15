@@ -65,7 +65,8 @@ export const teamHostBoundary: {
   auth: AuthService | null;
   runtime: HostRuntime<HostRpcRegistry> | null;
   directory: HostDirectoryService | null;
-} = { client: null, auth: null, runtime: null, directory: null };
+  binding: HostRuntimeBinding<HostRpcRegistry> | null;
+} = { client: null, auth: null, runtime: null, directory: null, binding: null };
 
 /**
  * The client of a second host (`mockRemoteHostEntry`) over the same messenger:
@@ -114,6 +115,13 @@ export function requireTeamCloudAuth(): AuthService {
     throw new Error("no team cloud auth mounted");
   }
   return teamHostBoundary.auth;
+}
+
+export function requireTeamHostBinding(): HostRuntimeBinding<HostRpcRegistry> {
+  if (teamHostBoundary.binding === null) {
+    throw new Error("no team host binding mounted");
+  }
+  return teamHostBoundary.binding;
 }
 
 export function requireTeamEnvironmentAuthnBinding(): {
@@ -238,6 +246,30 @@ export interface TeamPageHarness {
   readonly cloudResponses: TeamEnvironmentCloudResponses;
   /** The params of every request the host received for `method`, in order. */
   readonly paramsOf: (method: string) => unknown[];
+}
+
+export function rejectNextTeamEnvironmentItemPut(
+  harness: TeamPageHarness,
+): EnvironmentTransportRequest[] {
+  const cloud = harness.auth.environmentCloud();
+  const rejectedRequests: EnvironmentTransportRequest[] = [];
+  let rejectNextPut = true;
+  harness.auth.environmentCloud = () => ({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        rejectNextPut &&
+        request.method === "PUT" &&
+        new URL(request.url).pathname.endsWith("/items/variable")
+      ) {
+        rejectNextPut = false;
+        rejectedRequests.push(request);
+        throw new Error("The transport did not answer.");
+      }
+      return cloud.transport(request);
+    },
+  });
+  return rejectedRequests;
 }
 
 export function mountTeamPage(
@@ -449,6 +481,7 @@ function buildTeamPage(
     auth,
     hostId: null,
   };
+  teamHostBoundary.binding = authBinding;
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
   useAuthStore.setState({
     status: "signed-in",
@@ -489,6 +522,7 @@ export function resetTeamPageHarness(): void {
   teamHostBoundary.auth = null;
   teamHostBoundary.runtime = null;
   teamHostBoundary.directory = null;
+  teamHostBoundary.binding = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
   useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
