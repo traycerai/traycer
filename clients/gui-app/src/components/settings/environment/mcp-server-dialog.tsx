@@ -30,6 +30,8 @@ import {
   useConfigurationMcpServerMutations,
   type EnvironmentMcpServer,
 } from "@/hooks/environment/team/use-mcp-servers";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useHostClient } from "@/lib/host";
 import {
   useConfigurationIsPersonal,
@@ -109,15 +111,20 @@ export function McpServerDialog(props: {
   const update: FormUpdate = (patch) =>
     setForm((current) => ({ ...current, ...patch }));
   const credential = mcpServerCredential(form, server !== null, canPick);
-  const { put } = useConfigurationMcpServerMutations(() => {
-    if (source.kind !== "pool" || credential === null) {
-      throw new Error("MCP server input is unavailable.");
-    }
-    return mcpServerPutRequest(form, server, source.environmentId, credential);
-  });
+  const submittedServer =
+    useSubmittedSecretInput<EnvironmentConfigurationMcpServerPutRequestV11>(
+      "MCP server input is unavailable.",
+    );
+  const { put } = useConfigurationMcpServerMutations(
+    submittedServer.read,
+    submittedServer.clear,
+  );
   const submit = (): void => {
     if (source.kind !== "pool" || credential === null) return;
     setProblem(null);
+    submittedServer.set(
+      mcpServerPutRequest(form, server, source.environmentId, credential),
+    );
     put.mutate(
       {
         environmentId: source.environmentId,

@@ -89,6 +89,7 @@ function listChangedDuringMutation(
  */
 export function useProvidersMcpMutate(
   readTransport: (() => ProviderMcpServerTransportWrite) | null,
+  clearTransportInput: (() => void) | null,
 ): UseMutationResult<
   McpMutateResult,
   HostRpcError,
@@ -212,6 +213,7 @@ export function useProvidersMcpMutate(
         void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
       }
     },
+    onSettled: () => clearTransportInput?.(),
     onError: (error, variables, ctx) => {
       if (
         isProviderNativeRpcError(error) &&
@@ -243,5 +245,5 @@ export function useProvidersMcpApplyRemedy(): UseMutationResult<
   McpMutateVariables,
   McpMutateContext
 > {
-  return useProvidersMcpMutate(null);
+  return useProvidersMcpMutate(null, null);
 }

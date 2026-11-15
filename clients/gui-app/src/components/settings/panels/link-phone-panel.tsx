@@ -17,6 +17,7 @@ import {
   type LinkLoginDeadKind,
   type LiveClaim,
 } from "@/hooks/auth/use-link-login-watch";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useRespondLinkLoginMutation } from "@/hooks/auth/use-respond-link-login-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
@@ -626,10 +627,13 @@ export function LinkPhonePanel() {
     watchedClaim !== null && watchedClaim.code === decidedCode
       ? null
       : watchedClaim;
-  const respond = useRespondLinkLoginMutation(() => {
-    if (claim === null) throw new Error("Link claim input is unavailable.");
-    return claim.code;
-  });
+  const submittedCode = useSubmittedSecretInput<string>(
+    "Link claim input is unavailable.",
+  );
+  const respond = useRespondLinkLoginMutation(
+    submittedCode.read,
+    submittedCode.clear,
+  );
   const minted = code.data ?? null;
   // `claim-pending` is a state, not an error: the user's single live claim
   // is awaiting the decision on ANOTHER surface. Rendered only when this
@@ -678,6 +682,7 @@ export function LinkPhonePanel() {
     setRespondFailedCode(null);
     setDecidedElsewhere(null);
     const decidedOn = claim.code;
+    submittedCode.set(decidedOn);
     respond.mutate(
       { approve },
       {

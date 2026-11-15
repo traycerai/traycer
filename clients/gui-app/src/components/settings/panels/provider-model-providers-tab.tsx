@@ -26,6 +26,7 @@ import {
   type ModelProviderVisibility,
 } from "@/hooks/providers/use-model-provider-visibility";
 import { useProvidersModelProvidersList } from "@/hooks/providers/use-providers-model-providers-list-query";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { useHostBinding } from "@/lib/host/runtime";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
@@ -399,18 +400,12 @@ function useCustomProviderForm(
   // Its OWN mutation instance rather than the tab's. They share a key and an
   // invalidation, and nothing else: a disconnect in flight has no business
   // spinning this form's submit button, or the other way round.
-  const submittedAction = useRef<ModelProviderAuthAction | null>(null);
+  const submittedAction = useSubmittedSecretInput<ModelProviderAuthAction>(
+    "Model provider input is unavailable.",
+  );
   const auth = useProvidersModelProviderAuth(
-    () => {
-      const action = submittedAction.current;
-      submittedAction.current = null;
-      if (action === null)
-        throw new Error("Model provider input is unavailable.");
-      return action;
-    },
-    () => {
-      submittedAction.current = null;
-    },
+    submittedAction.read,
+    submittedAction.clear,
   );
 
   const open = useCallback((initial: CustomProviderValues | null) => {
@@ -433,7 +428,7 @@ function useCustomProviderForm(
       const token = configWrite.claim(values.modelProviderId);
       if (token === null) return;
       setError(null);
-      submittedAction.current = {
+      submittedAction.set({
         // One shape, two verbs - the wire's own split. `updateCustom` is
         // only reachable for a row the host flagged `configDeclaredCustom`,
         // which is the same set of rows it will accept an update for.
@@ -451,7 +446,7 @@ function useCustomProviderForm(
         // wire's clear signal, so an untouched form must send null rather
         // than an empty list it happens to be holding.
         env: values.env === null ? null : [...values.env],
-      };
+      });
       auth.mutate(
         {
           providerId,
@@ -482,7 +477,7 @@ function useCustomProviderForm(
         },
       );
     },
-    [auth, configWrite, credentialRefusal, providerId],
+    [auth, configWrite, credentialRefusal, providerId, submittedAction],
   );
 
   const submit = useCallback(

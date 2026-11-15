@@ -135,7 +135,7 @@ function ProviderServerRow(props: {
 }): ReactNode {
   const { server } = props;
   const source = useConfigurationSource();
-  const { putItem } = useConfigurationMcpServerMutations(null);
+  const { putItem } = useConfigurationMcpServerMutations(null, null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const harness = providerIdToGuiHarnessId(props.providerId);
   const item = server.item;

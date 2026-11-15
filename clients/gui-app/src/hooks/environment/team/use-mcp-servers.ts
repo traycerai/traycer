@@ -146,6 +146,7 @@ export function useConfigurationMcpServerMutations(
         "environment.configuration.mcpServers.put"
       >)
     | null,
+  clearPutInput: (() => void) | null,
 ) {
   const client = usePoolTierHostClient(useHostClient());
   const queries = useQueryClient();
@@ -178,6 +179,7 @@ export function useConfigurationMcpServerMutations(
         captured: undefined,
       }),
       onSuccess: (_result, target) => reread(target.environmentId),
+      onSettled: () => clearPutInput?.(),
       onError: (error) =>
         toastFromHostError(error, "Couldn't save this server."),
     },

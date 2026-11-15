@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import type { SyntheticEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mail, RefreshCcw, ShieldCheck } from "lucide-react";
@@ -88,8 +89,12 @@ function StepUpChallengeDialogActive(props: {
 }) {
   const requestChallenge = useAuthRequestStepUpChallenge();
   const [code, setCode] = useState("");
-  const verifyChallenge = useAuthVerifyStepUpChallenge(() =>
-    normalizeStepUpCodeInput(code),
+  const submittedCode = useSubmittedSecretInput<string>(
+    "Verification code input is unavailable.",
+  );
+  const verifyChallenge = useAuthVerifyStepUpChallenge(
+    submittedCode.read,
+    submittedCode.clear,
   );
   // Opens `sending`: the mount effect below sends the first code.
   const [challenge, setChallenge] = useState<ChallengeStatus>("sending");
@@ -165,6 +170,7 @@ function StepUpChallengeDialogActive(props: {
       return;
     }
     setError(null);
+    submittedCode.set(normalized);
     void verifyChallenge
       .mutateAsync()
       .then((response) => {

@@ -37,6 +37,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { cn } from "@/lib/utils";
@@ -291,13 +292,14 @@ export function ProviderMcpAddDialog(props: {
     [defaultAuth, initialServer, mode, remoteTransports, supportsRemote],
   );
   const [formError, setFormError] = useState<string | null>(null);
-  const mutate = useProvidersMcpMutate(() => {
-    const submission = submissionFromValues(form.state.values);
-    if (submission.error !== undefined) {
-      throw new Error("MCP transport input is unavailable.");
-    }
-    return submission.transport;
-  });
+  const submittedTransport =
+    useSubmittedSecretInput<ProviderMcpServerTransportWrite>(
+      "MCP transport input is unavailable.",
+    );
+  const mutate = useProvidersMcpMutate(
+    submittedTransport.read,
+    submittedTransport.clear,
+  );
   // A server whose definition carries a secret (an auth header's value, a
   // stdio env value) is never written to a sandbox. One with none (a bare
   // command, an OAuth or env-name server) still is: that is configuration,
@@ -478,6 +480,7 @@ export function ProviderMcpAddDialog(props: {
       submission.transport.type !== "stdio" &&
       submission.transport.auth !== null &&
       submission.transport.auth.type === "oauth";
+    submittedTransport.set(submission.transport);
     mutate.mutate(
       {
         ...scopeTuple,

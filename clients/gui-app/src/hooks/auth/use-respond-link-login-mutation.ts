@@ -19,10 +19,12 @@ export type RespondLinkLoginOutcome =
  */
 export function useRespondLinkLoginMutation(
   readCode: () => string,
+  clearCodeInput: () => void,
 ): UseMutationResult<RespondLinkLoginOutcome, Error, RespondLinkLoginInput> {
   const auth = useAuthService();
   return useMutation({
     mutationKey: authMutationKeys.respondLinkLogin(),
+    onSettled: clearCodeInput,
     mutationFn: async (input: RespondLinkLoginInput) => {
       const result = await auth.respondLinkLogin(readCode(), input.approve);
       if (result.kind === "ok") {

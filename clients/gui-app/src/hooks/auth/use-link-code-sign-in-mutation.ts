@@ -11,10 +11,12 @@ import { authMutationKeys } from "@/lib/query-keys";
  */
 export function useLinkCodeSignInMutation(
   readCode: () => string,
+  clearCodeInput: () => void,
 ): UseMutationResult<LinkLoginSignInResult, Error, void> {
   const auth = useAuthService();
   return useMutation({
     mutationKey: authMutationKeys.signInWithLinkCode(),
+    onSettled: clearCodeInput,
     mutationFn: () => auth.signInWithLinkCode(readCode()),
   });
 }

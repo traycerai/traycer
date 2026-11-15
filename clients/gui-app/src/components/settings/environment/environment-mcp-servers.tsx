@@ -1,3 +1,5 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useEffect, useState, type ReactNode } from "react";
 import { Server, Trash2 } from "lucide-react";
@@ -215,7 +217,7 @@ function McpServerRow(props: {
   const { server } = props;
   const source = useConfigurationSource();
   const name = useConfigurationName();
-  const { remove, setEnabled } = useConfigurationMcpServerMutations(null);
+  const { remove, setEnabled } = useConfigurationMcpServerMutations(null, null);
   const client = useHostClient();
   const removable =
     useHostNegotiatedMethodVersion(
@@ -426,7 +428,7 @@ export function McpServerTools(props: {
   readonly onIssue: (issue: ConfigurationWriteIssue) => void;
 }): ReactNode {
   const source = useConfigurationSource();
-  const { putItem } = useConfigurationMcpServerMutations(null);
+  const { putItem } = useConfigurationMcpServerMutations(null, null);
   const item = props.server.item;
   const list = useProvidersMcpList({
     providerId: props.providerId,
@@ -614,11 +616,14 @@ function McpOpenEditor(props: {
   readonly onDetail: (line: string | null) => void;
 }): ReactNode {
   const source = useConfigurationSource();
-  const { put, putItem } = useConfigurationMcpServerMutations(() => {
-    const request = readEndpointRequest();
-    if (request === null) throw new Error("MCP server input is unavailable.");
-    return request;
-  });
+  const submittedServer =
+    useSubmittedSecretInput<EnvironmentConfigurationMcpServerPutRequestV11>(
+      "MCP server input is unavailable.",
+    );
+  const { put, putItem } = useConfigurationMcpServerMutations(
+    submittedServer.read,
+    submittedServer.clear,
+  );
   const initial = endpointInitial(props.server);
   const [endpoint, setEndpoint] = useState(initial);
   const groups = groupServerTools(props.server, props.using, props.lists);
@@ -668,7 +673,8 @@ function McpOpenEditor(props: {
     // toggles beside a parallel items.put loses whichever lands last.
     if (endpointDirty) {
       const saved = readEndpointRequest();
-      if (saved !== null)
+      if (saved !== null) {
+        submittedServer.set(saved);
         put.mutate(
           { environmentId: saved.environmentId, serverId: saved.serverId },
           {
@@ -678,6 +684,7 @@ function McpOpenEditor(props: {
               ),
           },
         );
+      }
     }
     if (toolsDirty && item !== null && !endpointDirty)
       putItem.mutate(
