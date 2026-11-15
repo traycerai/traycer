@@ -22,7 +22,6 @@ import {
   SETUP_STEPS,
   setupView,
   terminalAccountSentence,
-  teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
@@ -183,15 +182,11 @@ function AccessSections(props: {
       {props.remoteAccess}
       <TerminalAccountsSection
         client={props.client}
-        sentence={
-          props.status.principal?.kind === "team"
-            ? teamTerminalAccountSentence(props.status.principal.teamName)
-            : terminalAccountSentence(
-                props.hostId !== null && props.hostId === localHostId
-                  ? null
-                  : props.hostName,
-              )
-        }
+        sentence={terminalAccountSentence(
+          props.hostId !== null && props.hostId === localHostId
+            ? null
+            : props.hostName,
+        )}
       />
       <LocalValuesSection client={props.client} hostId={props.hostId} />
     </>

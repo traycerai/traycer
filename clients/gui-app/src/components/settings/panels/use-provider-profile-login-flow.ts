@@ -84,7 +84,7 @@ export type CancelLoginMutation = UseMutationResult<
 export type SubmitLoginCodeMutation = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">
+  Omit<RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">, "code">
 >;
 export type TouchLoginMutation = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.touchLogin">,
@@ -542,6 +542,7 @@ interface UseProviderProfileLoginFlowInput {
   readonly awaitLogin: AwaitLoginMutation;
   readonly cancelLogin: CancelLoginMutation;
   readonly submitLoginCode: SubmitLoginCodeMutation;
+  readonly setSubmittedLoginCode: (code: string) => void;
   readonly touchLogin: TouchLoginMutation;
   /** Fetches the provider's pack again. Only ever called from `start`, i.e.
    *  from a press, and only when the previous attempt ended on a failed
@@ -669,13 +670,14 @@ export function useProviderDestinationLoginFlow(
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode,
     touchLogin,
     ensurePack,
     failureMessages,
     onFailed,
   } = input;
   const [state, setState] = useState<ProviderProfileLoginFlowState>(() =>
-    target !== null && !destinationSupported(targetClient)
+    target !== null && !providerLoginDestinationSupported(targetClient)
       ? { kind: "target-refused", targetRefusal: "unsupported-computer" }
       : { kind: "start" },
   );
@@ -1580,7 +1582,7 @@ export function useProviderDestinationLoginFlow(
       readonly label: string | null;
       readonly shareSkillsAndPlugins: boolean;
     }): void => {
-      if (target !== null && !destinationSupported(targetClient)) {
+      if (target !== null && !providerLoginDestinationSupported(targetClient)) {
         setState({
           kind: "target-refused",
           targetRefusal: "unsupported-computer",
@@ -1751,8 +1753,9 @@ export function useProviderDestinationLoginFlow(
       // still pending, `settleAttempt` must wait for the real verdict
       // instead of failing early (the lost-update race).
       submitOutcomeRef.current = "pending";
+      setSubmittedLoginCode(code);
       submitLoginCode.mutate(
-        { providerId, profileId: state.profileId, code },
+        { providerId, profileId: state.profileId },
         {
           onSuccess: (result) => {
             if (attemptIdRef.current !== thisAttemptId) return;
@@ -1772,7 +1775,7 @@ export function useProviderDestinationLoginFlow(
         },
       );
     },
-    [providerId, settleAttempt, state, submitLoginCode],
+    [providerId, settleAttempt, state, submitLoginCode, setSubmittedLoginCode],
   );
 
   const touchLoginMutate = touchLogin.mutate;
@@ -1844,7 +1847,7 @@ export function useProviderDestinationLoginFlow(
   };
 }
 
-function destinationSupported(
+export function providerLoginDestinationSupported(
   client: HostClient<HostRpcRegistry> | null,
 ): boolean {
   const hostId = client?.getActiveHostId() ?? null;

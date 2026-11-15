@@ -1,6 +1,6 @@
 // Providers page section, through the real ProviderProfileScopedSection.
-// offersSignIns on providers.list is the only switch. Absent and false keep
-// today's copy. The profile row, including a no-home presence, is the prop.
+// `offersSignIns` controls sign-in actions and no-home wording. The profile
+// row, including a no-home presence, is the prop.
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );
@@ -26,13 +26,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   recordNegotiatedHostManifest,
@@ -47,14 +41,12 @@ import { profileWithStanding } from "@/components/settings/panels/__tests__/prov
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_ID = "host-providers-page";
 const PROFILE_ID = "work";
 const SIGN_IN = "Sign in";
 const SIGN_IN_EVERYWHERE = "Sign in to use everywhere";
-const ON_THIS_HOST = "On this host only, link to use everywhere.";
 const AVAILABLE_HERE = "Available on this computer";
 const NOT_ON_COMPUTER = "Not on this computer yet";
 const NOT_ON_DEVICE = "Not on this device yet";
@@ -73,7 +65,6 @@ afterEach(() => {
   resetNegotiatedManifests();
   clientMock.current = null;
   useSettingsEnvironmentPickStore.setState({ pick: null });
-  useProviderLinkDialogStore.setState({ target: null });
 });
 
 function signedOutAuth(): ProviderProfile["auth"] {
@@ -193,6 +184,21 @@ function renderSection(input: {
 }
 
 describe("ProviderProfileScopedSection offersSignIns", () => {
+  it("calls Add a profile from its button", async () => {
+    const harness = renderSection({
+      offers: true,
+      row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
+      signedOut: true,
+      onHostOnly: true,
+      advertiseLink: true,
+    });
+    const button = await screen.findByRole("button", { name: "Add a profile" });
+    fireEvent.click(button);
+    expect(harness.onAddProfile).toHaveBeenCalledTimes(1);
+    expect(harness.startLogins()).toBe(0);
+    expect(harness.listCalls()).toBe(1);
+  });
+
   it("offers Sign in to use everywhere on a signed-out terminal row when the fact is true", async () => {
     const harness = renderSection({
       offers: true,
@@ -208,10 +214,6 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
     expect(harness.onAddProfile).toHaveBeenCalledTimes(1);
     expect(harness.startLogins()).toBe(0);
     expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Link account" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Link account" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Link" })).toBeNull();
     expect(harness.listCalls()).toBe(1);
   });
 
@@ -243,14 +245,13 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
     });
     const line = await screen.findByTestId(LINE_TESTID);
     expect(line.textContent).toContain(AVAILABLE_HERE);
-    expect(within(line).queryByRole("button", { name: "Link" })).toBeNull();
     expect(
       screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
     ).toBeNull();
     expect(harness.listCalls()).toBe(1);
   });
 
-  it("keeps today's on-this-host line and Link on a 10.11 computer", async () => {
+  it("shows availability without Sign in to use everywhere on a 10.11 computer", async () => {
     const harness = renderSection({
       offers: "10.11",
       row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
@@ -259,17 +260,15 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       advertiseLink: true,
     });
     const line = await screen.findByTestId(LINE_TESTID);
-    expect(line.textContent).toContain(ON_THIS_HOST);
-    fireEvent.click(screen.getByRole("button", { name: "Link" }));
-    expect(useProviderLinkDialogStore.getState().target).toEqual({
-      providerId: "opencode",
-      profileId: PROFILE_ID,
-    });
-    expect(screen.queryByText(AVAILABLE_HERE)).toBeNull();
+    expect(line.textContent).toContain(AVAILABLE_HERE);
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
+    ).toBeNull();
     expect(harness.listCalls()).toBe(1);
   });
 
-  it("keeps today's on-this-host line and Link when offersSignIns is false", async () => {
+  it("shows availability without Sign in to use everywhere when offersSignIns is false", async () => {
     const harness = renderSection({
       offers: false,
       row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
@@ -278,13 +277,8 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       advertiseLink: true,
     });
     const line = await screen.findByTestId(LINE_TESTID);
-    expect(line.textContent).toContain(ON_THIS_HOST);
-    fireEvent.click(screen.getByRole("button", { name: "Link" }));
-    expect(useProviderLinkDialogStore.getState().target).toEqual({
-      providerId: "opencode",
-      profileId: PROFILE_ID,
-    });
-    expect(screen.queryByText(AVAILABLE_HERE)).toBeNull();
+    expect(line.textContent).toContain(AVAILABLE_HERE);
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
     expect(
       screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
     ).toBeNull();

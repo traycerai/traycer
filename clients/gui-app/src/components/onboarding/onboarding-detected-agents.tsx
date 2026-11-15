@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   type ProviderCliState,
@@ -487,7 +488,13 @@ function useOnboardingWaitingCodePaste(args: {
   readonly userCode: string | null;
 }): ProviderProfileLoginFlowCodePaste {
   const { providerId, loginCapability, loginUrl, userCode } = args;
-  const submitLoginCode = useProvidersSubmitLoginCode();
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Provider login code input is unavailable.",
+  );
+  const submitLoginCode = useProvidersSubmitLoginCode(
+    submittedLoginCode.read,
+    submittedLoginCode.clear,
+  );
   const touchLogin = useProvidersTouchLogin();
   const codePasteEnabled = (loginCapability?.codePaste ?? null) !== null;
   const touchLoginMutate = touchLogin.mutate;
@@ -510,8 +517,9 @@ function useOnboardingWaitingCodePaste(args: {
     phase,
     submitError: submitLoginCode.error,
     submit: (code) => {
+      submittedLoginCode.set(code);
       submitLoginCode.mutate(
-        { providerId, profileId: null, code },
+        { providerId, profileId: null },
         {
           onSuccess: (result) => {
             if (result.outcome === "accepted") {

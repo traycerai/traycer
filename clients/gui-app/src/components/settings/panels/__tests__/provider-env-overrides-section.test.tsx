@@ -106,6 +106,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 import type { EnvOverrideValue } from "../env-override-editor";
 import {
   ProviderEnvOverridesSection,
@@ -120,6 +121,7 @@ const mocks = vi.hoisted(() => ({
   setOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
     Promise.resolve(),
   ),
+  setOverrideVariables: vi.fn<(variables: SetOverrideVariables) => void>(),
   deleteOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
     Promise.resolve(),
   ),
@@ -127,13 +129,34 @@ const mocks = vi.hoisted(() => ({
   credentialRefusal: null as string | null,
 }));
 
+type SetOverrideVariables = {
+  readonly providerId: string;
+  readonly key: string;
+  readonly executableWriteGrant: string | null;
+};
+
 vi.mock(
   "@/hooks/providers/use-providers-set-env-override-mutation",
   async () => {
     const { useMutation } = await import("@tanstack/react-query");
     return {
-      useProvidersSetEnvOverride: () =>
-        useMutation({ mutationFn: mocks.setOverrideMutate }),
+      useProvidersSetEnvOverride: (
+        readValue: () => string | null,
+        clearValueInput: () => void,
+      ) =>
+        useMutation<void, Error, SetOverrideVariables>({
+          mutationFn: async (variables) => {
+            mocks.setOverrideVariables(variables);
+            try {
+              return await mocks.setOverrideMutate({
+                ...variables,
+                value: readValue(),
+              });
+            } finally {
+              clearValueInput();
+            }
+          },
+        }),
     };
   },
 );
@@ -170,6 +193,46 @@ afterEach(() => {
   hostsRunningPersonalMock.current = { hosts: [], state: "ready" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
+
+function expectSetOverrideTargetVariables(providerId: string): void {
+  const call = mocks.setOverrideVariables.mock.calls.at(-1);
+  if (call === undefined)
+    throw new Error("Expected an environment override dispatch.");
+  const variables = call[0];
+  expect({
+    keys: Object.keys(variables).sort(),
+    providerId: variables.providerId,
+    executableWriteGrant: variables.executableWriteGrant,
+  }).toEqual({
+    keys: ["executableWriteGrant", "key", "providerId"],
+    providerId,
+    executableWriteGrant: null,
+  });
+}
+
+type OutgoingSetOverrideRequest = {
+  readonly providerId: string;
+  readonly key: string;
+  readonly value: string;
+  readonly executableWriteGrant: null;
+};
+
+function outgoingSetOverrideMatches(
+  actual: unknown,
+  expected: OutgoingSetOverrideRequest,
+): boolean {
+  if (!isRecord(actual)) return false;
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = ["executableWriteGrant", "key", "providerId", "value"];
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    actual.providerId === expected.providerId &&
+    actual.key === expected.key &&
+    actual.value === expected.value &&
+    actual.executableWriteGrant === expected.executableWriteGrant
+  );
+}
 
 /** The bare section reads and writes through the query client the app provides. */
 function withQueryClient(children: ReactNode): ReactNode {
@@ -719,12 +782,17 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     await waitFor(() =>
       expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
-    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
-      providerId: "claude-code",
-      key: "ANTHROPIC_BASE_URL",
-      value: OWN_URL,
-      executableWriteGrant: null,
-    });
+    expectSetOverrideTargetVariables("claude-code");
+    const outgoingSetCall = mocks.setOverrideMutate.mock.calls.at(0);
+    expect(
+      outgoingSetCall !== undefined &&
+        outgoingSetOverrideMatches(outgoingSetCall[0], {
+          providerId: "claude-code",
+          key: "ANTHROPIC_BASE_URL",
+          value: OWN_URL,
+          executableWriteGrant: null,
+        }),
+    ).toBe(true);
     // The clear RPC follows the save's resolved promise.
     await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
     expect(clearOverride).toHaveBeenCalledWith({
@@ -755,6 +823,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     await waitFor(() =>
       expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
+    expectSetOverrideTargetVariables("claude-code");
     expect(clearOverride).not.toHaveBeenCalled();
 
     view.unmount();
@@ -788,6 +857,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     await waitFor(() =>
       expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
+    expectSetOverrideTargetVariables("claude-code");
     if (rejectSave === undefined) throw new Error("save did not start");
     await act(async () => {
       rejectSave?.(new Error("save failed"));
@@ -817,6 +887,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     await waitFor(() =>
       expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
+    expectSetOverrideTargetVariables("cursor");
     // Reset the still-mounted draft so row cleanup doesn't submit the same
     // rename a second time while the first save remains in flight.
     fireEvent.change(nameField, {

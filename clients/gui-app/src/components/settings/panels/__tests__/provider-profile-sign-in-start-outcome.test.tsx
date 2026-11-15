@@ -82,6 +82,13 @@ vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
     error: null,
   }),
 }));
+vi.mock("@/hooks/providers/use-account-profile-recolor", () => ({
+  useAccountProfileRecolorForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
+}));
 // A spy, so a test can see which link a button sent the user to.
 const links = vi.hoisted(() => ({
   openLink: vi.fn<(url: string, kind: string, event: unknown) => unknown>(),

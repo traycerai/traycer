@@ -73,6 +73,21 @@ const routing = (enabled: boolean, revision: number) =>
     revision,
   });
 
+function managedProfile(key: string, name: string, enabled: boolean) {
+  return configurationItem({
+    kind: "managed_profile",
+    key,
+    value: {
+      name,
+      color: null,
+      harnessId: "claude",
+      accountIdentity: null,
+      needsLink: false,
+      enabled,
+    },
+  });
+}
+
 const host: EnvironmentHostRecordV12 = {
   hostId: "host-a",
   hostLabel: "Mac mini",
@@ -120,6 +135,50 @@ describe("TeamModelRouting", () => {
       environmentId: "env-a",
     });
     expect(harness.paramsOf("providers.fallbackPolicy.get")).toHaveLength(0);
+  });
+
+  it("shows the account-switch hint only when one enabled account is available", async () => {
+    const oneProfileHarness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [routing(true, 9), managedProfile("prof-1", "Claude", true)],
+      }),
+      "environment.host.list": () => ({ hosts: [host] }),
+    });
+    render(<TeamModelRouting />, { wrapper: oneProfileHarness.Wrapper });
+
+    const profileHint = await screen.findByText(
+      "No other accounts to switch to yet.",
+    );
+    expect(profileHint).toBeTruthy();
+    expect(within(profileHint).queryByRole("link")).toBeNull();
+    expect(
+      screen.queryByText("Link another plan to switch accounts."),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /link/i })).toBeNull();
+
+    cleanup();
+    resetTeamPageHarness();
+
+    const twoProfileHarness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [
+          routing(true, 9),
+          managedProfile("prof-1", "Claude", true),
+          managedProfile("prof-2", "Codex", true),
+        ],
+      }),
+      "environment.host.list": () => ({ hosts: [host] }),
+    });
+    render(<TeamModelRouting />, { wrapper: twoProfileHarness.Wrapper });
+
+    expect(await screen.findByText("Accounts: Claude, Codex.")).toBeTruthy();
+    expect(
+      screen.queryByText("No other accounts to switch to yet."),
+    ).toBeNull();
+    expect(
+      screen.queryByText("Link another plan to switch accounts."),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /link/i })).toBeNull();
   });
 
   it.each([

@@ -29,7 +29,7 @@ import { useHostClient } from "@/lib/host";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import { cn } from "@/lib/utils";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
-import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
+import { TeamProviderWriteFeedback } from "./configuration-write-feedback";
 import {
   configurationWriteIssue,
   type ConfigurationWriteIssue,
@@ -44,8 +44,12 @@ import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { ConfigurationProfiles } from "./team-configuration-profiles";
 import { TeamPlans } from "./team-plans";
+import {
+  TeamProviderRecordsContext,
+  useTeamProviderRecordsRead,
+} from "./team-provider-records";
+import { TeamSyncedProviderProfiles } from "./team-synced-provider-profiles";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
-import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { EnvironmentProviderSkillsTab } from "./environment-skills";
 import {
   cloudProviderStanding,
@@ -54,6 +58,12 @@ import {
 } from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "@/components/settings/panels/provider-env-subtitle";
+import {
+  canManageTeamProviderAccounts,
+  useConfigurationSource,
+} from "./configuration-source";
+import { usePickedTeamLabel } from "./team-pick-label";
+import { TeamProviderApiKeySection } from "./team-provider-api-key-section";
 
 type RailClass = "configured" | "unconfigured" | "unknown";
 
@@ -67,8 +77,8 @@ interface ProviderRailRow {
 export function TeamProviders(): ReactNode {
   const query = useConfigurationProviderItemsQuery();
   const read = useBoundedRead(query);
-  const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
+  const records = useTeamProviderRecordsRead();
   const catalog = useProvidersListForClient(scope.client, {
     enabled: scope.client !== null,
     subscribed: true,
@@ -134,26 +144,27 @@ export function TeamProviders(): ReactNode {
     ]),
   ];
   return (
-    <TeamProvidersView
-      providerId={providerId}
-      os={os}
-      onOsChange={setOs}
-      issue={issue}
-      readPending={read.pending}
-      readFailed={read.failed}
-      onRetry={read.retry}
-      ready={query.data !== undefined}
-      rows={rows}
-      onSelect={selectProvider}
-      profiles={profiles}
-      adminNames={members.adminNames}
-      packIds={packIds}
-      packs={packs}
-      items={items}
-      writes={writes}
-      harness={harness}
-      onOutcome={(result) => setIssue(configurationWriteIssue(result))}
-    />
+    <TeamProviderRecordsContext.Provider value={records}>
+      <TeamProvidersView
+        providerId={providerId}
+        os={os}
+        onOsChange={setOs}
+        issue={issue}
+        readPending={read.pending}
+        readFailed={read.failed}
+        onRetry={read.retry}
+        ready={query.data !== undefined}
+        rows={rows}
+        onSelect={selectProvider}
+        profiles={profiles}
+        packIds={packIds}
+        packs={packs}
+        items={items}
+        writes={writes}
+        harness={harness}
+        onOutcome={(result) => setIssue(configurationWriteIssue(result))}
+      />
+    </TeamProviderRecordsContext.Provider>
   );
 }
 
@@ -169,7 +180,6 @@ function TeamProvidersView(props: {
   readonly rows: readonly ProviderRailRow[];
   readonly onSelect: (providerId: ProviderId) => void;
   readonly profiles: readonly ConfigurationItem[];
-  readonly adminNames: readonly string[];
   readonly packIds: readonly string[];
   readonly packs: readonly ConfigurationItem[];
   readonly items: readonly ConfigurationItem[];
@@ -191,7 +201,6 @@ function TeamProvidersView(props: {
     rows,
     onSelect,
     profiles,
-    adminNames,
     packIds,
     packs,
     items,
@@ -199,13 +208,14 @@ function TeamProvidersView(props: {
     harness,
     onOutcome,
   } = props;
+  const source = useConfigurationSource();
   return (
     <SettingsPanelShell
       title="Providers"
       description="Sign-ins, keys and tools for each coding agent."
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
-      <ConfigurationWriteFeedback issue={issue} />
+      <TeamProviderWriteFeedback issue={issue} />
       {readPending ? <MutedAgentSpinner /> : null}
       {readFailed ? (
         <ConfigurationReadFailed page="providers" onRetry={onRetry} />
@@ -257,12 +267,32 @@ function TeamProvidersView(props: {
                 ) : null}
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
-                <TeamPlans providerId={providerId} adminNames={adminNames} />
-                <ConfigurationProfiles
-                  providerLabel={providerDisplayName(providerId)}
-                  profiles={profiles}
-                  onOutcome={onOutcome}
-                />
+                <TeamPlans providerId={providerId} />
+                {source.kind === "pool" && source.configuration === "team" ? (
+                  <TeamSyncedProviderProfiles
+                    providerId={providerId}
+                    onOutcome={onOutcome}
+                    fallback={
+                      <ConfigurationProfiles
+                        providerLabel={providerDisplayName(providerId)}
+                        profiles={profiles}
+                        onOutcome={onOutcome}
+                      />
+                    }
+                  />
+                ) : (
+                  <ConfigurationProfiles
+                    providerLabel={providerDisplayName(providerId)}
+                    profiles={profiles}
+                    onOutcome={onOutcome}
+                  />
+                )}
+                {source.kind === "pool" && source.configuration === "team" ? (
+                  <TeamProviderKey
+                    providerId={providerId}
+                    environmentId={source.environmentId}
+                  />
+                ) : null}
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">
@@ -309,6 +339,23 @@ function TeamProvidersView(props: {
         </>
       ) : null}
     </SettingsPanelShell>
+  );
+}
+
+function TeamProviderKey(props: {
+  readonly providerId: ProviderId;
+  readonly environmentId: string;
+}): ReactNode {
+  const environmentName = usePickedTeamLabel(props.environmentId);
+  const source = useConfigurationSource();
+  const canManage = canManageTeamProviderAccounts(source);
+  return (
+    <TeamProviderApiKeySection
+      providerId={props.providerId}
+      environmentId={props.environmentId}
+      environmentName={environmentName}
+      canManage={canManage}
+    />
   );
 }
 

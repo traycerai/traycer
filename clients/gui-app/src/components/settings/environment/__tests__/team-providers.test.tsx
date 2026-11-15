@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import {
   registerDetailsProvider,
@@ -19,8 +19,11 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { providerState, reachableHost } from "./mcp-skills-test-support";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useLocalTeamAdmissionStore } from "@/stores/host/local-team-admission-store";
 import {
   mountTeamPage,
+  mountVerifiedTeamProvidersPage,
   personalPoolSource,
   poolSource,
   requireTeamHostClient,
@@ -41,6 +44,9 @@ import {
   handlers,
 } from "./team-providers-test-support";
 
+const apiKeyPageHost = vi.hoisted((): { hostId: string | null } => ({
+  hostId: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -59,6 +65,9 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null ? null : requireTeamHostClient(),
 }));
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => apiKeyPageHost.hostId,
+}));
 vi.mock("@/components/settings/secrets/secret-row", () => ({
   SecretRow: () => null,
 }));
@@ -69,8 +78,22 @@ vi.mock("@/lib/links/open-link", () => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
+  apiKeyPageHost.hostId = null;
+  useLocalTeamAdmissionStore.setState({ byHost: new Map() });
   useSettingsEnvironmentPickStore.setState({ pick: null });
   setSystemTabModalApi(null);
+  vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  vi.doUnmock("@/lib/host");
+  vi.doUnmock("@/lib/host/runtime");
+  vi.doUnmock("@/hooks/chats/use-cloud-chat-queries");
+  vi.doUnmock("@/hooks/host/use-host-client-for-host-id");
+  vi.doUnmock("@/hooks/host/use-addressable-host-id");
+  vi.doUnmock("@/components/settings/secrets/secret-row");
+  vi.doUnmock("@/lib/links/open-link");
 });
 
 describe("TeamProviders items", () => {
@@ -287,11 +310,15 @@ describe("TeamProviders items", () => {
   });
 
   it("orders Plans & limits as Plans, Profiles, then rate limits", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [cursorProfile("Cursor Work", 1)]),
       "environment.secrets.list": () => ({
         secrets: [cursorKey],
         removed: [],
+      }),
+      "providers.list": () => ({
+        providers: [cursorProviderListRow()],
+        native: null,
       }),
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
@@ -542,13 +569,18 @@ describe("TeamProviders items", () => {
     );
     const unregister = registerDetailsProvider("env_override", provider);
     try {
-      const harness = mountTeamPage(
-        poolSource("viewer"),
-        handlers(() => [
+      const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
+        ...handlers(() => [
           profile(true, 4),
           envOverride("https://old.example", 7),
         ]),
-      );
+        "providers.list": () => ({
+          providers: [
+            providerState("claude-code", { mcp: false, skills: false }),
+          ],
+          native: null,
+        }),
+      });
       render(<TeamProviders />, { wrapper: harness.Wrapper });
 
       expect(await screen.findByText("On")).toBeTruthy();

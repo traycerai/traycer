@@ -3,6 +3,7 @@ import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
+import { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
 import { releasedStreamMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-stream-method-names";
 import { POOL_HOST_ID } from "../host-directory";
@@ -57,10 +58,6 @@ const CONFIGURATION_POOL_ONLY = [
   "environment.members.seats",
   "environment.members.setRole",
   "environment.plans.list",
-  "environment.providers.list",
-  "environment.providers.removeProfile",
-  "environment.providers.renameProfile",
-  "environment.providers.signOutProfile",
   "environment.plans.unlink",
   "environment.plans.unlinkPreview",
   "environment.secrets.consent",
@@ -100,16 +97,51 @@ const EXPECTED_POOL_ONLY = [
   "organization.subscribe",
 ].sort();
 
+const EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS = [
+  "host.profileSync.apply",
+  "host.profileSync.fetchCredential",
+  "host.profileSync.offerCredential",
+  "providers.profileSync.acceptAccount",
+  "providers.profileSync.overview",
+  "providers.profileSync.setKeepInSync",
+  "providers.profileSync.syncNow",
+].sort();
+
 describe("host RPC routing table", () => {
-  it("routes every released unary and stream name and every registry key", () => {
+  it("does not route retired team provider profile calls", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(hostRpcRouteOf(method)).toBeNull();
+    }
+  });
+
+  it("routes every client method and leaves exactly the retained profile-sync methods unrouted", () => {
+    const protocolRetained = Object.keys(PROFILE_SYNC_LINK_RPC_METHODS).sort();
+    const clientUnary = Object.keys(hostRpcRegistry)
+      .filter((name) => !protocolRetained.includes(name))
+      .sort();
     const names = [
       ...releasedMethodNames,
       ...releasedStreamMethodNames,
-      ...Object.keys(hostRpcRegistry),
+      ...clientUnary,
       ...Object.keys(hostStreamRpcRegistry),
     ];
     const unrouted = names.filter((name) => hostRpcRouteOf(name) === null);
+    expect([...clientUnary, ...protocolRetained].sort()).toEqual(
+      Object.keys(hostRpcRegistry).sort(),
+    );
+    expect(protocolRetained).toEqual(
+      EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS,
+    );
+    expect(Object.keys(HOST_UNARY_RPC_ROUTES).sort()).toEqual(clientUnary);
     expect(unrouted).toEqual([]);
+    for (const method of protocolRetained) {
+      expect(hostRpcRouteOf(method)).toBeNull();
+    }
   });
 
   it("has no route for a name outside the registries", () => {

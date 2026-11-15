@@ -42,7 +42,7 @@ function demotionRows(
   return [
     {
       label: AGENTS_ON_PLAN_LABEL,
-      value: planUnlinkTurnsLineFor(teamName, preview.turnsOnPlan),
+      value: planUnlinkTurnsLineFor(preview.turnsOnPlan),
     },
     {
       label: WHAT_KEEPS_WORKING_LABEL,

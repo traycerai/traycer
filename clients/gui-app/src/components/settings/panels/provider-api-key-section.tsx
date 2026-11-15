@@ -1,5 +1,5 @@
 import { providerApiKeyRefusal } from "@traycer/protocol/host/provider-api-key-issuer";
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -9,6 +9,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
+import { takeProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
 import { useProvidersClearApiKey } from "@/hooks/providers/use-providers-clear-api-key-mutation";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
@@ -22,6 +23,8 @@ import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
   providerKeyIsPersonalSecret,
+  providerKeyEnvironmentName,
+  recordKeyCustodyLine,
   type ProviderKeyPrincipal,
 } from "@/lib/providers/provider-key-custody";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
@@ -110,9 +113,7 @@ function apiKeyRowRefusal(
   return null;
 }
 
-// API-key-authenticated providers (Cursor) render a key field in addition to
-// the binary picker. The raw key never leaves the host; `state.apiKey` only
-// reports whether one is configured and where it came from.
+// API-key-authenticated providers render a key field in addition to the binary picker.
 //
 // The draft is OWNED BY THE CALLER rather than held here. This section renders
 // inside the `account` tab, and Radix unmounts an inactive `TabsContent` - so
@@ -124,14 +125,25 @@ export function ProviderApiKeySection({
   state,
   draft,
   onDraftChange,
+  expectedEnvironmentId,
+  environmentName,
 }: {
   readonly state: ProviderCliState;
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
+  readonly expectedEnvironmentId: string | null;
+  readonly environmentName: string | null;
 }) {
   const inputId = useId();
-  const setApiKey = useProvidersSetApiKey();
-  const clearApiKey = useProvidersClearApiKey();
+  const sentApiKey = useRef<string | null>(null);
+  const setApiKey = useProvidersSetApiKey(
+    expectedEnvironmentId,
+    () => takeProviderApiKeyInput(sentApiKey),
+    () => {
+      sentApiKey.current = null;
+    },
+  );
+  const clearApiKey = useProvidersClearApiKey(expectedEnvironmentId);
   const openLink = useOpenLink();
   // A sandbox never takes a key: the field is disabled and the save is never
   // sent. Clearing a stored key sends nothing secret, so it stays.
@@ -156,11 +168,8 @@ export function ProviderApiKeySection({
     keyRefusal !== null;
   const onSave = (): void => {
     if (saveDisabled) return;
-    const trimmed = draft.trim();
-    setApiKey.mutate(
-      { providerId, apiKey: trimmed },
-      { onSuccess: () => onDraftChange("") },
-    );
+    sentApiKey.current = draft.trim();
+    setApiKey.mutate({ providerId }, { onSuccess: () => onDraftChange("") });
   };
 
   return (
@@ -250,6 +259,8 @@ export function ProviderApiKeySection({
         personalSecret={personalSecret}
         hostName={hostName}
         principal={principal}
+        recordEnvironmentId={state.apiKey.recordEnvironmentId ?? null}
+        environmentName={environmentName}
       />
     </div>
   );
@@ -262,9 +273,48 @@ function ApiKeySourceLines(props: {
   readonly personalSecret: boolean;
   readonly hostName: string;
   readonly principal: ProviderKeyPrincipal;
+  readonly recordEnvironmentId: string | null;
+  readonly environmentName: string | null;
 }): ReactNode {
   const { providerId, fromShell, personalSecret } = props;
   const envVar = envNamePlaceholder(providerId);
+  let custody: ReactNode;
+  if (props.recordEnvironmentId !== null) {
+    custody = (
+      <>
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {recordKeyCustodyLine(
+            providerId,
+            props.environmentName ??
+              providerKeyEnvironmentName(props.principal),
+          )}
+        </p>
+        {personalSecret ? (
+          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+        ) : null}
+      </>
+    );
+  } else if (personalSecret) {
+    custody = (
+      <>
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {SECRET_CUSTODY_SENTENCE}
+        </p>
+        <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+      </>
+    );
+  } else {
+    custody = (
+      <p className="text-ui-xs text-muted-foreground">
+        {deviceKeyCustodyLine(
+          props.hostName,
+          PROVIDER_DISPLAY_NAMES[providerId],
+          envVar,
+          hostRunsPersonal(props.principal),
+        )}
+      </p>
+    );
+  }
   return (
     <>
       {fromShell ? (
@@ -272,24 +322,7 @@ function ApiKeySourceLines(props: {
           {`Using ${envVar} from your shell. Save a key here to override it.`}
         </p>
       ) : null}
-      {personalSecret ? (
-        <>
-          <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-            {SECRET_CUSTODY_SENTENCE}
-          </p>
-          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
-        </>
-      ) : null}
-      {personalSecret ? null : (
-        <p className="text-ui-xs text-muted-foreground">
-          {deviceKeyCustodyLine(
-            props.hostName,
-            PROVIDER_DISPLAY_NAMES[providerId],
-            envVar,
-            hostRunsPersonal(props.principal),
-          )}
-        </p>
-      )}
+      {custody}
     </>
   );
 }

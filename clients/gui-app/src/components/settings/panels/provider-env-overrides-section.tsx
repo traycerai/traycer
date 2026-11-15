@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
@@ -111,7 +112,13 @@ export function ProviderEnvOverridesSection(props: {
   // A team is read from the cloud (`TeamProviders`): this tab is Personal on
   // a host running it, or a Local row's computer.
   const local = useEnvironmentPick().kind === "local";
-  const setOverride = useProvidersSetEnvOverride();
+  const submittedValue = useSubmittedSecretInput<string | null>(
+    "Provider variable input is unavailable.",
+  );
+  const setOverride = useProvidersSetEnvOverride(
+    submittedValue.read,
+    submittedValue.clear,
+  );
   const deleteOverride = useProvidersDeleteEnvOverride();
   // A provider's env overrides are where its keys live (`ANTHROPIC_API_KEY`,
   // a base URL's token), so a sandbox gets none: the editor is disabled and
@@ -134,9 +141,10 @@ export function ProviderEnvOverridesSection(props: {
       readonly key: string;
       readonly value: string;
     }) => {
+      submittedValue.set(entry.value);
       await setOverride.mutateAsync({
         providerId,
-        ...entry,
+        key: entry.key,
         executableWriteGrant: null,
       });
       await clearOwnValue.mutateAsync({
@@ -145,15 +153,14 @@ export function ProviderEnvOverridesSection(props: {
     },
   });
   const commitOverride = useMutation({
+    onSettled: submittedValue.clear,
     mutationFn: async (entry: {
       readonly oldKey: string;
       readonly newKey: string;
-      readonly value: string | null;
     }) => {
       await setOverride.mutateAsync({
         providerId,
         key: entry.newKey,
-        value: entry.value,
         executableWriteGrant: null,
       });
       if (entry.oldKey.length > 0 && entry.oldKey !== entry.newKey) {
@@ -223,7 +230,8 @@ export function ProviderEnvOverridesSection(props: {
     if (credentialRefusal !== null)
       return Promise.reject(new Error(credentialRefusal));
     const hostId = hostClient?.getActiveHostId() ?? null;
-    await commitOverride.mutateAsync({ oldKey, newKey, value });
+    submittedValue.set(value);
+    await commitOverride.mutateAsync({ oldKey, newKey });
     await rereadOverrides(hostId);
   };
   const onDelete = async (key: string): Promise<void> => {

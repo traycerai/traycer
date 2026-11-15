@@ -127,6 +127,8 @@ export type {
   VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 export type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,

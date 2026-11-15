@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
@@ -243,15 +244,10 @@ function ProviderProfileSignInDialog({
   );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const finalizeAttemptRef = useRef<string | null>(null);
-  // Set once naming is committed (a rename RPC succeeded, or none was needed
-  // because the label was left at its default) for a given profileId - marks
-  // the transition from the naming step into the ordinary finalize/recolor
-  // path below, so a later recolor failure/retry never re-shows naming. State
-  // (not a ref) because it feeds the naming-step derivation below, which runs
-  // during render.
-  const [namingCommittedFor, setNamingCommittedFor] = useState<string | null>(
-    null,
-  );
+  // Keep the committed name through recolor completion and retry, which still
+  // receive the profile snapshot from before naming.
+  const [namingCommittedProfile, setNamingCommittedProfile] =
+    useState<ProviderProfile | null>(null);
   const startLogin = useProvidersStartLoginForClient(client);
   const awaitLogin = useProvidersDestinationAwaitLoginForClient(
     {
@@ -261,7 +257,14 @@ function ProviderProfileSignInDialog({
     target !== null,
   );
   const cancelLogin = useProvidersCancelLoginForClient(client);
-  const submitLoginCode = useProvidersSubmitLoginCodeForClient(client);
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Provider login code input is unavailable.",
+  );
+  const submitLoginCode = useProvidersSubmitLoginCodeForClient(
+    client,
+    submittedLoginCode.read,
+    submittedLoginCode.clear,
+  );
   const touchLogin = useProvidersTouchLoginForClient(client);
   const ensurePack = useProvidersEnsurePackForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
@@ -285,6 +288,7 @@ function ProviderProfileSignInDialog({
       awaitLogin,
       cancelLogin,
       submitLoginCode,
+      setSubmittedLoginCode: submittedLoginCode.set,
       touchLogin,
       ensurePack,
       failureMessages: {
@@ -318,9 +322,12 @@ function ProviderProfileSignInDialog({
   // the split-by-organization case now possible now that same-email,
   // different-org sign-ins mint distinct profiles instead of deduping. Holds
   // the dialog open on the resolved identity so the user can tell the two
-  // apart before the default label sticks. Cleared once `namingCommittedFor`
-  // is set (see `commitNaming`), so a later recolor retry never re-shows it.
-  const naming = resolveNamingStep(flow.state, namingCommittedFor);
+  // apart before the default label sticks. Once naming is committed, a later
+  // recolor retry never re-shows it.
+  const naming = resolveNamingStep(
+    flow.state,
+    namingCommittedProfile?.profileId ?? null,
+  );
 
   const complete = (profile: ProviderProfile): void => {
     onFailedAttempt(null);
@@ -347,7 +354,7 @@ function ProviderProfileSignInDialog({
   const commitNaming = (profile: ProviderProfile): void => {
     if (trimmedLabel.length === 0) return;
     if (trimmedLabel === profile.label) {
-      setNamingCommittedFor(profile.profileId);
+      setNamingCommittedProfile(profile);
       // Claim the attempt before finalizing directly - otherwise the render
       // this triggers flips `naming` to null, and the effect below (which
       // has no dependency array) sees an unclaimed `finalizeAttemptRef` and
@@ -363,10 +370,14 @@ function ProviderProfileSignInDialog({
         label: trimmedLabel,
       },
       {
-        onSuccess: () => {
-          setNamingCommittedFor(profile.profileId);
+        onSuccess: (result) => {
+          const renamedProfile = {
+            ...profile,
+            label: typeof result === "string" ? result : trimmedLabel,
+          };
+          setNamingCommittedProfile(renamedProfile);
           finalizeAttemptRef.current = profile.profileId;
-          finalizeProfile(profile);
+          finalizeProfile(renamedProfile);
         },
       },
     );
@@ -415,7 +426,11 @@ function ProviderProfileSignInDialog({
 
   const retryFinalize = (): void => {
     if (flow.state.kind !== "identity") return;
-    finalizeProfile(flow.state.profile);
+    const profile =
+      namingCommittedProfile?.profileId === flow.state.profileId
+        ? namingCommittedProfile
+        : flow.state.profile;
+    finalizeProfile(profile);
   };
 
   const duplicateProfile =
@@ -651,6 +666,8 @@ function dialogShowsCloseButton(
     flowState.kind === "start" ||
     flowState.kind === "already-signed-in" ||
     flowState.kind === "waiting-for-profile" ||
+    (flowState.kind === "target-outcome" &&
+      flowState.profileOutcome?.kind === "waiting-for-profile") ||
     flowState.kind === "list-unread"
   );
 }

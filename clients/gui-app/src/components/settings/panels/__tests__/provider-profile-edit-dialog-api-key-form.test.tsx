@@ -2,10 +2,18 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isRecord } from "@/lib/editor/prosemirror-json";
+import type { HostRpcRegistry } from "@/lib/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
+
+type ProfileApiKeyVariables = Omit<
+  RequestOfMethod<HostRpcRegistry, "providers.setProfileApiKey">,
+  "apiKey"
+>;
 
 // Same rationale as the sibling panel suites: the dialog pulls in
 // mutation/host hooks unconditionally, so those are stubbed to keep this test
@@ -54,8 +62,8 @@ vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
     error: null,
   }),
 }));
-vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => ({
-  useRecolorProviderProfile: () => ({
+vi.mock("@/hooks/providers/use-account-profile-recolor", () => ({
+  useAccountProfileRecolorForClient: () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
@@ -74,7 +82,15 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
 // it, and only the second keeps `useQueryClient` off surfaces that have no
 // `QueryClientProvider`.
 const apiKeyMutation = vi.hoisted(() => ({
-  set: { mutate: vi.fn(), reset: vi.fn(), isPending: false, used: vi.fn() },
+  set: {
+    mutate: vi.fn<(variables: ProfileApiKeyVariables) => void>(),
+    reset: vi.fn(),
+    isPending: false,
+    used: vi.fn(),
+    readApiKey: null as (() => string) | null,
+    clearApiKeyInput: null as (() => void) | null,
+    outgoingRequestMatches: false,
+  },
   clear: { mutate: vi.fn(), reset: vi.fn(), isPending: false, used: vi.fn() },
   // The MUTATION-level success callback each hook is handed. The draft clear
   // lives here, not in a `mutate(vars, { onSuccess })` bag, so that it still
@@ -86,8 +102,14 @@ const apiKeyMutation = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/providers/use-set-provider-profile-api-key-mutation", () => ({
-  useSetProviderProfileApiKey: (onSuccess: (() => void) | undefined) => {
+  useSetProviderProfileApiKey: (
+    readApiKey: () => string,
+    clearApiKeyInput: () => void,
+    onSuccess: (() => void) | undefined,
+  ) => {
     apiKeyMutation.set.used();
+    apiKeyMutation.set.readApiKey = readApiKey;
+    apiKeyMutation.set.clearApiKeyInput = clearApiKeyInput;
     apiKeyMutation.onSuccess.set = onSuccess ?? null;
     return {
       mutate: apiKeyMutation.set.mutate,
@@ -225,8 +247,37 @@ function keyField(): HTMLInputElement | null {
   return screen.queryByLabelText<HTMLInputElement>("API key");
 }
 
+function profileApiKeyVariablesMatch(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  return (
+    keys.length === 2 &&
+    keys[0] === "profileId" &&
+    keys[1] === "providerId" &&
+    value.providerId === PROVIDER_ID &&
+    value.profileId === PROFILE_ID
+  );
+}
+
+function profileApiKeyRequestMatches(value: unknown, apiKey: string): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  return (
+    keys.length === 3 &&
+    keys[0] === "apiKey" &&
+    keys[1] === "profileId" &&
+    keys[2] === "providerId" &&
+    value.providerId === PROVIDER_ID &&
+    value.profileId === PROFILE_ID &&
+    value.apiKey === apiKey
+  );
+}
+
 beforeEach(() => {
   apiKeyMutation.set.isPending = false;
+  apiKeyMutation.set.readApiKey = null;
+  apiKeyMutation.set.clearApiKeyInput = null;
+  apiKeyMutation.set.outgoingRequestMatches = false;
   apiKeyMutation.clear.isPending = false;
   // `vi.clearAllMocks()` in `afterEach` clears CALLS, not implementations, so
   // a test that makes a mutate invoke its `onSuccess` would leak that into
@@ -394,17 +445,34 @@ describe("<ProfileEditDialog /> API-key submission", () => {
     if (field === null) return;
 
     fireEvent.change(field, { target: { value: "   sk-live-abc   " } });
+    apiKeyMutation.set.mutate.mockImplementation((variables) => {
+      const readApiKey = apiKeyMutation.set.readApiKey;
+      if (readApiKey === null)
+        throw new Error("Profile key input is unavailable.");
+      const outgoingRequest = { ...variables, apiKey: readApiKey() };
+      apiKeyMutation.set.outgoingRequestMatches = profileApiKeyRequestMatches(
+        outgoingRequest,
+        "sk-live-abc",
+      );
+      apiKeyMutation.onSuccess.set?.();
+      apiKeyMutation.set.clearApiKeyInput?.();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Add key" }));
 
     expect(apiKeyMutation.set.mutate).toHaveBeenCalledTimes(1);
-    // Asserted through the matcher rather than by destructuring
-    // `mock.calls[0]`, which is an `any[]` and defeats the type-aware lint.
-    // ONE argument: the success work moved to the hook's own options, so there
-    // is no per-`mutate` bag left to match loosely.
-    expect(apiKeyMutation.set.mutate).toHaveBeenCalledWith({
-      providerId: PROVIDER_ID,
-      profileId: PROFILE_ID,
-      apiKey: "sk-live-abc",
+    expect({
+      mutationVariablesMatch: profileApiKeyVariablesMatch(
+        apiKeyMutation.set.mutate.mock.calls.at(0)?.[0],
+      ),
+      mutationHasOneArgument:
+        apiKeyMutation.set.mutate.mock.calls.at(0)?.length === 1,
+      outgoingRequestMatches: apiKeyMutation.set.outgoingRequestMatches,
+      draftClearedByMutationSuccess: keyField()?.value === "",
+    }).toEqual({
+      mutationVariablesMatch: true,
+      mutationHasOneArgument: true,
+      outgoingRequestMatches: true,
+      draftClearedByMutationSuccess: true,
     });
   });
 

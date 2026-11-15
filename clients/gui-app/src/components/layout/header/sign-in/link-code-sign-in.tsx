@@ -5,6 +5,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuthLinkLoginProgress } from "@/hooks/auth/use-auth-link-login-progress";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useLinkCodeSignInMutation } from "@/hooks/auth/use-link-code-sign-in-mutation";
 import type { LinkLoginSignInResult } from "@/lib/auth/auth-service";
 import { useAuthService } from "@/lib/host";
@@ -127,7 +128,13 @@ export function LinkCodeSignIn(props: {
   readonly presentation: "cta" | "link";
 }) {
   const runnerHost = useRunnerHostOrNull();
-  const redeem = useLinkCodeSignInMutation();
+  const submittedCode = useSubmittedSecretInput<string>(
+    "Link code input is unavailable.",
+  );
+  const redeem = useLinkCodeSignInMutation(
+    submittedCode.read,
+    submittedCode.clear,
+  );
   const [open, setOpen] = useState(false);
   const [entry, setEntry] = useState("");
   const [notice, setNotice] = useState<EntryNotice>(null);
@@ -146,7 +153,8 @@ export function LinkCodeSignIn(props: {
     }
     setNotice(null);
     clearDeepLinkNotice();
-    redeem.mutate(code, {
+    submittedCode.set(code);
+    redeem.mutate(undefined, {
       onSuccess: (result) => {
         const outcome = noticeForResult(result);
         if (outcome !== null) {

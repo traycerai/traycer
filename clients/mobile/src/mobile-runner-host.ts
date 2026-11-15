@@ -193,6 +193,9 @@ import {
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import {
   decideSecretRequestViaHttp,
+  replaceEnvironmentApiKeyViaHttp,
+  type EnvironmentApiKeyReplaceRequest,
+  type EnvironmentApiKeyReplaceResult,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
@@ -1061,6 +1064,17 @@ export class MobileRunnerHost implements IRunnerHost {
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult> {
     return fetchTeamEnvironmentViaHttp(this.authnBaseUrl, bearerToken, teamId);
+  }
+
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult> {
+    return replaceEnvironmentApiKeyViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      request,
+    );
   }
 
   getEnvironmentProviders(

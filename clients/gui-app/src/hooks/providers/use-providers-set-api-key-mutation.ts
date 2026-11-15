@@ -1,24 +1,33 @@
 import type { UseMutationResult } from "@tanstack/react-query";
-import type {
-  HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRpcRegistry } from "@/lib/host";
-import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderApiKeyChangeResponse } from "@traycer-clients/shared/host-client/provider-api-key-change";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import { useProviderApiKeyChangeMutation } from "@/hooks/providers/use-provider-api-key-change-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
-export function useProvidersSetApiKey(): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.setApiKey">,
+interface SetProviderApiKeyVariables {
+  readonly providerId: ProviderId;
+}
+
+export function useProvidersSetApiKey(
+  expectedEnvironmentId: string | null,
+  readApiKey: () => string,
+  clearApiKeyInput: () => void,
+): UseMutationResult<
+  ProviderApiKeyChangeResponse,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.setApiKey">,
+  SetProviderApiKeyVariables,
   { readonly hostId: string | null }
 > {
-  return useHostScopedMutation({
+  return useProviderApiKeyChangeMutation<SetProviderApiKeyVariables>({
+    expectedEnvironmentId,
     method: "providers.setApiKey",
     mutationKey: providersMutationKeys.setApiKey(),
     errorMessage: "Couldn't save the API key.",
-    invalidateMethods: PROVIDER_INVALIDATIONS,
+    changeOf: ({ providerId }) => ({
+      providerId,
+      change: { action: "set", apiKey: readApiKey() },
+    }),
+    clearInput: clearApiKeyInput,
   });
 }

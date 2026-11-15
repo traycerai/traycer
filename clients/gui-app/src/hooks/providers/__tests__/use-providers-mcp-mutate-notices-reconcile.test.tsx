@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -9,6 +9,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import type {
   ProviderMcpNotice,
   ProviderMcpServer,
+  ProviderMcpServerTransportWrite,
 } from "@traycer/protocol/host/provider-native-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -16,6 +17,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import type { McpListData } from "@/hooks/providers/native-response-map";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
 
 vi.mock("@/lib/host", async () => {
@@ -50,12 +52,264 @@ function staleRow(name: string): ProviderMcpServer {
   };
 }
 
+const FAKE_MCP_SECRET = "synthetic-mcp-secret";
+
+interface MutationObserverReference {
+  readonly options: unknown;
+}
+
+const consoleSpyRestorers: Array<() => void> = [];
+
+function captureConsoleOutput(): unknown[][] {
+  const output: unknown[][] = [];
+  const debug = vi.spyOn(console, "debug").mockImplementation((...values) => {
+    output.push(values);
+  });
+  const info = vi.spyOn(console, "info").mockImplementation((...values) => {
+    output.push(values);
+  });
+  const log = vi.spyOn(console, "log").mockImplementation((...values) => {
+    output.push(values);
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation((...values) => {
+    output.push(values);
+  });
+  const error = vi.spyOn(console, "error").mockImplementation((...values) => {
+    output.push(values);
+  });
+  consoleSpyRestorers.push(
+    () => debug.mockRestore(),
+    () => info.mockRestore(),
+    () => log.mockRestore(),
+    () => warn.mockRestore(),
+    () => error.mockRestore(),
+  );
+  return output;
+}
+
+function containsFakeMcpSecret(value: unknown): boolean {
+  const seen = new WeakSet<object>();
+  function contains(current: unknown): boolean {
+    if (typeof current === "string") {
+      return current.includes(FAKE_MCP_SECRET);
+    }
+    if (
+      (typeof current !== "object" && typeof current !== "function") ||
+      current === null
+    ) {
+      return false;
+    }
+    if (seen.has(current)) return false;
+    seen.add(current);
+    if (
+      current instanceof Error &&
+      (current.message.includes(FAKE_MCP_SECRET) || contains(current.cause))
+    ) {
+      return true;
+    }
+    return Object.values(current).some(contains);
+  }
+  return contains(value);
+}
+
+function mutationStateContainsFakeMcpSecret(
+  queryClient: QueryClient,
+  observers: readonly MutationObserverReference[],
+): boolean {
+  return (
+    queryClient
+      .getMutationCache()
+      .getAll()
+      .some((mutation) =>
+        containsFakeMcpSecret({
+          variables: mutation.state.variables,
+          context: mutation.state.context,
+          data: mutation.state.data,
+          error: mutation.state.error,
+          meta: mutation.options.meta,
+        }),
+      ) || observers.some((observer) => containsFakeMcpSecret(observer.options))
+  );
+}
+
+const mutationCacheUnsubscribers: Array<() => void> = [];
+
+function captureMutationObservers(
+  queryClient: QueryClient,
+): MutationObserverReference[] {
+  const observers: MutationObserverReference[] = [];
+  const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+    if (event.type === "observerAdded") observers.push(event.observer);
+  });
+  mutationCacheUnsubscribers.push(unsubscribe);
+  return observers;
+}
+
 afterEach(() => {
   cleanup();
   mockClientHolder.client = null;
+  for (const unsubscribe of mutationCacheUnsubscribers.splice(0)) unsubscribe();
+  for (const restore of consoleSpyRestorers.splice(0)) restore();
 });
 
 describe("useProvidersMcpMutate notice reconciliation", () => {
+  it.each([
+    { settles: "successfully" as const, fail: false },
+    { settles: "with an error" as const, fail: true },
+  ])(
+    "sends the credential at dispatch and retains no credential after it settles $settles",
+    async ({ fail }) => {
+      const consoleOutput = captureConsoleOutput();
+      const observations = {
+        outgoingRequestContainsSecret: false,
+        rejectionContainsSecret: false,
+      };
+      const queryClient = createAppQueryClient();
+      const observers = captureMutationObservers(queryClient);
+      const messenger = new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-secret-retention",
+        handlers: {
+          "providers.nativeMutate": (params) => {
+            observations.outgoingRequestContainsSecret =
+              containsFakeMcpSecret(params);
+            if (fail) throw new Error("Safe MCP failure");
+            return {
+              result: { ok: true, kind: "mcp", servers: [], notices: [] },
+            };
+          },
+        },
+      });
+      const client = new HostClient<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        invalidator: createHostQueryInvalidator(queryClient),
+        findHostById: (hostId) =>
+          hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+        messenger,
+      });
+      client.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "tok-retention",
+        }),
+      );
+      mockClientHolder.client = client.createRequester(mockLocalHostEntry);
+      function Wrapper(props: { readonly children: ReactNode }): ReactNode {
+        return (
+          <QueryClientProvider client={queryClient}>
+            {props.children}
+          </QueryClientProvider>
+        );
+      }
+      const transport: ProviderMcpServerTransportWrite = {
+        type: "http",
+        url: "https://example.com/mcp",
+        auth: {
+          type: "header",
+          name: "Authorization",
+          value: FAKE_MCP_SECRET,
+          additionalHeaders: [],
+        },
+      };
+      const rendered = renderHook(
+        () => {
+          const submittedTransport =
+            useSubmittedSecretInput<ProviderMcpServerTransportWrite>(
+              "MCP transport input is unavailable.",
+            );
+          return {
+            mutation: useProvidersMcpMutate(
+              submittedTransport.read,
+              submittedTransport.clear,
+            ),
+            submittedTransport,
+          };
+        },
+        { wrapper: Wrapper },
+      );
+      await act(async () => {
+        rendered.result.current.submittedTransport.set(transport);
+        try {
+          await rendered.result.current.mutation.mutateAsync({
+            providerId: "codex",
+            scope: "global",
+            workspaceRoot: null,
+            mutation: { action: "add", name: "docs" },
+            suppressToast: true,
+          });
+        } catch (error) {
+          observations.rejectionContainsSecret = containsFakeMcpSecret(error);
+        }
+      });
+      await waitFor(() =>
+        expect(rendered.result.current.mutation.status).toBe(
+          fail ? "error" : "success",
+        ),
+      );
+      const retainedMutation = queryClient.getMutationCache().getAll().at(-1);
+      if (retainedMutation === undefined) {
+        throw new Error("MCP mutation was not retained");
+      }
+      const mutationFn = retainedMutation.options.mutationFn;
+      if (mutationFn === undefined) {
+        throw new Error("MCP mutation has no mutation function");
+      }
+      const outgoingCallCount = messenger.calls.filter(
+        (call) => call.method === "providers.nativeMutate",
+      ).length;
+      let replayRefused = false;
+      let replayErrorContainsSecret = false;
+      try {
+        await mutationFn(
+          {
+            providerId: "codex",
+            scope: "global",
+            workspaceRoot: null,
+            mutation: { action: "add", name: "docs" },
+            suppressToast: true,
+          },
+          {
+            client: queryClient,
+            meta: retainedMutation.options.meta,
+            mutationKey: retainedMutation.options.mutationKey ?? [],
+          },
+        );
+      } catch (error) {
+        replayRefused =
+          error instanceof Error &&
+          error.message === "MCP transport input is unavailable.";
+        replayErrorContainsSecret = containsFakeMcpSecret(error);
+      }
+      expect(
+        observations.outgoingRequestContainsSecret &&
+          !mutationStateContainsFakeMcpSecret(queryClient, observers) &&
+          !containsFakeMcpSecret(rendered.result.current) &&
+          !containsFakeMcpSecret(consoleOutput) &&
+          !observations.rejectionContainsSecret &&
+          replayRefused &&
+          !replayErrorContainsSecret &&
+          messenger.calls.filter(
+            (call) => call.method === "providers.nativeMutate",
+          ).length === outgoingCallCount &&
+          (fail ? retainedMutation.state.status === "error" : true),
+      ).toBe(true);
+      rendered.unmount();
+      expect({
+        mutationCacheSecretFree: !mutationStateContainsFakeMcpSecret(
+          queryClient,
+          observers,
+        ),
+        hookResultSecretFree: !containsFakeMcpSecret(rendered.result.current),
+        logsSecretFree: !containsFakeMcpSecret(consoleOutput),
+      }).toEqual({
+        mutationCacheSecretFree: true,
+        hookResultSecretFree: true,
+        logsSecretFree: true,
+      });
+      client.dispose();
+    },
+  );
+
   it("invalidates after a concurrent list changed only notices", async () => {
     const server: ProviderMcpServer = {
       name: "docs",
@@ -138,7 +392,7 @@ describe("useProvidersMcpMutate notice reconciliation", () => {
         </QueryClientProvider>
       );
     }
-    const rendered = renderHook(() => useProvidersMcpMutate(), {
+    const rendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: Wrapper,
     });
     let write: Promise<unknown> = Promise.resolve();
@@ -240,7 +494,7 @@ describe("useProvidersMcpMutate notice reconciliation", () => {
         </QueryClientProvider>
       );
     }
-    const rendered = renderHook(() => useProvidersMcpMutate(), {
+    const rendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: Wrapper,
     });
     await act(async () => {
@@ -333,7 +587,7 @@ describe("useProvidersMcpMutate notice reconciliation", () => {
         </QueryClientProvider>
       );
     }
-    const rendered = renderHook(() => useProvidersMcpMutate(), {
+    const rendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: Wrapper,
     });
     await act(async () => {
@@ -423,7 +677,7 @@ describe("useProvidersMcpMutate notice reconciliation", () => {
             enabled: true,
             pollWhilePending: false,
           }),
-          mutation: useProvidersMcpMutate(),
+          mutation: useProvidersMcpMutate(null, null),
         }),
         { wrapper: Wrapper },
       );

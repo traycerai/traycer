@@ -43,6 +43,7 @@ import {
 import { voiceLiveWindows } from "../windows/voice-live-windows";
 import {
   decideSecretRequestViaHttp,
+  replaceEnvironmentApiKeyViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
@@ -496,6 +497,37 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bridge.options.authnBaseUrl,
         bearerToken,
         parseRequiredId(teamId, "getTeamEnvironment.teamId"),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.replaceEnvironmentApiKey,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      // Never throw validation details for a value that may contain a key.
+      if (
+        typeof bearerToken !== "string" ||
+        typeof request !== "object" ||
+        request === null ||
+        !("environmentId" in request) ||
+        typeof request.environmentId !== "string" ||
+        !("profileId" in request) ||
+        typeof request.profileId !== "string" ||
+        !("harnessId" in request) ||
+        typeof request.harnessId !== "string" ||
+        !("key" in request) ||
+        typeof request.key !== "string"
+      )
+        return { kind: "failed" };
+      return replaceEnvironmentApiKeyViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        {
+          environmentId: request.environmentId,
+          profileId: request.profileId,
+          harnessId: request.harnessId,
+          key: request.key,
+        },
       );
     },
   );

@@ -61,9 +61,9 @@ type CancelLoginResponse = ResponseOfMethod<
   "providers.cancelLogin"
 >;
 type AwaitLoginResponse = AwaitLoginTestAnswer;
-type SubmitLoginCodeRequest = RequestOfMethod<
-  HostRpcRegistry,
-  "providers.submitLoginCode"
+type SubmitLoginCodeRequest = Omit<
+  RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
+  "code"
 >;
 type SubmitLoginCodeResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -227,6 +227,7 @@ function LoginFlowHarness(props: {
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: () => undefined,
     touchLogin,
     ensurePack,
     failureMessages: { notStarted: NOT_STARTED, notFinished: NOT_FINISHED },

@@ -146,6 +146,8 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getEnvironmentProviders: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    replaceEnvironmentApiKey: () =>
+      Promise.resolve({ kind: "failed" as const }),
     decideSecretRequest: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     mintExecutableWriteGrant: () =>

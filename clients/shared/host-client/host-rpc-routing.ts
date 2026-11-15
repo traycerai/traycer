@@ -2,6 +2,7 @@ import type {
   HostRpcRegistry,
   HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
+import type { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import {
   isPoolHostDirectoryEntry,
@@ -67,9 +68,8 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * time - reachability, a refusal, an outage - ever moves a call between the
  * pool and a host.
  *
- * Exhaustive by type (`satisfies` over both registries rejects a missing and an
- * unknown name) and by test (`__tests__/host-rpc-routing.test.ts` walks the
- * released floor fixture and both registries).
+ * Exhaustive over client-routable names by type and test. Legacy profile-sync
+ * methods remain on the wire for released peers, with no client route.
  */
 export type HostRpcRoute =
   | "target-host"
@@ -80,9 +80,13 @@ export type HostRpcRoute =
   | "target-host-live-pool-at-rest";
 
 export type HostUnaryRpcMethod = keyof HostRpcRegistry & string;
+export type ClientHostUnaryRpcMethod = Exclude<
+  HostUnaryRpcMethod,
+  keyof typeof PROFILE_SYNC_LINK_RPC_METHODS
+>;
 export type HostStreamRpcMethod = keyof HostStreamRpcRegistry & string;
 
-/** The route of `method`, unary or stream; `null` for a name neither knows. */
+/** The client route of `method`, unary or stream; `null` when none is declared. */
 export function hostRpcRouteOf(method: string): HostRpcRoute | null {
   return ROUTE_BY_METHOD.get(method) ?? null;
 }
@@ -511,10 +515,6 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.plans.unlink": "pool-only",
   "environment.plans.unlinkPreview": "pool-only",
   "environment.previewLocalFacts": "target-host",
-  "environment.providers.list": "pool-only",
-  "environment.providers.removeProfile": "pool-only",
-  "environment.providers.renameProfile": "pool-only",
-  "environment.providers.signOutProfile": "pool-only",
   "environment.reachDiagnostics": "target-host",
   "environment.review": "target-host",
   "environment.review.heldApply": "target-host",
@@ -666,9 +666,6 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.portForward.acquireLease": "target-host",
   "host.portForward.leaseEnded": "target-host",
   "host.portForward.releaseLease": "target-host",
-  "host.profileSync.apply": "target-host",
-  "host.profileSync.fetchCredential": "target-host",
-  "host.profileSync.offerCredential": "target-host",
   "host.rebindLocalStore": "target-host",
   "host.remoteAccess.set": "target-host",
   "host.resolveRepoPaths": "target-host",
@@ -740,10 +737,6 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.modelProviderAuth": "target-host",
   "providers.nativeMutate": "target-host",
   "providers.previewProfileMove": "target-host",
-  "providers.profileSync.acceptAccount": "target-host",
-  "providers.profileSync.overview": "target-host",
-  "providers.profileSync.setKeepInSync": "target-host",
-  "providers.profileSync.syncNow": "target-host",
   "providers.readModelRoutes": "target-host",
   "providers.refreshPackDiscovery": "target-host",
   "providers.refreshProfileStatus": "target-host",
@@ -837,7 +830,9 @@ export const HOST_UNARY_RPC_ROUTES = {
   "worktree.setEntryMode": "target-host",
   "worktree.setRepoBranchPrefix": "target-host",
   "worktree.setRepoScripts": "target-host",
-} as const satisfies { readonly [Method in HostUnaryRpcMethod]: HostRpcRoute };
+} as const satisfies {
+  readonly [Method in ClientHostUnaryRpcMethod]: HostRpcRoute;
+};
 
 export const HOST_STREAM_RPC_ROUTES = {
   "agent.activity.subscribe": "target-host",

@@ -264,6 +264,8 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     getEnvironmentProviders: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    replaceEnvironmentApiKey: () =>
+      Promise.resolve({ kind: "failed" as const }),
     decideSecretRequest: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     mintExecutableWriteGrant: () =>

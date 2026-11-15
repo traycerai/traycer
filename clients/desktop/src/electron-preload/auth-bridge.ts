@@ -35,6 +35,8 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxPatchRequest,
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -251,6 +253,10 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult>;
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult>;
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -536,6 +542,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         teamId,
       ) as Promise<TeamEnvironmentFetchResult>,
+
+    replaceEnvironmentApiKey: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.replaceEnvironmentApiKey,
+        bearerToken,
+        request,
+      ) as Promise<EnvironmentApiKeyReplaceResult>,
 
     getEnvironmentProviders: (bearerToken, environmentId) =>
       ipcRenderer.invoke(
