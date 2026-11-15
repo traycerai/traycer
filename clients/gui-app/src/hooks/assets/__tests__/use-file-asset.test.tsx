@@ -60,11 +60,16 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => tabHostIdRef.value,
 }));
 
-vi.mock("@/lib/host", () => ({
-  useHostDirectory: () => ({
+const mockHostBinding = vi.hoisted(() => ({
+  directory: {
     onChange: () => ({ dispose() {} }),
     findById: () => null,
-  }),
+  },
+}));
+
+vi.mock("@/lib/host", () => ({
+  useHostDirectory: () => mockHostBinding.directory,
+  useHostBinding: () => mockHostBinding,
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
