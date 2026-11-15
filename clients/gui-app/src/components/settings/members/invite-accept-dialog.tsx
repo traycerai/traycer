@@ -17,7 +17,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useEnvironmentInvitationAcceptMutation } from "@/hooks/environment/use-environment-invitations";
-import { useHostClient } from "@/lib/host";
 
 /**
  * The Environment dropdown's `Review` on an invited team: the grant, the
@@ -29,7 +28,7 @@ export function InviteAcceptDialog(props: {
   readonly onClose: () => void;
   readonly onAccepted: (environmentId: string) => void;
 }): ReactNode {
-  const accept = useEnvironmentInvitationAcceptMutation(useHostClient());
+  const accept = useEnvironmentInvitationAcceptMutation();
   const [gone, setGone] = useState(false);
   const invitation = props.invitation;
   // An invitation to the retired view-only role cannot be accepted as

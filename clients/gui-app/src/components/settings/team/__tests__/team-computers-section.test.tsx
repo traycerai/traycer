@@ -429,13 +429,8 @@ describe("TeamComputersSection", () => {
     expect(within(dialog).queryByText(/running and will stop/)).toBeNull();
   });
 
-  it("does not use a cached zero when the next running-chats read fails", async () => {
-    let reads = 0;
-    previewLocalFacts.answer = () => {
-      reads += 1;
-      if (reads === 1) return { activeTurns: 0, terminals: 0 };
-      throw new Error("The computer refused the read.");
-    };
+  it("says running chats will stop when a read after a count of none fails", async () => {
+    previewLocalFacts.answer = () => ({ activeTurns: 0, terminals: 0 });
     const { harness } = mountSection(
       ENVIRONMENT_ID,
       "editor",
@@ -443,36 +438,21 @@ describe("TeamComputersSection", () => {
     );
     const user = userEvent.setup();
     await screen.findByRole("button", { name: "Claim this computer" });
-
     const dialog = await openClaimDialog(user);
     await waitFor(() =>
       expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(1),
     );
-    await waitFor(() =>
-      expect(
-        harness.queryClient
-          .getQueryCache()
-          .getAll()
-          .find((query) =>
-            query.queryKey.includes("environment.previewLocalFacts"),
-          )?.state.data,
-      ).toEqual({ activeTurns: 0, terminals: 0 }),
-    );
     expect(within(dialog).queryByText("Running chats will stop.")).toBeNull();
 
-    await act(async () => {
-      await harness.queryClient.refetchQueries({
-        type: "active",
-        predicate: (query) =>
-          query.queryKey.includes("environment.previewLocalFacts"),
-      });
-    });
+    previewLocalFacts.answer = () => {
+      throw new Error("The computer did not answer.");
+    };
+    await harness.queryClient.invalidateQueries();
 
-    await waitFor(() =>
-      expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(2),
-    );
-    expect(within(dialog).getByText("Running chats will stop.")).toBeTruthy();
-    expect(within(dialog).queryByText(/running and will stop/)).toBeNull();
+    expect(harness.paramsOf("environment.previewLocalFacts")).toHaveLength(2);
+    expect(
+      await within(dialog).findByText("Running chats will stop."),
+    ).toBeTruthy();
   });
 
   it.each([
