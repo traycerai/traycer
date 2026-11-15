@@ -170,6 +170,7 @@ function createStreamHarness(): {
     onStatusChange: (handler) => {
       onStatus = handler;
     },
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => undefined,
     getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),

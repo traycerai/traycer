@@ -59,6 +59,9 @@ function createScreencastClientHarness(id: string): {
       handler(status, null, null, null);
     },
     getNegotiatedSchemaVersion: () => null,
+    hasSentOpenRequest(): boolean {
+      return false;
+    },
     requestReconnect() {},
     close() {},
   };

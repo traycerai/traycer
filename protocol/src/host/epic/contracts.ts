@@ -180,6 +180,8 @@ import {
   listTaskHostsResponseSchema,
 } from "@traycer/protocol/host/task-host-summary";
 import {
+  getChatTitleRequestSchema,
+  getChatTitleResponseSchema,
   listCloudChatPayloadsRequestSchema,
   listCloudChatPayloadsResponseSchema,
   listCloudChatsRequestSchema,
@@ -1825,6 +1827,16 @@ export const epicResolveCloudChatHeadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveCloudChatHeadRequestSchema,
   responseSchema: resolveCloudChatHeadResponseSchema,
+});
+
+// The title a reference to a chat is drawn with, read by task and chat id.
+// Its own optional method: a peer without it answers `E_HOST_UNSUPPORTED` and
+// the reference keeps the text it was written with.
+export const epicGetChatTitleV10 = defineRpcContract({
+  method: "epic.getChatTitle",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: getChatTitleRequestSchema,
+  responseSchema: getChatTitleResponseSchema,
 });
 
 export const epicReadCloudChatPartV10 = defineRpcContract({

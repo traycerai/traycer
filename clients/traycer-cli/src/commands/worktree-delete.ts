@@ -323,11 +323,7 @@ function runDeleteCommand(
             error: deleteFailedCliError(reason, null, undefined),
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
-        onConnectionStatus: (
-          status: StreamConnectionStatus,
-          reason: StreamCloseReason | null,
-          retryCause: FatalErrorDetails | null,
-        ) => {
+        onConnectionStatus: ({ status, reason, retryCause }) => {
           if (status === "connecting" || status === "open") return;
           const admissionError = retryCause
             ? localTeamAdmissionCliError(retryCause)

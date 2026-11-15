@@ -1,3 +1,4 @@
+import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
 import type { ReactNode } from "react";
 import { ArtifactProofRoute } from "@/routes/settings-dev-artifact-proof-route-components";
 import { CanvasProofRoute } from "@/routes/settings-dev-canvas-proof-route-components";
@@ -74,23 +75,26 @@ export function SettingsModalContent(
     : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
   return (
     <SettingsDensityContext.Provider value="compact">
-      <div className="flex min-h-0 min-w-0 flex-1">
-        <SettingsSidebar
-          mode={{
-            kind: "modal",
-            activeSection: section,
-            onSelect: setSection,
-          }}
-          variant="rail"
-        />
-        {/* The pane a page result scrolls to the top: see
-            `useSettingsAnchorReveal`. Marked here, by the surface, rather
-            than by each panel, so a bespoke panel cannot opt out of it. */}
-        <div
-          data-settings-panel-pane
-          className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
-        >
-          <SettingsPanelForSection section={section} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <SoundtrackPlaybackControls placement="settings-modal" />
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <SettingsSidebar
+            mode={{
+              kind: "modal",
+              activeSection: section,
+              onSelect: setSection,
+            }}
+            variant="rail"
+          />
+          {/* The pane a page result scrolls to the top: see
+              `useSettingsAnchorReveal`. Marked here, by the surface, rather
+              than by each panel, so a bespoke panel cannot opt out of it. */}
+          <div
+            data-settings-panel-pane
+            className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
+          >
+            <SettingsPanelForSection section={section} />
+          </div>
         </div>
       </div>
     </SettingsDensityContext.Provider>
