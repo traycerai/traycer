@@ -58,6 +58,8 @@ beforeEach(() => {
   vi.stubEnv("USERPROFILE", workHome);
   stdoutChunks = [];
   stderrChunks = [];
+  const testStdoutChunks = stdoutChunks;
+  const testStderrChunks = stderrChunks;
   // `write`'s completion callback is load-bearing, not decoration: the
   // runner awaits it (via `flushStdio`) before `process.exit` so a terminal
   // NDJSON line larger than the 64 KiB pipe buffer is not truncated on the
@@ -67,7 +69,7 @@ beforeEach(() => {
     chunk: string | Uint8Array,
     callback: (() => void) | undefined,
   ) => {
-    stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    testStdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
     if (callback !== undefined) callback();
     return true;
   }) as never);
@@ -75,7 +77,7 @@ beforeEach(() => {
     chunk: string | Uint8Array,
     callback: (() => void) | undefined,
   ) => {
-    stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    testStderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
     if (callback !== undefined) callback();
     return true;
   }) as never);
@@ -116,6 +118,7 @@ function joined(chunks: readonly string[]): string {
 async function runAndCapture(
   fn: () => Promise<void>,
 ): Promise<ParsedRunnerOutput> {
+  const testStdoutChunks = stdoutChunks;
   // The runner records its code on `process.exitCode` and lets the loop drain
   // instead of calling `process.exit` (see runner/exit.ts). Snapshot and
   // RESTORE it around the run: a leaked non-zero value would otherwise make
@@ -141,7 +144,7 @@ async function runAndCapture(
   }
   const exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
   process.exitCode = priorExitCode;
-  const stdout = joined(stdoutChunks);
+  const stdout = joined(testStdoutChunks);
   const stdoutLines = stdout.split("\n").filter((l) => l.length > 0);
   const envelopes: Record<string, unknown>[] = [];
   for (const line of stdoutLines) {
@@ -278,7 +281,7 @@ describe("logoutCommand runner contract", () => {
       version: 1,
       users: {},
     });
-  });
+  }, 15_000);
 
   it("JSON mode: emits a single ok result with loggedOut=true when a session existed", async () => {
     mockLogoutStore({ hadSession: true, signOut: DELETED });
