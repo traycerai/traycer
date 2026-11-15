@@ -381,12 +381,35 @@ interface AttachCall {
 
 /** `epic.attachEnvironment` calls the person's host received, held open. */
 const attachCalls: AttachCall[] = [];
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve: (value: T) => void = () => {
+    throw new Error("resolve called before assignment");
+  };
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+type AttachTaskAnswer = Awaited<
+  ReturnType<MockRunnerHost["attachTaskEnvironment"]>
+>;
+
+let heldAttachmentPost: Deferred<AttachTaskAnswer> | null = null;
 const authnCalls: Array<
   | { readonly kind: "list"; readonly bearer: string }
   | {
       readonly kind: "attach";
       readonly bearer: string;
-      readonly request: { readonly taskId: string; readonly environmentId: string };
+      readonly request: {
+        readonly taskId: string;
+        readonly environmentId: string;
+      };
     }
 > = [];
 
@@ -680,6 +703,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     dialogMocks.events.length = 0;
     dialogMocks.toastError.mockReset();
     attachCalls.length = 0;
+    heldAttachmentPost = null;
     onOpenChange.mockReset();
     dialogMocks.clientsByHostId.clear();
     dialogMocks.appWideHostId = TAB_HOST_ID;
@@ -695,9 +719,8 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
       "fetch",
       async (_input: RequestInfo | URL, init?: RequestInit) => {
         const authorization = new Headers(init?.headers).get("Authorization");
-        const userId = authorization?.includes("token-b") === true
-          ? "user-b"
-          : "user-a";
+        const userId =
+          authorization?.includes("token-b") === true ? "user-b" : "user-a";
         return validAuthnResponse(userId);
       },
     );
@@ -711,7 +734,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     vi.spyOn(runnerHost, "attachTaskEnvironment").mockImplementation(
       (bearer, request) => {
         authnCalls.push({ kind: "attach", bearer, request });
-        return Promise.resolve({ kind: "ok" });
+        return heldAttachmentPost?.promise ?? Promise.resolve({ kind: "ok" });
       },
     );
     const directory = new HostDirectoryService({
@@ -780,6 +803,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     authRuntime = null;
     authDirectory = null;
     runtimeBinding = null;
+    heldAttachmentPost = null;
     vi.unstubAllGlobals();
   });
 
@@ -876,6 +900,99 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
         },
       },
     ]);
+    expect(dialogMocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not create the fork or show a toast when the sign-in changes while the attachment POST is out", async () => {
+    const post = deferred<AttachTaskAnswer>();
+    heldAttachmentPost = post;
+    await startFork();
+    attachCalls[0]?.settle("resolve");
+    await waitFor(() => {
+      expect(authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "token-a",
+        request: {
+          taskId: "epic-test",
+          environmentId: TEAM_ENVIRONMENT_ID,
+        },
+      });
+    });
+
+    const auth = requireAuthService();
+    const runnerHost = requireAuthRunnerHost();
+    await auth.signOut();
+    await signInAs(auth, runnerHost, "token-b");
+    await act(async () => {
+      post.resolve({ kind: "ok" });
+      await post.promise;
+    });
+
+    await waitFor(() => expect(forkButton().disabled).toBe(false));
+    expect(dialogMocks.creates).toHaveLength(0);
+    expect(dialogMocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not create the fork or show a toast when the same account signs in again while the attachment POST is out", async () => {
+    const post = deferred<AttachTaskAnswer>();
+    heldAttachmentPost = post;
+    await startFork();
+    attachCalls[0]?.settle("resolve");
+    await waitFor(() => {
+      expect(authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "token-a",
+        request: {
+          taskId: "epic-test",
+          environmentId: TEAM_ENVIRONMENT_ID,
+        },
+      });
+    });
+
+    const auth = requireAuthService();
+    const runnerHost = requireAuthRunnerHost();
+    await auth.signOut();
+    await signInAs(auth, runnerHost, "token-a-again");
+    await act(async () => {
+      post.resolve({ kind: "ok" });
+      await post.promise;
+    });
+
+    await waitFor(() => expect(forkButton().disabled).toBe(false));
+    expect(dialogMocks.creates).toHaveLength(0);
+    expect(dialogMocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("continues the fork when the bearer rotates on the same sign-in while the attachment POST is out", async () => {
+    const post = deferred<AttachTaskAnswer>();
+    heldAttachmentPost = post;
+    await startFork();
+    attachCalls[0]?.settle("resolve");
+    await waitFor(() => {
+      expect(authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "token-a",
+        request: {
+          taskId: "epic-test",
+          environmentId: TEAM_ENVIRONMENT_ID,
+        },
+      });
+    });
+
+    const auth = requireAuthService();
+    const identityGeneration = auth.getIdentityGeneration();
+    const session = auth.getCurrentSessionSnapshot();
+    await auth.ingestProjectedSessionSnapshot({
+      ...session,
+      token: "token-a-rotated",
+    });
+    expect(auth.getIdentityGeneration()).toBe(identityGeneration);
+
+    await act(async () => {
+      post.resolve({ kind: "ok" });
+      await post.promise;
+    });
+    await waitFor(() => expect(dialogMocks.creates).toHaveLength(1));
     expect(dialogMocks.toastError).not.toHaveBeenCalled();
   });
 

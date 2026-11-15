@@ -181,11 +181,9 @@ describe("team pages on a build with a server pool", () => {
         ],
       }),
       "environment.list": () => environmentList,
-      "environment.plans.unlinkPreview": () => ({
-        activeTurns: 0,
-        localHostId: null,
-        keepsWorking: [],
-      }),
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.host.list": () => ({ hosts: [] }),
       "environment.plans.unlink": () => ({ outcome: "unlinked" }),
     });
     removeSurfaceHost();
@@ -197,7 +195,7 @@ describe("team pages on a build with a server pool", () => {
     await waitFor(() => {
       expect(hostIdsOf(harness, "environment.list")).not.toHaveLength(0);
     });
-    const listReadsBefore = hostIdsOf(harness, "environment.list").length;
+    const listReadsBefore = harness.paramsOf("environment.list").length;
     await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
     const dialog = await screen.findByRole("dialog");
     await userEvent.click(
@@ -205,19 +203,29 @@ describe("team pages on a build with a server pool", () => {
     );
 
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.list").length).toBeGreaterThan(
+      expect(harness.paramsOf("environment.list").length).toBeGreaterThan(
         listReadsBefore,
       );
     });
-    expect(hostIdsOf(harness, "environment.plans.unlink")).toEqual([
-      POOL_HOST_ID,
+    expect(harness.paramsOf("environment.plans.unlink")).toEqual([
+      {
+        environmentId: "env-a",
+        profileId: "prof-1",
+        expectedBindingVersion: null,
+      },
     ]);
-    expect(new Set(hostIdsOf(harness, "environment.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
-    expect(new Set(hostIdsOf(harness, "environment.plans.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
+    expect(hostIdsOf(harness, "environment.plans.unlink")).toEqual([]);
+    expect(hostIdsOf(harness, "environment.plans.unlinkPreview")).toEqual([]);
+    expect(hostIdsOf(harness, "environment.previewLocalFacts")).toEqual([]);
+    expect(hostIdsOf(harness, "environment.plans.list")).toEqual([]);
+    expect(
+      harness.cloudRequests.filter((request) => request.method === "DELETE"),
+    ).toMatchObject([
+      {
+        url: "https://auth.example.invalid/api/v3/environments/env-a/secrets/harness-connections/prof-1",
+        body: { expectedBindingVersion: null },
+      },
+    ]);
   });
 
   it("rereads pool environment membership after a forbidden item save with no surface host", async () => {
