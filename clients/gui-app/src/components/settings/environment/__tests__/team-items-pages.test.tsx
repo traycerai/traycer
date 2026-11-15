@@ -181,6 +181,7 @@ describe("TeamVariablesAndShells", () => {
           path: "/bin/zsh",
           args: ["-l"],
           synthesised: false,
+          entries: [],
         }),
       });
       const user = userEvent.setup();

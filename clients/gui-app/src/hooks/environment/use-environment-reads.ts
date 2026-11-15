@@ -67,7 +67,6 @@ export function useEnvironmentStatusRead(
     options: { enabled: enabled && supported === true, poll: true },
   });
   const personal = usePersonalEnvironment(
-    client,
     enabled && query.data?.principal?.kind === "personal",
   );
   useRereadOnRevision(hostId, query.data ?? null, personal.environmentId);
@@ -159,10 +158,9 @@ function useRereadOnRevision(
  * the person's sign-in; `enabled` false on a host that does not run Personal.
  */
 export function useEnvironmentNoticesRead(
-  client: HostClient<HostRpcRegistry> | null,
   enabled: boolean,
 ): EnvironmentRead<EnvironmentNoticesResponse> {
-  const personal = usePersonalEnvironment(client, enabled);
+  const personal = usePersonalEnvironment(enabled);
   const environmentId = personal.environmentId;
   const query = useEnvironmentCloudOwnRead({
     method: "environment.notices",
@@ -207,7 +205,7 @@ export function useEnvironmentReviewRead(
   hostId: string | null,
   enabled: boolean,
 ): EnvironmentRead<EnvironmentReviewSheet> {
-  const personal = usePersonalEnvironment(client, enabled);
+  const personal = usePersonalEnvironment(enabled);
   const environmentId = personal.environmentId;
   const holds = useEnvironmentCloudOwnRead({
     method: "environment.review",

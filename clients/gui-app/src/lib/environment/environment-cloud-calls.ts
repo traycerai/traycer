@@ -10,11 +10,20 @@ import {
   listConfigurationPlans,
   putConfigurationItem,
   putConfigurationPolicy,
+  readConfigurationHistory,
   readConfigurationItems,
   readConfigurationRevision,
   setConfigurationMcpServerEnabled,
   unlinkConfigurationPlan,
 } from "@traycer-clients/shared/environment/configuration-settings";
+import { listConfigurationHosts } from "@traycer-clients/shared/environment/configuration-hosts";
+import {
+  inviteConfigurationMember,
+  readConfigurationSeats,
+  recordConfigurationNoticeSeen,
+  removeConfigurationMember,
+  setConfigurationMemberRole,
+} from "@traycer-clients/shared/environment/configuration-members";
 import {
   consentToSecret,
   createSecret,
@@ -48,6 +57,13 @@ export type EnvironmentCloudMethod =
   | "environment.configuration.mcpServers.delete"
   | "environment.configuration.mcpServers.setEnabled"
   | "environment.configuration.policy.put"
+  | "environment.history"
+  | "environment.host.list"
+  | "environment.members.seats"
+  | "environment.members.invite"
+  | "environment.members.setRole"
+  | "environment.members.remove"
+  | "environment.members.noticeSeen"
   | "environment.plans.list"
   | "environment.plans.unlink"
   | "environment.secrets.list"
@@ -95,6 +111,16 @@ const CALLS: {
   "environment.configuration.mcpServers.setEnabled":
     setConfigurationMcpServerEnabled,
   "environment.configuration.policy.put": putConfigurationPolicy,
+  "environment.history": readConfigurationHistory,
+  "environment.host.list": (cloud, request) =>
+    listConfigurationHosts(cloud, request.environmentId),
+  "environment.members.seats": (cloud, request) =>
+    readConfigurationSeats(cloud, request.environmentId),
+  "environment.members.invite": inviteConfigurationMember,
+  "environment.members.setRole": setConfigurationMemberRole,
+  "environment.members.remove": removeConfigurationMember,
+  "environment.members.noticeSeen": (cloud, request) =>
+    recordConfigurationNoticeSeen(cloud, request.environmentId),
   "environment.plans.list": (cloud, request) =>
     listConfigurationPlans(cloud, request.environmentId),
   "environment.plans.unlink": (cloud, request) =>

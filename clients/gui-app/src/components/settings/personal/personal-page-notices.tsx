@@ -82,7 +82,7 @@ function NoticeRow(props: {
   const { notice } = props;
   const label = itemLabel(notice);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const undo = useEnvironmentUndoMutation(props.client);
+  const undo = useEnvironmentUndoMutation();
   const keepTarget = keepLocalTarget(notice, props.hostId);
   return (
     <li className={ROW_CLASS} data-testid="personal-notice">

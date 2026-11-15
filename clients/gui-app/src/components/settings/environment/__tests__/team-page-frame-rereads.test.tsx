@@ -398,7 +398,12 @@ describe("a team page under PersonalPageFrame", () => {
         "environment.host.list": () => ({ hosts: [] }),
         "config.shell.get": () => {
           served += 1;
-          return { path: "/bin/zsh", args: [], synthesised: false };
+          return {
+            path: "/bin/zsh",
+            args: [],
+            synthesised: false,
+            entries: [],
+          };
         },
       },
       { section: "secrets", element: <HostShellReader /> },

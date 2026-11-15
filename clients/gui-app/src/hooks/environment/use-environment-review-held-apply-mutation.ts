@@ -4,7 +4,6 @@ import {
   type ReviewChoiceOutcome,
   type ReviewHeldEntry,
 } from "@traycer-clients/shared/environment/environment-review";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HeldApplyChoice } from "@/components/settings/move/retrospective-copy";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
@@ -14,7 +13,6 @@ import {
 } from "@/hooks/environment/use-environment-cloud";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { environmentCloudHostError } from "@/lib/environment/environment-cloud-calls";
-import type { HostRpcRegistry } from "@/lib/host";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
@@ -30,12 +28,11 @@ const METHOD = "environment.review.heldApply";
  * Either leaves the row in the review, and the reread draws it.
  */
 export function useEnvironmentReviewHeldApplyMutation(
-  client: HostClient<HostRpcRegistry> | null,
   entries: readonly ReviewHeldEntry[],
 ) {
   const queryClient = useQueryClient();
   const cloud = useEnvironmentCloud();
-  const { environmentId } = usePersonalEnvironment(client, true);
+  const { environmentId } = usePersonalEnvironment(true);
   return useMutation<
     ReviewChoiceOutcome,
     HostRpcError,

@@ -26,9 +26,16 @@ import {
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import {
+  withHostQueryErrorBoundary,
+  withHostMutationErrorBoundary,
+} from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import {
+  sendFollowedSave,
+  type PendingSettingsSave,
+} from "@/hooks/environment/use-settings-save";
 import {
   HOST_METHOD_POLL_TABLE,
   stampHostRpcMethod,
@@ -430,6 +437,17 @@ export interface UseHostMutationOptions<
         client: HostRequester<Registry>,
       ) => Promise<RequestOfMethod<Registry, Method>>)
     | undefined;
+  /**
+   * A save made in a host's settings: called with the request just before it
+   * is sent, on the client it is sent on, so the app remembers what the save
+   * will propose (`useSettingsSave`). Told whether the host answered.
+   */
+  readonly followSettingsSave?:
+    | ((
+        request: RequestOfMethod<Registry, Method>,
+        client: HostRequester<Registry>,
+      ) => Promise<PendingSettingsSave>)
+    | undefined;
   /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
   readonly onResponse?: (
     response: ResponseOfMethod<Registry, Method>,
@@ -539,7 +557,7 @@ export function useHostMutation<
     // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
     mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, async () => {
+      withHostMutationErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
             ? args.client(variables)
@@ -591,7 +609,13 @@ export function useHostMutation<
                 dispatch().catch((cause: unknown) => {
                   throw mapDispatchError(cause);
                 });
-        const dispatched = await mappedDispatch();
+        const dispatched =
+          args.followSettingsSave === undefined
+            ? await mappedDispatch()
+            : await sendFollowedSave(
+                await args.followSettingsSave(params, client),
+                mappedDispatch,
+              );
         // Between the dispatch and `onResponse`, so a substituted response is
         // what every arm below sees - including the caller's `onSuccess` and
         // whatever `mutateAsync` resolves with.
@@ -655,7 +679,7 @@ export function useHostMutationWithResponseTimeout<
   >({
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, async () => {
+      withHostMutationErrorBoundary(args.method, async () => {
         const client =
           typeof args.client === "function"
             ? args.client(variables)

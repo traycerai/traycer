@@ -319,7 +319,7 @@ export function SecretRow(props: {
   // rotation from the start and re-reads it until it settles.
   const [replacements, setReplacements] = useState(0);
   const actions = useSecretRowActions({ ...props, removing: secret.revoked });
-  const environmentId = useDetailsEnvironmentId(props.client);
+  const environmentId = useDetailsEnvironmentId();
   const source = useConfigurationSource();
   // Personal's values, and a computer's own, are all the person's; a team's
   // author is not on the wire.

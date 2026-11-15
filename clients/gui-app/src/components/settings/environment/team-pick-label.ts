@@ -11,8 +11,7 @@ import { useConfigurationSource } from "./configuration-source";
  * missing name costs something.
  */
 export function usePickedTeamLabel(environmentId: string): string | null {
-  const client = useHostClient();
-  const query = useEnvironmentListQuery(client, true);
+  const query = useEnvironmentListQuery(true);
   const entry = query.data?.environments.find(
     (row) => row.environmentId === environmentId,
   );
@@ -56,8 +55,7 @@ export function useConfigurationName(): string {
 
 /** The account's team route key; never substitute its environment id in a command. */
 export function usePickedTeamHandle(environmentId: string): string | null {
-  const client = useHostClient();
-  const query = useEnvironmentListQuery(client, true);
+  const query = useEnvironmentListQuery(true);
   return (
     query.data?.environments.find(
       (row) =>
