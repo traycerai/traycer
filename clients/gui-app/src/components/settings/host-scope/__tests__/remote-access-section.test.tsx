@@ -257,6 +257,17 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
       },
     });
     hostMock.binding = { auth: harness.auth };
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "viewer-test", username: "viewer" },
+      shareableTeams: [
+        {
+          teamId: TEAM_ENVIRONMENT.ownerId,
+          slug: TEAM_ENVIRONMENT.providerHandle ?? "studio",
+          avatarUrl: null,
+        },
+      ],
+    });
     recordNegotiatedHostMethods(ACCESS_HOST_ID, ACCESS_METHODS);
     useHostAccessPromptsStore.setState({
       remoteAccessAnswered: {},
@@ -336,6 +347,15 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     noSwitch();
 
     environments = [TEAM_ENVIRONMENT];
+    useAuthStore.setState({
+      shareableTeams: [
+        {
+          teamId: TEAM_ENVIRONMENT.ownerId,
+          slug: TEAM_ENVIRONMENT.providerHandle ?? "studio",
+          avatarUrl: null,
+        },
+      ],
+    });
     await act(async () => {
       await harness.queryClient.invalidateQueries();
     });

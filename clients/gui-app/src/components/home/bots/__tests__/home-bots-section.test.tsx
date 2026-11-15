@@ -687,7 +687,7 @@ describe("HomeBotsSection what each group is told", () => {
       ["env-team"],
       true,
     );
-    expect(latestGroupProps("env-team").environmentHostIds).toEqual(new Set());
+    expect(latestGroupProps("env-team").environmentHostIds).toBeNull();
   });
 
   it("holds the machine-list reads off while the bots band itself is unsupported", () => {
