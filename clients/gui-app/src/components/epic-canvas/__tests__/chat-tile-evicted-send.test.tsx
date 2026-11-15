@@ -127,8 +127,11 @@ const MOCK_HOST_DIRECTORY = {
 
 // ENUMERATES deliberately, as `chat-tile-queue-edit-steer.test.tsx` does: the
 // barrel's un-overridden residue is provider-coupled and throws.
+// The one binding carries the directory `useHostDirectory` answers, as in the
+// app: `useHostDirectoryEntry` reads it off the binding.
+const MOCK_HOST_BINDING = { directory: MOCK_HOST_DIRECTORY };
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () => MOCK_HOST_BINDING,
   useOptionalHostClient: () => MOCK_HOST_CLIENT,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
