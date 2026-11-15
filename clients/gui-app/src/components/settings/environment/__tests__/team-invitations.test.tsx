@@ -710,7 +710,14 @@ describe("InviteAcceptDialog", () => {
       "You can see the team's settings but not change them.",
     );
     expect(screen.queryByTestId("invite-accept-gone")).toBeNull();
-    expect(screen.getByTestId("invite-accept")).toBeTruthy();
-    expect(onAccepted).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId("invite-accept"));
+
+    await waitFor(() => {
+      expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
+    });
+    expect(harness.paramsOf("environment.invitations.accept")).toEqual([
+      { environmentId: "env-beta" },
+    ]);
   });
 });

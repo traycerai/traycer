@@ -1014,7 +1014,7 @@ describe("MembersPage refused writes", () => {
 
 /**
  * authn's members answer for `members` as it is on the wire, where a seat
- * stored on the retired Viewer role answers `effectiveRole: null`: on the row of
+ * stored on the Viewer role answers `effectiveRole: null`: on the row of
  * `nullRoleUserIds`, and on the reader's own role when `readerRole` is `null`.
  */
 function wireMembers(
