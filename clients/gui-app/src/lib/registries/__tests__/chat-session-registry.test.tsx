@@ -944,7 +944,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       });
     },
   );
-  it("does not acquire an owner for a below-floor host in the local booting shape", async () => {
+  it("does not acquire an owner for a below-floor host in the local booting shape", () => {
     signIn();
     const tracked = createTrackedOpenTransport();
     openTransportRef.fn = tracked.openTransport;

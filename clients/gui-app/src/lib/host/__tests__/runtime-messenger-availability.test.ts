@@ -645,7 +645,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       await waitFor(() => {
         expect(FakeNativeWebSocket.instances).toHaveLength(1);
       });
-      const [socket] = FakeNativeWebSocket.instances;
+      const socket = FakeNativeWebSocket.instances.at(0);
       if (socket === undefined) {
         throw new Error("Expected the recovered local query to open a socket");
       }
@@ -663,7 +663,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       await waitFor(() => {
         expect(sentFramesOfKind(socket, "request")).toHaveLength(1);
       });
-      const [requestFrame] = sentFramesOfKind(socket, "request");
+      const requestFrame = sentFramesOfKind(socket, "request").at(0);
       if (
         requestFrame === undefined ||
         typeof requestFrame.requestId !== "string"

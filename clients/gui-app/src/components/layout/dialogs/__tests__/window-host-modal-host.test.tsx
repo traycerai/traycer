@@ -757,13 +757,13 @@ describe("<WindowHostModalHost />", () => {
       await waitFor(() =>
         expect(FakeNativeWebSocket.instances).toHaveLength(1),
       );
-      const socket = FakeNativeWebSocket.instances[0];
+      const socket = FakeNativeWebSocket.instances.at(0);
       if (socket === undefined) throw new Error("host socket missing");
       socket.fireOpen();
       await waitFor(() =>
         expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
       );
-      const open = sentFramesOfKind(socket, "open")[0];
+      const open = sentFramesOfKind(socket, "open").at(0);
       if (open === undefined) throw new Error("host open frame missing");
       expect(open.token).toBe(hostToken);
       expect(JSON.stringify(open)).not.toContain(signInToken);
@@ -903,8 +903,8 @@ describe("<WindowHostModalHost />", () => {
       },
       hostTokens.era("user-1"),
     );
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
         new Response(
           JSON.stringify({
             grant: "relay-pass",
@@ -915,6 +915,7 @@ describe("<WindowHostModalHost />", () => {
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -1043,7 +1044,7 @@ describe("<WindowHostModalHost />", () => {
       expect(hasReadyRemoteSession(hostId)).toBe(true);
       expect(client.isClosed()).toBe(false);
 
-      const firstSocket = sockets[0];
+      const firstSocket = sockets.at(0);
       if (firstSocket === undefined || firstSocket.onclose === null) {
         throw new Error("established relay socket had no close handler");
       }
@@ -1196,7 +1197,7 @@ describe("<WindowHostModalHost />", () => {
       expect(hostPolicyPatchCalls).toBe(1);
       expect(authErrorToastHarness.show).toHaveBeenCalledTimes(1);
     });
-    const toastCall = authErrorToastHarness.show.mock.calls[0];
+    const toastCall = authErrorToastHarness.show.mock.calls.at(0);
     if (toastCall === undefined)
       throw new Error("update failure toast missing");
     expect(toastCall[1]).toBe("Couldn't update this host.");
