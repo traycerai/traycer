@@ -174,6 +174,7 @@ describe("TerminalStreamClient", () => {
         onExit: () => undefined,
         onActionAck: () => undefined,
         onSessionUpdated: () => undefined,
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -205,6 +206,7 @@ describe("TerminalStreamClient", () => {
         onExit: () => undefined,
         onActionAck: () => undefined,
         onSessionUpdated: () => undefined,
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -245,6 +247,7 @@ describe("TerminalStreamClient", () => {
             updates.push(frame.session.scope.kind);
           }
         },
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -295,6 +298,7 @@ describe("TerminalStreamClient", () => {
             currentDirectories.push(frame.session.currentCwd);
           }
         },
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -339,6 +343,7 @@ describe("TerminalStreamClient", () => {
             updates.push(frame.session.epicId);
           }
         },
+        onViewers: () => undefined,
         onConnectionStatus: () => undefined,
       },
     });
@@ -402,6 +407,7 @@ function terminalCallbacks(
     onExit: () => undefined,
     onActionAck: () => undefined,
     onSessionUpdated: () => undefined,
+    onViewers: () => undefined,
     onConnectionStatus,
   };
 }
@@ -645,12 +651,15 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
     readonly callbacks: TerminalStreamCallbacks;
     readonly dataChunks: string[];
     readonly otherKinds: string[];
+    readonly viewerFrames: unknown[];
   } {
     const dataChunks: string[] = [];
     const otherKinds: string[] = [];
+    const viewerFrames: unknown[] = [];
     return {
       dataChunks,
       otherKinds,
+      viewerFrames,
       callbacks: {
         onSnapshot: () => {
           otherKinds.push("snapshot");
@@ -671,6 +680,9 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
         },
         onSessionUpdated: () => {
           otherKinds.push("sessionUpdated");
+        },
+        onViewers: (frame) => {
+          viewerFrames.push(frame);
         },
         onConnectionStatus: () => undefined,
       },
@@ -700,6 +712,7 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
     expect(warn).not.toHaveBeenCalled();
     expect(recorded.dataChunks).toEqual([]);
     expect(recorded.otherKinds).toEqual([]);
+    expect(recorded.viewerFrames).toEqual([viewersEnvelope]);
 
     sockets[0].fireText(dataEnvelope);
 
@@ -741,6 +754,7 @@ describe("TerminalStreamClient viewers frame (terminal.subscribe@1.8)", () => {
     );
     expect(recorded.dataChunks).toEqual([]);
     expect(recorded.otherKinds).toEqual([]);
+    expect(recorded.viewerFrames).toEqual([]);
 
     sockets[0].fireText(dataEnvelope);
 

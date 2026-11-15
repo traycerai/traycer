@@ -43,6 +43,7 @@ import { PrDetailTile } from "./pr-detail-tile";
 import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import { SimulatorTile } from "@/components/simulator-tile/simulator-tile";
+import { HostTeamPeopleProvider } from "@/hooks/identity/use-host-team-people";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
   readonly node: R;
@@ -286,7 +287,9 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
                       : null
                   }
                 >
-                  {tileRenderer(args.node.type)(args)}
+                  <HostTeamPeopleProvider hostId={args.node.hostId}>
+                    {tileRenderer(args.node.type)(args)}
+                  </HostTeamPeopleProvider>
                 </SandboxTileStateFrame>
               </TileErrorBoundary>
             </TileMinimapScope>

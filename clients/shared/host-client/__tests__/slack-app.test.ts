@@ -20,6 +20,7 @@ import {
   registerSlackAppViaHttp,
   setSlackAppDmsViaHttp,
 } from "../slack-app";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
@@ -443,10 +444,7 @@ describe("a redirect answered to a Slack app request", () => {
   );
 
   it("reads a browser's opaque redirect as a network error", async () => {
-    const opaque = new Response(null);
-    Object.defineProperty(opaque, "status", { value: 0 });
-    Object.defineProperty(opaque, "type", { value: "opaqueredirect" });
-    const fetchMock = stubFetch(async () => opaque);
+    const fetchMock = stubFetch(async () => createOpaqueRedirectResponse());
 
     await expect(
       registerSlackAppViaHttp(BASE, BEARER, null, REGISTER_REQUEST),
