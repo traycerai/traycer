@@ -126,6 +126,7 @@ const SHARING_GENERATION = 4;
 const PROVIDER_ID = "codex";
 const ITEM_KEY = `${PROVIDER_ID}:CODEX_API_KEY`;
 const ROW_ORDER_KEY = "SAVE_ORDERING_CASE";
+let authIdentityGeneration = 0;
 type SetEnvOverrideResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.setEnvOverride"
@@ -308,6 +309,8 @@ interface SaveHarness {
   readonly savePayloads: SavePayload[];
   readonly recordsAtSend: (SettingsSaveMemoryRecord | null)[];
   readonly cloud: EnvironmentCloud;
+  readonly environmentCloud: () => EnvironmentCloud;
+  readonly rotateBearerToken: () => void;
   readonly setLocalHostId: (hostId: string | null) => void;
   readonly dispose: () => void;
 }
@@ -372,17 +375,11 @@ function makeSaveHarness(overrides: {
       Object.values(useSettingsSaveMemoryStore.getState().records)[0] ?? null,
     );
   };
-  const cloudViewerId = useAuthStore.getState().contextMetadata?.userId ?? null;
+  let bearerToken = "test-token";
   const cloud: EnvironmentCloud = {
     authnBaseUrl: "https://authn.test/",
-    bearer: { getBearerToken: () => "test-token" },
-    onOriginSignIn: () => {
-      state.originSignInChecks += 1;
-      return (
-        cloudViewerId !== null &&
-        useAuthStore.getState().contextMetadata?.userId === cloudViewerId
-      );
-    },
+    bearer: { getBearerToken: () => bearerToken },
+    onOriginSignIn: () => true,
     transport: async (request) => {
       authnRequests.push(request);
       if (request.url.includes("/hosts?include=binding")) {
@@ -444,6 +441,22 @@ function makeSaveHarness(overrides: {
       }
       throw new Error(`Unexpected authn route: ${request.method}`);
     },
+  };
+  const environmentCloud = (): EnvironmentCloud => {
+    const cloudViewerId =
+      useAuthStore.getState().contextMetadata?.userId ?? null;
+    const cloudIdentityGeneration = authIdentityGeneration;
+    return {
+      ...cloud,
+      onOriginSignIn: () => {
+        state.originSignInChecks += 1;
+        return (
+          cloudViewerId !== null &&
+          useAuthStore.getState().contextMetadata?.userId === cloudViewerId &&
+          authIdentityGeneration === cloudIdentityGeneration
+        );
+      },
+    };
   };
 
   const hostBinding: EnvironmentHostReadResponseV11 = {
@@ -592,7 +605,7 @@ function makeSaveHarness(overrides: {
   });
   const authService = new AuthService({ runnerHost });
   const auth = Object.assign(authService, {
-    environmentCloud: () => cloud,
+    environmentCloud,
   });
   const directoryService = createAuthBoundHostDirectory({
     auth: authService,
@@ -654,6 +667,10 @@ function makeSaveHarness(overrides: {
     savePayloads,
     recordsAtSend,
     cloud,
+    environmentCloud,
+    rotateBearerToken: () => {
+      bearerToken = "rotated-test-token";
+    },
     setLocalHostId: (hostId) => {
       state.localHostId = hostId;
       for (const listener of listeners) listener();
@@ -890,6 +907,27 @@ function requestBody(request: EnvironmentTransportRequest): unknown {
     : request.body;
 }
 
+async function signOutAndReenterSameAccount(): Promise<void> {
+  act(() => {
+    authIdentityGeneration += 1;
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+  });
+  await waitFor(() =>
+    expect(useSettingsSaveMemoryStore.persist.getOptions().name).toBe(
+      settingsSaveMemoryKey(null),
+    ),
+  );
+  act(() => {
+    authIdentityGeneration += 1;
+    setAccount(ACCOUNT_A);
+  });
+  await waitFor(() =>
+    expect(useSettingsSaveMemoryStore.persist.getOptions().name).toBe(
+      settingsSaveMemoryKey(ACCOUNT_A),
+    ),
+  );
+}
+
 async function waitForPreparedReads(
   harness: SaveHarness,
   kind: string,
@@ -930,6 +968,7 @@ function storedRows(accountId: string): readonly string[] {
 }
 
 beforeEach(() => {
+  authIdentityGeneration = 1;
   window.localStorage.clear();
   useSettingsSaveMemoryStore.persist.setOptions({
     name: settingsSaveMemoryKey(null),
@@ -1074,6 +1113,7 @@ describe("settings-save callers", () => {
         request: setRequest("new-value"),
       },
       OTHER_HOST_ID,
+      harness.environmentCloud(),
     );
     const answer = await sendFollowedSave(pending, sent);
 
@@ -1314,6 +1354,7 @@ describe("settings-save callers", () => {
       saving = result.current.mutateAsync(setRequest("new-value"));
     });
     await waitFor(() => expect(reviewApplyRequests(harness)).toHaveLength(1));
+    const readsBeforeSwitch = itemReadCount();
     const checksBeforeApplyAnswer = harness.state.originSignInChecks;
 
     act(() => setAccount(ACCOUNT_B));
@@ -1333,7 +1374,7 @@ describe("settings-save callers", () => {
       ),
     );
 
-    expect(itemReadCount()).toBe(readsAtOpen);
+    expect(itemReadCount()).toBe(readsBeforeSwitch);
     expect(records()).toEqual([]);
     expect(storedRows(ACCOUNT_A)).toHaveLength(1);
     expect(storedRows(ACCOUNT_B)).toEqual([]);
@@ -1355,6 +1396,83 @@ describe("settings-save callers", () => {
     );
     expect(harness.saveRequests).toEqual(["providers.setEnvOverride"]);
     expect(records()).toHaveLength(1);
+  });
+
+  async function runSameAccountReentryReadCase(
+    answer: EnvironmentTransportAnswer,
+  ): Promise<void> {
+    const itemsGate = deferred<EnvironmentTransportAnswer>();
+    const harness = makeSaveHarness({ itemsGate });
+    const addressSpy = vi.spyOn(settingsSaveMapping, "settingsSaveBaseAddress");
+    const { result } = renderHook(() => useProvidersDeleteEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await harness.state.itemsStarted.promise;
+
+    let deleting!: Promise<DeleteEnvOverrideResponse>;
+    act(() => {
+      deleting = result.current.mutateAsync({
+        providerId: PROVIDER_ID,
+        key: "CODEX_API_KEY",
+      });
+    });
+    await waitFor(() => expect(addressSpy).toHaveBeenCalled());
+    await signOutAndReenterSameAccount();
+    await act(async () => {
+      itemsGate.resolve(answer);
+      await expect(deleting).rejects.toBeInstanceOf(HostRequestAbortedError);
+    });
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+
+    expect(harness.saveRequests).toEqual([]);
+    expect(harness.recordsAtSend).toEqual([]);
+    expect(records()).toEqual([]);
+  }
+
+  it("does not send a delete whose base read answers after same-account re-entry", async () => {
+    await runSameAccountReentryReadCase({
+      status: 200,
+      text: JSON.stringify({ items: [row("macos", "old-value", 3)] }),
+    });
+  });
+
+  it("does not send a delete whose base read fails after same-account re-entry", async () => {
+    await runSameAccountReentryReadCase({ status: 503, text: "" });
+  });
+
+  it("sends a delete when only the token rotates during its base read", async () => {
+    const itemsGate = deferred<EnvironmentTransportAnswer>();
+    const harness = makeSaveHarness({ itemsGate });
+    const addressSpy = vi.spyOn(settingsSaveMapping, "settingsSaveBaseAddress");
+    const { result } = renderHook(() => useProvidersDeleteEnvOverride(), {
+      wrapper: harness.wrapper,
+    });
+    await harness.state.itemsStarted.promise;
+
+    let deleting!: Promise<DeleteEnvOverrideResponse>;
+    act(() => {
+      deleting = result.current.mutateAsync({
+        providerId: PROVIDER_ID,
+        key: "CODEX_API_KEY",
+      });
+    });
+    await waitFor(() => expect(addressSpy).toHaveBeenCalled());
+    harness.rotateBearerToken();
+    await act(async () => {
+      itemsGate.resolve({
+        status: 200,
+        text: JSON.stringify({ items: [row("macos", "old-value", 3)] }),
+      });
+      await deleting;
+    });
+
+    expect(harness.saveRequests).toEqual(["providers.deleteEnvOverride"]);
+    expect(harness.recordsAtSend).toHaveLength(1);
+    expect(harness.recordsAtSend[0]).toMatchObject({
+      kind: "env_override",
+      operation: "delete",
+      expectedLiveRevision: 3,
+    });
   });
 
   it("remembers the selection from each shell mutation", async () => {
