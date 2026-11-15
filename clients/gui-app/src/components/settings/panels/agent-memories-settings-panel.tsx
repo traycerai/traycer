@@ -201,6 +201,7 @@ function AgentMemoriesRow(): ReactNode {
           sentOn.getActiveHostId(),
           pressedOn,
         ),
+      proposes: (answer) => answer.state !== "local_only",
     },
     mutationKey: configMutationKeys.agentMemoriesSet(),
     errorMessage: "Couldn't update memories",
@@ -441,6 +442,22 @@ function AgentMemoriesRow(): ReactNode {
         },
         onSuccess: (response) => {
           if (!live()) return;
+          // Saved on a computer bound to no configuration, in force here like
+          // `applied`. A row that read a configuration ends as for a host
+          // rebound since the read, without taking the answer as its read.
+          if (response.state === "local_only") {
+            if (environmentId !== null) {
+              finish({ kind: "settled" });
+              return;
+            }
+            latestRead = {
+              enabled: response.enabled,
+              revision: null,
+              environmentId: null,
+            };
+            finishAfterRead({ kind: "settled" });
+            return;
+          }
           if (
             environmentId !== null &&
             response.environmentId !== environmentId

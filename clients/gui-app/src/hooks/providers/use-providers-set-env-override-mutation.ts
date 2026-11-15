@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -38,6 +39,7 @@ export function useProvidersSetEnvOverride(): UseMutationResult<
           client.getActiveHostId(),
           pressedOn,
         ),
+      proposes: everyAnswerProposes,
     },
   });
 }

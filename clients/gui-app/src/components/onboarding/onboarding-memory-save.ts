@@ -291,8 +291,10 @@ async function takeStep(
     if (answer === "unsent") return "unsent";
     if (answer === null) file(io, step.environmentId, { kind: "failed" });
     // Filed against the configuration the write was addressed to, which the
-    // host names: it may have been rebound since the read.
-    else
+    // host names: it may have been rebound since the read. A write saved on a
+    // computer bound to none since the read has nothing to file against, and
+    // the next read finds the host serves none.
+    else if (answer.state !== "local_only")
       file(
         io,
         answer.environmentId,

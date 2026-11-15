@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useEnvironmentCloudQuery } from "@/hooks/environment/use-environment-cloud";
 import { localPickerRow } from "@/components/settings/environment/environment-picker-model";
@@ -100,8 +101,9 @@ export function useHostsRunningConfiguration(
       )
       .map((host) => host.hostId),
   );
+  const data = environmentReadData(list);
   const model = hostsRunningConfiguration({
-    rows: list.data?.hosts ?? [],
+    rows: data?.hosts ?? [],
     personal: personalTarget,
     localHostIds,
     unreadHostIds,
@@ -109,7 +111,7 @@ export function useHostsRunningConfiguration(
     firsthand: scope.hosts.map(firsthandHost),
   });
   let state: HostsRunningConfiguration["state"] = "loading";
-  if (list.data !== undefined) state = "ready";
+  if (data !== undefined) state = "ready";
   else if (
     list.isError ||
     (personalTarget && personal.resolved && environmentId === null)
