@@ -106,6 +106,12 @@ type HostResponse = {
   } | null;
 };
 
+type CapturedHostRequest = {
+  readonly method: HostMethod;
+  readonly params: unknown;
+  readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
+};
+
 interface RemoteHarness {
   readonly client: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
@@ -117,6 +123,7 @@ interface RemoteHarness {
     readonly method: HostMethod;
     readonly params: unknown;
   }[];
+  readonly observedHostRequests: CapturedHostRequest[];
   armFloorDowngrade(method: HostMethod, version: HostVersion): void;
   close(): void;
 }
@@ -228,6 +235,7 @@ function makeHarness(
     readonly method: HostMethod;
     readonly params: unknown;
   }[] = [];
+  const observedHostRequests: CapturedHostRequest[] = [];
   const applyFloorDowngrade = (
     method: HostMethod,
     params: unknown,
@@ -248,6 +256,11 @@ function makeHarness(
       params: RequestOfMethod<HostRpcRegistry, Method>,
       options: HostRequestOptions,
     ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+      observedHostRequests.push({
+        method,
+        params,
+        requiredHostMethodVersion: options.requiredHostMethodVersion,
+      });
       const downgraded = applyFloorDowngrade(method, params, options);
       if (downgraded) {
         await vi.waitFor(() => {
@@ -268,6 +281,11 @@ function makeHarness(
       responseTimeoutMs: number,
       options: HostRequestOptions,
     ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+      observedHostRequests.push({
+        method,
+        params,
+        requiredHostMethodVersion: options.requiredHostMethodVersion,
+      });
       const downgraded = applyFloorDowngrade(method, params, options);
       if (downgraded) {
         await vi.waitFor(() => {
@@ -315,6 +333,7 @@ function makeHarness(
     capturedFloorRequirements,
     capturedFloorErrors,
     capturedFloorCalls,
+    observedHostRequests,
     armFloorDowngrade(method, version) {
       armedFloorDowngrade = { method, version };
     },
@@ -1282,44 +1301,82 @@ describe("provider metadata retry after an initial read failure", () => {
 });
 
 describe("RemoteSession rechecks the leave floors after reconnect", () => {
-  it("refuses Preview below 1.2 on the redialed connection through the real sheet hook", async () => {
-    const harness = makeHarness(({ method }) =>
-      method === "environment.move.stopPreview"
-        ? successful(preview(null))
-        : failed("E_UNEXPECTED", `unexpected method: ${method}`),
-    );
-    harness.armFloorDowngrade("environment.move.stopPreview", {
-      major: 1,
-      minor: 1,
-    });
-    await renderSession(harness.client, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
-
-    await expectFloorRefusalAfterReconnect(harness, {
+  it.each([
+    {
+      label: "the Preview 1.2 floor",
       method: "environment.move.stopPreview",
-      version: { major: 1, minor: 2 },
-    });
-    expect(harness.capturedFloorCalls).toEqual([
-      {
+      version: { major: 1, minor: 1 },
+      requirement: {
+        method: "environment.move.stopPreview",
+        version: { major: 1, minor: 2 },
+      },
+    },
+    {
+      label: "the separate targeted Await 2.4 prerequisite",
+      method: "providers.awaitLogin",
+      version: { major: 2, minor: 3 },
+      requirement: {
+        method: "providers.awaitLogin",
+        version: { major: 2, minor: 4 },
+      },
+    },
+  ] as const)(
+    "preflight-refuses the retained keep-mode Preview when $label is withdrawn",
+    async ({ method, version, requirement }) => {
+      const harness = makeHarness(({ method: requestMethod }) => {
+        if (requestMethod === "environment.move.stopPreview")
+          return successful(preview([]));
+        if (requestMethod === "providers.list")
+          return successful(providerList([]));
+        return failed("E_UNEXPECTED", `unexpected method: ${requestMethod}`);
+      });
+      cacheProvidersList(harness, []);
+      await renderSession(harness.client, {
+        showListAfterStop: false,
+        showToaster: false,
+      });
+      await screen.findByTestId("stop-sharing-managed-empty");
+      const keepPreviewKey = hostQueryKeys.method<
+        HostRpcRegistry,
+        "environment.move.stopPreview"
+      >(HOST_ID, "environment.move.stopPreview", {
+        profileMode: "keep-personal",
+      });
+      expect(harness.queryClient.getQueryData(keepPreviewKey)).toEqual(
+        preview([]),
+      );
+      expect(harness.observedHostRequests).toContainEqual({
         method: "environment.move.stopPreview",
         params: { profileMode: "keep-personal" },
-      },
-    ]);
-    await screen.findByTestId("stop-sharing-managed-empty");
-    const previewOnRedial = harness.relay.unaryRequests.flatMap(
-      (request, index) =>
-        request.method === "environment.move.stopPreview" &&
-        harness.relay.unaryRequestConnectionIds[index] === 1
-          ? [request.params]
-          : [],
-    );
-    expect(previewOnRedial).toContainEqual({ profileMode: null });
-    expect(previewOnRedial).not.toContainEqual({
-      profileMode: "keep-personal",
-    });
-  });
+        requiredHostMethodVersion: {
+          method: "environment.move.stopPreview",
+          version: { major: 1, minor: 2 },
+        },
+      });
+
+      cleanup();
+      await redialAtAdvertisedFloor(harness, method, version);
+      const previewCallsBeforeRetry = requestCount(
+        harness.relay,
+        "environment.move.stopPreview",
+      );
+      const hostCallsBeforeRetry = harness.observedHostRequests.length;
+      await harness.queryClient.refetchQueries({
+        queryKey: keepPreviewKey,
+        type: "all",
+      });
+      const refusal = harness.queryClient.getQueryState(keepPreviewKey)?.error;
+      expect(refusal).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+      expect(refusal).toMatchObject({ requirement, negotiated: version });
+      expect(requestCount(harness.relay, "environment.move.stopPreview")).toBe(
+        previewCallsBeforeRetry,
+      );
+      expect(harness.observedHostRequests).toHaveLength(hostCallsBeforeRetry);
+      expect(harness.queryClient.getQueryData(keepPreviewKey)).toEqual(
+        preview([]),
+      );
+    },
+  );
 
   it("refuses Stop below 1.1 on the redialed connection through the real sheet mutation", async () => {
     const harness = makeHarness(({ method }) =>
@@ -1330,26 +1387,21 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
           : failed("E_UNEXPECTED", `unexpected method: ${method}`),
     );
     cacheProvidersList(harness, []);
-    await reconnectWithAdvertisedFloor(harness, "environment.move.stop", {
-      major: 1,
-      minor: 0,
-    });
-    mountSession(harness.client, harness.queryClient, {
+    await renderSession(harness.client, {
       showListAfterStop: false,
       showToaster: false,
     });
     await screen.findByTestId("stop-sharing-managed-empty");
-    harness.captureFloorFor("environment.move.stop");
+    harness.armFloorDowngrade("environment.move.stop", {
+      major: 1,
+      minor: 0,
+    });
 
     fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-    await expectFloorRefusalAfterReconnect(
-      harness,
-      {
-        method: "environment.move.stop",
-        version: { major: 1, minor: 1 },
-      },
-      "environment.move.stop",
-    );
+    await expectFloorRefusalAfterReconnect(harness, {
+      method: "environment.move.stop",
+      version: { major: 1, minor: 1 },
+    });
     expect(harness.capturedFloorCalls).toEqual([
       {
         method: "environment.move.stop",
@@ -1361,49 +1413,52 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
       },
     ]);
     expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
+    await vi.waitFor(() =>
+      expect(
+        harness.relay.unaryRequests.some(
+          (request, index) =>
+            harness.relay.unaryRequestConnectionIds[index] === 1 &&
+            request.method === "environment.move.stopPreview" &&
+            JSON.stringify(request.params) ===
+              JSON.stringify({ profileMode: null }),
+        ),
+      ).toBe(true),
+    );
+    expect(
+      harness.relay.unaryRequests.some(
+        (request, index) =>
+          harness.relay.unaryRequestConnectionIds[index] === 1 &&
+          request.method === "environment.move.stop",
+      ),
+    ).toBe(false);
   });
 
   it("refuses targeted Start below 1.5 on the redialed connection through the real Add dialog", async () => {
-    const harness = makeHarness(({ method }) =>
-      method === "environment.move.stopPreview"
-        ? successful(preview([FOLDER("folder-one", "Work", "offered")]))
-        : method === "providers.startLogin"
-          ? successful(started("admission-one", null))
-          : failed("E_UNEXPECTED", `unexpected method: ${method}`),
-    );
-    cacheProvidersList(harness, []);
-    await reconnectWithAdvertisedFloor(harness, "providers.startLogin", {
-      major: 1,
-      minor: 4,
+    const harness = makeHarness(({ method }) => {
+      if (method === "providers.cancelLogin")
+        return successful({ cancelled: true });
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    mountSession(harness.client, harness.queryClient, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
-    await screen.findByTestId("personal-leave-codex-folder-one");
-    fireEvent.click(
-      within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
-        "button",
-        { name: "Sign in" },
-      ),
-    );
+    harness.session.start();
+    await vi.waitFor(() => expect(harness.session.isReady()).toBe(true));
+    mountLeaveTargetAddDialog(harness, "folder-one");
     const addDialog = await screen.findByRole("dialog", {
       name: "Add a profile",
     });
     const signIn = await within(addDialog).findByRole("button", {
       name: "Sign in",
     });
-    harness.captureFloorFor("providers.startLogin");
+    harness.armFloorDowngrade("providers.startLogin", {
+      major: 1,
+      minor: 4,
+    });
 
     fireEvent.click(signIn);
-    await expectFloorRefusalAfterReconnect(
-      harness,
-      {
-        method: "providers.startLogin",
-        version: { major: 1, minor: 5 },
-      },
-      "providers.startLogin",
-    );
+    await expectFloorRefusalAfterReconnect(harness, {
+      method: "providers.startLogin",
+      version: { major: 1, minor: 5 },
+    });
     expect(harness.capturedFloorCalls).toHaveLength(1);
     expect(harness.capturedFloorCalls[0]).toMatchObject({
       method: "providers.startLogin",
@@ -1411,60 +1466,47 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
         target: { kind: "leave-to-local", profileId: "folder-one" },
       },
     });
-    expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    await screen.findByRole("button", { name: "Skip" });
     expect(
-      within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
-        "button",
-        { name: "Skip" },
+      harness.relay.unaryRequests.some(
+        (request, index) =>
+          harness.relay.unaryRequestConnectionIds[index] === 1 &&
+          request.method === "providers.startLogin",
       ),
-    ).toBeTruthy();
+    ).toBe(false);
+    expect(screen.getByRole("dialog", { name: "Add a profile" })).toBeTruthy();
+    expect(requestCount(harness.relay, "providers.list")).toBe(0);
   });
 
   it("refuses targeted Await below 2.4 on the redialed connection through the real Add dialog", async () => {
-    const harness = makeHarness(({ method }) =>
-      method === "environment.move.stopPreview"
-        ? successful(preview([FOLDER("folder-one", "Work", "offered")]))
-        : method === "providers.startLogin"
-          ? successful(started("admission-one", null))
-          : method === "providers.awaitLogin"
-            ? successful(staged("folder-one"))
-            : failed("E_UNEXPECTED", `unexpected method: ${method}`),
-    );
-    cacheProvidersList(harness, []);
-    await reconnectWithAdvertisedFloor(harness, "providers.awaitLogin", {
-      major: 2,
-      minor: 3,
+    const harness = makeHarness(({ method }) => {
+      if (method === "providers.startLogin")
+        return successful(started("admission-one", null));
+      if (method === "providers.awaitLogin")
+        return successful(staged("folder-one"));
+      if (method === "providers.cancelLogin")
+        return successful({ cancelled: true });
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
     });
-    mountSession(harness.client, harness.queryClient, {
-      showListAfterStop: false,
-      showToaster: false,
-    });
-    await screen.findByTestId("personal-leave-codex-folder-one");
-    fireEvent.click(
-      within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
-        "button",
-        { name: "Sign in" },
-      ),
-    );
+    harness.session.start();
+    await vi.waitFor(() => expect(harness.session.isReady()).toBe(true));
+    mountLeaveTargetAddDialog(harness, "folder-one");
     const addDialog = await screen.findByRole("dialog", {
       name: "Add a profile",
     });
     const signIn = await within(addDialog).findByRole("button", {
       name: "Sign in",
     });
-    harness.captureFloorFor("providers.awaitLogin");
+    harness.armFloorDowngrade("providers.awaitLogin", {
+      major: 2,
+      minor: 3,
+    });
 
     fireEvent.click(signIn);
-    await expectFloorRefusalAfterReconnect(
-      harness,
-      {
-        method: "providers.awaitLogin",
-        version: { major: 2, minor: 4 },
-      },
-      "providers.awaitLogin",
-    );
+    await expectFloorRefusalAfterReconnect(harness, {
+      method: "providers.awaitLogin",
+      version: { major: 2, minor: 4 },
+    });
     expect(harness.capturedFloorCalls).toHaveLength(1);
     expect(harness.capturedFloorCalls[0]?.method).toBe("providers.awaitLogin");
     const startRequest = harness.relay.unaryRequests.find(
@@ -1473,14 +1515,58 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
     expect(startRequest?.params).toMatchObject({
       target: { kind: "leave-to-local", profileId: "folder-one" },
     });
-    expect(screen.getByTestId("stop-sharing-sheet")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    await screen.findByRole("button", { name: "Skip" });
     expect(
-      within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
-        "button",
-        { name: "Skip" },
+      harness.relay.unaryRequests.some(
+        (request, index) =>
+          harness.relay.unaryRequestConnectionIds[index] === 1 &&
+          request.method === "providers.awaitLogin",
       ),
-    ).toBeTruthy();
+    ).toBe(false);
+    expect(screen.getByRole("dialog", { name: "Add a profile" })).toBeTruthy();
+    expect(requestCount(harness.relay, "providers.list")).toBe(0);
+  });
+
+  it("carries a null-outcome reader wait through to a staged leave result", async () => {
+    let awaitCalls = 0;
+    const waitingForReaders: AwaitLogin = {
+      ...loginAnswer(null),
+      installation: {
+        kind: "waiting-for-readers",
+        admissionId: "admission-one",
+        count: 2,
+      },
+    };
+    const harness = makeHarness(({ method }) => {
+      if (method === "providers.startLogin")
+        return successful(started("admission-one", null));
+      if (method === "providers.awaitLogin") {
+        awaitCalls += 1;
+        return successful(
+          awaitCalls === 1 ? waitingForReaders : staged("folder-one"),
+        );
+      }
+      if (method === "providers.cancelLogin")
+        return successful({ cancelled: true });
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    harness.session.start();
+    await vi.waitFor(() => expect(harness.session.isReady()).toBe(true));
+    mountLeaveTargetAddDialog(harness, "folder-one");
+    const addDialog = await screen.findByRole("dialog", {
+      name: "Add a profile",
+    });
+    fireEvent.click(
+      await within(addDialog).findByRole("button", { name: "Sign in" }),
+    );
+
+    expect(await screen.findByText("staged-for-leave")).toBeTruthy();
+    expect(awaitCalls).toBe(2);
+    expect(requestCount(harness.relay, "providers.list")).toBe(0);
+    const providerListKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "providers.list"
+    >(HOST_ID, "providers.list", { native: null });
+    expect(harness.queryClient.getQueryData(providerListKey)).toBeUndefined();
   });
 });
