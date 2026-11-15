@@ -1642,7 +1642,12 @@ function BotTabContent(props: {
     onViewChange,
   });
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
-  const activeTasks = useBotActiveTasks(snapshot.tasks, hostId, snapshotFresh);
+  const activeTasks = useBotActiveTasks(
+    snapshot.tasks,
+    hostId,
+    snapshotFresh,
+    botId,
+  );
   const showMessages = useCallback(() => {
     closeSession();
     onViewChange("messages");
@@ -1982,7 +1987,7 @@ type BotChannelHeaderProps = {
   readonly onOpenSearch: (() => void) | null;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
-  /** How many tasks the Activity list shows. */
+  /** How many tasks are active, excluding recently ended tracking. */
   readonly activityCount: number;
 };
 
@@ -2124,7 +2129,7 @@ function BotChannelActions({
   );
 }
 
-/** Activity counts the tasks shown in the channel’s Activity view. */
+/** The Activity badge counts active tasks, not recent ended rows. */
 function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
   const { settingsOpen } = props;
   const botHeaderSlot = useMobileBotHeaderSlot();
