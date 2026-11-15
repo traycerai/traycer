@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
-import type { AuthService } from "@/lib/auth/auth-service";
+import type {
+  AuthService,
+  LiveRevalidationOutcome,
+} from "@/lib/auth/auth-service";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import {
   fetchEnvironmentInvitations,
   acceptEnvironmentInvitation,
@@ -616,6 +620,64 @@ describe("InviteAcceptDialog", () => {
     });
     expect(accept).toHaveBeenCalledExactlyOnceWith("env-beta");
   });
+
+  it.each([
+    [
+      "a returned network-error",
+      () => Promise.resolve({ kind: "network-error" }),
+    ],
+    ["a throw", () => Promise.reject(new Error("authn is down"))],
+  ] satisfies [string, () => Promise<LiveRevalidationOutcome>][])(
+    "still reports the team to pick, once, when the account read ends in %s",
+    async (_name, answer) => {
+      const order: string[] = [];
+      const onAccepted = vi.fn(() => {
+        order.push("onAccepted");
+      });
+      // Signed in through the provider, so the accept counts as made on this
+      // sign-in and the account is read after it.
+      const provider = new DefaultRequestContextProvider({
+        origin: "renderer",
+      });
+      provider.setSignedIn({
+        user: createAuthenticatedUserFixture({}),
+        bearerToken: "t1",
+        operationId: undefined,
+        externalAbortSignal: undefined,
+      });
+      const harness = mountTeamPage(poolSource("editor"), {});
+      const reread = vi
+        .spyOn(harness.auth, "revalidateCurrentContextAfterInvalidation")
+        .mockImplementation(() => {
+          order.push("reread");
+          return answer();
+        });
+      render(
+        <InviteAcceptDialog
+          invitation={INVITATION}
+          onClose={() => undefined}
+          onAccepted={onAccepted}
+        />,
+        {
+          wrapper: wrapperWithInvitationAuth(harness, {
+            ...invitationAuth(),
+            acceptEnvironmentInvitation: () =>
+              Promise.resolve({ outcome: "accepted" }),
+            getRequestContextProvider: () => provider,
+          }),
+        },
+      );
+
+      await userEvent.click(screen.getByTestId("invite-accept"));
+
+      await waitFor(() => {
+        expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
+      });
+      expect(reread).toHaveBeenCalledOnce();
+      expect(order).toEqual(["reread", "onAccepted"]);
+      expect(screen.queryByTestId("invite-accept-gone")).toBeNull();
+    },
+  );
 
   it("says the invitation is no longer open, and picks nothing, when it was withdrawn", async () => {
     const onAccepted = vi.fn();

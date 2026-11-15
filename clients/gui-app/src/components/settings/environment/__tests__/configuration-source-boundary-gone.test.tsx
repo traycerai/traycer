@@ -23,6 +23,7 @@ import type {
   HostListResponse,
 } from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
@@ -35,6 +36,7 @@ import {
   ConfigurationSourceBoundary,
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
+import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { TeamPlans } from "@/components/settings/environment/team-plans";
 import {
   useCanEditConfiguration,
@@ -56,11 +58,13 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   mountTeamPage,
+  configurationItem,
   poolSource,
   requireTeamCloudAuth,
   requireTeamHostClient,
   resetTeamPageHarness,
   teamHostBoundary,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 
 /**
@@ -166,12 +170,18 @@ vi.mock("@/lib/host", async (importOriginal) => {
     }),
   };
 });
-vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/chats/use-cloud-chat-queries")
-  >()),
-  useCloudChatViewerId: () => "user-me",
-}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >();
+  return {
+    ...actual,
+    // The signed-in viewer, which a case changes under a mounted page; the
+    // other cases set none and read as this one.
+    useCloudChatViewerId: () => actual.useCloudChatViewerId() || "user-me",
+  };
+});
 
 beforeEach(() => {
   hoisted.toasts.length = 0;
@@ -358,7 +368,7 @@ function mountOwnershipConsumers(
     <>
       <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <ConfigurationPermissionProbe testId="personal-ownership-probe" />
-        <TeamPlans providerId="claude-code" adminNames={[]} />
+        <TeamPlans providerId="claude-code" />
       </ConfigurationSourceBoundary>
       <ConfigurationSourceBoundary
         target={{ kind: "team", environmentId: "env-a" }}
@@ -403,10 +413,19 @@ function mountConfigurationPermissionBoundary(options: {
   readonly target: CloudConfigurationTarget;
   readonly environments: readonly EnvironmentDescriptorV11[];
   readonly activeHost: HostDirectoryEntry;
-}): void {
-  const harness = mountTeamPage(poolSource("admin"), {
-    "environment.list": () => ({ environments: [...options.environments] }),
-  });
+  readonly failEnvironmentList?: { current: boolean };
+  readonly children?: ReactNode;
+  readonly handlers?: MockHandlerMap<HostRpcRegistry>;
+}): TeamPageHarness["queryClient"] {
+  const handlers: MockHandlerMap<HostRpcRegistry> = {
+    "environment.list": () => {
+      if (options.failEnvironmentList?.current)
+        throw new Error("Could not read environment list");
+      return { environments: [...options.environments] };
+    },
+    ...options.handlers,
+  };
+  const harness = mountTeamPage(poolSource("admin"), handlers);
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(harness.queryClient),
@@ -422,10 +441,14 @@ function mountConfigurationPermissionBoundary(options: {
   });
   render(
     <ConfigurationSourceBoundary target={options.target} section={null}>
-      <ConfigurationPermissionProbe />
+      <>
+        <ConfigurationPermissionProbe />
+        {options.children}
+      </>
     </ConfigurationSourceBoundary>,
     { wrapper: harness.Wrapper },
   );
+  return harness.queryClient;
 }
 
 /**
@@ -440,12 +463,12 @@ function mountBoundary(options: {
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "team", environmentId: "env-a" },
   });
-  answerInvitations(() => ({
-    invitations: [...options.invitations],
-  }));
   const harness = mountTeamPage(poolSource("editor"), {
     "environment.list": () => ({ environments: [...options.environments()] }),
   });
+  answerInvitations(() => ({
+    invitations: [...options.invitations],
+  }));
   render(
     <HeldValueHostRuntime>
       <ConfigurationSourceBoundary
@@ -481,12 +504,12 @@ function mountFrame(options: {
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "team", environmentId: "env-a" },
   });
-  answerInvitations(() => ({
-    invitations: [...options.invitations],
-  }));
   const harness = mountTeamPage(poolSource("editor"), {
     "environment.list": () => ({ environments: [...options.environments()] }),
   });
+  answerInvitations(() => ({
+    invitations: [...options.invitations],
+  }));
   render(
     <HeldValueHostRuntime>
       <PersonalPageFrame section="secrets">
@@ -593,12 +616,12 @@ describe("a team the environment list no longer carries", () => {
     const invited: { current: readonly EnvironmentInvitation[] } = {
       current: [],
     };
-    answerInvitations(() => ({
-      invitations: [...invited.current],
-    }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [...listed.current] }),
     });
+    answerInvitations(() => ({
+      invitations: [...invited.current],
+    }));
     render(
       <HeldValueHostRuntime>
         <PersonalPageFrame section="secrets">
@@ -637,12 +660,12 @@ describe("a team the environment list no longer carries", () => {
       pick: { kind: "team", environmentId: "env-a" },
     });
     let asked = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [PERSONAL] }),
+    });
     answerInvitations(() => {
       asked += 1;
       throw new Error("down");
-    });
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.list": () => ({ environments: [PERSONAL] }),
     });
     // The page renders again IN PLACE, which is the only re-render this case
     // can mean. Both ways of doing it through `view.rerender` measured
@@ -652,10 +675,21 @@ describe("a team the environment list no longer carries", () => {
     // child whose element is the same object and no context it reads changed.
     // The count then holds without the page having rendered at all.
     //
-    // A FRESH element tears the read's observers down and builds new ones, and
-    // a new observer on a stale entry refetches by design — `refetchOnMount`,
-    // and this harness sets no `staleTime`. That is a request nothing asked
-    // this page for, and whether it landed before the assertion was a race.
+    // A FRESH element, measured HERE, tore the read's observers down and built
+    // new ones (`observerRemoved` to `obs=0` on both routes, then
+    // `observerAdded`), and a new observer on a stale entry refetches by
+    // design — `refetchOnMount`, and this harness sets no `staleTime`. A second
+    // request then arrived from the client's own queue, drained after the first
+    // settled (`HostRequestCoordinator.drain`, no `queryFn` in its stack).
+    // Both are requests nothing asked this page for, and whether they landed
+    // before the assertion was a race.
+    //
+    // That is what happened at THIS site, and not a property of the API: the
+    // `cannot reuse one entry's answer…` case below also rerenders with fresh
+    // elements, and its evidence survives them — a remount there would reset
+    // `answeredQuestion`, so its RED on the old code could not have failed the
+    // way it did. What differs between the two sites is not pinned down, which
+    // is the reason this case no longer depends on either shape.
     //
     // Rendering from inside the mounted tree keeps the observer and the effect,
     // so the count below is evidence about the effect's dependencies — which is
@@ -723,10 +757,10 @@ describe("a team the environment list no longer carries", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
-    answerInvitations(() => ({ invitations: [] }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [PERSONAL] }),
     });
+    answerInvitations(() => ({ invitations: [] }));
     render(
       <HeldValueHostRuntime>
         {alongside}
@@ -799,10 +833,10 @@ describe("a team the environment list no longer carries", () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
-    answerInvitations(() => ({ invitations: [] }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [PERSONAL] }),
     });
+    answerInvitations(() => ({ invitations: [] }));
     render(
       <HeldValueHostRuntime>
         <PersonalPageFrame section="secrets">
@@ -844,13 +878,13 @@ describe("a team the environment list no longer carries", () => {
     }>();
     let asked = 0;
     const listed = { current: [PERSONAL, team("editor")] };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: listed.current }),
+    });
     answerInvitations(() => {
       asked += 1;
       if (asked === 2) return ownRead.promise;
       return { invitations: asked === 1 ? [] : [INVITATION] };
-    });
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.list": () => ({ environments: listed.current }),
     });
     render(
       <HeldValueHostRuntime>
@@ -919,12 +953,12 @@ describe("a team the environment list no longer carries", () => {
     }>();
     let asked = 0;
     const listed = { current: [PERSONAL, team("editor")] };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: listed.current }),
+    });
     answerInvitations(() => {
       asked += 1;
       return asked === 1 ? inFlight.promise : { invitations: [INVITATION] };
-    });
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.list": () => ({ environments: listed.current }),
     });
     render(
       <HeldValueHostRuntime>
@@ -992,12 +1026,12 @@ describe("a team the environment list no longer carries", () => {
       });
       let asked = 0;
       const listed = { current: [PERSONAL, team("editor")] };
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.list": () => ({ environments: listed.current }),
+      });
       answerInvitations(() => {
         asked += 1;
         return { invitations: [] };
-      });
-      const harness = mountTeamPage(poolSource("editor"), {
-        "environment.list": () => ({ environments: listed.current }),
       });
       render(
         <HeldValueHostRuntime>
@@ -1041,19 +1075,130 @@ describe("a team the environment list no longer carries", () => {
     }
   });
 
+  // An answer is evidence only about the entry that gave it, and the boundary
+  // is not keyed by the viewer: an account switch with Settings open keeps
+  // what the page held. The clock is frozen so that both viewers' membership
+  // answers carry one stamp, and only the invitations entry's identity tells
+  // the first viewer's answer from the second's.
+  it("does not credit one viewer's invitations answer to the next viewer", async () => {
+    const frozen = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
+    try {
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: "env-a" },
+      });
+      const listed = { current: [PERSONAL, team("editor")] };
+      const invitedA: { current: readonly EnvironmentInvitation[] } = {
+        current: [],
+      };
+      const readB = Promise.withResolvers<EnvironmentInvitationsListResponse>();
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.list": () => ({ environments: [...listed.current] }),
+      });
+      // A held clock makes every entry stale at once, so the harness would
+      // refetch forever; the staleness is restored by hand.
+      harness.queryClient.setDefaultOptions({
+        queries: { retry: false, gcTime: Infinity, staleTime: 60_000 },
+      });
+      useAuthStore.setState({
+        contextMetadata: { userId: "user-a", username: "user-a" },
+      });
+      answerInvitations(() =>
+        useAuthStore.getState().contextMetadata?.userId === "user-b"
+          ? readB.promise
+          : { invitations: [...invitedA.current] },
+      );
+      render(
+        <HeldValueHostRuntime>
+          <ConfigurationSourceBoundary
+            section={null}
+            target={{ kind: "team", environmentId: "env-a" }}
+          >
+            <Probe />
+          </ConfigurationSourceBoundary>
+        </HeldValueHostRuntime>,
+        { wrapper: harness.Wrapper },
+      );
+      await screen.findByTestId("probe");
+
+      // The first viewer is removed and invited back, and their entry answers.
+      listed.current = [PERSONAL];
+      invitedA.current = [INVITATION];
+      await act(() =>
+        harness.queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey.includes("environment.list"),
+        }),
+      );
+      expect(
+        await screen.findByRole("button", { name: "Review" }),
+      ).toBeTruthy();
+
+      // The second viewer signs in under the mounted page. Their list answers
+      // with no team, and their invitations entry has not answered.
+      act(() => {
+        useAuthStore.setState({
+          contextMetadata: { userId: "user-b", username: "user-b" },
+        });
+      });
+      await waitFor(() =>
+        expect(
+          harness.queryClient
+            .getQueryCache()
+            .getAll()
+            .some(
+              (query) =>
+                query.queryKey.includes("environment.list") &&
+                query.queryKey.includes("user-b") &&
+                query.state.status === "success",
+            ),
+        ).toBe(true),
+      );
+      expect(
+        await screen.findByText("These settings are no longer available."),
+      ).toBeTruthy();
+
+      // The first viewer's answer says nothing about the second's entry: no
+      // removal is claimed and the selection stays.
+      expect(hoisted.toasts).toEqual([]);
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: "env-a",
+      });
+
+      // Once the second viewer's own entry answers that nothing invites them,
+      // the removal is real.
+      act(() => {
+        readB.resolve({ invitations: [] });
+      });
+      await waitFor(() =>
+        expect(hoisted.toasts).toEqual([
+          {
+            message: "You're no longer in Acme.",
+            options: { id: "environment-left:env-a" },
+          },
+        ]),
+      );
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("asks again on the membership answer after a failed read, and keeps the invited team", async () => {
     useSettingsEnvironmentPickStore.setState({
       pick: { kind: "team", environmentId: "env-a" },
     });
     const invitationsFail = { current: true };
     let asked = 0;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [PERSONAL] }),
+    });
     answerInvitations(() => {
       asked += 1;
       if (invitationsFail.current) throw new Error("down");
       return { invitations: [INVITATION] };
-    });
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.list": () => ({ environments: [PERSONAL] }),
     });
     render(
       <HeldValueHostRuntime>
@@ -1115,12 +1260,12 @@ describe("a team the environment list no longer carries", () => {
   });
 
   it("keeps the failed read's own line and Retry, which an answer has not refuted", async () => {
-    answerInvitations(() => ({ invitations: [] }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => {
         throw new Error("down");
       },
     });
+    answerInvitations(() => ({ invitations: [] }));
     render(
       <ConfigurationSourceBoundary
         section={null}
@@ -1160,12 +1305,12 @@ describe("the name a picked configuration is called", () => {
     readonly environments: readonly EnvironmentDescriptorV11[];
     readonly invitations: readonly EnvironmentInvitation[];
   }): Promise<void> {
-    answerInvitations(() => ({
-      invitations: [...options.invitations],
-    }));
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.list": () => ({ environments: [...options.environments] }),
     });
+    answerInvitations(() => ({
+      invitations: [...options.invitations],
+    }));
     render(<Label />, { wrapper: harness.Wrapper });
     await waitFor(() => {
       expect(harness.queryClient.isFetching()).toBe(0);
@@ -1252,7 +1397,6 @@ describe("configuration access after the team-computer lift", () => {
     expect(probe.getAttribute("data-effective-role")).toBe("admin");
     expect(probe.getAttribute("data-provider-handle")).toBe("handle-a");
     expect(probe.getAttribute("data-can-edit")).toBe("true");
-    expect(probe.getAttribute("data-can-administer")).toBe("true");
     expect(screen.queryByText(/but not change them/)).toBeNull();
   }
 
@@ -1264,6 +1408,91 @@ describe("configuration access after the team-computer lift", () => {
     });
 
     await expectEditableAdmin();
+  });
+
+  it("closes the configuration gate after the cached Admin role read fails", async () => {
+    const failEnvironmentList = { current: false };
+    const queryClient = mountConfigurationPermissionBoundary({
+      target: { kind: "team", environmentId: "env-a" },
+      environments: [PERSONAL, team("admin")],
+      activeHost: TEAM_OWNED_PHYSICAL_HOST,
+      failEnvironmentList,
+    });
+    const probe = await screen.findByTestId("configuration-permission-probe");
+    expect(probe.getAttribute("data-effective-role")).toBe("admin");
+    expect(probe.getAttribute("data-can-edit")).toBe("true");
+    const listQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+
+    failEnvironmentList.current = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: listQuery.queryKey });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(probe.getAttribute("data-can-edit")).toBe("false");
+    expect(
+      await screen.findByText(
+        "You can see Acme's settings but not change them.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("makes the approval policy read-only when its cached Admin role read fails", async () => {
+    const failEnvironmentList = { current: false };
+    const queryClient = mountConfigurationPermissionBoundary({
+      target: { kind: "team", environmentId: "env-a" },
+      environments: [PERSONAL, team("admin")],
+      activeHost: TEAM_OWNED_PHYSICAL_HOST,
+      failEnvironmentList,
+      handlers: {
+        "environment.configuration.items": () => ({
+          items: [
+            configurationItem({
+              kind: "auto_policy",
+              key: "policy",
+              value: { body: "Allow reads" },
+              revision: 3,
+            }),
+          ],
+        }),
+      },
+      children: <TeamPermissions>{null}</TeamPermissions>,
+    });
+
+    // An editable CodeMirror draws no `aria-readonly`; it is drawn only once
+    // the editor is read-only.
+    await waitFor(() => {
+      const editor = screen.getByRole("textbox", { name: "Approval policy" });
+      expect(editor.getAttribute("contenteditable")).toBe("true");
+      expect(editor.hasAttribute("aria-readonly")).toBe(false);
+    });
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    const listQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+
+    failEnvironmentList.current = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: listQuery.queryKey });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("textbox", { name: "Approval policy" })
+          .getAttribute("aria-readonly"),
+      ).toBe("true"),
+    );
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
   it("keeps Personal's owner editable on the user's physical remote host", async () => {
@@ -1284,6 +1513,16 @@ describe("configuration access after the team-computer lift", () => {
       target: { kind: "team", environmentId: "env-a" },
       environments: [PERSONAL, team("admin")],
       activeHost: TEAM_OWNED_SANDBOX_HOST,
+    });
+
+    await expectEditableAdmin();
+  });
+
+  it("keeps a team admin editable on this user's local host", async () => {
+    mountConfigurationPermissionBoundary({
+      target: { kind: "team", environmentId: "env-a" },
+      environments: [PERSONAL, team("admin")],
+      activeHost: mockLocalHostEntry,
     });
 
     await expectEditableAdmin();

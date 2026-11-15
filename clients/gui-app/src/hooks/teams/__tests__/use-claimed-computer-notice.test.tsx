@@ -11,7 +11,12 @@ import type {
   ClaimedComputer,
   ClaimedComputersResult,
 } from "@traycer-clients/shared/auth/claimed-computers";
+import type { HostDoorState } from "@traycer-clients/shared/host-transport/host-door-state";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
 import { keyedSeen } from "@/lib/persist/keyed-seen-store";
 import { authQueryKeys } from "@/lib/query-keys/auth-query-keys";
 
@@ -59,9 +64,9 @@ vi.mock("@/hooks/host/use-host-lease", () => ({
   useHostLeases: () => [],
 }));
 
+import { useHostClaim } from "@/hooks/host/use-host-claim";
 import { useClaimedComputerNotice } from "@/hooks/teams/use-claimed-computer-notice";
 import {
-  noteOwnClaim,
   useClaimNoticesToldStore,
   useOwnClaimsStore,
 } from "@/stores/hosts/claimed-computer-notice-store";
@@ -195,6 +200,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -233,24 +239,30 @@ describe("useClaimedComputerNotice", () => {
     expect(mocks.toastInfo).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a failed read waiting and tells the claim when the list refresh reads again", async () => {
-    mocks.read.mockImplementationOnce(() => answer({ kind: "failed" }));
-    const view = mount();
-    await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));
-    expect(mocks.toastInfo).not.toHaveBeenCalled();
+  it.each([
+    ["failed", { kind: "failed" }],
+    ["unauthorized", { kind: "unauthorized" }],
+  ] as const)(
+    "keeps an %s read waiting and tells the claim when the list refresh reads again",
+    async (_kind, firstAnswer) => {
+      mocks.read.mockImplementationOnce(() => answer(firstAnswer));
+      const view = mount();
+      await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));
+      expect(mocks.toastInfo).not.toHaveBeenCalled();
 
-    mocks.read.mockImplementation(() =>
-      answer({ kind: "ok", claims: [CLAIM] }),
-    );
-    mocks.hosts.updatedAt = 2;
-    view.rerender();
+      mocks.read.mockImplementation(() =>
+        answer({ kind: "ok", claims: [CLAIM] }),
+      );
+      mocks.hosts.updatedAt = 2;
+      view.rerender();
 
-    await waitFor(() =>
-      expect(mocks.toastInfo).toHaveBeenCalledExactlyOnceWith(ADA_SENTENCE, {
-        id: "claimed-computer:host-1@2026-11-14T10:00:00.000Z",
-      }),
-    );
-  });
+      await waitFor(() =>
+        expect(mocks.toastInfo).toHaveBeenCalledExactlyOnceWith(ADA_SENTENCE, {
+          id: "claimed-computer:host-1@2026-11-14T10:00:00.000Z",
+        }),
+      );
+    },
+  );
 
   it("reads again when a team computer leaves the list", async () => {
     mocks.hosts.current = { hosts: [teamHost("host-1")] };
@@ -316,8 +328,7 @@ describe("useClaimedComputerNotice", () => {
   });
 
   it("leaves another reader's first read of the team to finish, and reads after it", async () => {
-    let finishOther: (result: ClaimedComputersResult) => void = () =>
-      undefined;
+    let finishOther: (result: ClaimedComputersResult) => void = () => undefined;
     mocks.read.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -408,7 +419,6 @@ describe("useClaimedComputerNotice", () => {
     );
     expect(mocks.read).toHaveBeenCalledTimes(3);
   });
-
   it("tells nothing, and records nothing, when the account switches while the read waits", async () => {
     let finish: (result: ClaimedComputersResult) => void = () => undefined;
     mocks.read.mockImplementationOnce(
@@ -449,15 +459,112 @@ describe("useClaimedComputerNotice", () => {
     expect(toldFor("user-b", CLAIM)).toBe(false);
   });
 
-  it("settles the person's own claim made here without telling it", async () => {
-    noteOwnClaim("user-a", { environmentId: "env-a", hostId: "host-1" });
+  it("tells the signed-in claimant about a claim from another computer", async () => {
+    const ownClaim = { ...CLAIM, claimantName: "user-a" };
     mocks.read.mockImplementation(() =>
-      answer({ kind: "ok", claims: [CLAIM] }),
+      answer({ kind: "ok", claims: [ownClaim] }),
     );
 
     mount();
-    await waitFor(() => expect(toldFor("user-a", CLAIM)).toBe(true));
+    await waitFor(() =>
+      expect(mocks.toastInfo).toHaveBeenCalledExactlyOnceWith(
+        "user-a claimed this computer. It no longer belongs to Acme.",
+        { id: `claimed-computer:${ownClaim.hostId}@${ownClaim.claimedAt}` },
+      ),
+    );
+  });
+
+  it.each([
+    ["no matching claim", { kind: "ok", claims: [] }],
+    ["a not-found answer", { kind: "not-found" }],
+  ] as const)("does not tell a claim after %s", async (_case, result) => {
+    mocks.read.mockImplementation(() => answer(result));
+
+    mount();
+    await waitFor(() => expect(mocks.read).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(mocks.toastInfo).not.toHaveBeenCalled();
-    expect(useOwnClaimsStore.getState().byViewer["user-a"]).toEqual([]);
+  });
+});
+
+/** The entry a read of the filters or key `argument` names, if it is one. */
+function keyOf(argument: unknown): readonly unknown[] | null {
+  const key: unknown =
+    typeof argument === "object" &&
+    argument !== null &&
+    !Array.isArray(argument)
+      ? Reflect.get(argument, "queryKey")
+      : argument;
+  return Array.isArray(key) ? key.map((part: unknown) => part) : null;
+}
+
+describe("useClaimedComputerNotice beside a claimed computer's cover", () => {
+  afterEach(() => {
+    useHostDoorStateStore.setState({ byHost: new Map() });
+  });
+
+  it("tells the claim once and lets the cover name the claimant, neither touching the other's read", async () => {
+    mocks.read.mockImplementation(() =>
+      answer({ kind: "ok", claims: [CLAIM] }),
+    );
+    const queryClient = newQueryClient();
+    // Every way a reader could cancel, drop or overwrite an entry it shares.
+    const writers = [
+      vi.spyOn(queryClient, "setQueryData"),
+      vi.spyOn(queryClient, "resetQueries"),
+      vi.spyOn(queryClient, "removeQueries"),
+      vi.spyOn(queryClient, "cancelQueries"),
+      vi.spyOn(queryClient, "invalidateQueries"),
+    ];
+    const state: HostDoorState = {
+      hostId: "host-1",
+      kind: "host-claimed",
+      detail: null,
+    };
+    noteHostDoorState(state);
+
+    const view = renderHook(
+      () => {
+        useClaimedComputerNotice();
+        return useHostClaim("host-1", state);
+      },
+      {
+        wrapper: (props: { readonly children: ReactNode }) => (
+          <QueryClientProvider client={queryClient}>
+            {props.children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+
+    await waitFor(() =>
+      expect(view.result.current).toEqual({
+        claimantName: "Ada",
+        teamName: "Acme",
+      }),
+    );
+    await waitFor(() =>
+      expect(mocks.toastInfo).toHaveBeenCalledExactlyOnceWith(ADA_SENTENCE, {
+        id: "claimed-computer:host-1@2026-11-14T10:00:00.000Z",
+      }),
+    );
+    // Each asked for its own read, after the other's.
+    expect(mocks.read).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(claimedEntryKey())).toEqual({
+      kind: "ok",
+      claims: [CLAIM],
+    });
+    const entry = claimedEntryKey();
+    const touched = writers.flatMap((spy) =>
+      spy.mock.calls.filter((call) => {
+        const key = keyOf(call[0]);
+        return (
+          key !== null && entry.every((part, i) => Object.is(part, key[i]))
+        );
+      }),
+    );
+    expect(touched).toEqual([]);
   });
 });

@@ -84,6 +84,7 @@ const mocks = vi.hoisted(() => ({
     binding: null as EnvironmentHostBinding | null,
     status: null as EnvironmentStatusResponseV11 | null,
     teamRole: "editor",
+    environmentListFails: false,
     /** The rendered host's client, which a request named for its id reaches. */
     client: null as HostClient<HostRpcRegistry> | null,
   },
@@ -141,12 +142,19 @@ vi.mock("@/hooks/bots/use-environment-list-query", async () => {
     useEnvironmentListQuery: (enabled: boolean) =>
       useQuery({
         queryKey: ["environment-list-fixture", mocks.state.teamRole],
-        queryFn: () => ({
-          environments: [
-            listedEnvironment(PERSONAL),
-            { ...listedEnvironment(TEAM), effectiveRole: mocks.state.teamRole },
-          ],
-        }),
+        queryFn: () => {
+          if (mocks.state.environmentListFails)
+            throw new Error("The account environment list could not be read.");
+          return {
+            environments: [
+              listedEnvironment(PERSONAL),
+              {
+                ...listedEnvironment(TEAM),
+                effectiveRole: mocks.state.teamRole,
+              },
+            ],
+          };
+        },
         enabled,
       }),
   };
@@ -307,6 +315,7 @@ function ownershipResult(
 
 beforeEach(() => {
   mocks.state.teamRole = "editor";
+  mocks.state.environmentListFails = false;
   mocks.state.client = null;
   mocks.auth.currentAuthEra.mockReset();
   mocks.auth.currentAuthEra.mockReturnValue({
@@ -719,6 +728,37 @@ describe("HostEnvironmentSection", () => {
         queryClient.getQueryState(["environment-list-fixture", "viewer"])
           ?.status,
       ).toBe("success"),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
+  });
+
+  it("hides Claim after the cached Admin role read fails", async () => {
+    mocks.state.teamRole = "admin";
+    mocks.state.binding = teamBinding(true);
+    mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
+    const queryClient = renderSection("personal", {
+      ...NO_SECTION_OPTIONS,
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+    });
+    const queryKey = ["environment-list-fixture", "admin"];
+
+    expect(
+      await screen.findByRole("button", { name: "Claim this computer" }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKey)?.status).toBe("success"),
+    );
+
+    mocks.state.environmentListFails = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey });
+    });
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKey)?.status).toBe("error"),
     );
     expect(
       screen.queryByRole("button", { name: "Claim this computer" }),
