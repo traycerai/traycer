@@ -13,6 +13,7 @@ import {
 import { CopyTextButton } from "@/components/copy-text-button";
 import {
   profileCommitId,
+  profileUsesRecord,
   profileDisplayLabel,
   profileEnablementTooltipText,
   profileEligibilityToggleDisabledReason,
@@ -27,6 +28,7 @@ import { useClearProviderProfileApiKey } from "@/hooks/providers/use-clear-provi
 import { useSetProviderProfileApiKey } from "@/hooks/providers/use-set-provider-profile-api-key-mutation";
 import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
+import { useNameProfileRecordForClient } from "@/hooks/providers/use-name-profile-record-mutation";
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useProvidersAnswerProfileNameForClient } from "@/hooks/providers/use-providers-answer-profile-name-mutation";
 import {
@@ -582,15 +584,20 @@ interface ProfileRename {
   readonly error: Error | null;
 }
 
-/**
- * Rename on an account with other names sets its name everywhere and clears
- * them (`providers.answerProfileName`); `onRenamed` gets the name the account
- * then uses. Anywhere else it renames as before.
- */
-function useProfileRename(profile: ProviderProfile): ProfileRename {
+/** A record's name is written on the person's session; local rows keep their calls. */
+function useProfileRename(
+  providerId: ProviderId,
+  profile: ProviderProfile,
+): ProfileRename {
+  const client = useHostClient();
+  const usesRecord = profileUsesRecord(profile);
+  const nameRecord = useNameProfileRecordForClient(
+    client,
+    providerId,
+    usesRecord,
+  );
   const renameProfile = useRenameProviderProfile();
-  const answerProfileName =
-    useProvidersAnswerProfileNameForClient(useHostClient());
+  const answerProfileName = useProvidersAnswerProfileNameForClient(client);
   const answersName =
     useHostSupportsMethod(
       usePersonalPageHost().hostId,
@@ -599,6 +606,10 @@ function useProfileRename(profile: ProviderProfile): ProfileRename {
   return {
     rename: (providerId, label, onRenamed) => {
       const request = { providerId, profileId: profile.profileId, label };
+      if (usesRecord) {
+        nameRecord.mutate(request, { onSuccess: onRenamed });
+        return;
+      }
       if (answersName) {
         answerProfileName.mutate(request, {
           onSuccess: (data) => onRenamed(data.label),
@@ -607,8 +618,11 @@ function useProfileRename(profile: ProviderProfile): ProfileRename {
       }
       renameProfile.mutate(request, { onSuccess: () => onRenamed(label) });
     },
-    isPending: renameProfile.isPending || answerProfileName.isPending,
-    error: renameProfile.error ?? answerProfileName.error,
+    isPending:
+      nameRecord.isPending ||
+      renameProfile.isPending ||
+      answerProfileName.isPending,
+    error: nameRecord.error ?? renameProfile.error ?? answerProfileName.error,
   };
 }
 
@@ -712,7 +726,7 @@ export function ProfileEditDialog(props: {
     );
   };
   const removeProfile = useRemoveProviderProfile();
-  const renameProfile = useProfileRename(props.profile);
+  const renameProfile = useProfileRename(providerId, props.profile);
   const recolorProfile = useRecolorProviderProfile();
   const [switchingAccountOverride, setSwitchingAccount] = useState<
     boolean | null

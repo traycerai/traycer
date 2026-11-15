@@ -646,7 +646,9 @@ export interface RevokedCloudAuthorization {
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") without clearing persisted credentials.
  */
-export class AuthService implements ProfileRecordClient, ProfileRecordEnablementClient {
+export class AuthService
+  implements ProfileRecordClient, ProfileRecordEnablementClient
+{
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;

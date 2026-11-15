@@ -45,6 +45,8 @@ export interface ProfileListHost {
   readonly listCalls: unknown[];
   readonly answerNameCalls: AnswerProfileNameRequest[];
   readonly setEnabledCalls: SetEnabledRequest[];
+  readonly rpcCalls: MockHostMessenger<HostRpcRegistry>["calls"];
+  readonly exposeEnvironmentBinding: () => void;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
@@ -65,74 +67,109 @@ export function createProfileListHost(input: {
   const listCalls: unknown[] = [];
   const answerNameCalls: AnswerProfileNameRequest[] = [];
   const setEnabledCalls: SetEnabledRequest[] = [];
+  const handlers = {
+    "providers.list": (
+      params: RequestOfMethod<HostRpcRegistry, "providers.list">,
+    ) => {
+      listCalls.push(params);
+      return {
+        providers: input.answer.providers,
+        native: null,
+        removedProfiles: input.answer.removedProfiles,
+      };
+    },
+    "providers.answerProfileName": (params: AnswerProfileNameRequest) => {
+      answerNameCalls.push(params);
+      const response = input.answerProfileName(params);
+      const listedLabel =
+        input.listLabelAfterAnswer === undefined
+          ? response.label
+          : input.listLabelAfterAnswer;
+      input.answer.providers = input.answer.providers.map((provider) =>
+        provider.providerId !== params.providerId
+          ? provider
+          : {
+              ...provider,
+              profiles: provider.profiles.map((profile) =>
+                profile.profileId === params.profileId
+                  ? { ...profile, label: listedLabel, otherNames: [] }
+                  : profile,
+              ),
+            },
+      );
+      return response;
+    },
+    "providers.setEnabled": (params: SetEnabledRequest) => {
+      setEnabledCalls.push(params);
+      if (input.failSetEnabled) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "The rename did not finish.",
+          requestId: "req-1",
+          method: "providers.setEnabled",
+          fatalDetails: null,
+        });
+      }
+      const action = params.profileAction;
+      if (action !== null && action.type === "rename") {
+        input.answer.providers = input.answer.providers.map((provider) =>
+          provider.providerId !== params.providerId
+            ? provider
+            : {
+                ...provider,
+                profiles: provider.profiles.map((profile) =>
+                  profile.profileId === action.profileId
+                    ? { ...profile, label: action.label }
+                    : profile,
+                ),
+              },
+        );
+      }
+      return setEnabledEcho(params.providerId);
+    },
+  };
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-1",
+    handlers,
+  });
+  function exposeEnvironmentBinding(): void {
+    messenger.setHandlers({
+      ...handlers,
+      "environment.status": () => ({
+        principal: { kind: "team", teamName: "Test team" },
+        reachability: "connected",
+        bindingGeneration: null,
+        desiredRevision: null,
+        receivedRevision: null,
+        appliedRevision: null,
+        receiptAgeMs: null,
+        items: [],
+        pendingUploads: [],
+        setup: null,
+        remoteAccess: "off",
+      }),
+      "environment.host.read": () => ({
+        hostId: mockLocalHostEntry.hostId,
+        environment: {
+          environmentId: "environment-profile-fixture",
+          ownerKind: "organization",
+          ownerId: "team-profile-fixture",
+          roomId: "room-profile-fixture",
+          label: "Test team",
+        },
+        explicit: true,
+        enrolledByUserId: "user-profile-fixture",
+        canUnbind: false,
+      }),
+    });
+  }
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: {
-        "providers.list": (params) => {
-          listCalls.push(params);
-          return {
-            providers: input.answer.providers,
-            native: null,
-            removedProfiles: input.answer.removedProfiles,
-          };
-        },
-        "providers.answerProfileName": (params) => {
-          answerNameCalls.push(params);
-          const response = input.answerProfileName(params);
-          const listedLabel =
-            input.listLabelAfterAnswer === undefined
-              ? response.label
-              : input.listLabelAfterAnswer;
-          input.answer.providers = input.answer.providers.map((provider) =>
-            provider.providerId !== params.providerId
-              ? provider
-              : {
-                  ...provider,
-                  profiles: provider.profiles.map((profile) =>
-                    profile.profileId === params.profileId
-                      ? { ...profile, label: listedLabel, otherNames: [] }
-                      : profile,
-                  ),
-                },
-          );
-          return response;
-        },
-        "providers.setEnabled": (params) => {
-          setEnabledCalls.push(params);
-          if (input.failSetEnabled) {
-            throw new HostRpcError({
-              code: "RPC_ERROR",
-              message: "The rename did not finish.",
-              requestId: "req-1",
-              method: "providers.setEnabled",
-              fatalDetails: null,
-            });
-          }
-          const action = params.profileAction;
-          if (action !== null && action.type === "rename") {
-            input.answer.providers = input.answer.providers.map((provider) =>
-              provider.providerId !== params.providerId
-                ? provider
-                : {
-                    ...provider,
-                    profiles: provider.profiles.map((profile) =>
-                      profile.profileId === action.profileId
-                        ? { ...profile, label: action.label }
-                        : profile,
-                    ),
-                  },
-            );
-          }
-          return setEnabledEcho(params.providerId);
-        },
-      },
-    }),
+    messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
@@ -154,6 +191,8 @@ export function createProfileListHost(input: {
     listCalls,
     answerNameCalls,
     setEnabledCalls,
+    rpcCalls: messenger.calls,
+    exposeEnvironmentBinding,
     Wrapper,
   };
 }
