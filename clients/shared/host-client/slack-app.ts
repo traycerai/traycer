@@ -4,6 +4,10 @@ import {
   slackAppReadResponseSchema,
   slackAppRefusalBodySchema,
   slackAppResponseSchema,
+  SLACK_APP_REFUSAL_APP_NOT_FOUND,
+  SLACK_APP_REFUSAL_APP_TAKEN,
+  SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+  SLACK_APP_REFUSAL_NOT_CONFIGURED,
   type SlackAppDmsRequest,
   type SlackAppRegisterRequest,
   type SlackAppView,
@@ -42,8 +46,11 @@ const SLACK_APP_WRITE_TIMEOUT_MS = 70_000;
  * A non-`ok` answer:
  *  - `unauthorized`  — the bearer was rejected (401/403).
  *  - `refused`       — the server answered with its typed error body; `code`
- *                      is its word (`slack_not_configured`, `NOT_FOUND`, ...;
- *                      see `@traycer/protocol/host/slack-app`).
+ *                      is its word when this build knows it
+ *                      (`slack_not_configured`, `NOT_FOUND`, ...; see
+ *                      `@traycer/protocol/host/slack-app`), and
+ *                      `unrecognized` for any other, whose raw value is
+ *                      dropped here.
  *  - `network-error` — transport/timeout, a non-2xx without a typed body, or
  *                      a body this build cannot parse. `detail` is a stable
  *                      classification, never a raw server body.
@@ -97,6 +104,21 @@ function slackAppsUrl(serverBaseUrl: string, route: SlackAppRoute): string {
     : `${serverBaseUrl}/`;
   return new URL(`api/slack/apps/${route}`, base).toString();
 }
+
+/**
+ * The refusal codes the app branches on. Any other code is the server's
+ * free text, which could hold anything the request carried, the register
+ * call's two secrets included, so it never leaves this file: it reads as
+ * `unrecognized`, which every caller shows as its generic line.
+ */
+const KNOWN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  SLACK_APP_REFUSAL_NOT_CONFIGURED,
+  SLACK_APP_REFUSAL_APP_NOT_FOUND,
+  SLACK_APP_REFUSAL_APP_TAKEN,
+  SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+]);
+
+const UNRECOGNIZED_REFUSAL_CODE = "unrecognized";
 
 type PostResult<T> =
   | { readonly kind: "ok"; readonly value: T }
@@ -176,8 +198,16 @@ async function post<T>(
   if (status === 401 || status === 403) return { kind: "unauthorized" };
   if (status < 200 || status >= 300) {
     const refusal = slackAppRefusalBodySchema.safeParse(parsedBody);
+    // Still `refused` for an unknown code, never `network-error`: the server
+    // answered, and an answer is not asked again (the app read's retry rule).
     return refusal.success
-      ? { kind: "refused", status, code: refusal.data.code }
+      ? {
+          kind: "refused",
+          status,
+          code: KNOWN_REFUSAL_CODES.has(refusal.data.code)
+            ? refusal.data.code
+            : UNRECOGNIZED_REFUSAL_CODE,
+        }
       : {
           kind: "network-error",
           detail: `the server answered HTTP ${status} without a typed refusal`,

@@ -789,8 +789,15 @@ function useRoutingVerbs(input: {
         // it was and is said inline; unmounted, there is no line to say it.
         // The write is the app's own call to the server; only the retry
         // needs this chat's host.
+        //
+        // Both steps belong to the sign-in of the press. A write answered
+        // after it ended comes back `null` and publishes nothing; the retry is
+        // sent only while that same sign-in is current, so a sign-out, an
+        // account switch or a sign-in again in between drops it silently. A
+        // token rotation of the same sign-in keeps it.
         void writeBot.mutateAsync(request.write).then(
-          () => {
+          (written) => {
+            if (written === null || !written.signIn.isCurrent()) return;
             sendRung("retry", null, attempt);
           },
           (error: Error) => {

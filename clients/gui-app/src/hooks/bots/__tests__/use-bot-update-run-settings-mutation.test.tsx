@@ -23,6 +23,8 @@ const binding = vi.hoisted(
         readonly updateBotRunSettings: (
           request: BotUpdateRunSettingsRequest,
         ) => Promise<BotSetupWriteResult>;
+        readonly getIdentityGeneration: () => number;
+        readonly isIdentityCurrent: (generation: number) => boolean;
       };
     } | null;
   } => ({ current: null }),
@@ -54,6 +56,8 @@ describe("useBotUpdateRunSettingsMutation", () => {
             bot: { ...request, replyMode: "thread" },
           });
         },
+        getIdentityGeneration: () => 1,
+        isIdentityCurrent: (generation) => generation === 1,
       },
     };
     const listKey = hostQueryKeys.method<HostRpcRegistry, "bot.list">(

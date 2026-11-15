@@ -2111,9 +2111,10 @@ export class AuthService {
    * service is not disposed). Async credential tails capture the generation
    * before their first await and re-check through this after each one, so a
    * newer `signIn()` / `signOut()` / `dispose()` always wins over an
-   * already-started save/rotate/provision.
+   * already-started save/rotate/provision. A direct bot write's caller fences
+   * its own later steps the same way (`hooks/bots/bot-write-sign-in.ts`).
    */
-  private isIdentityCurrent(generation: number): boolean {
+  isIdentityCurrent(generation: number): boolean {
     return !this.disposed && generation === this.identityGeneration;
   }
 

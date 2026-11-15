@@ -43,6 +43,7 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
 import { applyBotSettingsToViews } from "@/hooks/bots/use-bot-subscription";
 import { botSetupError } from "@/hooks/bots/bot-setup-error";
+import { pressSignIn, type PressSignIn } from "@/hooks/bots/bot-write-sign-in";
 
 /**
  * The `bot.*` writes (Tracy Bots). Every hook takes the client that carries the
@@ -94,7 +95,7 @@ export function useBotCreateMutation(
  * the list no longer carries it.
  */
 export function useBotDeleteMutation(): UseMutationResult<
-  BotDeleteResponse,
+  BotDeleteResponse | null,
   Error,
   BotDeleteRequest
 > {
@@ -104,11 +105,14 @@ export function useBotDeleteMutation(): UseMutationResult<
     mutationKey: botMutationKeys.delete(),
     mutationFn: async (request) => {
       if (binding === null) throw botSetupError({ kind: "no_response" });
+      const signIn = pressSignIn(binding.auth);
       const result = await binding.auth.deleteBot(request);
+      if (!signIn.isCurrent()) return null;
       if (result.kind !== "ok") throw botSetupError(result);
       return { deleted: result.deleted };
     },
-    onSuccess: () => {
+    onSuccess: (answer) => {
+      if (answer === null) return;
       invalidateBotLists(queryClient);
     },
   });
@@ -135,9 +139,11 @@ export function useBotUpdateTitleMutation(
  * The harness, model, effort and profile the bot's next turn runs on. The
  * answer is laid over every view of the bot this app holds, since no host
  * re-sends one for a change it did not make, and every list is read again.
+ * `null` is a write whose sign-in ended before the answer (`pressSignIn`):
+ * nothing is laid over, read again or said.
  */
 export function useBotUpdateRunSettingsMutation(): UseMutationResult<
-  BotSetupRow,
+  BotRunSettingsWrite | null,
   Error,
   BotUpdateRunSettingsRequest
 > {
@@ -147,19 +153,32 @@ export function useBotUpdateRunSettingsMutation(): UseMutationResult<
     mutationKey: botMutationKeys.updateRunSettings(),
     mutationFn: async (request) => {
       if (binding === null) throw botSetupError({ kind: "no_response" });
+      const signIn = pressSignIn(binding.auth);
       const result = await binding.auth.updateBotRunSettings(request);
+      if (!signIn.isCurrent()) return null;
       if (result.kind !== "ok") throw botSetupError(result);
-      return result.bot;
+      return { bot: result.bot, signIn };
     },
-    onSuccess: (bot) => {
-      applyBotSettingsToViews(queryClient, bot);
+    onSuccess: (written) => {
+      if (written === null) return;
+      applyBotSettingsToViews(queryClient, written.bot);
       invalidateBotLists(queryClient);
     },
   });
 }
 
+/**
+ * A run-settings write the server took, with the sign-in it was pressed
+ * under: a later step on its answer (the fallback's retry) asks that sign-in
+ * first.
+ */
+export interface BotRunSettingsWrite {
+  readonly bot: BotSetupRow;
+  readonly signIn: PressSignIn;
+}
+
 export function useBotUpdateReplyModeMutation(): UseMutationResult<
-  BotSetupRow,
+  BotSetupRow | null,
   Error,
   BotUpdateReplyModeRequest
 > {
@@ -169,11 +188,14 @@ export function useBotUpdateReplyModeMutation(): UseMutationResult<
     mutationKey: botMutationKeys.updateReplyMode(),
     mutationFn: async (request) => {
       if (binding === null) throw botSetupError({ kind: "no_response" });
+      const signIn = pressSignIn(binding.auth);
       const result = await binding.auth.updateBotReplyMode(request);
+      if (!signIn.isCurrent()) return null;
       if (result.kind !== "ok") throw botSetupError(result);
       return result.bot;
     },
     onSuccess: (bot) => {
+      if (bot === null) return;
       applyBotSettingsToViews(queryClient, bot);
       invalidateBotLists(queryClient);
     },

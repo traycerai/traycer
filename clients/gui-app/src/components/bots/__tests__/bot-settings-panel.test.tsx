@@ -334,6 +334,9 @@ function newSlackHost(): MockRunnerHost {
 
 function newSlackAuth(host: MockRunnerHost): object {
   return {
+    // One sign-in for the whole case: every write's answer is read.
+    getIdentityGeneration: () => 1,
+    isIdentityCurrent: (generation: number) => generation === 1,
     readSlackApp: async (botId: string) =>
       slackOverrides.read ?? host.readSlackApp(SLACK_BEARER, botId),
     getSlackAppManifest: async (botId: string) =>
