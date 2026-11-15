@@ -514,7 +514,11 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     expect(seams.openAttempts).toEqual([TAB_HOST_ID]);
     publishTabRow("1.5.4");
     await screen.findByTestId("epic-repoint-failure");
+    // Two local refusals after the mount: the release's own reacquire, and the
+    // one run the controller's run key starts when its demand segment moves to
+    // "wants". Nothing follows, and neither is dialled.
     const attemptsAtFailure = [...seams.openAttempts];
+    expect(attemptsAtFailure).toEqual([TAB_HOST_ID, TAB_HOST_ID, TAB_HOST_ID]);
 
     // The ladder's first rung would fall due after a minute; the card is still
     // the answer then, and no transport was opened for it.
