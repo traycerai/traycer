@@ -597,6 +597,32 @@ describe("TeamTextItems on a phone", () => {
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
   });
 
+  it("does not send a dirty phone value when the page unmounts before Save", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [variable("development", 4, "any")],
+      }),
+      "environment.configuration.items.put": () => saved(5),
+    });
+    const page = renderPhone(<TextItemsPage />, harness);
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    const dialog = await openPreview("NODE_ENV", "development");
+    fireEvent.change(within(dialog).getByLabelText("Value for NODE_ENV"), {
+      target: { value: "unsaved-phone-draft" },
+    });
+
+    page.unmount();
+
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
+    expect(
+      harness.cloudRequests.filter(
+        (request) =>
+          request.method === "PUT" &&
+          new URL(request.url).pathname.endsWith("/items/variable"),
+      ),
+    ).toEqual([]);
+  });
+
   it("removes the original key, scope and revision from the sheet", async () => {
     let items = [variable("development", 4, "linux")];
     const harness = mountTeamPage(poolSource("editor"), {

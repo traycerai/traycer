@@ -19,7 +19,10 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { EnvironmentCloud, EnvironmentTransportRequest } from "@traycer-clients/shared/environment/environment-cloud";
+import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -37,7 +40,7 @@ import {
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
-import type { AuthService } from "@/lib/auth/auth-service";
+import type { AuthService, ExternalSession } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hashAppQueryKey } from "@/lib/query/query-key-hash";
@@ -123,7 +126,8 @@ export function requireTeamEnvironmentAuthnBinding(): {
     hostClient: requireTeamHostClient(),
     hostId: null,
     auth: {
-      environmentCloud: () => environmentCloudOverride ?? auth.environmentCloud(),
+      environmentCloud: () =>
+        environmentCloudOverride ?? auth.environmentCloud(),
     },
   };
 }
@@ -169,6 +173,59 @@ export function configurationItem(
     updatedAt: 1,
     writtenBy: { source: "live", hostId: null, hostName: null },
     ...row,
+  };
+}
+
+export function authSessionForUser(
+  userId: string,
+  token: string,
+): ExternalSession {
+  const now = new Date("2026-07-30T10:00:00.000Z");
+  return {
+    status: "signed-in",
+    token,
+    profile: {
+      userId,
+      userName: `${userId} display`,
+      email: `${userId}@example.com`,
+      avatarUrl: null,
+    },
+    user: {
+      user: {
+        id: userId,
+        name: `${userId} display`,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: now,
+        updatedAt: now,
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+      environments: { personal: null, teams: [] },
+      actingAs: null,
+    },
   };
 }
 

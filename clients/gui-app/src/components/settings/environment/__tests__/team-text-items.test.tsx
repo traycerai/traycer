@@ -9,11 +9,14 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentConfigurationItem,
   EnvironmentConfigurationItemWriteResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
+import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+import { AuthService } from "@/lib/auth/auth-service";
 import { TeamTextItems } from "@/components/settings/environment/team-text-items";
 import {
   useConfigurationItemWrites,
@@ -24,8 +27,10 @@ import { useConfigurationProviderItemsQuery } from "@/hooks/environment/team/use
 import { useConfigurationVariablesQuery } from "@/hooks/environment/team/use-variables-query";
 import { READ_BOUND_MS } from "@/hooks/environment/team/use-bounded-read";
 import {
+  authSessionForUser,
   configurationItem,
   mountTeamPage,
+  personalPoolSource,
   poolSource,
   requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
@@ -33,21 +38,37 @@ import {
   type TeamPageHarness,
 } from "./team-configuration-test-support";
 
+const authViewerMock = vi.hoisted(() => ({ fromAuthStore: false }));
+
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
   useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
-vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/chats/use-cloud-chat-queries")
-  >()),
-  useCloudChatViewerId: () => "user-me",
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), message: vi.fn() },
 }));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const { useAuthStore } = await import("@/stores/auth/auth-store");
+  return {
+    ...(await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >()),
+    useCloudChatViewerId: () => {
+      const userId = useAuthStore(
+        (state) => state.contextMetadata?.userId ?? "",
+      );
+      return authViewerMock.fromAuthStore ? userId : "user-me";
+    },
+  };
+});
 
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  authViewerMock.fromAuthStore = false;
+  vi.mocked(toast.error).mockClear();
   vi.useRealTimers();
 });
 
@@ -160,6 +181,59 @@ function mountEditor(
     "environment.configuration.items": items,
     "environment.configuration.items.put": put,
   });
+}
+
+interface MountedAuthPersonalVariables {
+  readonly harness: TeamPageHarness;
+  readonly unmount: () => void;
+}
+
+function mountAuthPersonalVariables(
+  items: EnvironmentConfigurationItem[],
+  userId: string,
+  token: string,
+): MountedAuthPersonalVariables {
+  authViewerMock.fromAuthStore = true;
+  const personalEnvironment = {
+    environmentId: "env-personal",
+    ownerKind: "user" as const,
+    ownerId: userId,
+    roomId: "room-personal",
+    label: "Personal",
+    effectiveRole: "owner" as const,
+    kind: "personal" as const,
+    hostCount: 0,
+    providerHandle: null,
+  };
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.list": () => ({ environments: [personalEnvironment] }),
+    "environment.configuration.revision": () => ({ revision: "1" }),
+    "environment.configuration.items": () => ({ items }),
+    "environment.configuration.items.put": () => ({
+      outcome: "saved",
+      revision: 2,
+    }),
+    "environment.host.list": () => ({ hosts: [] }),
+  });
+  harness.auth.environmentCloud = AuthService.prototype.environmentCloud.bind(
+    harness.auth,
+  );
+  harness.auth.applyExternalSession(authSessionForUser(userId, token));
+  const page = render(
+    <ConfigurationSourceBoundary section={null} target={{ kind: "personal" }}>
+      <TextItemsPage />
+    </ConfigurationSourceBoundary>,
+    { wrapper: harness.Wrapper },
+  );
+  return { harness, unmount: page.unmount };
+}
+
+function variablePutRequests(harness: TeamPageHarness) {
+  return harness.cloudRequests.filter(
+    (request) =>
+      request.method === "PUT" &&
+      new URL(request.url).pathname.endsWith("/items/variable"),
+  );
 }
 
 describe("TeamTextItems accepted writes", () => {
@@ -532,8 +606,10 @@ describe("TeamTextItems accepted writes", () => {
       editedWrites.updateDraft(submitted);
     });
     const restoredWrites = getWrites();
+    const typedOn =
+      requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
     await act(async () => {
-      await restoredWrites.writeOnUnmount(submitted);
+      await restoredWrites.writeOnUnmount(submitted, typedOn);
     });
 
     expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
@@ -567,6 +643,8 @@ describe("TeamTextItems accepted writes", () => {
     }
     render(<WritesProbe />, { wrapper: harness.Wrapper });
     expect(await screen.findByText("1")).toBeTruthy();
+    const typedOn =
+      requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
     const getWrites = (): ConfigurationItemWrites => {
       const writes = observeWrites.mock.lastCall?.[0];
       if (writes === undefined)
@@ -612,7 +690,7 @@ describe("TeamTextItems accepted writes", () => {
       ).toBeGreaterThan(readsBeforeWrite);
     });
     await act(async () => {
-      await getWrites().writeOnUnmount(typed);
+      await getWrites().writeOnUnmount(typed, typedOn);
     });
 
     await waitFor(() => {
@@ -1407,5 +1485,95 @@ describe("TeamTextItems editor", () => {
       "value",
       "linux-value",
     );
+  });
+});
+
+describe("an unsaved variable's sign-in when its row unmounts", () => {
+  it("does not send person A's draft on person B's bearer when the Personal page changes accounts", async () => {
+    const { harness } = mountAuthPersonalVariables(
+      [variable("saved", 1)],
+      "person-a",
+      "person-a-token",
+    );
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    await editVariable("typed-by-a");
+    expect(nodeValue()).toHaveProperty("value", "typed-by-a");
+
+    act(() => {
+      harness.auth.applyExternalSession(
+        authSessionForUser("person-b", "person-b-token"),
+      );
+    });
+
+    await waitFor(() => {
+      expect(nodeValue()).toHaveProperty("value", "saved");
+    });
+    expect(variablePutRequests(harness)).toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Couldn't save these settings/)).toBeNull();
+  });
+
+  it("does not send person A's draft after sign-out and signing back in as A", async () => {
+    const { harness } = mountAuthPersonalVariables(
+      [variable("saved", 1)],
+      "person-a",
+      "person-a-token",
+    );
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    await editVariable("typed-before-sign-out");
+
+    act(() => {
+      harness.auth.applyExternalSession({ status: "signed-out" });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: "NODE_ENV" })).toBeNull();
+    });
+
+    act(() => {
+      harness.auth.applyExternalSession(
+        authSessionForUser("person-a", "person-a-token-again"),
+      );
+    });
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    expect(nodeValue()).toHaveProperty("value", "saved");
+    expect(variablePutRequests(harness)).toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Couldn't save these settings/)).toBeNull();
+  });
+
+  it("sends person A's draft on the rotated bearer after an in-place token rotation", async () => {
+    const { harness, unmount } = mountAuthPersonalVariables(
+      [variable("saved", 1)],
+      "person-a",
+      "person-a-token",
+    );
+    await screen.findByRole("region", { name: "NODE_ENV" });
+    await editVariable("typed-before-rotation");
+    expect(nodeValue()).toHaveProperty("value", "typed-before-rotation");
+
+    act(() => {
+      harness.auth.applyExternalSession(
+        authSessionForUser("person-a", "person-a-token-rotated"),
+      );
+    });
+    expect(nodeValue()).toHaveProperty("value", "typed-before-rotation");
+
+    act(() => {
+      unmount();
+    });
+    await waitFor(() => {
+      expect(variablePutRequests(harness)).toHaveLength(1);
+    });
+    const [request] = variablePutRequests(harness);
+    expect(request.method).toBe("PUT");
+    expect(new Headers(request.headers).get("authorization")).toBe(
+      "Bearer person-a-token-rotated",
+    );
+    expect(request.body).toMatchObject({
+      key: "NODE_ENV",
+      os: "any",
+      value: { value: "typed-before-rotation" },
+      revision: 1,
+    });
   });
 });
