@@ -87,8 +87,10 @@ function StepUpChallengeDialogActive(props: {
   readonly onCancel: () => void;
 }) {
   const requestChallenge = useAuthRequestStepUpChallenge();
-  const verifyChallenge = useAuthVerifyStepUpChallenge();
   const [code, setCode] = useState("");
+  const verifyChallenge = useAuthVerifyStepUpChallenge(() =>
+    normalizeStepUpCodeInput(code),
+  );
   // Opens `sending`: the mount effect below sends the first code.
   const [challenge, setChallenge] = useState<ChallengeStatus>("sending");
   const [error, setError] = useState<string | null>(null);
@@ -164,7 +166,7 @@ function StepUpChallengeDialogActive(props: {
     }
     setError(null);
     void verifyChallenge
-      .mutateAsync(normalized)
+      .mutateAsync()
       .then((response) => {
         if (mountedRef.current) {
           props.onVerified(createStepUpCredential(response, Date.now()));
