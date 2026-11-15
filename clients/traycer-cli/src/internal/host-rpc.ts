@@ -1,6 +1,11 @@
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import { openCliHostSession } from "./cli-host-tokens";
-import { hostTokenFailureCliError, signedOutCliError } from "./host-door-words";
+import {
+  hostDoorRefusalCliError,
+  hostTokenFailureCliError,
+  signedOutCliError,
+} from "./host-door-words";
+import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
@@ -12,7 +17,10 @@ import {
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import type { OpenFrameBearerSource } from "../../../shared/auth/bearer-source";
 import type { RefusalAwareAuthRevalidator } from "../../../shared/auth/bearer-revalidator";
-import { markRefusalAfterRejectedSignIn } from "./sign-in-rejection";
+import {
+  isRefusalAfterRejectedSignIn,
+  markRefusalAfterRejectedSignIn,
+} from "./sign-in-rejection";
 import {
   createAuthAwareMessenger,
   type AuthRecoveryScope,
@@ -715,8 +723,8 @@ const EARLIER_ATTEMPT_MAY_HAVE_RUN =
  */
 export function hostRpcToCliError(err: unknown): unknown {
   // Classified by the refusal that ended a retry episode, not by its
-  // unknown-outcome wrapper: "sign in again" stays true about the retry
-  // whatever an earlier attempt did. The outcome stays unknown, and the
+  // unknown-outcome wrapper: what the final refusal says stays true about the
+  // retry whatever an earlier attempt did. The outcome stays unknown, and the
   // message says so.
   const refusal = finalRefusalOf(err);
   if (!(refusal instanceof HostRpcError)) return err;
@@ -739,6 +747,11 @@ export function hostRpcToCliError(err: unknown): unknown {
 
 /**
  * Maps a host wire error code to a stable CLI error code:
+ *   - a refusal by the host's door, after the call's one fresh token → the
+ *     door's own line (`hostDoorRefusalCliError`), decided by its reason
+ *     ahead of every code below: sign-in advice only for a machine signed out
+ *     in fact, the older-host line for a reasonless refusal of the token, and
+ *     otherwise the generic arm at the end.
  *   - authorization failure → `FORBIDDEN`: the host signals "no access" with a
  *     `FORBIDDEN` wire code - a cloud 403 is mapped to `FORBIDDEN` in the host's
  *     `cloudErrorFromResponse`, and a viewer/no-role caller hits
@@ -746,8 +759,8 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     an access denial that still arrives bucketed as `RPC_ERROR`. We do NOT pass
  *     the host's raw text through here: it can embed an internal user UUID and
  *     the internal term "task" (epic), neither actionable for a CLI user.
- *   - `UNAUTHORIZED` → `AUTH_REJECTED`: bearer rejected even after the
- *     auth-aware wrapper's refresh-and-retry.
+ *   - `UNAUTHORIZED` that is not the door's → `AUTH_REJECTED`, with the
+ *     host's own line.
  *   - `WORKTREE_MISSING` / `WORKSPACE_BINDING_REQUIRED` / `E_HOST_STORAGE_FULL`
  *     → the CLI code of the same name: the person's own folder, workspace
  *     choice or disk stops the request, and the host's message names the fix.
@@ -779,6 +792,16 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  const doorRefusal = hostRefusalOf(err);
+  const doorError =
+    doorRefusal === null
+      ? null
+      : hostDoorRefusalCliError(
+          doorRefusal,
+          isRefusalAfterRejectedSignIn(err),
+          () => unexpectedHostCliError(err),
+        );
+  if (doorError !== null) return doorError;
   const admissionError =
     err.fatalDetails === null
       ? null
@@ -979,6 +1002,11 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
+  return unexpectedHostCliError(err);
+}
+
+/** The host's own line, for an error no arm above names. */
+function unexpectedHostCliError(err: HostRpcError): CliError {
   const code =
     err.code === "UNAUTHORIZED"
       ? CLI_ERROR_CODES.AUTH_REJECTED

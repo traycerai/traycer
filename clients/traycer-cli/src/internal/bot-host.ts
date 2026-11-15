@@ -1,6 +1,10 @@
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import { requireCliHostSession } from "./cli-host-tokens";
-import { hostTokenFailureCliError, signedOutCliError } from "./host-door-words";
+import {
+  hostDoorRefusalCliError,
+  hostTokenFailureCliError,
+  signedOutCliError,
+} from "./host-door-words";
 /**
  * What the `traycer bot` commands share: finding a bot by id or title,
  * reading the environments the bots are grouped under, one `bot.subscribe`
@@ -286,17 +290,19 @@ export function readBotSnapshot(
         return;
       }
       if (reason?.kind === "fatalError") {
-        const admissionError = localTeamAdmissionCliError(reason.details);
-        if (admissionError !== null) {
-          finish(() => reject(admissionError));
-          return;
-        }
+        const details = reason.details;
+        const readFailed = (): CliError =>
+          botReadFailedError(` - ${details.reason}`);
+        // No sign-in is refreshed while this read runs (`auth: null`), so
+        // nothing here knows the machine to be signed out.
+        const fatalError =
+          hostDoorRefusalCliError(details, false, readFailed) ??
+          localTeamAdmissionCliError(details) ??
+          readFailed();
+        finish(() => reject(fatalError));
+        return;
       }
-      const detail =
-        reason !== null && reason.kind === "fatalError"
-          ? ` - ${reason.details.reason}`
-          : "";
-      finish(() => reject(botReadFailedError(detail)));
+      finish(() => reject(botReadFailedError("")));
     });
   });
 }

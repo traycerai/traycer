@@ -1,4 +1,8 @@
 import { TEAM_MEMBERSHIP_REQUIRED_MESSAGE } from "@traycer-clients/shared/host-transport/local-open-auth";
+import { hostDoorStateOfRefusal } from "@traycer-clients/shared/host-transport/host-door-state";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CliHostTokenFailure } from "./cli-host-tokens";
 
@@ -43,6 +47,57 @@ export function olderHostCliError(): CliError {
     details: null,
     exitCode: 1,
   });
+}
+
+/**
+ * How a refusal by a host's door, once the call's one recovery is spent, is
+ * told to the person:
+ * - `signed-out`: a credential refusal after authn refused the stored sign-in
+ *   during this call's recovery. This machine is signed out in fact, and only
+ *   this case gives sign-in advice.
+ * - `older-host`: no reason, on a non-retryable refusal of the token itself.
+ * - `unworded`: every reason the owner has not worded. The command prints its
+ *   own line for an unexpected host error, never sign-in advice and never the
+ *   epic-access line.
+ *
+ * `null`: not the door's refusal; the command's own arms decide. A reason
+ * decides ahead of the code that carries it.
+ */
+export type HostDoorRefusalKind = "signed-out" | "older-host" | "unworded";
+
+export function hostDoorRefusalKind(
+  refusal: FatalErrorDetails,
+  signInRejected: boolean,
+): HostDoorRefusalKind | null {
+  if (signInRejected && isCredentialRefusal(refusal)) return "signed-out";
+  if (readDoorReason(refusal.doorReason) !== "absent") return "unworded";
+  return hostDoorStateOfRefusal(refusal) === "older-host" ? "older-host" : null;
+}
+
+/**
+ * A command's line for a door refusal ({@link hostDoorRefusalKind}), or `null`
+ * when the refusal is not the door's. `generic` is the command's own line for
+ * an unexpected host error.
+ *
+ * The owner's board on the door's reasons words `not_admitted`,
+ * `keys_unavailable`, `clock_skew`, `enrolment_broken`, `membership_removed`
+ * and `host_claimed`; those arms go here, and print `generic` until then.
+ */
+export function hostDoorRefusalCliError<Generic extends Error>(
+  refusal: FatalErrorDetails,
+  signInRejected: boolean,
+  generic: () => Generic,
+): CliError | Generic | null {
+  switch (hostDoorRefusalKind(refusal, signInRejected)) {
+    case "signed-out":
+      return signedOutCliError();
+    case "older-host":
+      return olderHostCliError();
+    case "unworded":
+      return generic();
+    case null:
+      return null;
+  }
 }
 
 /** What a command says when no host-only token could be had for its host. */
