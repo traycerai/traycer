@@ -854,7 +854,6 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.setSlackAppDms,
           RunnerHostInvoke.readHostOwnership,
           RunnerHostInvoke.listTeamComputers,
-          RunnerHostInvoke.setEnvironmentBotHost,
           RunnerHostInvoke.releaseTeamComputer,
           RunnerHostInvoke.mintTeamComputerInstallToken,
           // The secrets broker, on authn.
