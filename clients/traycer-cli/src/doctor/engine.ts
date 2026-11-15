@@ -1743,7 +1743,7 @@ async function probeHostRpc(
         };
       }
       if (door !== null || err.code === "UNAUTHORIZED") {
-        const signedOut = door === "signed-out";
+        const signedOut = door === "sign-in-rejected";
         return {
           code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
           severity: "error",

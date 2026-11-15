@@ -258,6 +258,14 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // handler too would double up. A refusal a fresh token cannot answer stays
     // terminal there.
     auth: null,
+    // Each admitted open resets the host's recovery, so a refusal hours
+    // after a good reconnect earns its one fresh token again.
+    door: {
+      refused: () => undefined,
+      admitted: () => {
+        if (endpoint !== null) credential.admitted(endpoint.hostId);
+      },
+    },
     clock: null,
     hostCredentialMint: credential.hostCredentialMint,
     // The monitor provisions opportunistically and never verifies adoption -
@@ -330,6 +338,8 @@ interface MonitorCredential {
     hostId: string,
     details: FatalErrorDetails,
   ) => Promise<RevalidateOutcome>;
+  /** The host admitted an open: its recovery's bounds start again. */
+  readonly admitted: (hostId: string) => void;
   /** Whether this machine is signed out in fact; see `runInboxSubscription`. */
   readonly signInRejected: () => boolean;
   /** Mints for a host refused for good, until the returned stop is called. */
@@ -386,16 +396,10 @@ async function signInMonitorCredential(
     lease,
     signal: null,
   });
-  // Whether authn refused the stored sign-in at its last answered refresh:
-  // the only case in which this machine is signed out in fact.
-  let signInRejected = false;
-  const refreshSignIn = async (): Promise<RevalidateOutcome> => {
-    const outcome = await revalidator.revalidateCurrentContext();
-    if (outcome === "rejected") signInRejected = true;
-    else if (outcome === "rotated") signInRejected = false;
-    return outcome;
-  };
-  const hostTokens = createCliHostTokens({ lease, refresh: refreshSignIn });
+  const hostTokens = createCliHostTokens({
+    lease,
+    refresh: () => revalidator.revalidateCurrentContext(),
+  });
   let refreshScheduler: { readonly stop: () => void } | null = null;
   return {
     presented: "host-token",
@@ -403,7 +407,8 @@ async function signInMonitorCredential(
     bearer: (hostId) => hostTokens.streamBearer(hostId),
     recover: (hostId, details) =>
       hostTokens.streamRecovery(hostId).revalidateRefused(details),
-    signInRejected: () => signInRejected,
+    admitted: (hostId) => hostTokens.streamRecovery(hostId).admitted(),
+    signInRejected: () => hostTokens.signInRejected(),
     onMintRefused: (listener) => hostTokens.onMintRefused(listener),
     // Delegated host-credential provisioning. `monitor` is the CLI command
     // that most needs it: the host it watches should keep serving after this
@@ -429,13 +434,17 @@ async function signInMonitorCredential(
       const scheduler = createProactiveRefreshScheduler<NodeJS.Timeout>({
         getToken: () => readLeaseBearer(lease),
         revalidate: async () => {
-          const outcome = await refreshSignIn();
+          const outcome = await hostTokens.refreshSignIn();
           const current = hostId();
-          if (outcome === "rotated" && current !== null) {
-            await hostTokens.renewAfterSignInRefresh(current);
+          if (
+            outcome === "rotated" &&
+            current !== null &&
+            (await hostTokens.renewAfterSignInRefresh(current))
+          ) {
             // The host updates its captured credential in place - no
             // reconnect. The reactive path already re-dials with the fresh
-            // token, so it needs no push.
+            // token, so it needs no push. A refused mint ends the monitor
+            // through `onMintRefused`.
             onRenewed();
           }
           return outcome;
@@ -469,6 +478,7 @@ function capabilityMonitorCredential(
     userId: capability.bearer.identity.userId,
     bearer: () => capability.streamBearer,
     recover: () => capability.streamRecovery(),
+    admitted: () => undefined,
     signInRejected: () => false,
     onMintRefused: () => () => undefined,
     hostCredentialMint: null,
