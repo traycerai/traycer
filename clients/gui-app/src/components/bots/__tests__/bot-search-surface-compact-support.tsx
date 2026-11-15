@@ -26,16 +26,23 @@ export const FORMS = [
 
 /**
  * Registers the form, a focused Tracy tab and their cleanup for the describe
- * it is called in. The suite's lifecycle fakes the clock, and these waits are
- * Radix and vaul closing, which `findBy*`/`waitFor` poll for on timers a fake
- * clock never fires, so they run on the real one.
+ * it is called in. The clock stays the suite's fake one. Radix and vaul close
+ * on timers, which `findBy*`/`waitFor` poll for and advance only when Testing
+ * Library sees Jest's fake timers, so a `jest` stand-in that advances Vitest's
+ * clock is installed for the describe and removed after it.
  */
 export function installCompactHeaderLifecycle(): {
   readonly shell: () => ShellFormHarness;
 } {
   let shell: ShellFormHarness | null = null;
   beforeEach(() => {
-    vi.useRealTimers();
+    if (!vi.isFakeTimers()) vi.useFakeTimers();
+    Object.defineProperty(globalThis, "jest", {
+      configurable: true,
+      value: {
+        advanceTimersByTime: (ms: number) => vi.advanceTimersByTime(ms),
+      },
+    });
     shell = installShellForm(SHELL_WIDTH_MENU);
     const tracy = { kind: "tracy", id: "tracy" } as const;
     useTabsStore.setState({
@@ -45,6 +52,7 @@ export function installCompactHeaderLifecycle(): {
     });
   });
   afterEach(() => {
+    Reflect.deleteProperty(globalThis, "jest");
     shell?.dispose();
     shell = null;
     setPhoneLayoutOnly(false);
@@ -61,8 +69,13 @@ export function installCompactHeaderLifecycle(): {
 }
 
 export function userEvents(): UserEvent {
-  return userEvent.setup();
+  return userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
 }
+
+// Captured at load, before any test fakes the clock: the guard below must keep
+// counting real time, since a hung await never advances a fake one.
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
 
 /**
  * Each await goes through here, so a wait that never ends fails naming the
@@ -72,27 +85,27 @@ export async function step<T>(
   label: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  let timer = 0;
+  let timer: number | NodeJS.Timeout | undefined;
   const stuck = new Promise<never>((_resolve, reject) => {
-    timer = window.setTimeout(() => {
+    timer = realSetTimeout(() => {
       reject(new Error(`stuck awaiting: ${label}`));
     }, 5_000);
   });
   try {
     return await Promise.race([run(), stuck]);
   } finally {
-    window.clearTimeout(timer);
+    realClearTimeout(timer);
   }
 }
 
 /**
  * Radix hands focus back to a closed menu's trigger from a zero-delay timer
- * queued at unmount. A zero-delay timer queued now runs after it, so this
- * drains that one without waiting for any duration.
+ * queued at unmount. Running what is due now on the fake clock fires it,
+ * with no real time passing.
  */
 export async function drainZeroDelayTimers(): Promise<void> {
   await act(async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await vi.advanceTimersByTimeAsync(0);
   });
 }
 
