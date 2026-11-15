@@ -409,6 +409,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
       ).toBe(writesBeforeRecovery + 2),
     );
+    await act(async () => {});
     expect(harness.targetRequests).toEqual([knownIds, allIds]);
   });
 
@@ -468,6 +469,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
       ).toBe(writesBeforeRecovery + 2),
     );
+    await act(async () => {});
     expect(harness.targetRequests).toEqual([partialIds, partialIds, allIds]);
   });
 
@@ -750,6 +752,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
       ).toBe(2);
     });
+    await act(async () => {});
     expect(harness.targetRequests).toHaveLength(2);
 
     harness.targetGateIndex.value = 3;
@@ -854,6 +857,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         harness.queryClient.getQueryState(TARGETS_QUERY_KEY)?.dataUpdateCount,
       ).toBe(2);
     });
+    await act(async () => {});
     expect(harness.targetRequests).toHaveLength(2);
 
     harness.targetFailure.value = "rpc-error";
@@ -874,6 +878,7 @@ describe("fork lifecycle notification-indicator refresh", () => {
         ).toBe(errorsBeforeRecheck + 1);
         expect(sidebar.result.current.isFetching).toBe(false);
       });
+      await act(async () => {});
       expect(harness.targetRequests).toHaveLength(2 + 3 * failure);
     }
 
