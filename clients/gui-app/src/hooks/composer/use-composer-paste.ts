@@ -305,7 +305,7 @@ async function filesToImageAttrs(
   signal: AbortSignal,
   session: ImagePreparationSession,
 ): Promise<ComposerImageConversionResult> {
-  // This base64 ingest serves only chat / new-conversation surfaces.
+  // This base64 ingest serves only Tracy's message box.
   const trackRejected = (): void => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
       kind: "image",
@@ -350,7 +350,7 @@ async function filesToImageAttrs(
  * `release` (when supplied) is capacity a surface reserved across the
  * conversion writes above (landing's hash-only ingest) - `runImageIngest`
  * below calls it exactly once, only AFTER `insertAttrs` has run (or thrown),
- * never earlier. A surface with no such reservation (chat / new-conversation,
+ * never earlier. A surface with no such reservation (Tracy's message box,
  * whose base64 ingest owns no budget) simply omits it.
  */
 export interface ComposerImageConversionResult<Attrs = ImageAttachmentAttrs> {
@@ -795,9 +795,11 @@ async function resolveAndInsertNativeClipboardFilePaths(input: {
 /**
  * Drag/drop/paste plumbing shared by every composer surface. The image ingest
  * (base64 vs hash-only) is delegated to `imageIngest`/`insertAttrs`; image
- * filtering + the 5MB cap belong to the ingest via `collectImages`. Surfaces
- * wrap this with their own ingest: `useComposerPasteAdapter` (base64) for
- * chat / new-conversation, `useLandingComposerPaste` (hash-only) for landing.
+ * filtering and the source ceiling belong to the ingest via `collectImages`.
+ * Surfaces wrap this with their own ingest: `useComposerPasteAdapter` (base64)
+ * for Tracy's message box, `useComposerHashPasteAdapter` (hash-only) for the
+ * chat surfaces, `useLandingComposerPaste` (hash-only) for landing and
+ * `useArtifactImagePaste` for artifacts.
  * Non-image file/URL entries resolve through `filePaths`, while images keep
  * their existing independent ingest behavior.
  */
@@ -1181,9 +1183,10 @@ export function useComposerPasteEvents<Attrs>(args: {
 }
 
 /**
- * Base64 paste adapter for chat / new-conversation: accepted files are read as
- * base64 (`filesToImageAttrs`) and inserted as inline `b64content` nodes. This
- * is the behavior every non-landing surface relies on — do NOT change it.
+ * Base64 paste adapter for Tracy's message box: accepted files are read as
+ * base64 (`filesToImageAttrs`) and inserted as inline `b64content` nodes. The
+ * box sends each image's bytes from that inline content and refuses a node
+ * without it, so the images this adapter inserts stay inline.
  *
  * `admitImages` sees every image a paste, a drop or a pick hands the adapter,
  * before the source ceiling and before a byte is read: only what it returns
@@ -1243,10 +1246,6 @@ export function useComposerPasteAdapter(
     captureImageInsertion: undefined,
     fileAttach: null,
   });
-}
-
-function everyImage(files: ReadonlyArray<File>): ReadonlyArray<File> {
-  return files;
 }
 
 function hostStorableImage(file: File): boolean {
@@ -1478,9 +1477,8 @@ async function hashImageAttrsFromFiles(
 }
 
 /**
- * Hash-only paste adapter for the three chat surfaces. A sibling of
- * {@link useComposerPasteAdapter}, which stays exactly as it is - other callers
- * depend on its inline behaviour and its own comment forbids changing it.
+ * Hash-only paste adapter for the three chat surfaces: the sibling of
+ * {@link useComposerPasteAdapter}, whose images stay inline for Tracy's box.
  */
 export function useComposerHashPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
@@ -1568,40 +1566,6 @@ export interface ComposerPasteEditorHandle {
   /** With `draftGeneration`, what a file pick is fenced to. */
   readonly getEditorIncarnation: () => ComposerEditorIncarnation | null;
   readonly draftGeneration: () => number;
-}
-
-export function useComposerPaste(
-  editorRef: {
-    readonly current: ComposerPasteEditorHandle | null;
-  },
-  fileDrops: IFileDropHost,
-  mentionRoots: ReadonlyArray<string>,
-): UseComposerPasteResult {
-  const insertAttrs = useCallback(
-    (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
-      const handle = editorRef.current;
-      if (handle === null || !handle.isReady()) return 0;
-      handle.insertImageAttachments(attrs);
-      handle.focus();
-      return attrs.length;
-    },
-    [editorRef],
-  );
-  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
-    const handle = editorRef.current;
-    if (handle === null || !handle.isReady()) return null;
-    return handle.beginPathInsertion();
-  }, [editorRef]);
-  const filePaths = useMemo(
-    () => ({
-      fileDrops,
-      mentionRoots,
-      beginPathInsertion,
-      pathsReachTarget: true,
-    }),
-    [fileDrops, mentionRoots, beginPathInsertion],
-  );
-  return useComposerPasteAdapter(insertAttrs, filePaths, everyImage);
 }
 
 /**
@@ -1704,9 +1668,10 @@ export function useComposerFileAttachArgs(
 }
 
 /**
- * {@link useComposerPaste}'s hash-only twin, for the three chat surfaces. Same
- * editor handle, same file-path ingest, same events - only the image channel
- * differs, which is the whole point of the `ComposerImageIngest` seam.
+ * The paste hook of the three chat surfaces, over their editor handle: the
+ * hash-only image ingest on the file-path ingest and events every surface
+ * shares. Only the image channel differs between surfaces, which is the whole
+ * point of the `ComposerImageIngest` seam.
  */
 // `editorRef` stays its own argument: a ref inside an object handed to a hook
 // stops the React Compiler from keeping the caller's own memoization.
