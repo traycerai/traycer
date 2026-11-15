@@ -36,6 +36,8 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { IStreamSession } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -126,6 +128,12 @@ interface World {
   sessionImport: boolean;
   /** Hosts besides the tour's own that the host picker offers. */
   otherHosts: RemoteHostDirectoryEntry[];
+  /**
+   * The window holds a signed-in session when the tour mounts, as it does in
+   * the app, where the tour is shown only to a signed-in person. Off, no
+   * profile is present at the press and a followed save is abandoned unsent.
+   */
+  signedIn: boolean;
 }
 
 export function defaultProviders(): ProviderSpec[] {
@@ -163,6 +171,7 @@ function freshWorld(): World {
     nativeGate: null,
     sessionImport: true,
     otherHosts: [],
+    signedIn: true,
   };
 }
 
@@ -448,6 +457,44 @@ function streamBinding() {
   return { wsStreamClient: client, hostId: HOST_ID, retain: null };
 }
 
+const SIGNED_IN_AT = new Date("2026-01-01T00:00:00.000Z");
+const SIGNED_IN_USER: AuthenticatedUser = {
+  user: {
+    id: "memory-act-user",
+    name: "Person",
+    providerId: "provider-1",
+    providerHandle: "person",
+    providerType: "GITHUB",
+    email: "person@example.test",
+    avatarUrl: null,
+    activatedAt: SIGNED_IN_AT,
+    createdAt: SIGNED_IN_AT,
+    updatedAt: SIGNED_IN_AT,
+    lastSeenAt: SIGNED_IN_AT,
+    privacyMode: false,
+    isLearningEnabled: false,
+  },
+  userSubscription: {
+    id: "sub-1",
+    userID: "memory-act-user",
+    orgID: null,
+    teamID: null,
+    customerId: "cust-1",
+    createdAt: SIGNED_IN_AT,
+    updatedAt: SIGNED_IN_AT,
+    subscriptionExpiry: null,
+    trialEndsAt: null,
+    subscriptionStatus: "FREE",
+    hasPaymentMethod: null,
+    isInTrial: false,
+    rechargeRateSeconds: 0,
+  },
+  payAsYouGoUsage: { allowPayAsYouGo: false },
+  teamSubscriptions: [],
+  environments: { personal: null, teams: [] },
+  actingAs: null,
+};
+
 let queryClient = new QueryClient();
 let hostDirectory: HostDirectoryService | null = null;
 const captureDirectory = (directory: HostDirectoryService | null): void => {
@@ -526,6 +573,28 @@ export function invalidateAllQueries(): Promise<void> {
   return queryClient.invalidateQueries();
 }
 
+/**
+ * A session stored on the runner host, which the window's own `AuthService`
+ * rehydrates and validates when the host runtime starts: the sign-in path of a
+ * relaunch, with authn's identity answer faked at the runner host's edge.
+ */
+function signInWindow(runnerHost: MockRunnerHost): void {
+  runnerHost.tokenStoreEntries.set("traycer.token", {
+    token: "memory-act-token",
+    refreshToken: "memory-act-refresh-token",
+    savedAt: new Date().toISOString(),
+    user: {
+      id: SIGNED_IN_USER.user.id,
+      email: SIGNED_IN_USER.user.email,
+      name: SIGNED_IN_USER.user.name,
+    },
+  });
+  Object.assign(runnerHost, {
+    validateAuthTokenIdentity: (): Promise<AuthIdentityValidationResult> =>
+      Promise.resolve({ kind: "valid", user: SIGNED_IN_USER }),
+  });
+}
+
 /** Renders `ui` inside the faked host's real providers. */
 export function renderInHost(ui: ReactNode): void {
   queryClient = new QueryClient({
@@ -544,6 +613,7 @@ export function renderInHost(ui: ReactNode): void {
     hasLocalHost: undefined,
     traycerCli: new MockTraycerCli(),
   });
+  if (world.signedIn) signInWindow(runnerHost);
   for (const other of world.otherHosts)
     recordNegotiatedHostManifest(other.hostId, FULL_MANIFEST);
   const streams = streamBinding();
