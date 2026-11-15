@@ -1,26 +1,19 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import {
-  createFakeEnvironmentCloudAuth,
-  createFakeEnvironmentCloudTransport,
-} from "../../../../../__tests__/create-fake-runner-host";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   environmentListUpgradeV10ToV11,
   type EnvironmentDescriptorV11,
   type EnvironmentListResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
-import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { HostRuntimeContext } from "@/lib/host/runtime";
-import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { requireTeamHostClient } from "./team-configuration-test-support";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+} from "./team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,19 +25,10 @@ import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 
-// The shared host client and the signed-in identity are the external
-// boundaries; the environment.list query, its cache and the rows are real.
-const boundary = vi.hoisted(() => ({
-  client: null as HostClient<HostRpcRegistry> | null,
-}));
 vi.mock("@/lib/host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
-    ...actual,
-    useHostClient: () => {
-      if (boundary.client === null) throw new Error("no host client mounted");
-      return boundary.client;
-    },
+    ...(await importOriginal<typeof import("@/lib/host")>()),
+    useHostClient: () => requireTeamHostClient(),
   };
 });
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
@@ -101,63 +85,17 @@ type ListHandler = () => Promise<EnvironmentListResponseV11>;
 function mountClient(list: ListHandler): {
   readonly Wrapper: (p: { children: ReactNode }) => ReactNode;
 } {
-  let currentRows: EnvironmentDescriptorV11[] = [];
-  const auth = createFakeEnvironmentCloudAuth({
-    listEnvironments: async () => {
-      const response = await list();
-      currentRows = [...response.environments];
-      return { kind: "ok", list: { environments: [...currentRows] } };
-    },
-    transport: createFakeEnvironmentCloudTransport({
-      environments: () => currentRows,
-    }),
+  const harness = mountTeamPage(poolSource("admin"), {
+    "environment.list": () => list(),
   });
-  const authBinding = Object.create(
-    null,
-  ) as HostRuntimeBinding<HostRpcRegistry>;
-  Object.defineProperty(authBinding, "auth", { value: auth });
-  useAuthStore.setState({
-    status: "signed-in",
-    shareableTeams: ["admin", "editor", "viewer", "old", "a"].map((id) => ({
-      teamId: `team-${id}`,
-      slug: `handle-${id}`,
-      avatarUrl: null,
-    })),
-  });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: { "environment.list": list },
-    }),
-  });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
-  boundary.client = spine.createRequester(mockLocalHostEntry);
   return {
-    Wrapper: (props) => (
-      <QueryClientProvider client={queryClient}>
-        <HostRuntimeContext.Provider value={authBinding}>
-          {props.children}
-        </HostRuntimeContext.Provider>
-      </QueryClientProvider>
-    ),
+    Wrapper: harness.Wrapper,
   };
 }
 
-beforeEach(() => {
-  boundary.client = null;
-});
 afterEach(() => {
   cleanup();
+  resetTeamPageHarness();
   useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
 });
 
@@ -367,7 +305,7 @@ describe("ConfigurationSourceBoundary", () => {
     );
   });
 
-  it("gives an @1.0 host's team no role", async () => {
+  it("gives an @1.0 host's team the viewer role", async () => {
     const { Wrapper } = mountClient(() =>
       Promise.resolve(legacyTeamList("a", "Acme")),
     );
@@ -381,7 +319,7 @@ describe("ConfigurationSourceBoundary", () => {
       { wrapper: Wrapper },
     );
     expect((await screen.findByTestId("probe")).textContent).toBe(
-      "env-a|room-a|null|null|team",
+      "env-a|room-a|null|viewer|team",
     );
   });
 

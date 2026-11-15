@@ -49,7 +49,7 @@ const definition = (text: string, revision: number) =>
   });
 
 describe("AgentDefinitionsTab on a team", () => {
-  it("reads the team's definitions from the pool items, not the host's list", async () => {
+  it("reads the team's definitions from cloud items, never the host's list", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.configuration.items": () => ({
         items: [definition("Review the diff", 7)],
