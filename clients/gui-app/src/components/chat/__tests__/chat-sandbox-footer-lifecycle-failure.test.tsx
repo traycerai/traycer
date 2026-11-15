@@ -17,6 +17,7 @@ import {
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
+import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import {
   resolveChatSandbox,
   type ChatSandboxState,
@@ -28,6 +29,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
@@ -77,7 +80,11 @@ function renderFooter(state: ChatSandboxState): QueryClient {
       queries: { retry: false },
     },
   });
-  if (state.kind === "resting" && state.configuration.kind === "team") {
+  if (
+    state.kind === "resting" &&
+    state.configuration !== null &&
+    state.configuration.kind === "team"
+  ) {
     mocks.binding?.auth.getTeamEnvironment.mockResolvedValue({
       kind: "ok",
       environmentId: "team-a",
@@ -242,6 +249,45 @@ afterEach(() => {
 });
 
 describe("<ChatSandboxFooter /> lifecycle failures", () => {
+  it("shows a team's frozen refusal without a HostRuntimeProvider", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    });
+    render(
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({})}>
+        <QueryClientProvider client={queryClient}>
+          <SandboxOperationFailure
+            sandboxId="sbx-frozen-team"
+            name="e2e-sbx-team"
+            configuration={{
+              kind: "team",
+              teamId: "team-a",
+              teamName: "Acme",
+            }}
+            operation={{
+              kind: "failed",
+              verb: "resume",
+              error: new SandboxOperationError(refusal(402, "sandbox_frozen")),
+              code: "sandbox_frozen",
+              reference: "SBX-0507",
+              destroyRequest: undefined,
+            }}
+            busy={false}
+            onRetry={null}
+          />
+        </QueryClientProvider>
+      </RunnerHostProvider>,
+    );
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Couldn't resume e2e-sbx-team. This sandbox is out of credits. Acme's bundle is out.",
+    );
+    expect(screen.queryByRole("button", { name: "Add credits ↗" })).toBeNull();
+  });
+
   it("shows a refused Stop with Retry, hides it for another account, and retries the same Stop", async () => {
     const binding = mocks.binding;
     if (binding === null) throw new Error("the sandbox binding is missing");
