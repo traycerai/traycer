@@ -36,6 +36,13 @@ import type {
  * The component renders its `children` so it can sit transparently inside
  * the host-runtime children tree.
  */
+/**
+ * How often, while main holds this window's session as the local computer
+ * only, the window hands it over again. Main fetches its signing keys at most
+ * once a minute, so a shorter interval only meets its cooldown.
+ */
+const LOCAL_HOLD_RESEND_MS = 60_000;
+
 export interface WindowsBridgeAuthSessionBridgeProps {
   readonly children: ReactNode;
 }
@@ -55,16 +62,35 @@ export function WindowsBridgeAuthSessionBridge(
     let lastWrittenSerialized: string | null = null;
     let lastLocalRestoreSerialized: string | null = null;
     // The session main refused for want of its signing keys (no network) and
-    // holds as the local computer only; `null` once a later hand-over is
-    // accepted or superseded. One local restore per held session.
+    // now holds as the local computer only, and the one whose local restore
+    // is in flight. One restore per held session.
     let heldLocally: string | null = null;
+    let restoringLocally: string | null = null;
+    let localHoldResendTimer: number | null = null;
+    // The held session main has since judged bad, and that authn was asked
+    // about: one revalidation per judged session, not one per tick.
+    let revalidatedHeld: string | null = null;
 
-    const restoreLocal = (snapshot: AuthSessionSnapshot): void => {
+    const releaseLocalHold = (): void => {
+      heldLocally = null;
+      restoringLocally = null;
+      revalidatedHeld = null;
+      if (localHoldResendTimer !== null) {
+        window.clearInterval(localHoldResendTimer);
+        localHoldResendTimer = null;
+      }
+    };
+
+    const restoreLocal = (
+      snapshot: AuthSessionSnapshot,
+      onSettled: ((restored: boolean) => void) | null,
+    ): void => {
       if (
         bridge.authSession.restoreLocal === undefined ||
         snapshot.token === null ||
         snapshot.profile === null
       ) {
+        onSettled?.(false);
         return;
       }
       const expected = {
@@ -76,6 +102,7 @@ export function WindowsBridgeAuthSessionBridge(
       lastLocalRestoreSerialized = serialized;
       void bridge.authSession.restoreLocal(expected).then(
         (result) => {
+          onSettled?.(result === "restored");
           if (result === "restored") return;
           if (lastLocalRestoreSerialized === serialized) {
             lastLocalRestoreSerialized = null;
@@ -87,6 +114,7 @@ export function WindowsBridgeAuthSessionBridge(
           }
         },
         () => {
+          onSettled?.(false);
           if (lastLocalRestoreSerialized === serialized) {
             lastLocalRestoreSerialized = null;
           }
@@ -109,9 +137,11 @@ export function WindowsBridgeAuthSessionBridge(
         // siblings still derive their own offline session independently.
         // Clear the verified echo latch so a same-token promotion is published.
         lastWrittenSerialized = null;
-        restoreLocal(snapshot);
+        restoreLocal(snapshot, null);
         return;
       }
+      // A sign-out (or a sign-in starting) is not a session to hold.
+      if (snapshot.status !== "signed-in") releaseLocalHold();
       lastLocalRestoreSerialized = null;
       const desktopSnapshot = toDesktopSnapshot(snapshot);
       const serialized = serializeDesktopSnapshot(desktopSnapshot);
@@ -122,7 +152,7 @@ export function WindowsBridgeAuthSessionBridge(
       void bridge.authSession.set(desktopSnapshot).then(
         (result) => {
           if (result.outcome !== "refused") {
-            heldLocally = null;
+            releaseLocalHold();
             return;
           }
           // The latch is an echo suppressor, not a record of what the bridge
@@ -135,15 +165,43 @@ export function WindowsBridgeAuthSessionBridge(
           // Main could not reach its signing keys (no network), so it lists
           // no computer at all. The local computer needs no cloud verdict:
           // restore it as an unverified session would, and hand this session
-          // over again when the network returns. Every other refusal is a
-          // statement about the token and adopts nothing.
+          // over again until main verifies it. No toast: the app works, and a
+          // failed restore says so itself. Every other refusal is a statement
+          // about the token and adopts nothing.
+          if (result.reason === "key-source-unavailable" && current) {
+            if (heldLocally === serialized || restoringLocally === serialized)
+              return;
+            restoringLocally = serialized;
+            restoreLocal(snapshot, (restored) => {
+              if (restoringLocally !== serialized) return;
+              restoringLocally = null;
+              if (!restored) return;
+              heldLocally = serialized;
+              localHoldResendTimer ??= window.setInterval(
+                resendWhileHeldLocally,
+                LOCAL_HOLD_RESEND_MS,
+              );
+            });
+            return;
+          }
+          // A held session main now judges bad (its keys came back): ask authn
+          // at once, as the start's own validation would. A refresh is handed
+          // over, a rejection signs out, an acceptance is handed over on the
+          // next tick, and an unreachable authn leaves the hold as it is.
           if (
-            result.reason === "key-source-unavailable" &&
+            heldLocally !== null &&
             current &&
-            heldLocally !== serialized
+            revalidatedHeld !== serialized &&
+            (result.reason === "bad-signature" ||
+              result.reason === "unknown-signing-key" ||
+              result.reason === "expired")
           ) {
-            heldLocally = serialized;
-            restoreLocal(snapshot);
+            revalidatedHeld = serialized;
+            void auth.revalidateCurrentContext().catch((cause: unknown) => {
+              appLogger.warn("[auth] could not revalidate a held session", {
+                cause: cause instanceof Error ? cause.message : String(cause),
+              });
+            });
           }
           authSessionRefusedToast.warning(
             describeAuthSessionRefusalReason(result.reason),
@@ -164,10 +222,20 @@ export function WindowsBridgeAuthSessionBridge(
       );
     };
 
+    // The way back from a local hold: hand the same session over again so main
+    // can verify it. A hand-over still in flight holds the latch, so an
+    // attempt never overlaps another.
+    const resendWhileHeldLocally = (): void => {
+      if (heldLocally === null) return;
+      writeOutbound(auth.getCurrentSessionSnapshot());
+    };
+
     const ingestInbound = (snapshot: DesktopAuthSessionSnapshot): void => {
       // Main's local selection identity is neither a cloud verdict nor a
       // sign-out. Each window restores it through its own AuthService.
       if (snapshot.status === "unverified") return;
+      // A signed-in session from main is one it verified: no local hold left.
+      if (snapshot.status === "signed-in") releaseLocalHold();
       const serialized = serializeDesktopSnapshot(snapshot);
       if (serialized === lastWrittenSerialized) {
         return;
@@ -231,16 +299,11 @@ export function WindowsBridgeAuthSessionBridge(
     // Listen first so subsequent cross-window transitions remain observable.
     const sessionSubscription = auth.onSessionSnapshotChange(writeOutbound);
 
-    // The way back from a local hold: when the network returns, hand the
-    // same session over again so main can verify it. Event-driven only; a
-    // hand-over still in flight holds the latch, so a burst sends one.
-    const disposeWake = onWakeReconnect(() => {
-      if (heldLocally === null) return;
-      writeOutbound(auth.getCurrentSessionSnapshot());
-    });
+    const disposeWake = onWakeReconnect(resendWhileHeldLocally);
 
     return () => {
       disposeWake();
+      releaseLocalHold();
       sessionSubscription.dispose();
       inboundSubscription.dispose();
       revokeSubscription.dispose();
