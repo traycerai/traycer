@@ -31,6 +31,13 @@ import {
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
 import { Button } from "@/components/ui/button";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { useOpenHostUpdate } from "@/components/epic-canvas/renderers/use-chat-tile-host-update";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import { sideTabStripEdge } from "@/lib/layout/layout-arrangement";
 import {
   useArrangementValue,
@@ -299,7 +306,21 @@ function EpicRepointFailure(props: {
 function EpicRepointFailureCard(props: {
   readonly presentation: EpicSessionPresentation;
 }) {
-  const hostLabel = props.presentation.targetHostId ?? "the selected host";
+  const targetHostId = props.presentation.targetHostId;
+  const targetEntry = useHostDirectoryEntry(targetHostId);
+  if (
+    targetHostId !== null &&
+    targetEntry !== null &&
+    hostDirectoryEntryNeedsUpdate(targetEntry, MINIMUM_HOST_VERSION)
+  ) {
+    return (
+      <EpicOlderHostCard
+        hostId={targetHostId}
+        presentation={props.presentation}
+      />
+    );
+  }
+  const hostLabel = targetHostId ?? "the selected host";
   const originalHostId = props.presentation.originalHostId;
   return (
     <div
@@ -312,6 +333,41 @@ function EpicRepointFailureCard(props: {
       <div className="flex flex-wrap gap-2">
         <Button size="sm" onClick={props.presentation.retry}>
           Retry
+        </Button>
+        {originalHostId !== null ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={props.presentation.openOnOriginalHost}
+          >
+            Open on original host
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The failed card for a host below the version floor: what a chat tile draws
+ * for that host, and no Retry, since no session may be opened to it. Rising
+ * back above the floor rebuilds the session by itself.
+ */
+function EpicOlderHostCard(props: {
+  readonly hostId: string;
+  readonly presentation: EpicSessionPresentation;
+}) {
+  const openHostUpdate = useOpenHostUpdate(props.hostId);
+  const originalHostId = props.presentation.originalHostId;
+  return (
+    <div
+      data-testid="epic-repoint-failure"
+      className="flex max-w-md flex-col gap-3 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-sm"
+    >
+      <p className="text-ui-sm font-medium">{HOST_UPDATE_SKEW_COPY.title}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" onClick={openHostUpdate}>
+          {HOST_UPDATE_SKEW_COPY.action}
         </Button>
         {originalHostId !== null ? (
           <Button

@@ -1668,6 +1668,7 @@ function createEpicSessionController(): EpicSessionController {
       { epicId: entry.epicId },
       error instanceof Error ? error : new Error(String(error)),
     );
+    const floorAdmitted = readOwnerFloorAdmitted(entry.sessionHostClient);
     forgetSession(entry);
     entry.constructionFailed = true;
     present(entry, {
@@ -1675,6 +1676,13 @@ function createEpicSessionController(): EpicSessionController {
       targetHostId,
       originalHostId: entry.originalHostId,
     });
+    // No session may be opened to a host below the version floor, so no
+    // ladder, and none left pending from an earlier failure: rising back
+    // above it moves the run key, and that run acquires.
+    if (!floorAdmitted) {
+      entry.backoff.cancel();
+      return;
+    }
     entry.backoff.request({}, () => undefined);
     entry.backoff.request({}, () => {
       bumpRetry(entry);
