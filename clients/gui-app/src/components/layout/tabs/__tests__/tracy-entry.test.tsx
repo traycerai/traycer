@@ -1170,13 +1170,11 @@ describe("the fixed Tracy entry - signals", () => {
         tracyIndicators({ unreadDone: true, unreadCount: 3 });
         mountEntry();
 
-        const entry = await screen.findByTestId("tab-tracy");
+        const entry = await screen.findByRole("tab", {
+          name: "Tracy, 3 unread",
+        });
         expect(entry.hasAttribute("data-unread")).toBe(true);
-        expect(entry.getAttribute("aria-label")).toBe("Tracy, 3 unread");
-        expect(
-          within(entry).queryByTestId("tracy-entry-unread-count"),
-        ).toBeNull();
-        expect(within(entry).queryByTestId("side-tab-rail-count")).toBeNull();
+        expect(within(entry).queryByText("3")).toBeNull();
         if (railed) {
           expect(
             within(entry)
@@ -1198,9 +1196,8 @@ describe("the fixed Tracy entry - signals", () => {
         tracyIndicators({ unreadCount: 0 });
         mountEntry();
 
-        const entry = await screen.findByTestId("tab-tracy");
+        const entry = await screen.findByRole("tab", { name: "Tracy" });
         expect(entry.hasAttribute("data-unread")).toBe(false);
-        expect(entry.getAttribute("aria-label")).toBe("Tracy");
         expect(within(entry).queryByTestId("side-tab-rail-badge")).toBeNull();
       },
     );
@@ -1211,9 +1208,8 @@ describe("the fixed Tracy entry - signals", () => {
         tracyIndicators({ unreadDone: true, unreadCount: null });
         mountEntry();
 
-        const entry = await screen.findByTestId("tab-tracy");
+        const entry = await screen.findByRole("tab", { name: "Tracy" });
         expect(entry.hasAttribute("data-unread")).toBe(true);
-        expect(entry.getAttribute("aria-label")).toBe("Tracy");
         expect(
           within(entry).queryByTestId("side-tab-rail-badge") !== null,
         ).toBe(railed);

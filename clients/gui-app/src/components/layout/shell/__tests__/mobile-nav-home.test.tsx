@@ -376,9 +376,10 @@ describe("MobileNavDrawer rows", () => {
       tracyIndicators(true, 3);
       renderDrawer();
 
-      const row = await screen.findByTestId("mobile-nav-tracy");
-      expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
-      expect(row.getAttribute("aria-label")).toBe("Tracy, 3 unread");
+      const row = await screen.findByRole("button", {
+        name: "Tracy, 3 unread",
+      });
+      expect(within(row).queryByText("3")).toBeNull();
       expect(row.hasAttribute("data-unread")).toBe(true);
       expect(within(row).getByText("Tracy").className).toContain(
         "font-semibold",
@@ -390,23 +391,19 @@ describe("MobileNavDrawer rows", () => {
       tracyIndicators(false, 0);
       renderDrawer();
 
-      const row = await screen.findByTestId("mobile-nav-tracy");
-      expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
-      expect(row.getAttribute("aria-label")).toBe("Tracy");
+      const row = await screen.findByRole("button", { name: "Tracy" });
       expect(row.hasAttribute("data-unread")).toBe(false);
       expect(within(row).getByText("Tracy").className).not.toContain(
         "font-semibold",
       );
     });
 
-    it("keeps the bold name and draws no count for a host that does not count", async () => {
+    it("keeps the bold name for a host that does not count", async () => {
       openTracyRow();
       tracyIndicators(true, null);
       renderDrawer();
 
-      const row = await screen.findByTestId("mobile-nav-tracy");
-      expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
-      expect(row.getAttribute("aria-label")).toBe("Tracy");
+      const row = await screen.findByRole("button", { name: "Tracy" });
       expect(row.hasAttribute("data-unread")).toBe(true);
       expect(within(row).getByText("Tracy").className).toContain(
         "font-semibold",

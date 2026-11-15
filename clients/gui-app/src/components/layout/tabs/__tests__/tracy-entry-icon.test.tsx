@@ -30,7 +30,6 @@ function expectPlainMascot(icon: HTMLElement): void {
 describe("<TracyEntryIcon />", () => {
   it("draws the plain bot's mascot at 16px, not the robot glyph, bare", () => {
     expectPlainMascot(mountIcon(false));
-    expect(screen.queryByTestId("tracy-entry-unread-count")).toBeNull();
     expect(screen.queryByTestId("tracy-entry-muted")).toBeNull();
   });
 
