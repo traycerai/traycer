@@ -103,7 +103,7 @@ function StaleLine(props: {
       role="status"
       data-testid={`bot-${surface}-stale`}
       data-failure={failure}
-      className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md bg-muted px-3 py-1.5 text-ui-xs text-muted-foreground"
+      className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md bg-foreground/6 px-3 py-1.5 text-ui-xs text-muted-foreground"
     >
       <span className="flex min-w-0 items-center gap-2">
         {failure === "reconnecting" ? <MutedDots /> : null}

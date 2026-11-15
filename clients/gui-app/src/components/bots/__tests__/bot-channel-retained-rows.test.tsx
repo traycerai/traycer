@@ -530,6 +530,38 @@ describe("<BotChannelView /> rows another account fetched", () => {
       expect(screen.getByTestId("bot-channel-error")).toBeDefined();
     },
   );
+
+  it("withholds an earlier fetched answer a cache write puts back after the read was reset, when a failure follows", async () => {
+    mount({ openThread: null, tiles: null });
+    await screen.findByText(POST_FIRST_LINE);
+    const [query] = queryClient.getQueryCache().findAll({
+      queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, CHANNEL_READ),
+    });
+    const first = query.state.data;
+    script.conversationList = () =>
+      Promise.resolve({
+        conversations: [{ ...CHANNEL_LIST.conversations[0], title: "Renamed" }],
+      });
+    await refetchRead(queryClient, CHANNEL_READ);
+    expect(query.state.data).not.toBe(first);
+    // A reset leaves the read no data, so the write that follows stores the
+    // object it is given, as a rollback of an answer captured earlier does.
+    act(() => {
+      query.reset();
+    });
+    act(() => {
+      queryClient.setQueryData(query.queryKey, first);
+    });
+    expect(query.state.data).toBe(first);
+
+    script.conversationList = () =>
+      Promise.reject(hostFailure("RPC_ERROR", CHANNEL_READ));
+    await refetchRead(queryClient, CHANNEL_READ);
+
+    expect(screen.queryByText(POST_FIRST_LINE)).toBeNull();
+    expect(screen.queryByTestId("bot-channel-stale")).toBeNull();
+    expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+  });
 });
 
 describe("<BotChannelView tiles={1} /> a read that fails beside an open thread", () => {
