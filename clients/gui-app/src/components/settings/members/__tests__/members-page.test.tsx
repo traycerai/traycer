@@ -181,14 +181,19 @@ function rowOf(userId: string): HTMLElement {
 
 describe("MembersPage members read", () => {
   it("shows a loading state, not an empty team, while the read is outstanding", async () => {
-    // No account team is seeded here: the environment list's join of the
-    // viewer's role would wait on this same outstanding read, so the list
-    // names the team degraded and the heading still reads Acme.
-    const harness = mountTeamHarness(
+    let reads = 0;
+    const harness = mountTeamPage(
       { kind: "host" },
       {
         "environment.list": () => ({ environments: [TEAM] }),
-        "environment.members": () => new Promise(() => undefined),
+        "environment.members": () => {
+          reads += 1;
+          // The first read is the environment list's join of the viewer's
+          // role, which names the team and which the page waits for; the page's
+          // own read is the next, and stays outstanding.
+          if (reads === 1) return membersPage([ADA]);
+          return new Promise(() => undefined);
+        },
       },
     );
     render(<MembersPage environmentId="env-a" />, {
@@ -196,7 +201,9 @@ describe("MembersPage members read", () => {
     });
 
     await screen.findByText(/^Who is in Acme/);
-    expect(harness.paramsOf("environment.members")).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(harness.paramsOf("environment.members")).toHaveLength(2);
+    });
     expect(screen.queryByText(/Acme · 0 people/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
     expect(screen.getByTestId("members-loading")).toBeTruthy();
