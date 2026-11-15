@@ -1,3 +1,4 @@
+import type { AuthnSecretsCreateResponse } from "@traycer-clients/shared/environment/configuration-secrets";
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -38,7 +39,7 @@ export function useEnvironmentSecretsCreateMutation(
     "environment.secrets.create"
   >,
 ): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "environment.secrets.create">,
+  AuthnSecretsCreateResponse,
   HostRpcError,
   void,
   CapturedHost
@@ -46,7 +47,7 @@ export function useEnvironmentSecretsCreateMutation(
   const { environmentId } = useSecretsEnvironment(client);
   const queryClient = useQueryClient();
   return useSecretsOperationMutation<
-    ResponseOfMethod<HostRpcRegistry, "environment.secrets.create">,
+    AuthnSecretsCreateResponse,
     void,
     CapturedHost
   >({
