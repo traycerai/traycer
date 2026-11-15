@@ -129,7 +129,13 @@ const MOCK_HOST_DIRECTORY = {
 // barrel's un-overridden residue is provider-coupled and throws.
 // The one binding carries the directory `useHostDirectory` answers, as in the
 // app: `useHostDirectoryEntry` reads it off the binding.
-const MOCK_HOST_BINDING = { directory: MOCK_HOST_DIRECTORY };
+const MOCK_HOST_BINDING = {
+  directory: MOCK_HOST_DIRECTORY,
+  hostClient: {
+    ...MOCK_HOST_CLIENT,
+    resolveHostById: (hostId: string) => MOCK_HOST_DIRECTORY.findById(hostId),
+  },
+};
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => MOCK_HOST_BINDING,
   useOptionalHostClient: () => MOCK_HOST_CLIENT,

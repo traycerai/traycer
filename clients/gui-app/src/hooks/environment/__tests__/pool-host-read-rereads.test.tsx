@@ -37,6 +37,16 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 const LOCAL_HOST_ID = mockLocalHostEntry.hostId;
 const REMOTE_HOST_ID = mockRemoteHostEntry.hostId;
 
+// The settings page's host scope reads the runtime client and resolves clients
+// by host id: both answer the harness's host, as in `team-page-frame-rereads`.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : requireTeamHostClient(),
+}));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
