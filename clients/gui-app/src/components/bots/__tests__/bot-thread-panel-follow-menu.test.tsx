@@ -25,7 +25,16 @@ import {
   createFollowHostFixture,
   type FollowHostFixture,
 } from "@/hooks/bots/__tests__/bot-thread-follow-test-support";
+import { boxInput } from "@/components/bots/__tests__/bot-box-test-support";
 import { BotThreadPanel } from "@/components/bots/bot-thread-panel";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  holdScreenLandscape,
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../__tests__/short-keyboard-viewport-harness";
 import type { BotThreadFollow } from "@traycer/protocol/host/bot/schemas";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
@@ -126,7 +135,6 @@ function mountPanel(
               onClose={vi.fn()}
               onEditPost={vi.fn()}
               onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
               landOn={null}
               quote={null}
             />
@@ -177,20 +185,15 @@ async function expectFollowedByChoice(user: UserEvent): Promise<void> {
 }
 
 describe("<BotThreadPanel /> the thread's follow menu", () => {
-  it("puts Thread actions after Thread session in the header, and shows no follow state while the menu is closed", async () => {
+  it("keeps Thread actions as the header's only thread control, and shows no follow state while the menu is closed", async () => {
     mountPanel({ [THREAD_ID]: MANUAL_FOLLOW });
 
     const actions = await screen.findByRole("button", {
       name: "Thread actions",
     });
-    const session = screen.getByRole("button", { name: "Thread session" });
     const header = screen.getByRole("banner");
-    expect(header.contains(session)).toBe(true);
     expect(header.contains(actions)).toBe(true);
-    expect(
-      session.compareDocumentPosition(actions) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Thread session" })).toBeNull();
     expect(within(header).queryByText(/Following/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
   });
@@ -279,5 +282,40 @@ describe("<BotThreadPanel /> the thread's follow menu", () => {
     fixture.control.releaseWrites[1]();
     await waitFor(() => expect(fixture.reads.count).toBe(3));
     await expectUnfollowed(user);
+  });
+});
+
+describe("<BotThreadPanel /> the follow menu on a short viewport under the keyboard", () => {
+  beforeEach(() => {
+    setPhoneLayoutOnly(true);
+    holdScreenLandscape();
+    raiseNativeKeyboard(IPHONE_17);
+  });
+
+  afterEach(() => {
+    setPhoneLayoutOnly(false);
+    restoreKeyboardEnvironment();
+  });
+
+  function actionsShown(): boolean {
+    return screen.getByTestId("bot-thread-menu").closest("[hidden]") === null;
+  }
+
+  it("hides Thread actions while the reply box has the focus and shows it again with the keyboard down", async () => {
+    const user = userEvent.setup();
+    mountPanel({ [THREAD_ID]: MANUAL_FOLLOW });
+    await screen.findByRole("button", { name: "Thread actions" });
+    expect(actionsShown()).toBe(true);
+
+    const box = boxInput("Reply in the thread");
+    Object.defineProperty(box, "isContentEditable", {
+      configurable: true,
+      value: true,
+    });
+    await user.click(box);
+    expect(actionsShown()).toBe(false);
+
+    lowerNativeKeyboard();
+    expect(actionsShown()).toBe(true);
   });
 });

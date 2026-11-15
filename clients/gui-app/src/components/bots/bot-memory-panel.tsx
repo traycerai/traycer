@@ -47,7 +47,7 @@ export interface BotMemoryPanelProps {
   readonly trunkChatId: string;
   /** The bot's threads, to find the one an entry was written in; `null` while unread. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
-  /** Another bot of the environment by its id, for a shared entry's writer. */
+  /** Another bot of the environment by its id, for a common memory entry's writer. */
   readonly botNameOf: (botId: string) => string | null;
   readonly back: BotOpenThread | null;
   /** Brings back the thread the pane displaced; `null` when it displaced none. */
@@ -61,8 +61,8 @@ export interface BotMemoryPanelProps {
  * reads before every reply, in the rail beside its channel, read-only - a
  * person changes one by telling the bot. Its own entries newest-confirmed
  * first, each with when and where it was written and when it was last
- * confirmed; the ones shared with every bot below, with the bot that wrote
- * each; a find box; and how full its own memory is. Live: an entry written
+ * confirmed; the common memory below, which every bot and agent of the
+ * environment reads, with the bot that wrote each; a find box; and how full its own memory is. Live: an entry written
  * while the pane is open is marked new. It takes the rail's one slot, a thread included, whose crumb in
  * the header brings it back.
  */
@@ -217,7 +217,7 @@ function MemoryList(props: ListProps): ReactNode {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <p className="px-4 pt-3 text-ui-xs text-muted-foreground">
-        {`${botTitle} wrote these and reads them before every reply. To change one, tell ${botTitle} in the channel.`}
+        {`${botTitle} reads these before every reply. ${botTitle}'s memory is its own. Common memory is what all your bots and agents here can remember and use. To change one, tell ${botTitle} in the channel.`}
       </p>
       <div className="px-4 pt-3">
         <Input
@@ -230,8 +230,7 @@ function MemoryList(props: ListProps): ReactNode {
         />
       </div>
       <MemorySection
-        title="Its own"
-        note={null}
+        title={`${botTitle}'s memory`}
         count={own.length}
         testId="bot-memory-own"
       >
@@ -257,13 +256,12 @@ function MemoryList(props: ListProps): ReactNode {
       </MemorySection>
       {shared.length === 0 && searching ? null : (
         <MemorySection
-          title="Shared"
-          note="tidied by the main bot"
+          title="Common memory"
           count={shared.length}
           testId="bot-memory-shared"
         >
           {shared.length === 0 ? (
-            <EmptyLine text="Nothing shared yet." />
+            <EmptyLine text="No common memories yet." />
           ) : (
             shared.map((entry) => (
               <MemoryRow
@@ -301,7 +299,6 @@ function useMemoryMarks(entries: readonly BotMemoryEntry[]): MemoryMarks {
 
 function MemorySection(props: {
   readonly title: string;
-  readonly note: string | null;
   readonly count: number;
   readonly testId: string;
   readonly children: ReactNode;
@@ -315,7 +312,7 @@ function MemorySection(props: {
       <h3 className="flex items-baseline gap-2 px-4 pb-1 text-ui-xs font-semibold tracking-wide text-muted-foreground uppercase">
         {props.title}
         <span className="font-normal tracking-normal normal-case">
-          {props.note === null ? props.count : `${props.count} · ${props.note}`}
+          {props.count}
         </span>
       </h3>
       <ul className="flex flex-col">{props.children}</ul>
@@ -333,7 +330,7 @@ function EmptyLine(props: { readonly text: string }): ReactNode {
 
 /**
  * One entry: its text, then when it was confirmed and when and where it was
- * written - or that it was never confirmed since - for a shared entry the
+ * written - or that it was never confirmed since - for a common entry the
  * bot that wrote it, and for its own the other bots that keep it too. An
  * entry written while the pane is open says it is new.
  */
@@ -399,7 +396,7 @@ function otherKeepers(props: ListProps, entry: BotMemoryEntry): string[] {
   });
 }
 
-/** The bot that wrote a shared entry, by name; `null` when none is known. */
+/** The bot that wrote a common entry, by name; `null` when none is known. */
 function writerOf(props: ListProps, botId: string | null): string | null {
   if (botId === null) return null;
   return botId === props.botId ? props.botTitle : props.botNameOf(botId);
@@ -425,7 +422,7 @@ function KnownStamp(props: {
 /**
  * Where the bot learned the entry, as a link there: the member's post it was
  * answering in the channel, the thread it was written in, or the channel
- * when the post is unknown; a shared entry's too, when this bot wrote it.
+ * when the post is unknown; a common entry's too, when this bot wrote it.
  * Nothing for a chat this bot no longer has, or another bot's.
  */
 function EntryWhere(
@@ -534,7 +531,7 @@ function MemoryMeter(props: {
     <div className="mt-auto flex flex-col gap-1.5 px-4 pt-4 pb-3">
       <div
         role="meter"
-        aria-label={`${botTitle}'s own memories`}
+        aria-label={`${botTitle}'s memory`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent}
@@ -550,7 +547,7 @@ function MemoryMeter(props: {
         className="text-ui-xs text-muted-foreground"
         data-testid="bot-memory-meter-line"
       >
-        {`${botTitle}'s own memories: ${count} When it's full, adds are refused until an entry is removed.`}
+        {`${botTitle}'s memory: ${count} When it's full, adds are refused until an entry is removed.`}
       </p>
     </div>
   );

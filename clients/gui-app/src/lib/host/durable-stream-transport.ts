@@ -133,11 +133,13 @@ export function openDurableStreamTransport(params: {
     autoStart: true,
   });
   if (wsStreamClient === null) {
-    // Only reachable for a remote target whose registry-published public key
-    // does not decode (a corrupt row) — genuinely exceptional, unlike the
-    // ordinary "no target yet" case callers already gate on before opening.
+    // Two causes, both refused before any dial: a target of any kind below
+    // the app's minimum host version, or a remote target whose
+    // registry-published public key does not decode (a corrupt row). Unlike
+    // the ordinary "no target yet" case callers already gate on before
+    // opening.
     throw new Error(
-      `Remote host ${params.target.hostId} has an invalid public key; cannot open a durable stream`,
+      `Host ${params.target.hostId} is below the minimum host version or has an invalid public key; cannot open a durable stream`,
     );
   }
   appLogger.debug("[stream] durable transport opened", {

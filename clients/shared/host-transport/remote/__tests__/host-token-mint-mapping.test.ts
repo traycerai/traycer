@@ -179,6 +179,30 @@ describe("host-only token mint response mapping", () => {
     });
   });
 
+  it("refuses an attach-grant 403 team_membership_required as not a member, like the 404", async () => {
+    stubResponse(403, { code: "team_membership_required" });
+    const notAMember = await mintRelayPassWithHostTokenViaHttp(
+      BASE_URL,
+      HOST_ID,
+      SIGN_IN_TOKEN,
+    );
+    stubResponse(404, { code: "not_found" });
+    const notAdmitted = await mintRelayPassWithHostTokenViaHttp(
+      BASE_URL,
+      HOST_ID,
+      SIGN_IN_TOKEN,
+    );
+
+    expect(notAdmitted.kind).toBe("not-admitted");
+    expect(notAMember).toEqual({ ...notAdmitted, kind: "not-a-member" });
+    expect(notAMember).toMatchObject({
+      provision: {
+        kind: "refused",
+        fatal: { code: "TEAM_MEMBERSHIP_REQUIRED", retryable: false },
+      },
+    });
+  });
+
   it("keeps an attach-grant 403 on the existing refusal path", async () => {
     stubResponse(403, { code: "remote_access_off" });
     expect(

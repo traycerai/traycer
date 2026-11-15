@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   Suspense,
   useCallback,
@@ -429,7 +430,10 @@ function LandingTerminalDurableState(props: {
       <LandingTerminalErrorState
         message={props.requestError.message}
         isPending={props.requestPending}
-        onRetry={props.retry}
+        onRetry={() => {
+          if (showHostUpdateNeededForGesture(props.tab.hostId)) return;
+          props.retry();
+        }}
       />
     );
   }

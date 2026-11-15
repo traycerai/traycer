@@ -1,3 +1,7 @@
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { useHostCredentialStatusStore } from "@/stores/host/host-credential-status-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -300,6 +304,8 @@ export function buildHostStreamClient(params: {
   // connects on first use.
   readonly autoStart: boolean;
 }): IHostStreamClient<HostStreamRpcRegistry> | null {
+  if (hostDirectoryEntryNeedsUpdate(params.target, MINIMUM_HOST_VERSION))
+    return null;
   if (isPoolHostDirectoryEntry(params.target)) {
     // The server pool: the remote session on a direct leg, never the plain
     // per-socket client below. Its credentials are fixed by the entry's kind.
@@ -824,7 +830,9 @@ export function useHostStreamClientBindingFor(
     }, [endpointKind, rebuildBackoff]),
   );
 
-  return binding?.client.isClosed() === true ? null : binding;
+  return transportKey === null || binding?.client.isClosed() === true
+    ? null
+    : binding;
 }
 
 export function useHostStreamClientFor(

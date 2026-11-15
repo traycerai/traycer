@@ -13,9 +13,13 @@ import { appLogger, describeLogError } from "@/lib/logger";
 
 const historyMatchModeSchema = z.enum(["any", "all"]);
 const historyOwnershipSchema = z.enum(["mine", "shared"]);
+// `oldest` left the menu for `created-desc`, and stays here so a saved search
+// or URL that carries it still parses: a sort this rejects drops the whole
+// persisted search, filters included.
 const historySortSchema = z.enum([
   "recent",
   "last-viewed",
+  "created-desc",
   "oldest",
   "title-asc",
   "title-desc",

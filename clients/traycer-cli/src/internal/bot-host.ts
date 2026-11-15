@@ -25,10 +25,6 @@ import {
   type BotRecord,
   type BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
-import {
-  environmentListResponseSchemaV11,
-  type EnvironmentDescriptor,
-} from "@traycer/protocol/host/environment/contracts";
 import { isIncompatibleCloseForMethod } from "@traycer/protocol/host-transport/stream-session";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/host-messenger";
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
@@ -82,17 +78,6 @@ export async function listBots(): Promise<readonly BotRecord[]> {
   const result = await toBotCliError(callHostRpc("bot.list", {}));
   return parseCanonicalHostResponse("bot.list", botListResponseSchema, result)
     .bots;
-}
-
-export async function listEnvironments(): Promise<
-  readonly EnvironmentDescriptor[]
-> {
-  const result = await toBotCliError(callHostRpc("environment.list", {}));
-  return parseCanonicalHostResponse(
-    "environment.list",
-    environmentListResponseSchemaV11,
-    result,
-  ).environments;
 }
 
 /**

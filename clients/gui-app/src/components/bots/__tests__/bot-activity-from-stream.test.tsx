@@ -40,6 +40,8 @@ import {
 
 const mocks = vi.hoisted(() => ({
   taskTitles: {} as Record<string, string>,
+  /** Tasks the host's indicator read says wait on an approval, independently of any bot snapshot. */
+  approvalPending: new Set<string>(),
 }));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
@@ -59,6 +61,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
         { epic: { light: { title } } },
       ]),
     ),
+    resolutionsById: new Map(),
+    pendingTaskIds: new Set<string>(),
   }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -91,16 +95,37 @@ vi.mock("@/hooks/notifications/use-notification-host", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) => ({ hostId }),
 }));
-// The host holds no unread result for any task: every indicator read answers
-// complete and empty.
+// The host holds no unread result for any task, except an approval pending
+// for the tasks `mocks.approvalPending` names: every other indicator read
+// answers complete and empty.
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
-    requests: ReadonlyArray<unknown>;
+    requests: ReadonlyArray<{
+      readonly params: { readonly epicIds: ReadonlyArray<string> };
+    }>;
     combine: (results: ReadonlyArray<unknown>) => unknown;
   }) =>
     args.combine(
-      args.requests.map(() => ({
-        data: { epics: {}, chats: {}, complete: true },
+      args.requests.map((request) => ({
+        data: {
+          epics: Object.fromEntries(
+            request.params.epicIds
+              .filter((id) => mocks.approvalPending.has(id))
+              .map((id) => [
+                id,
+                {
+                  pendingFork: false,
+                  pendingApproval: true,
+                  pendingInterview: false,
+                  unreadFailure: false,
+                  unreadDone: false,
+                  unreadCount: 1,
+                },
+              ]),
+          ),
+          chats: {},
+          complete: true,
+        },
         isPending: false,
         isFetching: false,
         error: null,
@@ -128,6 +153,7 @@ function mountOver(session: StubSession): void {
       tasks,
       HOST_ID,
       subscription.snapshotFresh,
+      BOT_ID,
     );
     if (subscription.snapshot === null) return null;
     return (
@@ -158,6 +184,7 @@ function mountOver(session: StubSession): void {
 
 beforeEach(() => {
   mocks.taskTitles = {};
+  mocks.approvalPending = new Set();
   __resetAgentActivityStoreForTests();
   // The activity plane vouches the whole fleet, so a quiet seen task can leave.
   __setAgentActivityPlaneAnsweringForTests();
@@ -331,6 +358,86 @@ describe("the Activity tab over a bot.subscribe snapshot", () => {
     // The reconnect's snapshot makes it current again.
     act(() => session.emit(snapshotWith([waitingTask()], [])));
     expect(bandOf()).toBe("needs-you");
+  });
+
+  describe("an ended task that still waits on a person", () => {
+    const endedWaiting = (): object =>
+      wireTask("t-ended-wait", {
+        cadence: { kind: "none" },
+        state: "ended",
+        endedReason: "completed",
+        lastCheckinAt: NOW,
+        inputNeeded: [
+          {
+            hostId: "host-agents",
+            hostName: "Studio Mac",
+            agentChatId: "a-2",
+            surfaceId: "surface-a-2",
+            surface: {
+              kind: "approval",
+              approvalId: "approval-a-2",
+              tool: "gh pr merge",
+              summary: "Merge the release PR",
+              tier: null,
+              requiresPerson: true,
+              askedAt: NOW,
+            },
+            reportedAt: NOW,
+            acceptsActions: true,
+          },
+        ],
+      });
+    const endedRow = (): HTMLElement =>
+      screen.getByTestId("bot-activity-ended-task");
+
+    it("keeps its row and reason but drops Needs you and the waiting words from the moment the stream leaves open, until a fresh snapshot restores them", () => {
+      const session = new StubSession();
+      mountOver(session);
+      act(() => session.emit(snapshotWith([endedWaiting()], [])));
+      expect(
+        within(endedRow()).getByTestId("bot-activity-needs-you"),
+      ).toBeTruthy();
+      expect(endedRow().textContent).toContain("waiting on you");
+
+      act(() => session.status("reconnecting", null));
+      expect(
+        within(endedRow()).getByTestId("bot-activity-ended-reason").textContent,
+      ).toBe("Check-in completed");
+      expect(
+        within(endedRow()).queryByTestId("bot-activity-needs-you"),
+      ).toBeNull();
+      expect(endedRow().textContent).not.toMatch(/waiting on you|approv/i);
+
+      act(() => session.status("open", null));
+      expect(
+        within(endedRow()).queryByTestId("bot-activity-needs-you"),
+      ).toBeNull();
+      expect(endedRow().textContent).not.toMatch(/waiting on you|approv/i);
+
+      act(() => session.emit(snapshotWith([endedWaiting()], [])));
+      expect(
+        within(endedRow()).getByTestId("bot-activity-needs-you"),
+      ).toBeTruthy();
+      expect(endedRow().textContent).toContain("waiting on you");
+    });
+
+    it("keeps a waiting approval the host's own indicator still holds while the snapshot's waiting surface is stale", () => {
+      mocks.approvalPending.add("t-ended-wait");
+      const session = new StubSession();
+      mountOver(session);
+      act(() => session.emit(snapshotWith([endedWaiting()], [])));
+
+      act(() => session.status("reconnecting", null));
+
+      expect(
+        within(endedRow()).queryByTestId("bot-activity-needs-you"),
+      ).toBeNull();
+      expect(
+        within(endedRow())
+          .getByTestId("bot-activity-task-glyph")
+          .getAttribute("aria-label"),
+      ).toContain("waiting for approval");
+    });
   });
 
   it("keeps a scheduled task with a stale waiting surface listed as Status unknown, not relabelled periodic, until a fresh snapshot lands", () => {

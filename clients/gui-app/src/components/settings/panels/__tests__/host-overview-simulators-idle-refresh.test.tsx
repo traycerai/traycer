@@ -162,6 +162,7 @@ function renderTab(client: HostClient<HostRpcRegistry>): void {
   render(
     <QueryClientProvider client={createAppQueryClient()}>
       <HostOverviewSimulatorsTab
+        usable
         client={client}
         hostId={mockLocalHostEntry.hostId}
         hostName="Studio Mac"
