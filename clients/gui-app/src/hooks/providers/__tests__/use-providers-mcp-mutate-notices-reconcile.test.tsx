@@ -293,6 +293,19 @@ describe("useProvidersMcpMutate notice reconciliation", () => {
           ).length === outgoingCallCount &&
           (fail ? retainedMutation.state.status === "error" : true),
       ).toBe(true);
+      rendered.unmount();
+      expect({
+        mutationCacheSecretFree: !mutationStateContainsFakeMcpSecret(
+          queryClient,
+          observers,
+        ),
+        hookResultSecretFree: !containsFakeMcpSecret(rendered.result.current),
+        logsSecretFree: !containsFakeMcpSecret(consoleOutput),
+      }).toEqual({
+        mutationCacheSecretFree: true,
+        hookResultSecretFree: true,
+        logsSecretFree: true,
+      });
       client.dispose();
     },
   );

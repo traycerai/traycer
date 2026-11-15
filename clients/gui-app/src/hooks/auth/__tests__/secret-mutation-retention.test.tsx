@@ -38,6 +38,7 @@ interface AuthHttpReply {
 interface AuthHttpCall {
   readonly path: string;
   readonly method: string;
+  readonly status: number;
   readonly secretPresent: boolean;
 }
 
@@ -45,6 +46,13 @@ interface AuthHttpBoundary {
   readonly calls: AuthHttpCall[];
   readonly restore: () => void;
 }
+
+const LINK_TOKEN_PATH = "/api/v3/auth/link/token";
+const claimedLinkReply: AuthHttpReply = {
+  path: "/api/v3/auth/link/claim",
+  status: 200,
+  body: '{"status":"claimed","secret":"synthetic-link-poll-secret","interval":1}',
+};
 
 interface MutationObserverReference {
   readonly options: unknown;
@@ -114,6 +122,7 @@ function installAuthHttpBoundary(
     calls.push({
       path: url.pathname,
       method: init?.method ?? "GET",
+      status: reply.status,
       secretPresent: body.includes(secret),
     });
     return new Response(reply.body, {
@@ -206,6 +215,24 @@ function authHttpCallContainsSecret(
     call.method === "POST" &&
     call.secretPresent
   );
+}
+
+function authHttpResponseObserved(
+  boundary: AuthHttpBoundary,
+  path: string,
+  status: number,
+): boolean {
+  return boundary.calls.some(
+    (call) =>
+      call.path === path && call.method === "POST" && call.status === status,
+  );
+}
+
+function authHttpPathWasNotCalled(
+  boundary: AuthHttpBoundary,
+  path: string,
+): boolean {
+  return !boundary.calls.some((call) => call.path === path);
 }
 
 async function observeMutationExecution(
@@ -364,27 +391,38 @@ describe("one-shot auth mutation inputs", () => {
     {
       settles: "successfully" as const,
       replies: [
+        claimedLinkReply,
         {
-          path: "/api/v3/auth/link/claim",
-          status: 200,
-          body: '{"status":"claimed","secret":"synthetic-link-poll-secret","interval":1}',
-        },
-        {
-          path: "/api/v3/auth/link/token",
+          path: LINK_TOKEN_PATH,
           status: 200,
           body: '{"token":"synthetic-link-access-token","refreshToken":"synthetic-link-refresh-token","familyId":"synthetic-link-family"}',
         },
       ],
       expectedKind: "signed-in",
+      tokenResponse: 200,
     },
     {
       settles: "with a typed refusal" as const,
       replies: [{ path: "/api/v3/auth/link/claim", status: 401, body: "" }],
       expectedKind: "invalid-code",
+      tokenResponse: null,
+    },
+    {
+      settles: "with a terminal token access denial" as const,
+      replies: [
+        claimedLinkReply,
+        {
+          path: LINK_TOKEN_PATH,
+          status: 400,
+          body: '{"error":"access_denied"}',
+        },
+      ],
+      expectedKind: "denied",
+      tokenResponse: 400,
     },
   ])(
     "sends a submitted link code and retains none after it settles $settles",
-    async ({ replies, expectedKind }) => {
+    async ({ replies, expectedKind, tokenResponse }) => {
       const consoleOutput = captureConsoleOutput();
       const secret = "synthetic-link-sign-in-code";
       useAuthStore.getState().setSignedOut();
@@ -440,6 +478,14 @@ describe("one-shot auth mutation inputs", () => {
           boundary,
           "/api/v3/auth/link/claim",
         ),
+        tokenOutcomeMatches:
+          tokenResponse === null
+            ? authHttpPathWasNotCalled(boundary, LINK_TOKEN_PATH)
+            : authHttpResponseObserved(
+                boundary,
+                LINK_TOKEN_PATH,
+                tokenResponse,
+              ),
         mutationAndObserverSecretFree:
           !retention.mutationAndObserverContainSecret,
         logSecretFree: !retention.logsContainSecret,
@@ -449,6 +495,7 @@ describe("one-shot auth mutation inputs", () => {
         mutationSettled: true,
         resultKindMatches: true,
         requestContainsCode: true,
+        tokenOutcomeMatches: true,
         mutationAndObserverSecretFree: true,
         logSecretFree: true,
         hookResultSecretFree: true,

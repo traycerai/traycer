@@ -577,7 +577,7 @@ describe("The MCP server dialog", () => {
       await waitFor(() =>
         expect(useAuthStore.getState().status).toBe("signed-in"),
       );
-      const { result } = renderHook(
+      const { result, unmount } = renderHook(
         () => {
           const submitted =
             useSubmittedSecretInput<EnvironmentConfigurationMcpServerPutRequestV11>(
@@ -659,6 +659,19 @@ describe("The MCP server dialog", () => {
           harness.paramsOf("environment.configuration.mcpServers.put")
             .length === putCallCount,
       ).toBe(true);
+      unmount();
+      expect({
+        mutationCacheSecretFree: !mutationCacheContainsTeamPat(
+          queryClient,
+          observers,
+        ),
+        hookResultSecretFree: !containsTeamPat(result.current),
+        logsSecretFree: !containsTeamPat(consoleOutput),
+      }).toEqual({
+        mutationCacheSecretFree: true,
+        hookResultSecretFree: true,
+        logsSecretFree: true,
+      });
     },
   );
 
