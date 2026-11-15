@@ -165,17 +165,7 @@ function linkHeldOff(reasons: {
   );
 }
 
-export function AddProviderProfileDialog({
-  state,
-  client,
-  isLocalHost,
-  open,
-  onOpenChange,
-  onFailedAttempt,
-  onProfileCreated,
-  target,
-  targetResult,
-}: {
+interface AddProviderProfileDialogProps {
   readonly target: ProviderLoginTarget | null;
   readonly targetResult:
     | ((
@@ -195,6 +185,44 @@ export function AddProviderProfileDialog({
     attempt: FailedProviderProfileAttempt | null,
   ) => void;
   readonly onProfileCreated: (profileId: string) => void;
+}
+
+export function AddProviderProfileDialog(
+  props: AddProviderProfileDialogProps,
+): ReactNode {
+  return (
+    <ProviderProfileSignInDialog
+      {...props}
+      switchSourceProfileId={null}
+      onSwitchProfileChosen={null}
+    />
+  );
+}
+
+export function SwitchAccountSignInDialog(
+  props: AddProviderProfileDialogProps & {
+    readonly switchSourceProfileId: string;
+    readonly onSwitchProfileChosen: (profile: ProviderProfile) => void;
+  },
+): ReactNode {
+  return <ProviderProfileSignInDialog {...props} />;
+}
+
+function ProviderProfileSignInDialog({
+  state,
+  client,
+  isLocalHost,
+  open,
+  onOpenChange,
+  onFailedAttempt,
+  onProfileCreated,
+  target,
+  targetResult,
+  switchSourceProfileId,
+  onSwitchProfileChosen,
+}: AddProviderProfileDialogProps & {
+  readonly switchSourceProfileId: string | null;
+  readonly onSwitchProfileChosen: ((profile: ProviderProfile) => void) | null;
 }): ReactNode {
   const openLink = useOpenLink();
   // Every entry point gates on the target host already; this is the floor
@@ -291,15 +319,16 @@ export function AddProviderProfileDialog({
   // is set (see `commitNaming`), so a later recolor retry never re-shows it.
   const naming = resolveNamingStep(flow.state, namingCommittedFor);
 
-  const complete = (profileId: string): void => {
+  const complete = (profile: ProviderProfile): void => {
     onFailedAttempt(null);
-    onProfileCreated(profileId);
+    onProfileCreated(profile.profileId);
+    onSwitchProfileChosen?.(profile);
     onOpenChange(false);
   };
 
   const finalizeProfile = (profile: ProviderProfile): void => {
     if (accentColor === profile.accentColor) {
-      complete(profile.profileId);
+      complete(profile);
       return;
     }
     recolorProfile.mutate(
@@ -308,7 +337,7 @@ export function AddProviderProfileDialog({
         profileId: profile.profileId,
         accentColor,
       },
-      { onSuccess: () => complete(profile.profileId) },
+      { onSuccess: () => complete(profile) },
     );
   };
 
@@ -500,6 +529,7 @@ export function AddProviderProfileDialog({
         ) : null}
         <AddProfileOutcomeFooter
           flowState={flow.state}
+          sameAccountProfileId={switchSourceProfileId}
           offersSignIns={offersSignIns}
           showsSignedIn={naming === null && recolorProfile.error === null}
           finalizing={finalizing}
@@ -956,6 +986,7 @@ function FooterSentence({
  */
 function AddProfileOutcomeFooter({
   flowState,
+  sameAccountProfileId,
   offersSignIns,
   showsSignedIn,
   finalizing,
@@ -967,12 +998,13 @@ function AddProfileOutcomeFooter({
   onDone,
 }: {
   readonly flowState: ProviderProfileLoginFlowState;
+  readonly sameAccountProfileId: string | null;
   readonly offersSignIns: boolean;
   /** No naming step and no failed recolor stands in front of it. */
   readonly showsSignedIn: boolean;
   readonly finalizing: boolean;
   readonly signInAgainDisabled: boolean;
-  readonly onUse: (profileId: string) => void;
+  readonly onUse: (profile: ProviderProfile) => void;
   readonly onSignInWithAnother: () => void;
   readonly listRereadPending: boolean;
   readonly onRetryListRead: () => void;
@@ -1012,6 +1044,18 @@ function AddProfileOutcomeFooter({
   }
   if (flowState.kind === "already-signed-in") {
     const { profile } = flowState;
+    if (sameAccountProfileId === profile.profileId) {
+      return (
+        <DialogFooter>
+          <FooterSentence>
+            {alreadySignedInAsText(profile.label)}
+          </FooterSentence>
+          <Button type="button" size="sm" onClick={onDone}>
+            Done
+          </Button>
+        </DialogFooter>
+      );
+    }
     return (
       <DialogFooter>
         <Button
@@ -1023,11 +1067,7 @@ function AddProfileOutcomeFooter({
         >
           {SIGN_IN_WITH_ANOTHER_TEXT}
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => onUse(profile.profileId)}
-        >
+        <Button type="button" size="sm" onClick={() => onUse(profile)}>
           {USE_PROFILE_TEXT}
         </Button>
         <FooterSentence>{alreadySignedInAsText(profile.label)}</FooterSentence>
