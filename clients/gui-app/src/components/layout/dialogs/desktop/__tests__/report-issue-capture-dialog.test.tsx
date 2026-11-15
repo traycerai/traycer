@@ -270,8 +270,6 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     decideSecretRequest: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
-    mintExecutableWriteGrant: () =>
-      Promise.resolve({ kind: "unauthorized" as const }),
     listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
     revokeUserSession: () =>
       Promise.resolve({ kind: "network-error" as const }),

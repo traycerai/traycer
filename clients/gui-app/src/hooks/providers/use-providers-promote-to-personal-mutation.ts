@@ -34,7 +34,6 @@ import {
 } from "@/components/settings/environment/mcp-skills-copy";
 import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -130,7 +129,6 @@ export function useProvidersPromoteToPersonal(
 > {
   const client = useHostClient();
   const cloud = useEnvironmentCloud();
-  const grant = useExecutableWriteGrant();
   const queries = useQueryClient();
   const [capturedRequests] = useState(
     () => new WeakMap<PromoteToEnvironmentVariables, CapturedPromoteRequest>(),
@@ -168,17 +166,12 @@ export function useProvidersPromoteToPersonal(
           name: variables.name,
           intentOperationId: intent?.operationId ?? null,
         };
-        const request: ProvidersNativeMutateRequestV15 = await grant(
-          {
-            providerId: variables.providerId,
-            mutation: promote,
-            executableWriteGrant: null,
-            expectedEnvironmentId: variables.expectedEnvironmentId,
-          },
-          client,
-        );
-        // The grant reads the host's status and may mint, so the sign-in
-        // can change while it is out; the upload goes only on the click's.
+        const request: ProvidersNativeMutateRequestV15 = {
+          providerId: variables.providerId,
+          mutation: promote,
+          executableWriteGrant: null,
+          expectedEnvironmentId: variables.expectedEnvironmentId,
+        };
         if (intent !== null && !intent.operation.onOriginSignIn())
           return intentOutcome(null, environmentName);
         const { result } = await client.request(METHOD, request);
@@ -196,7 +189,7 @@ export function useProvidersPromoteToPersonal(
         if (intent === null) return { kind: "added" };
         return intentOutcome(await readIntentState(intent), environmentName);
       }),
-    [capturedRequests, client, environmentName, grant],
+    [capturedRequests, client, environmentName],
   );
   const onMutate = useCallback(
     (variables: PromoteToEnvironmentVariables) => ({

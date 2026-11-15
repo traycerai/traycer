@@ -18,15 +18,9 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
-// The app-wide host client and binding. The client is a REAL `HostClient` over
-// an in-memory messenger (`buildEnvironmentClient`): only the host on the far
-// side is faked. The binding carries the minter `useExecutableWriteGrant` reads.
-const hostMock = vi.hoisted(
-  (): { client: unknown; binding: { readonly auth: unknown } | null } => ({
-    client: null,
-    binding: null,
-  }),
-);
+// The app-wide host client is a real `HostClient` over an in-memory
+// messenger (`buildEnvironmentClient`): only the host on the far side is faked.
+const hostMock = vi.hoisted((): { client: unknown } => ({ client: null }));
 // A host that runs environments, the one the Personal mark is drawn on.
 vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
   useSkillEnvironmentRoute: () => ({
@@ -52,7 +46,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostClient: () => hostMock.client,
-    useHostBinding: () => hostMock.binding,
+    useHostBinding: () => null,
   };
 });
 
@@ -261,7 +255,6 @@ afterEach(() => {
     team: false,
   };
   hostMock.client = null;
-  hostMock.binding = null;
   scopeMock.scope = "global";
   listMock.servers = [];
   listMock.skills = [];
@@ -387,7 +380,6 @@ interface Rig {
   readonly sent: NativeMutateRequest[];
   /** What the host has applied as the person's items, as `environment.status` says. */
   readonly applied: EnvironmentItemStatus[];
-  readonly mintedFor: string[];
   readonly appliedAtRead: {
     readonly status: number[];
     readonly providers: number[];
@@ -492,7 +484,6 @@ function renderPage(
   const rig: Rig = {
     sent: [],
     applied: [...options.applied],
-    mintedFor: [],
     appliedAtRead: { status: [], providers: [] },
   };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
@@ -567,19 +558,6 @@ function renderPage(
   }
   recordNegotiatedHostManifest(HOST_ID, manifest);
   hostMock.client = client;
-  hostMock.binding = {
-    auth: {
-      mintExecutableWriteGrant: (hostId: string) => {
-        rig.mintedFor.push(hostId);
-        return Promise.resolve({
-          kind: "ok" as const,
-          grant: "grant-1",
-          expiresInSeconds: 600,
-        });
-      },
-      getCredentialGeneration: () => 0,
-    },
-  };
   // These cases are about a host's own pages, which a Local row reads.
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
@@ -699,10 +677,7 @@ describe("A `claude mcp add` entry on a provider's MCP tab", () => {
         name: "github",
       },
     });
-    // What it uploads can run on every host, so it carries the grant the
-    // person's own session minted for THIS host.
-    expect(rig.sent[0]?.executableWriteGrant).toBe("grant-1");
-    expect(rig.mintedFor).toEqual([HOST_ID]);
+    expect(rig.sent[0]?.executableWriteGrant).toBeNull();
 
     // Now the host's status says the person's item applied as `github`: the
     // row says Personal, with no local line and no button left to click.

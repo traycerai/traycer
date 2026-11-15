@@ -5,6 +5,7 @@ import type {
   EnvironmentCloud,
   EnvironmentCloudSource,
   EnvironmentTransportRequest,
+  EnvironmentTransportAnswer,
 } from "@traycer-clients/shared/environment/environment-cloud";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { EnvironmentHostReadResponseV11 } from "@traycer/protocol/host/environment/contracts";
@@ -33,9 +34,6 @@ const cloudHarness = vi.hoisted(() => ({
   source: null as EnvironmentCloudSource | null,
 }));
 const toastHarness = vi.hoisted(() => ({ messages: [] as string[] }));
-const grantHarness = vi.hoisted(() => ({
-  prepare: null as ((request: unknown) => Promise<unknown>) | null,
-}));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -43,12 +41,6 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/environment/use-environment-cloud", () => ({
   useEnvironmentCloud: () => cloudHarness.source,
-}));
-vi.mock("@/hooks/environment/use-executable-write-grant", () => ({
-  useExecutableWriteGrant: () => (request: unknown) => {
-    const prepare = grantHarness.prepare;
-    return prepare === null ? Promise.resolve(request) : prepare(request);
-  },
 }));
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: (_error: unknown, fallback: string) => {
@@ -183,7 +175,6 @@ afterEach(() => {
   cleanup();
   cloudHarness.source = null;
   toastHarness.messages = [];
-  grantHarness.prepare = null;
   resetTeamPageHarness();
 });
 
@@ -516,38 +507,25 @@ describe("useProvidersPromoteToPersonal", () => {
     expect(bRequests).toEqual([]);
   });
 
-  it("does not upload when sign-in changes while the executable write grant is being prepared", async () => {
+  it("does not upload when sign-in changes while the intent is being recorded", async () => {
     const account = { current: "A" };
     const requests: EnvironmentTransportRequest[] = [];
+    const recordedIntent = deferred<EnvironmentTransportAnswer>();
+    const recordingStarted = deferred<void>();
     const cloudA = makeCloud(
       (request) => {
         requests.push(request);
-        return Promise.resolve(
-          request.method === "POST"
-            ? {
-                status: 200,
-                text: JSON.stringify({
-                  operationId: "00000000-0000-4000-8000-000000000001",
-                  endsAt: 2_000_000_000,
-                }),
-              }
-            : {
-                status: 200,
-                text: JSON.stringify({
-                  state: "consumed",
-                  mcpServerId: SERVER_ID,
-                }),
-              },
-        );
+        if (request.method === "POST") {
+          recordingStarted.resolve();
+          return recordedIntent.promise;
+        }
+        return Promise.resolve({
+          status: 200,
+          text: JSON.stringify({ state: "consumed", mcpServerId: SERVER_ID }),
+        });
       },
       () => account.current === "A",
     );
-    const grant = deferred<unknown>();
-    const grantStarted = deferred<void>();
-    grantHarness.prepare = (request) => {
-      grantStarted.resolve();
-      return grant.promise.then(() => request);
-    };
     const nativeRequests: unknown[] = [];
     const result = await runPromote({
       cloud: () => cloudA,
@@ -564,9 +542,15 @@ describe("useProvidersPromoteToPersonal", () => {
       mutation = result.rendered.result.current.mutateAsync(result.input);
       await Promise.resolve();
     });
-    await grantStarted.promise;
+    await recordingStarted.promise;
     account.current = "B";
-    grant.resolve(undefined);
+    recordedIntent.resolve({
+      status: 200,
+      text: JSON.stringify({
+        operationId: "00000000-0000-4000-8000-000000000001",
+        endsAt: 2_000_000_000,
+      }),
+    });
     let outcome: unknown;
     await act(async () => {
       outcome = await mutation;

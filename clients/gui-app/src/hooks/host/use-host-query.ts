@@ -444,10 +444,7 @@ export interface UseHostMutationOptions<
   ) => RequestOfMethod<Registry, Method>;
   /**
    * Completes the mapped request asynchronously, at DISPATCH, on the client
-   * the request is about to be sent on. The one caller is the executable-write
-   * grant (`lib/environment/executable-write-grant.ts`): a grant is minted for
-   * one host and expires, so it has to be read when the write goes, not when
-   * the variables were built. Inside the dispatch boundary, so a throw here
+   * the request is about to be sent on. Inside the dispatch boundary, a throw
    * surfaces as the declared `HostRpcError` like a `mapVariables` throw does.
    */
   readonly prepareRequest?:

@@ -151,11 +151,7 @@ interface UseHostScopedMutationArgs<
   readonly followSettingsSave?:
     | SettingsSaveFollow<HostRpcRegistry, Method>
     | undefined;
-  /**
-   * Completes the request at dispatch: the executable-write grant
-   * (`useExecutableWriteGrant`) on a write that can reach an execution sink.
-   * See `UseHostMutationOptions.prepareRequest`.
-   */
+  /** See `UseHostMutationOptions.prepareRequest`. */
   readonly prepareRequest?:
     | ((
         request: RequestOfMethod<HostRpcRegistry, Method>,

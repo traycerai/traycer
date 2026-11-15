@@ -20,7 +20,6 @@ import type {
   TokenRotateOutcome,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
@@ -3641,20 +3640,6 @@ export class AuthService {
       requestId,
       decision,
     );
-  }
-
-  /**
-   * An executable-write grant for one host, minted on this user's session
-   * (`lib/environment/executable-write-grant.ts` is the caller and the cache).
-   */
-  async mintExecutableWriteGrant(
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult> {
-    const bearer = this.cloudBearer();
-    if (bearer === null) {
-      return { kind: "unauthorized" };
-    }
-    return this.runnerHost.mintExecutableWriteGrant(bearer, hostId);
   }
 
   private async revalidateCurrentContextOnce(
