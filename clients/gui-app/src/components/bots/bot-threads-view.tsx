@@ -18,6 +18,10 @@ import { Button } from "@/components/ui/button";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
+import {
+  BotMayChangeContext,
+  readerMayChangeBot,
+} from "@/hooks/bots/use-reader-may-change-bot";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
@@ -939,9 +943,13 @@ function ThreadCardScope(props: {
   return (
     <BotMentionsContext value={mentioned}>
       <BotIdentityContext value={identity}>
-        <BotSurfaceCardsContext.Provider value={surfaceCards}>
-          {props.children}
-        </BotSurfaceCardsContext.Provider>
+        <BotMayChangeContext
+          value={readerMayChangeBot(environments.data, bot.environmentId)}
+        >
+          <BotSurfaceCardsContext.Provider value={surfaceCards}>
+            {props.children}
+          </BotSurfaceCardsContext.Provider>
+        </BotMayChangeContext>
       </BotIdentityContext>
     </BotMentionsContext>
   );

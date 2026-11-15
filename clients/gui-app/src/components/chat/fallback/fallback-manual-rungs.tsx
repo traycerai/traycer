@@ -49,6 +49,7 @@ import {
 import { usePublishConfirmedManualFallbackAction } from "./use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-outcome";
 import { RoutingDestinationPicker } from "./routing-destination-picker";
+import { useBotTurnMayChange } from "@/hooks/bots/use-reader-may-change-bot";
 
 /**
  * The failed-turn card's actions: Retry, Switch to…, and "Wait until <time>".
@@ -425,6 +426,9 @@ function ManualRungAffordances({
   useHoldFailedTurnRefusal({ hostId, chatId }, attempt.turnId);
   const chatSettings = useChatPersistedSettings({ epicId, chatId, hostId });
   const seedTuple = failedTurnSwitchSeed(attempt, chatSettings);
+  // On a bot's own chat a Switch writes the bot's run settings, which a team's
+  // Viewer may not change; the composer's banner reads the same answer.
+  const mayChangeBot = useBotTurnMayChange(epicId);
   // Any rung in flight for this chat - a bare button here or a pick in the
   // picker - quiets every control, so one press cannot race another.
   const rungsInFlight =
@@ -470,7 +474,9 @@ function ManualRungAffordances({
       retry: attempt.eligibleRungs.includes("retry") && leaves.retry,
       // The composer's banner predicate asks the same function, so the card
       // and the banner cannot disagree about whether "Switch to…" is here.
-      switch: failedTurnSwitchOffered({ attempt, refusal, seedTuple }),
+      switch:
+        mayChangeBot &&
+        failedTurnSwitchOffered({ attempt, refusal, seedTuple }),
       wait: waitUntil !== null && leaves.wait,
     },
   });
