@@ -2746,8 +2746,6 @@ describe("<TestEpicSessionTab />", () => {
       readonly streams: ControlledStream[];
       /** Publishes the host's row at `appVersion`, or removes it for `null`. */
       readonly publishRow: (appVersion: string | null) => void;
-      /** The session's latest presentation kind, `null` before the first. */
-      readonly presentationKind: () => EpicSessionPresentation["kind"] | null;
       /** The mounted session's handle, once it has one. */
       readonly handle: () => OpenEpicStoreHandle | undefined;
     }
@@ -2785,7 +2783,6 @@ describe("<TestEpicSessionTab />", () => {
         emitRowChanged();
       };
       publishRow("2.0.0");
-      let presentationKind: EpicSessionPresentation["kind"] | null = null;
       let handle: OpenEpicStoreHandle | undefined;
       render(
         <TestEpicSessionTab
@@ -2797,11 +2794,6 @@ describe("<TestEpicSessionTab />", () => {
               handle = mounted;
             }}
           />
-          <PresentationProbe
-            onPresentation={(presentation) => {
-              presentationKind = presentation?.kind ?? null;
-            }}
-          />
         </TestEpicSessionTab>,
       );
       await waitFor(() => {
@@ -2810,7 +2802,6 @@ describe("<TestEpicSessionTab />", () => {
       return {
         streams,
         publishRow,
-        presentationKind: () => presentationKind,
         handle: () => handle,
       };
     }
@@ -2820,8 +2811,7 @@ describe("<TestEpicSessionTab />", () => {
     });
 
     it("releases the mounted session's durable stream when its row falls below the floor", async () => {
-      const { streams, publishRow, presentationKind } =
-        await mountSessionAtFloor();
+      const { streams, publishRow } = await mountSessionAtFloor();
 
       act(() => {
         publishRow("1.5.4");
@@ -2830,13 +2820,16 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(streams[0].closeCount).toBe(1);
       });
-      // The release settles into the failed presentation (the opener refuses
-      // the row), and nothing later closes the stream again or opens another.
-      await waitFor(() => {
-        expect(presentationKind()).toBe("failed");
+      // Rising back to the floor acquires exactly one more session; the
+      // released stream is not closed a second time on the way.
+      act(() => {
+        publishRow("2.0.0");
       });
-      expect(streams).toHaveLength(1);
+      await waitFor(() => {
+        expect(streams).toHaveLength(2);
+      });
       expect(streams[0].closeCount).toBe(1);
+      expect(streams[1].closeCount).toBe(0);
     });
 
     it("keeps the stream when its row is removed", async () => {
