@@ -1,21 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import type { EnvironmentHostReadResponseV11 } from "@traycer/protocol/host/environment/contracts";
+import type { ProfileRecordEnablementResult } from "@traycer-clients/shared/host-client/provider-profile-enablement";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys";
+import type { VisibleRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
+import { legacyProfile } from "@/components/providers/__tests__/profile-pin-fixtures";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
@@ -114,6 +134,36 @@ function authUserFixture(): AuthenticatedUser {
   };
 }
 
+function accountProfileFixture(): ProviderProfile {
+  return {
+    ...legacyProfile({
+      profileId: "record-profile",
+      kind: "managed",
+      label: "Work",
+      enabled: true,
+      authStatus: "authenticated",
+    }),
+    aliases: [],
+  };
+}
+
+function accountBindingFixture(): EnvironmentHostReadResponseV11 {
+  return {
+    hostId: mockLocalHostEntry.hostId,
+    environment: {
+      environmentId: "record-environment",
+      ownerKind: "user",
+      ownerId: "test-owner",
+      roomId: "test-room",
+      label: "Personal",
+    },
+    explicit: false,
+    enrolledByUserId: null,
+    canUnbind: false,
+    sharingGeneration: null,
+  };
+}
+
 /**
  * Only this mutable placeholder lives in `vi.hoisted`: Vitest hoists that
  * call (and every `vi.mock` factory below) above this file's own imports, so
@@ -125,9 +175,20 @@ function authUserFixture(): AuthenticatedUser {
 const providersFixtureState = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
   providers: [] as ProviderCliState[],
+  visibleProviders: [] as VisibleRateLimitProvider[],
+  offersSignIns: false,
+  listCalls: 0,
 }));
 
 const mocks = vi.hoisted(() => ({
+  setProfileRecordEnabled: vi.fn<
+    (
+      environmentId: string,
+      harnessId: string,
+      request: { readonly profileId: string; readonly enabled: boolean },
+      callerSignal: AbortSignal | null,
+    ) => Promise<ProfileRecordEnablementResult>
+  >(() => Promise.resolve({ kind: "ok" })),
   authUser: {
     data: null as AuthenticatedUser | null,
     isPending: false,
@@ -149,11 +210,14 @@ vi.mock("@/lib/host", async (importOriginal) => {
       }
       return providersFixtureState.client;
     },
+    useAuthService: () => ({
+      setProfileRecordEnabled: mocks.setProfileRecordEnabled,
+    }),
   };
 });
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
-  useConfiguredRateLimitProviders: () => [],
-  useVisibleRateLimitProviders: () => [],
+  useConfiguredRateLimitProviders: () => providersFixtureState.visibleProviders,
+  useVisibleRateLimitProviders: () => providersFixtureState.visibleProviders,
 }));
 vi.mock("@/hooks/rate-limits/use-status-bar-rate-limit-segments", () => ({
   useStatusBarRateLimitSegments: () => ({
@@ -260,8 +324,7 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 
-/** Only `providers.list` has a handler - the only method this popover's
- * real query (`useTraycerSubscription`'s `useProvidersList`) calls. */
+/** The live providers and environment answers come from this fake computer. */
 function buildProvidersFixture() {
   const queryClient = createAppQueryClient();
   let requestSeq = 0;
@@ -277,10 +340,17 @@ function buildProvidersFixture() {
         return `req-${String(requestSeq)}`;
       },
       handlers: {
-        "providers.list": () => ({
-          providers: [...providersFixtureState.providers],
-          native: null,
-        }),
+        "providers.list": () => {
+          providersFixtureState.listCalls += 1;
+          return {
+            providers: [...providersFixtureState.providers],
+            native: null,
+            offersSignIns: providersFixtureState.offersSignIns,
+          };
+        },
+        "environment.status": () =>
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+        "environment.host.read": () => accountBindingFixture(),
       },
     }),
   });
@@ -292,6 +362,16 @@ function buildProvidersFixture() {
     queryClient,
     setProviders: (next: ReadonlyArray<ProviderCliState>) => {
       providersFixtureState.providers = [...next];
+    },
+    setVisibleProviders: (next: ReadonlyArray<VisibleRateLimitProvider>) => {
+      providersFixtureState.visibleProviders = [...next];
+    },
+    setOffersSignIns: (offersSignIns: boolean) => {
+      providersFixtureState.offersSignIns = offersSignIns;
+    },
+    listCalls: () => providersFixtureState.listCalls,
+    resetListCalls: () => {
+      providersFixtureState.listCalls = 0;
     },
   };
 }
@@ -346,7 +426,12 @@ async function settleProvidersListOn(enabled: boolean): Promise<void> {
 describe("<RateLimitPopover /> Traycer provider enablement (integrated)", () => {
   beforeEach(() => {
     providersFixture.setProviders([traycerProviderFixture(false)]);
+    providersFixture.setVisibleProviders([]);
+    providersFixture.setOffersSignIns(false);
+    providersFixture.resetListCalls();
     providersFixture.queryClient.clear();
+    mocks.setProfileRecordEnabled.mockReset();
+    mocks.setProfileRecordEnabled.mockResolvedValue({ kind: "ok" });
     mocks.authUser = {
       data: authUserFixture(),
       isPending: false,
@@ -367,6 +452,7 @@ describe("<RateLimitPopover /> Traycer provider enablement (integrated)", () => 
 
   afterEach(() => {
     cleanup();
+    resetNegotiatedManifests();
   });
 
   it("shows and hides the Traycer tab as providers.list toggles it, on one open panel", async () => {
@@ -389,5 +475,65 @@ describe("<RateLimitPopover /> Traycer provider enablement (integrated)", () => 
       screen.getByText("Connect a supported provider to see usage here."),
     ).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Traycer Inference" })).toBeNull();
+  });
+
+  it("writes an enabled account record from the usage popover on the person's session", async () => {
+    const record = accountProfileFixture();
+    providersFixture.setOffersSignIns(true);
+    providersFixture.setProviders([
+      traycerProviderFixture(true),
+      {
+        ...traycerProviderFixture(true),
+        providerId: "claude-code",
+        profiles: [record],
+      },
+    ]);
+    providersFixture.setVisibleProviders([
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: [record],
+        authStatus: "authenticated",
+        usageReportingConfirmed: true,
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
+    ]);
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "providers.list": { major: 10, minor: 12 },
+      "environment.status": { major: 1, minor: 1 },
+      "environment.host.read": { major: 1, minor: 1 },
+    });
+
+    renderTraycerPopover();
+    await waitFor(() => expect(providersFixture.listCalls()).toBe(1));
+    fireEvent.click(screen.getByRole("tab", { name: /Claude/ }));
+    const enableSwitch = await screen.findByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    expect(enableSwitch).toHaveProperty("disabled", false);
+    expect(enableSwitch.getAttribute("aria-disabled")).toBeNull();
+    const bindingQueryKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "environment.host.read"
+    >(mockLocalHostEntry.hostId, "environment.host.read", {});
+    await waitFor(() =>
+      expect(
+        providersFixture.queryClient.getQueryState(bindingQueryKey)?.status,
+      ).toBe("success"),
+    );
+    expect(providersFixture.queryClient.getQueryData(bindingQueryKey)).toEqual(
+      accountBindingFixture(),
+    );
+
+    fireEvent.click(enableSwitch);
+    await waitFor(() =>
+      expect(mocks.setProfileRecordEnabled).toHaveBeenCalledWith(
+        "record-environment",
+        "claude",
+        { profileId: "record-profile", enabled: false },
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() => expect(providersFixture.listCalls()).toBe(2));
   });
 });
