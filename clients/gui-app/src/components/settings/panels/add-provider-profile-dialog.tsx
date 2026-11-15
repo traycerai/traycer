@@ -259,6 +259,8 @@ export function AddProviderProfileDialog({
         providerId: state.providerId,
         profileId: profile.profileId,
         accentColor,
+        enabled: profile.enabled,
+        environmentProfileId: profile.environmentProfileId ?? null,
       },
       { onSuccess: () => complete(profile.profileId) },
     );
@@ -281,6 +283,8 @@ export function AddProviderProfileDialog({
         providerId: state.providerId,
         profileId: profile.profileId,
         label: trimmedLabel,
+        enabled: profile.enabled,
+        environmentProfileId: profile.environmentProfileId ?? null,
       },
       {
         onSuccess: () => {

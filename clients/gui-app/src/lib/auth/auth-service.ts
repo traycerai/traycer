@@ -3,10 +3,7 @@ import {
   AUTH_ERROR_DISK_FULL,
   isDiskFullSignInError,
 } from "@traycer-clients/shared/auth/sign-in-storage";
-import type {
-  TeamComputersResult,
-  SetEnvironmentBotHostResult,
-} from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
@@ -93,6 +90,10 @@ import {
   fetchEnvironmentInvitations,
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
+import {
+  fetchClaimedComputers,
+  type ClaimedComputersResult,
+} from "@traycer-clients/shared/auth/claimed-computers";
 import {
   claimCreditOfferViaHttp,
   listCreditOffersViaHttp,
@@ -3195,20 +3196,6 @@ export class AuthService {
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.listTeamComputers(bearer, environmentId);
   }
-  async setEnvironmentBotHost(
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult> {
-    const bearer = this.cloudBearer();
-    if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.setEnvironmentBotHost(
-      bearer,
-      environmentId,
-      hostId,
-      sharingGeneration,
-    );
-  }
   async mintTeamComputerInstallToken(
     environmentId: string,
   ): Promise<TeamComputerInstallTokenResult> {
@@ -3525,6 +3512,21 @@ export class AuthService {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     return this.runnerHost.setSlackAppDms(bearer, request);
+  }
+
+  /** The team computers a member claimed away from this team, kept 30 days. */
+  async listClaimedComputers(
+    environmentId: string,
+    signal: AbortSignal | null,
+  ): Promise<ClaimedComputersResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return fetchClaimedComputers(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      signal,
+    );
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */
