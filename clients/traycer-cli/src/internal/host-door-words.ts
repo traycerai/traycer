@@ -27,6 +27,17 @@ export const SIGNED_OUT_MESSAGE =
 export const STORED_CREDENTIAL_REJECTED_MESSAGE =
   "The stored credential was rejected. Run `traycer login` to re-authenticate.";
 
+/**
+ * authn's directory could not be read for this computer, so whose it is was
+ * not confirmed: the team install's owner check and `bot list`'s narrowing.
+ */
+export const HOST_OWNERSHIP_UNCONFIRMED_MESSAGE =
+  "This computer's ownership could not be confirmed. Try again.";
+
+/** authn could not be reached to read the stored sign-in: `whoami`'s words. */
+export const AUTHN_UNREACHABLE_MESSAGE =
+  "Could not reach the authn service; check your network.";
+
 /** The owner's ruling 2 of 14 Nov: an older host, never a login. */
 export const OLDER_HOST_MESSAGE =
   "The host is out of date. Reinstall the latest host with 'traycer host update'.";

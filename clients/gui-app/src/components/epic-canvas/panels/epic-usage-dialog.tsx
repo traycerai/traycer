@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -107,6 +108,11 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
     [epicId, windowDays],
   );
   const query = useUsageSummaryForClient(client, request, open, false);
+  const changeWindowDays = (next: UsageSummaryWindowDays): void => {
+    if (showHostUpdateNeededForGesture(client?.getActiveHostId() ?? null))
+      return;
+    setWindowDays(next);
+  };
   const { openSettings } = useSystemTabModalActions();
   // The capture region is found by data attribute under this dialog's own
   // content node at click time, not held as a threaded RefObject - the
@@ -151,7 +157,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
           headerControls={
             <UsageWindowPicker
               windowDays={windowDays}
-              onChange={setWindowDays}
+              onChange={changeWindowDays}
               triggerClassName={COARSE_POINTER_TRIGGER}
             />
           }
@@ -196,9 +202,10 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
           }
         >
           <EpicUsageDialogBody
+            hostId={client?.getActiveHostId() ?? null}
             query={query}
             windowDays={windowDays}
-            onWindowDaysChange={setWindowDays}
+            onWindowDaysChange={changeWindowDays}
             chartGroupBy={chartGroupBy}
             onChartGroupByChange={setChartGroupBy}
             chatTitles={chatTitles}
@@ -215,6 +222,7 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
  * constant around it.
  */
 function EpicUsageDialogBody(props: {
+  readonly hostId: string | null;
   readonly query: UsageSummaryQueryResult;
   readonly windowDays: UsageSummaryWindowDays;
   readonly onWindowDaysChange: (windowDays: UsageSummaryWindowDays) => void;
@@ -230,6 +238,7 @@ function EpicUsageDialogBody(props: {
       <UsageDialogErrorState
         error={query.error}
         onRetry={() => {
+          if (showHostUpdateNeededForGesture(props.hostId)) return;
           void query.refetch();
         }}
       />

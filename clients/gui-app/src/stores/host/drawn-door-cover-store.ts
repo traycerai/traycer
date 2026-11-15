@@ -20,6 +20,13 @@ export function isDoorCoverDrawn(hostId: string): boolean {
   return useDrawnDoorCoverStore.getState().drawn.has(hostId);
 }
 
+/** {@link isDoorCoverDrawn} for a render: re-renders when it changes. */
+export function useIsDoorCoverDrawn(hostId: string | null): boolean {
+  return useDrawnDoorCoverStore((state) =>
+    hostId === null ? false : state.drawn.has(hostId),
+  );
+}
+
 /** Marks `hostId`'s door cover drawn for as long as the caller stays mounted with it. */
 export function useMarkDrawnDoorCover(hostId: string | null): void {
   useLayoutEffect(() => {
