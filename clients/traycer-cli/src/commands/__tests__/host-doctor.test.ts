@@ -731,6 +731,10 @@ describe("hostDoctorCommand asks a host that answers not yet", () => {
 
   it.each([
     { name: "does not answer", pick: "silent" },
+    {
+      name: "does not answer, as a retryable dial or open failure",
+      pick: "silentRetryable",
+    },
     { name: "refuses for good", pick: "unauthorized" },
     {
       name: "times out after the open, as a current host says it",

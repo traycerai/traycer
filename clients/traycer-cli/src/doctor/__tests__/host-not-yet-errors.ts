@@ -20,6 +20,8 @@ export interface HostNotYetErrors {
   readonly legacyRequestTimeout: (method: string) => Error;
   /** Nothing answered. */
   readonly silent: (method: string) => Error;
+  /** Nothing answered, as a retryable transport error: a dial or open that failed. */
+  readonly silentRetryable: (method: string) => Error;
   /** A final refusal: not retryable. */
   readonly unauthorized: (method: string) => Error;
 }
@@ -88,6 +90,15 @@ export const hostNotYetErrors: HostNotYetErrors = {
         incompatibleMethods: null,
         upgradeGuidance: null,
       },
+      replaySafetyFromKey: false,
+    }),
+  silentRetryable: (method) =>
+    new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Local admission changed before the request was sent",
+      requestId: "silent-retryable",
+      method,
+      fatalDetails: null,
       replaySafetyFromKey: false,
     }),
   silent: (method) =>

@@ -419,6 +419,10 @@ describe("runDoctor against a host that answers not yet", () => {
   it.each([
     { name: "did not answer", pick: "silent" },
     {
+      name: "did not answer, as a retryable dial or open failure",
+      pick: "silentRetryable",
+    },
+    {
       name: "timed out after the open, as a current host says it",
       pick: "requestTimeout",
     },
