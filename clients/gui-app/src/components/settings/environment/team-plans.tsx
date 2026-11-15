@@ -25,7 +25,6 @@ import { useTeamProviderRecords } from "./team-provider-records";
 
 export function TeamPlans(props: {
   readonly providerId: ProviderId;
-  readonly adminNames: readonly string[];
 }): ReactNode {
   const records = useTeamProviderRecords();
   const source = useConfigurationSource();
@@ -74,7 +73,6 @@ export function TeamPlans(props: {
         teamName={name}
         plans={plans}
         canAdminister={canAdminister}
-        adminNames={props.adminNames}
         isPending={target !== null}
         onPreviewUnlink={
           records === null

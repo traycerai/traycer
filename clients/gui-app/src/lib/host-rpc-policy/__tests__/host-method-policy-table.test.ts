@@ -140,7 +140,7 @@ const wrongKeyPolicy: ErasedConditionPollPolicy<"agent.gui.listHarnesses"> =
   typedToErasedPolicy;
 
 describe("host method poll policy table", () => {
-  it("has no policy entries for retired team provider profile calls", () => {
+  it("has no scheduling entries for retired team provider profile calls", () => {
     for (const method of [
       "environment.providers.list",
       "environment.providers.signOutProfile",

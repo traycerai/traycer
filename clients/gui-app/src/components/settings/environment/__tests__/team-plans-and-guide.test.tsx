@@ -30,6 +30,16 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
 }));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : requireTeamHostClient(),
+}));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), message: vi.fn() },
 }));
@@ -119,7 +129,7 @@ describe("TeamPlans", () => {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -139,12 +149,12 @@ describe("TeamPlans", () => {
     expect(screen.getAllByText(/ plan$/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("gives a viewer no Link, Unlink or Add a profile verbs, and names the admins", async () => {
+  it("gives a viewer no Link, Unlink or Add a profile verbs", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.plans.list": () => plans,
       "environment.list": () => environmentList,
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -152,9 +162,6 @@ describe("TeamPlans", () => {
     expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
     expect(screen.queryByText(/add a profile/i)).toBeNull();
-    expect(
-      screen.getByText("Only an admin can link a plan: ask Ada."),
-    ).toBeTruthy();
   });
 
   it("holds Unlink until its preview resolves, then unlinks the picked profile in this team", async () => {
@@ -172,7 +179,7 @@ describe("TeamPlans", () => {
         }),
       "environment.plans.unlink": () => ({ outcome: "unlinked" }),
     });
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -259,7 +266,7 @@ describe("TeamPlans", () => {
       },
       { "environment.plans.unlink": { major: 1, minor: negotiatedMinor } },
     );
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
@@ -297,7 +304,7 @@ describe("TeamPlans", () => {
         },
         "environment.list": () => environmentList,
       });
-      render(<TeamPlans providerId="claude-code" adminNames={[]} />, {
+      render(<TeamPlans providerId="claude-code" />, {
         wrapper: harness.Wrapper,
       });
 

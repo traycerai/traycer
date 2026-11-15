@@ -21,7 +21,6 @@ const plan: ConfigurationPlan = {
 function renderPlans(overrides: {
   canAdminister: boolean;
   plans?: readonly ConfigurationPlan[];
-  adminNames?: readonly string[];
   onPreviewUnlink?: (plan: ConfigurationPlan) => void;
 }): void {
   render(
@@ -29,7 +28,6 @@ function renderPlans(overrides: {
       teamName="Acme"
       plans={overrides.plans ?? [plan]}
       canAdminister={overrides.canAdminister}
-      adminNames={overrides.adminNames ?? ["Ada", "Grace"]}
       isPending={false}
       onPreviewUnlink={overrides.onPreviewUnlink ?? vi.fn()}
     />,
@@ -39,33 +37,27 @@ function renderPlans(overrides: {
 afterEach(cleanup);
 
 describe("PlansCard", () => {
-  it("gives a viewer no Link or Unlink verbs", () => {
-    renderPlans({ canAdminister: false });
-
-    expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /unlink/i })).toBeNull();
-  });
-
   it.each([
-    { admins: [], line: "Only an admin can link a plan." },
-    { admins: ["Ada"], line: "Only an admin can link a plan: ask Ada." },
-    {
-      admins: ["Ada", "Grace"],
-      line: "Only an admin can link a plan: ask Ada or Grace.",
-    },
-    {
-      admins: ["Ada", "Grace", "Linus"],
-      line: "Only an admin can link a plan: ask Ada, Grace or 1 other.",
-    },
-    {
-      admins: ["Ada", "Grace", "Linus", "Barbara", "Alan"],
-      line: "Only an admin can link a plan: ask Ada, Grace or 3 others.",
-    },
-  ])("tells a reader who to ask: $line", ({ admins, line }) => {
-    renderPlans({ canAdminister: false, adminNames: admins });
+    { mode: "record mode", onPreviewUnlink: null },
+    { mode: "legacy mode", onPreviewUnlink: vi.fn() },
+  ])(
+    "gives a viewer no Link, Unlink or admin hint in $mode",
+    ({ onPreviewUnlink }) => {
+      render(
+        <PlansCard
+          teamName="Acme"
+          plans={[plan]}
+          canAdminister={false}
+          isPending={false}
+          onPreviewUnlink={onPreviewUnlink}
+        />,
+      );
 
-    expect(screen.getByText(line)).toBeTruthy();
-  });
+      expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /unlink/i })).toBeNull();
+      expect(screen.queryByText(/Only an admin can link a plan/)).toBeNull();
+    },
+  );
 
   it("says no plan is linked when the team has none", () => {
     renderPlans({ canAdminister: true, plans: [] });
@@ -94,7 +86,6 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister
-        adminNames={["Ada"]}
         isPending={false}
         onPreviewUnlink={() => undefined}
       />,
@@ -128,7 +119,6 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister={false}
-        adminNames={["Ada"]}
         isPending={false}
         onPreviewUnlink={() => undefined}
       />,
@@ -136,9 +126,6 @@ describe("PlansCard", () => {
     expect(screen.getByText("Claude Code plan")).toBeTruthy();
     expect(screen.getByText("Sign-in is pending.")).toBeTruthy();
     expect(screen.queryByText(/Shared Claude Code quota/)).toBeNull();
-    expect(
-      screen.getByText("Only an admin can link a plan: ask Ada."),
-    ).toBeTruthy();
     cleanup();
 
     render(
@@ -153,7 +140,6 @@ describe("PlansCard", () => {
           },
         ]}
         canAdminister
-        adminNames={["Ada"]}
         isPending={false}
         onPreviewUnlink={() => undefined}
       />,

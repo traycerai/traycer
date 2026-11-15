@@ -189,7 +189,7 @@ describe("team pages on a build with a server pool", () => {
       "environment.plans.unlink": () => ({ outcome: "unlinked" }),
     });
     removeSurfaceHost();
-    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+    render(<TeamPlans providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
