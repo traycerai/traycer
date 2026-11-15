@@ -78,7 +78,7 @@ export const TEAM_INSTALL_ROADS = [
 
 export const MINT_URL = "https://authn.test/api/v3/hosts/team-install-tokens";
 export const MINTED_TOKEN = "minted-install-token";
-export const MINTED_ENVIRONMENT_ID = "resolved-environment-acme";
+export const MINTED_ENVIRONMENT_ID = "environment-acme";
 /** The token file the host reads at its first start, for the minted token. */
 export const MINTED_TOKEN_FILE = `${JSON.stringify({
   token: MINTED_TOKEN,
@@ -103,14 +103,23 @@ export const MINT_FAILURES = [
     answer: (): Response | null =>
       Response.json({ code: "environment_not_found" }, { status: 404 }),
     error: {
-      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message: TEAM_SLUG_SENTENCE,
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message: UNWORDED_MINT_REFUSAL_MESSAGE,
     },
   },
   {
-    label: "authn refuses the token for another reason",
+    label: "authn refuses the mint with a server error",
     answer: (): Response | null =>
       Response.json({ code: "broker_unavailable" }, { status: 503 }),
+    error: {
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: AUTHN_UNREACHABLE_SENTENCE,
+    },
+  },
+  {
+    label: "authn rate-limits the mint with an unrecognized body",
+    answer: (): Response | null =>
+      Response.json({ message: "rate limited" }, { status: 429 }),
     error: {
       code: CLI_ERROR_CODES.FORBIDDEN,
       message: UNWORDED_MINT_REFUSAL_MESSAGE,
@@ -127,6 +136,22 @@ export const MINT_FAILURES = [
   {
     label: "authn cannot be reached",
     answer: (): Response | null => null,
+    error: {
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: AUTHN_UNREACHABLE_SENTENCE,
+    },
+  },
+  {
+    label: "authn answers for a different environment",
+    answer: (): Response | null =>
+      Response.json(
+        {
+          token: MINTED_TOKEN,
+          environmentId: "environment-another-team",
+          expiresAt: 1_800_000_000,
+        },
+        { status: 201 },
+      ),
     error: {
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
       message: AUTHN_UNREACHABLE_SENTENCE,

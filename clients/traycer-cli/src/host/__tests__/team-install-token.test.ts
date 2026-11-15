@@ -394,6 +394,60 @@ describe("withStagedTeamToken", () => {
       ),
     ).resolves.toEqual({ hostId, environmentId: resolvedEnvironmentId });
   });
+
+  it("clears its own staged token when the install returns a nonzero result", async () => {
+    const result = await withStagedTeamToken(
+      environment,
+      TOKEN,
+      resolvedEnvironmentId,
+      async () => ({ exitCode: 1 as const }),
+    );
+
+    expect(result).toEqual({ exitCode: 1 });
+    await expectNoStagedToken(environment);
+  });
+
+  it("preserves a replacement stage under the token-file lock when install rejects", async () => {
+    const stagePath = hostTeamInstallTokenPath(environment);
+    const replacementToken = "tkn_replacement-install-token";
+
+    await expect(
+      withStagedTeamToken(
+        environment,
+        TOKEN,
+        resolvedEnvironmentId,
+        async () => {
+          const lock = await credentialsLock.acquireCredentialsLock({
+            lockPath: `${stagePath}.lock`,
+            reason: "test-replacement-team-install-token",
+            waitMs: 0,
+            pollIntervalMs: 50,
+            signal: null,
+          });
+          if (!lock.acquired)
+            throw new Error("the replacement could not acquire the stage lock");
+          try {
+            await writeFile(
+              stagePath,
+              `${JSON.stringify({
+                token: replacementToken,
+                environmentId: resolvedEnvironmentId,
+              })}\n`,
+              { mode: 0o600 },
+            );
+          } finally {
+            await lock.handle.release();
+          }
+          throw new Error("install callback rejected");
+        },
+      ),
+    ).rejects.toThrow("install callback rejected");
+
+    expect(JSON.parse(await readFile(stagePath, "utf8"))).toEqual({
+      token: replacementToken,
+      environmentId: resolvedEnvironmentId,
+    });
+  });
 });
 
 describe("waitForTeamTokenInstall", () => {

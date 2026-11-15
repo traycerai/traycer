@@ -172,9 +172,9 @@ vi.mock(
       >();
     return {
       ...actual,
-      mintTeamComputerInstallTokenBySlugViaHttp: (
+      mintTeamComputerInstallTokenViaHttp: (
         ...callArgs: Parameters<
-          typeof actual.mintTeamComputerInstallTokenBySlugViaHttp
+          typeof actual.mintTeamComputerInstallTokenViaHttp
         >
       ) => mocks.mintTeamInstallTokenMock(...callArgs),
     };
@@ -497,7 +497,7 @@ describe("install auth helpers", () => {
     mocks.mintTeamInstallTokenMock.mockResolvedValue({
       kind: "ok",
       token: "team-install-secret",
-      environmentId: "resolved-environment-acme",
+      environmentId: "environment-acme",
       expiresAt: 1_800_000_000,
     });
     mocks.createStoreBackedRevalidatorMock.mockImplementation(
@@ -523,7 +523,7 @@ describe("install auth helpers", () => {
   });
 
   it.each(["team/acme", "acme", "environment-acme"])(
-    "mints by the resolved team's slug, with authn's resolved environment id, when no enrollment record exists (typed as %s)",
+    "mints by the resolved team's environment id when no enrollment record exists (typed as %s)",
     async (typed) => {
       const result = await beginAttendedTeamInstall(fakeCtx(), typed);
 
@@ -532,12 +532,12 @@ describe("install auth helpers", () => {
         session: { preflight: signedIn(), inlineSignInToken: null },
         slug: "acme",
         token: "team-install-secret",
-        environmentId: "resolved-environment-acme",
+        environmentId: "environment-acme",
       });
       expect(mocks.mintTeamInstallTokenMock).toHaveBeenCalledWith(
         "https://authn.test",
         "stored-bearer",
-        "acme",
+        "environment-acme",
       );
     },
   );

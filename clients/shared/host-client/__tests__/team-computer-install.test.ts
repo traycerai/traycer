@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  mintTeamComputerInstallTokenBySlugViaHttp,
-  mintTeamComputerInstallTokenViaHttp,
-} from "../team-computer-install";
+import { mintTeamComputerInstallTokenViaHttp } from "../team-computer-install";
 
 const AUTHN = "https://authn.example.test";
 const BEARER = "user-jwt-secret";
@@ -59,33 +56,6 @@ describe("mintTeamComputerInstallTokenViaHttp", () => {
     expect(init?.body).toBe(JSON.stringify({ environmentId: ENVIRONMENT_ID }));
   });
 
-  it("accepts authn's resolved environment id when minting by team slug", async () => {
-    const resolvedEnvironmentId = "resolved-environment-acme";
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      jsonResponse(201, {
-        token: INSTALL_TOKEN,
-        environmentId: resolvedEnvironmentId,
-        expiresAt: 1_800_000_000,
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      mintTeamComputerInstallTokenBySlugViaHttp(AUTHN, BEARER, "acme"),
-    ).resolves.toEqual({
-      kind: "ok",
-      token: INSTALL_TOKEN,
-      environmentId: resolvedEnvironmentId,
-      expiresAt: 1_800_000_000,
-    });
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe(
-      "https://authn.example.test/api/v3/hosts/team-install-tokens",
-    );
-    expect(init?.body).toBe(JSON.stringify({ environmentId: "acme" }));
-    expect(init?.redirect).toBe("manual");
-  });
-
   it("treats a redirect as a non-success without exposing its token", async () => {
     vi.stubGlobal(
       "fetch",
@@ -98,10 +68,10 @@ describe("mintTeamComputerInstallTokenViaHttp", () => {
       ),
     );
 
-    const result = await mintTeamComputerInstallTokenBySlugViaHttp(
+    const result = await mintTeamComputerInstallTokenViaHttp(
       AUTHN,
       BEARER,
-      "acme",
+      ENVIRONMENT_ID,
     );
 
     expect(result).toEqual({
@@ -184,6 +154,24 @@ describe("mintTeamComputerInstallTokenViaHttp", () => {
       detail: "the install-token request answered HTTP 403",
     });
     expect(JSON.stringify(result)).not.toContain(reflectedSecret);
+  });
+
+  it("preserves an unrecognized HTTP 429 as a refusal without its body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(429, { message: "rate limited by an unknown policy" }),
+      ),
+    );
+
+    const result = await mintTeamComputerInstallTokenViaHttp(
+      AUTHN,
+      BEARER,
+      ENVIRONMENT_ID,
+    );
+
+    expect(result).toEqual({ kind: "refused", status: 429, code: null });
+    expect(JSON.stringify(result)).not.toContain("unknown policy");
   });
 
   it("returns a fixed diagnostic when fetch throws an error containing credentials", async () => {

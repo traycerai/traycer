@@ -1171,8 +1171,18 @@ describe("buildHostInstallCommand", () => {
   });
 
   describe("--team on a machine with no host yet", () => {
-    it("mints the team's token by slug and has it staged before the host is downloaded or started, with no personal credential, transfer or restart", async () => {
+    it("mints by the resolved environment id and stages the token before download or start, with no personal credential, transfer or restart", async () => {
       const mintRequests = stubMintAnswer(mintedAnswer);
+      const inlineToken = "inline-enrol-success";
+      setStdoutIsTTY(true);
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      mocks.runDeviceAuthFlowMock.mockImplementation(
+        inlineSignInDeviceFlow(inlineToken),
+      );
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: signedInAcmeUser(),
+      });
       // What the machine holds for the host's first start, read where the
       // command stages the bytes and where it starts the host.
       const tokenFileWhen: { at: string; file: string | null }[] = [];
@@ -1205,8 +1215,8 @@ describe("buildHostInstallCommand", () => {
       expect(mintRequests).toEqual([
         {
           url: MINT_URL,
-          authorization: "Bearer test-token",
-          body: { environmentId: "acme" },
+          authorization: `Bearer ${inlineToken}`,
+          body: { environmentId: MINTED_ENVIRONMENT_ID },
         },
       ]);
       expect(tokenFileWhen).toEqual([
@@ -1252,6 +1262,7 @@ describe("buildHostInstallCommand", () => {
       expect(
         JSON.stringify(vi.mocked(ctx.output.human).mock.calls),
       ).not.toContain(MINTED_TOKEN);
+      expect(ctx.output.humanRequired).not.toHaveBeenCalled();
     });
 
     it.each(MINT_FAILURES)(
@@ -1278,6 +1289,41 @@ describe("buildHostInstallCommand", () => {
         expect(stagedTeamTokenFile()).toBeNull();
       },
     );
+
+    it("reminds about an inline-created sign-in when staging fails after the token was staged", async () => {
+      const inlineToken = "inline-enrol-stage-failure";
+      setStdoutIsTTY(true);
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      mocks.runDeviceAuthFlowMock.mockImplementation(
+        inlineSignInDeviceFlow(inlineToken),
+      );
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: signedInAcmeUser(),
+      });
+      const mintRequests = stubMintAnswer(mintedAnswer);
+      mocks.stageHostInstallSourceMock.mockRejectedValue(
+        new Error("host download staging failed"),
+      );
+      const ctx = fakeCtx();
+
+      await expect(
+        buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx),
+      ).rejects.toThrow("host download staging failed");
+
+      expect(mintRequests).toHaveLength(1);
+      expect(mocks.callOrder).toContain("stage");
+      expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.waitForTeamTokenInstallMock).not.toHaveBeenCalled();
+      expect(stagedTeamTokenFile()).toBeNull();
+      expect(ctx.output.humanRequired).toHaveBeenCalledWith(
+        RETAINED_SIGN_IN_WARNING,
+      );
+      expect(
+        (await readCredentialsFile(cliCredentialsPath("production")))?.token,
+      ).toBe(inlineToken);
+    });
 
     it("reminds a person who signed in inline that the sign-in stays when the team is refused", async () => {
       setStdoutIsTTY(true);

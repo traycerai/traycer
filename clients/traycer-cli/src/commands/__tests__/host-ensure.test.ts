@@ -694,7 +694,7 @@ describe("buildHostEnsureCommand", () => {
   );
 
   describe("--team on a machine with no host yet", () => {
-    it("mints the team's token by slug and has it staged before ensure installs or starts anything, with no personal credential, transfer or restart", async () => {
+    it("mints by the resolved environment id and stages the token before ensure installs or starts anything, with no personal credential, transfer or restart", async () => {
       const mintRequests = stubMintAnswer(mintedAnswer);
       // What the machine holds for the host's first start, read where ensure
       // installs and starts the host.
@@ -724,7 +724,7 @@ describe("buildHostEnsureCommand", () => {
         {
           url: MINT_URL,
           authorization: "Bearer test-token",
-          body: { environmentId: "acme" },
+          body: { environmentId: MINTED_ENVIRONMENT_ID },
         },
       ]);
       expect(tokenFileAtEnsure).toEqual([MINTED_TOKEN_FILE]);
