@@ -1,4 +1,3 @@
-import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   recordSignInRequestViaHttp,
   type SignInRequestRecordAnswer,
@@ -16,6 +15,7 @@ import {
   type ProfileRecordNameResult,
   type ProfileRecordNameChange,
 } from "@traycer-clients/shared/host-client/profile-record-actions";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   setProfileRecordEnabledViaHttp,
   type ProfileRecordEnablementClient,
@@ -652,7 +652,7 @@ export interface RevokedCloudAuthorization {
  *      failed - please try again") without clearing persisted credentials.
  */
 export class AuthService
-  implements ProfileRecordClient, ProfileRecordEnablementClient
+  implements ProfileRecordEnablementClient, ProfileRecordClient
 {
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;

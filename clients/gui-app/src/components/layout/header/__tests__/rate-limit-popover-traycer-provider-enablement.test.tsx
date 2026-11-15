@@ -35,6 +35,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import type { VisibleRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
+import { legacyProfile } from "@/components/providers/__tests__/profile-pin-fixtures";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
@@ -135,24 +136,13 @@ function authUserFixture(): AuthenticatedUser {
 
 function accountProfileFixture(): ProviderProfile {
   return {
-    profileId: "record-profile",
-    kind: "managed",
-    authType: "oauth",
-    label: "Work",
-    enabled: true,
-    auth: {
-      status: "authenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    identity: null,
-    usageUpdatedAt: null,
-    rateLimitStatus: "unknown",
-    rateLimitLimitedScopes: null,
-    duplicateOfProfileId: null,
-    ambientDriftNotice: null,
-    accentColor: null,
+    ...legacyProfile({
+      profileId: "record-profile",
+      kind: "managed",
+      label: "Work",
+      enabled: true,
+      authStatus: "authenticated",
+    }),
     aliases: [],
   };
 }
@@ -198,7 +188,7 @@ const mocks = vi.hoisted(() => ({
       request: { readonly profileId: string; readonly enabled: boolean },
       callerSignal: AbortSignal | null,
     ) => Promise<ProfileRecordEnablementResult>
-  >(async () => ({ kind: "ok" })),
+  >(() => Promise.resolve({ kind: "ok" })),
   authUser: {
     data: null as AuthenticatedUser | null,
     isPending: false,
@@ -441,9 +431,7 @@ describe("<RateLimitPopover /> Traycer provider enablement (integrated)", () => 
     providersFixture.resetListCalls();
     providersFixture.queryClient.clear();
     mocks.setProfileRecordEnabled.mockReset();
-    mocks.setProfileRecordEnabled.mockImplementation(async () => ({
-      kind: "ok",
-    }));
+    mocks.setProfileRecordEnabled.mockResolvedValue({ kind: "ok" });
     mocks.authUser = {
       data: authUserFixture(),
       isPending: false,
