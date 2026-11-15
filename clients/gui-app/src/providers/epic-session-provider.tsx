@@ -5,7 +5,8 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
+import { runWhenRouterSettled } from "@/lib/router-settled";
 import {
   EpicSessionContext,
   EpicSessionHostClientContext,
@@ -57,6 +58,7 @@ export function EpicSessionProvider(
   }, [epicId]);
 
   const navigate = useNavigate();
+  const router = useRouter();
 
   const subscribe = useCallback(
     (listener: () => void) => controller.subscribe(listener),
@@ -76,15 +78,25 @@ export function EpicSessionProvider(
   );
 
   // Another window owns this TAB, so the controller has discarded it here.
-  // Leaving the route is the one part of that only a mounted surface can do.
-  useEffect(
-    () =>
-      controller.subscribeOwnershipDenied((deniedEpicId, deniedTabId) => {
+  // Leaving the route is the one part of that only a mounted surface can do;
+  // it waits for a router load in flight (`runWhenRouterSettled`), and a
+  // surface that unmounts first does not leave at all.
+  useEffect(() => {
+    let cancelLeave: (() => void) | null = null;
+    const unsubscribe = controller.subscribeOwnershipDenied(
+      (deniedEpicId, deniedTabId) => {
         if (deniedEpicId !== epicId || deniedTabId !== tabId) return;
-        void navigate({ to: "/epics", replace: true });
-      }),
-    [controller, epicId, navigate, tabId],
-  );
+        cancelLeave?.();
+        cancelLeave = runWhenRouterSettled(router, () => {
+          void navigate({ to: "/epics", replace: true });
+        });
+      },
+    );
+    return () => {
+      unsubscribe();
+      cancelLeave?.();
+    };
+  }, [controller, epicId, navigate, router, tabId]);
 
   const retry = useCallback(() => {
     controller.retry(epicId);

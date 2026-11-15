@@ -11,6 +11,20 @@
  * Every caller that would start a load on its own initiative goes through
  * {@link runWhenRouterSettled}, so on one router no such load starts under
  * another.
+ *
+ * A wait lasts as long as the load in flight. This app's route guards and
+ * loaders are synchronous, so a load stays pending only while a route's
+ * code-split chunk has not arrived; one that fails settles the load as an
+ * error. A chunk that never answers would hold the router itself on its
+ * pending screen, and every queued task with it: no timer cuts that short,
+ * so a caller withdraws what must not stay on screen before it queues the
+ * navigation, and queues only the navigation.
+ *
+ * A task that throws is written to the app's error log (`appLogger.error`:
+ * the console, and in the desktop build `traycer-desktop.log`) and the
+ * tasks behind it still run. It reaches neither the root error boundary nor
+ * its crash report, where a throw from the same work inside a React effect
+ * went before this queue existed.
  */
 import { appLogger } from "@/lib/logger";
 

@@ -1,5 +1,5 @@
 import { use, useEffect, useRef } from "react";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { QueryClientContext } from "@tanstack/react-query";
 import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import {
@@ -25,6 +25,7 @@ import { liveEpicTitleFromHandle } from "@/lib/epic-selectors";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { LANDING_ROUTE, readActiveEpicIdFromPath } from "@/lib/routes";
+import { runWhenRouterSettled } from "@/lib/router-settled";
 import {
   collectOpenEpicIds,
   epicTabName,
@@ -64,6 +65,12 @@ import type { OpenEpicState } from "@/stores/epics/open-epic/store";
  *    session keeps the tab open read-only and never raises these signals, so a
  *    downgrade never reaches this coordinator.
  *
+ * The navigation away waits for a router load in flight
+ * (`runWhenRouterSettled`): a refusal can land during the window's first
+ * load, and a load started under another can throw `undefined` to the root
+ * error boundary. Only the navigation waits; the toast and the tab's close
+ * happen at once, so nothing of the refused task stays drawn meanwhile.
+ *
  * Must be mounted INSIDE the router subtree - it calls `navigate`. Live
  * background close is guaranteed only for sessions resident in the registry's
  * MRU window; a session pruned out of that window has no live stream and is
@@ -71,6 +78,7 @@ import type { OpenEpicState } from "@/stores/epics/open-epic/store";
  */
 export function EpicAccessCoordinator() {
   const navigate = useNavigate();
+  const router = useRouter();
   const queryClient = use(QueryClientContext);
   // Track which epic (if any) the user is currently viewing, off the route -
   // read at close time to decide whether to redirect. Kept in a ref so the
@@ -96,6 +104,18 @@ export function EpicAccessCoordinator() {
     // session on mount (`reconcile` + its dead-at-subscribe catch), so a
     // bailed verdict is re-derived, never lost.
     let disposed = false;
+    // Navigations away from a lost task, waiting for a load in flight; a
+    // coordinator torn down first makes none of them.
+    const pendingNavigations = new Set<{ cancel: () => void }>();
+    const leaveForLanding = (): void => {
+      // Held before it is queued: on an idle router the task runs at once.
+      const pending = { cancel: (): void => undefined };
+      pendingNavigations.add(pending);
+      pending.cancel = runWhenRouterSettled(router, () => {
+        pendingNavigations.delete(pending);
+        void navigate({ ...LANDING_ROUTE, replace: true });
+      });
+    };
     // Attempts already spent (and the pending timer, if any) of the
     // created-this-session `unavailable` grace. Attempts are deliberately
     // never reset on recovery: the budget exists to absorb ONE create's
@@ -243,7 +263,7 @@ export function EpicAccessCoordinator() {
         // side effect; clear it so the route-driven strip highlight and the
         // canvas store agree once we leave the epic for landing.
         useEpicCanvasStore.setState({ activeTabId: null });
-        void navigate({ ...LANDING_ROUTE, replace: true });
+        leaveForLanding();
       }
     };
 
@@ -304,7 +324,7 @@ export function EpicAccessCoordinator() {
       tabCommandCoordinator.handleEpicAccessLoss(lostIds, notification.userId);
       if (anyWasActive) {
         useEpicCanvasStore.setState({ activeTabId: null });
-        void navigate({ ...LANDING_ROUTE, replace: true });
+        leaveForLanding();
       }
     };
 
@@ -468,6 +488,8 @@ export function EpicAccessCoordinator() {
 
     return () => {
       disposed = true;
+      for (const pending of pendingNavigations) pending.cancel();
+      pendingNavigations.clear();
       unsubscribeRegistry();
       unsubscribeCanvas();
       unsubscribeDeletedEpicNotifications();
@@ -480,7 +502,7 @@ export function EpicAccessCoordinator() {
       for (const unsubscribe of forbiddenWatches.values()) unsubscribe();
       forbiddenWatches.clear();
     };
-  }, [navigate, queryClient]);
+  }, [navigate, queryClient, router]);
 
   return null;
 }

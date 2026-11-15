@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -16,6 +17,8 @@ import type {
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
+import { appLogger } from "@/lib/logger";
+import { runWhenRouterSettled } from "@/lib/router-settled";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { taskReferenceLookupKey } from "@/lib/query-keys/__tests__/task-reference-lookup-key";
@@ -1297,6 +1300,214 @@ describe("EpicAccessCoordinator", () => {
 
       expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
     });
+  });
+});
+
+/** The app's root error boundary, above the router: records what was thrown. */
+class CrashRecorder extends Component<
+  { readonly onCrash: (thrown: unknown) => void; readonly children: ReactNode },
+  { readonly crashed: boolean }
+> {
+  state = { crashed: false };
+
+  static getDerivedStateFromError(): { crashed: boolean } {
+    return { crashed: true };
+  }
+
+  componentDidCatch(thrown: unknown, _info: ErrorInfo): void {
+    this.props.onCrash(thrown);
+  }
+
+  render(): ReactNode {
+    return this.state.crashed ? null : this.props.children;
+  }
+}
+
+/**
+ * The coordinator under a router whose first load onto the task is still in
+ * flight: the task route's load waits on `taskLoad`.
+ */
+function renderCoordinatorDuringFirstLoad(
+  pathname: string,
+  taskLoad: Promise<void>,
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        <EpicAccessCoordinator />
+        <Outlet />
+      </>
+    ),
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => <div data-testid="landing" />,
+  });
+  const epicRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/epics/$epicId/$tabId",
+    loader: () => taskLoad,
+    component: () => <div data-testid="epic" />,
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute, epicRoute]),
+    history: createMemoryHistory({ initialEntries: [pathname] }),
+    defaultPendingMs: 10,
+    defaultPendingComponent: () => <div data-testid="pending" />,
+    defaultPendingMinMs: 0,
+  });
+  const crashes: unknown[] = [];
+  render(
+    <CrashRecorder onCrash={(thrown) => crashes.push(thrown)}>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </CrashRecorder>,
+  );
+  return { router, crashes };
+}
+
+function withFirstLoadInFlight(): {
+  readonly load: Promise<void>;
+  readonly finish: () => void;
+} {
+  let finish: () => void = () => undefined;
+  const load = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  return { load, finish };
+}
+
+describe("EpicAccessCoordinator during the window's first load", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    __getOpenEpicRegistryForTests().disposeAll();
+    toastInfo.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    __getOpenEpicRegistryForTests().disposeAll();
+    useAuthStore.getState().setSignedOut();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useSelectionAuthorityStore.getState().reset();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    {
+      refusal: "a revoke",
+      refuse: (handle: OpenedStoreForTest) => {
+        handle.store.setState({ accessLost: true });
+      },
+    },
+    {
+      refusal: "a delete broadcast by another window",
+      refuse: () => {
+        dispatchDeletedEpicStorageEvent(
+          "user-1",
+          ["epic-1"],
+          { "epic-1": "Epic One" },
+          // Past every sequence this file's earlier broadcasts used.
+          9001,
+        );
+      },
+    },
+  ])(
+    "closes the task at once on $refusal and leaves it only once the load ends, with no throw at the root",
+    async ({ refuse }) => {
+      const handle = registerSession("epic-1");
+      seedTabs(
+        [{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }],
+        "tab-1",
+      );
+      const firstLoad = withFirstLoadInFlight();
+      const { router, crashes } = renderCoordinatorDuringFirstLoad(
+        "/epics/epic-1/tab-1",
+        firstLoad.load,
+      );
+      await waitFor(() => {
+        expect(router.state.status).toBe("pending");
+        expect(router.state.matches.length).toBeGreaterThan(0);
+      });
+
+      act(() => {
+        refuse(handle);
+      });
+
+      // Withdrawn at once: the tab is closed and the person is told, while
+      // the route still waits on its load and nothing of the task is drawn.
+      await waitFor(() =>
+        expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+      );
+      expect(toastInfo).toHaveBeenCalled();
+      expect(router.state.status).toBe("pending");
+      expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1");
+      expect(document.querySelector('[data-testid="epic"]')).toBeNull();
+
+      act(() => {
+        firstLoad.finish();
+      });
+      await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+      expect(crashes).toEqual([]);
+    },
+  );
+
+  it("still leaves the task when a task queued ahead of the navigation threw", async () => {
+    const errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+    const handle = registerSession("epic-1");
+    seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
+    const firstLoad = withFirstLoadInFlight();
+    const { router, crashes } = renderCoordinatorDuringFirstLoad(
+      "/epics/epic-1/tab-1",
+      firstLoad.load,
+    );
+    await waitFor(() => {
+      expect(router.state.status).toBe("pending");
+      expect(router.state.matches.length).toBeGreaterThan(0);
+    });
+    const fault = new Error("quota exceeded");
+    runWhenRouterSettled(router, () => {
+      throw fault;
+    });
+
+    act(() => {
+      handle.store.setState({ accessLost: true });
+    });
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    act(() => {
+      firstLoad.finish();
+    });
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(crashes).toEqual([]);
+    expect(errors).toHaveBeenCalledWith(
+      "[router] a task waiting for the router threw",
+      {},
+      fault,
+    );
   });
 });
 

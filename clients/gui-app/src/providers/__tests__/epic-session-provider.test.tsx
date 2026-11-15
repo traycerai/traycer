@@ -42,6 +42,32 @@ const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
+/**
+ * The router `useRouter()` answers: idle unless a test starts a load, and
+ * `resolve()` emits `onResolved` the way the Transitioner does (still pending)
+ * before it writes idle.
+ */
+const scriptedRouter = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const state: { status: "pending" | "idle" } = { status: "idle" };
+  return {
+    state,
+    listeners,
+    router: {
+      state,
+      subscribe: (_eventType: "onResolved", fn: () => void) => {
+        listeners.add(fn);
+        return () => {
+          listeners.delete(fn);
+        };
+      },
+    },
+    resolve: () => {
+      for (const listener of listeners) listener();
+      state.status = "idle";
+    },
+  };
+});
 // Real (non-null) `useHostBinding()` for the R-1 owner-identity rotation test
 // below - every other test in this file relies on the default `null` (no
 // `HostClient` needed to drive `sessionKey`, which is `activeHostId` +
@@ -153,6 +179,7 @@ vi.mock("@/lib/host", () => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
+  useRouter: () => scriptedRouter.router,
 }));
 
 /**
@@ -899,6 +926,8 @@ describe("<TestEpicSessionTab />", () => {
     sessionHostClients.byHostId.clear();
     resetHostConnectionRegistryForTest();
     navigateMock.mockClear();
+    scriptedRouter.state.status = "idle";
+    scriptedRouter.listeners.clear();
     resetCanvasStore();
     __getOpenEpicRegistryForTests().disposeAll();
     resetFakeDurableStreamTransports();
@@ -3295,6 +3324,56 @@ describe("<TestEpicSessionTab />", () => {
     expect(__getOpenEpicRegistryForTests().size()).toBe(0);
     expect(navigateMock).toHaveBeenCalledWith({ to: "/epics", replace: true });
   });
+
+  it.each([{ unmountFirst: false }, { unmountFirst: true }])(
+    "leaves a tab another window owns only once a router load in flight settles, and not at all from an unmounted surface (unmounted first: $unmountFirst)",
+    async ({ unmountFirst }) => {
+      const calls = {
+        claims: [] as string[],
+        releases: [] as string[],
+        focusRequests: [] as string[],
+        perWindowUpdates: [] as DesktopPerWindowStatePatch[],
+      };
+      setDesktopEpicOwnershipBridge(
+        createDesktopWindowsBridgeForTests(calls, {
+          ok: false,
+          currentOwner: "window-owner",
+        }),
+      );
+      const conflictTabId = useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-conflict", "Conflict");
+      // The window's first load is still in flight.
+      scriptedRouter.state.status = "pending";
+
+      const view = render(
+        <TestEpicSessionTab epicId="epic-conflict" tabId={conflictTabId}>
+          <HandleProbe onHandle={() => undefined} />
+        </TestEpicSessionTab>,
+      );
+      await waitFor(() => {
+        expect(calls.focusRequests).toEqual(["window-owner"]);
+      });
+      // The controller has discarded the tab already; only leaving waits.
+      expect(__getOpenEpicRegistryForTests().size()).toBe(0);
+      expect(navigateMock).not.toHaveBeenCalled();
+
+      if (unmountFirst) view.unmount();
+      act(() => {
+        scriptedRouter.resolve();
+      });
+      await act(() => Promise.resolve());
+
+      if (unmountFirst) {
+        expect(navigateMock).not.toHaveBeenCalled();
+      } else {
+        expect(navigateMock).toHaveBeenCalledWith({
+          to: "/epics",
+          replace: true,
+        });
+      }
+    },
+  );
 
   describe("a completed re-point keeps the document it merged (B5)", () => {
     function installControlledFactory(streams: ControlledEpicStream[]): void {
