@@ -308,7 +308,8 @@ vi.mock("../../host/team-install-token", async (importOriginal) => {
 });
 
 // Keep the command's branch under test while the lower-level team auth and
-// binding flow has its own real-filesystem coverage in team-install-auth.test.
+// give-through-move flow has its own real-filesystem coverage in
+// host/__tests__/install-auth.test.ts.
 vi.mock("../../host/install-auth", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../host/install-auth")>();
@@ -690,12 +691,49 @@ describe("buildHostInstallCommand", () => {
       (ctx: CommandContext, team: string) =>
         actual.beginAttendedTeamInstall(ctx, team),
     );
-    const urls: string[] = [];
+    const requests: Array<{
+      readonly url: string;
+      readonly init: RequestInit | undefined;
+    }> = [];
+    const inlineToken = "inline-install-sign-in-token";
+    setStdoutIsTTY(true);
+    mocks.resolveHostAuthMock
+      .mockReset()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        token: inlineToken,
+        authnBaseUrl: "https://authn.test",
+        userId: "user-1",
+      });
+    mocks.runDeviceAuthFlowMock.mockImplementation(async () => {
+      await writeCredentialsFile(
+        cliCredentialsPath("production"),
+        {
+          token: inlineToken,
+          refreshToken: "inline-install-refresh",
+          savedAt: "2026-11-10T00:00:00.000Z",
+          user: {
+            id: "user-1",
+            email: "member@example.test",
+            name: "Member",
+          },
+        },
+        0,
+      );
+      return {
+        token: inlineToken,
+        user: {
+          id: "user-1",
+          email: "member@example.test",
+          name: "Member",
+        },
+        authnBaseUrl: "https://authn.test",
+      };
+    });
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const url = String(input);
-        urls.push(url);
+      vi.fn<typeof fetch>(async (input, init) => {
+        requests.push({ url: String(input), init });
         return new Response(
           JSON.stringify({
             token: "attended-install-token",
@@ -749,6 +787,7 @@ describe("buildHostInstallCommand", () => {
     expect(mocks.callOrder).toEqual([
       "team-token-prepare",
       "auth-resolve",
+      "device-login",
       "auth-resolve",
       "team-token-stage",
       "stage",
@@ -767,9 +806,14 @@ describe("buildHostInstallCommand", () => {
     expect(result.data).toMatchObject({ teamInstallReceipt: receipt });
     expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
     expect(personalProvision).not.toHaveBeenCalled();
-    expect(urls).toEqual([
+    expect(requests.map(({ url }) => url)).toEqual([
       "https://authn.test/api/v3/hosts/team-install-tokens",
     ]);
+    expect(requests[0]?.init?.method).toBe("POST");
+    expect(requests[0]?.init?.redirect).toBe("manual");
+    expect(new Headers(requests[0]?.init?.headers).get("authorization")).toBe(
+      "Bearer " + inlineToken,
+    );
     expect(mocks.stagedTeamTokenMock).toHaveBeenCalledWith(
       "production",
       "attended-install-token",
@@ -779,7 +823,9 @@ describe("buildHostInstallCommand", () => {
     expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toEqual(
       { environmentId: "acme" },
     );
-    expect(urls.some((url) => url.includes("remote-access"))).toBe(false);
+    expect(requests.some(({ url }) => url.includes("remote-access"))).toBe(
+      false,
+    );
   });
 
   it("does not stage or install when authn rejects a non-member", async () => {
@@ -960,7 +1006,7 @@ describe("buildHostInstallCommand", () => {
     expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
   });
 
-  it("the CLI does not send a team target to a host that cannot transfer", async () => {
+  it("refuses a host without plan@2.0 before its first RPC frame", async () => {
     const legacyHost = new LegacyTeamHost();
     mocks.legacyHost = legacyHost;
     const actual = await vi.importActual<
@@ -983,12 +1029,12 @@ describe("buildHostInstallCommand", () => {
       buildHostInstallCommand(baseArgs({ team: "acme" }))(fakeCtx()),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
-      message: expect.stringContaining("traycer host update"),
+      message: expect.stringContaining("environment.move.plan"),
     });
     expect(legacyHost.requests).toEqual([]);
   });
 
-  it.each(["stage", "bind", "post-swap"] as const)(
+  it.each(["stage", "give", "post-swap"] as const)(
     "warns about the retained sign-in when team install fails at %s through the real credentials file",
     async (failure) => {
       const token = `retained-install-${failure}`;
@@ -1021,9 +1067,9 @@ describe("buildHostInstallCommand", () => {
           new Error("stage failed"),
         );
       else mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
-      if (failure === "bind")
+      if (failure === "give")
         mocks.completeTeamInstallMock.mockRejectedValue(
-          new Error("bind failed"),
+          new Error("give failed"),
         );
       if (failure === "post-swap") handle.state.postSwapError = "start failed";
       mocks.createServiceInstallLifecycleMock.mockReturnValue(handle);

@@ -461,7 +461,7 @@ describe("buildHostEnsureCommand", () => {
     expect(mocks.ensureHostMock).not.toHaveBeenCalled();
   });
 
-  it("the CLI does not send a team target to a host that cannot transfer", async () => {
+  it("refuses a host without plan@2.0 before its first RPC frame", async () => {
     const legacyHost = new LegacyTeamHost();
     mocks.legacyHost = legacyHost;
     const actual = await vi.importActual<
@@ -475,12 +475,12 @@ describe("buildHostEnsureCommand", () => {
       buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
-      message: expect.stringContaining("traycer host update"),
+      message: expect.stringContaining("environment.move.plan"),
     });
     expect(legacyHost.requests).toEqual([]);
   });
 
-  it.each(["ensure", "bind", "not-running", "unreadable"] as const)(
+  it.each(["ensure", "give", "not-running", "unreadable"] as const)(
     "warns about the retained sign-in when team %s fails through the real credentials file",
     async (failure) => {
       const directory = mkdtempSync(join(tmpdir(), "team-ensure-sign-in-"));
@@ -520,9 +520,9 @@ describe("buildHostEnsureCommand", () => {
           mkdirSync(mocks.credentialsPath);
           throw new Error("unreadable failed");
         });
-      if (failure === "bind")
+      if (failure === "give")
         mocks.completeTeamInstallMock.mockRejectedValue(
-          new Error("bind failed"),
+          new Error("give failed"),
         );
       if (failure === "not-running")
         mocks.ensureHostMock.mockResolvedValue(
