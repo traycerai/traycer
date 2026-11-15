@@ -125,7 +125,7 @@ describe("notification hook save account part @4.0", () => {
   it("upgrades the registered @3.0 request and response into @4.0", () => {
     const status = latestStatus();
     const saveRegistry = hostRpcRegistry["host.notificationHooks.save"];
-    const latest = getLatestContract(saveRegistry);
+    const latest = getLatestContract(saveRegistry, undefined);
     expect(latest.schemaVersion).toEqual({ major: 4, minor: 0 });
 
     const upgradedRequest = upgradeRequestToVersion(
