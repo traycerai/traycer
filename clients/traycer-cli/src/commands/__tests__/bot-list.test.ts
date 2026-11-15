@@ -7,6 +7,7 @@ import {
   BOT_HOST_UPDATE_MESSAGE,
   BOT_SNAPSHOT_DEADLINE_MS,
 } from "../../internal/bot-host";
+import { hostTokenFailureCliError } from "../../internal/host-door-words";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandResult } from "../../runner/runner";
 import {
@@ -652,6 +653,155 @@ describe("bot list", () => {
     expect(result.human).toBe("You belong to no environments yet.");
     expect(result.data).toEqual({ environments: [] });
     expect(result.exitCode).toBe(0);
+  });
+
+  describe("on the computer authn's directory says whose it is", () => {
+    const PERSONAL = environmentDescriptor("env-personal", "Personal");
+    const ALPHA = environmentDescriptor("env-alpha", "alpha");
+    const BETA = environmentDescriptor("env-beta", "beta");
+    // `signInUserFromDescriptors` makes each team's id the descriptor's owner id.
+    const BETA_TEAM_ID = BETA.ownerId;
+
+    function stageThreeEnvironments(): void {
+      stage({
+        environments: [PERSONAL, ALPHA, BETA],
+        bots: [],
+        client: botSubscribeClient({}),
+      });
+    }
+
+    function ownedBy(
+      owner:
+        | { readonly kind: "team"; readonly id: string; readonly name: string }
+        | { readonly kind: "user"; readonly id: string },
+    ): void {
+      hoisted.readHostOwnership.mockResolvedValue({
+        kind: "ok",
+        host: {
+          hostId: THIS_HOST_ID,
+          owner,
+          kind: "machine",
+          remoteAccess: true,
+        },
+      });
+    }
+
+    it("lists only the owning team's environment on a team's computer", async () => {
+      stageThreeEnvironments();
+      ownedBy({ kind: "team", id: BETA_TEAM_ID, name: "beta" });
+
+      const result = await runList();
+
+      expect(result.data).toEqual({
+        environments: [{ environmentId: "env-beta", label: "beta", bots: [] }],
+      });
+      expect(result.human).toBe("beta\n  no bots");
+      expect(result.exitCode).toBe(0);
+      expect(hoisted.readHostOwnership).toHaveBeenCalledTimes(1);
+      expect(hoisted.readHostOwnership).toHaveBeenCalledWith(
+        "https://authn.test",
+        "sign-in-bearer",
+        THIS_HOST_ID,
+      );
+    });
+
+    it("lists the sign-in's whole list, unchanged, on a personal computer", async () => {
+      stageThreeEnvironments();
+      ownedBy({ kind: "user", id: "user-1" });
+
+      const result = await runList();
+
+      expect(result.data).toEqual({
+        environments: [
+          { environmentId: "env-personal", label: "Personal", bots: [] },
+          { environmentId: "env-alpha", label: "alpha", bots: [] },
+          { environmentId: "env-beta", label: "beta", bots: [] },
+        ],
+      });
+      expect(hoisted.readHostOwnership).toHaveBeenCalledTimes(1);
+    });
+
+    it("lists the sign-in's whole list, unchanged, on a computer the directory has no row for", async () => {
+      stageThreeEnvironments();
+      hoisted.readHostOwnership.mockResolvedValue({ kind: "not-found" });
+
+      const result = await runList();
+
+      expect(result.data).toEqual({
+        environments: [
+          { environmentId: "env-personal", label: "Personal", bots: [] },
+          { environmentId: "env-alpha", label: "alpha", bots: [] },
+          { environmentId: "env-beta", label: "beta", bots: [] },
+        ],
+      });
+      expect(hoisted.readHostOwnership).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports the stored credential rejected when authn refuses the directory read", async () => {
+      stageThreeEnvironments();
+      hoisted.readHostOwnership.mockResolvedValue({ kind: "unauthorized" });
+
+      await expect(runList()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message:
+          "The stored credential was rejected. Run `traycer login` to re-authenticate.",
+        exitCode: 1,
+      });
+    });
+
+    it("reports cloud-unreachable, with no message, when the directory cannot be reached", async () => {
+      stageThreeEnvironments();
+      hoisted.readHostOwnership.mockResolvedValue({ kind: "network-error" });
+
+      await expect(runList()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: "",
+        exitCode: 1,
+      });
+    });
+
+    it("reports the signed-out line when no sign-in is held at the directory read", async () => {
+      stageThreeEnvironments();
+      // The sign-in read before it succeeds; the directory read finds no sign-in.
+      hoisted.resolveHostAuth
+        .mockResolvedValueOnce({
+          token: "sign-in-bearer",
+          authnBaseUrl: "https://authn.test",
+          userId: "user-1",
+        })
+        .mockResolvedValue(null);
+
+      await expect(runList()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+        message:
+          "traycer: not signed in - run `traycer login` to authenticate.",
+        exitCode: 1,
+      });
+      expect(hoisted.readHostOwnership).not.toHaveBeenCalled();
+    });
+
+    it("prints the door's own refusal, not the no-environments line, on a team's computer whose team the sign-in does not list", async () => {
+      stageThreeEnvironments();
+      ownedBy({ kind: "team", id: "team-not-listed", name: "outsiders" });
+      // The local open's mint answers `not-a-member`; `callHostRpc` then throws
+      // the CLI's own non-member line, which no `bot.list` answer replaces.
+      hoisted.callHostRpc.mockRejectedValue(
+        hostTokenFailureCliError({ kind: "not-a-member" }),
+      );
+
+      const failure = await runList().then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toMatchObject({
+        code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
+        message:
+          "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.",
+        exitCode: 1,
+      });
+      expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+    });
   });
 
   it("opens one bot.subscribe per bot, closes each session, and closes the client afterwards", async () => {
