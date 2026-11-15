@@ -201,6 +201,7 @@ import {
   plainHostEntry,
   resetHostDirectoryRows,
   sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 
 /**
@@ -2435,6 +2436,23 @@ describe("useComposerToolbarStore on a sandbox host", () => {
     );
     expect(result.current.getState().selection.harnessId).toBe("codex");
     expect(result.current.getState().values.selection.harnessId).toBe("codex");
+  });
+
+  it("keeps the person's pick on a sandbox whose directory row names no owner: whose it is does not change that it is a sandbox", async () => {
+    installHostDirectoryRows([sandboxHostEntryWithoutOwner(SANDBOX_HOST_ID)]);
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        fallbackSeedSource(null, null),
+        null,
+        scopeOn(SANDBOX_HOST_ID),
+      ),
+    );
+
+    await waitFor(() =>
+      expect(result.current.getState().catalog.harnesses).toBeDefined(),
+    );
+    expect(result.current.getState().selection.harnessId).toBe("codex");
   });
 
   it("still reroutes the same pick to the first runnable harness on a host that is not a sandbox", async () => {

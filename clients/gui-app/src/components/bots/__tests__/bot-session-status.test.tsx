@@ -235,6 +235,7 @@ function mountSession(input: {
               <BotSessionView
                 botId={BOT_ID}
                 hostId={HOST_ID}
+                boundHostId={null}
                 botTitle="Release Bot"
                 session={{
                   chatId: input.chatId,

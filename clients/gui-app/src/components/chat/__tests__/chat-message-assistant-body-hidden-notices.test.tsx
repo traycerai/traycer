@@ -4,7 +4,10 @@ import type { ReactNode } from "react";
 import { QUEUE_PAUSED_AFTER_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
-import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
+import {
+  ChatTranscriptProvider,
+  type ChatTranscriptIdentity,
+} from "@/components/chat/chat-transcript-context";
 import { TranscriptQueuePauseReasonSupportContext } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -125,7 +128,7 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 
 function renderBody(
   body: ReactNode,
-  transcript: { chatId: string; hostId: string } | null,
+  transcript: ChatTranscriptIdentity | null,
 ) {
   const ui = sessionHarness.hasSession() ? (
     <TranscriptQueuePauseReasonSupportContext
@@ -313,6 +316,7 @@ describe("AssistantMessageBody hides for the queue notice", () => {
     renderBody(<Body segments={[QUEUE_NOTICE]} />, {
       chatId: TRANSCRIPT_CHAT_ID,
       hostId: TRANSCRIPT_HOST_ID,
+      payerHostId: TRANSCRIPT_HOST_ID,
     });
 
     expect(screen.getByText(QUEUE_NOTICE_MESSAGE)).not.toBeNull();
@@ -328,6 +332,7 @@ describe("AssistantMessageBody hides for the queue notice", () => {
     renderBody(<Body segments={[QUEUE_NOTICE]} />, {
       chatId: TRANSCRIPT_CHAT_ID,
       hostId: TRANSCRIPT_HOST_ID,
+      payerHostId: TRANSCRIPT_HOST_ID,
     });
 
     expect(screen.queryByText(QUEUE_NOTICE_MESSAGE)).toBeNull();
@@ -347,6 +352,7 @@ describe("AssistantMessageBody hides for the queue notice", () => {
     renderBody(<Body segments={[QUEUE_NOTICE]} />, {
       chatId: TRANSCRIPT_CHAT_ID,
       hostId: TRANSCRIPT_HOST_ID,
+      payerHostId: TRANSCRIPT_HOST_ID,
     });
 
     expect(
@@ -381,6 +387,7 @@ describe("AssistantMessageBody hides the cancellation notice unconditionally", (
       renderBody(<Body segments={[CANCELLATION_NOTICE]} />, {
         chatId: TRANSCRIPT_CHAT_ID,
         hostId: TRANSCRIPT_HOST_ID,
+        payerHostId: TRANSCRIPT_HOST_ID,
       });
 
       expect(screen.queryByText(CANCELLATION_TITLE)).toBeNull();
@@ -396,6 +403,7 @@ describe("AssistantMessageBody hides the cancellation notice unconditionally", (
     renderBody(<Body segments={[EXHAUSTED_NOTICE]} />, {
       chatId: TRANSCRIPT_CHAT_ID,
       hostId: TRANSCRIPT_HOST_ID,
+      payerHostId: TRANSCRIPT_HOST_ID,
     });
 
     expect(screen.getByText(CANCELLATION_TITLE)).not.toBeNull();
@@ -407,6 +415,7 @@ describe("AssistantMessageBody hides the cancellation notice unconditionally", (
     renderBody(<Body segments={[EXHAUSTED_WITH_CANCEL_PROSE_NOTICE]} />, {
       chatId: TRANSCRIPT_CHAT_ID,
       hostId: TRANSCRIPT_HOST_ID,
+      payerHostId: TRANSCRIPT_HOST_ID,
     });
 
     expect(screen.getByText(CANCELLATION_TITLE)).not.toBeNull();
@@ -418,6 +427,7 @@ describe("AssistantMessageBody hides the cancellation notice unconditionally", (
     renderBody(<Body segments={[CANCELLED_CODE_ON_APPLIED_NOTICE]} />, {
       chatId: TRANSCRIPT_CHAT_ID,
       hostId: TRANSCRIPT_HOST_ID,
+      payerHostId: TRANSCRIPT_HOST_ID,
     });
 
     expect(screen.getByText(CANCELLATION_TITLE)).not.toBeNull();
@@ -444,7 +454,11 @@ describe("elapsed footer", () => {
     };
     renderBody(
       <CompletedBody segments={[ERROR_SEGMENT, CANCELLATION_NOTICE]} />,
-      { chatId: TRANSCRIPT_CHAT_ID, hostId: TRANSCRIPT_HOST_ID },
+      {
+        chatId: TRANSCRIPT_CHAT_ID,
+        hostId: TRANSCRIPT_HOST_ID,
+        payerHostId: TRANSCRIPT_HOST_ID,
+      },
     );
 
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
@@ -481,7 +495,11 @@ describe("elapsed footer", () => {
       <TooltipProvider delayDuration={0}>
         <TabHostProvider hostId={TRANSCRIPT_HOST_ID}>
           <ChatTranscriptProvider
-            value={{ chatId: TRANSCRIPT_CHAT_ID, hostId: TRANSCRIPT_HOST_ID }}
+            value={{
+              chatId: TRANSCRIPT_CHAT_ID,
+              hostId: TRANSCRIPT_HOST_ID,
+              payerHostId: TRANSCRIPT_HOST_ID,
+            }}
           >
             <ChatExpansionTestProviders tileInstanceId="hidden-notices-tile">
               <AssistantMessageBody
@@ -542,6 +560,7 @@ describe("elapsed footer", () => {
     renderBody(<CompletedBody segments={[ERROR_SEGMENT, FALLBACK_APPLIED]} />, {
       chatId: TRANSCRIPT_CHAT_ID,
       hostId: TRANSCRIPT_HOST_ID,
+      payerHostId: TRANSCRIPT_HOST_ID,
     });
 
     expect(screen.queryByTestId("assistant-elapsed-footer")).not.toBeNull();
@@ -565,6 +584,7 @@ describe("elapsed footer", () => {
     renderBody(<CompletedBody segments={[ERROR_SEGMENT, QUEUE_NOTICE]} />, {
       chatId: TRANSCRIPT_CHAT_ID,
       hostId: TRANSCRIPT_HOST_ID,
+      payerHostId: TRANSCRIPT_HOST_ID,
     });
 
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();

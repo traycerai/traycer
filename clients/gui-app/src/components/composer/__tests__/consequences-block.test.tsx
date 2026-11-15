@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -7,6 +8,8 @@ import {
   within,
 } from "@testing-library/react";
 import { ConsequencesBlock } from "@/components/composer/consequences-block";
+import { renderWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
+import { SandboxBillingRuntime } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
 import {
   consequencesShownSubject,
   type ConsequencesInput,
@@ -94,10 +97,10 @@ afterEach(() => {
 describe("<ConsequencesBlock />", () => {
   it("renders every clause in full the first time and records it as shown", () => {
     const value = input({ reachHost: "Build box" });
-    render(block(value));
+    renderWithQueryClient(block(value));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     for (const kind of ["audience", "reach", "team", "resting-storage"]) {
       expect(screen.getByTestId(`consequences-clause-${kind}`)).toBeDefined();
@@ -115,10 +118,10 @@ describe("<ConsequencesBlock />", () => {
 
   it("collapses an unchanged repeat to the price and What this means, which expands", () => {
     const value = input({});
-    const first = render(block(value));
+    const first = renderWithQueryClient(block(value));
     first.unmount();
 
-    render(block(value));
+    renderWithQueryClient(block(value));
 
     expect(screen.getByTestId("consequences-price")).toBeDefined();
     expect(screen.queryByTestId("consequences-clause-team")).toBeNull();
@@ -132,21 +135,22 @@ describe("<ConsequencesBlock />", () => {
 
   it("keeps team price and payer once in the summary, then shows rate, use, payer, access and storage once in full", () => {
     const value = input({});
-    const first = render(block(value));
+    const first = renderWithQueryClient(block(value));
     first.unmount();
 
-    render(block(value));
+    renderWithQueryClient(block(value));
     const summaryPrice = screen.getByTestId("consequences-price").textContent;
     expect(summaryPrice).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     const summaryText = screen.getByTestId("consequences-block").textContent;
     expect(summaryText.match(/\$0\.12 an hour/g)).toHaveLength(1);
-    expect(summaryText.match(/Acme credits/g)).toHaveLength(1);
+    expect(summaryText.match(/Acme's credits/g)).toHaveLength(1);
+    expect(summaryText).not.toContain("your Acme");
 
     fireEvent.click(screen.getByTestId("consequences-what-this-means"));
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     const fullText = screen.getByTestId("consequences-block").textContent;
     const team = screen.getByTestId("consequences-clause-team").textContent;
@@ -162,7 +166,7 @@ describe("<ConsequencesBlock />", () => {
       "consequences-clause-resting-storage",
     ).textContent;
     expect(storage).toBe(
-      "Storage while it's suspended or stopped, on the same credits until another member wakes it.",
+      "Storage while it's suspended or stopped, on the same credits.",
     );
     expect(
       fullText.match(/Storage while it's suspended or stopped/g),
@@ -174,7 +178,7 @@ describe("<ConsequencesBlock />", () => {
       configuration: { kind: "personal" },
       audience: "shared",
     });
-    const full = render(block(value));
+    const full = renderWithQueryClient(block(value));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
       "$0.12 an hour while awake · uses your credits",
@@ -183,7 +187,7 @@ describe("<ConsequencesBlock />", () => {
     expect(fullText.match(/\$0\.12 an hour/g)).toHaveLength(1);
     expect(fullText.match(/uses your credits/g)).toHaveLength(1);
     full.unmount();
-    render(block(value));
+    renderWithQueryClient(block(value));
     const summaryPrice = screen.getByTestId("consequences-price").textContent;
     expect(summaryPrice).toBe("$0.12 an hour while awake · uses your credits");
     const summaryText = screen.getByTestId("consequences-block").textContent;
@@ -195,48 +199,48 @@ describe("<ConsequencesBlock />", () => {
     const value = input({});
     const expected =
       "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.";
-    const first = render(block(value));
+    const first = renderWithQueryClient(block(value));
     expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
       expected,
     );
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     first.unmount();
 
-    render(block(value));
+    renderWithQueryClient(block(value));
     expect(screen.getByTestId("consequences-what-this-means")).toBeDefined();
     expect(screen.queryByTestId("consequences-clause-team")).toBeNull();
     expect(screen.getByTestId("consequences-setup-charges").textContent).toBe(
       expected,
     );
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
   });
 
   it("keeps the Windows limitation in view on a collapsed repeat, and says nothing of it for Linux", () => {
     const windows = input({ os: "windows" });
-    const first = render(block(windows));
+    const first = renderWithQueryClient(block(windows));
     expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
     first.unmount();
 
-    const collapsed = render(block(windows));
+    const collapsed = renderWithQueryClient(block(windows));
     expect(screen.queryByTestId("consequences-clause-team")).toBeNull();
     expect(screen.getByTestId("consequences-what-this-means")).toBeDefined();
     expect(screen.getByText(WINDOWS_SANDBOX_LIMITATION)).toBeDefined();
     collapsed.unmount();
 
-    render(block(input({ os: "linux" })));
+    renderWithQueryClient(block(input({ os: "linux" })));
     expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
     cleanup();
 
-    render(block(input({})));
+    renderWithQueryClient(block(input({})));
     expect(screen.queryByText(WINDOWS_SANDBOX_LIMITATION)).toBeNull();
   });
 
   it("renders in full again for a different audience", () => {
-    render(block(input({ audience: "private" }))).unmount();
+    renderWithQueryClient(block(input({ audience: "private" }))).unmount();
     expect(
       consequencesShown(
         useTeamHostDisclosureSeenStore.getState().seen,
@@ -245,14 +249,14 @@ describe("<ConsequencesBlock />", () => {
       ),
     ).toBe(false);
 
-    render(block(input({ audience: "shared" })));
+    renderWithQueryClient(block(input({ audience: "shared" })));
 
     expect(screen.getByTestId("consequences-clause-audience")).toBeDefined();
     expect(screen.getByTestId("consequences-clause-team")).toBeDefined();
   });
 
   it("renders in full again for a different configuration", () => {
-    render(block(input({}))).unmount();
+    renderWithQueryClient(block(input({}))).unmount();
 
     const globex = input({
       configuration: {
@@ -269,7 +273,7 @@ describe("<ConsequencesBlock />", () => {
       ),
     ).toBe(false);
 
-    render(block(globex));
+    renderWithQueryClient(block(globex));
 
     expect(screen.getByTestId("consequences-clause-team").textContent).toBe(
       "Everyone in Globex can use it; another member's agent can read what yours can.",
@@ -285,16 +289,16 @@ describe("<ConsequencesBlock />", () => {
 
   it("renders in full and collapses nothing for a signed-out viewer, recording nothing", () => {
     useAuthStore.setState({ status: "signed-out", contextMetadata: null });
-    render(block(input({}))).unmount();
+    renderWithQueryClient(block(input({}))).unmount();
 
-    render(block(input({})));
+    renderWithQueryClient(block(input({})));
 
     expect(screen.getByTestId("consequences-clause-team")).toBeDefined();
     expect(useTeamHostDisclosureSeenStore.getState().seen).toEqual({});
   });
 
   it("is the price alone, with no What this means, when nothing else applies", () => {
-    render(
+    renderWithQueryClient(
       block(
         input({ configuration: { kind: "personal" }, audience: "private" }),
       ),
@@ -306,16 +310,45 @@ describe("<ConsequencesBlock />", () => {
     expect(screen.queryByTestId("consequences-what-this-means")).toBeNull();
   });
 
-  it("at a short balance asks for the team's credits and links to the configuration's billing page", () => {
-    render(block(input({ needsCredits: true, shortfallMc: 120 })));
+  it("at a short balance names the team's credits and offers a reader not known to be its Admin no top-up", () => {
+    renderWithQueryClient(
+      block(input({ needsCredits: true, shortfallMc: 120 })),
+    );
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "Your Acme allowance is short $0.12. $0.12 more starts this sandbox for an hour.",
+      "Acme's credits are short $0.12. $0.12 more starts this sandbox for an hour.",
     );
-    const link = within(screen.getByTestId("consequences-block")).getByRole(
-      "button",
-      { name: "Add credits ↗" },
+    // A team's credits are bought by its Admin only (board C25).
+    expect(
+      within(screen.getByTestId("consequences-block")).queryByRole("button", {
+        name: "Add credits ↗",
+      }),
+    ).toBeNull();
+  });
+
+  it("at a short balance links the team's billing page for the team's Admin", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <SandboxBillingRuntime
+        answer={{ kind: "ready", role: "admin" }}
+        hostId="billing-host"
+        environmentId="env-acme"
+        queryClient={queryClient}
+        onBinding={(binding) => {
+          vi.spyOn(binding.auth, "getTeamEnvironment").mockResolvedValue({
+            kind: "ok",
+            environmentId: "env-acme",
+          });
+        }}
+        onEnvironmentListRead={null}
+      >
+        {block(input({ needsCredits: true, shortfallMc: 120 }))}
+      </SandboxBillingRuntime>,
     );
+
+    const link = await screen.findByRole("button", { name: "Add credits ↗" });
     fireEvent.click(link);
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://billing.test/acme",
@@ -324,7 +357,7 @@ describe("<ConsequencesBlock />", () => {
   });
 
   it("at a short balance on Personal asks for credits, without a team's name", () => {
-    render(
+    renderWithQueryClient(
       block(
         input({
           configuration: { kind: "personal" },
@@ -338,11 +371,16 @@ describe("<ConsequencesBlock />", () => {
     expect(screen.getByTestId("consequences-price").textContent).toBe(
       "Not enough credits. $0.12 more starts this sandbox for an hour.",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Add credits ↗" }));
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://billing.test/acme",
+      "account",
+    );
   });
 
   it("offers another host instead of a terminal at a short allowance", () => {
     const choose = vi.fn<() => void>();
-    render(
+    renderWithQueryClient(
       <ConsequencesBlock
         input={input({ needsCredits: true, shortfallMc: 210 })}
         onMoveFirst={null}
@@ -358,20 +396,20 @@ describe("<ConsequencesBlock />", () => {
     ).toBeNull();
   });
 
-  it("says who takes over payment before a task wakes a team sandbox", () => {
-    render(block(input({ wakingName: "e2e-sbx-t1" })));
+  it("names the team's credits before a task wakes a team sandbox", () => {
+    renderWithQueryClient(block(input({ wakingName: "e2e-sbx-t1" })));
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "Waking e2e-sbx-t1 uses your Acme allowance and makes you the payer.",
+      "Waking e2e-sbx-t1 uses Acme's credits.",
     );
   });
 
   it("does not offer Add credits at a covered balance", () => {
-    render(block(input({})));
+    renderWithQueryClient(block(input({})));
     expect(screen.queryByTestId("consequences-add-credits")).toBeNull();
   });
 
   it("prefixes `from ` for a price that is only a lower bound", () => {
-    render(
+    renderWithQueryClient(
       block(
         input({
           price: {
@@ -384,7 +422,7 @@ describe("<ConsequencesBlock />", () => {
       ),
     );
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "from $0.12 an hour while awake · uses your Acme credits",
+      "from $0.12 an hour while awake · uses Acme's credits",
     );
   });
 
@@ -399,19 +437,19 @@ describe("<ConsequencesBlock />", () => {
       .getState()
       .markSeen(VIEWER, consequencesShownKey(older));
 
-    render(block(value));
+    renderWithQueryClient(block(value));
 
     expect(screen.getByTestId("consequences-clause-team").textContent).toBe(
       "Everyone in Acme can use it; another member's agent can read what yours can.",
     );
     expect(screen.queryByTestId("consequences-what-this-means")).toBeNull();
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
   });
 
   it("shows the hourly rate with its funding context once billing has started", () => {
-    render(
+    renderWithQueryClient(
       block(
         input({
           needsCredits: true,
@@ -422,10 +460,12 @@ describe("<ConsequencesBlock />", () => {
     );
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
-      "$0.12 an hour while awake · uses your Acme credits",
+      "$0.12 an hour while awake · uses Acme's credits",
     );
     expect(
-      screen.queryByText(/allowance is short|Not enough credits/),
+      screen.queryByText(
+        /allowance is short|credits are short|Not enough credits/,
+      ),
     ).toBeNull();
   });
 
@@ -436,7 +476,7 @@ describe("<ConsequencesBlock />", () => {
       audience: "private",
       unmovedComputer: "MacBook",
     });
-    render(
+    renderWithQueryClient(
       <ConsequencesBlock
         input={withMove}
         onMoveFirst={onMoveFirst}
@@ -450,7 +490,7 @@ describe("<ConsequencesBlock />", () => {
     cleanup();
     useTeamHostDisclosureSeenStore.setState({ seen: {} });
 
-    render(block(withMove));
+    renderWithQueryClient(block(withMove));
     expect(
       screen.getByTestId("consequences-clause-move").textContent,
     ).toContain("MacBook");

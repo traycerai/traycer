@@ -12,10 +12,15 @@
  * so an error raised from a typed host error renders the same either way.
  */
 import { SANDBOX_EGRESS_REFUSAL_CODES } from "@traycer/protocol/host/sandbox-egress";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   NO_EGRESS_REFUSAL_SUBJECT,
   sandboxEgressRefusalCopyFor,
 } from "@/lib/sandboxes/sandbox-egress-refusal-copy";
+import {
+  onceTeamHasCreditsLine,
+  teamOutOfCreditsHeadline,
+} from "@/lib/sandboxes/sandbox-strings";
 
 export interface SandboxRefusalCopy {
   /** The row's headline, in the interrupted (warning) presentation. */
@@ -30,6 +35,10 @@ export interface SandboxRefusalCopy {
   readonly hostDetail: string | null;
 }
 
+const SANDBOX_FROZEN = "SANDBOX_FROZEN";
+const FROZEN_ENDED_TURN =
+  "This sandbox ran out of credits, which ended the turn.";
+
 interface SandboxRefusalRow {
   readonly headline: string;
   readonly description: string;
@@ -42,10 +51,9 @@ interface SandboxRefusalRow {
  * to the generic red failure with the host's raw message.
  */
 const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
-  SANDBOX_FROZEN: {
+  [SANDBOX_FROZEN]: {
     headline: "Paused: account out of credits",
-    description:
-      "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+    description: `${FROZEN_ENDED_TURN} Add credits, then send a message to pick up where it stopped.`,
     showsHostDetail: false,
   },
   SANDBOX_GUEST_NOT_CONFIGURED: {
@@ -67,6 +75,50 @@ const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
     showsHostDetail: false,
   },
 };
+
+/** Whether the block is a turn a sandbox's want of credits ended. */
+export function isSandboxFrozenRefusal(
+  code: string | null,
+  message: string,
+): boolean {
+  return code !== null && code.length > 0
+    ? code === SANDBOX_FROZEN
+    : message.startsWith(`${SANDBOX_FROZEN}:`);
+}
+
+/**
+ * That turn's copy on a team's sandbox. The title names the team for
+ * everyone; the line under it tells only someone who can buy the team's
+ * credits to add them.
+ */
+export function teamFrozenRefusalCopy(
+  copy: SandboxRefusalCopy,
+  teamName: string,
+  buysTeamCredits: boolean,
+): SandboxRefusalCopy {
+  return {
+    ...copy,
+    headline: teamOutOfCreditsHeadline(teamName),
+    description: buysTeamCredits
+      ? copy.description
+      : onceTeamHasCreditsLine(teamName),
+  };
+}
+
+/**
+ * That turn's copy while whose sandbox it is is not known: the neutral
+ * out-of-credits line names no account, and no remedy is told as the
+ * reader's to take.
+ */
+export function unknownPayerFrozenRefusalCopy(
+  copy: SandboxRefusalCopy,
+): SandboxRefusalCopy {
+  return {
+    ...copy,
+    headline: SANDBOX_OUT_OF_CREDITS,
+    description: FROZEN_ENDED_TURN,
+  };
+}
 
 export function sandboxRefusalCopyFor(
   code: string | null,
