@@ -78,6 +78,7 @@ const mocks = vi.hoisted(() => ({
     binding: null as EnvironmentHostBinding | null,
     status: null as EnvironmentStatusResponseV11 | null,
     teamRole: "editor" as string | null,
+    teamRoleReadFails: false,
     /** The rendered host's client, which a request named for its id reaches. */
     client: null as HostClient<HostRpcRegistry> | null,
   },
@@ -133,12 +134,20 @@ vi.mock("@/hooks/bots/use-environment-list-query", async () => {
     useEnvironmentListQuery: (enabled: boolean) =>
       useQuery({
         queryKey: ["environment-list-fixture", mocks.state.teamRole],
-        queryFn: () => ({
-          environments: [
-            listedEnvironment(PERSONAL),
-            { ...listedEnvironment(TEAM), effectiveRole: mocks.state.teamRole },
-          ],
-        }),
+        queryFn: () => {
+          if (mocks.state.teamRoleReadFails) {
+            throw new Error("The account role could not be read.");
+          }
+          return {
+            environments: [
+              listedEnvironment(PERSONAL),
+              {
+                ...listedEnvironment(TEAM),
+                effectiveRole: mocks.state.teamRole,
+              },
+            ],
+          };
+        },
         enabled,
       }),
   };
@@ -292,6 +301,7 @@ function ownershipResult(
 
 beforeEach(() => {
   mocks.state.teamRole = "editor";
+  mocks.state.teamRoleReadFails = false;
   mocks.state.client = null;
   mocks.auth.currentAuthEra.mockReset();
   mocks.auth.currentAuthEra.mockReturnValue({
@@ -729,6 +739,37 @@ describe("HostEnvironmentSection", () => {
       ).toBeNull();
     },
   );
+
+  it("hides Claim when the account role read fails after Admin is allowed", async () => {
+    mocks.state.teamRole = "admin";
+    mocks.state.binding = teamBinding(true);
+    mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
+    const queryClient = renderSection("personal", {
+      ...NO_SECTION_OPTIONS,
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+    });
+    const roleKey = ["environment-list-fixture", "admin"];
+
+    expect(
+      await screen.findByRole("button", { name: "Claim this computer" }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(queryClient.getQueryState(roleKey)?.status).toBe("success"),
+    );
+
+    mocks.state.teamRoleReadFails = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: roleKey });
+    });
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(roleKey)?.status).toBe("error"),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
+  });
 
   it("does not offer Claim this computer on a remote team-owned host", () => {
     mocks.state.binding = teamBinding(true);
