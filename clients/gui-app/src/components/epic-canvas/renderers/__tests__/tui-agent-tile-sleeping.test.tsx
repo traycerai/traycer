@@ -297,6 +297,10 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", async (importOriginal) => {
     >();
   return {
     ...actual,
+    // The real host is a lazy chunk that mounts, once an earlier case has
+    // warmed it, inside a later test and needs a ThemeProvider this suite
+    // does not render. Nothing here asserts what it draws.
+    TerminalXtermHost: () => null,
     useTerminalTileBootstrap: (input: {
       readonly adoptOnly?: boolean | undefined;
     }) => {
