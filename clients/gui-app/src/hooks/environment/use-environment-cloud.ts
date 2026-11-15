@@ -13,10 +13,11 @@ import type {
   EnvironmentCloud,
   EnvironmentCloudSource,
 } from "@traycer-clients/shared/environment/environment-cloud";
-import type {
-  HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
+import {
+  HostRequestAbortedError,
+  type HostRpcError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import type { HostScopedMutationContext } from "@/hooks/host/use-host-scoped-mutation";
@@ -259,6 +260,8 @@ interface UseEnvironmentCloudMutationArgs<
   /**
    * The sign-in a write armed before it was made, taken once by that write:
    * it is sent on that operation instead of one begun now. Null: begin now.
+   * An armed sign-in that ended before the write ran abandons it unsent, as
+   * an abort before dispatch.
    */
   readonly takeOrigin?: (() => EnvironmentCloud | null) | undefined;
 }
@@ -291,6 +294,16 @@ export function useEnvironmentCloudMutation<
     mutationKey: args.mutationKey,
     mutationFn: (request) => {
       const origin = args.takeOrigin?.() ?? null;
+      if (origin !== null && !origin.onOriginSignIn()) {
+        return Promise.reject<ResponseOfMethod<HostRpcRegistry, Method>>(
+          new HostRequestAbortedError({
+            message: "Request authority was aborted before dispatch",
+            requestId: "sign-in-ended",
+            method,
+            mayHaveDispatched: false,
+          }),
+        );
+      }
       const send =
         origin === null
           ? begin()

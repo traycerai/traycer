@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRequestAbortedError,
+  type HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
@@ -225,6 +228,22 @@ function writeBasis(
   return { write, revision: held.typedAt };
 }
 
+/**
+ * The failure a refused write shows, or null for a write abandoned before
+ * dispatch (its sign-in ended first): nothing was sent, so nothing is shown.
+ */
+function writeFailure(
+  write: ConfigurationItemWrite,
+  error: unknown,
+): ConfigurationItemWriteFailure | null {
+  if (error instanceof HostRequestAbortedError && !error.mayHaveDispatched)
+    return null;
+  return {
+    write,
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
 function acceptedValueMatches(
   write: ConfigurationItemWrite,
   row: ConfigurationItem,
@@ -442,17 +461,11 @@ export function useConfigurationItemWrites(
         ? put.mutateAsync({ ...request, value: write.value })
         : remove.mutateAsync(request));
     } catch (error) {
+      const failure = writeFailure(write, error);
       setState((current) =>
         current.scope !== scope || current.pending?.write !== write
           ? current
-          : {
-              ...current,
-              pending: null,
-              failure: {
-                write,
-                message: error instanceof Error ? error.message : String(error),
-              },
-            },
+          : { ...current, pending: null, failure: failure ?? current.failure },
       );
       if (active.current === write) active.current = null;
       return;
