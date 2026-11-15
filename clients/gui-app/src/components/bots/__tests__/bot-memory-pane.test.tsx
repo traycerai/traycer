@@ -452,13 +452,13 @@ describe("what the bot knows, in the rail", () => {
       /^Written .+ in the channel · never confirmed since$/,
     );
     expect(
-      within(pane).getByText(/reads them before every reply/).textContent,
+      within(pane).getByText(/reads these before every reply/).textContent,
     ).toBe(
-      "Release Bot wrote these and reads them before every reply. To change one, tell Release Bot in the channel.",
+      "Release Bot reads these before every reply. Release Bot's memory is its own; environment memory is common to every bot and agent in this environment. To change one, tell Release Bot in the channel.",
     );
   });
 
-  it("lists the shared entries below under the two group titles, each with the bot that wrote it, a legacy entry tagged both ways reading as shared", async () => {
+  it("lists the environment memory entries below under the two group titles, each with the bot that wrote it, a legacy entry tagged both ways reading as environment memory", async () => {
     const user = userEvent.setup();
     render(<MountedKnowingChannel />);
     const legacyBoth = entry({
@@ -480,12 +480,12 @@ describe("what the bot knows, in the rail", () => {
       within(pane)
         .getAllByRole("heading", { level: 3 })
         .map((heading) => heading.firstChild?.textContent),
-    ).toEqual(["Its own", "Shared"]);
+    ).toEqual(["Release Bot's memory", "Environment memory"]);
     const own = within(pane).getByTestId("bot-memory-own");
     expect(textsOf(own)).not.toContain(legacyBoth.text);
     const shared = within(pane).getByTestId("bot-memory-shared");
     expect(within(shared).getByRole("heading").textContent).toBe(
-      "Shared2 · tidied by the main bot",
+      "Environment memory2",
     );
     expect(textsOf(shared)).toEqual([legacyBoth.text, SHARED.text]);
     expect(metaOf(rowsOf(shared)[1])).toMatch(

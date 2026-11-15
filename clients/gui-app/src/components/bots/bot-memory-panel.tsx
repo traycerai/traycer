@@ -47,7 +47,7 @@ export interface BotMemoryPanelProps {
   readonly trunkChatId: string;
   /** The bot's threads, to find the one an entry was written in; `null` while unread. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
-  /** Another bot of the environment by its id, for a shared entry's writer. */
+  /** Another bot of the environment by its id, for an environment memory entry's writer. */
   readonly botNameOf: (botId: string) => string | null;
   readonly back: BotOpenThread | null;
   /** Brings back the thread the pane displaced; `null` when it displaced none. */
@@ -61,8 +61,8 @@ export interface BotMemoryPanelProps {
  * reads before every reply, in the rail beside its channel, read-only - a
  * person changes one by telling the bot. Its own entries newest-confirmed
  * first, each with when and where it was written and when it was last
- * confirmed; the ones shared with every bot below, with the bot that wrote
- * each; a find box; and how full its own memory is. Live: an entry written
+ * confirmed; the environment memory below, common to every bot and agent of
+ * the environment, with the bot that wrote each; a find box; and how full its own memory is. Live: an entry written
  * while the pane is open is marked new. It takes the rail's one slot, a thread included, whose crumb in
  * the header brings it back.
  */
@@ -217,7 +217,7 @@ function MemoryList(props: ListProps): ReactNode {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <p className="px-4 pt-3 text-ui-xs text-muted-foreground">
-        {`${botTitle} wrote these and reads them before every reply. To change one, tell ${botTitle} in the channel.`}
+        {`${botTitle} reads these before every reply. ${botTitle}'s memory is its own; environment memory is common to every bot and agent in this environment. To change one, tell ${botTitle} in the channel.`}
       </p>
       <div className="px-4 pt-3">
         <Input
@@ -230,7 +230,7 @@ function MemoryList(props: ListProps): ReactNode {
         />
       </div>
       <MemorySection
-        title="Its own"
+        title={`${botTitle}'s memory`}
         note={null}
         count={own.length}
         testId="bot-memory-own"
@@ -257,13 +257,13 @@ function MemoryList(props: ListProps): ReactNode {
       </MemorySection>
       {shared.length === 0 && searching ? null : (
         <MemorySection
-          title="Shared"
-          note="tidied by the main bot"
+          title="Environment memory"
+          note={null}
           count={shared.length}
           testId="bot-memory-shared"
         >
           {shared.length === 0 ? (
-            <EmptyLine text="Nothing shared yet." />
+            <EmptyLine text="No environment memories yet." />
           ) : (
             shared.map((entry) => (
               <MemoryRow
@@ -333,7 +333,7 @@ function EmptyLine(props: { readonly text: string }): ReactNode {
 
 /**
  * One entry: its text, then when it was confirmed and when and where it was
- * written - or that it was never confirmed since - for a shared entry the
+ * written - or that it was never confirmed since - for an environment entry the
  * bot that wrote it, and for its own the other bots that keep it too. An
  * entry written while the pane is open says it is new.
  */
@@ -399,7 +399,7 @@ function otherKeepers(props: ListProps, entry: BotMemoryEntry): string[] {
   });
 }
 
-/** The bot that wrote a shared entry, by name; `null` when none is known. */
+/** The bot that wrote an environment entry, by name; `null` when none is known. */
 function writerOf(props: ListProps, botId: string | null): string | null {
   if (botId === null) return null;
   return botId === props.botId ? props.botTitle : props.botNameOf(botId);
@@ -425,7 +425,7 @@ function KnownStamp(props: {
 /**
  * Where the bot learned the entry, as a link there: the member's post it was
  * answering in the channel, the thread it was written in, or the channel
- * when the post is unknown; a shared entry's too, when this bot wrote it.
+ * when the post is unknown; an environment entry's too, when this bot wrote it.
  * Nothing for a chat this bot no longer has, or another bot's.
  */
 function EntryWhere(
