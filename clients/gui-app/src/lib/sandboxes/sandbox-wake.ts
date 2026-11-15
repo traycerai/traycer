@@ -5,6 +5,7 @@ import {
 import { toast } from "sonner";
 import {
   ensureSandboxAwake,
+  SANDBOX_OUT_OF_CREDITS,
   type EnsureSandboxAwakeDeps,
   type SandboxDialFacts,
   type SandboxWakeBudget,
@@ -22,7 +23,6 @@ import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
-  SANDBOX_OUT_OF_CREDITS,
   sandboxCreditShortLine,
   teamPossessive,
   type SandboxConfigurationCopy,

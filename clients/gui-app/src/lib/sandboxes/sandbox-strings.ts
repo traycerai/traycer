@@ -11,6 +11,7 @@ import type {
   SandboxCreditSource,
   SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   formatCredits,
   formatCreditsRequired,
@@ -264,13 +265,6 @@ export const ONLY_TEAM_ADMINS_LINE: { readonly shown: boolean } = {
 export function teamCreditsRanOutLine(teamName: string): string {
   return `${teamPossessive(teamName)} credits ran out.`;
 }
-
-/**
- * A frozen sandbox, said with no remedy: the wake toast's title, and the
- * whole sentence where the reader cannot buy its credits and the app does not
- * know whose sandbox it is.
- */
-export const SANDBOX_OUT_OF_CREDITS = "This sandbox is out of credits.";
 
 /** After "Couldn't resume build-box." on a team's sandbox row. */
 export function teamSandboxOutOfCreditsLine(teamName: string): string {

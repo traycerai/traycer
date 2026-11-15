@@ -917,6 +917,13 @@ export const SANDBOX_FROZEN_MESSAGE =
   "This sandbox is paused because your credits ran out. Add credits to wake it.";
 
 /**
+ * A frozen sandbox, said with no remedy: the wake toast's title, and the
+ * whole sentence where the reader cannot buy its credits or the app does not
+ * know the sandbox is the reader's own.
+ */
+export const SANDBOX_OUT_OF_CREDITS = "This sandbox is out of credits.";
+
+/**
  * Wakes a sandbox before a tab dials it: resume a suspended (or suspending)
  * one, start a stopped (or stopping) or released one, then wait until the
  * host list says `awake`. Called at tab open only, never from a session's

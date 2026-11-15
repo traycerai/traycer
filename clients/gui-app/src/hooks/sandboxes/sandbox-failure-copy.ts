@@ -1,4 +1,7 @@
-import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  SANDBOX_OUT_OF_CREDITS,
+  type SandboxControlFailure,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_BUSY,
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
@@ -17,7 +20,6 @@ import {
 } from "@traycer/protocol/host/sandbox-control";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
-  SANDBOX_OUT_OF_CREDITS,
   TEAM_CREDITS_DONT_COVER_AN_HOUR,
   teamSandboxOutOfCreditsLine,
 } from "@/lib/sandboxes/sandbox-strings";

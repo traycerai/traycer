@@ -11,7 +11,12 @@ import type {
   AttachGrantProvision,
 } from "@traycer/protocol/host-transport/remote/grant";
 import { composeRequestAbort, untilAborted } from "../../auth/request-abort";
-import { SANDBOX_FROZEN_MESSAGE } from "../../host-client/sandbox-control";
+import { readHostDirectoryEntry } from "../../host-client/host-connection-registry";
+import { isRemoteHostDirectoryEntry } from "../../host-client/remote-fetcher";
+import {
+  SANDBOX_FROZEN_MESSAGE,
+  SANDBOX_OUT_OF_CREDITS,
+} from "../../host-client/sandbox-control";
 
 export type {
   AttachGrant,
@@ -428,15 +433,34 @@ function isSandboxFrozenRefusal(bodyText: string): boolean {
 
 /**
  * The fatal a frozen sandbox's refused mint ends the session on: the same
- * typed `SANDBOX_FROZEN` refusal, and copy, the host itself answers a frozen
- * sandbox's calls with, so every surface renders it the same way.
+ * typed `SANDBOX_FROZEN` refusal the host itself answers a frozen sandbox's
+ * calls with. Every surface prints its reason as it is, so the reason is
+ * worded here for its reader: "your credits" only on a sandbox the person's
+ * host directory names as their own, and the line with no remedy on a team's
+ * sandbox, on a row with no owner, and where there is no directory to read.
  */
-const SANDBOX_FROZEN_FATAL: FatalErrorDetails = {
-  code: "SANDBOX_FROZEN",
-  reason: SANDBOX_FROZEN_MESSAGE,
-  incompatibleMethods: null,
-  upgradeGuidance: null,
-};
+function sandboxFrozenFatal(hostId: string): FatalErrorDetails {
+  return {
+    code: "SANDBOX_FROZEN",
+    reason: isOwnSandbox(hostId)
+      ? SANDBOX_FROZEN_MESSAGE
+      : SANDBOX_OUT_OF_CREDITS,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}
+
+/** Personal as `useSandboxHostPayer` reads it: no team owner, and the row names the person. */
+function isOwnSandbox(hostId: string): boolean {
+  const entry = readHostDirectoryEntry(hostId);
+  return (
+    entry !== null &&
+    isRemoteHostDirectoryEntry(entry) &&
+    entry.sandbox !== null &&
+    entry.sandbox.ownerTeamId === null &&
+    entry.owner?.kind === "user"
+  );
+}
 
 const TEAM_MEMBERSHIP_REQUIRED: FatalErrorDetails = {
   code: "TEAM_MEMBERSHIP_REQUIRED",
@@ -459,6 +483,7 @@ const TEAM_MEMBERSHIP_UNAVAILABLE: FatalErrorDetails = {
 /** Preserve a membership verdict instead of retrying it as a network failure. */
 function provisionOfFailedMint(
   result: Exclude<AttachGrantResult, { readonly kind: "ok" }>,
+  hostId: string,
 ): AttachGrantProvision {
   if (result.kind === "team-membership-required") {
     return {
@@ -479,7 +504,7 @@ function provisionOfFailedMint(
   if (result.kind === "sandbox-frozen") {
     return {
       kind: "refused",
-      fatal: SANDBOX_FROZEN_FATAL,
+      fatal: sandboxFrozenFatal(hostId),
       detail: result.detail,
       context: result.context,
     };
@@ -519,7 +544,7 @@ export function createAttachGrantProvider(deps: {
     if (result.kind === "ok") {
       return { kind: "ok", grant: result.grant };
     }
-    return provisionOfFailedMint(result);
+    return provisionOfFailedMint(result, deps.hostId);
   };
 }
 
@@ -578,7 +603,7 @@ export function createSandboxAttachGrantProvider(deps: {
       deps.signal ?? null,
     );
     if (result.kind !== "ok") {
-      const provision = provisionOfFailedMint(result);
+      const provision = provisionOfFailedMint(result, deps.hostId);
       return provision.kind === "unavailable"
         ? { ...provision, retryCause: TEAM_MEMBERSHIP_UNAVAILABLE }
         : provision;
