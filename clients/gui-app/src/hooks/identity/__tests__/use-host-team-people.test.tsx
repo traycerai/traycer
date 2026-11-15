@@ -19,7 +19,6 @@ import {
   FORMER_USER_ID,
   MEMBER_USER_ID,
   TEAM_ENVIRONMENT_ID,
-  TEAM_HOST_ID,
   TEAM_ID,
   TEAM_ONLY_USER_ID,
   VIEWER_USER_ID,
@@ -200,16 +199,14 @@ describe("team host member identity in a rendered comment", () => {
   });
 
   it("does not ask while the viewer has no cloud verdict", async () => {
-    useAuthStore
-      .getState()
-      .setUnverifiedSession(
-        {
-          userId: VIEWER_USER_ID,
-          userName: "Viewer",
-          email: "viewer@example.test",
-        },
-        { userId: VIEWER_USER_ID, username: "Viewer" },
-      );
+    useAuthStore.getState().setUnverifiedSession(
+      {
+        userId: VIEWER_USER_ID,
+        userName: "Viewer",
+        email: "viewer@example.test",
+      },
+      { userId: VIEWER_USER_ID, username: "Viewer" },
+    );
 
     render(wrapHarness(<IdentityProbe userId={MEMBER_USER_ID} />));
 
@@ -254,7 +251,7 @@ describe("former members on a team host", () => {
     const view = render(wrapHarness(<IdentityProbe userId={FORMER_USER_ID} />));
 
     expect(await screen.findByText(`unknown:${FORMER_USER_ID}`)).toBeTruthy();
-    expect(harness.personReads).toHaveLength(1);
+    await waitFor(() => expect(harness.personReads).toHaveLength(1));
     view.rerender(wrapHarness(<IdentityProbe userId={FORMER_USER_ID} />));
     await act(async () => Promise.resolve());
     expect(harness.personReads).toHaveLength(1);

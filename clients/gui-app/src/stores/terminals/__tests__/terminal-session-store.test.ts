@@ -28,10 +28,7 @@ type TerminalExitFrame = Extract<
   TerminalSubscribeServerFrame,
   { readonly kind: "exit" }
 >;
-type TerminalViewersFrame = Extract<
-  TerminalSubscribeServerFrame,
-  { readonly kind: "viewers" }
->;
+type TerminalViewersFrame = Parameters<TerminalStreamCallbacks["onViewers"]>[0];
 
 function terminalInfoWithSize(cols: number, rows: number): TerminalSessionInfo {
   return {
