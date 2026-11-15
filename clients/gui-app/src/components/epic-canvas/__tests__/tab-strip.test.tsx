@@ -54,6 +54,7 @@ import {
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { markRenameInFlight } from "@/stores/epics/open-epic/rename-in-flight";
@@ -574,6 +575,7 @@ describe("<TabStrip />", () => {
   });
 
   it("shows a terminal viewer in the landing panel's terminal tab", async () => {
+    stubImmediateImage();
     const viewerId = "landing-viewer";
     const landingTab: LandingTerminalTabRef = {
       kind: "terminal",

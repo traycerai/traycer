@@ -1,21 +1,18 @@
 import { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { vi } from "vitest";
-import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
-import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  RemoteHostDirectoryEntry,
+  RemoteHostFetchOutcome,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry } from "@/lib/host";
-import { HostDirectoryService } from "@/lib/host/host-directory-service";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { HostRuntimeContext } from "@/lib/host/runtime";
-import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
-import { AuthService } from "@/lib/auth/auth-service";
+import { HostRuntimeProvider } from "@/lib/host/runtime";
 import { HostTeamPeopleProvider } from "@/hooks/identity/use-host-team-people";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
@@ -24,8 +21,8 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   createPersonAvatarHarness,
   type PersonAvatarHarness,
@@ -63,8 +60,6 @@ export interface TeamPeopleHarnessOptions {
 }
 
 export interface TeamPeopleHarness {
-  readonly auth: AuthService;
-  readonly directory: HostDirectoryService;
   readonly memberRequests: Array<{
     environmentId: string;
     cursor: string | null;
@@ -73,8 +68,6 @@ export interface TeamPeopleHarness {
   readonly personReads: string[];
   readonly people: PersonAvatarHarness;
   readonly queryClient: QueryClient;
-  readonly runnerHost: MockRunnerHost;
-  readonly runtime: HostRuntime<HostRpcRegistry>;
   readonly setPersonAnswer: (answer: unknown, status: number) => void;
   readonly wrap: (children: ReactNode, outer: BotMemberResolver) => ReactNode;
   readonly dispose: () => void;
@@ -92,7 +85,6 @@ export async function createTeamPeopleHarness(
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
-  const auth = new AuthService({ runnerHost });
   let personAnswer: unknown = {
     userId: FORMER_USER_ID,
     name: "Former Member",
@@ -133,7 +125,6 @@ export async function createTeamPeopleHarness(
     { token: "test-cloud-bearer", refreshToken: "test-refresh-token" },
     { id: VIEWER_USER_ID, email: "viewer@example.test", name: "Viewer" },
   );
-  await auth.start();
 
   const people = createPersonAvatarHarness();
   const queryClient = people.queryClient;
@@ -147,84 +138,24 @@ export async function createTeamPeopleHarness(
     ...remoteEntry(TEAM_HOST_ID, null),
     owner,
   };
-  const directory = new HostDirectoryService({
-    runnerHost,
-    remoteFetcher: () =>
-      Promise.resolve({ kind: "hosts", entries: [remoteHost] }),
-    onRegistryPollTick: null,
-    authContextId: () => VIEWER_USER_ID,
-    credentialGeneration: () => 1,
-    localHostIdSeeder: () => Promise.resolve(null),
-  });
-  await directory.start();
   let requestSeq = 0;
-  const runtime = new HostRuntime<HostRpcRegistry>({
-    runnerHost,
-    registry: hostRpcRegistry,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => `identity-test-${++requestSeq}`,
-      handlers: {
-        "environment.list": () => {
-          environmentListRequests += 1;
-          return options.environmentList?.() ?? environmentListWithTeam();
-        },
-        "environment.members": (request) => {
-          memberRequests.push(request);
-          return (
-            options.members?.(request.environmentId, request.cursor) ?? {
-              members: [TEAM_MEMBER],
-              nextCursor: null,
-              legacyRoleNoticeSeenAt: null,
-              legacyMembers: [],
-            }
-          );
-        },
-      },
-    }),
-    requestContextProvider: new DefaultRequestContextProvider({
-      origin: "renderer",
-    }),
-    directory,
-    invalidator: createHostQueryInvalidator(queryClient),
-    schedulingPolicy: hostRpcSchedulingPolicy,
-    authorityRegistry: null,
-    requestCoordinator: null,
-    selectedHostId: () => TEAM_HOST_ID,
-    connectionRegistry: {
-      directory: {
-        findById: (hostId) => directory.findById(hostId),
-        onDirectoryChanged: (listener) => directory.onChange(listener),
-      },
-      leases: null,
-    },
-  });
-  runtime.start();
+  runnerHost.selectionPreferredStore.save(VIEWER_USER_ID, TEAM_HOST_ID);
+  runnerHost.selectionIdentity.set(VIEWER_USER_ID);
+  runnerHost.setHosts([remoteHost]);
   recordNegotiatedHostMethods(
     TEAM_HOST_ID,
     options.methods ?? ["environment.list", "environment.members"],
   );
-  useAuthStore
-    .getState()
-    .setSignedIn(
-      {
-        userId: VIEWER_USER_ID,
-        userName: "Viewer",
-        email: "viewer@example.test",
-      },
-      { userId: VIEWER_USER_ID, username: "Viewer" },
-      [],
-    );
-  const binding: HostRuntimeBinding<HostRpcRegistry> = {
-    runtime,
-    hostClient: runtime.hostClient,
-    directory,
-    auth,
-    hostId: TEAM_HOST_ID,
-  };
+  useAuthStore.getState().setSignedIn(
+    {
+      userId: VIEWER_USER_ID,
+      userName: "Viewer",
+      email: "viewer@example.test",
+    },
+    { userId: VIEWER_USER_ID, username: "Viewer" },
+    [],
+  );
   return {
-    auth,
-    directory,
     memberRequests,
     get environmentListRequests() {
       return environmentListRequests;
@@ -232,31 +163,66 @@ export async function createTeamPeopleHarness(
     personReads,
     people,
     queryClient,
-    runnerHost,
-    runtime,
     setPersonAnswer: (answer, status) => {
       personAnswer = answer;
       personStatus = status;
     },
     wrap: (children, outer) => (
       <RunnerHostProvider runnerHost={runnerHost}>
-        <HostRuntimeContext.Provider value={binding}>
-          {people.wrap(
+        {people.wrap(
+          <HostRuntimeProvider
+            registry={hostRpcRegistry}
+            messengerFactory={({ registry }) =>
+              new MockHostMessenger<HostRpcRegistry>({
+                registry,
+                requestId: () => `identity-test-${++requestSeq}`,
+                handlers: {
+                  "environment.list": () => {
+                    environmentListRequests += 1;
+                    return (
+                      options.environmentList?.() ?? environmentListWithTeam()
+                    );
+                  },
+                  "environment.members": (request) => {
+                    memberRequests.push(request);
+                    return (
+                      options.members?.(
+                        request.environmentId,
+                        request.cursor,
+                      ) ?? {
+                        members: [TEAM_MEMBER],
+                        nextCursor: null,
+                        legacyRoleNoticeSeenAt: null,
+                        legacyMembers: [],
+                      }
+                    );
+                  },
+                },
+              })
+            }
+            invalidator={null}
+            requestId={null}
+            remoteFetcher={() =>
+              Promise.resolve<RemoteHostFetchOutcome>({
+                kind: "hosts",
+                entries: [remoteHost],
+              })
+            }
+            fallback={<div data-testid="team-runtime-fallback" />}
+          >
             <PersonMembersContext.Provider value={outer}>
               <HostTeamPeopleProvider hostId={TEAM_HOST_ID}>
                 {children}
               </HostTeamPeopleProvider>
-            </PersonMembersContext.Provider>,
-          )}
-        </HostRuntimeContext.Provider>
+            </PersonMembersContext.Provider>
+          </HostRuntimeProvider>,
+        )}
       </RunnerHostProvider>
     ),
     dispose: () => {
-      runtime.dispose();
-      directory.dispose();
-      auth.dispose();
       people.dispose();
       resetNegotiatedManifests();
+      useSelectionAuthorityStore.getState().reset();
     },
   };
 }

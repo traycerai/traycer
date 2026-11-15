@@ -33,6 +33,7 @@ import {
   type SurfaceSyncEntry,
 } from "@/stores/sync/surface-sync-store";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (the title it reads).
@@ -55,6 +56,7 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
 // QueryClient, and no tile here is a chat the projection lacks a record for.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({ data: undefined }),
+  useCloudChatViewerId: () => "user-1",
 }));
 
 /**
@@ -419,6 +421,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
     });
 
     it("shows the live viewer in the phone's current-tile bar", () => {
+      stubImmediateImage();
       terminalDirectory.set("phone-viewer", {
         displayName: "Phone Viewer",
         avatarUrl: "https://images.example.test/phone-viewer.png",

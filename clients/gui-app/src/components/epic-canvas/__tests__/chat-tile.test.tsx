@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -2010,6 +2011,7 @@ function deliverBlockEvent(
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    stubImmediateImage();
     installLegendListViewportMetrics();
     installLegendListTestClock();
     window.localStorage.clear();
@@ -2737,7 +2739,9 @@ describe("<ChatTile />", () => {
     const line = await screen.findByTestId(
       `chat-started-by-${CHAT_ARTIFACT.id}`,
     );
-    expect(line.textContent).toBe("Started by Priya");
+    expect(
+      within(line).getByText("Started by Priya", { exact: true }),
+    ).toBeTruthy();
     expect(
       line
         .querySelector('[data-testid="person-avatar"] img')

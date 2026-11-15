@@ -29,6 +29,7 @@ import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/envir
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { HostRuntimeProvider } from "@/lib/host/runtime";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -255,29 +256,43 @@ function notificationRowTree(row: MergedNotificationRow, taskIsOpen: boolean) {
       </NotificationBotsProvider>
     </PersonMembersContext.Provider>
   );
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://example.com",
+    authnBaseUrl: "https://auth.example.com",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
   return (
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
-        <RunnerHostProvider
-          runnerHost={
-            new MockRunnerHost({
-              signInUrl: "https://example.com",
-              authnBaseUrl: "https://auth.example.com",
-              localHost: null,
-              hosts: [],
-              workspaceFolderPickerPaths: undefined,
-              hasLocalHost: undefined,
-              traycerCli: undefined,
-            })
-          }
-        >
-          {taskIsOpen ? (
-            <TestEpicSessionWrapper epicId={STARTER_EPIC_ID}>
-              {content}
-            </TestEpicSessionWrapper>
-          ) : (
-            content
-          )}
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <HostRuntimeProvider
+            registry={hostRpcRegistry}
+            messengerFactory={({ registry }) =>
+              new MockHostMessenger<HostRpcRegistry>({
+                registry,
+                requestId: () => "notification-starter-runtime",
+                handlers: {},
+              })
+            }
+            invalidator={null}
+            requestId={null}
+            remoteFetcher={() =>
+              Promise.resolve({ kind: "hosts", entries: [] })
+            }
+            fallback={<div data-testid="notification-runtime-fallback" />}
+          >
+            {taskIsOpen ? (
+              <TestEpicSessionWrapper epicId={STARTER_EPIC_ID}>
+                {content}
+              </TestEpicSessionWrapper>
+            ) : (
+              content
+            )}
+          </HostRuntimeProvider>
         </RunnerHostProvider>
       </QueryClientProvider>
     </TestRouterProvider>
