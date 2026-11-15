@@ -20,7 +20,6 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import {
   SettingsDetailHeader,
   SettingsMasterDetail,
@@ -634,9 +633,6 @@ function ProvidersSettingsPanelInner({
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
         />
-        {/* The Link dialog: mounted once, inside the scoped
-            host, so its calls go to the host this page shows. */}
-        <ProviderLinkDialog />
       </HostScopeGate>
     </SettingsPanelShell>
   );
