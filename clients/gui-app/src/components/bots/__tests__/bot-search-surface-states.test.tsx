@@ -16,6 +16,7 @@ import {
   lastAsked,
   settle,
   typeIntoPanel,
+  searchAllBots,
   pickFilter,
   thread,
   THREAD_HIT,
@@ -36,16 +37,13 @@ import {
 
 installSearchSurfaceLifecycle();
 
-/** Both ways in to a search: the column's box asks the tab's host about every bot, the header's button asks the one bot's own host. */
+/** Both ways in to a search: widened to every bot, which asks the tab's host, and left on the one bot, which asks its own host. */
 const SEARCH_ROUTES = [
   [
     "every bot, of the tab's host",
     TAB_HOST,
     async (): Promise<void> => {
-      fireEvent.change(screen.getByTestId("bot-column-search"), {
-        target: { value: "ship" },
-      });
-      await settle();
+      await searchAllBots("ship");
     },
   ],
   [
@@ -61,7 +59,7 @@ const SEARCH_ROUTES = [
 ] as const;
 
 describe("the filters", () => {
-  /** Filters, one at a time from the column box's All bots, each in the request. */
+  /** Filters, one at a time from All bots, each in the request. */
   it.each([
     [
       "In",
@@ -101,10 +99,7 @@ describe("the filters", () => {
     "%s set to %s changes the request (%#)",
     async (_name, trigger, option, expected) => {
       render(<Surface />);
-      fireEvent.change(screen.getByTestId("bot-column-search"), {
-        target: { value: "ship" },
-      });
-      await settle();
+      await searchAllBots("ship");
       const before = mocks.asked.length;
 
       pickFilter(trigger, option);
@@ -117,10 +112,7 @@ describe("the filters", () => {
 
   it("sends the other order when the sort toggle is pressed", async () => {
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "ship" },
-    });
-    await settle();
+    await searchAllBots("ship");
     expect(lastAsked().request.sort).toBe("relevance");
 
     fireEvent.click(screen.getByTestId("bot-search-sort"));
@@ -132,10 +124,7 @@ describe("the filters", () => {
 
   it("asks the bot's own host when the In filter narrows to a bot this client can dial, and the tab's host for all", async () => {
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "ship" },
-    });
-    await settle();
+    await searchAllBots("ship");
     expect(lastAsked().hostId).toBe(TAB_HOST);
 
     pickFilter("bot-search-filter-in", "Notes Bot");
@@ -169,10 +158,7 @@ describe("paging the results", () => {
       });
     };
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "ship" },
-    });
-    await settle();
+    await searchAllBots("ship");
     expect(mocks.asked.map((entry) => entry.request.cursor)).toEqual([null]);
 
     const list = screen.getByTestId("bot-search-results");
@@ -231,10 +217,7 @@ describe("a search its host no longer holds", () => {
           });
     };
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "ship" },
-    });
-    await settle();
+    await searchAllBots("ship");
 
     fireEvent.scroll(screen.getByTestId("bot-search-results"), {
       target: { scrollTop: 4_500 },
@@ -298,10 +281,7 @@ describe("a search its host no longer holds", () => {
   it("starts again once for a search whose host goes on refusing, then says it could not load more, with no loop", async () => {
     refusePageTwo();
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "ship" },
-    });
-    await settle();
+    await searchAllBots("ship");
 
     // The list is too short to scroll, so every render asks for more.
     expect(cursorsAsked()).toEqual([null, "page-2", null, "page-2"]);
@@ -352,10 +332,7 @@ describe("a search its host no longer holds", () => {
     async (_change, change) => {
       refusePageTwo();
       render(<Surface />);
-      fireEvent.change(screen.getByTestId("bot-column-search"), {
-        target: { value: "ship" },
-      });
-      await settle();
+      await searchAllBots("ship");
       expect(cursorsAsked()).toEqual([null, "page-2", null, "page-2"]);
 
       change();
@@ -486,10 +463,7 @@ describe("the count of results", () => {
         }),
       );
       render(<Surface />);
-      fireEvent.change(screen.getByTestId("bot-column-search"), {
-        target: { value: "release" },
-      });
-      await settle();
+      await searchAllBots("release");
 
       expect(hitRows()).toHaveLength(rows);
       expect(mocks.asked).toHaveLength(1);
@@ -509,10 +483,7 @@ describe("what the list says besides the results", () => {
   it("says no result matched, and offers to clear the filters and to search all bots only where either would widen it", async () => {
     mocks.state.answer = answerWith(searchResponse({ hits: [], total: 0 }));
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "zzz" },
-    });
-    await settle();
+    await searchAllBots("zzz");
     const buttons = (): string[] =>
       within(screen.getByTestId("bot-search-no-results"))
         .queryAllByRole("button")
@@ -555,10 +526,7 @@ describe("what the list says besides the results", () => {
       }),
     );
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "release" },
-    });
-    await settle();
+    await searchAllBots("release");
 
     expect(screen.getByTestId("bot-search-unreachable").textContent).toBe(
       "Ops Bot's host is not reachable",
@@ -586,10 +554,7 @@ describe("a bot under another owner", () => {
             unreachable: [OTHER_OWNER_B],
           });
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "release" },
-    });
-    await settle();
+    await searchAllBots("release");
 
     expect(mocks.asked.map((entry) => entry.hostId)).toEqual([
       TAB_HOST,
@@ -637,10 +602,7 @@ describe("a bot under another owner", () => {
           });
     };
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "release" },
-    });
-    await settle();
+    await searchAllBots("release");
 
     // Page one stops at A's last hit, 70: B's 5 waits for the A hits above it.
     expect(
@@ -681,10 +643,7 @@ describe("a bot under another owner", () => {
             unreachable: [OTHER_OWNER_B],
           });
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "release" },
-    });
-    await settle();
+    await searchAllBots("release");
 
     expect(screen.getByTestId("bot-search-unreachable").textContent).toBe(
       "Notes Bot's host is not reachable",

@@ -14,6 +14,7 @@ import {
   transcriptOf,
   conversationOf,
   settle,
+  searchAllBots,
   installSearchSurfaceLifecycle,
 } from "./bot-search-surface-support";
 import { Surface } from "./bot-search-surface-view";
@@ -37,12 +38,6 @@ function cursorsAsked(): Array<string | null> {
   return mocks.asked.map((entry) => entry.request.cursor);
 }
 
-function typeInColumnBox(text: string): void {
-  fireEvent.change(screen.getByTestId("bot-column-search"), {
-    target: { value: text },
-  });
-}
-
 describe("a page with no hits and a page to come", () => {
   it("is not 'no results': the list asks for the next page and shows its hits, with the note the empty page carried", async () => {
     const second = Promise.withResolvers<BotConversationSearchResponse>();
@@ -55,8 +50,7 @@ describe("a page with no hits and a page to come", () => {
           })
         : second.promise;
     render(<Surface />);
-    typeInColumnBox("ship");
-    await settle();
+    await searchAllBots("ship");
 
     // The next page is held: this is the state a flash of "No results" would show in.
     expect(cursorsAsked()).toEqual([null, "page-2"]);
@@ -92,8 +86,7 @@ describe("a page with no hits and a page to come", () => {
       });
     render(<Surface />);
 
-    typeInColumnBox("ship");
-    await settle();
+    await searchAllBots("ship");
 
     expect(cursorsAsked()).toEqual([null, "page-2", "page-3"]);
     expect(screen.getByTestId("bot-search-no-results")).toBeTruthy();
@@ -112,8 +105,7 @@ describe("a page with no hits and a page to come", () => {
             fatalDetails: null,
           });
     render(<Surface />);
-    typeInColumnBox("ship");
-    await settle();
+    await searchAllBots("ship");
     // Past the retry delays a failed page would be asked again after.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
@@ -149,8 +141,7 @@ describe("the longest query the host takes", () => {
     render(<Surface />);
 
     // `fireEvent.change` sets what the input's own limit would have stopped.
-    typeInColumnBox(`  ${long}  `);
-    await settle();
+    await searchAllBots(`  ${long}  `);
 
     expect(lastAsked().request.query).toBe(
       "q".repeat(BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS),
@@ -159,16 +150,12 @@ describe("the longest query the host takes", () => {
     expect(hitRows()).toHaveLength(1);
   });
 
-  it("is the limit the column's box and the panel's input hold a person to", () => {
+  it("is the limit the panel's input holds a person to", () => {
     render(<Surface />);
     fireEvent.click(
       screen.getByRole("button", { name: "Search in Release Bot" }),
     );
 
-    expect(screen.getByTestId("bot-column-search")).toHaveProperty(
-      "maxLength",
-      BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS,
-    );
     expect(screen.getByTestId("bot-search-input")).toHaveProperty(
       "maxLength",
       BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS,
@@ -188,8 +175,7 @@ describe("a host that answers a page with the cursor it was asked for", () => {
           ? searchResponse({ hits: [...firstHits], nextCursor: "page-2" })
           : searchResponse({ hits: [], nextCursor: request.cursor });
       render(<Surface />);
-      typeInColumnBox("ship");
-      await settle();
+      await searchAllBots("ship");
       // Past the retry delays the failed page is asked again after.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
@@ -230,8 +216,7 @@ describe("the keys of an input method", () => {
     "%s while composing is left to the input method: no jump, no selection, not prevented; the same key after it lands the result",
     async (key) => {
       render(<Surface />);
-      typeInColumnBox("ship");
-      await settle();
+      await searchAllBots("ship");
       const input = screen.getByTestId("bot-search-input");
       const landedOn = (): string | undefined =>
         transcriptOf(conversationOf(SEARCH_BOT_A)).dataset.landOn;

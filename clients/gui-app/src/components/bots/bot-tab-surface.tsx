@@ -980,10 +980,10 @@ function useBotTabRail(
 
 /**
  * How the channel's search opens: the header's button and ⌘F, on this bot,
- * while a host that takes it serves the tab (`null` otherwise). Each opening,
- * the column's box included, shows the channel it opened beside: Messages,
- * in place of a session or Threads. A session has its own find, and Threads
- * no channel, so ⌘F is theirs while they show.
+ * while a host that takes it serves the tab (`null` otherwise). Each opening
+ * shows the channel it opened beside: Messages, in place of a session or
+ * Threads. A session has its own find, and Threads no channel, so ⌘F is
+ * theirs while they show.
  */
 function useChannelSearchEntry(args: {
   readonly botId: string;
