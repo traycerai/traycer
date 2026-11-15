@@ -435,6 +435,34 @@ function renderTabOnAnotherComputer(hasOriginalHost: boolean): void {
   );
 }
 
+/**
+ * A tab that follows the effective computer, and the move of that computer:
+ * the re-point leaves the first computer as the tab's original host.
+ */
+function renderFollowingTab(): { readonly moveTo: (hostId: string) => void } {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  const tree = () => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
+          <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+        </TestEpicSessionTab>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+  const view = render(tree());
+  return {
+    moveTo: (hostId) => {
+      seams.effectiveHostId = hostId;
+      act(() => {
+        view.rerender(tree());
+      });
+    },
+  };
+}
+
 async function waitForTaskShown(): Promise<void> {
   await waitFor(() => {
     expect(screen.getByTestId("tile-canvas-stub")).toBeTruthy();
@@ -525,6 +553,36 @@ describe("a task tab whose computer falls below the minimum host version", () =>
         .map((button) => button.textContent),
     ).toEqual(["Update now"]);
     expect(within(card).queryByText(/Retry/)).toBeNull();
+  });
+
+  it("keeps Open on original host for a tab re-pointed away, and it goes back there", async () => {
+    installStreams();
+    publishTabRow("2.0.0");
+    seams.effectiveHostId = WINDOW_HOST_ID;
+    const view = renderFollowingTab();
+    await waitForTaskShown();
+    view.moveTo(TAB_HOST_ID);
+    await waitFor(() => {
+      expect(seams.openAttempts).toContain(TAB_HOST_ID);
+    });
+    await waitForTaskShown();
+
+    publishTabRow("1.5.4");
+
+    const card = await screen.findByTestId("epic-repoint-failure");
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Update now", "Open on original host"]);
+
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Open on original host" }),
+    );
+
+    await waitForTaskShown();
+    expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
+    expect(seams.openAttempts.at(-1)).toBe(WINDOW_HOST_ID);
   });
 
   it("starts no further rebuild while the row stays below the floor, past fifteen minutes", async () => {
