@@ -871,6 +871,7 @@ function installReturnedLandingDraft(
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
     returnedSandbox: destination,
+    namedHostId: null,
     durability: "saved",
   });
 }

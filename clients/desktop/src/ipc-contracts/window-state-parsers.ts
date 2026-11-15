@@ -137,6 +137,9 @@ export function parseLandingDraft(
     ...(obj.accountFollowsDefault === true
       ? { accountFollowsDefault: true }
       : {}),
+    ...(typeof obj.namedHostId === "string" && obj.namedHostId.length > 0
+      ? { namedHostId: obj.namedHostId }
+      : {}),
   };
 }
 

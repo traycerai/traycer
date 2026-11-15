@@ -4,7 +4,6 @@ import {
   ChevronUp,
   Copy,
   ImagePlus,
-  Inbox,
   MoreHorizontal,
   Pencil,
   SendHorizontal,
@@ -98,7 +97,7 @@ import { BrowserReferenceChips } from "./browser-reference-chips";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { AgentHeaderLink } from "./segments/agent-header-link";
+import { A2APeerPicture, AgentHeaderLink } from "./segments/agent-header-link";
 import { AgentMessageBody } from "./segments/agent-message-body";
 import {
   ReplyExpectedIcon,
@@ -283,10 +282,8 @@ function AgentMessageDisplayView({
     agentMessage?.senderTitle ??
     agentSenderInfo.senderTitle ??
     `${agentSenderInfo.agentId.slice(0, 8)}…`;
-  const senderChipName = useStandaloneBotName(
-    sender?.bot?.botId ?? null,
-    senderName,
-  );
+  const senderBotId = sender?.bot?.botId ?? null;
+  const senderChipName = useStandaloneBotName(senderBotId, senderName);
   const expectReply =
     agentMessage?.reply.expectsReply ?? agentSenderInfo.expectReply;
 
@@ -310,8 +307,9 @@ function AgentMessageDisplayView({
 
   // Same shape as the sent card's header (`A2ASendToolSegment`): the sender
   // name is the only element allowed to shrink, so the direction words are
-  // for assistive tech only and reply-expected is an icon. The icon plus
-  // "from" carry the meaning for sighted users.
+  // for assistive tech only and reply-expected is an icon. "from" carries
+  // the direction for sighted users, and the picture after it says whether
+  // the sender is a bot or an agent.
   //
   // The arrival stamp trails the row, past the `flex-1` name cell, so it lands
   // at the header's right edge. Agent-to-agent traffic is where a timeline is
@@ -319,10 +317,10 @@ function AgentMessageDisplayView({
   // is the one place the stamp is load-bearing rather than a convenience.
   const header = (
     <>
-      <Inbox className="size-3.5 shrink-0 text-primary" aria-hidden />
       <span className="sr-only">Received message</span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
         <span className="shrink-0 text-muted-foreground">from</span>
+        <A2APeerPicture botId={senderBotId} glyphClassName="text-primary" />
         <AgentHeaderLink
           name={senderChipName}
           onOpen={sender !== null ? openSenderTab : null}

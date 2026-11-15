@@ -91,6 +91,7 @@ import {
 import {
   isOpenLandingDraft,
   landingRowIsForeign,
+  useLandingDraftNamedHostId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import {
@@ -148,7 +149,10 @@ import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
 import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-send-handoff";
-import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
+import {
+  landingDraftSurfaceKey,
+  subscribeFollowingSurfaceReset,
+} from "@/stores/host/surface-host-selection-store";
 import {
   ComposerHostNotice,
   type ComposerHostNoticeState,
@@ -226,8 +230,11 @@ export function LandingComposer(props: LandingComposerProps) {
   // The composer's PLACEMENT: its own
   // window-keyed surface pin, or the effective host while it follows. Not the
   // app-wide selection - the picker no longer moves that - so every RPC this
-  // surface makes, and every create it performs, resolves through here.
-  const placement = useComposerPlacement(null);
+  // surface makes, and every create it performs, resolves through here. A
+  // draft opened for one machine names it instead, which fixes the picker and
+  // refuses Send while that machine is offline.
+  const namedHostId = useLandingDraftNamedHostId(props.draftId);
+  const placement = useComposerPlacement(namedHostId);
   // READ target for this surface's queries; SUBMIT target (host-frozen client)
   // for anything that creates - see `useComposerPlacement`.
   const placementTarget = placement.target;
@@ -431,8 +438,14 @@ export function LandingComposer(props: LandingComposerProps) {
       setGlobalRunSettings,
     ],
   );
-  // The window's pin key, which a staged sandbox is staged under.
-  const composerSurfaceKey = useComposerSurfaceHostKey();
+  // The window's pin key, which a staged sandbox is staged under; a draft
+  // opened for one machine stages under its own, so no sandbox picked for the
+  // window's other drafts takes its Send.
+  const composerSurfaceKey = landingDraftSurfaceKey(
+    useComposerSurfaceHostKey(),
+    props.draftId,
+    namedHostId,
+  );
   useLandingReturnedSandbox(composerSurfaceKey, draftId, activityEnabled);
   const settingsSeed = useMemo(
     () =>

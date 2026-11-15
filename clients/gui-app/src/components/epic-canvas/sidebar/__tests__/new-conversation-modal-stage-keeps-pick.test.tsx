@@ -328,7 +328,6 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   });
   return {
     ...actual,
-    useComposerPaste: stubPasteResult,
     useComposerHashPaste: stubPasteResult,
   };
 });

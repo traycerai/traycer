@@ -76,6 +76,7 @@ function landingTab(id: string, index: number): LandingDraftTab {
     closed: true,
     returnedSandbox: null,
     accountFollowsDefault: false,
+    namedHostId: null,
   };
 }
 

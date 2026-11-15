@@ -157,7 +157,8 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     (selector: (value: typeof state) => unknown) => selector(state),
     { getState: () => state, subscribe: () => () => undefined },
   );
-  return { useLandingDraftStore };
+  // No draft in this suite was opened for a host.
+  return { useLandingDraftStore, useLandingDraftNamedHostId: () => null };
 });
 
 vi.mock("@/stores/composer/composer-run-settings-store", () => {

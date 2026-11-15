@@ -91,6 +91,7 @@ function landingTab(
     closed: true,
     returnedSandbox: null,
     accountFollowsDefault: false,
+    namedHostId: null,
     ...overrides,
   };
 }

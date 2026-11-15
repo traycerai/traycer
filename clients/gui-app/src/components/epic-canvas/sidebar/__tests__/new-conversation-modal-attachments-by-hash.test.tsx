@@ -605,11 +605,11 @@ vi.mock("@/providers/use-runner-host", () => ({
     },
   }),
 }));
-// The paste seam, mocked so this suite's cases never run a real ingest. Both
-// hooks are stubbed because the modal calls `useComposerHashPaste`, not
-// `useComposerPaste` - and `runPendingImageJob` is on the RESULT here, not on a
-// separate ingest hook: `useComposerPendingImageIngest` is fed from it, so a
-// stub missing that member leaves the modal wiring an undefined runner.
+// The paste seam, mocked so this suite's cases never run a real ingest. The
+// modal's paste hook is `useComposerHashPaste`, and `runPendingImageJob` is on
+// the RESULT here, not on a separate ingest hook:
+// `useComposerPendingImageIngest` is fed from it, so a stub missing that member
+// leaves the modal wiring an undefined runner.
 vi.mock("@/hooks/composer/use-composer-paste", async () => {
   const actual = await vi.importActual<
     typeof import("@/hooks/composer/use-composer-paste")
@@ -629,7 +629,6 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   });
   return {
     ...actual,
-    useComposerPaste: stubPasteResult,
     useComposerHashPaste: stubPasteResult,
   };
 });

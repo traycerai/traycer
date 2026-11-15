@@ -252,6 +252,8 @@ vi.mock("@/stores/home/landing-draft-store", () => {
   );
   return {
     useLandingDraftStore,
+    // No draft in this suite was opened for a host.
+    useLandingDraftNamedHostId: () => null,
   };
 });
 
