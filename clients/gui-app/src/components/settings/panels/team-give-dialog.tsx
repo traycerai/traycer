@@ -9,6 +9,7 @@ import {
 } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { needsUpdateSubtitle } from "@/components/settings/environment/environment-picker-model";
 import { giveNotFinishedLine } from "@/components/settings/panels/team-give-copy";
+import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,12 +43,18 @@ import { authQueryKeys } from "@/lib/query-keys";
  * held only when it was read after the start answered; one read before could
  * still name the previous attempt.
  *
+ * Beside the disclosure and outside its hashed text, the computer's own count
+ * of the chats running on it under its current owner (`ClaimRunningWork`,
+ * shared with the claim confirm), asked each time the dialog opens.
+ *
  * Mounted while a team is chosen, keyed by it, so every give starts afresh.
  */
 export function TeamGiveDialog(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
+  /** The environment the computer is in now, whose running chats the give stops. */
+  readonly currentEnvironmentId: string | null;
   readonly team: EnvironmentDescriptorV11;
   readonly onClose: () => void;
   readonly onGiven: (team: EnvironmentDescriptorV11) => void;
@@ -145,6 +152,10 @@ export function TeamGiveDialog(props: {
             <li key={line}>{line}</li>
           ))}
         </ul>
+        <ClaimRunningWork
+          hostId={props.hostId}
+          environmentId={props.currentEnvironmentId}
+        />
         <GiveLines
           hostName={props.hostName}
           teamLabel={team.label}

@@ -180,6 +180,9 @@ export function HostOverviewSettingsCard(props: {
               hostId={props.hostId}
               hostName={props.hostName}
               owner={props.owner}
+              currentEnvironmentId={
+                props.binding?.environment.environmentId ?? null
+              }
               onTransferred={setOwnershipReceipt}
               value={model.value}
               options={model.options}
@@ -377,6 +380,7 @@ function EnvironmentSourceControl(
     readonly hostId: string;
     readonly hostName: string;
     readonly owner: HostOwnerPrincipal | null;
+    readonly currentEnvironmentId: string | null;
     readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
@@ -403,6 +407,7 @@ function TeamEnvironmentSourceControl(
     readonly client: HostClient<HostRpcRegistry>;
     readonly hostId: string;
     readonly hostName: string;
+    readonly currentEnvironmentId: string | null;
     readonly onTransferred: (receipt: string) => void;
   },
 ): ReactNode {
@@ -434,6 +439,7 @@ function TeamEnvironmentSourceControl(
           client={props.client}
           hostId={props.hostId}
           hostName={props.hostName}
+          currentEnvironmentId={props.currentEnvironmentId}
           team={selected}
           onClose={() => setSelected(null)}
           onGiven={(team) => {
