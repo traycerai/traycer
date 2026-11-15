@@ -28,6 +28,7 @@ import type {
   HostReadinessController,
 } from "@/components/layout/host-readiness-controller-context";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useWindowNarration } from "@/hooks/host/use-window-narration";
 import {
   noteHostDoorState,
   useHostDoorStateStore,
@@ -382,6 +383,12 @@ const READY_CONTROLLER: HostReadinessController = {
   hasBeenDefaultHostReady: true,
 };
 
+let lastNarration: unknown = null;
+function NarrationProbe(): null {
+  lastNarration = useWindowNarration();
+  return null;
+}
+
 /** The tab on the window's own computer, with the window's cover mounted. */
 function renderTabOnTheWindowsComputer(): void {
   seams.effectiveHostId = TAB_HOST_ID;
@@ -407,6 +414,7 @@ function renderTabOnTheWindowsComputer(): void {
             <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
           </TestEpicSessionTab>
           <WindowHostModalHost bypassed={false} />
+          <NarrationProbe />
         </HostReadinessControllerContext.Provider>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -509,13 +517,11 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
   });
 
-  it("shows Update now alone when the tab has no original host", async () => {
+  it("shows Update now alone when the tab never had a session to go back to", async () => {
     installStreams();
-    publishTabRow("2.0.0");
-    renderTabOnAnotherComputer(false);
-    await waitForTaskShown();
-
     publishTabRow("1.5.4");
+
+    renderTabOnAnotherComputer(false);
 
     const card = await screen.findByTestId("epic-repoint-failure");
     expect(within(card).getByText("Host update needed")).toBeTruthy();
@@ -524,6 +530,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
         .getAllByRole("button")
         .map((button) => button.textContent),
     ).toEqual(["Update now"]);
+    expect(within(card).queryByText(/Retry/)).toBeNull();
   });
 
   it("starts no further rebuild while the row stays below the floor, past fifteen minutes", async () => {
@@ -636,6 +643,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
             effective: selection.effectiveHostId,
             target: selection.targetHostId,
             leases: selection.leases,
+            narration: lastNarration,
             testIds: [...document.querySelectorAll("[data-testid]")].map(
               (element) => element.getAttribute("data-testid"),
             ),
