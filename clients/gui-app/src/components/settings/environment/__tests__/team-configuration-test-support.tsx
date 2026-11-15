@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { createHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   mockLocalHostEntry,
@@ -22,6 +23,7 @@ import type {
   EnvironmentTransportAnswer,
   EnvironmentTransportRequest,
 } from "@traycer-clients/shared/environment/environment-cloud";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
@@ -33,10 +35,13 @@ import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contr
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
-  createFakeEnvironmentCloudAuth,
+  createFakeEnvironmentCloudServices,
   createFakeEnvironmentCloudTransport,
   jsonEnvironmentAnswer,
 } from "../../../../../__tests__/create-fake-runner-host";
@@ -48,7 +53,10 @@ import {
  */
 export const teamHostBoundary: {
   client: HostClient<HostRpcRegistry> | null;
-} = { client: null };
+  auth: AuthService | null;
+  runtime: HostRuntime<HostRpcRegistry> | null;
+  directory: HostDirectoryService | null;
+} = { client: null, auth: null, runtime: null, directory: null };
 
 /**
  * The client of a second host (`mockRemoteHostEntry`) over the same messenger:
@@ -82,6 +90,13 @@ export function requireTeamHostClient(): HostClient<HostRpcRegistry> {
     throw new Error("no team host client mounted");
   }
   return teamHostBoundary.client;
+}
+
+export function requireTeamCloudAuth(): AuthService {
+  if (teamHostBoundary.auth === null) {
+    throw new Error("no team cloud auth mounted");
+  }
+  return teamHostBoundary.auth;
 }
 
 /**
@@ -132,6 +147,7 @@ export interface TeamPageHarness {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+  readonly auth: AuthService;
   /** The params of every request the host received for `method`, in order. */
   readonly paramsOf: (method: string) => unknown[];
 }
@@ -200,7 +216,9 @@ async function answerEnvironmentReadFromHandlers(
       return response === undefined ? null : jsonEnvironmentAnswer(response);
     }
     case "secrets": {
-      const response = await handlers["environment.secrets.list"]?.({});
+      const response = await handlers["environment.secrets.list"]?.({
+        environmentId,
+      });
       if (response === undefined) return null;
       return jsonEnvironmentAnswer({
         secrets: response.secrets.map((secret) => ({
@@ -371,7 +389,7 @@ function buildTeamPage(
         ]
       : [];
   let currentRows: EnvironmentDescriptorV11[] = [...fallbackRows];
-  const auth = createFakeEnvironmentCloudAuth({
+  const { auth, runnerHost } = createFakeEnvironmentCloudServices({
     listEnvironments: async () => {
       const response = await handlers["environment.list"]?.({});
       if (response !== undefined) currentRows = [...response.environments];
@@ -382,11 +400,8 @@ function buildTeamPage(
       onRequest: (request) =>
         answerEnvironmentReadFromHandlers(request, handlers),
     }),
+    runnerHostOverrides: {},
   });
-  const authBinding = Object.create(
-    null,
-  ) as HostRuntimeBinding<HostRpcRegistry>;
-  Object.defineProperty(authBinding, "auth", { value: auth });
   let requestCounter = 0;
   const messengerOptions = {
     registry: hostRpcRegistry,
@@ -400,28 +415,35 @@ function buildTeamPage(
     negotiated === null
       ? new MockHostMessenger<HostRpcRegistry>(messengerOptions)
       : new FloorEnforcingMessenger(messengerOptions, negotiated);
-  const spine = new HostClient<HostRpcRegistry>({
+  const directory = new TeamPageHostDirectory(runnerHost, withPool);
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
     registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) => {
-      if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
-      if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
-      return withPool && hostId === poolEntry.hostId ? poolEntry : null;
-    },
     messenger,
-    ...(withPool
-      ? {
-          routing: {
-            plan: createHostRpcTierPlan(poolEntry),
-            selectedHostId: () => null,
-          },
-        }
-      : {}),
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    connectionRegistry: null,
+    selectedHostId: () => null,
   });
+  const spine = runtime.hostClient;
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   teamHostBoundary.client = spine.createRequester(mockLocalHostEntry);
+  teamHostBoundary.auth = auth;
+  teamHostBoundary.runtime = runtime;
+  teamHostBoundary.directory = directory;
+  const authBinding: HostRuntimeBinding<HostRpcRegistry> = {
+    runtime,
+    hostClient: spine,
+    directory,
+    auth,
+    hostId: null,
+  };
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
   useAuthStore.setState({
     status: "signed-in",
@@ -439,6 +461,7 @@ function buildTeamPage(
   return {
     messenger,
     queryClient,
+    auth,
     paramsOf: (method) =>
       messenger.calls
         .filter((call) => call.method === method)
@@ -456,8 +479,41 @@ function buildTeamPage(
 }
 
 export function resetTeamPageHarness(): void {
+  teamHostBoundary.runtime?.dispose();
+  teamHostBoundary.directory?.dispose();
+  teamHostBoundary.auth?.dispose();
   teamHostBoundary.client = null;
+  teamHostBoundary.auth = null;
+  teamHostBoundary.runtime = null;
+  teamHostBoundary.directory = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
   useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
+}
+
+class TeamPageHostDirectory extends HostDirectoryService {
+  constructor(runnerHost: IRunnerHost, withPool: boolean) {
+    super({
+      runnerHost,
+      remoteFetcher: null,
+      onRegistryPollTick: null,
+      authContextId: null,
+      credentialGeneration: null,
+      localHostIdSeeder: null,
+    });
+    this.withPool = withPool;
+  }
+
+  private readonly withPool: boolean;
+
+  override list(): Promise<readonly HostDirectoryEntry[]> {
+    return Promise.resolve([mockLocalHostEntry, mockRemoteHostEntry]);
+  }
+
+  override findById(hostId: string): HostDirectoryEntry | null {
+    if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+    if (hostId === mockRemoteHostEntry.hostId) return mockRemoteHostEntry;
+    if (this.withPool && hostId === poolEntry.hostId) return poolEntry;
+    return null;
+  }
 }
