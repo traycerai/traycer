@@ -7,15 +7,28 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
  * `environment_not_found` or 403 `environment_action_forbidden`)
  * `E_ENVIRONMENT_NOT_A_MEMBER`.
  * A malformed request (`E_INVALID_ARGUMENT`) and a 403 without authn's code
- * (`E_ROLE_FORBIDDEN`) are none of these.
+ * (`E_ROLE_FORBIDDEN`) are none of these. Typed as the error's own code, so a
+ * code no error can carry fails the compile here.
  */
-const AUTHORITY_REFUSALS = new Set([
+const RPC_AUTHORITY_REFUSALS: ReadonlySet<HostRpcError["code"]> = new Set<
+  HostRpcError["code"]
+>([
   "UNAUTHORIZED",
   "FORBIDDEN",
-  "NOT_FOUND",
-  "TEAM_MEMBERSHIP_REQUIRED",
   "E_ENVIRONMENT_NOT_A_MEMBER",
   "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
+]);
+
+/**
+ * Those, and the session-fatal codes a refusal's fatal details carry that are
+ * no RPC error code. Typed as that field's own code.
+ */
+const AUTHORITY_REFUSALS: ReadonlySet<
+  NonNullable<HostRpcError["fatalDetails"]>["code"]
+> = new Set([
+  ...RPC_AUTHORITY_REFUSALS,
+  "NOT_FOUND",
+  "TEAM_MEMBERSHIP_REQUIRED",
 ]);
 
 /** Keep the last answer through outages, but never through lost authority. */
