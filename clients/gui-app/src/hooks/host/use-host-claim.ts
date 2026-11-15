@@ -129,8 +129,10 @@ function untilNoReadInFlight(
  * has answered, `false` if the state ended first; a throw otherwise. A read
  * already in flight when the state asks may predate its claim, so the state
  * waits for it and reads after it, never cancelling it. A read begun once the
- * state has asked counts for every state on it. A read another reader
- * replaced (a refetch of the entry) is followed to its replacement.
+ * state has asked counts for every state on it, and only its answer does:
+ * a cancelled read that hands back the entry's earlier data is not one. A read
+ * another reader replaced (a refetch of the entry) is followed to its
+ * replacement.
  */
 /** Whose read of a team's entry this is: a state, for one account. */
 interface TeamReadTarget {
@@ -160,8 +162,12 @@ async function readTeamForState(
     if (!isLive()) return false;
     joinRead(query, reads);
     try {
+      const answersBefore = query.state.dataUpdateCount;
       await queryClient.fetchQuery({ ...options, staleTime: 0 });
-      return isLive();
+      // A cancel that reverts hands back the data held before, and the count
+      // with it: only an answer that landed during this read counts.
+      if (query.state.dataUpdateCount > answersBefore) return isLive();
+      if (queryClient.isFetching(exact) === 0) throw new CancelledError();
     } catch (error) {
       // Cancelled with a replacement in flight: that read began after this
       // state asked, so it is followed.

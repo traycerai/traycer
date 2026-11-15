@@ -2,6 +2,7 @@ import {
   claimedComputerDetail,
   claimedComputerTitle,
 } from "@/hooks/teams/claimed-computer-notice-model";
+import { DOOR_STATE_TITLES } from "@/lib/host/door-state-titles";
 import type { DoorStateCoverVariant } from "@/lib/host/window-narration";
 
 export interface DoorCoverCopy {
@@ -17,7 +18,7 @@ const DOOR_COVER_COPY: Readonly<
   Record<Exclude<DoorStateCoverVariant["kind"], "host-claimed">, DoorCoverCopy>
 > = {
   "token-unavailable": {
-    title: "We can't confirm access to this computer right now",
+    title: DOOR_STATE_TITLES["token-unavailable"],
     description: "We'll try again. Your draft is saved.",
   },
   "keys-unavailable": {
@@ -29,7 +30,7 @@ const DOOR_COVER_COPY: Readonly<
     description: "Enable automatic date and time on that computer, then retry.",
   },
   "token-expired": {
-    title: "Access needs to be renewed before you can reconnect",
+    title: DOOR_STATE_TITLES["token-expired"],
     description:
       "Connect to the internet and retry. Work already started remains on this computer.",
   },

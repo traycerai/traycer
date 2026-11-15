@@ -32,6 +32,14 @@ const USER_ID = "user-relay-open";
 const SIGN_IN_TOKEN = "sign-in-relay-open";
 const WAIT = { timeout: 10_000, interval: 50 } as const;
 const RELAY_URL = "wss://relay.test/attach";
+const TEAM_MEMBERSHIP_FATAL: FatalErrorDetails = {
+  code: "TEAM_MEMBERSHIP_REQUIRED",
+  reason:
+    "This account cannot access this computer. Switch accounts to use it.",
+  retryable: false,
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
 
 interface RelayHostCase {
   readonly name: string;
@@ -427,6 +435,89 @@ describe("remote RPC relay OPEN host-token frame", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     retireAllRemoteSessions();
+  });
+
+  it("ends an attach-grant 403 team_membership_required as not-a-member", async () => {
+    const test = signInRelayHarness(
+      () =>
+        new Response(JSON.stringify({ code: "team_membership_required" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        }),
+      false,
+    );
+
+    try {
+      test.transport.session.start();
+      await vi.waitFor(
+        () =>
+          expect(test.transport.session.terminalFatal()).toEqual(
+            TEAM_MEMBERSHIP_FATAL,
+          ),
+        WAIT,
+      );
+
+      expect(test.states).toEqual([
+        { hostId: test.entry.hostId, kind: "not-a-member" },
+      ]);
+      expect(test.sentSignIns).toEqual([`Bearer ${SIGN_IN_TOKEN}`]);
+      expect(test.peer.openCount).toBe(0);
+      expect(test.transport.session.isClosed()).toBe(true);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
+  });
+
+  it("keeps a bare attach-grant 404 as the existing not-admitted refusal", async () => {
+    const test = signInRelayHarness(
+      () => new Response("", { status: 404 }),
+      false,
+    );
+
+    try {
+      test.transport.session.start();
+      await vi.waitFor(
+        () =>
+          expect(test.transport.session.terminalFatal()).toEqual(
+            TEAM_MEMBERSHIP_FATAL,
+          ),
+        WAIT,
+      );
+
+      expect(test.states).toEqual([
+        { hostId: test.entry.hostId, kind: "not-admitted" },
+      ]);
+      expect(test.sentSignIns).toEqual([`Bearer ${SIGN_IN_TOKEN}`]);
+      expect(test.peer.openCount).toBe(0);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
+  });
+
+  it("keeps an unrelated attach-grant 403 on unavailable backoff", async () => {
+    const test = signInRelayHarness(
+      () =>
+        new Response(JSON.stringify({ code: "remote_access_off" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        }),
+      false,
+    );
+
+    try {
+      test.transport.session.start();
+      await vi.waitFor(() => expect(test.sentSignIns).toHaveLength(2), WAIT);
+
+      expect(test.transport.session.terminalFatal()).toBeNull();
+      expect(test.transport.session.isClosed()).toBe(false);
+      expect(test.states).toEqual([]);
+      expect(test.peer.openCount).toBe(0);
+    } finally {
+      test.transport.session.close();
+      retireAllRemoteSessions();
+    }
   });
 
   it.each(RELAY_HOST_CASES)(
