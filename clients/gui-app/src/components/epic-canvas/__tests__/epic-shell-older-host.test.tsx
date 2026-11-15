@@ -15,6 +15,8 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
@@ -298,27 +300,59 @@ function remoteRow(
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
 const emitRowChanged = vi.hoisted(() => ({ run: () => undefined }));
 
-/** Streams the session's worker opened, and how many it closed. */
-function installStreams(): { readonly opened: () => number } {
+/** The session worker's streams: opened and closed counts, and a snapshot to each. */
+function installStreams(): {
+  readonly opened: () => number;
+  readonly closed: () => number;
+  readonly deliverSnapshot: (index: number) => void;
+} {
   let opened = 0;
+  let closed = 0;
+  const callbacks: EpicStreamCallbacks[] = [];
   previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createInProcessEpicRuntimeWorker({
-      streamClientFactory: () => {
+      streamClientFactory: (_epicId, streamCallbacks) => {
         opened += 1;
+        callbacks.push(streamCallbacks);
         return {
           applyUpdate: () => undefined,
           awareness: () => undefined,
           applyArtifactRoomUpdate: () => undefined,
           artifactRoomAwareness: () => undefined,
           retryMigration: () => undefined,
-          close: () => undefined,
+          close: () => {
+            closed += 1;
+          },
         };
       },
       laneSelection: null,
     }).createWorker(),
   );
-  return { opened: () => opened };
+  return {
+    opened: () => opened,
+    closed: () => closed,
+    deliverSnapshot: (index) => {
+      const stream = callbacks.at(index);
+      if (stream === undefined) throw new Error("expected that stream");
+      const meta: SnapshotMetaEpic = {
+        schemaVersion: "2.0.0",
+        roomId: "room-older-host",
+        epicLight: null,
+        permissionRole: "editor",
+        repos: [],
+        workspaces: [],
+        repoMapping: [],
+        workspaceFolders: [],
+        unresolvedRepos: [],
+        hostStateVectorBase64: "AA==",
+      };
+      act(() => {
+        stream.onConnectionStatus("open", null, false, null);
+        stream.onSnapshot(meta, new Uint8Array([0, 0]));
+      });
+    },
+  };
 }
 
 function publishTabRow(appVersion: string): void {
@@ -415,11 +449,11 @@ function renderTabOnTheWindowsComputer(): void {
   );
 }
 
-function renderTabOnAnotherComputer(hasOriginalHost: boolean): void {
+function renderTabOnAnotherComputer(seededOnTabComputer: boolean): void {
   // The tab's own computer, not the window's: the create-host seed names it,
-  // and the window's computer is then the tab's original host. Without the
-  // seed the tab simply follows the effective computer.
-  if (hasOriginalHost) markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
+  // and its first session is then on that computer. Without the seed the tab
+  // simply follows the effective computer.
+  if (seededOnTabComputer) markEpicCreatedThisSession(EPIC_ID, TAB_HOST_ID);
   else seams.effectiveHostId = TAB_HOST_ID;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -433,6 +467,34 @@ function renderTabOnAnotherComputer(hasOriginalHost: boolean): void {
       </TooltipProvider>
     </QueryClientProvider>,
   );
+}
+
+/**
+ * A tab that follows the effective computer, and the move of that computer:
+ * the re-point leaves the first computer as the tab's original host.
+ */
+function renderFollowingTab(): { readonly moveTo: (hostId: string) => void } {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  const tree = () => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
+          <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
+        </TestEpicSessionTab>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+  const view = render(tree());
+  return {
+    moveTo: (hostId) => {
+      seams.effectiveHostId = hostId;
+      act(() => {
+        view.rerender(tree());
+      });
+    },
+  };
 }
 
 async function waitForTaskShown(): Promise<void> {
@@ -489,7 +551,7 @@ describe("a task tab whose computer falls below the minimum host version", () =>
     setMobileApp(false);
   });
 
-  it("shows Host update needed, Update now and Open on original host, and no Retry", async () => {
+  it("shows Host update needed and Update now alone when the tab's original host is the computer below the floor", async () => {
     installStreams();
     publishTabRow("2.0.0");
     renderTabOnAnotherComputer(true);
@@ -499,13 +561,13 @@ describe("a task tab whose computer falls below the minimum host version", () =>
 
     const card = await screen.findByTestId("epic-repoint-failure");
     expect(within(card).getByText("Host update needed")).toBeTruthy();
-    // The card's one action is Update now; "Open on original host" is the
-    // re-point's own way back, present because this tab has an original host.
+    // The tab's first session was on this very computer, so there is no other
+    // computer to go back to: Update now is the card's only action.
     expect(
       within(card)
         .getAllByRole("button")
         .map((button) => button.textContent),
-    ).toEqual(["Update now", "Open on original host"]);
+    ).toEqual(["Update now"]);
     expect(within(card).queryByText(/Retry/)).toBeNull();
     expect(screen.queryByText(/Couldn't load this task/)).toBeNull();
     expect(screen.queryByTestId("tile-canvas-stub")).toBeNull();
@@ -525,6 +587,45 @@ describe("a task tab whose computer falls below the minimum host version", () =>
         .map((button) => button.textContent),
     ).toEqual(["Update now"]);
     expect(within(card).queryByText(/Retry/)).toBeNull();
+  });
+
+  it("keeps Open on original host for a tab re-pointed away, and it goes back there", async () => {
+    const streams = installStreams();
+    publishTabRow("2.0.0");
+    seams.effectiveHostId = WINDOW_HOST_ID;
+    const view = renderFollowingTab();
+    await waitFor(() => {
+      expect(streams.opened()).toBe(1);
+    });
+    streams.deliverSnapshot(0);
+    await waitForTaskShown();
+    // The effective computer moves: the tab is re-pointed to it, leaving the
+    // first computer as its original host.
+    view.moveTo(TAB_HOST_ID);
+    await waitFor(() => {
+      expect(streams.opened()).toBe(2);
+    });
+    streams.deliverSnapshot(1);
+    await waitFor(() => {
+      expect(streams.closed()).toBe(1);
+    });
+
+    publishTabRow("1.5.4");
+
+    const card = await screen.findByTestId("epic-repoint-failure");
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Update now", "Open on original host"]);
+
+    fireEvent.click(
+      within(card).getByRole("button", { name: "Open on original host" }),
+    );
+
+    await waitForTaskShown();
+    expect(screen.queryByTestId("epic-repoint-failure")).toBeNull();
+    expect(seams.openAttempts.at(-1)).toBe(WINDOW_HOST_ID);
   });
 
   it("starts no further rebuild while the row stays below the floor, past fifteen minutes", async () => {
