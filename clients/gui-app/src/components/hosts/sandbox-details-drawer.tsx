@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import {
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   sandboxSupportReference,
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
@@ -42,6 +43,7 @@ import {
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   SANDBOX_LIST_FAILED,
+  sandboxCreditShortLine,
   sandboxVerbFailureLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -136,13 +138,35 @@ function withOperationFailure(
   };
 }
 
+/**
+ * The failed operation's sentence for its reader. While whose sandbox it is
+ * is not known (`ownerKnown` false), a refusal for want of credits from any
+ * pot but the team's reads as the tile and the row read it for that reader,
+ * with no amount told as the person's own.
+ */
 function operationFailureMessage(
   error: Error,
   reader: SandboxFailureReader,
+  ownerKnown: boolean,
 ): string {
-  return error instanceof SandboxOperationError
-    ? sandboxFailureMessageFor(error.failure, error.message, reader)
-    : error.message;
+  if (!(error instanceof SandboxOperationError)) return error.message;
+  const { failure } = error;
+  if (
+    !ownerKnown &&
+    failure.kind === "refused" &&
+    failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&
+    failure.reason !== "unverified" &&
+    failure.reason !== "unsupported-subscription" &&
+    failure.creditSource !== "team"
+  ) {
+    return sandboxCreditShortLine(
+      null,
+      failure.creditSource ?? null,
+      failure.shortfallMc,
+      { waking: true, context: "sentence" },
+    );
+  }
+  return sandboxFailureMessageFor(failure, error.message, reader);
 }
 
 function SandboxDetailsSections(props: {
@@ -214,13 +238,17 @@ function SandboxDetailsSections(props: {
                 {sandboxVerbFailureLine(operation.verb, summary.displayName)}
               </p>
               <p>
-                {operationFailureMessage(operation.error, {
-                  buysTeamCredits,
-                  teamName:
-                    configuration?.kind === "team"
-                      ? configuration.teamName
-                      : null,
-                })}
+                {operationFailureMessage(
+                  operation.error,
+                  {
+                    buysTeamCredits,
+                    teamName:
+                      configuration?.kind === "team"
+                        ? configuration.teamName
+                        : null,
+                  },
+                  configuration !== null,
+                )}
               </p>
               <p>{`Support reference: ${operation.reference}`}</p>
             </li>
