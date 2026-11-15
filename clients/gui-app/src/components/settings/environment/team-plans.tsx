@@ -22,7 +22,7 @@ import { PlansCard, type ConfigurationPlan } from "./plans-card";
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
-import { useWindowHostIsTeamComputer } from "@/hooks/environment/use-window-host-is-team-computer";
+import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 import { TeamReadFailed } from "./team-read-failed";
 
 export function TeamPlans(props: {
@@ -35,8 +35,9 @@ export function TeamPlans(props: {
     "this team";
   const canAdminister = useCanAdministerConfiguration();
   // Linking goes through this window's host, and a team's computer cannot
-  // check the caller's seat for it, so it is not offered through one.
-  const linkReachable = !useWindowHostIsTeamComputer();
+  // check the caller's seat for it, so it is not offered through one, nor
+  // until the registry has said whose computer this is.
+  const linkReachable = useWindowHostOwnership() === "not-team";
   const personal = useConfigurationIsPersonal();
   const query = useConfigurationPlansQuery();
   const [target, setTarget] = useState<{
