@@ -10,6 +10,7 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
 }));
 
 import { openOneShotStreamTransport } from "@/lib/host/one-shot-stream-transport";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 
 // `buildHostStreamClient` is mocked in these tests, so `target` only needs to
 // satisfy the type — its content plays no role in the assembly contract.
@@ -29,6 +30,7 @@ function buildParams() {
     endpoint: () => null,
     bearer: () => null,
     authnBaseUrl: "http://localhost:5005",
+    hostTokens: inertHostTokenSource(),
   };
 }
 

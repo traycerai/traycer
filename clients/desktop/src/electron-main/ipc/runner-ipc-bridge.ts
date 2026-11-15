@@ -1,4 +1,10 @@
 import { SandboxArtifactServer } from "../app/sandbox-artifact-server";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
+import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
 import { registerSandboxArtifactIpc } from "./sandbox-artifact-ipc";
 import type { BrowserDesktopControl } from "../browser-sessions/browser-desktop-control";
 import {
@@ -580,6 +586,8 @@ export interface RunnerIpcOptions {
   // Absent in tests / the single-window shell: defaults to a null store. The
   // real desktop startup always injects a `FileTokenStore`.
   readonly authTokenStore: IpcAuthTokenStore | undefined;
+  /** The person's host-only tokens; tests that leave it out get an in-memory table. */
+  readonly hostTokens?: HostTokenSource;
   readonly tray: DesktopTrayController | null;
   readonly window: IpcManagedWindow;
   readonly zoomController: IpcZoomController | undefined;
@@ -592,6 +600,8 @@ export interface RunnerIpcRegistryOptions {
   readonly authnBaseUrl: string;
   readonly authRedirectUri: string | null;
   readonly authTokenStore: IpcAuthTokenStore | undefined;
+  /** The person's host-only tokens; tests that leave it out get an in-memory table. */
+  readonly hostTokens?: HostTokenSource;
   readonly tray: DesktopTrayController | null;
   readonly windowRegistry: IpcWindowRegistry;
   readonly ownership: IpcEpicWindowOwnership;
@@ -643,6 +653,7 @@ export class RunnerIpcBridge {
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly authTokenStore: IpcAuthTokenStore;
+  readonly hostTokens: HostTokenSource;
   readonly support: IpcSupportService;
   readonly zoomController: IpcZoomController;
   readonly quitState: IpcShellQuitState;
@@ -718,6 +729,20 @@ export class RunnerIpcBridge {
       );
     this.options = options;
     this.authTokenStore = options.authTokenStore ?? new NullAuthTokenStore();
+    this.hostTokens =
+      options.hostTokens ??
+      createHostTokenSource({
+        persistence: createMemoryHostTokenPersistence(),
+        mint: (hostId, signInToken, signal) =>
+          mintHostTokenViaHttp(
+            options.authnBaseUrl,
+            hostId,
+            signInToken,
+            signal,
+          ),
+        signIn: null,
+        now: Date.now,
+      });
     if ("windowRegistry" in options) {
       this.windowRegistry = options.windowRegistry;
       this.ownership = options.ownership;

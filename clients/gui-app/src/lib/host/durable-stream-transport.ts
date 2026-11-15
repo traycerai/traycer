@@ -124,6 +124,7 @@ export function openDurableStreamTransport(params: {
       authorizesCloudCapability(useAuthStore.getState().status),
     authnBaseUrl: params.runnerHost.authnBaseUrl,
     auth: params.auth,
+    hostTokens: params.runnerHost.hostTokens,
     userId: params.userId,
     // Durable warm session: its streams re-snapshot on replay, so the
     // process-wide sweep may probe or force-drop it freely.
