@@ -309,6 +309,104 @@ describe("local stream host-token open frame", () => {
     client.close("test complete");
   });
 
+  it("keeps access-check-delayed after a cached-token stream is admitted", async () => {
+    const hostId = "local-delayed-after-admission";
+    clearHostDoorState(hostId);
+    const provider = newProvider();
+    signIn(provider, USER_A, SIGN_IN_TOKEN);
+    const hostTokens = await tokensWithLocalCredential(
+      hostId,
+      "cached-host-token",
+    );
+    noteHostTokenRenewal(hostId, true);
+    expect(hostDoorStateFor(hostId)?.kind).toBe("access-check-delayed");
+
+    const { client, session, socket } = await connectLocalStream(
+      { ...mockLocalHostEntry, hostId },
+      provider,
+      hostTokens,
+    );
+    const open = sentFramesOfKind(socket, "open")[0];
+    expect(open.token).toBe("cached-host-token");
+    const statuses: string[] = [];
+    session.onStatusChange((status) => statuses.push(status));
+    socket.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(statuses).toContain("open"));
+
+    expect(hostDoorStateFor(hostId)?.kind).toBe("access-check-delayed");
+    noteHostTokenRenewal(hostId, false);
+    expect(hostDoorStateFor(hostId)).toBeNull();
+
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("clears keys-unavailable when a cached-token stream is admitted", async () => {
+    const hostId = "local-keys-unavailable-after-admission";
+    clearHostDoorState(hostId);
+    const provider = newProvider();
+    signIn(provider, USER_A, SIGN_IN_TOKEN);
+    const hostTokens = await tokensWithLocalCredential(
+      hostId,
+      "cached-host-token",
+    );
+    const target = { ...mockLocalHostEntry, hostId };
+    const client = buildLocalClient(target, provider, hostTokens);
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    const statuses: string[] = [];
+    session.onStatusChange((status) => statuses.push(status));
+    const firstSocket = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(1);
+      return FakeNativeWebSocket.instances[0];
+    });
+    firstSocket.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(firstSocket, "open")).toHaveLength(1),
+    );
+    firstSocket.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(statuses).toContain("open"));
+    firstSocket.fireMessage(
+      JSON.stringify({
+        kind: "fatalError",
+        details: {
+          code: "NETWORK_ERROR",
+          reason: "the host has not fetched its verification keys",
+          doorReason: "keys_unavailable",
+          retryable: true,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(hostDoorStateFor(hostId)?.kind).toBe("keys-unavailable"),
+    );
+    await vi.waitFor(() => expect(statuses).toContain("reconnecting"));
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS);
+    const admittedSocket = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      return FakeNativeWebSocket.instances[1];
+    });
+    admittedSocket.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(admittedSocket, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(admittedSocket, "open")[0]?.token).toBe(
+      "cached-host-token",
+    );
+    admittedSocket.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() =>
+      expect(statuses.filter((status) => status === "open")).toHaveLength(2),
+    );
+
+    expect(hostDoorStateFor(hostId)).toBeNull();
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
   it("self-heals an expired local token through reconnect backoff after authn returns", async () => {
     const provider = newProvider();
     signIn(provider, USER_A, SIGN_IN_TOKEN);

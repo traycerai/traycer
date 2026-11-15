@@ -473,8 +473,11 @@ describe("host-token revalidation after an era changes", () => {
 
     const pending = revalidator.revalidateRefused({
       code: "UNAUTHORIZED",
+      reason: "the host says the token expired",
       retryable: false,
       doorReason: "token_expired",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
     });
     await firstStarted.promise;
     await tokens.forgetUser(USER_A);
@@ -516,8 +519,11 @@ describe("host-token revalidation after an era changes", () => {
 
     const pending = revalidator.revalidateRefused({
       code: "UNAUTHORIZED",
+      reason: "the host says the token expired",
       retryable: false,
       doorReason: "token_expired",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
     });
     await firstStarted.promise;
     currentUserId = "user-b";

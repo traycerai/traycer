@@ -4,22 +4,28 @@ import { Button } from "@/components/ui/button";
 import { useHostBinding } from "@/lib/host";
 import { doorCoverCopy } from "@/lib/host/door-cover-copy";
 import { retryHostDoor } from "@/lib/host/host-door-retry";
+import { appLogger } from "@/lib/logger";
 import {
   offersDoorRetry,
   type DoorStateCoverVariant,
 } from "@/lib/host/window-narration";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useMarkDrawnDoorCover } from "@/stores/host/drawn-door-cover-store";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 
 /**
  * Board C1's column (b): the tile's body is the state's title and line, with
  * Retry where the board draws it and Switch account for a non-member. Drawn
- * over the body, which stays mounted, so a draft in it is kept.
+ * over the body, which stays mounted, so a draft in it is kept. Marked drawn
+ * while mounted, so the toast stays quiet about that computer's refusal.
  */
 export function TileDoorCoverLayer(props: {
+  /** The tile's computer, whose state the cover draws. */
+  readonly hostId: string;
   readonly cover: DoorStateCoverVariant;
 }): ReactNode {
   const copy = doorCoverCopy(props.cover);
+  useMarkDrawnDoorCover(props.hostId);
   return (
     <div
       data-testid="tile-door-cover"
@@ -53,7 +59,13 @@ function TileDoorCoverAction(props: {
         variant="outline"
         className="mt-2"
         onClick={() => {
-          void retryHostDoor(cover.hostId, hostTokens);
+          // The reconnect has already run when a failed token refresh
+          // rejects; the cover stays up until an open is admitted.
+          retryHostDoor(cover.hostId, hostTokens).catch(() => {
+            appLogger.warn("[host-door] retry token refresh failed", {
+              hostId: cover.hostId,
+            });
+          });
         }}
       >
         Retry

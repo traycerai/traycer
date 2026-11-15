@@ -136,7 +136,7 @@ function TileOverlay(props: {
   const { overlay, facts } = props;
   if (overlay === null) {
     return props.doorCover === null ? null : (
-      <TileDoorCoverLayer cover={props.doorCover} />
+      <TileDoorCoverLayer hostId={props.hostId} cover={props.doorCover} />
     );
   }
   return (

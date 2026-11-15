@@ -1206,7 +1206,11 @@ describe("RunnerIpcBridge", () => {
     bridge.authSession.set({
       status: "signed-in",
       token: "new-sign-in-token",
-      profile: { userId: "user-a", email: "a@example.invalid" },
+      profile: {
+        userId: "user-a",
+        userName: "User A",
+        email: "a@example.invalid",
+      },
     });
 
     await expect(pending).resolves.toEqual({
