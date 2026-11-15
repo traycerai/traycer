@@ -166,6 +166,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", async (importActual) => ({
     typeof import("@/hooks/host/use-host-client-for-host-id")
   >()),
   useHostClientForHostId: () => null,
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === null ? null : MOCK_HOST_DIRECTORY.findById(hostId),
 }));
 vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
   ...(await importActual<

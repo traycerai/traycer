@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { UseMutationResult } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -11,10 +12,15 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { toast } from "sonner";
 import { packVersionUseRefusalMessage } from "@/components/settings/panels/provider-pack-version-manager-model";
 import type { VersionManagerPanelToken } from "@/components/settings/panels/provider-pack-version-manager-presence";
 import { versionManagerPanelIsMounted } from "@/components/settings/panels/provider-pack-version-manager-presence";
+
+/** The item a pack save writes. */
+const PACK_SAVE_KINDS = ["pack_policy"] as const;
 
 type UsePackVersionMutationResult = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.usePackVersion">,
@@ -62,6 +68,8 @@ export function useProvidersUsePackVersionForClient(
   panel: VersionManagerPanelToken | null,
 ): UsePackVersionMutationResult {
   const queryClient = useQueryClient();
+  const prepareSave = useSettingsSave(client, PACK_SAVE_KINDS);
+  const cloudSource = useEnvironmentCloud();
   return useHostMutation<
     HostRpcRegistry,
     "providers.usePackVersion",
@@ -70,6 +78,16 @@ export function useProvidersUsePackVersionForClient(
     client,
     method: "providers.usePackVersion",
     mapVariables: (variables) => variables,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: "providers.usePackVersion", request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
     options: {
       mutationKey: providersMutationKeys.usePackVersion(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null, panel }),

@@ -974,7 +974,6 @@ export function BotChannelView(props: {
                 <BotSearchPanel
                   botId={botId}
                   botTitle={botTitle}
-                  hostId={hostId}
                   environmentId={environmentId}
                   onClose={() => closeBotSearch(botId)}
                 />

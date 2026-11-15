@@ -102,14 +102,9 @@ const mocks = vi.hoisted(() => {
     }>,
     useEnvironmentHostLists:
       vi.fn<
-        (
-          client: object,
-          environmentIds: ReadonlyArray<string>,
-          enabled: boolean,
-        ) => unknown
+        (environmentIds: ReadonlyArray<string>, enabled: boolean) => unknown
       >(),
-    useEnvironmentListQuery:
-      vi.fn<(client: object, enabled: boolean) => unknown>(),
+    useEnvironmentListQuery: vi.fn<(enabled: boolean) => unknown>(),
     useBotListQuery: vi.fn<(client: object, enabled: boolean) => unknown>(),
     useBotListChangedSubscriptionForApp: vi.fn<(enabled: boolean) => void>(),
     useHostMethodSupport:
@@ -179,8 +174,8 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   }),
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: (client: object, enabled: boolean) =>
-    mocks.useEnvironmentListQuery(client, enabled),
+  useEnvironmentListQuery: (enabled: boolean) =>
+    mocks.useEnvironmentListQuery(enabled),
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: (client: object, enabled: boolean) =>
@@ -200,10 +195,9 @@ vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-environment-host-lists-query", () => ({
   useEnvironmentHostLists: (
-    client: object,
     environmentIds: ReadonlyArray<string>,
     enabled: boolean,
-  ) => mocks.useEnvironmentHostLists(client, environmentIds, enabled),
+  ) => mocks.useEnvironmentHostLists(environmentIds, enabled),
 }));
 vi.mock("@/components/home/bots/home-bots-group", () => ({
   HomeBotsGroupCard: (props: {
@@ -386,10 +380,7 @@ describe("HomeBotsSection capability gate", () => {
     expect(screen.queryByTestId("home-bots-unavailable")).toBeNull();
     expect(screen.queryByTestId("home-bots-group")).toBeNull();
     // The reads stay off while the answer is unknown.
-    expect(mocks.useEnvironmentListQuery).toHaveBeenLastCalledWith(
-      mocks.hostClient,
-      false,
-    );
+    expect(mocks.useEnvironmentListQuery).toHaveBeenLastCalledWith(false);
     expect(mocks.useBotListQuery).toHaveBeenLastCalledWith(
       mocks.hostClient,
       false,
@@ -423,16 +414,13 @@ describe("HomeBotsSection capability gate", () => {
     expect(screen.queryByTestId("home-bots-count")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
 
-    expect(mocks.useEnvironmentListQuery).toHaveBeenLastCalledWith(
-      mocks.hostClient,
-      false,
-    );
+    expect(mocks.useEnvironmentListQuery).toHaveBeenLastCalledWith(false);
     expect(mocks.useBotListQuery).toHaveBeenLastCalledWith(
       mocks.hostClient,
       false,
     );
     for (const call of mocks.useEnvironmentListQuery.mock.calls) {
-      expect(call[1]).toBe(false);
+      expect(call[0]).toBe(false);
     }
     for (const call of mocks.useBotListQuery.mock.calls) {
       expect(call[1]).toBe(false);
@@ -443,10 +431,7 @@ describe("HomeBotsSection capability gate", () => {
     mountSection();
 
     expect(screen.queryByTestId("home-bots-unavailable")).toBeNull();
-    expect(mocks.useEnvironmentListQuery).toHaveBeenLastCalledWith(
-      mocks.hostClient,
-      true,
-    );
+    expect(mocks.useEnvironmentListQuery).toHaveBeenLastCalledWith(true);
     expect(mocks.useBotListQuery).toHaveBeenLastCalledWith(
       mocks.hostClient,
       true,
@@ -701,25 +686,23 @@ describe("HomeBotsSection what each group is told", () => {
     mountSection();
 
     expect(mocks.useEnvironmentHostLists).toHaveBeenLastCalledWith(
-      mocks.hostClient,
       ["env-team"],
       true,
     );
   });
 
-  it("holds the machine-list reads off on a host without environment.host.list", () => {
+  it("reads team machine lists from the cloud without environment.host.list support", () => {
     mocks.state.hostListSupport = false;
     resolveBothQueries();
     mountSection();
 
-    expect(mocks.useHostMethodSupport).toHaveBeenCalledWith(
+    expect(mocks.useHostMethodSupport).not.toHaveBeenCalledWith(
       "host-1",
       "environment.host.list",
     );
     expect(mocks.useEnvironmentHostLists).toHaveBeenLastCalledWith(
-      mocks.hostClient,
       ["env-team"],
-      false,
+      true,
     );
     expect(latestGroupProps("env-team").environmentHostIds).toBeNull();
   });
@@ -729,7 +712,7 @@ describe("HomeBotsSection what each group is told", () => {
     mountSection();
 
     for (const call of mocks.useEnvironmentHostLists.mock.calls) {
-      expect(call[2]).toBe(false);
+      expect(call[1]).toBe(false);
     }
   });
 });
@@ -852,7 +835,7 @@ describe("HomeBotsSection create a team", () => {
 
   it("re-reads the environment list when the window regains focus, so a team made on the dashboard replaces the card", async () => {
     hostAnswer.environments = [PERSONAL];
-    mocks.useEnvironmentListQuery.mockImplementation((_client, enabled) =>
+    mocks.useEnvironmentListQuery.mockImplementation((enabled) =>
       useLiveEnvironmentList(enabled),
     );
     mocks.state.bots.data = { bots: [], mainBotIds: null };

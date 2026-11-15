@@ -622,7 +622,11 @@ import {
   configShellAddV10,
   configShellAddV11,
   configShellAddUpgradeV10ToV11,
+  configShellAddV12,
+  configShellAddUpgradeV11ToV12,
   configShellGetV10,
+  configShellGetV11,
+  configShellGetUpgradeV10ToV11,
   configShellListDetectedUpgradeV10ToV11,
   configShellListDetectedV10,
   configShellListDetectedV11,
@@ -630,15 +634,21 @@ import {
   configShellRemoveV10,
   configShellRemoveV11,
   configShellRemoveUpgradeV10ToV11,
+  configShellRemoveV12,
+  configShellRemoveUpgradeV11ToV12,
   configShellResetV10,
   configShellResetV11,
   configShellResetUpgradeV10ToV11,
   configShellRevertArgsV10,
   configShellRevertArgsV11,
   configShellRevertArgsUpgradeV10ToV11,
+  configShellRevertArgsV12,
+  configShellRevertArgsUpgradeV11ToV12,
   configShellSetV10,
   configShellSetV11,
   configShellSetUpgradeV10ToV11,
+  configShellSetV12,
+  configShellSetUpgradeV11ToV12,
   configWorktreesGetV10,
   configWorktreesSetV10,
   configVisualizationGetV10,
@@ -5818,12 +5828,10 @@ export const providersSetEnabledUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Bridges from v2.1 (the latest installed version of major 2's line) down to
-// the frozen v1.0 - not from v2.0, since v2.1 supersedes it as major 2's
-// latest. Used directly by `provider-profiles-compat.test.ts` to assert
-// `profileAction` never reaches a v1.0 caller; the registered
-// `downgradePathsFromLatest` bridge is `providersSetEnabledDowngradeV21ToV10`
-// below.
+// Bridges from v2.1 down to the frozen v1.0. Used directly by
+// `provider-profiles-compat.test.ts` to assert `profileAction` never reaches a
+// v1.0 caller; the registered `downgradePathsFromLatest` bridge is
+// `providersSetEnabledDowngradeV22ToV10` below.
 export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
   typeof providersSetEnabledV21,
   typeof providersSetEnabledV10
@@ -5874,31 +5882,9 @@ export const providersSetEnabledDowngradeV21ToV20 = defineDowngradePath<
   },
 });
 
-export const providersSetEnabledDowngradeV21ToV10 = defineDowngradePath<
-  typeof providersSetEnabledV21,
-  typeof providersSetEnabledV10
->({
-  from: { major: 2, minor: 1 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(providersSetEnabledRequestSchemaV10, {
-      providerId: request.providerId,
-      enabled: request.enabled,
-    }),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersSetEnabledResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
-
-// The bridge `providers.setEnabled@2.2` registers from its latest minor to the
-// frozen 1.0, the same projection as 2.1's: 1.0 knows no profile action.
+// The bridge major 2 registers from its latest minor to the frozen 1.0. 1.0
+// knows no profile action, so only `providerId` and `enabled` cross; v1.0's
+// strict request would refuse the whole call over any other key.
 export const providersSetEnabledDowngradeV22ToV10 = defineDowngradePath<
   typeof providersSetEnabledV22,
   typeof providersSetEnabledV10
@@ -5924,10 +5910,9 @@ export const providersSetEnabledDowngradeV22ToV10 = defineDowngradePath<
 
 // The only `providers.setEnabled@2.2` any build carries is the one above. An
 // earlier 2.2 that carried an optional tri-state `mode` was withdrawn before
-// any release, so no released peer negotiates a different 2.2. The bridge down
-// to the frozen v1.0 starts at whichever minor is major 2's latest:
-// `providersSetEnabledDowngradeV21ToV10` from 2.1,
-// `providersSetEnabledDowngradeV22ToV10` from 2.2.
+// any release, so no released peer negotiates a different 2.2. A
+// `downgradePathsFromLatest` bridge starts at its line's latest minor, so a
+// new minor of major 2 brings its own bridge down to v1.0.
 
 export const providersSetApiKeyV10 = defineRpcContract({
   method: "providers.setApiKey",
@@ -6867,11 +6852,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.shell.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configShellGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configShellGetV11,
+          upgradeFromPreviousVersion: configShellGetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6880,7 +6869,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.shell.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: configShellSetV10,
@@ -6889,6 +6878,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: configShellSetV11,
           upgradeFromPreviousVersion: configShellSetUpgradeV10ToV11,
+        },
+        2: {
+          contract: configShellSetV12,
+          upgradeFromPreviousVersion: configShellSetUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -6914,7 +6907,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.shell.add": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: configShellAddV10,
@@ -6924,6 +6917,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: configShellAddV11,
           upgradeFromPreviousVersion: configShellAddUpgradeV10ToV11,
         },
+        2: {
+          contract: configShellAddV12,
+          upgradeFromPreviousVersion: configShellAddUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -6931,7 +6928,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.shell.remove": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: configShellRemoveV10,
@@ -6941,6 +6938,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: configShellRemoveV11,
           upgradeFromPreviousVersion: configShellRemoveUpgradeV10ToV11,
         },
+        2: {
+          contract: configShellRemoveV12,
+          upgradeFromPreviousVersion: configShellRemoveUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -6948,7 +6949,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.shell.revertArgs": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: configShellRevertArgsV10,
@@ -6957,6 +6958,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: configShellRevertArgsV11,
           upgradeFromPreviousVersion: configShellRevertArgsUpgradeV10ToV11,
+        },
+        2: {
+          contract: configShellRevertArgsV12,
+          upgradeFromPreviousVersion: configShellRevertArgsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -13584,7 +13589,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.usePackVersion": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersUsePackVersionV10,
@@ -13596,6 +13601,10 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           // Host dispatch projects the new refusal for a 1.0 peer.
           responseGrowthProjectionGated: true,
         },
+        2: {
+          contract: providersUsePackVersionV12,
+          upgradeFromPreviousVersion: providersUsePackVersionUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -13603,11 +13612,15 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.setPackPolicy": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersSetPackPolicyV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersSetPackPolicyV11,
+          upgradeFromPreviousVersion: providersSetPackPolicyUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -13953,7 +13966,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: providersSetEnabledV20,
@@ -13963,9 +13976,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersSetEnabledV21,
           upgradeFromPreviousVersion: providersSetEnabledUpgradeV20ToV21,
         },
+        2: {
+          contract: providersSetEnabledV22,
+          upgradeFromPreviousVersion: providersSetEnabledUpgradeV21ToV22,
+        },
       },
       downgradePathsFromLatest: {
-        1: providersSetEnabledDowngradeV21ToV10,
+        1: providersSetEnabledDowngradeV22ToV10,
       },
     },
   },

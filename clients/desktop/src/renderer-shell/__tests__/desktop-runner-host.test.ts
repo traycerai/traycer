@@ -144,6 +144,7 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: async () => ({
       kind: "network-error" as const,
       detail: "test",

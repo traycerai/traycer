@@ -2,24 +2,25 @@
  * A bell row about a member's post in a bot's conversation draws that member,
  * or its kind glyph when we do not know them; the bot's picture is for the
  * bot's own rows. The real `NotificationRow` under
- * the real `NotificationBotsProvider` and the real loaded-members read over a
- * mock messenger; the merged row and the host's `bot.list` answer are the
- * boundaries.
+ * the real `NotificationBotsProvider` and the real loaded-members read over the
+ * page harness's fake authn, which serves the Members pages; the merged row and
+ * the host's `bot.list` answer are the boundaries.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { ReactNode } from "react";
+import type { QueryClient } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
 import type {
   ChatRecordSummaryV12,
@@ -28,40 +29,36 @@ import type {
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
+import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
+import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
+import { TestRouterProvider } from "@/__tests__/with-test-router";
+import { useLoadedEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
+import { useEnvironmentMembersPages } from "@/hooks/environment/use-environment-members-list";
+import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeProvider } from "@/lib/host/runtime";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { queryKeys } from "@/lib/query-keys";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
-import { TestRouterProvider } from "@/__tests__/with-test-router";
-import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
-import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
-import { TestEpicSessionWrapper } from "@/components/epic-canvas/__tests__/test-epic-session";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ENVIRONMENT_ID = "env-1";
+type StarterStore = OpenEpicStoreHandle["store"];
+
 const STARTER_EPIC_ID = "epic-notification-starter";
 const STARTER_CHAT_ID = "chat-notification-starter";
-
-interface StarterTestPerson {
-  readonly displayName: string;
-  readonly avatarUrl: string | null;
-}
-
-const starterPeople = new Map<string, StarterTestPerson>();
-
-function resolveStarterPerson(userId: string): StarterTestPerson | null {
-  return starterPeople.get(userId) ?? null;
-}
 
 const mocks = vi.hoisted(() => ({
   row: null as MergedNotificationRow | null,
   bots: undefined as BotListResponse | undefined,
-  client: null as HostClient<HostRpcRegistry> | null,
 }));
 
 vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
@@ -91,26 +88,12 @@ vi.mock("@/providers/use-runner-host", async (importActual) => ({
 vi.mock("@/hooks/notifications/use-notification-host", () => ({
   useNotificationResolveHost: () => ({
     hostId: mockLocalHostEntry.hostId,
-    client: mocks.client,
+    client: null,
   }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     method === "bot.list",
-}));
-vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: (
-    client: { getActiveHostId: () => string | null } | null,
-  ) => {
-    const hostId = client === null ? null : client.getActiveHostId();
-    return {
-      hostId,
-      requestContextUserId: "user-1",
-      isReady: hostId !== null,
-      hasRpcEndpoint: hostId !== null,
-      canExecute: hostId !== null,
-    };
-  },
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: (_client: unknown, enabled: boolean) => ({
@@ -122,34 +105,9 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
 import { NotificationRow } from "@/components/notifications/notification-row";
 import { NotificationBotsProvider } from "@/components/notifications/notification-bots";
 
-const notificationMessengerFactory = ({
-  registry,
-}: {
-  registry: HostRpcRegistry;
-}) =>
-  new MockHostMessenger<HostRpcRegistry>({
-    registry,
-    requestId: () => "notification-starter-runtime",
-    handlers: {},
-  });
-
-const notificationRemoteFetcher = () =>
-  Promise.resolve({ kind: "hosts" as const, entries: [] });
-
+let harness: TeamPageHarness;
 let queryClient: QueryClient;
-let runnerHost: MockRunnerHost;
 let memberRequests: number;
-let hostMessenger: MockHostMessenger<HostRpcRegistry>;
-const epicHarness = createEpicSessionTestHarness(STARTER_EPIC_ID);
-
-async function waitForStarterStore() {
-  await waitFor(() => {
-    expect(__getOpenEpicRegistryForTests().get(STARTER_EPIC_ID)).not.toBeNull();
-  });
-  const handle = __getOpenEpicRegistryForTests().get(STARTER_EPIC_ID);
-  if (handle === null) throw new Error("Expected an open Epic session");
-  return handle.store;
-}
 
 function membersPage(member: {
   userId: string;
@@ -173,15 +131,17 @@ function membersPage(member: {
   };
 }
 
+/** Publishes a page as the Members surface would have read it from authn. */
 function cacheMembers(page: EnvironmentMembersResponseV12): void {
+  const keys = renderHook(
+    () => useEnvironmentMembersPages(ENVIRONMENT_ID, false),
+    { wrapper: harness.Wrapper },
+  );
   queryClient.setQueryData(
-    queryKeys.hostMethod<HostRpcRegistry, "environment.members">(
-      mockLocalHostEntry.hostId,
-      "environment.members",
-      { environmentId: ENVIRONMENT_ID, cursor: null },
-    ),
+    keys.result.current.pageKey(ENVIRONMENT_ID, null),
     page,
   );
+  keys.unmount();
 }
 
 function conversationRow(
@@ -215,100 +175,10 @@ function conversationRow(
   };
 }
 
-function starterNotificationRow(
-  outcome: "completed" | "errored",
-): MergedNotificationRow {
-  const row = conversationRow(STARTER_EPIC_ID, null);
-  return {
-    ...row,
-    feedId: `host:${STARTER_CHAT_ID}`,
-    sourceId: STARTER_CHAT_ID,
-    body: "The server's chat result",
-    payload: {
-      kind: "chat",
-      epicId: STARTER_EPIC_ID,
-      chatId: STARTER_CHAT_ID,
-    },
-    outcome,
-  };
-}
-
-function starterRecord(
-  starterUserId: string | null,
-): ChatRecordSummaryV12 & Pick<ChatRecordSummaryV15, "starterUserId"> {
-  return {
-    chatId: STARTER_CHAT_ID,
-    ownerUserId: "user-1",
-    originHostId: mockLocalHostEntry.hostId,
-    title: "Started task",
-    isTitleEditedByUser: false,
-    parentChatId: null,
-    createdAt: 1,
-    updatedAt: 2,
-    archived: false,
-    archivedAt: null,
-    runSettingsSummary: "claude",
-    revision: 1,
-    visibility: "private",
-    origin: "own",
-    docResident: false,
-    head: null,
-    ...(starterUserId === null ? {} : { starterUserId }),
-  };
-}
-
-function notificationRowTree(row: MergedNotificationRow, taskIsOpen: boolean) {
-  mocks.row = row;
-  const content = (
-    <PersonMembersContext.Provider value={resolveStarterPerson}>
-      <NotificationBotsProvider>
-        <ul>
-          <NotificationRow
-            feedId={row.feedId}
-            highlightRelocation={false}
-            onActivate={vi.fn()}
-            onAcknowledge={vi.fn()}
-          />
-        </ul>
-      </NotificationBotsProvider>
-    </PersonMembersContext.Provider>
-  );
-  return (
-    <TestRouterProvider>
-      <QueryClientProvider client={queryClient}>
-        <RunnerHostProvider runnerHost={runnerHost}>
-          <HostRuntimeProvider
-            registry={hostRpcRegistry}
-            messengerFactory={notificationMessengerFactory}
-            invalidator={null}
-            requestId={null}
-            remoteFetcher={notificationRemoteFetcher}
-            fallback={<div data-testid="notification-runtime-fallback" />}
-          >
-            {taskIsOpen ? (
-              <TestEpicSessionWrapper epicId={STARTER_EPIC_ID}>
-                {content}
-              </TestEpicSessionWrapper>
-            ) : (
-              content
-            )}
-          </HostRuntimeProvider>
-        </RunnerHostProvider>
-      </QueryClientProvider>
-    </TestRouterProvider>
-  );
-}
-
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
-  return input.url;
-}
-
 function renderRow(row: MergedNotificationRow): HTMLElement {
   mocks.row = row;
   render(
-    <QueryClientProvider client={queryClient}>
+    <harness.Wrapper>
       <NotificationBotsProvider>
         <ul>
           <NotificationRow
@@ -319,90 +189,13 @@ function renderRow(row: MergedNotificationRow): HTMLElement {
           />
         </ul>
       </NotificationBotsProvider>
-    </QueryClientProvider>,
+    </harness.Wrapper>,
   );
   return screen.getByTestId("notification-entry");
 }
 
-beforeEach(async () => {
-  vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
-    const url = requestUrl(input);
-    if (url.includes("/api/v3/user/negotiated")) {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            user: {
-              id: "user-1",
-              name: "Viewer",
-              providerId: "provider-1",
-              providerHandle: "viewer",
-              providerType: "GITHUB",
-              email: "v@example.com",
-              avatarUrl: null,
-              activatedAt: null,
-              createdAt: "2024-01-01T00:00:00.000Z",
-              updatedAt: "2024-01-01T00:00:00.000Z",
-              lastSeenAt: null,
-              privacyMode: false,
-              isLearningEnabled: true,
-            },
-            userSubscription: {
-              id: "subscription-1",
-              userID: "user-1",
-              orgID: null,
-              teamID: null,
-              customerId: "customer-1",
-              createdAt: "2024-01-01T00:00:00.000Z",
-              updatedAt: "2024-01-01T00:00:00.000Z",
-              subscriptionExpiry: null,
-              trialEndsAt: null,
-              subscriptionStatus: "FREE",
-              hasPaymentMethod: false,
-              isInTrial: false,
-              rechargeRateSeconds: 0,
-            },
-            teamSubscriptions: [],
-            payAsYouGoUsage: { allowPayAsYouGo: false },
-          }),
-          {
-            status: 200,
-            headers: {
-              "Content-Type": "application/json",
-              "x-traycer-user-record-version": "2.0",
-            },
-          },
-        ),
-      );
-    }
-    return Promise.resolve(new Response(null, { status: 404 }));
-  });
-  runnerHost = new MockRunnerHost({
-    signInUrl: "https://example.com",
-    authnBaseUrl: "https://auth.example.com",
-    localHost: {
-      hostId: mockLocalHostEntry.hostId,
-      websocketUrl: "ws://127.0.0.1:4917/rpc",
-      version: "0.0.0-mock",
-      pid: 1,
-      systemHostName: "notification-test",
-      displayName: "Notification test",
-      availability: "available",
-    },
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-  });
-  runnerHost.selectionPreferredStore.save("user-1", mockLocalHostEntry.hostId);
-  runnerHost.selectionIdentity.set("user-1");
-  runnerHost.setHosts([]);
-  await runnerHost.tokenStore.signIn(
-    { token: "test-cloud-bearer", refreshToken: "test-refresh-token" },
-    { id: "user-1", email: "v@example.com", name: "Viewer" },
-  );
-  epicHarness.install(null, "editor");
+beforeEach(() => {
   mocks.row = null;
-  starterPeople.clear();
   mocks.bots = {
     bots: [
       {
@@ -433,47 +226,27 @@ beforeEach(async () => {
       { userId: "user-1", username: "Viewer" },
       [],
     );
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
   memberRequests = 0;
-  let requestCount = 0;
-  hostMessenger = new MockHostMessenger<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    requestId: () => `req-${String((requestCount += 1))}`,
-    handlers: {
-      "environment.members": () => {
-        memberRequests += 1;
-        return membersPage({
-          userId: "never",
-          displayName: null,
-          avatarUrl: null,
-        });
-      },
+  harness = mountTeamPage(poolSource("viewer"), {
+    "environment.members": () => {
+      memberRequests += 1;
+      return membersPage({
+        userId: "never",
+        displayName: null,
+        avatarUrl: null,
+      });
     },
   });
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: hostMessenger,
-  });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
-  mocks.client = spine.createRequester(mockLocalHostEntry);
+  queryClient = harness.queryClient;
   stubImmediateImage();
 });
 
 afterEach(() => {
   cleanup();
-  epicHarness.teardown();
-  starterPeople.clear();
   vi.unstubAllGlobals();
   queryClient.clear();
+  resetTeamPageHarness();
   useAuthStore.getState().setSignedOut();
-  useSelectionAuthorityStore.getState().reset();
 });
 
 describe("<NotificationRow /> about a member's post", () => {
@@ -540,7 +313,7 @@ describe("<NotificationRow /> about a member's post", () => {
     expect(entry.querySelector("svg.lucide")).not.toBeNull();
   });
 
-  it("asks the host for no members when none are cached", () => {
+  it("asks authn for no members when none are cached", () => {
     renderRow(conversationRow(BOT_ID, "user-2"));
 
     expect(queryClient.isFetching()).toBe(0);
@@ -548,50 +321,100 @@ describe("<NotificationRow /> about a member's post", () => {
   });
 });
 
-// Board C30 row 24 governs when a notification may replace its server body.
+// Board C30 row 24 governs when a notification may replace its server body:
+// the chat did not fail, its task is open in this session, a person started it.
 describe("NotificationRow started-by attribution", () => {
-  it("keeps a failed chat's own text even when its open task has a starter", async () => {
-    render(notificationRowTree(starterNotificationRow("errored"), true));
-    const store = await waitForStarterStore();
-    act(() => {
-      store.getState().applyChatRecords([starterRecord("user-2")], null);
+  const epicHarness = createEpicSessionTestHarness(STARTER_EPIC_ID);
+  let runnerHost: MockRunnerHost;
+  let authnRequests: string[];
+
+  beforeEach(async () => {
+    authnRequests = [];
+    vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
+      authnRequests.push(requestUrl(input));
+      return Promise.resolve(new Response(null, { status: 404 }));
     });
+    runnerHost = new MockRunnerHost({
+      signInUrl: "https://example.com",
+      authnBaseUrl: "https://auth.example.com",
+      localHost: {
+        hostId: mockLocalHostEntry.hostId,
+        websocketUrl: "ws://127.0.0.1:4917/rpc",
+        version: "0.0.0-mock",
+        pid: 1,
+        systemHostName: "notification-test",
+        displayName: "Notification test",
+        availability: "available",
+      },
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    runnerHost.selectionPreferredStore.save(
+      "user-1",
+      mockLocalHostEntry.hostId,
+    );
+    runnerHost.selectionIdentity.set("user-1");
+    runnerHost.setHosts([]);
+    await runnerHost.tokenStore.signIn(
+      { token: "t1", refreshToken: "r1" },
+      { id: "user-1", email: "v@example.com", name: "Viewer" },
+    );
+    epicHarness.install(null, "editor");
+  });
+
+  afterEach(() => {
+    cleanup();
+    epicHarness.teardown();
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  it("keeps a failed chat's own text even when its open task has a starter", async () => {
+    cacheMembers(
+      membersPage({
+        userId: "user-2",
+        displayName: "Grace Hopper",
+        avatarUrl: null,
+      }),
+    );
+    render(startedRowTree(starterNotificationRow("errored"), true));
+    const store = await waitForStarterStore();
+    seedStarter(store, "user-2");
 
     const entry = await screen.findByTestId("notification-entry");
     expect(within(entry).getByText("The server's chat result")).not.toBeNull();
     expect(within(entry).queryByText(/Started by/)).toBeNull();
   });
 
-  it("keeps a closed task's text without a host or authn lookup for its starter", () => {
-    const authnRequests: string[] = [];
-    vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
-      authnRequests.push(requestUrl(input));
-      return Promise.resolve(new Response(null, { status: 404 }));
-    });
+  it("keeps a closed task's text without an authn lookup for its starter", () => {
+    const cloudRequestsBefore = harness.cloudRequests.length;
     const entry = renderRow(starterNotificationRow("completed"));
 
     expect(within(entry).getByText("The server's chat result")).not.toBeNull();
     expect(within(entry).queryByText(/Started by/)).toBeNull();
     expect(queryClient.isFetching()).toBe(0);
-    expect(memberRequests).toBe(0);
-    expect(hostMessenger.calls).toEqual([]);
+    expect(harness.cloudRequests).toHaveLength(cloudRequestsBefore);
     expect(authnRequests).toEqual([]);
+    expect(harness.messenger.calls).toEqual([]);
+    expect(memberRequests).toBe(0);
   });
 
   it("replaces the same row's body once its open task supplies a named starter", async () => {
-    starterPeople.set("user-2", {
-      displayName: "Grace Hopper",
-      avatarUrl: "https://example.com/grace.png",
-    });
+    cacheMembers(
+      membersPage({
+        userId: "user-2",
+        displayName: "Grace Hopper",
+        avatarUrl: "https://example.com/grace.png",
+      }),
+    );
     const row = starterNotificationRow("completed");
-    const rendered = render(notificationRowTree(row, false));
+    const rendered = render(startedRowTree(row, false));
     expect(await screen.findByText("The server's chat result")).not.toBeNull();
 
-    rendered.rerender(notificationRowTree(row, true));
+    rendered.rerender(startedRowTree(row, true));
     const store = await waitForStarterStore();
-    act(() => {
-      store.getState().applyChatRecords([starterRecord("user-2")], null);
-    });
+    seedStarter(store, "user-2");
 
     const entry = await screen.findByTestId("notification-entry");
     expect(
@@ -601,14 +424,144 @@ describe("NotificationRow started-by attribution", () => {
   });
 
   it("keeps the server body when the starter is system", async () => {
-    render(notificationRowTree(starterNotificationRow("completed"), true));
+    render(startedRowTree(starterNotificationRow("completed"), true));
     const store = await waitForStarterStore();
-    act(() => {
-      store.getState().applyChatRecords([starterRecord("system")], null);
-    });
+    seedStarter(store, "system");
 
     const entry = await screen.findByTestId("notification-entry");
     expect(within(entry).getByText("The server's chat result")).not.toBeNull();
     expect(within(entry).queryByText(/Started by/)).toBeNull();
   });
+
+  function starterNotificationRow(
+    outcome: "completed" | "errored",
+  ): MergedNotificationRow {
+    return {
+      ...conversationRow(STARTER_EPIC_ID, null),
+      feedId: `host:${STARTER_CHAT_ID}`,
+      sourceId: STARTER_CHAT_ID,
+      body: "The server's chat result",
+      payload: {
+        kind: "chat",
+        epicId: STARTER_EPIC_ID,
+        chatId: STARTER_CHAT_ID,
+      },
+      outcome,
+    };
+  }
+
+  /**
+   * The row under the page harness's members read, over the session an open
+   * task has. The members sit above the session so a task opening or closing
+   * does not remount the read.
+   */
+  function startedRowTree(
+    row: MergedNotificationRow,
+    taskIsOpen: boolean,
+  ): ReactNode {
+    mocks.row = row;
+    const feed = (
+      <NotificationBotsProvider>
+        <ul>
+          <NotificationRow
+            feedId={row.feedId}
+            highlightRelocation={false}
+            onActivate={vi.fn()}
+            onAcknowledge={vi.fn()}
+          />
+        </ul>
+      </NotificationBotsProvider>
+    );
+    return (
+      <harness.Wrapper>
+        <LoadedMembers>
+          <TestRouterProvider>
+            <RunnerHostProvider runnerHost={runnerHost}>
+              <HostRuntimeProvider
+                registry={hostRpcRegistry}
+                messengerFactory={sessionMessengerFactory}
+                invalidator={null}
+                requestId={null}
+                remoteFetcher={noRemoteHosts}
+                fallback={<div data-testid="session-runtime-fallback" />}
+              >
+                {taskIsOpen ? (
+                  <TestEpicSessionWrapper epicId={STARTER_EPIC_ID}>
+                    {feed}
+                  </TestEpicSessionWrapper>
+                ) : (
+                  feed
+                )}
+              </HostRuntimeProvider>
+            </RunnerHostProvider>
+          </TestRouterProvider>
+        </LoadedMembers>
+      </harness.Wrapper>
+    );
+  }
 });
+
+/** The members the app has loaded from authn, as the bell's author avatar reads them. */
+function LoadedMembers(props: { readonly children: ReactNode }): ReactNode {
+  const resolveMember = useLoadedEnvironmentMembers(ENVIRONMENT_ID, true);
+  return (
+    <PersonMembersContext value={resolveMember}>
+      {props.children}
+    </PersonMembersContext>
+  );
+}
+
+const sessionMessengerFactory = ({ registry }: { registry: HostRpcRegistry }) =>
+  new MockHostMessenger<HostRpcRegistry>({
+    registry,
+    requestId: () => "notification-starter-runtime",
+    handlers: {},
+  });
+
+const noRemoteHosts = () =>
+  Promise.resolve({ kind: "hosts" as const, entries: [] });
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+async function waitForStarterStore(): Promise<StarterStore> {
+  await waitFor(() => {
+    expect(__getOpenEpicRegistryForTests().get(STARTER_EPIC_ID)).not.toBeNull();
+  });
+  const handle = __getOpenEpicRegistryForTests().get(STARTER_EPIC_ID);
+  if (handle === null) throw new Error("Expected an open Epic session");
+  return handle.store;
+}
+
+/** The host's chat record for the task's chat, as its chat-records read fills the store. */
+function seedStarter(store: StarterStore, starterUserId: string): void {
+  const record: ChatRecordSummaryV12 &
+    Pick<ChatRecordSummaryV15, "starterUserId"> = {
+    chatId: STARTER_CHAT_ID,
+    ownerUserId: "user-1",
+    originHostId: mockLocalHostEntry.hostId,
+    title: "Started task",
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    runSettingsSummary: "claude",
+    revision: 1,
+    visibility: "private",
+    origin: "own",
+    docResident: false,
+    head: null,
+    starterUserId,
+  };
+  act(() => {
+    store.getState().applyChatRecords([record], null);
+  });
+  expect(Object.values(store.getState().chatRecordStarters)).toEqual([
+    starterUserId,
+  ]);
+}

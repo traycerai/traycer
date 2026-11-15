@@ -16,6 +16,7 @@ vi.mock(
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -25,9 +26,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
 }));
 
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type {
   EnvironmentSecretRemovalV12,
   EnvironmentSecretV12,
@@ -35,6 +34,7 @@ import type {
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -54,25 +54,25 @@ import {
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { OpenLink } from "@/lib/links/open-link";
+import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   hostIdsOf,
   mountTeamPageOnPoolBuild,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   teamHostBoundary,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { useSecretsRead } from "@/hooks/environment/use-environment-secrets-calls";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { ReactNode } from "react";
-import type { QueryKey } from "@tanstack/react-query";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   RETIRED_PROVIDER_VARIABLES,
@@ -80,7 +80,20 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
-const LOCAL_HOST_ID = mockLocalHostEntry.hostId;
+/**
+ * What a write's own invalidation must answer within. The boundary's revision
+ * poll ticks every 5 seconds from the page's mount and the write is made within
+ * a second of the initial reads, so a read inside this bound cannot have come
+ * from the poll: a write that dropped its own invalidation fails here.
+ */
+const OWN_INVALIDATION_WAIT_MS = 2_000;
+/**
+ * The boundary's revision poll interval. The file fakes the interval timers
+ * and lets them follow real time, so the poll ticks when a case advances the
+ * clock by this much, and on its own only after this long in real time, which
+ * no case here runs.
+ */
+const REVISION_POLL_MS = 5_000;
 type SecretReadMethod = (typeof SECRET_READS)[number];
 type Rotation = EnvironmentSecretsRotationResponse["rotation"];
 type RemovedSecret = ResponseOfMethod<
@@ -94,6 +107,8 @@ interface SecretHostState {
   versions: SecretVersion[];
   removal: EnvironmentSecretRemovalV12 | null;
   rotation: Rotation;
+  /** authn's configuration revision: it moves on every committed change. */
+  revision: number;
 }
 
 function secretFixture(
@@ -183,13 +198,31 @@ function stateWithSecret(overrides: Partial<SecretHostState>): SecretHostState {
     ],
     removal: null,
     rotation: null,
+    revision: 1,
     ...overrides,
   };
 }
 
 function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
   return {
-    "environment.list": () => ({ environments: [] }),
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: "env-a",
+          ownerKind: "organization" as const,
+          ownerId: "team-a",
+          roomId: "room-a",
+          label: "Acme",
+          effectiveRole: "editor" as const,
+          kind: "team" as const,
+          hostCount: 1,
+          providerHandle: "handle-a",
+        },
+      ],
+    }),
+    "environment.configuration.revision": () => ({
+      revision: String(state.revision),
+    }),
     "environment.secrets.list": () => ({
       secrets: [...state.secrets],
       removed: [...state.removed],
@@ -209,6 +242,7 @@ function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
         currentVersionId: "ver-1",
       });
       state.secrets = [...state.secrets, secret];
+      state.revision += 1;
       return { outcome: "created", secret };
     },
     "environment.secrets.replaceValue": () => {
@@ -227,6 +261,7 @@ function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
         }),
       ];
       state.rotation = rotationFixture();
+      state.revision += 1;
       return { outcome: "accepted", rotationId: "rot-1", versionId: "ver-3" };
     },
     "environment.secrets.destroy": () => {
@@ -234,6 +269,7 @@ function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
         state.removed.length === 0 ? "revoked" : "destroyed",
       );
       state.removal = nextRemoval;
+      state.revision += 1;
       state.removed = [
         { id: "sec-1", name: "STRIPE_KEY", removal: nextRemoval },
       ];
@@ -262,41 +298,36 @@ function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
           supersededAt: AT,
         }),
       ];
+      state.revision += 1;
       return { outcome: "accepted", rotationId: "rot-2", versionId: "ver-1" };
     },
   };
 }
 
-/** Keeps each pool-backed secret read observed while an action runs. */
+/** Keeps each of the team's secret reads, authn's own, observed while an action runs. */
 function SecretReadProbe(props: {
   readonly client: HostClient<HostRpcRegistry>;
 }): ReactNode {
-  const list = useHostQuery<HostRpcRegistry, "environment.secrets.list">({
-    cacheKeyIdentity: ["user-me"],
+  const list = useSecretsRead({
     client: props.client,
     method: "environment.secrets.list",
     params: { environmentId: "env-a" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
-  const versions = useHostQuery<
-    HostRpcRegistry,
-    "environment.secrets.versions"
-  >({
-    cacheKeyIdentity: undefined,
+  const versions = useSecretsRead({
     client: props.client,
     method: "environment.secrets.versions",
     params: { secretId: "sec-1", environmentId: "env-a" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
-  const rotation = useHostQuery<
-    HostRpcRegistry,
-    "environment.secrets.rotation"
-  >({
-    cacheKeyIdentity: undefined,
+  const rotation = useSecretsRead({
     client: props.client,
     method: "environment.secrets.rotation",
     params: { secretId: "sec-1", environmentId: "env-a" },
-    options: {},
+    enabled: true,
+    poll: false,
   });
   return (
     <div hidden>
@@ -345,103 +376,88 @@ function mountPage(
       hostName={(hostId) => hostId}
     />
   );
+  // The boundary Settings mounts every team page in: its revision hook is what
+  // re-reads the reads a committed change moved.
   render(
-    options?.includeProbe === false ? (
-      page
-    ) : (
-      <>
-        {page}
-        <SecretReadProbe client={client} />
-      </>
-    ),
+    <ConfigurationSourceBoundary
+      section={null}
+      target={{ kind: "team", environmentId: "env-a" }}
+    >
+      {options?.includeProbe === false ? (
+        page
+      ) : (
+        <>
+          {page}
+          <SecretReadProbe client={client} />
+        </>
+      )}
+    </ConfigurationSourceBoundary>,
     { wrapper: harness.Wrapper },
   );
   return harness;
-}
-
-function seedHostScopedDecoy(
-  harness: TeamPageHarness,
-  method: SecretReadMethod,
-): QueryKey {
-  const key = hostQueryKeys.methodScope(LOCAL_HOST_ID, method);
-  harness.queryClient.setQueryDefaults(key, { gcTime: 60_000 });
-  harness.queryClient.setQueryData(key, { decoy: method });
-  return key;
-}
-
-function seedHostScopedDecoys(
-  harness: TeamPageHarness,
-): Record<SecretReadMethod, QueryKey> {
-  return {
-    "environment.secrets.list": seedHostScopedDecoy(
-      harness,
-      "environment.secrets.list",
-    ),
-    "environment.secrets.versions": seedHostScopedDecoy(
-      harness,
-      "environment.secrets.versions",
-    ),
-    "environment.secrets.rotation": seedHostScopedDecoy(
-      harness,
-      "environment.secrets.rotation",
-    ),
-  };
 }
 
 function readCounts(
   harness: TeamPageHarness,
 ): Record<SecretReadMethod, number> {
   return {
-    "environment.secrets.list": hostIdsOf(harness, "environment.secrets.list")
+    "environment.secrets.list": harness.paramsOf("environment.secrets.list")
       .length,
-    "environment.secrets.versions": hostIdsOf(
-      harness,
+    "environment.secrets.versions": harness.paramsOf(
       "environment.secrets.versions",
     ).length,
-    "environment.secrets.rotation": hostIdsOf(
-      harness,
+    "environment.secrets.rotation": harness.paramsOf(
       "environment.secrets.rotation",
     ).length,
   };
 }
 
-async function expectPoolReadsAfter(
+/**
+ * More reads of each secret method reached authn, and none reached a host.
+ * The write's own invalidation re-reads the list and the versions, and (a
+ * create or a replace) the rotation, inside {@link OWN_INVALIDATION_WAIT_MS}.
+ * A Remove, an Undo and a removal retry invalidate only the list and the
+ * versions: their rotation is re-read when the committed change moves authn's
+ * revision, which the boundary sees on its next poll, so the case advances the
+ * clock by one poll interval.
+ */
+async function expectAuthnReadsAfter(
   harness: TeamPageHarness,
   before: Record<SecretReadMethod, number>,
   extraVersionReads: number,
+  rotationFromRevision: boolean,
 ): Promise<void> {
-  await waitFor(() => {
-    for (const method of SECRET_READS) {
-      expect(hostIdsOf(harness, method).length).toBeGreaterThan(
-        before[method] +
-          (method === "environment.secrets.versions" ? extraVersionReads : 0),
-      );
-    }
-  });
-  for (const method of SECRET_READS) {
-    expect(new Set(hostIdsOf(harness, method))).toEqual(
-      new Set([POOL_HOST_ID]),
+  const grew = (method: SecretReadMethod): void => {
+    expect(harness.paramsOf(method).length).toBeGreaterThan(
+      before[method] +
+        (method === "environment.secrets.versions" ? extraVersionReads : 0),
     );
-  }
-}
-
-function expectHostDecoysUntouched(
-  harness: TeamPageHarness,
-  keys: Record<SecretReadMethod, QueryKey>,
-): void {
-  for (const method of SECRET_READS) {
-    const key = keys[method];
-    expect(harness.queryClient.getQueryState(key)?.isInvalidated).toBe(false);
-    expect(harness.queryClient.getQueryData(key)).toEqual({
-      decoy: method,
+  };
+  await waitFor(
+    () => {
+      grew("environment.secrets.list");
+      grew("environment.secrets.versions");
+      if (!rotationFromRevision) grew("environment.secrets.rotation");
+    },
+    { timeout: OWN_INVALIDATION_WAIT_MS },
+  );
+  if (rotationFromRevision) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REVISION_POLL_MS);
     });
+    await waitFor(() => grew("environment.secrets.rotation"), {
+      timeout: OWN_INVALIDATION_WAIT_MS,
+    });
+  }
+  for (const method of SECRET_READS) {
+    expect(hostIdsOf(harness, method)).toEqual([]);
   }
 }
 
 async function waitForInitialReads(harness: TeamPageHarness): Promise<void> {
   await waitFor(() => {
     for (const method of SECRET_READS) {
-      expect(hostIdsOf(harness, method)).not.toHaveLength(0);
+      expect(harness.paramsOf(method)).not.toHaveLength(0);
     }
   });
   await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
@@ -467,12 +483,21 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  // Only the interval timers, which the revision poll runs on, and they follow
+  // real time: Testing Library's `waitFor` polls on the same global
+  // `setInterval`, so a frozen one would stop it re-checking. The 5 s poll
+  // still cannot tick inside a wait of a couple of seconds.
+  vi.useFakeTimers({
+    toFake: ["setInterval", "clearInterval"],
+    shouldAdvanceTime: true,
+  });
   openLinkMock.mockResolvedValue(undefined);
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   resetTeamPageHarness();
   useSelectionAuthorityStore.getState().reset();
   openLinkMock.mockReset();
@@ -496,15 +521,13 @@ describe("secret writes on a build with a server pool", () => {
     expect(await screen.findByTestId("secret-rotation-status")).toBeTruthy();
 
     for (const method of SECRET_READS) {
-      expect(new Set(hostIdsOf(harness, method))).toEqual(
-        new Set([POOL_HOST_ID]),
-      );
+      expect(harness.paramsOf(method)).not.toHaveLength(0);
+      expect(hostIdsOf(harness, method)).toEqual([]);
     }
   });
 
   it("refreshes pool list, versions, and rotation after create", async () => {
     const harness = mountPage(stateWithSecret({}), undefined);
-    const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     const before = readCounts(harness);
 
@@ -512,18 +535,16 @@ describe("secret writes on a build with a server pool", () => {
     fireEvent.click(await screen.findByTestId("secret-save"));
 
     expect(await screen.findByText("DATABASE_URL")).toBeTruthy();
-    await expectPoolReadsAfter(harness, before, 0);
+    await expectAuthnReadsAfter(harness, before, 0, false);
     await waitFor(() =>
       expect(screen.getByTestId("pool-secret-list").textContent).toContain(
         "DATABASE_URL",
       ),
     );
-    expectHostDecoysUntouched(harness, decoys);
   });
 
   it("refreshes pool list, versions, and rotation after replace", async () => {
     const harness = mountPage(stateWithSecret({}), undefined);
-    const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     const before = readCounts(harness);
 
@@ -533,7 +554,7 @@ describe("secret writes on a build with a server pool", () => {
     });
     fireEvent.click(await screen.findByTestId("replace-secret-confirm"));
 
-    await expectPoolReadsAfter(harness, before, 0);
+    await expectAuthnReadsAfter(harness, before, 0, false);
     await waitFor(() => {
       expect(screen.getByTestId("pool-secret-version").textContent).toBe(
         "ver-3",
@@ -542,12 +563,10 @@ describe("secret writes on a build with a server pool", () => {
         "rot-1",
       );
     });
-    expectHostDecoysUntouched(harness, decoys);
   });
 
   it("refreshes pool list, versions, and rotation after Remove", async () => {
     const harness = mountPage(stateWithSecret({}), undefined);
-    const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     const before = readCounts(harness);
 
@@ -556,18 +575,16 @@ describe("secret writes on a build with a server pool", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     expect(await screen.findByTestId("removed-secret-row")).toBeTruthy();
-    await expectPoolReadsAfter(harness, before, 0);
+    await expectAuthnReadsAfter(harness, before, 0, true);
     await waitFor(() =>
       expect(screen.getByTestId("pool-secret-list").textContent).toContain(
         "STRIPE_KEY",
       ),
     );
-    expectHostDecoysUntouched(harness, decoys);
   });
 
   it("refreshes pool list, versions, and rotation after Undo", async () => {
     const harness = mountPage(stateWithSecret({}), undefined);
-    const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     fireEvent.click(await screen.findByRole("button", { name: "Details" }));
     const rows = await screen.findAllByTestId("secret-version");
@@ -575,7 +592,7 @@ describe("secret writes on a build with a server pool", () => {
 
     fireEvent.click(within(rows[1]).getByTestId("secret-version-undo"));
 
-    await expectPoolReadsAfter(harness, before, 0);
+    await expectAuthnReadsAfter(harness, before, 0, true);
     await waitFor(() => {
       expect(screen.getByTestId("pool-secret-version").textContent).toBe(
         "ver-1",
@@ -584,7 +601,6 @@ describe("secret writes on a build with a server pool", () => {
         "STRIPE_KEY",
       );
     });
-    expectHostDecoysUntouched(harness, decoys);
   });
 
   it("refreshes pool list, versions, and rotation after a removal retry", async () => {
@@ -597,7 +613,6 @@ describe("secret writes on a build with a server pool", () => {
       }),
       undefined,
     );
-    const decoys = seedHostScopedDecoys(harness);
     await waitForInitialReads(harness);
     const before = readCounts(harness);
     const status = await screen.findByTestId("secret-removal-status");
@@ -607,7 +622,6 @@ describe("secret writes on a build with a server pool", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("removed-secret-row")).toBeNull(),
     );
-    await expectPoolReadsAfter(harness, before, 1);
-    expectHostDecoysUntouched(harness, decoys);
+    await expectAuthnReadsAfter(harness, before, 1, true);
   });
 });
