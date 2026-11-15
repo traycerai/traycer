@@ -2746,6 +2746,10 @@ describe("<TestEpicSessionTab />", () => {
       readonly streams: ControlledStream[];
       /** Publishes the host's row at `appVersion`, or removes it for `null`. */
       readonly publishRow: (appVersion: string | null) => void;
+      /** The session's latest presentation kind, `null` before the first. */
+      readonly presentationKind: () => EpicSessionPresentation["kind"] | null;
+      /** The mounted session's handle, once it has one. */
+      readonly handle: () => OpenEpicStoreHandle | undefined;
     }
 
     async function mountSessionAtFloor(): Promise<FloorSession> {
@@ -2781,18 +2785,34 @@ describe("<TestEpicSessionTab />", () => {
         emitRowChanged();
       };
       publishRow("2.0.0");
+      let presentationKind: EpicSessionPresentation["kind"] | null = null;
+      let handle: OpenEpicStoreHandle | undefined;
       render(
         <TestEpicSessionTab
           epicId="epic-session-test"
           tabId="epic-session-test"
         >
-          <HandleProbe onHandle={() => undefined} />
+          <HandleProbe
+            onHandle={(mounted) => {
+              handle = mounted;
+            }}
+          />
+          <PresentationProbe
+            onPresentation={(presentation) => {
+              presentationKind = presentation?.kind ?? null;
+            }}
+          />
         </TestEpicSessionTab>,
       );
       await waitFor(() => {
         expect(streams).toHaveLength(1);
       });
-      return { streams, publishRow };
+      return {
+        streams,
+        publishRow,
+        presentationKind: () => presentationKind,
+        handle: () => handle,
+      };
     }
 
     afterEach(() => {
@@ -2800,7 +2820,8 @@ describe("<TestEpicSessionTab />", () => {
     });
 
     it("releases the mounted session's durable stream when its row falls below the floor", async () => {
-      const { streams, publishRow } = await mountSessionAtFloor();
+      const { streams, publishRow, presentationKind } =
+        await mountSessionAtFloor();
 
       act(() => {
         publishRow("1.5.4");
@@ -2809,17 +2830,26 @@ describe("<TestEpicSessionTab />", () => {
       await waitFor(() => {
         expect(streams[0].closeCount).toBe(1);
       });
+      // The release settles into the failed presentation (the opener refuses
+      // the row), and nothing later closes the stream again or opens another.
+      await waitFor(() => {
+        expect(presentationKind()).toBe("failed");
+      });
+      expect(streams).toHaveLength(1);
+      expect(streams[0].closeCount).toBe(1);
     });
 
     it("keeps the stream when its row is removed", async () => {
-      const { streams, publishRow } = await mountSessionAtFloor();
+      const { streams, publishRow, handle } = await mountSessionAtFloor();
 
       act(() => {
         publishRow(null);
       });
-      await act(async () => {
-        await Promise.resolve();
-      });
+      // A round trip over the worker's bridge answers after any close the
+      // removal had sent, so the count below is read after it settled.
+      const mounted = handle();
+      if (mounted === undefined) throw new Error("expected a mounted session");
+      await mounted.encodeRootState();
       expect(streams[0].closeCount).toBe(0);
     });
   });
