@@ -150,7 +150,10 @@ vi.mock("@/providers/use-runner-host", async () => {
     hasLocalHost: undefined,
     traycerCli: null,
   });
-  return { useRunnerHost: () => runnerHost };
+  return {
+    useRunnerHost: () => runnerHost,
+    useRunnerHostOrNull: () => runnerHost,
+  };
 });
 
 vi.mock(
