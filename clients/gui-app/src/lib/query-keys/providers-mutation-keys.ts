@@ -1,4 +1,6 @@
 export const providersMutationKeys = {
+  profileRecordAction: (action: "sign-out" | "remove", hostId: string | null) =>
+    ["providers.profileRecordAction", action, hostId] as const,
   commitProfileMove: () => ["providers.commitProfileMove"] as const,
   signOutProfile: () => ["providers.signOutProfile"] as const,
   setSelection: () => ["providers.setSelection"] as const,
