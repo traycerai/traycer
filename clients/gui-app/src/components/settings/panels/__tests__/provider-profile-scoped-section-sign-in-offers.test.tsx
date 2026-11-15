@@ -1,6 +1,6 @@
 // Providers page section, through the real ProviderProfileScopedSection.
-// offersSignIns on providers.list is the only switch. Absent and false keep
-// today's copy. The profile row, including a no-home presence, is the prop.
+// `offersSignIns` controls sign-in actions and no-home wording. The profile
+// row, including a no-home presence, is the prop.
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );
@@ -21,25 +21,30 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
   profile,
   provider,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { profileWithStanding } from "@/components/settings/panels/__tests__/provider-profile-standing-fixture";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_ID = "host-providers-page";
 const PROFILE_ID = "work";
 const SIGN_IN = "Sign in";
 const SIGN_IN_EVERYWHERE = "Sign in to use everywhere";
+const AVAILABLE_HERE = "Available on this computer";
 const NOT_ON_COMPUTER = "Not on this computer yet";
 const NOT_ON_DEVICE = "Not on this device yet";
 const LINE_TESTID = "profile-on-host-only";
 
-type Offers = true | false | "absent";
+type Offers = true | false | "10.11";
 type ListResponse = ResponseOfMethod<HostRpcRegistry, "providers.list">;
 type ProfilePresence = NonNullable<ProviderProfile["presence"]>;
 
@@ -49,6 +54,7 @@ interface RecordedCall {
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
   clientMock.current = null;
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
@@ -84,7 +90,7 @@ function listBody(offers: Offers, onHostOnly: boolean): ListResponse {
       ? { onHostOnly: [{ providerId: "opencode", profileId: PROFILE_ID }] }
       : {}),
   };
-  if (offers === "absent") return body;
+  if (offers === "10.11") return body;
   return { ...body, offersSignIns: offers };
 }
 
@@ -93,13 +99,16 @@ function renderSection(input: {
   readonly row: ProviderProfile;
   readonly signedOut: boolean;
   readonly onHostOnly: boolean;
+  readonly advertiseLink: boolean;
 }) {
   const calls: RecordedCall[] = [];
+  let listCalls = 0;
   const body = listBody(input.offers, input.onHostOnly);
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
       "providers.list": () => {
+        listCalls += 1;
         return body;
       },
       "providers.startLogin": () => {
@@ -118,20 +127,22 @@ function renderSection(input: {
     },
   });
   clientMock.current = client;
+  const oldComputer = input.offers === "10.11";
+  const manifest = {
+    "providers.list": { major: 10, minor: oldComputer ? 11 : 12 },
+    ...(input.advertiseLink
+      ? { "providers.link": { major: 1, minor: 1 } }
+      : {}),
+    "providers.startLogin": { major: 1, minor: oldComputer ? 4 : 5 },
+    "providers.awaitLogin": { major: 2, minor: oldComputer ? 2 : 4 },
+  } as const;
+  recordNegotiatedHostManifest(HOST_ID, manifest);
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
-  queryClient.setQueryData(
-    hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-      HOST_ID,
-      "providers.list",
-      { native: null },
-    ),
-    body,
-  );
   const onAddProfile = vi.fn<() => void>();
   const state = provider("opencode", [input.row]);
   render(
@@ -160,6 +171,7 @@ function renderSection(input: {
   return {
     onAddProfile,
     startLogins: () => calls.length,
+    listCalls: () => listCalls,
   };
 }
 
@@ -169,7 +181,8 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
       offers: true,
       row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
       signedOut: true,
-      onHostOnly: false,
+      onHostOnly: true,
+      advertiseLink: true,
     });
     const button = await screen.findByRole("button", {
       name: SIGN_IN_EVERYWHERE,
@@ -177,78 +190,104 @@ describe("ProviderProfileScopedSection offersSignIns", () => {
     fireEvent.click(button);
     expect(harness.onAddProfile).toHaveBeenCalledTimes(1);
     expect(harness.startLogins()).toBe(0);
+    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
+    expect(harness.listCalls()).toBe(1);
   });
 
-  it.each([false, "absent"] as const)(
+  it.each([false, "10.11"] as const)(
     "keeps today's Sign in on a signed-out terminal row when offersSignIns is %s",
     async (offers) => {
-      renderSection({
+      const harness = renderSection({
         offers,
         row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
         signedOut: true,
         onHostOnly: false,
+        advertiseLink: false,
       });
       expect(await screen.findByRole("button", { name: SIGN_IN })).toBeTruthy();
       expect(
         screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
       ).toBeNull();
+      expect(harness.listCalls()).toBe(1);
     },
   );
 
-  it("shows the available line when the computer offers sign-ins", async () => {
-    renderSection({
+  it("says Available on this computer when the fact is true", async () => {
+    const harness = renderSection({
       offers: true,
       row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
       signedOut: false,
       onHostOnly: true,
+      advertiseLink: true,
     });
     const line = await screen.findByTestId(LINE_TESTID);
-    expect(line.textContent).toContain("Available on this computer");
+    expect(line.textContent).toContain(AVAILABLE_HERE);
+    expect(
+      screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
+    ).toBeNull();
+    expect(harness.listCalls()).toBe(1);
   });
 
-  it("says Not on this computer yet when the fact is true and the profile has no home", async () => {
-    renderSection({
-      offers: true,
-      row: rowProfile({
-        kind: "managed",
-        signedOut: false,
-        presence: { kind: "no-home" },
-      }),
+  it("shows availability without Sign in to use everywhere on a 10.11 computer", async () => {
+    const harness = renderSection({
+      offers: "10.11",
+      row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
       signedOut: false,
-      onHostOnly: false,
+      onHostOnly: true,
+      advertiseLink: true,
     });
-    expect(await screen.findByText(NOT_ON_COMPUTER)).toBeTruthy();
-    expect(screen.queryByText(NOT_ON_DEVICE)).toBeNull();
+    const line = await screen.findByTestId(LINE_TESTID);
+    expect(line.textContent).toContain(AVAILABLE_HERE);
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
+    ).toBeNull();
+    expect(harness.listCalls()).toBe(1);
   });
 
-  it.each([false, "absent"] as const)(
-    "keeps today's Not on this device yet when offersSignIns is %s",
+  it("shows availability without Sign in to use everywhere when offersSignIns is false", async () => {
+    const harness = renderSection({
+      offers: false,
+      row: rowProfile({ kind: "managed", signedOut: false, presence: null }),
+      signedOut: false,
+      onHostOnly: true,
+      advertiseLink: true,
+    });
+    const line = await screen.findByTestId(LINE_TESTID);
+    expect(line.textContent).toContain(AVAILABLE_HERE);
+    expect(screen.queryByRole("button", { name: "Link" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: SIGN_IN_EVERYWHERE }),
+    ).toBeNull();
+    expect(harness.listCalls()).toBe(1);
+  });
+
+  it.each([true, "10.11"] as const)(
+    "shows the no-home summary and stale standing when offersSignIns is %s",
     async (offers) => {
-      renderSection({
+      const harness = renderSection({
         offers,
-        row: rowProfile({
-          kind: "managed",
-          signedOut: false,
-          presence: { kind: "no-home" },
-        }),
+        row: profileWithStanding(
+          { material: "stale", cause: "session expired" },
+          rowProfile({
+            kind: "managed",
+            signedOut: false,
+            presence: { kind: "no-home" },
+          }),
+        ),
         signedOut: false,
         onHostOnly: false,
+        advertiseLink: false,
       });
-      expect(await screen.findByText(NOT_ON_DEVICE)).toBeTruthy();
-      expect(screen.queryByText(NOT_ON_COMPUTER)).toBeNull();
+      if (offers === true) {
+        expect(await screen.findByText(NOT_ON_COMPUTER)).toBeTruthy();
+        expect(screen.queryByText(NOT_ON_DEVICE)).toBeNull();
+      } else {
+        expect(await screen.findByText(NOT_ON_DEVICE)).toBeTruthy();
+        expect(screen.queryByText(NOT_ON_COMPUTER)).toBeNull();
+      }
+      expect(screen.getByText("Stale")).toBeTruthy();
+      expect(harness.listCalls()).toBe(1);
     },
   );
-
-  it("keeps Add a profile available when the fact is true", async () => {
-    const harness = renderSection({
-      offers: true,
-      row: rowProfile({ kind: "ambient", signedOut: true, presence: null }),
-      signedOut: true,
-      onHostOnly: true,
-    });
-    await screen.findByRole("button", { name: SIGN_IN_EVERYWHERE });
-    fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
-    expect(harness.onAddProfile).toHaveBeenCalledTimes(1);
-    expect(harness.startLogins()).toBe(0);
-  });
 });

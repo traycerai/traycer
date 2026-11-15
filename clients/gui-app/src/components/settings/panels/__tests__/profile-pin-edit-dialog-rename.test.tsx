@@ -46,7 +46,11 @@ vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => holder.client };
+  return {
+    ...actual,
+    useHostClient: () => holder.client,
+    useAuthService: () => ({}),
+  };
 });
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({

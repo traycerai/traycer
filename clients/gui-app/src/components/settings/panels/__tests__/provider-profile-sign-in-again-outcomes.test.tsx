@@ -270,13 +270,20 @@ function renderReauth(input: {
       },
     },
   });
+  clientMock.current = client;
   if (input.ownership) {
     recordNegotiatedHostManifest(HOST_ID, {
       "providers.startLogin": { major: 1, minor: 4 },
       "providers.cancelLogin": { major: 1, minor: 2 },
     });
+  } else {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.list": { major: 10, minor: 12 },
+      "providers.startLogin": { major: 1, minor: 5 },
+      "providers.awaitLogin": { major: 2, minor: 5 },
+      "providers.cancelLogin": { major: 1, minor: 2 },
+    });
   }
-  clientMock.current = client;
   const signInFetch = activeSignInFetch;
   if (signInFetch === null)
     throw new Error("sign-in request fetch harness is missing");
@@ -544,7 +551,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
         offers: true,
         outcome,
         holdAwait: false,
-        ownership: true,
       });
       expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
       expect(
@@ -576,7 +582,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
         outcome,
         holdAwait: false,
         echoedSignedIn: true,
-        ownership: true,
       });
       expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
       expect(
