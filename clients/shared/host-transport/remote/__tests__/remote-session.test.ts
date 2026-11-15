@@ -59,6 +59,7 @@ import {
   SESSION_CONTROL_STREAM_ID,
   decodeMuxFrame,
   encodeMuxFrame,
+  encodedSubscribeStreamId,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_MEMBER_CREDENTIAL,
@@ -151,6 +152,7 @@ import { BrowserSessionsStreamClient } from "../../browser-sessions-stream-clien
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
 import { WorktreeDeleteStreamClient } from "../../worktree-delete-stream-client";
 import { SessionImportRunClient } from "../../session-import-run-client";
+import { NoiseChannel } from "@traycer/protocol/host-transport/remote/noise-channel";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
 // unrecoverable: an UNAUTHORIZED session fatal (the wake-time expired-bearer
@@ -11724,6 +11726,59 @@ describe("RemoteSession: a start request sent and never answered", () => {
     return { relay, session, streamClient };
   }
 
+  /** Every import start the relay received, as each one's session ids. */
+  function sentSelections(relay: FakeRelayHost): string[][] {
+    return relay.subscribeParams.map((params) =>
+      (
+        params as { selections: readonly { nativeSessionId: string }[] }
+      ).selections.map((selection) => selection.nativeSessionId),
+    );
+  }
+
+  const importCallbacks = {
+    onStarted: () => undefined,
+    onProgress: () => undefined,
+    onComplete: () => undefined,
+    onRunEndedUnseen: () => undefined,
+    onConnectionStatus: () => undefined,
+  };
+
+  function startImport(
+    streamClient: RemoteStreamClient<
+      VersionedRpcRegistry,
+      typeof hostStreamRpcRegistry
+    >,
+    nativeSessionId: string,
+  ): SessionImportRunClient {
+    return new SessionImportRunClient({
+      wsStreamClient: streamClient,
+      selections: [{ harness: "claude", nativeSessionId }],
+      permissionMode: "default",
+      callbacks: importCallbacks,
+    });
+  }
+
+  /**
+   * Routes the seal of the first SUBSCRIBE through `sealFirstSubscribe`, and
+   * every other frame through the real seal.
+   */
+  function interceptFirstSubscribeSeal(
+    sealFirstSubscribe: (seal: () => Promise<Uint8Array>) => Promise<Uint8Array>,
+  ): { readonly intercepted: () => boolean; readonly restore: () => void } {
+    const seal = NoiseChannel.prototype.encrypt;
+    let intercepted = false;
+    const spy = vi
+      .spyOn(NoiseChannel.prototype, "encrypt")
+      .mockImplementation(function (this: NoiseChannel, frame: Uint8Array) {
+        if (!intercepted && encodedSubscribeStreamId(frame) !== null) {
+          intercepted = true;
+          return sealFirstSubscribe(() => seal.call(this, frame));
+        }
+        return seal.call(this, frame);
+      });
+    return { intercepted: () => intercepted, restore: () => spy.mockRestore() };
+  }
+
   async function dropAndReconnect(
     relay: FakeRelayHost,
     session: RemoteSession,
@@ -11886,50 +11941,101 @@ describe("RemoteSession: a start request sent and never answered", () => {
     "re-opens a session import attach-only, never re-sending its selections",
     async () => {
       const { relay, session, streamClient } = startSession();
-      const importCallbacks = {
-        onStarted: () => undefined,
-        onProgress: () => undefined,
-        onComplete: () => undefined,
-        onRunEndedUnseen: () => undefined,
-        onConnectionStatus: () => undefined,
-      };
-      const run = new SessionImportRunClient({
-        wsStreamClient: streamClient,
-        selections: [{ harness: "claude", nativeSessionId: "session-a" }],
-        permissionMode: "default",
-        callbacks: importCallbacks,
-      });
+      const run = startImport(streamClient, "session-a");
       try {
         await vi.waitFor(
           () => expect(relay.subscribeParams).toHaveLength(1),
           WAIT,
         );
         await dropAndReconnect(relay, session);
-        const sentinel = new SessionImportRunClient({
-          wsStreamClient: streamClient,
-          selections: [{ harness: "claude", nativeSessionId: "sentinel" }],
-          permissionMode: "default",
-          callbacks: importCallbacks,
-        });
+        const sentinel = startImport(streamClient, "sentinel");
         try {
           await vi.waitFor(
             () => expect(relay.subscribeParams).toHaveLength(3),
             WAIT,
           );
-          expect(
-            relay.subscribeParams.map(
-              (params) =>
-                (
-                  params as {
-                    selections: readonly { nativeSessionId: string }[];
-                  }
-                ).selections.map((selection) => selection.nativeSessionId),
-            ),
-          ).toEqual([["session-a"], [], ["sentinel"]]);
+          expect(sentSelections(relay)).toEqual([
+            ["session-a"],
+            [],
+            ["sentinel"],
+          ]);
         } finally {
           sentinel.close();
         }
       } finally {
+        run.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "replays an import's selections whose start failed to seal, since nothing reached the host",
+    async () => {
+      const { relay, session, streamClient } = startSession();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      const seal = interceptFirstSubscribeSeal(() =>
+        Promise.reject(new Error("seal failed")),
+      );
+      const run = startImport(streamClient, "session-a");
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(1),
+          WAIT,
+        );
+        const sentinel = startImport(streamClient, "sentinel");
+        try {
+          await vi.waitFor(
+            () => expect(relay.subscribeParams).toHaveLength(2),
+            WAIT,
+          );
+          expect(seal.intercepted()).toBe(true);
+          expect(sentSelections(relay)).toEqual([["session-a"], ["sentinel"]]);
+        } finally {
+          sentinel.close();
+        }
+      } finally {
+        seal.restore();
+        run.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "replays an import's selections whose start was still sealing when the connection went",
+    async () => {
+      const { relay, session, streamClient } = startSession();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      const gate = Promise.withResolvers<void>();
+      const seal = interceptFirstSubscribeSeal(async (sealNow) => {
+        await gate.promise;
+        return sealNow();
+      });
+      const run = startImport(streamClient, "session-a");
+      try {
+        await vi.waitFor(() => expect(seal.intercepted()).toBe(true), WAIT);
+        await dropAndReconnect(relay, session);
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(1),
+          WAIT,
+        );
+        gate.resolve();
+        const sentinel = startImport(streamClient, "sentinel");
+        try {
+          await vi.waitFor(
+            () => expect(relay.subscribeParams).toHaveLength(2),
+            WAIT,
+          );
+          expect(sentSelections(relay)).toEqual([["session-a"], ["sentinel"]]);
+        } finally {
+          sentinel.close();
+        }
+      } finally {
+        gate.resolve();
+        seal.restore();
         run.close();
         session.close();
       }

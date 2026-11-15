@@ -116,6 +116,7 @@ import {
   creditPayloadSchema,
   decodeMuxFrame,
   encodeMuxFrame,
+  encodedSubscribeStreamId,
   fatalPayloadSchema,
   sessionOpenAckPayloadSchema,
   unaryResponsePayloadSchema,
@@ -6732,12 +6733,6 @@ export class RemoteSession<
       return;
     }
     const plaintext = encodeMuxFrame(frame);
-    // Before the seal: a write that fails below may still have reached the
-    // host, and treating an unsent request as sent costs only an attach where
-    // the reverse starts the work twice.
-    if (frame.type === MuxFrameType.SUBSCRIBE) {
-      this.subscriptions.get(frame.streamId)?.noteOpenRequestSent();
-    }
     // Appended before the seal, in pull order: the scheduler runs one write at
     // a time, so ring order is wire order, and a write that fails below leaves
     // the frame in the gap rather than nowhere.
@@ -6781,6 +6776,15 @@ export class RemoteSession<
     }
     if (!this.isLegCurrent(connection, leg)) {
       return;
+    }
+    // A SUBSCRIBE is sent from here on, whatever `sendData` answers: the host
+    // may act on a write that reports failure. Before here (a seal that
+    // rejected, a leg that went while it sealed) nothing left this client, so
+    // the subscription may still replay its start. Both the first write and a
+    // ledger resend pass through here.
+    const subscribeStreamId = encodedSubscribeStreamId(muxFrame);
+    if (subscribeStreamId !== null) {
+      this.subscriptions.get(subscribeStreamId)?.noteOpenRequestSent();
     }
     if (!connection.socket.sendData(sealed)) {
       this.handleLegLost(generation, "write-failed", "host-transport-plane");

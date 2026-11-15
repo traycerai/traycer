@@ -851,6 +851,17 @@ export function encodeMuxFrame(input: EncodeMuxFrameInput): Uint8Array {
   return out;
 }
 
+/**
+ * The stream id of an encoded frame when it is a SUBSCRIBE, else `null`. Reads
+ * the header only, so a write path can ask it of every frame it sends.
+ */
+export function encodedSubscribeStreamId(bytes: Uint8Array): number | null {
+  if (bytes.length < HEADER_LEN || bytes[1] !== MuxFrameType.SUBSCRIBE) {
+    return null;
+  }
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(2);
+}
+
 const KNOWN_MUX_FRAME_TYPES: ReadonlySet<number> = new Set(
   Object.values(MuxFrameType),
 );

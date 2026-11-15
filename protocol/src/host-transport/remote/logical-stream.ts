@@ -265,7 +265,7 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
 
   /**
    * A frame of this stream's SUBSCRIBE was handed to the socket. Not when it
-   * was queued: a SUBSCRIBE still in the scheduler when the connection drops
+   * was queued or while it sealed: a SUBSCRIBE that never reached the socket
    * never reached the host, and its replay is the request the person made.
    */
   noteOpenRequestSent(): void {
