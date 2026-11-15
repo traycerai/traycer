@@ -579,12 +579,65 @@ describe("buildHostEnsureCommand", () => {
     });
     expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
     expect(legacyHost.requests).toEqual([]);
-    expect(ctx.progress).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stage: "host-team",
-        message: "Restarting Traycer on this computer to run as acme…",
+    // The plan is read before anything is printed, so a host that cannot
+    // transfer is refused with no disclosure and no restart line.
+    expect(ctx.progress).not.toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "host-team" }),
+    );
+  });
+
+  it("leaves a sign-in made during the command alone when --team enrols the computer", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "team-ensure-enrol-"));
+    mocks.credentialsPath = join(directory, "credentials");
+    const token = "inline-team-token";
+    await writeCredentialsFile(
+      mocks.credentialsPath,
+      {
+        token,
+        refreshToken: "inline-refresh",
+        savedAt: "2026-11-10T00:00:00.000Z",
+        user: {
+          id: "test-person",
+          email: "fixture@example.test",
+          name: "Member",
+        },
+      },
+      0,
+    );
+    mocks.attendedTeamInstallMock.mockResolvedValue({
+      kind: "enrol",
+      session: {
+        preflight: { state: "signed-in-inline", reason: null },
+        inlineSignInToken: token,
+      },
+      slug: "acme",
+      token: "attended-install-token",
+      environmentId: "resolved-environment-acme",
+    });
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue({
+      hostId: "host-local",
+      environmentId: "resolved-environment-acme",
+    });
+    mocks.ensureHostMock.mockResolvedValue(
+      baseEnsureResult({
+        action: "started",
+        serviceLifecycle: lifecycle({ postSwapAction: "start" }),
       }),
     );
+    const ctx = fakeCtx();
+
+    try {
+      await buildHostEnsureCommand(baseArgs({ team: "acme" }))(ctx);
+
+      // The enrol path has no sign-out step and no warning about one.
+      expect(ctx.output.humanRequired).not.toHaveBeenCalled();
+      expect((await readCredentialsFile(mocks.credentialsPath))?.token).toBe(
+        token,
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+      mocks.credentialsPath = "";
+    }
   });
 
   it.each(["ensure", "bind", "not-running", "unreadable"] as const)(
