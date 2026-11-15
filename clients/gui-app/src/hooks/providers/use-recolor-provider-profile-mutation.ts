@@ -77,10 +77,11 @@ export function useRecolorProviderProfileForClient(
       providerProfileSaveRequest({ type: "recolor", ...variables }),
     prepareRequest: (request) =>
       confirmEnvironmentProfile(request, environmentProfileExists),
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: "providers.setEnabled", request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     options: {
       mutationKey: providersMutationKeys.recolorProfile(),

@@ -15,6 +15,9 @@ import type {
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { SettingsSave } from "@traycer/protocol/host/environment/settings-save-mapping";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import {
   sendFollowedSave,
   useSettingsSave,
@@ -111,10 +114,19 @@ export function useProvidersMcpMutate(): UseMutationResult<
   const grant = useExecutableWriteGrant();
   const prepareSave = useSettingsSave(client, SAVED_KINDS);
   // The save is prepared by the editor of the render the person acted in,
-  // which `onMutate` sees and the function, run with a newer render's options,
-  // does not (see `useHostMutation`).
-  const [prepareMadeIn] = useState(
-    () => new WeakMap<MutationFunctionContext, PrepareSettingsSave>(),
+  // on the sign-in current as they act, which `onMutate` sees and the
+  // function, run with a newer render's options, does not (see
+  // `useHostMutation`).
+  const cloudSource = useEnvironmentCloud();
+  const [pressedIn] = useState(
+    () =>
+      new WeakMap<
+        MutationFunctionContext,
+        {
+          readonly prepare: PrepareSettingsSave;
+          readonly pressedOn: EnvironmentCloud | null;
+        }
+      >(),
   );
   return useMutation<
     McpMutateResult,
@@ -126,11 +138,14 @@ export function useProvidersMcpMutate(): UseMutationResult<
     // requester. Keep the observer attached while that host's readiness changes.
     mutationKey: providersMutationKeys.mcpMutate(),
     onMutate: (_variables, context) => {
-      prepareMadeIn.set(context, prepareSave);
+      pressedIn.set(context, {
+        prepare: prepareSave,
+        pressedOn: cloudSource === null ? null : cloudSource(),
+      });
       return { hostId: client.getActiveHostId() };
     },
     mutationFn: async (variables, context) => {
-      const prepare = prepareMadeIn.get(context) ?? prepareSave;
+      const pressed = pressedIn.get(context);
       const hostId = client.getActiveHostId();
       const listParams = {
         providerId: variables.providerId,
@@ -169,11 +184,15 @@ export function useProvidersMcpMutate(): UseMutationResult<
         variables.mutation.action === "toggleTool"
           ? request
           : await grant(request, client);
+      const save: SettingsSave = {
+        method: "providers.nativeMutate",
+        request: sent,
+      };
+      // A save with no press recorded is not sent.
       const response = await sendFollowedSave(
-        await prepare(
-          { method: "providers.nativeMutate", request: sent },
-          hostId,
-        ),
+        pressed === undefined
+          ? { kind: "abandoned", method: save.method }
+          : await pressed.prepare(save, hostId, pressed.pressedOn),
         () => client.request("providers.nativeMutate", sent),
       );
       return { data: mapNativeMutateToMcpMutate({ response }), snapshot };

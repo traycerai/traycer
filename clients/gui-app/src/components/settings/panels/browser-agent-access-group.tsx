@@ -112,10 +112,11 @@ function AgentBrowserAccessRow(): ReactNode {
     mutationKey: configMutationKeys.browserSet(),
     errorMessage: "Couldn't update agent browser access",
     invalidateMethods: [AGENT_BROWSER_ACCESS_GET],
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: AGENT_BROWSER_ACCESS_SET, request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
   });
 

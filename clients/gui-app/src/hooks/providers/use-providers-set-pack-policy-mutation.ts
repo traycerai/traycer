@@ -48,10 +48,11 @@ export function useProvidersSetPackPolicyForClient(
     client,
     method: "providers.setPackPolicy",
     mapVariables: (variables) => variables,
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: "providers.setPackPolicy", request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     options: {
       mutationKey: providersMutationKeys.setPackPolicy(),

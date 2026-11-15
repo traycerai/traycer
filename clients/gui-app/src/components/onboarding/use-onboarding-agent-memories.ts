@@ -170,10 +170,11 @@ export function useOnboardingAgentMemories(input: {
   });
   const setTraycerMemories = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: AGENT_MEMORIES_SET, request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     mutationKey: configMutationKeys.agentMemoriesSet(),
     // Reported on the act, beside the change it is about.

@@ -75,10 +75,11 @@ export function useRenameProviderProfileForClient(
       providerProfileSaveRequest({ type: "rename", ...variables }),
     prepareRequest: (request) =>
       confirmEnvironmentProfile(request, environmentProfileExists),
-    followSettingsSave: (request, sentOn) =>
+    followSettingsSave: (request, sentOn, pressedOn) =>
       prepareSave(
         { method: "providers.setEnabled", request },
         sentOn.getActiveHostId(),
+        pressedOn,
       ),
     options: {
       mutationKey: providersMutationKeys.renameProfile(),

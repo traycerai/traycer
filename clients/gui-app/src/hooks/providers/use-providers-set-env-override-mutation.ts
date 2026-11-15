@@ -28,10 +28,11 @@ export function useProvidersSetEnvOverride(): UseMutationResult<
     mutationKey: providersMutationKeys.setEnvOverride(),
     errorMessage: "Couldn't save the variable.",
     invalidateMethods: PROVIDER_INVALIDATIONS,
-    followSettingsSave: (request, client) =>
+    followSettingsSave: (request, client, pressedOn) =>
       prepareSave(
         { method: "providers.setEnvOverride", request },
         client.getActiveHostId(),
+        pressedOn,
       ),
   });
 }
