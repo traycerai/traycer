@@ -134,8 +134,11 @@ function teamsNamed(
 }
 
 /**
- * Ask for a fresh read of each team; a team already waiting is read again.
- * The entry is refreshed, not replaced, so a read already out answers it.
+ * Ask for a read of each team started after this trigger; a team already
+ * waiting is read again. A read already out was started before the trigger
+ * and cannot answer for it, so it is cancelled first, as G6 does on the same
+ * entry: the cancel reverts the entry and adds no answer to its count, and
+ * only the read started here does.
  */
 function askReads(
   queryClient: QueryClient,
@@ -152,17 +155,22 @@ function askReads(
     return { pending, signInAsked: state.signInAsked || signIn };
   });
   for (const team of asked) {
-    void queryClient.invalidateQueries(
-      {
-        queryKey: authQueryKeys.claimedComputers(
-          era.auth,
-          era.viewerUserId,
-          team.environmentId,
-        ),
-        exact: true,
-      },
-      { cancelRefetch: false },
+    const options = claimedComputersOptions(
+      era.auth,
+      era.viewerUserId,
+      team.environmentId,
     );
+    const inFlight =
+      queryClient.isFetching({ queryKey: options.queryKey, exact: true }) > 0;
+    void (
+      inFlight
+        ? queryClient.cancelQueries({ queryKey: options.queryKey, exact: true })
+        : Promise.resolve()
+    )
+      .then(() => queryClient.fetchQuery({ ...options, staleTime: 0 }))
+      // A failed read is an answer the entry holds; a cancelled one is a
+      // later trigger's to replace.
+      .catch(() => undefined);
   }
 }
 
@@ -243,7 +251,7 @@ interface ReadTarget extends NoticeTeam {
  * yet shows the owner's sentence. A team's read waits until one answers: a
  * failed read is read again on focus and on the next list refresh. Each team
  * has one entry, which a claimed computer's cover reads too; a trigger
- * refreshes it.
+ * reads it again.
  */
 export function useClaimedComputerNotice(): void {
   const auth = useHostBinding()?.auth ?? null;
