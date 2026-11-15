@@ -351,8 +351,8 @@ export function createRemoteHostTransport<
           );
           return { kind: "ok", grant: minted.grant };
         }
-        if (minted.kind === "not-admitted")
-          options.onState(options.hostId, "not-admitted");
+        if (minted.kind === "not-admitted" || minted.kind === "not-a-member")
+          options.onState(options.hostId, minted.kind);
         else if (minted.kind === "unreachable")
           options.onState(options.hostId, "token-unavailable");
         return minted.provision;
