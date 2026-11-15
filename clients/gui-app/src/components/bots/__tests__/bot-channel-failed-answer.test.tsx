@@ -42,6 +42,7 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import { botReply } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
   negotiateBotSend,
   resetBotFailedRequestSupport,
@@ -1898,5 +1899,115 @@ describe("<BotChannelView tiles={null} /> the line under a post the bot did not 
     );
     expect(screen.queryByTestId("bot-thread-unanswered")).toBeNull();
     expect(screen.queryByTestId("bot-channel-unanswered")).toBeNull();
+  });
+});
+
+describe("a frozen turn in a bot's channel or thread draws no error row, and the summary says it", () => {
+  const FROZEN_RAW =
+    "SANDBOX_FROZEN: sandbox host 'sbx-1': the sandbox is paused";
+  const FROZEN_REASON = {
+    summary: FROZEN_RAW,
+    code: "SANDBOX_FROZEN",
+    harnessId: "claude",
+    action: "none",
+  } as const;
+  const TWO_SENTENCES =
+    "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.";
+
+  /** The bot's turn that the sandbox's want of credits ended. */
+  function frozenTurn(): Message {
+    const turn = botReply({
+      messageId: "turn-frozen",
+      text: "",
+      timestamp: 2_000,
+    });
+    return {
+      ...turn,
+      blocks: [
+        {
+          type: "error",
+          blockId: "turn-frozen:error",
+          status: "completed",
+          timestamp: 2_000,
+          parentBlockId: null,
+          message: FROZEN_RAW,
+          recoverable: false,
+          code: "SANDBOX_FROZEN",
+          failure: null,
+        },
+      ],
+    };
+  }
+
+  function expectNoErrorRow(): void {
+    expect(document.querySelector("[data-failure-presentation]")).toBeNull();
+    expect(screen.queryByText(/^Paused:/)).toBeNull();
+    expect(screen.queryByText(FROZEN_RAW)).toBeNull();
+  }
+
+  it("in the channel", () => {
+    installHostDirectoryRows([sandboxHostEntry(BOUND_HOST_ID, null)]);
+    activityStore.setState({
+      activity: {
+        trunk: { ...sessionOn("failed", POST_REQUEST), reason: FROZEN_REASON },
+        threads: {},
+      },
+    });
+    mountChannelWith(null, [memberPost(VIEWER_USER_ID), frozenTurn()]);
+
+    expect(screen.getByTestId("bot-reply-row")).toBeTruthy();
+    expectNoErrorRow();
+    expect(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-unanswered",
+      ).textContent,
+    ).toBe(`Not answered: ${TWO_SENTENCES} · Retry · Edit`);
+  });
+
+  it("in a thread's panel", () => {
+    const requestId = "req-thread-reply";
+    installHostDirectoryRows([sandboxHostEntry(BOUND_HOST_ID, null)]);
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    mocks.threadHandle = {
+      store: createChannelStore([
+        {
+          ...memberPost(VIEWER_USER_ID),
+          messageId: "thread-reply",
+          conversationRequest: {
+            requestId,
+            resolvedAt: null,
+            resolvedByMessageId: null,
+          },
+        },
+        frozenTurn(),
+      ]),
+    } as ChatSessionStoreHandle;
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: {
+          [THREAD_ID]: {
+            ...failedOn(requestId),
+            reason: FROZEN_REASON,
+          },
+        },
+      },
+    });
+    mountChannelWith(
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      [memberPost(VIEWER_USER_ID)],
+    );
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).getByTestId("bot-reply-row")).toBeTruthy();
+    expectNoErrorRow();
+    expect(
+      within(panel).getByTestId("bot-message-unanswered").textContent,
+    ).toBe(`Not answered: ${TWO_SENTENCES} · Retry · Edit`);
   });
 });
