@@ -19,6 +19,7 @@ import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 const mocks = vi.hoisted(() => ({
   openLink: vi.fn(),
   setApiKeyMutate: vi.fn(),
+  expectedApiKey: null as string | null,
   clearApiKeyMutate: vi.fn(),
   setExpectedEnvironmentIds: new Array<string | null>(),
   clearExpectedEnvironmentIds: new Array<string | null>(),
@@ -29,7 +30,7 @@ const openLink = mocks.openLink;
 
 const apiKeyMutationVariablesSchema = z.strictObject({
   providerId: z.string(),
-  apiKey: z.string(),
+  keyMatches: z.boolean(),
 });
 const apiKeyMutationCallsSchema = z.array(
   z.tuple([apiKeyMutationVariablesSchema]).rest(z.unknown()),
@@ -45,9 +46,29 @@ function parseApiKeyMutationCalls(
 }
 
 vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
-  useProvidersSetApiKey: (expectedEnvironmentId: string | null) => {
+  useProvidersSetApiKey: (
+    expectedEnvironmentId: string | null,
+    readApiKey: () => string,
+    clearApiKeyInput: () => void,
+  ) => {
     mocks.setExpectedEnvironmentIds.push(expectedEnvironmentId);
-    return { mutate: mocks.setApiKeyMutate, isPending: false };
+    return {
+      mutate: (variables: { readonly providerId: string }) => {
+        let keyMatches = false;
+        try {
+          keyMatches =
+            mocks.expectedApiKey !== null &&
+            readApiKey() === mocks.expectedApiKey;
+        } finally {
+          clearApiKeyInput();
+        }
+        mocks.setApiKeyMutate({
+          providerId: variables.providerId,
+          keyMatches,
+        });
+      },
+      isPending: false,
+    };
   },
 }));
 
@@ -70,6 +91,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.credentialRefusal = null;
+  mocks.expectedApiKey = null;
   mocks.setExpectedEnvironmentIds.length = 0;
   mocks.clearExpectedEnvironmentIds.length = 0;
 });
@@ -194,6 +216,7 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
     );
 
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    mocks.expectedApiKey = "sk-secret";
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
 
@@ -204,8 +227,8 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
       calls !== null &&
         calls.length === 2 &&
         firstCall?.providerId === "cursor" &&
-        firstCall.apiKey === "sk-secret" &&
-        secondCall?.apiKey === "sk-secret",
+        firstCall.keyMatches &&
+        secondCall?.keyMatches,
     ).toBe(true);
   });
 });
@@ -244,6 +267,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
   it("control: the vendor's own key and a key of no recognizable shape are saved, with no refusal", () => {
     for (const draft of [OPENROUTER_KEY, "unrecognized-shape-fake-key"]) {
       mocks.setApiKeyMutate.mockClear();
+      mocks.expectedApiKey = draft;
       const { unmount } = render(
         <UnscopedProviderApiKeySection
           state={apiKeyState("openrouter")}
@@ -265,7 +289,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
         savedCalls !== null &&
           savedCalls.length === 1 &&
           savedCall?.providerId === "openrouter" &&
-          savedCall.apiKey === draft,
+          savedCall.keyMatches,
       ).toBe(true);
       unmount();
     }
@@ -326,6 +350,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
     expect(
       screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
     ).toBe(false);
+    mocks.expectedApiKey = OPENROUTER_KEY;
     fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
     const savedCalls = parseApiKeyMutationCalls(
       mocks.setApiKeyMutate.mock.calls,
@@ -335,7 +360,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
       savedCalls !== null &&
         savedCalls.length === 1 &&
         savedCall?.providerId === "openrouter" &&
-        savedCall.apiKey === OPENROUTER_KEY,
+        savedCall.keyMatches,
     ).toBe(true);
   });
 

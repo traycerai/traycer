@@ -53,10 +53,12 @@ const DEV_MANIFEST = {
 };
 
 type Opened = { readonly kind: "refused" };
-// Never answers until the test ends, so a recording stays as started.
+// Holds a recording at the opening boundary until teardown begins.
 const unanswered: ((answer: Opened) => void)[] = [];
 const open = vi.fn<(quality: string) => Promise<Opened>>();
 const reveal = vi.fn<(recordingId: string) => Promise<boolean>>();
+let releaseHeldDigest: (() => void) | null = null;
+let restoreHeldDigest: (() => void) | null = null;
 const channel = {
   open,
   append: () => Promise.resolve({ kind: "ok" }),
@@ -65,7 +67,34 @@ const channel = {
   onFinishRequested: () => () => undefined,
 };
 
+async function settleRecordingTeardown(): Promise<void> {
+  try {
+    try {
+      cleanup();
+      Reflect.deleteProperty(navigator, "locks");
+      open.mockResolvedValue({ kind: "refused" });
+      useSoundtrackStore.getState().disable();
+      for (const answer of unanswered.splice(0)) answer({ kind: "refused" });
+    } finally {
+      const releaseDigest = releaseHeldDigest;
+      releaseHeldDigest = null;
+      releaseDigest?.();
+    }
+    await vi.waitFor(() => {
+      expect(useSoundtrackStore.getState().recording.kind).not.toBe("saving");
+    });
+  } finally {
+    const restoreDigest = restoreHeldDigest;
+    restoreHeldDigest = null;
+    restoreDigest?.();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  }
+}
+
 beforeEach(() => {
+  releaseHeldDigest = null;
+  restoreHeldDigest = null;
   resetFakePorts();
   open.mockReset().mockImplementation(
     () =>
@@ -86,16 +115,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  cleanup();
-  Reflect.deleteProperty(navigator, "locks");
-  useSoundtrackStore.getState().disable();
-  // A recording still opening would stay the store's, and block the next one.
-  for (const answer of unanswered.splice(0)) answer({ kind: "refused" });
-  await vi.waitFor(() => {
-    expect(useSoundtrackStore.getState().recording.kind).not.toBe("saving");
-  });
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
+  await settleRecordingTeardown();
 });
 
 function renderSection(): void {
@@ -350,6 +370,61 @@ describe("the Record session row", () => {
       useSoundtrackStore.getState().setPaused(false);
     });
     expect(screen.getByText("Recording, 0:00 of 30:00.")).toBeTruthy();
+  });
+
+  it("settles a late save-channel open after paused recording teardown begins", async () => {
+    renderSection();
+    await openSession();
+    await userEvent.click(screen.getByRole("combobox", { name: "Stop after" }));
+    await userEvent.click(screen.getByRole("option", { name: "30 minutes" }));
+
+    let signalDigestStarted: (() => void) | null = null;
+    const digestStarted = new Promise<void>((resolve) => {
+      signalDigestStarted = resolve;
+    });
+    let releaseDigest: (() => void) | null = null;
+    const digestGate = new Promise<void>((resolve) => {
+      releaseDigest = resolve;
+    });
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    const digestSpy = vi
+      .spyOn(crypto.subtle, "digest")
+      .mockImplementation(async (algorithm, data) => {
+        const digest = await originalDigest(algorithm, data);
+        const signalStarted = signalDigestStarted;
+        if (signalStarted === null)
+          throw new Error("Expected digest start signal");
+        signalStarted();
+        await digestGate;
+        return digest;
+      });
+    releaseHeldDigest = () => {
+      const release = releaseDigest;
+      if (release === null) throw new Error("Expected digest gate");
+      release();
+    };
+    restoreHeldDigest = () => digestSpy.mockRestore();
+
+    act(() => {
+      useSettingsStore.setState({ soundtrackPaused: true });
+      useSoundtrackStore.getState().setPaused(true);
+    });
+    await userEvent.click(
+      screen.getByRole("switch", { name: "Record session" }),
+    );
+    expect(
+      await screen.findByText("Recording paused, 0:00 of 30:00."),
+    ).toBeTruthy();
+    await digestStarted;
+    expect(open).not.toHaveBeenCalled();
+
+    const teardown = settleRecordingTeardown();
+    expect(useSoundtrackStore.getState().recording.kind).toBe("saving");
+    await teardown;
+
+    expect(open).toHaveBeenCalledWith("compressed");
+    expect(unanswered).toHaveLength(0);
+    expect(useSoundtrackStore.getState().recording.kind).not.toBe("saving");
   });
 
   it("rehydrates a quality and a limit the app does not know to the defaults", async () => {
