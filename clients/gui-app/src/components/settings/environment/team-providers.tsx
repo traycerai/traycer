@@ -60,7 +60,7 @@ import {
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "@/components/settings/panels/provider-env-subtitle";
 import {
-  useCanEditConfiguration,
+  canManageTeamProviderAccounts,
   useConfigurationSource,
 } from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
@@ -352,7 +352,8 @@ function TeamProviderKey(props: {
   readonly environmentId: string;
 }): ReactNode {
   const environmentName = usePickedTeamLabel(props.environmentId);
-  const canManage = useCanEditConfiguration();
+  const source = useConfigurationSource();
+  const canManage = canManageTeamProviderAccounts(source);
   return (
     <TeamProviderApiKeySection
       providerId={props.providerId}

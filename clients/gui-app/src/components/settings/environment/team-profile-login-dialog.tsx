@@ -48,7 +48,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useCanEditConfiguration } from "./configuration-source";
+import {
+  canManageTeamProviderAccounts,
+  useConfigurationSource,
+} from "./configuration-source";
 import {
   useTeamProviderRecords,
   type TeamProviderRecords,
@@ -84,7 +87,8 @@ export function TeamProfileLoginDialog(props: TeamLoginProps): ReactNode {
     client,
     "providers.awaitLogin",
   );
-  const canManage = useCanEditConfiguration();
+  const source = useConfigurationSource();
+  const canManage = canManageTeamProviderAccounts(source);
   const records = useTeamProviderRecords();
   const refusalReason = teamLoginRefusal({
     client,

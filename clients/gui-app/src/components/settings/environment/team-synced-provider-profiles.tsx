@@ -22,7 +22,7 @@ import {
 } from "@/lib/provider-ordering";
 import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import {
-  useCanEditConfiguration,
+  canManageTeamProviderAccounts,
   useConfigurationSource,
 } from "./configuration-source";
 import {
@@ -45,7 +45,7 @@ export function TeamSyncedProviderProfiles(props: {
 }): ReactNode {
   const records = useTeamProviderRecords();
   const source = useConfigurationSource();
-  const canEdit = useCanEditConfiguration();
+  const canEdit = canManageTeamProviderAccounts(source);
   const [move, setMove] = useState<{
     readonly source: ProviderProfile;
     readonly destination: ProviderProfile;
