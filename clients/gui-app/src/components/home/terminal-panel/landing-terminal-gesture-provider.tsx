@@ -5,6 +5,7 @@ import { useHostDirectory } from "@/lib/host";
 import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
+import { useLandingDraftNamedHostId } from "@/stores/home/landing-draft-store";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
@@ -63,8 +64,10 @@ export function LandingTerminalGestureProvider(props: {
   // machines. The FROZEN submit client throughout: this provider both lists
   // and creates through one client, and a create must provably land on the
   // host the chip resolved (`useComposerPlacement`); a derivation move
-  // re-resolves the placement and hands this provider a new client.
-  const placement = useComposerPlacement(null);
+  // re-resolves the placement and hands this provider a new client. A draft
+  // opened for one machine (`LandingDraftTab.namedHostId`) names it, as its
+  // composer does, so the terminal beside it lists and creates there too.
+  const placement = useComposerPlacement(useLandingDraftNamedHostId(draftId));
   // A terminal asked for from outside the panel on another host (the
   // Automations row's Open terminal) is opened on THAT host, folderless,
   // without moving the composer: while it is unserved the panel targets the

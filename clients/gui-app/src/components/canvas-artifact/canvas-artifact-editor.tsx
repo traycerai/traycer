@@ -1,4 +1,5 @@
 import { useArtifactEscape } from "@/components/artifacts/artifact-expanded-context";
+import { COMMENT_OPENER } from "@/lib/comments/comment-opener";
 import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
 import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
@@ -175,6 +176,12 @@ function canvasDrawingEnabled(
 function canvasSelectionEnabled(readOnly: boolean, tool: CanvasTool): boolean {
   return !readOnly && tool === "select";
 }
+function canvasCommentMode(
+  tool: CanvasTool,
+  events: CanvasFrameEvents | null,
+): boolean {
+  return tool === "comment" && events?.commentsEnabled === true;
+}
 function handleCanvasUndo(
   event: KeyboardEvent,
   store: CanvasLayoutStore,
@@ -349,7 +356,7 @@ function CanvasShownViewport({
  */
 export function CanvasArtifactEditor(props: CanvasArtifactEditorProps) {
   return (
-    <ArtifactExpansion title="Canvas">
+    <ArtifactExpansion title="Canvas" commentsInline>
       <CanvasEditorSurface {...props} />
     </ArtifactExpansion>
   );
@@ -921,6 +928,7 @@ function CanvasEditorSurface({
       setFullscreen,
     ],
   );
+  const commentMode = canvasCommentMode(activeTool, frameEvents);
   const actions = useMemo<CanvasNodeActions>(
     () => ({
       sourceForBoard,
@@ -930,8 +938,7 @@ function CanvasEditorSurface({
         (!readOnly &&
           activeTool === "comment" &&
           frameEvents?.commentsEnabled === true),
-      commentMode:
-        activeTool === "comment" && frameEvents?.commentsEnabled === true,
+      commentMode,
       panMode: activeTool === "hand" && !readOnly,
       onAddError: (path, error) => {
         if (readOnly) return;
@@ -1017,6 +1024,7 @@ function CanvasEditorSurface({
       sourceForBoard,
       selectEnabled,
       activeTool,
+      commentMode,
       frameEvents,
       boardEvents,
       readOnly,
@@ -1242,6 +1250,9 @@ function CanvasEditorSurface({
                   }}
                 >
                   <ReactFlow<CanvasFlowNode>
+                    // A press on the pane pins a comment while comments are
+                    // on: the pin asks an open draft's question itself.
+                    {...(commentMode ? COMMENT_OPENER : {})}
                     // Transparent as well: React Flow's own fill would show
                     // as a box scaling with the layer. The backdrop below
                     // paints the same fill and stays put.

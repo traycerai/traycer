@@ -10,8 +10,11 @@ export type ArtifactEscapeHandler = (event: KeyboardEvent) => boolean;
 export interface ArtifactExpansionControls {
   /** Whether this surface is raised over the task right now. */
   readonly expanded: boolean;
-  /** Raise it. Does nothing while something needs the reader. */
-  readonly expand: () => void;
+  /**
+   * Raise it, and say whether it is up. Does nothing, and answers `false`,
+   * while something needs the reader.
+   */
+  readonly expand: () => boolean;
   /** Lower it and return focus to the toggle. */
   readonly collapse: () => void;
   /**

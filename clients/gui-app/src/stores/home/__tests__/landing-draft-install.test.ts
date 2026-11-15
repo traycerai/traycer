@@ -42,6 +42,7 @@ function snapshot(
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
     returnedSandbox: null,
+    namedHostId: null,
     durability: "saved",
     ...overrides,
   };
@@ -102,6 +103,17 @@ describe("landing draft store: installLandingDraft", () => {
     expect(draft.adoption).toEqual(UNADOPTED_LANDING_DRAFT);
     expect(draft.hostRevision).toBe(0);
     expect(draft.supersedes).toBeNull();
+  });
+
+  it("keeps the host a draft was opened for through a reload", () => {
+    useLandingDraftStore
+      .getState()
+      .installLandingDraft(snapshot("named", { namedHostId: "host-a" }));
+    expect(readDraft("named").namedHostId).toBe("host-a");
+    const stored: unknown = JSON.parse(
+      localStorage.getItem(LANDING_DRAFT_PERSIST_KEY) ?? "null",
+    );
+    expect(JSON.stringify(stored)).toContain('"namedHostId":"host-a"');
   });
 
   it("leaves the store as it was and throws when a saved install cannot be saved", () => {
