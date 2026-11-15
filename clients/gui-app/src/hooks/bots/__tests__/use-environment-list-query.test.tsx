@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import {
+  authnAnswer,
   mountTeamPage,
   poolSource,
   resetTeamPageHarness,
@@ -116,5 +117,93 @@ describe("useEnvironmentListQuery - per-viewer cache partition", () => {
 
     expect(fixture.requestCount()).toBe(0);
     expect(result.current.data).toBeUndefined();
+  });
+});
+
+describe("useEnvironmentListQuery - the account's teams", () => {
+  const acme = { teamId: "team-a", slug: "acme", avatarUrl: null };
+  const beta = { teamId: "team-b", slug: "beta", avatarUrl: null };
+
+  /** The directory names one team the account may not yet list; authn knows its role. */
+  function mountTeamDirectory() {
+    let reads = 0;
+    const harness = mountTeamPage(poolSource("admin"), {});
+    harness.auth.listEnvironments = () => {
+      reads += 1;
+      return Promise.resolve({
+        kind: "ok",
+        list: {
+          environments: [
+            {
+              environmentId: "env-team-a",
+              ownerKind: "organization",
+              ownerId: "team-a",
+              roomId: "room-team-a",
+              label: "Acme",
+            },
+          ],
+        },
+      });
+    };
+    harness.cloudResponses.set(
+      "GET /api/v3/environments/env-team-a/members",
+      () => authnAnswer(200, { viewer: { effectiveRole: "editor" } }),
+    );
+    harness.queryClient.setDefaultOptions({
+      queries: { retry: false, staleTime: 0, gcTime: Infinity },
+      mutations: { retry: false },
+    });
+    return { ...harness, directoryReads: () => reads };
+  }
+
+  function setTeams(teams: (typeof acme)[]): void {
+    act(() => useAuthStore.setState({ shareableTeams: teams }));
+  }
+
+  it("lists a team degraded until the account names it, then reads the list again", async () => {
+    const fixture = mountTeamDirectory();
+    viewer.current = "user-a";
+    setSignedInViewer("user-a");
+    const { result } = renderHook(() => useEnvironmentListQuery(true), {
+      wrapper: fixture.Wrapper,
+    });
+
+    await waitFor(() => {
+      expect(result.current.data?.environments[0]).toMatchObject({
+        providerHandle: null,
+        effectiveRole: "viewer",
+      });
+    });
+    expect(fixture.directoryReads()).toBe(1);
+
+    setTeams([acme]);
+
+    await waitFor(() => {
+      expect(result.current.data?.environments[0]).toMatchObject({
+        providerHandle: "acme",
+        effectiveRole: "editor",
+      });
+    });
+    expect(fixture.directoryReads()).toBe(2);
+  });
+
+  it("reads again for a changed set of teams, and not for the same set written again or reordered", async () => {
+    const fixture = mountTeamDirectory();
+    viewer.current = "user-a";
+    setSignedInViewer("user-a");
+    const { result } = renderHook(() => useEnvironmentListQuery(true), {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    setTeams([acme, beta]);
+    await waitFor(() => expect(fixture.directoryReads()).toBe(2));
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+    setTeams([{ ...acme }, { ...beta }]);
+    expect(result.current.isFetching).toBe(false);
+    setTeams([beta, acme]);
+    expect(result.current.isFetching).toBe(false);
+
+    expect(fixture.directoryReads()).toBe(2);
   });
 });
