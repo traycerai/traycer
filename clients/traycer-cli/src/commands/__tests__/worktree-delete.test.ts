@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -15,6 +16,8 @@ import type { StreamCloseReason } from "../../../../shared/host-transport/i-stre
 import type { StreamMethodSupport } from "../../../../shared/host-transport/ws-stream-client";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { resolveEndpoint } from "../../internal/host-rpc";
+import { config } from "../../config";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -99,6 +102,7 @@ vi.mock("../../internal/host-rpc", async () => {
 
 const resolveHostAuthMock = vi.mocked(resolveHostAuth);
 const resolveEndpointMock = vi.mocked(resolveEndpoint);
+const pendingWorktreeCommands = new Set<Promise<void>>();
 
 const ctx = {} as CommandContext;
 
@@ -141,14 +145,22 @@ function startWorktreeDelete(
   commandContext: CommandContext,
 ): Promise<CommandResult> {
   const pending = buildWorktreeDeleteCommand({ worktreePath })(commandContext);
-  void pending.catch(() => undefined);
+  const settled = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  pendingWorktreeCommands.add(settled);
+  void settled.then(() => pendingWorktreeCommands.delete(settled));
   return pending;
 }
 
 async function waitForSessions(count: number): Promise<void> {
-  await vi.waitFor(() => {
-    expect(hoisted.state.sessions.length).toBeGreaterThanOrEqual(count);
-  });
+  await vi.waitFor(
+    () => {
+      expect(hoisted.state.sessions.length).toBeGreaterThanOrEqual(count);
+    },
+    { timeout: 10_000 },
+  );
 }
 
 beforeEach(async () => {
@@ -205,6 +217,39 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  const cleanupStartedAt = performance.now();
+  const pendingAtCleanup = pendingWorktreeCommands.size;
+  const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
+  const lockPresentAtCleanup = existsSync(lockPath);
+  if (pendingWorktreeCommands.size > 0) {
+    await vi.waitFor(
+      () => {
+        expect(
+          hoisted.state.sessions.length > 0 ||
+            pendingWorktreeCommands.size === 0,
+        ).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
+    for (const session of hoisted.state.sessions) {
+      session.frameHandler?.({
+        kind: "command.complete",
+        requestedCount: 1,
+        deletedCount: 1,
+        failedCount: 0,
+        hasBinaryPayload: false,
+      });
+    }
+    await Promise.all([...pendingWorktreeCommands]);
+  }
+  if (existsSync(lockPath)) {
+    await vi.waitFor(() => expect(existsSync(lockPath)).toBe(false), {
+      timeout: 10_000,
+    });
+  }
+  console.info(
+    `[timing] worktree-delete cleanup-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - cleanupStartedAt).toFixed(1)}ms pending-at-entry=${pendingAtCleanup} fetches=${hoisted.state.fetch.mock.calls.length} sessions=${hoisted.state.sessions.length} lock-at-entry=${lockPresentAtCleanup}`,
+  );
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   const home = hoisted.state.home.path;
@@ -247,6 +292,7 @@ describe("buildWorktreeDeleteCommand input validation", () => {
 
   // A folder name may end in whitespace, so a real value is sent as written.
   it("sends a --path with a trailing space as written and reports it as is", async () => {
+    const startedAt = performance.now();
     const pending = startWorktreeDelete("/wt/feature ", ctx);
 
     await waitForSessions(1);
@@ -265,11 +311,14 @@ describe("buildWorktreeDeleteCommand input validation", () => {
     });
 
     const result = await pending;
+    console.info(
+      `[timing] worktree-delete trailing-space session-and-command-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - startedAt).toFixed(1)}ms`,
+    );
     expect(result.data).toEqual({
       worktreePath: "/wt/feature ",
       deleted: true,
     });
-  });
+  }, 15_000);
 });
 
 describe("buildWorktreeDeleteCommand command shape", () => {

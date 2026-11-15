@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   afterEach,
+  beforeAll,
   beforeEach,
   describe,
   expect,
@@ -102,6 +103,12 @@ afterEach(() => {
   stderrSpy.mockRestore();
   exitSpy.mockRestore();
   vi.restoreAllMocks();
+});
+
+beforeAll(async () => {
+  await import("../../runner/runner");
+  await import("../logout");
+  await import("@traycer-clients/shared/auth/host-token-file");
 });
 
 interface ParsedRunnerOutput {
@@ -281,7 +288,7 @@ describe("logoutCommand runner contract", () => {
       version: 1,
       users: {},
     });
-  }, 15_000);
+  });
 
   it("JSON mode: emits a single ok result with loggedOut=true when a session existed", async () => {
     mockLogoutStore({ hadSession: true, signOut: DELETED });
