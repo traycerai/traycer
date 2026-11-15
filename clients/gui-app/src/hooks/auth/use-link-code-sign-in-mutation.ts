@@ -9,14 +9,12 @@ import { authMutationKeys } from "@/lib/query-keys";
  * them inline next to the code field, so a wrong code is an ordinary state
  * with the field still focused, not a toast.
  */
-export function useLinkCodeSignInMutation(): UseMutationResult<
-  LinkLoginSignInResult,
-  Error,
-  string
-> {
+export function useLinkCodeSignInMutation(
+  readCode: () => string,
+): UseMutationResult<LinkLoginSignInResult, Error, void> {
   const auth = useAuthService();
   return useMutation({
     mutationKey: authMutationKeys.signInWithLinkCode(),
-    mutationFn: (code: string) => auth.signInWithLinkCode(code),
+    mutationFn: () => auth.signInWithLinkCode(readCode()),
   });
 }

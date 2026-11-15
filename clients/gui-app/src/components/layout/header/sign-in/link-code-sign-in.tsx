@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { QrCode } from "lucide-react";
 import { parseLinkLoginInput } from "@traycer-clients/shared/auth/link-login";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -127,7 +127,13 @@ export function LinkCodeSignIn(props: {
   readonly presentation: "cta" | "link";
 }) {
   const runnerHost = useRunnerHostOrNull();
-  const redeem = useLinkCodeSignInMutation();
+  const submittedCode = useRef<string | null>(null);
+  const redeem = useLinkCodeSignInMutation(() => {
+    const code = submittedCode.current;
+    submittedCode.current = null;
+    if (code === null) throw new Error("Link code input is unavailable.");
+    return code;
+  });
   const [open, setOpen] = useState(false);
   const [entry, setEntry] = useState("");
   const [notice, setNotice] = useState<EntryNotice>(null);
@@ -146,7 +152,8 @@ export function LinkCodeSignIn(props: {
     }
     setNotice(null);
     clearDeepLinkNotice();
-    redeem.mutate(code, {
+    submittedCode.current = code;
+    redeem.mutate(undefined, {
       onSuccess: (result) => {
         const outcome = noticeForResult(result);
         if (outcome !== null) {
