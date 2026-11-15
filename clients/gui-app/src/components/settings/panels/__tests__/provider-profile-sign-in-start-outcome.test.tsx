@@ -543,6 +543,8 @@ function renderAntigravityAddDialog(
           client={client}
           isLocalHost
           open
+          target={null}
+          targetResult={null}
           onOpenChange={() => undefined}
           onFailedAttempt={onFailedAttempt}
           onProfileCreated={() => undefined}
@@ -830,6 +832,8 @@ describe.each(MOUNT_MODES)(
                 client={client}
                 isLocalHost
                 open
+                target={null}
+                targetResult={null}
                 onOpenChange={() => undefined}
                 onFailedAttempt={() => undefined}
                 onProfileCreated={() => undefined}

@@ -148,9 +148,10 @@ async function awaitWithRecording(
   client: HostClient<HostRpcRegistry>,
   variables: AwaitLoginVariables,
   recordSignInRequest: SignInRequestRecorder,
+  targeted: boolean,
 ): Promise<AwaitLoginAnswer> {
   const ask = (request: AwaitLoginRequest): Promise<AwaitLoginResponse> =>
-    variables.signal === undefined
+    variables.signal === undefined && !targeted
       ? client.requestWithResponseTimeout(
           "providers.awaitLogin",
           request,
@@ -159,7 +160,12 @@ async function awaitWithRecording(
       : client.requestWithOptions("providers.awaitLogin", request, {
           responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
           idempotencyKey: null,
-          requiredHostMethodVersion: null,
+          requiredHostMethodVersion: targeted
+            ? {
+                method: "providers.awaitLogin",
+                version: { major: 2, minor: 4 },
+              }
+            : null,
           signal: variables.signal,
         });
   const answer = await ask(variables.request);
@@ -253,6 +259,21 @@ export function useProvidersAwaitLoginForClient(args: {
   AwaitLoginVariables,
   AwaitLoginContext
 > {
+  return useProvidersDestinationAwaitLoginForClient(args, false);
+}
+
+export function useProvidersDestinationAwaitLoginForClient(
+  args: {
+    readonly client: HostClient<HostRpcRegistry> | null;
+    readonly getCacheHostId: () => string | null;
+  },
+  targeted: boolean,
+): UseMutationResult<
+  AwaitLoginAnswer,
+  HostRpcError,
+  AwaitLoginVariables,
+  AwaitLoginContext
+> {
   const queryClient = useQueryClient();
   const recordSignInRequest = useProviderSignInRecording();
   const client = args.client;
@@ -273,7 +294,12 @@ export function useProvidersAwaitLoginForClient(args: {
             hostClientUnavailableError("providers.awaitLogin"),
           );
         }
-        return awaitWithRecording(client, variables, recordSignInRequest);
+        return awaitWithRecording(
+          client,
+          variables,
+          recordSignInRequest,
+          targeted,
+        );
       }),
     ...withHostMutationLifecycleBoundary<
       AwaitLoginAnswer,
@@ -283,7 +309,7 @@ export function useProvidersAwaitLoginForClient(args: {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
       onSuccess: async (data: AwaitLoginAnswer, variables, context) => {
-        if (context.hostId === null) return;
+        if (targeted || context.hostId === null) return;
         const next = data.state;
         if (next === null) {
           // A caller that reads outcomes looks a named profile up in the

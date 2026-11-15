@@ -667,6 +667,20 @@ vi.mock(
         const mockedMutation = useProvidersAwaitLogin();
         return providerMocks.liveList ? liveMutation : mockedMutation;
       },
+      useProvidersDestinationAwaitLoginForClient: (
+        args: {
+          readonly client: HostClient<HostRpcRegistry> | null;
+          readonly getCacheHostId: () => string | null;
+        },
+        targeted: boolean,
+      ) => {
+        const liveMutation = actual.useProvidersDestinationAwaitLoginForClient(
+          args,
+          targeted,
+        );
+        const mockedMutation = useProvidersAwaitLogin();
+        return providerMocks.liveList ? liveMutation : mockedMutation;
+      },
     };
   },
 );
@@ -2556,6 +2570,12 @@ describe("<ProvidersSettingsPanel />", () => {
         hostName: "dev-box",
       },
     });
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "claude",
+      hostId: "host-reauth-page",
+      profileId: existingProfile.profileId,
+      startSignIn: true,
+    });
     recordNegotiatedHostManifest("host-reauth-page", {
       "providers.list": { major: 10, minor: 12 },
       "providers.startLogin": { major: 1, minor: 4 },
@@ -2587,12 +2607,7 @@ describe("<ProvidersSettingsPanel />", () => {
         </TooltipProvider>
       </QueryClientProvider>,
     );
-    await screen.findByRole("tab", { name: "Profiles & Limits" });
-    openProfilesTab();
-    await screen.findByRole("button", { name: "Manage profile" });
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
-    await screen.findByRole("dialog", { name: "Edit profile" });
-    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await screen.findByRole("dialog", { name: "Sign in again" });
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
       expect(awaitCalls).toBe(1);
