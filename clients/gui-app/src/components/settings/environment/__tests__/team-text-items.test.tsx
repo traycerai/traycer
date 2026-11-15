@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { AuthService } from "@/lib/auth/auth-service";
+import { authQueryKeys } from "@/lib/query-keys";
 import { TeamTextItems } from "@/components/settings/environment/team-text-items";
 import {
   useConfigurationItemWrites,
@@ -226,6 +227,10 @@ function mountAuthPersonalVariables(
     harness.auth,
   );
   harness.auth.applyExternalSession(authSessionForUser(userId, token));
+  harness.queryClient.setQueryData(
+    authQueryKeys.registeredHosts(harness.auth, userId),
+    { hosts: [] },
+  );
   const page = render(
     <ConfigurationSourceBoundary section={null} target={{ kind: "personal" }}>
       <TextItemsPage />
