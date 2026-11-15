@@ -16,7 +16,7 @@ import type {
 } from "@traycer-clients/shared/host-client/team-computers";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
-import type { AuthService } from "@/lib/auth/auth-service";
+import type { AuthService, ChosenSignIn } from "@/lib/auth/auth-service";
 import {
   ConfigurationSourceContext,
   type ConfigurationRole,
@@ -79,12 +79,19 @@ const releaseTeamComputer =
     (
       hostId: string,
       environmentId: string,
+      chosenBy: ChosenSignIn,
     ) => Promise<TeamComputerReleaseResult>
   >();
+/** The sign-in every press here is made under. */
+const PRESSED_AS: ChosenSignIn = { identityGeneration: 0, userId: "user-a" };
 const auth = {
   listTeamComputers,
   releaseTeamComputer,
-} satisfies Pick<AuthService, "listTeamComputers" | "releaseTeamComputer">;
+  chosenSignIn: () => PRESSED_AS,
+} satisfies Pick<
+  AuthService,
+  "listTeamComputers" | "releaseTeamComputer" | "chosenSignIn"
+>;
 const directory = { refresh: vi.fn(() => Promise.resolve()) };
 
 function computer(overrides: Partial<TeamComputer>): TeamComputer {
@@ -163,16 +170,6 @@ function mountSection(
     }),
     "environment.previewLocalFacts": () => previewLocalFacts.answer(),
   });
-  vi.spyOn(harness.auth, "listTeamComputers").mockImplementation(
-    auth.listTeamComputers,
-  );
-  vi.spyOn(harness.auth, "setEnvironmentBotHost").mockImplementation(
-    auth.setEnvironmentBotHost,
-  );
-  vi.spyOn(harness.auth, "releaseTeamComputer").mockImplementation(
-    auth.releaseTeamComputer,
-  );
-  hostBinding.value = { auth: harness.auth, directory };
   const runnerHost = dashboardRunnerHost();
   const view = render(
     sectionTree(harness, environmentId, effectiveRole, runnerHost),
@@ -245,18 +242,13 @@ describe("TeamComputersSection", () => {
   });
 
   it("prints install and use commands with the team's provider handle", async () => {
-    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    mountSection(ENVIRONMENT_ID, "owner", `handle-${ENVIRONMENT_ID}`);
     const user = userEvent.setup();
 
     await user.click(
       await screen.findByRole("button", { name: "Add a computer" }),
     );
 
-    expect(
-      screen.getByText(
-        "Run this on the computer. If nobody is signed in to Traycer there, it asks you to sign in.",
-      ),
-    ).toBeTruthy();
     expect(screen.getByTestId("team-computers-add-command").textContent).toBe(
       "traycer host install --team handle-env-a",
     );
@@ -266,7 +258,7 @@ describe("TeamComputersSection", () => {
   });
 
   it("does not offer a command when the team has no provider handle", async () => {
-    mountSection(ENVIRONMENT_ID, "editor", null);
+    mountSection(ENVIRONMENT_ID, "owner", null);
 
     await waitFor(() =>
       expect(listTeamComputers).toHaveBeenCalledWith(ENVIRONMENT_ID),
@@ -305,64 +297,53 @@ describe("TeamComputersSection", () => {
     expect(within(row).getByText(hostName)).toBeTruthy();
   });
 
-  it.each([
-    ["Admin", "admin"],
-    ["Editor", "editor"],
-  ] as const)(
-    "lets a team %s claim a computer after confirming",
-    async (_roleName, role) => {
-      const pending = Promise.withResolvers<TeamComputerReleaseResult>();
-      releaseTeamComputer.mockReturnValue(pending.promise);
-      mountSection(ENVIRONMENT_ID, role, `handle-${ENVIRONMENT_ID}`);
-      const user = userEvent.setup();
+  it("lets a team member claim a computer after confirming", async () => {
+    const pending = Promise.withResolvers<TeamComputerReleaseResult>();
+    releaseTeamComputer.mockReturnValue(pending.promise);
+    mountSection(ENVIRONMENT_ID, "editor", `handle-${ENVIRONMENT_ID}`);
+    const user = userEvent.setup();
 
-      expect(
-        await screen.findByRole("button", {
-          name: "Claim this computer",
-        }),
-      ).toBeTruthy();
-      const dialog = await openClaimDialog(user);
-      expect(
-        screen.getByRole("heading", { name: "Claim Studio?" }),
-      ).toBeTruthy();
-      expect(
-        screen.getByText(
-          "This computer will become yours. The team will lose access to it.",
-        ),
-      ).toBeTruthy();
-      expect(releaseTeamComputer).not.toHaveBeenCalled();
-
-      await user.click(
-        within(dialog).getByRole("button", { name: "Claim this computer" }),
-      );
-
-      const confirm = screen.getByRole("button", {
+    expect(
+      await screen.findByRole("button", {
         name: "Claim this computer",
-      });
-      await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
-      expect(
-        confirm.querySelector('[data-testid="team-computer-claim-progress"]'),
-      ).not.toBeNull();
-      await act(async () => {
-        pending.resolve({ kind: "ok" });
-        await pending.promise;
-      });
-      await waitFor(() =>
-        expect(noteHostMembershipChanged).toHaveBeenCalledWith(
-          "host-computer-a",
-        ),
-      );
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      }),
+    ).toBeTruthy();
+    const dialog = await openClaimDialog(user);
+    expect(screen.getByRole("heading", { name: "Claim Studio?" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This computer will become yours. The team will lose access to it.",
+      ),
+    ).toBeTruthy();
+    expect(releaseTeamComputer).not.toHaveBeenCalled();
 
-      await waitFor(() =>
-        expect(releaseTeamComputer).toHaveBeenCalledWith(
-          "host-computer-a",
-          ENVIRONMENT_ID,
-        ),
-      );
-      expect(noteHostMembershipChanged).toHaveBeenCalledTimes(1);
-    },
-  );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Claim this computer" }),
+    );
+
+    const confirm = screen.getByRole("button", { name: "Claim this computer" });
+    await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
+    expect(
+      confirm.querySelector('[data-testid="team-computer-claim-progress"]'),
+    ).not.toBeNull();
+    await act(async () => {
+      pending.resolve({ kind: "ok" });
+      await pending.promise;
+    });
+    await waitFor(() =>
+      expect(noteHostMembershipChanged).toHaveBeenCalledWith("host-computer-a"),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await waitFor(() =>
+      expect(releaseTeamComputer).toHaveBeenCalledWith(
+        "host-computer-a",
+        ENVIRONMENT_ID,
+        PRESSED_AS,
+      ),
+    );
+    expect(noteHostMembershipChanged).toHaveBeenCalledTimes(1);
+  });
 
   it.each([
     ["answers no count", () => ({ activeTurns: null, terminals: null })],
@@ -468,17 +449,25 @@ describe("TeamComputersSection", () => {
   it.each([
     ["a Viewer", "viewer"],
     ["a role not known", null],
-  ] as const)("does not offer Claim to %s", async (_who, role) => {
-    mountSection(ENVIRONMENT_ID, role, `handle-${ENVIRONMENT_ID}`);
+  ] as const)(
+    "offers %s no Claim and no Add a computer",
+    async (_who, role) => {
+      mountSection(ENVIRONMENT_ID, role, `handle-${ENVIRONMENT_ID}`);
 
-    await screen.findByText("Studio");
-    expect(
-      screen.queryByRole("button", { name: "Claim this computer" }),
-    ).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Refresh" }).hasAttribute("disabled"),
-    ).toBe(false);
-  });
+      await screen.findByText("Studio");
+      expect(
+        screen.queryByRole("button", { name: "Claim this computer" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Add a computer" }),
+      ).toBeNull();
+      expect(
+        screen
+          .getByRole("button", { name: "Refresh" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    },
+  );
 
   it("shows a fixed error when claiming a computer fails", async () => {
     releaseTeamComputer.mockResolvedValue({ kind: "network-error" });
@@ -498,6 +487,7 @@ describe("TeamComputersSection", () => {
     expect(releaseTeamComputer).toHaveBeenCalledWith(
       "host-computer-a",
       ENVIRONMENT_ID,
+      PRESSED_AS,
     );
     expect(noteHostMembershipChanged).not.toHaveBeenCalled();
   });

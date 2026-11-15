@@ -28,6 +28,7 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import type { AuthService } from "@/lib/auth/auth-service";
+import type { ChosenSignIn } from "@/lib/auth/auth-service";
 import { authQueryKeys } from "@/lib/query-keys";
 import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
@@ -93,10 +94,15 @@ const mocks = vi.hoisted(() => ({
         (
           hostId: string,
           environmentId: string,
+          chosenBy: ChosenSignIn,
         ) => Promise<TeamComputerReleaseResult>
       >(),
     listEnvironments: vi.fn<AuthService["listEnvironments"]>(),
     environmentCloud: vi.fn<AuthService["environmentCloud"]>(),
+    chosenSignIn: (): ChosenSignIn => ({
+      identityGeneration: 0,
+      userId: "user-a",
+    }),
   },
   refreshDirectory: vi.fn<() => Promise<unknown>>(),
 }));
@@ -674,6 +680,7 @@ describe("HostEnvironmentSection", () => {
     expect(mocks.auth.releaseTeamComputer).toHaveBeenCalledWith(
       "host-a",
       "env-team",
+      mocks.auth.chosenSignIn(),
     );
     expect(stopRequests).toEqual([]);
     expect(stopPreviewCalls).toBe(0);
