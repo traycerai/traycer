@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { RenderResult } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {
   EnvironmentConfigurationItem,
@@ -56,6 +57,7 @@ import type {
   StoragePolicyValue,
 } from "@/hooks/environment/use-storage-policy";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { READ_BOUND_MS } from "@/hooks/environment/team/use-bounded-read";
 
 const PERSONAL_ENV = "env-personal";
 const PERSONAL_SECTION = <StoragePolicySection pick={{ kind: "personal" }} />;
@@ -98,7 +100,9 @@ const host = {
   readFails: false,
   read: null as
     | null
-    | (() => Promise<{ readonly items: EnvironmentConfigurationItem[] }>),
+    | ((
+        environmentId: string,
+      ) => Promise<{ readonly items: EnvironmentConfigurationItem[] }>),
   put: null as
     | null
     | (() => Promise<EnvironmentConfigurationItemWriteResponse>),
@@ -129,7 +133,7 @@ function snapshotItem(
   });
 }
 
-function renderSection(ui: ReactNode): void {
+function renderSection(ui: ReactNode): Pick<RenderResult, "rerender"> {
   harness = mountTeamPage(poolSource("owner"), {
     "environment.list": () => ({
       environments: [
@@ -139,7 +143,7 @@ function renderSection(ui: ReactNode): void {
     }),
     "environment.configuration.items": (params) => {
       if (host.readFails) throw new Error("read refused");
-      if (host.read !== null) return host.read();
+      if (host.read !== null) return host.read(params.environmentId);
       return {
         items: params.environmentId === TEAM_ENV ? host.teamItems : host.items,
       };
@@ -149,7 +153,7 @@ function renderSection(ui: ReactNode): void {
         ? Promise.resolve({ outcome: "saved", revision: 1 })
         : host.put(),
   });
-  render(
+  return render(
     <>
       {ui}
       <Toaster />
@@ -271,6 +275,7 @@ describe("<StoragePolicySection />", () => {
   });
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     toast.dismiss();
   });
 
@@ -778,7 +783,7 @@ describe("<StoragePolicySection />", () => {
     expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("false");
   });
 
-  it("keeps a saved snapshot until a read passes its addressed revision, including a newer foreign value", async () => {
+  it("keeps a saved snapshot through lower and addressed revisions, then shows a newer foreign value", async () => {
     host.items = [
       storageItem({ chats: true, idleTaskDays: null, archivedChatHours: 4 }, 3),
       snapshotItem({ quietChatDays: 90 }, 4),
@@ -806,6 +811,32 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() => expect(reads).toHaveLength(1));
     act(() =>
       reads[0]([
+        snapshotItem({ quietChatDays: 90 }, 3),
+        storageItem(
+          { chats: true, idleTaskDays: null, archivedChatHours: 4 },
+          3,
+        ),
+      ]),
+    );
+    // A read below the revision the save addressed does not release the hold.
+    await waitFor(() =>
+      expect(
+        harness?.queryClient.isFetching({
+          predicate: (query) =>
+            query.queryKey.includes("environment.configuration.items"),
+        }),
+      ).toBe(0),
+    );
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+
+    const addressedRead = harness?.queryClient.invalidateQueries({
+      predicate: (query) =>
+        query.queryKey.includes("environment.configuration.items"),
+    });
+    await waitFor(() => expect(reads).toHaveLength(2));
+    act(() =>
+      reads[1]([
         snapshotItem({ quietChatDays: 90 }, 4),
         storageItem(
           { chats: true, idleTaskDays: null, archivedChatHours: 4 },
@@ -813,7 +844,7 @@ describe("<StoragePolicySection />", () => {
         ),
       ]),
     );
-    // The reread carrying the old revision has landed.
+    await addressedRead;
     await waitFor(() =>
       expect(
         harness?.queryClient.isFetching({
@@ -833,8 +864,8 @@ describe("<StoragePolicySection />", () => {
       predicate: (query) =>
         query.queryKey.includes("environment.configuration.items"),
     });
-    await waitFor(() => expect(reads).toHaveLength(2));
-    act(() => reads[1](host.items));
+    await waitFor(() => expect(reads).toHaveLength(3));
+    act(() => reads[2](host.items));
     await reread;
     await waitFor(() =>
       expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
@@ -887,6 +918,333 @@ describe("<StoragePolicySection />", () => {
     await waitFor(() =>
       expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
     );
+  });
+
+  it("keeps a team's held snapshot while Personal is shown, then releases it when the team read lands", async () => {
+    host.items = [
+      storageItem(
+        { chats: false, idleTaskDays: null, archivedChatHours: 24 },
+        2,
+      ),
+      snapshotItem({ quietChatDays: 90 }, 3),
+    ];
+    host.teamItems = [
+      storageItem({ chats: true, idleTaskDays: null, archivedChatHours: 4 }, 4),
+      snapshotItem({ quietChatDays: 90 }, 4),
+    ];
+    const view = renderSection(
+      <StoragePolicySection pick={{ kind: "team", environmentId: TEAM_ENV }} />,
+    );
+    await settled();
+
+    const teamReads: Array<(items: EnvironmentConfigurationItem[]) => void> =
+      [];
+    host.read = (environmentId) => {
+      if (environmentId === TEAM_ENV) {
+        return new Promise((resolve) => {
+          teamReads.push((items) => resolve({ items }));
+        });
+      }
+      return Promise.resolve({ items: host.items });
+    };
+    host.put = () => {
+      host.teamItems = [
+        storageItem(
+          { chats: true, idleTaskDays: null, archivedChatHours: 4 },
+          4,
+        ),
+        snapshotItem({ quietChatDays: 30 }, 5),
+      ];
+      return Promise.resolve({ outcome: "saved", revision: 5 });
+    };
+
+    pickOption(snapshotsSelect(), "After 30 days");
+    await waitFor(() => expect(teamReads.length).toBeGreaterThan(0));
+    await waitFor(async () =>
+      expect((await chatsSwitch()).hasAttribute("disabled")).toBe(false),
+    );
+
+    view.rerender(<StoragePolicySection pick={{ kind: "personal" }} />);
+    await waitFor(() =>
+      expect(snapshotsSelect().textContent).toContain("After 90 days"),
+    );
+    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("false");
+    expect((await chatsSwitch()).hasAttribute("disabled")).toBe(false);
+
+    view.rerender(
+      <StoragePolicySection pick={{ kind: "team", environmentId: TEAM_ENV }} />,
+    );
+    await waitFor(() =>
+      expect(snapshotsSelect().textContent).toContain("After 30 days"),
+    );
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+    expect(
+      within(groupOf(SNAPSHOT_GROUP)).getByTestId("storage-policy-saving"),
+    ).toBeTruthy();
+
+    act(() => {
+      for (const finish of teamReads) finish(host.teamItems);
+    });
+    await waitFor(() =>
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
+    );
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+  });
+
+  it("keeps a saved snapshot when its refreshed query has no data yet", async () => {
+    host.items = [snapshotItem({ quietChatDays: 90 }, 4)];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    const reads: Array<(items: EnvironmentConfigurationItem[]) => void> = [];
+    host.read = () =>
+      new Promise((resolve) => {
+        reads.push((items) => resolve({ items }));
+      });
+    host.put = () => {
+      host.items = [snapshotItem({ quietChatDays: 30 }, 5)];
+      return Promise.resolve({ outcome: "saved", revision: 5 });
+    };
+
+    pickOption(snapshotsSelect(), "After 30 days");
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await waitFor(async () =>
+      expect((await chatsSwitch()).hasAttribute("disabled")).toBe(false),
+    );
+
+    act(() => {
+      void harness?.queryClient.resetQueries({
+        predicate: (query) => {
+          const methodIndex = query.queryKey.indexOf(
+            "environment.configuration.items",
+          );
+          if (methodIndex < 0) return false;
+          const params = query.queryKey[methodIndex + 1];
+          return (
+            typeof params === "object" &&
+            params !== null &&
+            "environmentId" in params &&
+            params.environmentId === PERSONAL_ENV
+          );
+        },
+      });
+    });
+    await waitFor(() => expect(reads).toHaveLength(2));
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+
+    act(() => reads[1](host.items));
+    await waitFor(() =>
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
+    );
+  });
+
+  it("expires an unconfirmed create at the read bound and refetches once", async () => {
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    let readCalls = 0;
+    let readStarted: () => void = () => {
+      throw new Error("save reread has not started");
+    };
+    const saveRereadStarted = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    host.read = () => {
+      readCalls += 1;
+      if (readCalls === 1) readStarted();
+      return Promise.resolve({ items: host.items });
+    };
+    let finishSave: () => void = () => {
+      throw new Error("save has not started");
+    };
+    host.put = () =>
+      new Promise((resolve) => {
+        finishSave = () => resolve({ outcome: "saved", revision: 5 });
+      });
+
+    pickOption(snapshotsSelect(), "After 30 days");
+    await waitFor(() => {
+      expect(snapshotsSelect().textContent).toContain("After 30 days");
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => {
+      finishSave();
+      await saveRereadStarted;
+    });
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+    expect(
+      within(groupOf(SNAPSHOT_GROUP)).getByTestId("storage-policy-saving"),
+    ).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(READ_BOUND_MS - 1);
+    });
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(snapshotsSelect().textContent).toContain("After 7 days");
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByTestId("storage-policy-saving")).toBeNull();
+    expect(readCalls).toBe(2);
+  });
+
+  it("shows the read value and no hold after a forbidden save", async () => {
+    host.items = [
+      storageItem({ chats: true, idleTaskDays: null, archivedChatHours: 4 }, 3),
+    ];
+    host.put = () => Promise.resolve({ outcome: "forbidden" });
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    await userEvent.click(await chatsSwitch());
+    // The forbidden answer has arrived.
+    await waitFor(() => {
+      expect(harness?.paramsOf(PUT)).toHaveLength(1);
+      expect(
+        harness?.queryClient
+          .getMutationCache()
+          .getAll()
+          .some((mutation) => mutation.state.status === "success"),
+      ).toBe(true);
+    });
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("switch", { name: "Chats" })
+          .getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    await waitFor(async () =>
+      expect((await chatsSwitch()).hasAttribute("disabled")).toBe(false),
+    );
+    expect(screen.queryByTestId("storage-policy-saving")).toBeNull();
+  });
+
+  it("keeps storage held across a snapshot save and releases each item on its own read", async () => {
+    host.items = [
+      storageItem({ chats: true, idleTaskDays: null, archivedChatHours: 4 }, 4),
+      snapshotItem({ quietChatDays: 90 }, 3),
+    ];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    const reads: Array<(items: EnvironmentConfigurationItem[]) => void> = [];
+    host.read = () =>
+      new Promise((resolve) => {
+        reads.push((items) => resolve({ items }));
+      });
+    let writes = 0;
+    host.put = () => {
+      writes += 1;
+      return Promise.resolve({
+        outcome: "saved",
+        revision: writes === 1 ? 5 : 6,
+      });
+    };
+
+    await userEvent.click(await chatsSwitch());
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await waitFor(() =>
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
+    );
+    act(() =>
+      reads[0]([
+        storageItem(
+          { chats: true, idleTaskDays: null, archivedChatHours: 4 },
+          4,
+        ),
+        snapshotItem({ quietChatDays: 90 }, 3),
+      ]),
+    );
+    await waitFor(() =>
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
+    );
+    expect((await chatsSwitch()).hasAttribute("disabled")).toBe(true);
+
+    pickOption(snapshotsSelect(), "After 30 days");
+    await waitFor(() => expect(reads).toHaveLength(2));
+    await waitFor(() =>
+      expect(
+        harness?.queryClient
+          .getMutationCache()
+          .getAll()
+          .some((mutation) => mutation.state.status === "pending"),
+      ).toBe(false),
+    );
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+    expect(
+      within(groupOf(SNAPSHOT_GROUP)).getByTestId("storage-policy-saving"),
+    ).toBeTruthy();
+    act(() =>
+      reads[1]([
+        storageItem(
+          { chats: false, idleTaskDays: null, archivedChatHours: 4 },
+          4,
+        ),
+        snapshotItem({ quietChatDays: 30 }, 6),
+      ]),
+    );
+    await waitFor(() =>
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
+    );
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+    expect((await chatsSwitch()).hasAttribute("disabled")).toBe(true);
+
+    host.items = [
+      storageItem(
+        { chats: false, idleTaskDays: null, archivedChatHours: 4 },
+        5,
+      ),
+      snapshotItem({ quietChatDays: 30 }, 6),
+    ];
+    const reread = harness?.queryClient.invalidateQueries({
+      predicate: (query) =>
+        query.queryKey.includes("environment.configuration.items"),
+    });
+    await waitFor(() => expect(reads).toHaveLength(3));
+    act(() => reads[2](host.items));
+    await reread;
+    await waitFor(async () =>
+      expect((await chatsSwitch()).hasAttribute("disabled")).toBe(false),
+    );
+    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("false");
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(false);
+  });
+
+  it("keeps a hold after a read error and releases it when Retry reads the saved revision", async () => {
+    host.items = [snapshotItem({ quietChatDays: 90 }, 4)];
+    renderSection(PERSONAL_SECTION);
+    await settled();
+
+    host.readFails = true;
+    host.put = () => {
+      host.items = [snapshotItem({ quietChatDays: 30 }, 5)];
+      return Promise.resolve({ outcome: "saved", revision: 5 });
+    };
+    pickOption(snapshotsSelect(), "After 30 days");
+    expect(await screen.findByText("Couldn't read this setting.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+    expect(
+      within(groupOf(SNAPSHOT_GROUP)).getByTestId("storage-policy-saving"),
+    ).toBeTruthy();
+
+    host.readFails = false;
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
+    );
+    expect(snapshotsSelect().textContent).toContain("After 30 days");
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+    expect(screen.queryByTestId("storage-policy-saving")).toBeNull();
   });
 
   it("lists a stored idle window that is not a preset and shows it selected", async () => {
@@ -1013,6 +1371,7 @@ describe("<StorageSettingsPanel />", () => {
   });
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     toast.dismiss();
   });
 
