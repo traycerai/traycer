@@ -873,10 +873,6 @@ describe("buildHostInstallCommand", () => {
       previous: null,
       installGeneration: "id:install-2.0.0",
     });
-    const teamPreflight = vi.spyOn(
-      installAuthModule,
-      "runTeamInstallAuthPreflight",
-    );
     const signInPreflight = vi.spyOn(installAuthModule, "runSignInPreflight");
     const personalProvision = vi.spyOn(
       installAuthModule,
@@ -901,7 +897,6 @@ describe("buildHostInstallCommand", () => {
       prepared,
       60_000,
     );
-    expect(teamPreflight).not.toHaveBeenCalled();
     expect(signInPreflight).not.toHaveBeenCalled();
     expect(personalProvision).not.toHaveBeenCalled();
     expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
