@@ -1245,10 +1245,6 @@ export function useComposerPasteAdapter(
   });
 }
 
-function everyImage(files: ReadonlyArray<File>): ReadonlyArray<File> {
-  return files;
-}
-
 function hostStorableImage(file: File): boolean {
   return isHostStorableImageMimeType(file.type);
 }
@@ -1570,40 +1566,6 @@ export interface ComposerPasteEditorHandle {
   readonly draftGeneration: () => number;
 }
 
-export function useComposerPaste(
-  editorRef: {
-    readonly current: ComposerPasteEditorHandle | null;
-  },
-  fileDrops: IFileDropHost,
-  mentionRoots: ReadonlyArray<string>,
-): UseComposerPasteResult {
-  const insertAttrs = useCallback(
-    (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
-      const handle = editorRef.current;
-      if (handle === null || !handle.isReady()) return 0;
-      handle.insertImageAttachments(attrs);
-      handle.focus();
-      return attrs.length;
-    },
-    [editorRef],
-  );
-  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
-    const handle = editorRef.current;
-    if (handle === null || !handle.isReady()) return null;
-    return handle.beginPathInsertion();
-  }, [editorRef]);
-  const filePaths = useMemo(
-    () => ({
-      fileDrops,
-      mentionRoots,
-      beginPathInsertion,
-      pathsReachTarget: true,
-    }),
-    [fileDrops, mentionRoots, beginPathInsertion],
-  );
-  return useComposerPasteAdapter(insertAttrs, filePaths, everyImage);
-}
-
 /**
  * Whether a surface takes file attachments, and where they go. `null` is a
  * surface with no file route; a route whose `target` is `null` has one but no
@@ -1704,9 +1666,10 @@ export function useComposerFileAttachArgs(
 }
 
 /**
- * {@link useComposerPaste}'s hash-only twin, for the three chat surfaces. Same
- * editor handle, same file-path ingest, same events - only the image channel
- * differs, which is the whole point of the `ComposerImageIngest` seam.
+ * The paste hook of the three chat surfaces, over their editor handle: the
+ * hash-only image ingest on the file-path ingest and events every surface
+ * shares. Only the image channel differs between surfaces, which is the whole
+ * point of the `ComposerImageIngest` seam.
  */
 // `editorRef` stays its own argument: a ref inside an object handed to a hook
 // stops the React Compiler from keeping the caller's own memoization.
