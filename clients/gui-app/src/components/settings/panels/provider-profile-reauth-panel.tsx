@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   useCallback,
@@ -108,7 +109,13 @@ export function ProviderProfileReauthPanel({
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
-  const submitLoginCode = useProvidersSubmitLoginCode();
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Provider login code input is unavailable.",
+  );
+  const submitLoginCode = useProvidersSubmitLoginCode(
+    submittedLoginCode.read,
+    submittedLoginCode.clear,
+  );
   const touchLogin = useProvidersTouchLogin();
   const ensurePack = useProvidersEnsurePack();
   // The `profile` prop is LIVE, and it turns over mid-flow:
@@ -139,6 +146,7 @@ export function ProviderProfileReauthPanel({
       awaitLogin,
       cancelLogin,
       submitLoginCode,
+      setSubmittedLoginCode: submittedLoginCode.set,
       touchLogin,
       ensurePack,
       failureMessages: {

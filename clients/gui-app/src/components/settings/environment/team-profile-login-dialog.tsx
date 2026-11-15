@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import {
   createContext,
   useContext,
@@ -258,7 +259,14 @@ function TeamProfileReauthDialog(
     true,
   );
   const cancelLogin = useProvidersCancelLoginForClient(client);
-  const submitLoginCode = useProvidersSubmitLoginCodeForClient(client);
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Provider login code input is unavailable.",
+  );
+  const submitLoginCode = useProvidersSubmitLoginCodeForClient(
+    client,
+    submittedLoginCode.read,
+    submittedLoginCode.clear,
+  );
   const touchLogin = useProvidersTouchLoginForClient(client);
   const ensurePack = useProvidersEnsurePackForClient(client);
   const supportsLoginOwnership = useProvidersLoginOwnershipForClient(client);
@@ -274,6 +282,7 @@ function TeamProfileReauthDialog(
       awaitLogin,
       cancelLogin,
       submitLoginCode,
+      setSubmittedLoginCode: submittedLoginCode.set,
       touchLogin,
       ensurePack,
       failureMessages: {

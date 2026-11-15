@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
@@ -256,7 +257,14 @@ function ProviderProfileSignInDialog({
     target !== null,
   );
   const cancelLogin = useProvidersCancelLoginForClient(client);
-  const submitLoginCode = useProvidersSubmitLoginCodeForClient(client);
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Provider login code input is unavailable.",
+  );
+  const submitLoginCode = useProvidersSubmitLoginCodeForClient(
+    client,
+    submittedLoginCode.read,
+    submittedLoginCode.clear,
+  );
   const touchLogin = useProvidersTouchLoginForClient(client);
   const ensurePack = useProvidersEnsurePackForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
@@ -280,6 +288,7 @@ function ProviderProfileSignInDialog({
       awaitLogin,
       cancelLogin,
       submitLoginCode,
+      setSubmittedLoginCode: submittedLoginCode.set,
       touchLogin,
       ensurePack,
       failureMessages: {

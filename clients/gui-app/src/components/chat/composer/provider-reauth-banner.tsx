@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -747,7 +748,13 @@ function OAuthReauthForm({
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
-  const submitLoginCode = useProvidersSubmitLoginCode();
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Provider login code input is unavailable.",
+  );
+  const submitLoginCode = useProvidersSubmitLoginCode(
+    submittedLoginCode.read,
+    submittedLoginCode.clear,
+  );
   const touchLogin = useProvidersTouchLogin();
   const ensurePack = useProvidersEnsurePack();
 
@@ -765,6 +772,7 @@ function OAuthReauthForm({
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: submittedLoginCode.set,
     touchLogin,
     ensurePack,
     failureMessages: {
@@ -1103,7 +1111,13 @@ function TokenReauthForm({
   const [pickedVar, setPickedVar] = useState("");
   const [probing, setProbing] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
-  const setEnvOverride = useProvidersSetEnvOverride();
+  const submittedOverride = useSubmittedSecretInput<string | null>(
+    "Provider variable input is unavailable.",
+  );
+  const setEnvOverride = useProvidersSetEnvOverride(
+    submittedOverride.read,
+    submittedOverride.clear,
+  );
   const sentApiKey = useRef<string | null>(null);
   const setApiKey = useProvidersSetApiKey(
     null,
@@ -1192,11 +1206,11 @@ function TokenReauthForm({
         },
       );
     } else {
+      submittedOverride.set(trimmed);
       setEnvOverride.mutate(
         {
           providerId,
           key: activeVar,
-          value: trimmed,
           executableWriteGrant: null,
         },
         { onSuccess: afterWrite },

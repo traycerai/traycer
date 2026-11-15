@@ -26,6 +26,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import {
   awaitLoginTestAnswer,
   type AwaitLoginTestAnswer,
@@ -70,6 +71,22 @@ type SubmitLoginCodeRequest = RequestOfMethod<
   HostRpcRegistry,
   "providers.submitLoginCode"
 >;
+type SubmitLoginCodeVariables = Omit<SubmitLoginCodeRequest, "code">;
+
+function submitLoginCodeRequestMatches(
+  actual: SubmitLoginCodeRequest,
+  expected: SubmitLoginCodeRequest,
+): boolean {
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    actual.providerId === expected.providerId &&
+    actual.profileId === expected.profileId &&
+    actual.code === expected.code
+  );
+}
 type SubmitLoginCodeResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.submitLoginCode"
@@ -154,6 +171,7 @@ function LoginFlowHarness(props: {
   ) => Promise<AwaitLoginResponse>;
   readonly onCancel?: (request: CancelLoginRequest) => void;
   readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
+  readonly onSubmitVariables: (variables: SubmitLoginCodeVariables) => void;
   readonly onFailed: (message: string) => void;
   readonly onIdentity: () => void;
 }): ReactNode {
@@ -187,15 +205,20 @@ function LoginFlowHarness(props: {
     },
     onMutate: () => ({ hostId: null }),
   });
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Test login code input is unavailable.",
+  );
   const submitLoginCode: SubmitLoginCodeMutation = useMutation<
     SubmitLoginCodeResponse,
     HostRpcError,
-    SubmitLoginCodeRequest
+    SubmitLoginCodeVariables
   >({
-    mutationFn: (request) => {
-      props.onSubmitCode?.(request);
+    mutationFn: (variables) => {
+      props.onSubmitVariables(variables);
+      props.onSubmitCode?.({ ...variables, code: submittedLoginCode.read() });
       return Promise.resolve({ outcome: "accepted" });
     },
+    onSettled: submittedLoginCode.clear,
   });
   const touchLogin: TouchLoginMutation = useMutation<
     TouchLoginResponse,
@@ -225,6 +248,7 @@ function LoginFlowHarness(props: {
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: submittedLoginCode.set,
     touchLogin,
     ensurePack,
     failureMessages: { notStarted: NOT_STARTED, notFinished: NOT_FINISHED },
@@ -298,12 +322,20 @@ function renderFlow(options: {
   readonly onCancel?: (request: CancelLoginRequest) => void;
   readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
   readonly onIdentity?: () => void;
-}): { readonly onFailed: Mock<(message: string) => void> } {
+}): {
+  readonly onFailed: Mock<(message: string) => void>;
+  readonly onSubmitVariables: Mock<
+    (variables: SubmitLoginCodeVariables) => void
+  >;
+} {
   const onFailed = vi.fn<(message: string) => void>();
+  const onSubmitVariables =
+    vi.fn<(variables: SubmitLoginCodeVariables) => void>();
   render(
     <LoginFlowHarness
       {...options}
       onFailed={onFailed}
+      onSubmitVariables={onSubmitVariables}
       onIdentity={options.onIdentity ?? (() => undefined)}
     />,
     {
@@ -311,7 +343,7 @@ function renderFlow(options: {
     },
   );
   fireEvent.click(screen.getByRole("button", { name: "start" }));
-  return { onFailed };
+  return { onFailed, onSubmitVariables };
 }
 
 function flowState(): string | null {
@@ -445,7 +477,7 @@ describe("useProviderProfileLoginFlow - a provider that refuses the completed si
     const submitObserved = deferred<SubmitLoginCodeRequest>();
     let awaitCount = 0;
 
-    renderFlow({
+    const flowHarness = renderFlow({
       mode: "create",
       existingProfileId: null,
       startLoginImpl: () => Promise.resolve(startedAnswer({})),
@@ -482,11 +514,14 @@ describe("useProviderProfileLoginFlow - a provider that refuses the completed si
     });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Test submit code" }));
-      await expect(submitObserved.promise).resolves.toEqual({
-        providerId: PROVIDER_ID,
-        profileId: "admission-reader-wait",
-        code: "synthetic-code",
-      });
+      const submittedRequest = await submitObserved.promise;
+      expect(
+        submitLoginCodeRequestMatches(submittedRequest, {
+          providerId: PROVIDER_ID,
+          profileId: "admission-reader-wait",
+          code: "synthetic-code",
+        }),
+      ).toBe(true);
     });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Test cancel" }));
@@ -497,6 +532,10 @@ describe("useProviderProfileLoginFlow - a provider that refuses the completed si
       });
     });
     expect(submitCalls).toHaveBeenCalledTimes(1);
+    expect(flowHarness.onSubmitVariables).toHaveBeenCalledWith({
+      providerId: PROVIDER_ID,
+      profileId: "admission-reader-wait",
+    });
     expect(cancelCalls).toHaveBeenCalledTimes(1);
     await act(async () => {
       secondAwaitResult.resolve(awaitAnswer({ state: authenticatedState() }));

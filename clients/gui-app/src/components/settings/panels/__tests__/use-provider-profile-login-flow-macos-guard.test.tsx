@@ -103,7 +103,7 @@ function Harness(props: {
   const submitLoginCode = useMutation<
     ResponseOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
     HostRpcError,
-    RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">
+    Omit<RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">, "code">
   >({
     mutationFn: () => Promise.resolve({ outcome: "accepted" }),
   });
@@ -138,6 +138,7 @@ function Harness(props: {
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: () => undefined,
     touchLogin,
     ensurePack,
     failureMessages: {

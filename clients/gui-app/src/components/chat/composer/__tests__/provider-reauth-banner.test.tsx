@@ -96,10 +96,16 @@ type AwaitLoginMutate = (
   options: AwaitLoginOptions,
 ) => void;
 
-type SubmitLoginCodeVariables = {
+type SubmitLoginCodeRequest = {
   readonly providerId: string;
   readonly profileId: string | null;
   readonly code: string;
+};
+type SubmitLoginCodeVariables = Omit<SubmitLoginCodeRequest, "code">;
+type SetEnvOverrideVariables = {
+  readonly providerId: string;
+  readonly key: string;
+  readonly executableWriteGrant: null;
 };
 type SubmitLoginCodeOptions = {
   readonly onSuccess: (result: {
@@ -108,9 +114,24 @@ type SubmitLoginCodeOptions = {
   readonly onError: () => void;
 };
 type SubmitLoginCodeMutate = (
-  variables: SubmitLoginCodeVariables,
+  variables: SubmitLoginCodeRequest,
   options: SubmitLoginCodeOptions,
 ) => void;
+
+function submitLoginCodeRequestMatches(
+  actual: SubmitLoginCodeRequest,
+  expected: SubmitLoginCodeRequest,
+): boolean {
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    actual.providerId === expected.providerId &&
+    actual.profileId === expected.profileId &&
+    actual.code === expected.code
+  );
+}
 
 const setApiKeyMutationVariablesSchema = z.strictObject({
   providerId: z.string(),
@@ -178,6 +199,8 @@ const mocks = vi.hoisted(() => ({
   cancelLoginMutate: vi.fn(),
   cancelLoginPending: false,
   submitLoginCodeMutate: vi.fn<SubmitLoginCodeMutate>(),
+  submitLoginCodeVariables:
+    vi.fn<(variables: SubmitLoginCodeVariables) => void>(),
   submitLoginCodeReset: vi.fn(),
   submitLoginCodePending: false,
   submitLoginCodeSuccess: false,
@@ -188,6 +211,8 @@ const mocks = vi.hoisted(() => ({
   touchLoginMutate: vi.fn(),
   touchLoginReset: vi.fn(),
   setEnvOverrideMutate: vi.fn(),
+  setEnvOverrideVariables:
+    vi.fn<(variables: SetEnvOverrideVariables) => void>(),
   setApiKeyMutate: vi.fn(),
   useRealKeyChange: false,
   hostClient: null as HostClient<HostRpcRegistry> | null,
@@ -341,8 +366,18 @@ vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
   useProvidersLoginOwnershipForClient: () => false,
 }));
 vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => ({
-  useProvidersSubmitLoginCode: () => ({
-    mutate: mocks.submitLoginCodeMutate,
+  useProvidersSubmitLoginCode: (
+    readCode: () => string,
+    clearCodeInput: () => void,
+  ) => ({
+    mutate: (
+      variables: SubmitLoginCodeVariables,
+      options: SubmitLoginCodeOptions,
+    ) => {
+      mocks.submitLoginCodeVariables(variables);
+      mocks.submitLoginCodeMutate({ ...variables, code: readCode() }, options);
+      clearCodeInput();
+    },
     isPending: mocks.submitLoginCodePending,
     isSuccess: mocks.submitLoginCodeSuccess,
     data: mocks.submitLoginCodeData,
@@ -359,8 +394,15 @@ vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => ({
   }),
 }));
 vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
-  useProvidersSetEnvOverride: () => ({
-    mutate: mocks.setEnvOverrideMutate,
+  useProvidersSetEnvOverride: (
+    readValue: () => string | null,
+    clearValueInput: () => void,
+  ) => ({
+    mutate: (variables: SetEnvOverrideVariables) => {
+      mocks.setEnvOverrideVariables(variables);
+      mocks.setEnvOverrideMutate({ ...variables, value: readValue() });
+      clearValueInput();
+    },
     isPending: false,
   }),
 }));
@@ -814,6 +856,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.cancelLoginMutate.mockClear();
     mocks.cancelLoginPending = false;
     mocks.submitLoginCodeMutate.mockReset();
+    mocks.submitLoginCodeVariables.mockClear();
     mocks.submitLoginCodePending = false;
     mocks.submitLoginCodeSuccess = false;
     mocks.submitLoginCodeData = undefined;
@@ -835,6 +878,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.touchLoginMutate.mockReset();
     mocks.touchLoginReset.mockClear();
     mocks.setEnvOverrideMutate.mockClear();
+    mocks.setEnvOverrideVariables.mockClear();
     mocks.setApiKeyMutate.mockClear();
     mocks.refreshProviders.mockClear();
     mocks.openLink.mockClear();
@@ -1497,10 +1541,20 @@ describe("<ProviderReauthBanner />", () => {
       clipboardData: { getData: () => "abc123#xyz789" },
     });
 
-    expect(mocks.submitLoginCodeMutate).toHaveBeenCalledWith(
-      { providerId: "claude-code", profileId: null, code: "abc123#xyz789" },
-      expect.anything(),
-    );
+    const recordedSubmitLoginCodeCall =
+      mocks.submitLoginCodeMutate.mock.calls.at(-1);
+    expect(
+      recordedSubmitLoginCodeCall !== undefined &&
+        submitLoginCodeRequestMatches(recordedSubmitLoginCodeCall[0], {
+          providerId: "claude-code",
+          profileId: null,
+          code: "abc123#xyz789",
+        }),
+    ).toBe(true);
+    expect(mocks.submitLoginCodeVariables).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: null,
+    });
   });
 
   it("offers Authenticate with a paste field on a remote host when codePaste is set", async () => {
@@ -2126,6 +2180,11 @@ describe("<ProviderReauthBanner />", () => {
         "sk-ant-123",
       ),
     ).toBe(true);
+    expect(mocks.setEnvOverrideVariables).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      key: "ANTHROPIC_API_KEY",
+      executableWriteGrant: null,
+    });
   });
 
   it("kills the login child on explicit Cancel but not on teardown", async () => {
