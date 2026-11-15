@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -26,11 +27,23 @@ import {
   tryReserveLandingImageBudget,
 } from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
+
+interface SenderTestPerson {
+  readonly displayName: string;
+  readonly avatarUrl: string | null;
+}
+
+const teamDirectoryPeople = new Map<string, SenderTestPerson>();
+
+function resolveTeamDirectoryPerson(userId: string): SenderTestPerson | null {
+  return teamDirectoryPeople.get(userId) ?? null;
+}
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -674,6 +687,11 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/senders";
+import type {
+  ChatRecordSummaryV12,
+  ChatRecordSummaryV15,
+} from "@traycer/protocol/host/epic/chat-records";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -1053,6 +1071,67 @@ function testWorktreeBinding(): WorktreeBinding {
       },
     ],
   };
+}
+
+function userSenderMessage(
+  messageId: string,
+  sender: UserMessageSender,
+  text: string,
+): Message {
+  return {
+    role: "user",
+    messageId,
+    sender,
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text }],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1,
+    sessionAnchor: null,
+  };
+}
+
+function chatStarterRecord(
+  starterUserId: string | null,
+): ChatRecordSummaryV12 & Pick<ChatRecordSummaryV15, "starterUserId"> {
+  return {
+    chatId: CHAT_ARTIFACT.id,
+    ownerUserId: "owner-1",
+    originHostId: HOST_ID,
+    title: CHAT_ARTIFACT.name,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    archived: false,
+    archivedAt: null,
+    runSettingsSummary: null,
+    revision: 1,
+    visibility: "private",
+    origin: "own",
+    docResident: false,
+    head: null,
+    ...(starterUserId === null ? {} : { starterUserId }),
+  };
+}
+
+function publishChatStarter(starterUserId: string | null): void {
+  const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+  if (handle === null) throw new Error("expected live epic handle");
+  act(() => {
+    handle.store
+      .getState()
+      .applyChatRecords([chatStarterRecord(starterUserId)], null);
+  });
 }
 
 function hostUserMessage(): Message {
@@ -1795,7 +1874,11 @@ function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
             <TooltipProvider>
               <TestEpicSessionWrapper epicId={EPIC_ID}>
                 <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  {content}
+                  <PersonMembersContext.Provider
+                    value={resolveTeamDirectoryPerson}
+                  >
+                    {content}
+                  </PersonMembersContext.Provider>
                 </TabHostProvider>
               </TestEpicSessionWrapper>
             </TooltipProvider>
@@ -1951,6 +2034,7 @@ function deliverBlockEvent(
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    stubImmediateImage();
     installLegendListViewportMetrics();
     installLegendListTestClock();
     window.localStorage.clear();
@@ -2014,6 +2098,7 @@ describe("<ChatTile />", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
+    teamDirectoryPeople.clear();
     harnessCatalogTestState.harnesses = [];
     harnessCatalogTestState.toolbarModelsReady = false;
     resetNegotiatedManifests();
@@ -2021,6 +2106,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    teamDirectoryPeople.clear();
     sandboxCatalogueTestState.catalogue = null;
     viewport.mobile = false;
     restoreLegendListTestClock();
@@ -2548,6 +2634,183 @@ describe("<ChatTile />", () => {
     }
     expect(messages.length).toBe(1);
     rootState.destroy();
+  });
+
+  it("shows team member and former-member names and pictures on chat rows", async () => {
+    teamDirectoryPeople.set("team-member", {
+      displayName: "Team Directory Member",
+      avatarUrl: "https://images.example.test/chat-team-member.png",
+    });
+    teamDirectoryPeople.set("former-member", {
+      displayName: "Former Directory Member",
+      avatarUrl: "https://images.example.test/chat-former-member.png",
+    });
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "team-member-row",
+            { type: "user", userId: "team-member" },
+            "Team member chat row",
+          ),
+          userSenderMessage(
+            "former-member-row",
+            { type: "user", userId: "former-member" },
+            "Former member chat row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    expect(await screen.findByText("Team Directory Member")).not.toBeNull();
+    expect(await screen.findByText("Former Directory Member")).not.toBeNull();
+    await waitFor(() => {
+      const pictures = screen
+        .getAllByTestId("person-avatar")
+        .map((avatar) => avatar.querySelector("img")?.getAttribute("src"));
+      expect(pictures).toContain(
+        "https://images.example.test/chat-team-member.png",
+      );
+      expect(pictures).toContain(
+        "https://images.example.test/chat-former-member.png",
+      );
+    });
+    expect(screen.queryByText("team-member", { exact: true })).toBeNull();
+    expect(screen.queryByText("former-member", { exact: true })).toBeNull();
+  });
+
+  it("keeps the viewer at You without a picture and keeps an agent sender's label", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "viewer-row",
+            { type: "user", userId: "owner-1" },
+            "Viewer chat row",
+          ),
+          userSenderMessage(
+            "agent-row",
+            {
+              type: "agent",
+              harnessId: "codex",
+              agentId: "codex",
+              displayName: "Codex",
+              reply: { expectsReply: false },
+              inReplyTo: null,
+            },
+            "Agent chat row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    expect(await screen.findByText("You")).not.toBeNull();
+    expect(screen.getByText("Codex")).not.toBeNull();
+    expect(screen.queryByTestId("person-avatar")).toBeNull();
+  });
+
+  it("shows only the timestamp on a system sender row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "viewer-row",
+            { type: "user", userId: "owner-1" },
+            "Viewer chat row",
+          ),
+          userSenderMessage(
+            "system-row",
+            { type: "user", userId: "system" },
+            "System status row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    const systemText = await screen.findByText("System status row");
+    const systemRow = systemText.closest('[class~="group/message"]');
+    if (!(systemRow instanceof HTMLElement)) {
+      throw new Error("expected the system sender row");
+    }
+    expect(within(systemRow).queryByText("system", { exact: true })).toBeNull();
+    expect(within(systemRow).queryByTestId("person-avatar")).toBeNull();
+    const stamp = within(systemRow).getByTestId("chat-message-timestamp");
+    expect(stamp.closest("span.text-overline")?.textContent).not.toContain(
+      " · ",
+    );
+  });
+
+  it("shows Started by Priya with her picture from the team's directory", async () => {
+    teamDirectoryPeople.set("u-priya", {
+      displayName: "Priya",
+      avatarUrl: "https://images.example.test/priya.png",
+    });
+    renderChatTile();
+    await waitForChatTileLoaded();
+    publishChatStarter("u-priya");
+
+    const line = await screen.findByTestId(
+      `chat-started-by-${CHAT_ARTIFACT.id}`,
+    );
+    expect(
+      within(line).getByText("Started by Priya", { exact: true }),
+    ).toBeTruthy();
+    expect(
+      line
+        .querySelector('[data-testid="person-avatar"] img')
+        ?.getAttribute("src"),
+    ).toBe("https://images.example.test/priya.png");
+    expect(screen.queryByText("u-priya", { exact: true })).toBeNull();
+  });
+
+  it("draws no Started by line when the starter is system", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    publishChatStarter("system");
+
+    expect(
+      screen.queryByTestId(`chat-started-by-${CHAT_ARTIFACT.id}`),
+    ).toBeNull();
+  });
+
+  it("draws no Started by line when an older chat row omits the starter", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    publishChatStarter(null);
+
+    expect(
+      screen.queryByTestId(`chat-started-by-${CHAT_ARTIFACT.id}`),
+    ).toBeNull();
+  });
+
+  it("uses the starter id when no directory names that person", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    publishChatStarter("u-gone");
+
+    expect(await screen.findByText("Started by u-gone")).not.toBeNull();
   });
 
   it("keeps a resting copy sendable without serving-host workspace access", async () => {

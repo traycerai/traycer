@@ -182,6 +182,13 @@ export interface TerminalSessionState {
    * `terminal.list` metadata.
    */
   readonly currentCwdReported: boolean;
+  /**
+   * The people who have this terminal on screen, as the host last published
+   * them (`terminal.subscribe@1.8`), the viewer included. `null` is unknown:
+   * no frame on this connection yet, a host older than 1.8, or a dropped
+   * stream - never read as nobody.
+   */
+  readonly viewers: ReadonlyArray<string> | null;
 
   /** Tile registers an xterm `term.write` proxy here once mounted. */
   setWriter: (writer: TerminalDataWriter | null) => void;
@@ -415,6 +422,7 @@ function bindStreamCallbacks(
     onExit: guarded(callbacks.onExit),
     onActionAck: guarded(callbacks.onActionAck),
     onSessionUpdated: guarded(callbacks.onSessionUpdated),
+    onViewers: guarded(callbacks.onViewers),
     onConnectionStatus: guarded(callbacks.onConnectionStatus),
   };
 }
@@ -780,6 +788,10 @@ export function createTerminalSessionStore(
             currentCwd === undefined ? get().currentCwdReported : true,
         });
       },
+      onViewers: (frame) => {
+        if (disposed || frame.sessionId !== options.sessionId) return;
+        set({ viewers: frame.viewers.map((viewer) => viewer.userId) });
+      },
       onConnectionStatus: (
         status,
         reason,
@@ -805,8 +817,10 @@ export function createTerminalSessionStore(
           // A reconnect re-subscribes and the host mints a fresh subscriber
           // with unackedBytes = 0, so any credit accumulated for the old
           // connection is moot - drop it rather than send a stale ack (or
-          // leak the timer) once the new connection opens.
+          // leak the timer) once the new connection opens. The viewer set
+          // was the old subscription's; the new one publishes its own.
           resetAckAccounting();
+          set({ viewers: null });
         }
         set((state) => ({
           connectionStatus: status,
@@ -980,6 +994,7 @@ export function createTerminalSessionStore(
       activeProcessName: null,
       currentCwd: null,
       currentCwdReported: false,
+      viewers: null,
 
       setWriter: (next) => {
         writer = next;

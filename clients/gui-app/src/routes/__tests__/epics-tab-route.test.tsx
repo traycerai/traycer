@@ -49,10 +49,6 @@ vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
   DesktopDialogHost: () => null,
 }));
 
-vi.mock("@/components/layout/dialogs/window-host-modal-host", () => ({
-  WindowHostModalHost: () => null,
-}));
-
 vi.mock("@/components/layout/bridges/menu-command-listener", () => ({
   MenuCommandListener: () => null,
 }));

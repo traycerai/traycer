@@ -34,6 +34,7 @@ import type {
   SecretVersion,
 } from "@traycer/protocol/host/environment-schemas";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -86,8 +87,12 @@ const AT = Date.UTC(2026, 9, 20, 9, 30);
  * from the poll: a write that dropped its own invalidation fails here.
  */
 const OWN_INVALIDATION_WAIT_MS = 2_000;
-/** The revision poll's 5 seconds, and the time to see its answer re-read. */
-const REVISION_POLL_WAIT_MS = 9_000;
+/**
+ * The boundary's revision poll interval. The file fakes the interval timers,
+ * so the poll ticks when a case advances the clock by this much and never on
+ * real time.
+ */
+const REVISION_POLL_MS = 5_000;
 type SecretReadMethod = (typeof SECRET_READS)[number];
 type Rotation = EnvironmentSecretsRotationResponse["rotation"];
 type RemovedSecret = ResponseOfMethod<
@@ -412,7 +417,8 @@ function readCounts(
  * create or a replace) the rotation, inside {@link OWN_INVALIDATION_WAIT_MS}.
  * A Remove, an Undo and a removal retry invalidate only the list and the
  * versions: their rotation is re-read when the committed change moves authn's
- * revision, which the boundary sees within its 5 second poll.
+ * revision, which the boundary sees on its next poll, so the case advances the
+ * clock by one poll interval.
  */
 async function expectAuthnReadsAfter(
   harness: TeamPageHarness,
@@ -435,8 +441,11 @@ async function expectAuthnReadsAfter(
     { timeout: OWN_INVALIDATION_WAIT_MS },
   );
   if (rotationFromRevision) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REVISION_POLL_MS);
+    });
     await waitFor(() => grew("environment.secrets.rotation"), {
-      timeout: REVISION_POLL_WAIT_MS,
+      timeout: OWN_INVALIDATION_WAIT_MS,
     });
   }
   for (const method of SECRET_READS) {
@@ -473,12 +482,15 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  // Only the interval timers, which the revision poll runs on.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   openLinkMock.mockResolvedValue(undefined);
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   resetTeamPageHarness();
   useSelectionAuthorityStore.getState().reset();
   openLinkMock.mockReset();

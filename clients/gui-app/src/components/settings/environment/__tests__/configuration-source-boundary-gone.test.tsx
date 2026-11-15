@@ -763,10 +763,17 @@ describe("a team the environment list no longer carries", () => {
       .getQueryCache()
       .getAll()
       .filter((query) => query.queryKey.includes("environment.list"));
-    expect(membershipQueries).toHaveLength(1);
-    expect(membershipQueries[0]?.queryKey).not.toContain(
-      remote.getActiveHostId(),
-    );
+    // The list's key carries the account's teams, so the removal above reads it
+    // again under another key and leaves the first entry cached with no
+    // observer (`gcTime` here is infinite): one answer is observed, and no
+    // entry's key names either host.
+    expect(
+      membershipQueries.filter((query) => query.getObserversCount() > 0),
+    ).toHaveLength(1);
+    for (const query of membershipQueries) {
+      expect(query.queryKey).not.toContain(remote.getActiveHostId());
+      expect(query.queryKey).not.toContain(mockLocalHostEntry.hostId);
+    }
 
     act(() => {
       teamHostBoundary.client = remote;

@@ -51,10 +51,15 @@ const KEY_SEPARATOR = "\u001f";
  * `chatId` alone is host-minted and not unique under a task, so a key on it
  * would let a collaborator's row evict the viewer's own same-id chat. The
  * separator is a control character no id can contain, which is also what makes
- * {@link dropChatRecordHeadsForChat}'s suffix test exact.
+ * {@link chatRecordKeyNamesChat}'s suffix test exact.
  */
 export function chatRecordKey(ownerUserId: string, chatId: string): string {
   return `${ownerUserId}${KEY_SEPARATOR}${chatId}`;
+}
+
+/** Whether a {@link chatRecordKey} names `chatId`, whatever its owner. */
+export function chatRecordKeyNamesChat(key: string, chatId: string): boolean {
+  return key.endsWith(`${KEY_SEPARATOR}${chatId}`);
 }
 
 /**
@@ -142,24 +147,23 @@ export function applyChatRecordHeadRows(
 
 /**
  * The table with every entry for `chatId` dropped, or the SAME table when it
- * held none.
+ * held none. Serves every plane keyed by {@link chatRecordKey}.
  *
  * Keyed by `chatId` ALONE, matching how a `remove` frame is addressed: it
  * carries `(epicId, chatId, reason)` and no owner, so the frame is COARSER
  * than a record identity and retracts every retained entry with that id - the
  * same coarseness, and the same bound, as the record table's own retraction
- * map. The suffix test is exact because {@link KEY_SEPARATOR} is a control
- * character no id can contain.
+ * map.
  */
-export function dropChatRecordHeadsForChat(
-  held: Readonly<Record<string, ChatRecordHeadStamp>>,
+export function dropChatRecordEntriesForChat<T>(
+  held: Readonly<Record<string, T>>,
   chatId: string,
-): Readonly<Record<string, ChatRecordHeadStamp>> {
-  const suffix = `${KEY_SEPARATOR}${chatId}`;
-  const surviving = Object.keys(held).filter((key) => !key.endsWith(suffix));
+): Readonly<Record<string, T>> {
+  const surviving = Object.keys(held).filter(
+    (key) => !chatRecordKeyNamesChat(key, chatId),
+  );
   if (surviving.length === Object.keys(held).length) return held;
-  if (surviving.length === 0) return EMPTY_CHAT_RECORD_HEADS;
-  const next: Record<string, ChatRecordHeadStamp> = {};
+  const next: Record<string, T> = {};
   for (const key of surviving) next[key] = held[key];
   return next;
 }

@@ -19,6 +19,7 @@ import {
   runSignInPreflight,
   runTeamInstallAuthPreflight,
   completeTeamInstall,
+  resolveSignInTeam,
   warnIfTeamInstallSignInRemains,
   type HostInstallAuthPreflight,
 } from "../host/install-auth";
@@ -89,6 +90,11 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
             ? await runTeamInstallAuthPreflight(ctx)
             : null;
         try {
+          // The team is checked against the sign-in's own teams before ensure
+          // installs, registers or starts anything, so a slug that names none
+          // of them changes nothing. `completeTeamInstall` checks it again.
+          if (args.team !== null && teamSession !== null)
+            await resolveSignInTeam(args.team);
           // This command can install + register + START a host (three of its four
           // actions), so it owns the same sign-in pre-flight and post-start
           // credential provisioning as `host install` and `host service install` -

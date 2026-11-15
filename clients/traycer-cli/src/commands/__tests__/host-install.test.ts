@@ -247,7 +247,14 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
     >();
   return {
     ...actual,
-    validateAuthTokenIdentityAccessOnly: mocks.validateIdentityMock,
+    // The sign-in's own record of the person's teams is read through this
+    // call; the order records when a command reads it.
+    validateAuthTokenIdentityAccessOnly: (
+      ...callArgs: Parameters<typeof mocks.validateIdentityMock>
+    ) => {
+      mocks.callOrder.push("sign-in-list-read");
+      return mocks.validateIdentityMock(...callArgs);
+    },
   };
 });
 
@@ -423,6 +430,20 @@ function signedInAcmeUser() {
     ],
   };
 }
+/** The same sign-in, not a member of any team. */
+function signedInNonMemberUser() {
+  return {
+    ...signedInAcmeUser(),
+    environments: { personal: null, teams: [] },
+    teamSubscriptions: [],
+  };
+}
+
+const TEAM_SLUG_SENTENCE =
+  "Enter the slug of a team you belong to, as shown in its dashboard address.";
+const AUTHN_UNREACHABLE_SENTENCE =
+  "Could not reach the authn service; check your network.";
+
 beforeAll(() => {
   expect(osHome.current).not.toBe("");
   expect(hostHomeDir("production").startsWith(osHome.current)).toBe(true);
@@ -646,6 +667,11 @@ describe("buildHostInstallCommand", () => {
       acceptStoreFormatLoss: false,
       site: "host install",
     });
+    // The signed-in person belongs to the acme team unless a case says not.
+    mocks.validateIdentityMock.mockResolvedValue({
+      kind: "valid",
+      user: signedInAcmeUser(),
+    });
     mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
     mocks.teamTokenPreparationMock.mockResolvedValue(null);
     mocks.waitForTeamTokenInstallMock.mockResolvedValue({
@@ -729,6 +755,74 @@ describe("buildHostInstallCommand", () => {
       }),
       ctx.progress,
     );
+    // A member's team is found in the sign-in's list before anything is staged.
+    expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeLessThan(
+      mocks.callOrder.indexOf("stage"),
+    );
+  });
+
+  it.each([
+    {
+      label: "a person who belongs to no team",
+      user: signedInNonMemberUser,
+      team: "team/acme",
+    },
+    {
+      label: "a member who mistypes the slug",
+      user: signedInAcmeUser,
+      team: "team/acmee",
+    },
+  ])(
+    "stops --team for $label before anything is installed",
+    async ({ user, team }) => {
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: user(),
+      });
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(
+        sampleLifecycleHandle(),
+      );
+
+      await expect(
+        buildHostInstallCommand(baseArgs({ team }))(fakeCtx()),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: TEAM_SLUG_SENTENCE,
+        exitCode: 1,
+      });
+
+      // Nothing was staged, started or asked of a host.
+      expect(mocks.callOrder).not.toContain("stage");
+      expect(mocks.callOrder).not.toContain("commit");
+      expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.createBytesOnlyInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+      expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
+      expect(mocks.legacyHost).toBeNull();
+    },
+  );
+
+  it("stops --team before anything is installed when the sign-in's teams cannot be read", async () => {
+    mocks.validateIdentityMock.mockResolvedValue({ kind: "network-error" });
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+
+    await expect(
+      buildHostInstallCommand(baseArgs({ team: "team/acme" }))(fakeCtx()),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: AUTHN_UNREACHABLE_SENTENCE,
+      exitCode: 1,
+    });
+
+    expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
   });
 
   it("uses a prepared team token before auth, waits after commit, and returns only the target receipt", async () => {
@@ -932,7 +1026,9 @@ describe("buildHostInstallCommand", () => {
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
       message: expect.stringContaining("traycer host update"),
     });
-    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(1);
+    // The team is read from the sign-in's list twice: before anything is
+    // staged, and again by the transfer itself.
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(2);
     expect(legacyHost.requests).toEqual([]);
     expect(ctx.progress).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -949,6 +1045,12 @@ describe("buildHostInstallCommand", () => {
       mocks.resolveHostAuthMock.mockResolvedValue(null);
       const token = `retained-install-${failure}`;
       mocks.runDeviceAuthFlowMock.mockImplementation(async () => {
+        // The inline sign-in is now the one the command resolves.
+        mocks.resolveHostAuthMock.mockResolvedValue({
+          token,
+          authnBaseUrl: "https://authn.test",
+          userId: "test-person",
+        });
         await writeCredentialsFile(
           cliCredentialsPath("production"),
           {
@@ -1006,10 +1108,18 @@ describe("buildHostInstallCommand", () => {
 
   it("passes the inline-created sign-in token into team completion", async () => {
     mocks.resolveHostAuthMock.mockResolvedValue(null);
-    mocks.runDeviceAuthFlowMock.mockResolvedValue({
-      token: "inline-team-token",
-      user: { id: "member-1", email: "member@example.test", name: "Member" },
-      authnBaseUrl: "https://authn.test",
+    mocks.runDeviceAuthFlowMock.mockImplementation(() => {
+      // The inline sign-in is now the one the command resolves.
+      mocks.resolveHostAuthMock.mockResolvedValue({
+        token: "inline-team-token",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      });
+      return Promise.resolve({
+        token: "inline-team-token",
+        user: { id: "member-1", email: "member@example.test", name: "Member" },
+        authnBaseUrl: "https://authn.test",
+      });
     });
     mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
     mocks.createServiceInstallLifecycleMock.mockReturnValue(
