@@ -1,14 +1,16 @@
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
-import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { CliError, CLI_ERROR_CODES } from "../runner/errors";
 import {
   listBots,
-  listEnvironments,
   openLocalStreamClient,
   readBotSnapshot,
   type BotSnapshot,
 } from "../internal/bot-host";
 import type { CommandFn } from "../runner/runner";
+import {
+  readSignInEnvironments,
+  type SignInEnvironment,
+} from "../internal/sign-in-environments";
 
 /** One bot as `traycer bot list` reports it. */
 export interface BotListRow {
@@ -26,7 +28,7 @@ export interface BotListRow {
   readonly readFailed: boolean;
 }
 
-/** One environment and its bots, in the order the host lists environments. */
+/** One environment and its bots, in the order the sign-in lists environments. */
 export interface BotListGroup {
   readonly environmentId: string;
   readonly label: string;
@@ -45,7 +47,7 @@ export interface BotListGroup {
 export function buildBotListCommand(): CommandFn {
   return async () => {
     const [environments, bots] = await Promise.all([
-      listEnvironments(),
+      readSignInEnvironments(),
       listBots(),
     ]);
     const { client, endpoint } = await openLocalStreamClient();
@@ -115,11 +117,11 @@ function toRow(
 }
 
 /**
- * Every environment the host lists, in its order, then any environment a bot
- * names that the list did not (shown by id, so no bot is dropped).
+ * Every environment the sign-in lists, in its order, then any environment a
+ * bot names that the list did not (shown by id, so no bot is dropped).
  */
 export function groupByEnvironment(
-  environments: readonly EnvironmentDescriptor[],
+  environments: readonly SignInEnvironment[],
   rows: readonly BotListRow[],
   bots: readonly BotRecord[],
 ): readonly BotListGroup[] {
