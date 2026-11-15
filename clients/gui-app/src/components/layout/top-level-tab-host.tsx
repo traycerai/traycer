@@ -1,3 +1,4 @@
+import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
 import {
   Suspense,
   useCallback,
@@ -388,6 +389,12 @@ function TopLevelSurfaceMount(props: {
             visible={mount.activity.visible}
             focused={mount.activity.focused}
           >
+            {mount.tab.kind === "home" ||
+            mount.tab.kind === "draft" ||
+            mount.tab.kind === "settings" ||
+            mount.tab.kind === "tracy" ? (
+              <SoundtrackPlaybackControls placement="surface" />
+            ) : null}
             {/* A retained hidden tab must start its loading delay only when
                 the user actually opens it. */}
             <Suspense
