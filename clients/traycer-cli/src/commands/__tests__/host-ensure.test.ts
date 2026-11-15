@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +11,30 @@ import {
   LEGACY_TEAM,
 } from "../../host/__tests__/legacy-team-host";
 import { CLI_ERROR_CODES } from "../../runner/errors";
-import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
+import {
+  hostEnrollmentRecordPath,
+  hostTeamInstallTokenPath,
+} from "../../store/paths";
+import {
+  AUTHN_UNREACHABLE_SENTENCE,
+  type InlineSignIn,
+  inlineSignIn,
+  inlineSignInCredentials,
+  MINT_FAILURES,
+  MINT_URL,
+  MINTED_ENVIRONMENT_ID,
+  MINTED_TOKEN,
+  MINTED_TOKEN_FILE,
+  mintedAnswer,
+  RETAINED_SIGN_IN_WARNING,
+  registerHostOnMachine,
+  signedInAcmeUser,
+  signedInNonMemberUser,
+  stagedTeamTokenFile,
+  stubMintAnswer,
+  TEAM_INSTALL_ROADS,
+  TEAM_SLUG_SENTENCE,
+} from "../../host/__tests__/team-install-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `traycer host ensure` is the desktop's idempotent post-auth
@@ -57,6 +81,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // to pin how `host-ensure.ts` THREADS the callback and the result through
 // the two auth steps.
 
+// HOME is redirected to a private temp dir before anything reads it: the
+// command looks for this machine's host enrolment record and stages the team
+// token under `hostHomeDir()`, and `store/paths` binds `homedir()` at module
+// load. The dir is made inside the `node:os` factory, so it exists before the
+// first module that asks for `homedir()` is evaluated.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-host-ensure-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
 const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
   credentialsPath: "",
@@ -67,6 +109,7 @@ const mocks = vi.hoisted(() => ({
   readHostOwnershipMock: vi.fn(),
   ensureHostMock: vi.fn(),
   runSignInPreflightMock: vi.fn(),
+  runDeviceAuthFlowMock: vi.fn(),
   maybeProvisionCredentialMock: vi.fn(),
   completeTeamInstallMock: vi.fn(),
   teamTokenPreparationMock: vi.fn(),
@@ -156,6 +199,12 @@ vi.mock("../../internal/host-rpc", async (importOriginal) => {
   };
 });
 
+vi.mock("../../auth/login-flow", () => ({
+  runDeviceAuthFlow: async (
+    ...callArgs: Parameters<typeof mocks.runDeviceAuthFlowMock>
+  ) => mocks.runDeviceAuthFlowMock(...callArgs),
+}));
+
 vi.mock("../../host/team-install-token", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../host/team-install-token")>();
@@ -236,10 +285,6 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
       mocks.callOrder.push("credential-provision");
       return mocks.maybeProvisionCredentialMock(...callArgs);
     },
-    runTeamInstallAuthPreflight: async () => ({
-      preflight: await mocks.runSignInPreflightMock(),
-      inlineSignInToken: null,
-    }),
     completeTeamInstall: (
       ...callArgs: Parameters<typeof actual.completeTeamInstall>
     ) => mocks.completeTeamInstallMock(...callArgs),
@@ -255,41 +300,6 @@ import type { HostProvisionServiceLifecycle } from "../../host/provision";
 import type { HostCredentialProvisionOutcome } from "../../host/credential-provisioning";
 import type { HostInstallAuthPreflight } from "../../host/install-auth";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-
-function signedInAcmeUser() {
-  const base = createAuthenticatedUserFixture(undefined);
-  return {
-    ...base,
-    user: { ...base.user, id: "user-1" },
-    environments: {
-      personal: null,
-      teams: [
-        {
-          teamId: "organization-acme",
-          environmentId: "environment-acme",
-        },
-      ],
-    },
-    teamSubscriptions: [
-      {
-        team: { id: "organization-acme", slug: "acme" },
-      } as (typeof base.teamSubscriptions)[number],
-    ],
-  };
-}
-/** The same sign-in, not a member of any team. */
-function signedInNonMemberUser() {
-  return {
-    ...signedInAcmeUser(),
-    environments: { personal: null, teams: [] },
-    teamSubscriptions: [],
-  };
-}
-
-const TEAM_SLUG_SENTENCE =
-  "Enter the slug of a team you belong to, as shown in its dashboard address.";
-const AUTHN_UNREACHABLE_SENTENCE =
-  "Could not reach the authn service; check your network.";
 
 const teamBindingFixture = {
   hostId: "host-local",
@@ -396,6 +406,39 @@ function baseEnsureResult(
   };
 }
 
+// The sign-in pre-flight's prompt gate reads `process.stdout.isTTY` directly
+// (not through `ctx`), so a case that signs in inline sets it itself; the
+// original shape is restored after every case.
+const originalStdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(
+  process.stdout,
+  "isTTY",
+);
+
+function setStdoutIsTTY(value: boolean): void {
+  Object.defineProperty(process.stdout, "isTTY", {
+    value,
+    configurable: true,
+  });
+}
+
+/** A device flow that signs the person in and leaves the sign-in on disk. */
+function inlineSignInDeviceFlow(token: string): () => Promise<InlineSignIn> {
+  return async () => {
+    // The inline sign-in is now the one the command resolves.
+    mocks.resolveHostAuthMock.mockResolvedValue({
+      token,
+      authnBaseUrl: "https://authn.test",
+      userId: "test-person",
+    });
+    await writeCredentialsFile(
+      mocks.credentialsPath,
+      inlineSignInCredentials(token),
+      0,
+    );
+    return inlineSignIn(token);
+  };
+}
+
 describe("buildHostEnsureCommand", () => {
   beforeEach(() => {
     mocks.pidMetadata = null;
@@ -425,7 +468,19 @@ describe("buildHostEnsureCommand", () => {
 
   afterEach(() => {
     vi.resetAllMocks();
+    vi.unstubAllGlobals();
     mocks.callOrder = [];
+    rmSync(hostEnrollmentRecordPath("production"), { force: true });
+    rmSync(hostTeamInstallTokenPath("production"), { force: true });
+    if (originalStdoutIsTTYDescriptor === undefined) {
+      Reflect.deleteProperty(process.stdout, "isTTY");
+    } else {
+      Object.defineProperty(
+        process.stdout,
+        "isTTY",
+        originalStdoutIsTTYDescriptor,
+      );
+    }
   });
 
   it("runs the sign-in pre-flight inside ensureHost's beforeMutate hook, and provisions the credential only after ensureHost returns", async () => {
@@ -440,7 +495,8 @@ describe("buildHostEnsureCommand", () => {
     ]);
   });
 
-  it("sends --team ensure through the shared team completion step, including an already-running no-op", async () => {
+  it("sends --team ensure on a machine with a registered host through the shared team completion step, including an already-running no-op", async () => {
+    registerHostOnMachine();
     mocks.ensureHostMock.mockResolvedValue(
       baseEnsureResult({ action: "noop", serviceLifecycle: null }),
     );
@@ -470,20 +526,26 @@ describe("buildHostEnsureCommand", () => {
     );
   });
 
-  it.each([
-    {
-      label: "a person who belongs to no team",
-      user: signedInNonMemberUser,
-      team: "acme",
-    },
-    {
-      label: "a member who mistypes the slug",
-      user: signedInAcmeUser,
-      team: "acmee",
-    },
-  ])(
-    "stops --team ensure for $label before anything is installed or started",
-    async ({ user, team }) => {
+  it.each(
+    [
+      {
+        label: "a person who belongs to no team",
+        user: signedInNonMemberUser,
+        team: "acme",
+      },
+      {
+        label: "a member who mistypes the slug",
+        user: signedInAcmeUser,
+        team: "acmee",
+      },
+    ].flatMap((teamCase) =>
+      TEAM_INSTALL_ROADS.map((road) => ({ ...teamCase, ...road })),
+    ),
+  )(
+    "stops --team ensure for $label on $road before anything is installed or started",
+    async ({ user, team, hostRegistered }) => {
+      if (hostRegistered) registerHostOnMachine();
+      const mintRequests = stubMintAnswer(() => null);
       mocks.validateIdentityMock.mockResolvedValue({
         kind: "valid",
         user: user(),
@@ -502,25 +564,36 @@ describe("buildHostEnsureCommand", () => {
       expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
       expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
       expect(mocks.legacyHost).toBeNull();
+      // The list refused it first: no token was asked for or kept.
+      expect(mintRequests).toEqual([]);
+      expect(stagedTeamTokenFile()).toBeNull();
     },
   );
 
-  it("stops --team ensure before anything is installed when the sign-in's teams cannot be read", async () => {
-    mocks.validateIdentityMock.mockResolvedValue({ kind: "network-error" });
+  it.each(TEAM_INSTALL_ROADS)(
+    "stops --team ensure on $road before anything is installed when the sign-in's teams cannot be read",
+    async ({ hostRegistered }) => {
+      if (hostRegistered) registerHostOnMachine();
+      const mintRequests = stubMintAnswer(() => null);
+      mocks.validateIdentityMock.mockResolvedValue({ kind: "network-error" });
 
-    await expect(
-      buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
-    ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-      message: AUTHN_UNREACHABLE_SENTENCE,
-      exitCode: 1,
-    });
+      await expect(
+        buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: AUTHN_UNREACHABLE_SENTENCE,
+        exitCode: 1,
+      });
 
-    expect(mocks.ensureHostMock).not.toHaveBeenCalled();
-    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
-  });
+      expect(mocks.ensureHostMock).not.toHaveBeenCalled();
+      expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+      expect(mintRequests).toEqual([]);
+      expect(stagedTeamTokenFile()).toBeNull();
+    },
+  );
 
   it("the CLI does not send a team target to a host that cannot transfer", async () => {
+    registerHostOnMachine();
     mocks.resolveHostAuthMock.mockResolvedValue({
       token: "stored-bearer",
       authnBaseUrl: "https://authn.test",
@@ -574,28 +647,12 @@ describe("buildHostEnsureCommand", () => {
       mocks.credentialsPath = join(directory, "credentials");
       const token = "inline-team-token";
       const ctx = fakeCtx();
-      const preflight = vi
-        .spyOn(installAuthModule, "runTeamInstallAuthPreflight")
-        .mockImplementation(async () => {
-          await writeCredentialsFile(
-            mocks.credentialsPath,
-            {
-              token,
-              refreshToken: "inline-refresh",
-              savedAt: "2026-11-10T00:00:00.000Z",
-              user: {
-                id: "test-person",
-                email: "fixture@example.test",
-                name: "Member",
-              },
-            },
-            0,
-          );
-          return {
-            preflight: { state: "signed-in-inline", reason: null },
-            inlineSignInToken: token,
-          };
-        });
+      registerHostOnMachine();
+      setStdoutIsTTY(true);
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      mocks.runDeviceAuthFlowMock.mockImplementation(
+        inlineSignInDeviceFlow(token),
+      );
       if (failure === "ensure")
         mocks.ensureHostMock.mockRejectedValue(new Error("ensure failed"));
       if (failure === "unreadable")
@@ -626,16 +683,143 @@ describe("buildHostEnsureCommand", () => {
             (await readCredentialsFile(mocks.credentialsPath))?.token,
           ).toBe(token);
           expect(ctx.output.humanRequired).toHaveBeenCalledWith(
-            "Your sign-in stays on this computer. Run `traycer logout` to remove it.",
+            RETAINED_SIGN_IN_WARNING,
           );
         }
       } finally {
-        preflight.mockRestore();
         rmSync(directory, { recursive: true, force: true });
         mocks.credentialsPath = "";
       }
     },
   );
+
+  describe("--team on a machine with no host yet", () => {
+    it("mints by the resolved environment id and stages the token before ensure installs or starts anything, with no personal credential, transfer or restart", async () => {
+      const mintRequests = stubMintAnswer(mintedAnswer);
+      // What the machine holds for the host's first start, read where ensure
+      // installs and starts the host.
+      const tokenFileAtEnsure: (string | null)[] = [];
+      mocks.ensureHostMock.mockImplementation(() => {
+        tokenFileAtEnsure.push(stagedTeamTokenFile());
+        return Promise.resolve(
+          baseEnsureResult({
+            action: "started",
+            serviceLifecycle: lifecycle({ postSwapAction: "start" }),
+            postSwapError: null,
+          }),
+        );
+      });
+      const receipt = {
+        hostId: "host-local",
+        environmentId: MINTED_ENVIRONMENT_ID,
+      };
+      mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
+
+      const ctx = fakeCtx();
+      const result = await buildHostEnsureCommand(baseArgs({ team: "acme" }))(
+        ctx,
+      );
+
+      expect(mintRequests).toEqual([
+        {
+          url: MINT_URL,
+          authorization: "Bearer test-token",
+          body: { environmentId: MINTED_ENVIRONMENT_ID },
+        },
+      ]);
+      expect(tokenFileAtEnsure).toEqual([MINTED_TOKEN_FILE]);
+      // The team is found in the sign-in's list, then the token is minted:
+      // both before ensure installs, registers or starts anything.
+      expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThan(-1);
+      expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeLessThan(
+        mocks.callOrder.indexOf("ensure-enter"),
+      );
+      // The receipt is awaited after ensure, for the minted target.
+      expect(mocks.callOrder.indexOf("team-token-wait")).toBeGreaterThan(
+        mocks.callOrder.indexOf("ensure-exit"),
+      );
+      expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
+        "production",
+        {
+          environmentId: MINTED_ENVIRONMENT_ID,
+          tokenHash: createHash("sha256").update(MINTED_TOKEN).digest("hex"),
+        },
+        60_000,
+      );
+      expect(result.human).toContain("This computer belongs to acme.");
+      expect(result.exitCode).toBe(0);
+      expect(result.data).toMatchObject({
+        teamBinding: null,
+        teamInstallReceipt: receipt,
+      });
+      // No personal credential, no transfer, no restart.
+      expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
+      expect(mocks.callOrder).not.toContain("credential-provision");
+      expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+      expect(mocks.legacyHost).toBeNull();
+      expect(ctx.progress).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("Restarting Traycer"),
+        }),
+      );
+      // The token never leaves the command.
+      expect(JSON.stringify(result)).not.toContain(MINTED_TOKEN);
+      expect(
+        JSON.stringify(vi.mocked(ctx.output.human).mock.calls),
+      ).not.toContain(MINTED_TOKEN);
+    });
+
+    it.each(MINT_FAILURES)(
+      "stops before anything is installed or started when $label at the token's mint",
+      async ({ answer, error }) => {
+        const mintRequests = stubMintAnswer(answer);
+
+        await expect(
+          buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),
+        ).rejects.toMatchObject({ ...error, exitCode: 1 });
+
+        expect(mintRequests).toHaveLength(1);
+        expect(mocks.ensureHostMock).not.toHaveBeenCalled();
+        expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+        expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
+        expect(stagedTeamTokenFile()).toBeNull();
+      },
+    );
+
+    it("reminds a person who signed in inline that the sign-in stays when the team is refused", async () => {
+      const directory = mkdtempSync(join(tmpdir(), "team-ensure-refused-"));
+      mocks.credentialsPath = join(directory, "credentials");
+      setStdoutIsTTY(true);
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      mocks.runDeviceAuthFlowMock.mockImplementation(
+        inlineSignInDeviceFlow("retained-refused-team"),
+      );
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: signedInNonMemberUser(),
+      });
+      const mintRequests = stubMintAnswer(() => null);
+
+      const ctx = fakeCtx();
+      try {
+        await expect(
+          buildHostEnsureCommand(baseArgs({ team: "acme" }))(ctx),
+        ).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message: TEAM_SLUG_SENTENCE,
+        });
+
+        expect(ctx.output.humanRequired).toHaveBeenCalledWith(
+          RETAINED_SIGN_IN_WARNING,
+        );
+        expect(mintRequests).toEqual([]);
+        expect(mocks.ensureHostMock).not.toHaveBeenCalled();
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+        mocks.credentialsPath = "";
+      }
+    });
+  });
 
   it("uses a prepared team token before auth, waits after ensure, and returns only the target receipt", async () => {
     const prepared = {
@@ -664,9 +848,9 @@ describe("buildHostEnsureCommand", () => {
         postSwapError: null,
       }),
     );
-    const teamPreflight = vi.spyOn(
+    const attendedTeamInstall = vi.spyOn(
       installAuthModule,
-      "runTeamInstallAuthPreflight",
+      "beginAttendedTeamInstall",
     );
     const signInPreflight = vi.spyOn(installAuthModule, "runSignInPreflight");
 
@@ -686,7 +870,7 @@ describe("buildHostEnsureCommand", () => {
       prepared,
       60_000,
     );
-    expect(teamPreflight).not.toHaveBeenCalled();
+    expect(attendedTeamInstall).not.toHaveBeenCalled();
     expect(signInPreflight).not.toHaveBeenCalled();
     expect(mocks.runSignInPreflightMock).not.toHaveBeenCalled();
     expect(mocks.maybeProvisionCredentialMock).not.toHaveBeenCalled();
