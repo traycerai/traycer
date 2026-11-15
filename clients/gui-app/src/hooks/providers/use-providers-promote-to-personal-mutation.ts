@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 import {
   useMutation,
   useQueryClient,
@@ -135,6 +135,107 @@ export function useProvidersPromoteToPersonal(
   const capturedRequests = useRef(
     new WeakMap<PromoteToEnvironmentVariables, CapturedPromoteRequest>(),
   );
+  const mutationFn = useCallback(
+    (variables: PromoteToEnvironmentVariables) =>
+      withHostQueryErrorBoundary(METHOD, async () => {
+        const captured = capturedRequests.current.get(variables);
+        if (captured === undefined)
+          throw new Error("Missing promote request capture.");
+        if (captured.kind === "failed") throw captured.error;
+        let intent: RecordedIntent | null = null;
+        if (captured.intentRequired) {
+          const operation = captured.operation;
+          if (operation === null || !operation.onOriginSignIn())
+            return intentOutcome(null, environmentName);
+          const operationId = crypto.randomUUID();
+          const recorded = await recordIntent(
+            client,
+            operation,
+            operationId,
+            variables.name,
+          );
+          if (recorded === null || !operation.onOriginSignIn())
+            return intentOutcome(null, environmentName);
+          intent = { environmentId: recorded, operationId, operation };
+        }
+        const promote: NativePromoteToPersonalMutationV15 = {
+          kind: "promoteToPersonal",
+          entryKind: variables.entryKind,
+          scope: variables.scope,
+          workspaceRoot: variables.workspaceRoot,
+          name: variables.name,
+          intentOperationId: intent?.operationId ?? null,
+        };
+        const request: ProvidersNativeMutateRequestV15 = await grant(
+          {
+            providerId: variables.providerId,
+            mutation: promote,
+            executableWriteGrant: null,
+            expectedEnvironmentId: variables.expectedEnvironmentId,
+          },
+          client,
+        );
+        // The grant reads the host's status and may mint, so the sign-in
+        // can change while it is out; the upload goes only on the click's.
+        if (intent !== null && !intent.operation.onOriginSignIn())
+          return intentOutcome(null, environmentName);
+        const { result } = await client.request(METHOD, request);
+        if (!result.ok) {
+          return {
+            kind: "refused",
+            text: promoteRefusalText(
+              result.code,
+              result.detail,
+              environmentName,
+            ),
+            refreshLists: false,
+          };
+        }
+        if (intent === null) return { kind: "added" };
+        return intentOutcome(await readIntentState(intent), environmentName);
+      }),
+    [client, environmentName, grant],
+  );
+  const onMutate = useCallback(
+    (variables: PromoteToEnvironmentVariables) => ({
+      hostId: capturedRequests.current.get(variables)?.hostId ?? null,
+    }),
+    [],
+  );
+  const onSettled = useCallback(
+    (
+      outcome: PromoteToEnvironmentOutcome | undefined,
+      error: HostRpcError | null,
+      variables: PromoteToEnvironmentVariables,
+      context: PromoteContext | undefined,
+    ) => {
+      capturedRequests.current.delete(variables);
+      if (context?.hostId === null || context === undefined) return;
+      if (
+        error === null &&
+        outcome?.kind === "refused" &&
+        !outcome.refreshLists
+      )
+        return;
+      // The native lists (the row's mark) and the host's status (where the
+      // item now applies) both change, on the host the click was sent on.
+      // A lost answer may follow a committed upload, so errors re-read too.
+      for (const method of ["providers.list", "environment.status"] as const) {
+        void queries.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            hostRpcServingTierHostId(
+              method,
+              context.hostId,
+              readProcessHostRpcTierPlan(),
+              null,
+            ),
+            method,
+          ),
+        });
+      }
+    },
+    [queries],
+  );
   const mutation = useMutation<
     PromoteToEnvironmentOutcome,
     HostRpcError,
@@ -143,67 +244,8 @@ export function useProvidersPromoteToPersonal(
   >(
     withHostMutationLifecycleBoundary(METHOD, {
       mutationKey: providersMutationKeys.promoteToPersonal(),
-      mutationFn: (variables) =>
-        withHostQueryErrorBoundary(METHOD, async () => {
-          const captured = capturedRequests.current.get(variables);
-          if (captured === undefined)
-            throw new Error("Missing promote request capture.");
-          if (captured.kind === "failed") throw captured.error;
-          let intent: RecordedIntent | null = null;
-          if (captured.intentRequired) {
-            const operation = captured.operation;
-            if (operation === null || !operation.onOriginSignIn())
-              return intentOutcome(null, environmentName);
-            const operationId = crypto.randomUUID();
-            const recorded = await recordIntent(
-              client,
-              operation,
-              operationId,
-              variables.name,
-            );
-            if (recorded === null || !operation.onOriginSignIn())
-              return intentOutcome(null, environmentName);
-            intent = { environmentId: recorded, operationId, operation };
-          }
-          const promote: NativePromoteToPersonalMutationV15 = {
-            kind: "promoteToPersonal",
-            entryKind: variables.entryKind,
-            scope: variables.scope,
-            workspaceRoot: variables.workspaceRoot,
-            name: variables.name,
-            intentOperationId: intent?.operationId ?? null,
-          };
-          const request: ProvidersNativeMutateRequestV15 = await grant(
-            {
-              providerId: variables.providerId,
-              mutation: promote,
-              executableWriteGrant: null,
-              expectedEnvironmentId: variables.expectedEnvironmentId,
-            },
-            client,
-          );
-          // The grant reads the host's status and may mint, so the sign-in
-          // can change while it is out; the upload goes only on the click's.
-          if (intent !== null && !intent.operation.onOriginSignIn())
-            return intentOutcome(null, environmentName);
-          const { result } = await client.request(METHOD, request);
-          if (!result.ok) {
-            return {
-              kind: "refused",
-              text: promoteRefusalText(
-                result.code,
-                result.detail,
-                environmentName,
-              ),
-              refreshLists: false,
-            };
-          }
-          if (intent === null) return { kind: "added" };
-          return intentOutcome(await readIntentState(intent), environmentName);
-        }),
-      onMutate: (variables) => ({
-        hostId: capturedRequests.current.get(variables)?.hostId ?? null,
-      }),
+      mutationFn,
+      onMutate,
       onSuccess: (outcome, variables) => {
         if (outcome.kind === "refused" && !outcome.refreshLists) return;
         // The entry joins the configuration, so the MCP servers and Skills
@@ -220,35 +262,7 @@ export function useProvidersPromoteToPersonal(
           );
         }
       },
-      onSettled: (outcome, error, variables, context) => {
-        capturedRequests.current.delete(variables);
-        if (context?.hostId === null || context === undefined) return;
-        if (
-          error === null &&
-          outcome?.kind === "refused" &&
-          !outcome.refreshLists
-        )
-          return;
-        // The native lists (the row's mark) and the host's status (where the
-        // item now applies) both change, on the host the click was sent on.
-        // A lost answer may follow a committed upload, so errors re-read too.
-        for (const method of [
-          "providers.list",
-          "environment.status",
-        ] as const) {
-          void queries.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(
-              hostRpcServingTierHostId(
-                method,
-                context.hostId,
-                readProcessHostRpcTierPlan(),
-                null,
-              ),
-              method,
-            ),
-          });
-        }
-      },
+      onSettled,
       onError: (error) => {
         toastFromHostError(error, addToConfigurationFailure(environmentName));
       },
