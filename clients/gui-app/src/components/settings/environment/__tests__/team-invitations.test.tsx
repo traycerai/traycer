@@ -240,7 +240,6 @@ function InvitationFlow(props: {
 
 async function assertExplicitHttpInvitationFlow(
   harness: TeamPageHarness,
-  expectMembershipUnread: boolean,
 ): Promise<void> {
   const calls = stubInvitationHttp(undefined);
   const onAccepted = vi.fn();
@@ -250,11 +249,9 @@ async function assertExplicitHttpInvitationFlow(
   const row = await screen.findByTestId("environment-invitation-env-beta");
   expect(row.textContent).toContain("Beta");
   expect(screen.getByText("Invitations")).toBeTruthy();
-  if (expectMembershipUnread) {
-    expect(
-      screen.getByText("Your teams couldn't be read from here."),
-    ).toBeTruthy();
-  }
+  expect(
+    screen.queryByText("Your teams couldn't be read from here."),
+  ).toBeNull();
   expect(calls.map((call) => call.method)).toEqual(["GET"]);
   expect(calls[0]?.url).toBe(
     `${AUTHN_BASE_URL}/api/v3/environments/me/invitations`,
@@ -418,13 +415,13 @@ describe("the invited rows of the Environment dropdown", () => {
           {
             environmentId: "env-team",
             ownerKind: "organization",
-            ownerId: "org-team",
+            ownerId: "team-a",
             roomId: "room-team",
             label: "Acme Robotics",
             effectiveRole: "editor",
             kind: "team",
             hostCount: 1,
-            providerHandle: "handle-team",
+            providerHandle: "handle-a",
           },
         ],
       }),
@@ -525,7 +522,7 @@ describe("the invited rows of the Environment dropdown", () => {
       "environment.invitations.list": () => ({ invitations: [INVITATION] }),
       "environment.invitations.accept": () => ({ outcome: "accepted" }),
     });
-    await assertExplicitHttpInvitationFlow(harness, false);
+    await assertExplicitHttpInvitationFlow(harness);
   });
 
   it("lists and accepts over authenticated HTTP without an active host", async () => {
@@ -540,7 +537,7 @@ describe("the invited rows of the Environment dropdown", () => {
     teamHostBoundary.client = requester.createRequesterForHostId(null);
     expect(teamHostBoundary.client.getActiveHostId()).toBeNull();
 
-    await assertExplicitHttpInvitationFlow(harness, true);
+    await assertExplicitHttpInvitationFlow(harness);
   });
 
   it("waits for an addressable host's invitation capabilities before routing", async () => {

@@ -44,10 +44,16 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
+import {
+  mountTeamPage,
+  poolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  resetTeamPageHarness();
   hostMock.binding = null;
   useAuthStore.getState().setSignedOut();
   window.localStorage.clear();
@@ -153,6 +159,54 @@ function noSwitch(): void {
 }
 
 describe("<RemoteAccessSection /> in Access and setup", () => {
+  it("offers no switch to a viewer of the computer's team", async () => {
+    const host = teamHost("off");
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.list": () => ({
+        environments: [{ ...TEAM_ENVIRONMENT, effectiveRole: "viewer" }],
+      }),
+    });
+    hostMock.binding = { auth: harness.auth };
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "viewer-test", username: "viewer" },
+      shareableTeams: [
+        {
+          teamId: TEAM_ENVIRONMENT.ownerId,
+          slug: "studio",
+          avatarUrl: null,
+        },
+      ],
+    });
+    recordNegotiatedHostMethods(ACCESS_HOST_ID, ACCESS_METHODS);
+
+    render(
+      <HostOverviewAccessTab
+        client={host.client}
+        hostId={ACCESS_HOST_ID}
+        hostName={ACCESS_HOST_NAME}
+        connecting={false}
+        usable
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
+    await waitFor(() => {
+      expect(
+        harness.cloudRequests.some((request) => {
+          const url = new URL(request.url);
+          return (
+            request.method === "GET" &&
+            url.pathname === "/api/v3/environments/environment-team/members"
+          );
+        }),
+      ).toBe(true);
+      noSwitch();
+      expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
+    });
+  });
+
   it("describes a team's remote access and keeps the computer's answered memory on return", async () => {
     const host = teamHost("on");
     const queryClient = renderTab(host, ACCESS_METHODS, true);

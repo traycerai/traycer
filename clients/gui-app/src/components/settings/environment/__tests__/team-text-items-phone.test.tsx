@@ -571,7 +571,7 @@ describe("TeamTextItems on a phone", () => {
     const refused = screen.getByRole("dialog");
     expect(within(refused).getByRole("alert")).toHaveProperty(
       "textContent",
-      "the cloud could not be reached",
+      "Connect to manage settings.",
     );
     expect(within(refused).getByLabelText("Value for NODE_ENV")).toHaveProperty(
       "value",

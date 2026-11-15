@@ -257,9 +257,8 @@ const INVITATION: EnvironmentInvitation = {
 };
 
 /**
- * Reads the other host, as a second window on the same account does, so that
- * host's entries exist and hold its answers. Unmounted, those entries stay in
- * cache with nothing observing them — the window closed.
+ * Warms the other host's invitations entry alongside the account's shared
+ * environment list, as a second window on the same account does.
  */
 function WarmOtherHost(): ReactNode {
   const client = requireViewingHostClient();
@@ -629,16 +628,10 @@ describe("a team the environment list no longer carries", () => {
     });
   });
 
-  // Two entries of ONE slot. A build with no server pool gives each host its
-  // own RPC entry for the same account, so the slot never changes when the
-  // client does — and a question certified while one entry served must not
-  // survive the move to the other, whose cached list predates the removal.
-  //
-  // The clock is held so both hosts' membership answers carry the same
-  // `listedAt`: that equality is what isolates the entry identity as the only
-  // thing standing between the old answer and the new entry's stale data. It
-  // is a condition of this case, not a claim that every host switch fails.
-  it("cannot reuse one entry's answer for another entry of the same slot", async () => {
+  // Invitations stay host-scoped while the membership list is the account's.
+  // A held clock keeps the membership stamp equal across the host switch, so
+  // the boundary must distinguish the invitations entries themselves.
+  it("cannot reuse one host's invitations answer for another host", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
       "environment.invitations.accept": V10,
@@ -709,25 +702,19 @@ describe("a team the environment list no longer carries", () => {
         environmentId: "env-a",
       });
 
-      // The other host's membership answer says the same thing, in the same
-      // millisecond, so `listedAt` does not move. Its invitations entry still
-      // holds the list from before the reinvitation.
-      const otherList = harness.queryClient
+      // Both hosts read the account's one membership answer. The remote
+      // invitations entry still predates the reinvitation.
+      const membership = harness.queryClient
         .getQueryCache()
         .getAll()
-        .find(
-          (query) =>
-            query.queryKey.includes("environment.list") &&
-            query.queryKey.includes(remote.getActiveHostId()),
-        );
-      expect(otherList).toBeDefined();
-      if (otherList !== undefined) {
-        act(() => {
-          harness.queryClient.setQueryData(otherList.queryKey, {
-            environments: [PERSONAL],
-          });
+        .find((query) => query.queryKey.includes("environment.list"));
+      if (membership === undefined)
+        throw new Error("membership list was not read");
+      act(() => {
+        harness.queryClient.setQueryData(membership.queryKey, {
+          environments: [PERSONAL],
         });
-      }
+      });
 
       act(() => {
         teamHostBoundary.client = remote;
@@ -1421,21 +1408,17 @@ describe("the viewer's standing line", () => {
   });
 });
 
-describe("transport-scoped configuration access", () => {
-  async function expectReadOnlyAdmin(): Promise<void> {
+describe("configuration access after the team-computer lift", () => {
+  async function expectEditableAdmin(): Promise<void> {
     const probe = await screen.findByTestId("configuration-permission-probe");
     expect(probe.getAttribute("data-effective-role")).toBe("admin");
     expect(probe.getAttribute("data-provider-handle")).toBe("handle-a");
-    expect(probe.getAttribute("data-can-edit")).toBe("false");
-    expect(probe.getAttribute("data-can-administer")).toBe("false");
-    expect(
-      await screen.findByText(
-        "You can see Acme's settings but not change them.",
-      ),
-    ).toBeTruthy();
+    expect(probe.getAttribute("data-can-edit")).toBe("true");
+    expect(probe.getAttribute("data-can-administer")).toBe("true");
+    expect(screen.queryByText(/but not change them/)).toBeNull();
   }
 
-  it("makes a team admin read-only on a team-owned physical remote host", async () => {
+  it("keeps a team admin editable on a team-owned physical remote host", async () => {
     mountConfigurationPermissionBoundary({
       target: { kind: "team", environmentId: "env-a" },
       environments: [PERSONAL, team("admin")],
@@ -1443,7 +1426,7 @@ describe("transport-scoped configuration access", () => {
       localAdmissionByHost: new Map(),
     });
 
-    await expectReadOnlyAdmin();
+    await expectEditableAdmin();
   });
 
   it("keeps Personal's owner editable on the user's physical remote host", async () => {
@@ -1477,7 +1460,7 @@ describe("transport-scoped configuration access", () => {
   });
 
   it.each(["admitted", "required", "unavailable"] as const)(
-    "makes team settings read-only on this user's local host with %s admission",
+    "keeps team settings editable on this user's local host with %s admission",
     async (state) => {
       mountConfigurationPermissionBoundary({
         target: { kind: "team", environmentId: "env-a" },
@@ -1488,7 +1471,7 @@ describe("transport-scoped configuration access", () => {
         ]),
       });
 
-      await expectReadOnlyAdmin();
+      await expectEditableAdmin();
     },
   );
 
