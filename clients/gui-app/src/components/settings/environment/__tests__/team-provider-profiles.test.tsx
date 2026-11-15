@@ -83,72 +83,78 @@ beforeEach(() => {
 });
 
 describe("TeamProviders profiles", () => {
-  it("reads the team's rows by environment and excludes another computer's Personal rows", async () => {
-    negotiateMethods({ "environment.providers.list": { major: 1, minor: 0 } });
-    const teamRows = [
-      teamProviderProfile({
-        profileId: "team-signed-in",
-        label: "Team signed in",
-        authStatus: "authenticated",
-        personNotice: null,
-        apiKeyConfigured: false,
-      }),
-      teamProviderProfile({
-        profileId: "team-needs-sign-in",
-        label: "Team needs sign-in",
-        authStatus: "unknown",
-        personNotice: "needs-sign-in",
-        apiKeyConfigured: false,
-      }),
-      teamProviderProfile({
-        profileId: "team-waiting",
-        label: "Team waiting",
-        authStatus: "unknown",
-        personNotice: "waiting",
-        apiKeyConfigured: false,
-      }),
-      teamProviderProfile({
-        profileId: "team-api-key",
-        label: "Team API key",
-        authStatus: "configured",
-        personNotice: null,
-        apiKeyConfigured: true,
-      }),
-    ];
-    const personalRow = teamProviderProfile({
-      profileId: "personal-only",
-      label: "Personal only",
-      authStatus: "authenticated",
-      personNotice: null,
-      apiKeyConfigured: false,
-    });
-    const futureProviderRow = teamProviderProfile({
-      profileId: "future-provider-only",
-      label: "Future provider only",
-      authStatus: "authenticated",
-      personNotice: null,
-      apiKeyConfigured: false,
-    });
+  it("reads team records through the verified app session and omits Personal and unknown providers", async () => {
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: {
+        enabled: true,
+        records: [
+          {
+            profileId: "team-signed-in",
+            harnessId: "claude",
+            name: "Team signed in",
+            color: null,
+            enabled: true,
+            kind: "managed",
+            readerLabel: "live",
+            otherNames: [],
+          },
+          {
+            profileId: "team-needs-sign-in",
+            harnessId: "claude",
+            name: "Team needs sign-in",
+            color: null,
+            enabled: true,
+            kind: "managed",
+            readerLabel: "needs-sign-in",
+            otherNames: [],
+          },
+          {
+            profileId: "team-waiting",
+            harnessId: "claude",
+            name: "Team waiting",
+            color: null,
+            enabled: true,
+            kind: "managed",
+            readerLabel: "waiting",
+            otherNames: [],
+          },
+          {
+            profileId: "team-api-key",
+            harnessId: "claude",
+            name: "Team API key",
+            color: null,
+            enabled: true,
+            kind: "api_key",
+            readerLabel: "live",
+            otherNames: [],
+          },
+          {
+            profileId: "personal-only",
+            harnessId: "claude",
+            name: "Personal only",
+            color: null,
+            enabled: true,
+            kind: "managed",
+            readerLabel: "live",
+            otherNames: [],
+          },
+          {
+            profileId: "future-provider-only",
+            harnessId: "future-provider",
+            name: "Future provider only",
+            color: null,
+            enabled: true,
+            kind: "managed",
+            readerLabel: "live",
+            otherNames: [],
+          },
+        ],
+      },
+    };
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => []),
       "environment.host.list": () => ({ hosts: [reachableHost] }),
-      "environment.providers.list": () => ({
-        profileSyncEnabled: true,
-        providers: [
-          { providerId: "future-provider", profiles: [futureProviderRow] },
-          { providerId: "claude-code", profiles: teamRows },
-        ],
-      }),
-      "providers.list": () => ({
-        providers: [
-          {
-            ...cursorProviderListRow(),
-            providerId: "claude-code",
-            profiles: [personalRow],
-          },
-        ],
-        native: null,
-      }),
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
@@ -168,19 +174,32 @@ describe("TeamProviders profiles", () => {
     expect(screen.getByText("Team API key")).toBeTruthy();
     expect(screen.queryByText("Personal only")).toBeNull();
     expect(screen.queryByText("Future provider only")).toBeNull();
-    expect(harness.paramsOf("environment.providers.list")).toEqual([
-      { environmentId: "env-a" },
+
+    const profileReads = teamProfileRecordHttpBoundary.calls.filter((call) =>
+      call.url.endsWith("/api/v3/environments/env-a/profile-records"),
+    );
+    expect(profileReads).toEqual([
+      {
+        url: "http://localhost:5005/api/v3/environments/env-a/profile-records",
+        method: "GET",
+        authorization: "Bearer team-test-app-session",
+        body: null,
+      },
     ]);
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "environment.providers.list",
+      ),
+    ).toEqual([]);
   });
 
-  it("keeps the legacy profile panel when the environment says sync is off", async () => {
-    negotiateMethods({ "environment.providers.list": { major: 1, minor: 0 } });
+  it("keeps legacy profile rows when the broker disables shared records", async () => {
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: { enabled: false },
+    };
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => [profile(true, 4)]),
-      "environment.providers.list": () => ({
-        profileSyncEnabled: false,
-        providers: [],
-      }),
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
@@ -190,49 +209,18 @@ describe("TeamProviders profiles", () => {
       }),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
-    expect(harness.paramsOf("environment.providers.list")).toEqual([
-      { environmentId: "env-a" },
-    ]);
-  });
-
-  it("keeps legacy rows and sends no environment-profile request before method support is known", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers(() => [profile(true, 4)]),
-      "environment.providers.list": () => ({
-        profileSyncEnabled: true,
-        providers: [],
-      }),
-    });
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
     expect(
-      await screen.findByRole("button", {
-        name: profileTriggerName("Work", false),
-      }),
-    ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
-    expect(harness.paramsOf("environment.providers.list")).toEqual([]);
+      teamProfileRecordHttpBoundary.calls.filter((call) =>
+        call.url.endsWith("/api/v3/environments/env-a/profile-records"),
+      ),
+    ).toHaveLength(1);
   });
 
-  it("keeps the empty synced state and Add affordance for an editor", async () => {
-    negotiateMethods({ "environment.providers.list": { major: 1, minor: 0 } });
-    const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers(() => []),
-      "environment.providers.list": () => ({
-        profileSyncEnabled: true,
-        providers: [],
-      }),
-    });
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("No profiles yet")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
-    expect(harness.paramsOf("environment.providers.list")).toEqual([
-      { environmentId: "env-a" },
-    ]);
-  });
-
-  it("keeps legacy rows when the caller's own 10.11 list omits offersSignIns", async () => {
+  it("keeps the negotiated 10.11 computer provider path separate from team profile reads", async () => {
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: { enabled: false },
+    };
     negotiateMethods({ "providers.list": { major: 10, minor: 11 } });
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers(() => [profile(true, 4)]),
@@ -266,32 +254,57 @@ describe("TeamProviders profiles", () => {
       }),
     ).toBeTruthy();
     expect(screen.queryByText("Computer profile")).toBeNull();
-    expect(harness.paramsOf("environment.providers.list")).toEqual([]);
     expect(harness.paramsOf("providers.list")).toEqual([{ native: null }]);
+    expect(
+      harness.messenger.calls.filter(
+        (call) => call.method === "environment.providers.list",
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps the empty synced state and Add affordance for an editor", async () => {
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: { enabled: true, records: [] },
+    };
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers(() => []),
+    );
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("No profiles yet")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a profile" })).toBeTruthy();
+    expect(
+      teamProfileRecordHttpBoundary.calls.filter((call) =>
+        call.url.endsWith("/api/v3/environments/env-a/profile-records"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("gives a reader shared profile rows without Add, Sign in again or Manage", async () => {
-    negotiateMethods({ "environment.providers.list": { major: 1, minor: 0 } });
-    const harness = mountTeamPage(poolSource("viewer"), {
-      ...handlers(() => []),
-      "environment.providers.list": () => ({
-        profileSyncEnabled: true,
-        providers: [
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: {
+        enabled: true,
+        records: [
           {
-            providerId: "claude-code",
-            profiles: [
-              teamProviderProfile({
-                profileId: "team-reader-row",
-                label: "Team reader row",
-                authStatus: "unauthenticated",
-                personNotice: "needs-sign-in",
-                apiKeyConfigured: false,
-              }),
-            ],
+            profileId: "team-reader-row",
+            harnessId: "claude",
+            name: "Team reader row",
+            color: null,
+            enabled: true,
+            kind: "managed",
+            readerLabel: "needs-sign-in",
+            otherNames: [],
           },
         ],
-      }),
-    });
+      },
+    };
+    const harness = mountTeamPage(
+      poolSource("viewer"),
+      handlers(() => []),
+    );
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     expect(
@@ -303,32 +316,16 @@ describe("TeamProviders profiles", () => {
     expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
-    expect(harness.paramsOf("environment.providers.list")).toEqual([
-      { environmentId: "env-a" },
-    ]);
+    expect(
+      teamProfileRecordHttpBoundary.calls.filter((call) =>
+        call.url.endsWith("/api/v3/environments/env-a/profile-records"),
+      ),
+    ).toHaveLength(1);
   });
 
-  it("keeps Personal Providers on its existing rows without requesting environment profiles", async () => {
-    negotiateMethods({ "environment.providers.list": { major: 1, minor: 0 } });
+  it("keeps Personal Providers on its existing rows without a profile-record request", async () => {
     const harness = mountTeamPage(personalPoolSource(), {
       ...handlers(() => [profile(true, 4)]),
-      "environment.providers.list": () => ({
-        profileSyncEnabled: true,
-        providers: [
-          {
-            providerId: "claude-code",
-            profiles: [
-              teamProviderProfile({
-                profileId: "must-not-enter-personal",
-                label: "Team only row",
-                authStatus: "authenticated",
-                personNotice: null,
-                apiKeyConfigured: false,
-              }),
-            ],
-          },
-        ],
-      }),
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
@@ -337,31 +334,34 @@ describe("TeamProviders profiles", () => {
         name: profileTriggerName("Work", false),
       }),
     ).toBeTruthy();
-    expect(screen.queryByText("Team only row")).toBeNull();
-    expect(harness.paramsOf("environment.providers.list")).toEqual([]);
+    expect(
+      teamProfileRecordHttpBoundary.calls.filter((call) =>
+        call.url.includes("/profile-records"),
+      ),
+    ).toEqual([]);
   });
 
   it("keeps the plan label, standing and quota while synced team admins lose Link and Unlink", async () => {
-    negotiateMethods({ "environment.providers.list": { major: 1, minor: 0 } });
-    const harness = mountTeamPage(poolSource("admin"), {
-      ...handlers(() => []),
-      "environment.providers.list": () => ({
-        profileSyncEnabled: true,
-        providers: [
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: {
+        enabled: true,
+        records: [
           {
-            providerId: "claude-code",
-            profiles: [
-              teamProviderProfile({
-                profileId: "team-plan-row",
-                label: "Team plan row",
-                authStatus: "authenticated",
-                personNotice: null,
-                apiKeyConfigured: false,
-              }),
-            ],
+            profileId: "team-plan-row",
+            harnessId: "claude",
+            name: "Team plan row",
+            color: null,
+            enabled: true,
+            kind: "managed",
+            readerLabel: "live",
+            otherNames: [],
           },
         ],
-      }),
+      },
+    };
+    const harness = mountTeamPage(poolSource("admin"), {
+      ...handlers(() => []),
       "environment.plans.list": () => ({
         plans: [
           {
@@ -395,8 +395,7 @@ describe("TeamProviders profiles", () => {
     ]);
   });
 
-  it("toggles a synced row through its own harness and dotted profile item key, then rereads", async () => {
-    negotiateMethods({ "environment.providers.list": { major: 1, minor: 0 } });
+  it("updates a synced row through its exact managed-profile item key and rereads records", async () => {
     const stored = {
       name: "Shared Work",
       color: null,
@@ -406,115 +405,74 @@ describe("TeamProviders profiles", () => {
       enabled: true,
       mergedInto: "canonical-shared-work",
     };
-    const row = configurationItem({
-      kind: "managed_profile",
-      key: "claude:profile.with.dots",
-      value: stored,
-      revision: 9,
-    });
-    const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers(() => [row]),
-      "environment.providers.list": () => ({
-        profileSyncEnabled: true,
-        providers: [
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: {
+        enabled: true,
+        records: [
           {
-            providerId: "claude-code",
-            profiles: [
-              teamProviderProfile({
-                profileId: "profile.with.dots",
-                label: "Shared Work",
-                authStatus: "authenticated",
-                personNotice: null,
-                apiKeyConfigured: false,
-              }),
-            ],
+            profileId: "profile.with.dots",
+            harnessId: "claude",
+            name: stored.name,
+            color: null,
+            enabled: true,
+            kind: "managed",
+            readerLabel: "live",
+            otherNames: [],
           },
         ],
-      }),
-      "environment.configuration.items.put": () => ({
-        outcome: "saved",
-        revision: 10,
-      }),
-    });
+      },
+    };
+    teamProfileRecordHttpBoundary.items = {
+      status: 200,
+      body: {
+        items: [
+          {
+            kind: "managed_profile",
+            key: "claude:profile.with.dots",
+            value: stored,
+            revision: 9,
+          },
+        ],
+      },
+    };
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers(() => []),
+    );
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const enabledSwitch = await screen.findByRole("switch", {
       name: "Allow agents to use Shared Work",
     });
-    const reads = harness.paramsOf("environment.configuration.items").length;
     await userEvent.click(enabledSwitch);
 
-    await waitFor(() => {
-      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-        {
-          environmentId: "env-a",
-          kind: "managed_profile",
+    const itemWrites = teamProfileRecordHttpBoundary.calls.filter(
+      (call) =>
+        call.url.endsWith("/api/v3/environments/env-a/items/managed_profile") &&
+        call.method === "PUT",
+    );
+    expect(itemWrites).toEqual([
+      {
+        url: "http://localhost:5005/api/v3/environments/env-a/items/managed_profile",
+        method: "PUT",
+        authorization: "Bearer team-test-app-session",
+        body: JSON.stringify({
           key: "claude:profile.with.dots",
           os: null,
           value: { ...stored, enabled: false },
           revision: 9,
-        },
-      ]);
-      expect(
-        harness.paramsOf("environment.configuration.items").length,
-      ).toBeGreaterThan(reads);
-    });
-  });
-
-  it("toggles a profile against the displayed revision, and a conflict rereads it beside the changed-by line", async () => {
-    let current = profile(true, 4);
-    const harness = mountTeamPage(poolSource("editor"), {
-      ...handlers(() => [current]),
-      "environment.configuration.items.put": () => {
-        current = profile(false, 5);
-        return {
-          outcome: "conflict",
-          current: { revision: 5, changedBy: "Grace", changedAt: 2 },
-        };
-      },
-    });
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("Work")).toBeTruthy();
-    const checkboxItem = screen.getByRole("switch", {
-      name: "Allow agents to use Work",
-    });
-    expect(checkboxItem.getAttribute("aria-checked")).toBe("true");
-    await userEvent.click(checkboxItem);
-
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "managed_profile",
-        key: "claude:prof-1",
-        os: null,
-        value: {
-          name: "Work",
-          color: null,
-          harnessId: "claude",
-          accountIdentity: "ada@example.com",
-          needsLink: false,
-          enabled: false,
-          mergedInto: "kept-work",
-        },
-        revision: 4,
+          upload: null,
+        }),
       },
     ]);
-    expect(
-      await screen.findByText("Changed by Grace a moment ago"),
-    ).toBeTruthy();
-    expect(screen.queryByText("Off")).toBeNull();
-    expect(
-      screen.getByRole("button", {
-        name: profileTriggerName("Work", true),
-      }),
-    ).toBeTruthy();
-    await waitFor(() => {
-      const updatedCheckboxItem = screen.getByRole("switch", {
-        name: "Allow agents to use Work",
-      });
-      expect(updatedCheckboxItem.getAttribute("aria-checked")).toBe("false");
-    });
+    const profileReads = teamProfileRecordHttpBoundary.calls.filter(
+      (call) =>
+        call.url.endsWith("/api/v3/environments/env-a/profile-records") &&
+        call.method === "GET",
+    );
+    expect(profileReads).toHaveLength(2);
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
   });
 
   it("does not label an editor profile control Use", async () => {
