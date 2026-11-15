@@ -19,7 +19,7 @@ import {
 import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useBillingUrlOf } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
-import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useSandboxHostPayer } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useOpenLink } from "@/lib/links/open-link";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
@@ -53,7 +53,7 @@ export function useSandboxOperationFailure(
   props: SandboxOperationFailureProps,
 ): ReactNode {
   const { operation, onRetry } = props;
-  const hostConfiguration = useSandboxHostConfiguration(props.hostId ?? null);
+  const hostConfiguration = useSandboxHostPayer(props.hostId ?? null);
   // `null` while neither the surface nor the directory says whose sandbox it
   // is: nothing is offered or said as the person's own until one does.
   const configuration = props.configuration ?? hostConfiguration;

@@ -281,10 +281,9 @@ const NOT_ENOUGH_CREDITS_TO_WAKE = "Not enough credits to wake this sandbox";
 
 /**
  * The credit gate's description, or `null` for the title alone. A refusal
- * that named a team pot says which, as a row does. The person's own balance
- * keeps the add-credits line, and so does an older server's silence on a
- * known Personal sandbox. While whose sandbox it is is not known, or an
- * older server names no pot on a team's, nothing is told as the person's own.
+ * that named a team pot says which, as a row does. The person's own balance,
+ * or an older server's silence, keeps the add-credits line. While whose
+ * sandbox it is is not known, nothing is told as the person's own.
  */
 function creditGateDescription(
   outcome: Extract<SandboxWakeOutcome, { readonly kind: "credit-gate" }>,
@@ -292,11 +291,12 @@ function creditGateDescription(
 ): string | null {
   if (configuration === null) return null;
   const { creditSource } = outcome;
-  if (creditSource === "personal") return addCreditsLine(outcome.shortfallMc);
-  if (creditSource === undefined || creditSource === null) {
-    return configuration.kind === "personal"
-      ? addCreditsLine(outcome.shortfallMc)
-      : null;
+  if (
+    creditSource === undefined ||
+    creditSource === null ||
+    creditSource === "personal"
+  ) {
+    return addCreditsLine(outcome.shortfallMc);
   }
   return sandboxCreditShortLine(
     configuration,
@@ -361,17 +361,18 @@ export function startSandboxWake(
     return Promise.resolve(null);
   }
   const entry = directory.findById(hostId);
-  const facts =
-    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  // A sandbox row with no team owner is the person's own (an owner a server
-  // did not send reads so too, as the host list reads it); no row at all says
-  // nothing about whose it is.
+  const remote =
+    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry : null;
+  // Whose sandbox it is, from the directory: a team's by its owner, the
+  // person's only when the row names them as owner. A row with no owner (an
+  // authn before `owner`) or no row at all says nothing about whose it is.
   let configuration: SandboxConfigurationCopy | null = null;
-  if (facts !== null) {
-    configuration =
-      facts.ownerTeamName === null
-        ? { kind: "personal" }
-        : { kind: "team", teamName: facts.ownerTeamName };
+  if (remote !== null && remote.sandbox !== null) {
+    if (remote.sandbox.ownerTeamName !== null) {
+      configuration = { kind: "team", teamName: remote.sandbox.ownerTeamName };
+    } else if (remote.owner?.kind === "user") {
+      configuration = { kind: "personal" };
+    }
   }
   return runSandboxWake({ client, binding, hostId, configuration, gesture });
 }

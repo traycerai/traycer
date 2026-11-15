@@ -35,6 +35,8 @@ export interface SandboxRefusalCopy {
 }
 
 const SANDBOX_FROZEN = "SANDBOX_FROZEN";
+const FROZEN_ENDED_TURN =
+  "This sandbox ran out of credits, which ended the turn.";
 
 interface SandboxRefusalRow {
   readonly headline: string;
@@ -50,8 +52,7 @@ interface SandboxRefusalRow {
 const SANDBOX_REFUSAL_COPY: Readonly<Record<string, SandboxRefusalRow>> = {
   [SANDBOX_FROZEN]: {
     headline: "Paused: account out of credits",
-    description:
-      "This sandbox ran out of credits, which ended the turn. Add credits, then send a message to pick up where it stopped.",
+    description: `${FROZEN_ENDED_TURN} Add credits, then send a message to pick up where it stopped.`,
     showsHostDetail: false,
   },
   SANDBOX_GUEST_NOT_CONFIGURED: {
@@ -101,6 +102,16 @@ export function teamFrozenRefusalCopy(
       ? copy.description
       : onceTeamHasCreditsLine(teamName),
   };
+}
+
+/**
+ * That turn's copy while whose sandbox it is is not known: no remedy is told
+ * as the reader's to take.
+ */
+export function unknownPayerFrozenRefusalCopy(
+  copy: SandboxRefusalCopy,
+): SandboxRefusalCopy {
+  return { ...copy, description: FROZEN_ENDED_TURN };
 }
 
 export function sandboxRefusalCopyFor(

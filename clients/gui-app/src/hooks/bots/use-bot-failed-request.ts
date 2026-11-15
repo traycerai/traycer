@@ -5,7 +5,12 @@ import type {
   BotActivityAction,
   BotActivityReason,
 } from "@traycer/protocol/host/bot/schemas";
-import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
+import {
+  isSandboxFrozenRefusal,
+  sandboxRefusalCopyFor,
+  unknownPayerFrozenRefusalCopy,
+  type SandboxRefusalCopy,
+} from "@/components/chat/segments/sandbox-refusal-copy";
 import { BOT_CONVERSATION_IMAGES_ONLY_TEXT } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { ChatBotFailedRequest } from "@/components/chat/chat-bot-presentation-context";
@@ -18,6 +23,7 @@ import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useProviderUpdateForClient } from "@/hooks/providers/use-provider-update";
+import { useSandboxHostPayer } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -78,6 +84,9 @@ export function useBotFailedRequest(args: {
   const supported = botSendTakes(sendVersion, BOT_CONVERSATION_RETRY_VERSION);
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
   const signIn = useProviderSignIn(boundHostId);
+  // Whose credits the bot's sandbox is on: while that is not known, its
+  // out-of-credits refusal tells no remedy as the reader's.
+  const payerKnown = useSandboxHostPayer(boundHostId) !== null;
   // Named rather than `useHostClientForHostId`, which throws where no host
   // runtime is mounted: the channel draws its posts without one.
   const binding = useHostBinding();
@@ -114,12 +123,10 @@ export function useBotFailedRequest(args: {
       const channelId = supported ? conversationId : null;
       return {
         state: session.state,
-        // A sandbox's refusal in the words the error row gives it, from the
-        // same code and text.
         summary:
           reason === null
             ? null
-            : (sandboxRefusalCopyFor(reason.code, reason.summary)
+            : (refusalCopy(reason.code, reason.summary, payerKnown)
                 ?.description ?? reason.summary),
         signIn: reasonAction(reason, "sign-in", signIn),
         update: reasonAction(reason, "update-provider", update),
@@ -169,6 +176,7 @@ export function useBotFailedRequest(args: {
       failedOn,
       mutate,
       onEdit,
+      payerKnown,
       retryingId,
       signIn,
       supported,
@@ -179,6 +187,22 @@ export function useBotFailedRequest(args: {
       viewerUserId,
     ],
   );
+}
+
+/**
+ * A sandbox's refusal in the words the error row gives it, cut as the row
+ * cuts it while whose credits the sandbox is on is not known.
+ */
+function refusalCopy(
+  code: string | null,
+  summary: string,
+  payerKnown: boolean,
+): SandboxRefusalCopy | null {
+  const copy = sandboxRefusalCopyFor(code, summary);
+  if (copy === null || payerKnown || !isSandboxFrozenRefusal(code, summary)) {
+    return copy;
+  }
+  return unknownPayerFrozenRefusalCopy(copy);
 }
 
 /**

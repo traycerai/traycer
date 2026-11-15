@@ -346,14 +346,19 @@ export function sandboxShapeAndCostLine(
 /**
  * The same line for a row whose credits may not be the page's:
  * `configuration` is the page's, `credits` whose credits the row is on, and
- * `null` where that is not known leaves the funding clause out.
+ * `null` where that is not known leaves the funding clause out (on an
+ * Automations row, everything but what it cannot run).
  */
 export function sandboxRowShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
   credits: SandboxPageConfiguration | null,
 ): string {
-  if (summary.kind === "automation") return automationsShapeLine(configuration);
+  if (summary.kind === "automation") {
+    return credits === null
+      ? AUTOMATIONS_RUN_NO_AGENTS
+      : automationsShapeLine(credits);
+  }
   const creator = agentCreatorClause(summary);
   if (summary.priceMcPerHour === null) {
     return joinParts(sandboxShapeLine(summary), creator);
@@ -385,13 +390,15 @@ function agentCreatorClause(summary: SandboxSummary): string | null {
   return agent === null ? `for ${task}` : `created by ${agent} for ${task}`;
 }
 
+const AUTOMATIONS_RUN_NO_AGENTS = "agents can't run here";
+
 /** What the configuration's Automations host is for, and what it costs. */
 export function automationsShapeLine(
   configuration: SandboxPageConfiguration,
 ): string {
   return configuration.kind === "team"
-    ? `Runs ${configuration.teamName}'s long-running shells · agents can't run here · uses ${configuration.teamName}'s shared credits, not a member's allowance`
-    : "Runs your long-running shells · agents can't run here · no charge";
+    ? `Runs ${configuration.teamName}'s long-running shells · ${AUTOMATIONS_RUN_NO_AGENTS} · uses ${configuration.teamName}'s shared credits, not a member's allowance`
+    : `Runs your long-running shells · ${AUTOMATIONS_RUN_NO_AGENTS} · no charge`;
 }
 
 const RELEASED_CLAUSE = "files kept · the next shell starts it";
@@ -436,10 +443,9 @@ export interface SandboxClockInput {
   readonly configuration: SandboxPageConfiguration;
   /**
    * Whose credits the row is on, for the frozen cause and the storage clause:
-   * `null` where that is not known, which leaves both out. Absent, the
-   * page's configuration is.
+   * `null` where that is not known, which leaves both out.
    */
-  readonly credits?: SandboxPageConfiguration | null;
+  readonly credits: SandboxPageConfiguration | null;
   readonly cost: SandboxCost | null;
   /** The class's wake string, or `null` when the catalogue does not say. */
   readonly wakeString: string | null;
@@ -801,15 +807,9 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
 }
 
-/** Whose credits the row is on: `null` where that is not known. */
-function rowCredits(input: SandboxClockInput): SandboxPageConfiguration | null {
-  return input.credits === undefined ? input.configuration : input.credits;
-}
-
 /** A frozen row's cause, or nothing while whose credits ran out is not known. */
 function rowFrozenCause(input: SandboxClockInput): string | null {
-  const credits = rowCredits(input);
-  return credits === null ? null : sandboxFrozenCause(credits);
+  return input.credits === null ? null : sandboxFrozenCause(input.credits);
 }
 
 /**
@@ -845,7 +845,7 @@ function restingClockLine(
         );
   return joinParts(
     resting,
-    storageCreditClause(rowCredits(input)),
+    storageCreditClause(input.credits),
     cost !== null && cost.todayMillicredits > 0
       ? `${formatSandboxCost(cost.todayMillicredits)} today`
       : null,

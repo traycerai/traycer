@@ -45,18 +45,25 @@ export function SandboxFailedChatActions(props: {
   const resolved =
     configuration?.kind === "personal" && !personal ? null : configuration;
   return (
-    <SandboxFailedRowActions summary={props.summary} configuration={resolved} />
+    <SandboxFailedRowActions
+      summary={props.summary}
+      configuration={resolved}
+      credits={resolved}
+    />
   );
 }
 
 /** The failed-create row's safe actions, shared by Settings and the chat slot. */
 export function SandboxFailedRowActions(props: {
   readonly summary: SandboxSummary;
+  /** Where Retry creates and what it names; `null` holds Retry back. */
   readonly configuration: SandboxPageConfiguration | null;
+  /** Whose credits the row is on, for its money remedies; `null` where not known. */
+  readonly credits: SandboxPageConfiguration | null;
 }): ReactNode {
-  const { summary, configuration } = props;
+  const { summary, configuration, credits } = props;
   // Not known whose sandbox it is: worded as for someone who cannot buy.
-  const buysTeamCredits = useOffersAddCredits(configuration);
+  const buysTeamCredits = useOffersAddCredits(credits);
   const create = useSandboxCreate("toast", buysTeamCredits);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
@@ -158,7 +165,7 @@ export function SandboxFailedRowActions(props: {
         sandboxId={summary.id}
         name={summary.displayName}
         hostId={summary.hostId}
-        configuration={configuration ?? undefined}
+        configuration={credits ?? undefined}
         operation={operation}
         busy={busy}
         onRetry={

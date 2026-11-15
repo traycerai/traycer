@@ -17,10 +17,11 @@ import {
   isSandboxFrozenRefusal,
   sandboxRefusalCopyFor,
   teamFrozenRefusalCopy,
+  unknownPayerFrozenRefusalCopy,
   type SandboxRefusalCopy,
 } from "@/components/chat/segments/sandbox-refusal-copy";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
-import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useSandboxHostPayer } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useTeamBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
 import { ProviderUpdateAction } from "@/components/chat/segments/provider-update-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -221,11 +222,10 @@ export function ErrorSegment({
   settledNoticeFindUnitId,
 }: ErrorSegmentProps) {
   const readOnly = useContext(ChatStatusReadOnlyContext);
-  // The chat's own sandbox, from the person's host directory: a team's one
-  // out of credits names the team.
-  const teamSandbox = useSandboxHostConfiguration(
-    useMaybeChatTranscript()?.hostId ?? null,
-  );
+  // Whose credits the chat's sandbox is on, from the person's host directory:
+  // a team's one out of credits names the team, and while it is not known no
+  // remedy is told as the reader's.
+  const payer = useSandboxHostPayer(useMaybeChatTranscript()?.hostId ?? null);
   // Built at CLICK time, never at render. This row is durable transcript: it
   // mounts whenever the chat is opened, which is one or more commits BEFORE
   // `SupportContextRegistryBridge`'s effects publish that chat's own
@@ -321,16 +321,28 @@ export function ErrorSegment({
   };
   if (
     sandboxRefusal !== null &&
-    teamSandbox?.kind === "team" &&
-    teamSandbox.teamName.length > 0 &&
+    payer?.kind === "team" &&
+    payer.teamName.length > 0 &&
     isSandboxFrozenRefusal(code, message)
   ) {
     return (
       <TeamFrozenErrorSegmentRow
         {...row}
         copy={sandboxRefusal}
-        teamId={teamSandbox.teamId}
-        teamName={teamSandbox.teamName}
+        teamId={payer.teamId}
+        teamName={payer.teamName}
+      />
+    );
+  }
+  if (
+    sandboxRefusal !== null &&
+    payer === null &&
+    isSandboxFrozenRefusal(code, message)
+  ) {
+    return (
+      <ErrorSegmentRow
+        {...row}
+        sandboxRefusal={unknownPayerFrozenRefusalCopy(sandboxRefusal)}
       />
     );
   }

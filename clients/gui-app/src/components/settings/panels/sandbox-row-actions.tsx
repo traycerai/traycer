@@ -91,10 +91,10 @@ interface SandboxRowActionsProps {
   /** The page's configuration: where the row opens and what it is listed as. */
   readonly configuration: SandboxPageConfiguration;
   /**
-   * Whose credits the row is on, for its failure lines: `null` where that is
-   * not known. Absent, the page's configuration is.
+   * Whose credits the row is on, for its money remedies and failure lines:
+   * `null` where that is not known.
    */
-  readonly credits?: SandboxPageConfiguration | null;
+  readonly credits: SandboxPageConfiguration | null;
   readonly unreachable: boolean;
   readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
@@ -133,18 +133,13 @@ function useRowDialog(
  * Interrupting and ending actions confirm in their dialogs; a wake is one click
  * after the row says who pays.
  */
-function rowCredits(
-  props: SandboxRowActionsProps,
-): SandboxPageConfiguration | null {
-  return props.credits === undefined ? props.configuration : props.credits;
-}
-
 export function SandboxRowActions(props: SandboxRowActionsProps): ReactNode {
   if (props.summary.state === "failed" && props.summary.kind !== "automation") {
     return (
       <SandboxFailedRowActions
         summary={props.summary}
-        configuration={rowCredits(props)}
+        configuration={props.configuration}
+        credits={props.credits}
       />
     );
   }
@@ -345,7 +340,7 @@ function SandboxLifecycleRowActions(
         name={summary.displayName}
         // Not known whose: no host is named either, so the line reads as
         // not known.
-        configuration={rowCredits(props) ?? undefined}
+        configuration={props.credits ?? undefined}
         operation={shownOperation}
         busy={busy}
         onRetry={(pressed) => {
