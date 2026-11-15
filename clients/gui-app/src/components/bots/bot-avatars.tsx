@@ -19,6 +19,7 @@ import {
   type IdentityAvatarSize,
 } from "@/components/bots/bot-mascot-frame";
 import {
+  DEFAULT_MASCOT,
   MASCOT_AT_REST,
   MASCOT_WORKING_BEATS,
   type MascotExpression,
@@ -229,7 +230,7 @@ export function BotMascotPreview(props: {
 
 /**
  * The bot's picture: the surface's bot (`BotIdentityContext`) by its id, or
- * a plain bot outside one.
+ * the default mascot outside one.
  */
 export function BotAvatar(props: {
   readonly size: IdentityAvatarSize;
@@ -237,17 +238,30 @@ export function BotAvatar(props: {
   return <ExpressiveBotAvatar size={props.size} expression="idle" />;
 }
 
-/** The bot a picture is of where none is named. */
-const PLAIN_BOT_ID = "bot";
-
 /**
- * The plain bot's picture, whatever surface it is drawn on: what stands for
- * bots as a kind, where no one bot is meant.
+ * The default mascot, whatever surface it is drawn on: what stands for bots
+ * as a kind, where no one bot is meant.
  */
 export function PlainBotAvatar(props: {
   readonly size: IdentityAvatarSize;
 }): ReactElement {
-  return <NamedBotAvatar botId={PLAIN_BOT_ID} size={props.size} />;
+  return <DefaultMascotAvatar size={props.size} expression="idle" />;
+}
+
+function DefaultMascotAvatar(props: {
+  readonly size: IdentityAvatarSize;
+  readonly expression: MascotExpression;
+}): ReactElement {
+  const { size, expression } = props;
+  const beat = useWorkingBeat(expression === "working");
+  return (
+    <BotMascotFrame
+      mascot={DEFAULT_MASCOT}
+      pose={{ expression, beat }}
+      size={size}
+      testId="bot-avatar"
+    />
+  );
 }
 
 /**
@@ -259,10 +273,15 @@ export function ExpressiveBotAvatar(props: {
   readonly expression: MascotExpression;
 }): ReactElement {
   const identity = useBotIdentity();
+  if (identity === null) {
+    return (
+      <DefaultMascotAvatar size={props.size} expression={props.expression} />
+    );
+  }
   return (
     <IdentityAvatar
       kind="bot"
-      botId={identity?.botId ?? PLAIN_BOT_ID}
+      botId={identity.botId}
       expression={props.expression}
       size={props.size}
       testId="bot-avatar"

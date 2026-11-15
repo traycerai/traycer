@@ -664,6 +664,17 @@ function rampAround(hue: number, saturation: number, base: number): MascotRamp {
 export const DEFAULT_MASCOT_SHAPE: MascotShape = "blob";
 export const DEFAULT_MASCOT_RAMP: MascotRamp = rampAround(192, 32, 68);
 
+/**
+ * The default mascot whole. It is no bot's: it stands for bots where no one
+ * bot is meant, so it is the same picture for everyone, everywhere.
+ */
+export const DEFAULT_MASCOT: MascotLook = {
+  shape: DEFAULT_MASCOT_SHAPE,
+  ramp: DEFAULT_MASCOT_RAMP,
+  eyewear: "none",
+  accessory: "none",
+};
+
 /** A dark lens, whatever the body's colour, and the bridge of a pair of glasses. */
 const LENS_COLOUR = hsl(220, 12, 7);
 const BRIDGE_COLOUR = hsl(220, 12, 14);

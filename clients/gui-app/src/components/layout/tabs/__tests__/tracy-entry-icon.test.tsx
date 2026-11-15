@@ -1,15 +1,14 @@
 /**
  * The Tracy entry's glyph through the REAL `TracyEntryIcon`: Tracy is a bot,
- * so it is drawn as the plain bot's mascot at the strip's 16px size and never
+ * so it is drawn as the default mascot at the strip's 16px size and never
  * as the robot glyph an agent wears, bare or wearing its muted mark.
  */
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  PLAIN_BOT_ID,
+  defaultMascotDrawing,
   drawsRobotGlyph,
-  mascotPathsAt,
-  renderedMascotPaths,
+  renderedMascotDrawing,
 } from "@/components/bots/__tests__/mascot-drawing";
 import { TracyEntryIcon } from "@/components/layout/tabs/tracy-strip-entry";
 
@@ -21,14 +20,12 @@ function mountIcon(muted: boolean): HTMLElement {
 }
 
 function expectPlainMascot(icon: HTMLElement): void {
-  expect(renderedMascotPaths(icon)).toEqual(
-    mascotPathsAt(PLAIN_BOT_ID, false, 16),
-  );
+  expect(renderedMascotDrawing(icon)).toEqual(defaultMascotDrawing(16));
   expect(drawsRobotGlyph(icon)).toBe(false);
 }
 
 describe("<TracyEntryIcon />", () => {
-  it("draws the plain bot's mascot at 16px, not the robot glyph, bare", () => {
+  it("draws the default mascot at 16px, not the robot glyph, bare", () => {
     expectPlainMascot(mountIcon(false));
     expect(screen.queryByTestId("tracy-entry-muted")).toBeNull();
   });

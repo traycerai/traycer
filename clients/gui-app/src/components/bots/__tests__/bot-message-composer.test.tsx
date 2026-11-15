@@ -34,9 +34,10 @@ import {
 } from "@/components/bots/__tests__/bot-box-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import {
-  PLAIN_BOT_ID,
+  defaultMascotDrawing,
   drawsRobotGlyph,
   mascotPathsAt,
+  renderedMascotDrawing,
   renderedMascotPaths,
 } from "@/components/bots/__tests__/mascot-drawing";
 
@@ -959,15 +960,13 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
     expect(menuHeader()).toBe("Mentions");
   });
 
-  it("draws the Bots category as the plain bot's 16px mascot, not the channel bot's own and not the robot glyph", async () => {
+  it("draws the Bots category as the default 16px mascot, not the channel bot's own and not the robot glyph", async () => {
     mountWith(TEAM, DIRECTORY, null);
 
     await typeBox("@");
 
     const row = menuRow("Bots");
-    expect(renderedMascotPaths(row)).toEqual(
-      mascotPathsAt(PLAIN_BOT_ID, false, 16),
-    );
+    expect(renderedMascotDrawing(row)).toEqual(defaultMascotDrawing(16));
     expect(renderedMascotPaths(row)).not.toEqual(
       mascotPathsAt(OWN_BOT, false, 16),
     );
