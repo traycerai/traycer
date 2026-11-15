@@ -478,11 +478,8 @@ export function planUnlinkLead(teamName: string): string {
   return `${teamName}'s agents stop using this plan. Nothing about a sandbox changes: sandbox charges use ${teamName} credits, not the plan.`;
 }
 
-export function planUnlinkTurnsLineFor(
-  teamName: string,
-  turnsOnPlan: number | null,
-): string {
-  const stops = `then stops with "${teamName}'s Claude plan was unlinked."`;
+export function planUnlinkTurnsLineFor(turnsOnPlan: number | null): string {
+  const stops = "then stops";
   if (turnsOnPlan === null) {
     return `Unavailable. Each turn on Claude Code finishes its current step, ${stops}`;
   }
