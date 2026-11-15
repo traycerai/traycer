@@ -81,6 +81,8 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
 
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   localEntry,
@@ -176,6 +178,14 @@ function tookOlderHost(state: WindowNarrationState): boolean {
   );
 }
 
+function narrationQueryClientWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return ({ children }: { readonly children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children);
+}
+
 beforeEach(() => {
   socketBuilds.rpc = 0;
   socketBuilds.stream = 0;
@@ -236,7 +246,9 @@ describe("older host floor gate", () => {
     narratedEntry.current = remoteRow("1.5.4");
     attachNarration();
 
-    const { result } = renderHook(() => useWindowNarration());
+    const { result } = renderHook(() => useWindowNarration(), {
+      wrapper: narrationQueryClientWrapper(),
+    });
 
     expect(tookOlderHost(result.current.narration)).toBe(true);
     if (
@@ -256,13 +268,17 @@ describe("older host floor gate", () => {
     narratedEntry.current = remoteRow("2.0.0");
     attachNarration();
 
-    const { result } = renderHook(() => useWindowNarration());
+    const { result } = renderHook(() => useWindowNarration(), {
+      wrapper: narrationQueryClientWrapper(),
+    });
 
     expect(tookOlderHost(result.current.narration)).toBe(false);
   });
 
   it("does not throw when the narrator has no directory row and no runtime binding", () => {
-    const { result } = renderHook(() => useWindowNarration());
+    const { result } = renderHook(() => useWindowNarration(), {
+      wrapper: narrationQueryClientWrapper(),
+    });
 
     expect(tookOlderHost(result.current.narration)).toBe(false);
   });

@@ -21,7 +21,7 @@ import { staleWriteOfHostError } from "@/lib/environment/stale-write";
 import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
-import { drawnDoorCoverHost } from "@/stores/host/drawn-door-cover-store";
+import { isDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
 import { hostOfFailedCall } from "@/lib/host/refused-host";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -660,7 +660,7 @@ function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
 /** Whether the window has the door cover of the host `error` was sent to on screen. */
 function doorStateCovers(error: HostRpcError): boolean {
   const hostId = hostOfFailedCall(error);
-  return hostId !== null && drawnDoorCoverHost() === hostId;
+  return hostId !== null && isDoorCoverDrawn(hostId);
 }
 
 /**

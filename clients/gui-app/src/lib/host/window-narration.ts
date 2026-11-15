@@ -55,7 +55,7 @@ export type WindowNarrationCause =
   | "door-state";
 
 /** The door states drawn as their own cover, each with the computer it is about. */
-export type DoorCoverKind =
+type DoorCoverKind =
   | "token-unavailable"
   | "keys-unavailable"
   | "clock-skew"
@@ -78,10 +78,83 @@ const DOOR_COVER_KINDS: ReadonlySet<string> = new Set<DoorCoverKind>([
   "membership-removed",
 ]);
 
-export function isDoorCoverVariant(
+function isDoorCoverVariant(
   variant: WindowNarrationVariant,
 ): variant is DoorCoverVariant {
   return DOOR_COVER_KINDS.has(variant.kind);
+}
+
+export function isDoorStateCoverVariant(
+  variant: WindowNarrationVariant,
+): variant is DoorStateCoverVariant {
+  return (
+    isDoorCoverVariant(variant) ||
+    variant.kind === "team-membership-required" ||
+    variant.kind === "not-admitted" ||
+    variant.kind === "host-claimed"
+  );
+}
+
+/** The door covers board C1 draws with a Retry: each says "then retry". */
+const DOOR_COVERS_WITH_RETRY: ReadonlySet<string> = new Set<DoorCoverKind>([
+  "keys-unavailable",
+  "clock-skew",
+  "token-expired",
+]);
+
+/** Whether a door cover offers Retry, which re-opens its computer now. */
+export function offersDoorRetry(
+  variant: WindowNarrationVariant,
+): variant is DoorCoverVariant {
+  return DOOR_COVERS_WITH_RETRY.has(variant.kind);
+}
+
+/** Who claimed a computer and the team it left, read from authn's claims. */
+export interface HostClaimFacts {
+  readonly claimantName: string;
+  readonly teamName: string;
+}
+
+/** Every cover a door state draws with its own words and buttons (board C1). */
+export type DoorStateCoverVariant =
+  | { readonly kind: "team-membership-required" }
+  | { readonly kind: "not-admitted" }
+  | ({ readonly kind: "host-claimed" } & HostClaimFacts)
+  | DoorCoverVariant;
+
+/**
+ * The cover one host's door state draws with its own words, or `null` when it
+ * draws none. A state the app does not get out of by itself (the policy's
+ * `retry` is `none`) covers outright: only a person or an Admin clears it. A
+ * state it retries on its own covers only while the host is not already
+ * serving. A claimed computer covers once `claim` names who claimed it, and
+ * until then keeps today's cover (board C30, row 14). An older host and an
+ * unrecognised reason have no cover of their own.
+ */
+export function ownDoorCover(
+  state: HostDoorState | null,
+  alreadyServing: boolean,
+  claim: HostClaimFacts | null,
+): DoorStateCoverVariant | null {
+  if (state === null) return null;
+  switch (state.kind) {
+    case "not-a-member":
+      return { kind: "team-membership-required" };
+    case "not-admitted":
+      return { kind: "not-admitted" };
+    case "membership-removed":
+      return { kind: state.kind, hostId: state.hostId };
+    case "host-claimed":
+      return claim === null ? null : { kind: "host-claimed", ...claim };
+    case "token-unavailable":
+    case "keys-unavailable":
+    case "clock-skew":
+    case "token-expired":
+    case "enrolment-broken":
+      return alreadyServing ? null : { kind: state.kind, hostId: state.hostId };
+    default:
+      return null;
+  }
 }
 
 /**
@@ -94,9 +167,7 @@ export function isDoorCoverVariant(
  */
 export type WindowNarrationVariant =
   | { readonly kind: "offline" }
-  | { readonly kind: "team-membership-required" }
-  | { readonly kind: "not-admitted" }
-  | DoorCoverVariant
+  | DoorStateCoverVariant
   /**
    * The `offline` cover for a host whose refusal carries a reason this app
    * does not know: a newer host, never an older one. Its own kind only so the
@@ -161,6 +232,11 @@ export interface WindowNarrationInput {
    * effective host, else the target), or `null`.
    */
   readonly doorState?: HostDoorState | null;
+  /**
+   * Who claimed that host and from which team, once read, while its door
+   * state is `host-claimed`; `null` otherwise or until it is read.
+   */
+  readonly hostClaim?: HostClaimFacts | null;
   /**
    * Whether this window's selection kernel has published a snapshot.
    *
@@ -430,15 +506,9 @@ export function hostUpdateActionApplies(
 }
 
 /**
- * The cover a blocking door state draws, and its cause.
- *
- * A state the app does not get out of by itself (the policy's `retry` is
- * `none`) owns the window outright: only a person or an Admin clears it. A
- * state it retries on its own covers only while nothing is serving.
- *
- * A claimed computer and an unrecognised reason have no cover of their own
- * here: they draw the "no host" cover, the unrecognised reason
- * with its code beneath it.
+ * The state's own cover is chosen by `ownDoorCover`. While nothing is
+ * serving, an older host draws its update cover; another state falls
+ * back to the "no host" cover, with an unrecognised reason's code beneath it.
  */
 function doorStateCover(input: WindowNarrationInput): {
   readonly cause: WindowNarrationCause;
@@ -446,56 +516,29 @@ function doorStateCover(input: WindowNarrationInput): {
 } | null {
   const state = input.doorState ?? null;
   if (state === null || !HOST_DOOR_STATE_POLICY[state.kind].blocks) return null;
-  switch (state.kind) {
-    case "not-a-member":
-      return {
-        cause: "door-state",
-        variant: { kind: "team-membership-required" },
-      };
-    case "not-admitted":
-      return { cause: "door-state", variant: { kind: "not-admitted" } };
-    case "membership-removed":
-      return {
-        cause: "door-state",
-        variant: { kind: state.kind, hostId: state.hostId },
-      };
-    default:
-      break;
-  }
   const alreadyServing =
     input.hasBeenServed &&
     isServingLease(findLease(input.leases, input.effectiveHostId));
+  const own = ownDoorCover(state, alreadyServing, input.hostClaim ?? null);
+  if (own !== null) return { cause: "door-state", variant: own };
   if (alreadyServing) return null;
-  switch (state.kind) {
-    case "older-host":
-      return {
-        cause: "no-usable-host",
-        variant: olderHostUpdateVariant(
-          state.hostId,
-          state.hostId === input.targetHostId,
-          null,
-        ),
-      };
-    case "token-unavailable":
-    case "keys-unavailable":
-    case "clock-skew":
-    case "token-expired":
-    case "enrolment-broken":
-      return {
-        cause: "door-state",
-        variant: { kind: state.kind, hostId: state.hostId },
-      };
-    case "unrecognised-refusal":
-      return {
-        cause: "no-usable-host",
-        variant:
-          state.detail === null
-            ? { kind: "offline" }
-            : { kind: "unrecognised-refusal", code: state.detail.code },
-      };
-    default:
-      return { cause: "no-usable-host", variant: { kind: "offline" } };
+  if (state.kind === "older-host") {
+    return {
+      cause: "no-usable-host",
+      variant: olderHostUpdateVariant(
+        state.hostId,
+        state.hostId === input.targetHostId,
+        null,
+      ),
+    };
   }
+  if (state.kind === "unrecognised-refusal" && state.detail !== null) {
+    return {
+      cause: "no-usable-host",
+      variant: { kind: "unrecognised-refusal", code: state.detail.code },
+    };
+  }
+  return { cause: "no-usable-host", variant: { kind: "offline" } };
 }
 
 /**

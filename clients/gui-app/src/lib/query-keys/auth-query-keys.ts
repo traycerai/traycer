@@ -19,6 +19,23 @@ export const authQueryKeys = {
     userId,
     environmentId,
   ],
+  hostClaim: (
+    auth: object | null,
+    userId: string | null,
+    read: {
+      readonly hostId: string;
+      readonly stateSerial: number;
+      readonly environmentIds: readonly string[];
+    },
+  ): readonly unknown[] => [
+    "auth",
+    "host-claim",
+    auth,
+    userId,
+    read.hostId,
+    read.stateSerial,
+    read.environmentIds,
+  ],
   environmentInvitations: (
     authService: object | null,
     userId: string,

@@ -33,8 +33,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 import { appLogger } from "@/lib/logger";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
-  isDoorCoverVariant,
-  type DoorCoverKind,
+  offersDoorRetry,
   type WindowNarrationCause,
   type WindowNarrationState,
   type WindowNarrationVariant,
@@ -435,24 +434,27 @@ function resolveRetry(args: {
   readonly settled: SettledFailure;
 }): ResolvedRetry {
   const { variant, hostTokens, presentation, localLifecycle, settled } = args;
-  if (isDoorCoverVariant(variant)) {
-    return DOOR_COVERS_WITH_RETRY.has(variant.kind)
-      ? {
-          onRetry: () => {
-            void retryHostDoor(variant.hostId, hostTokens);
-          },
-          pending: false,
-        }
-      : { onRetry: null, pending: false };
+  if (offersDoorRetry(variant)) {
+    return {
+      onRetry: () => {
+        // The reconnect has already run when a failed token refresh rejects;
+        // the cover stays up until an open is admitted.
+        retryHostDoor(variant.hostId, hostTokens).catch(() => {
+          appLogger.warn("[host-door] retry token refresh failed", {
+            hostId: variant.hostId,
+          });
+        });
+      },
+      pending: false,
+    };
   }
   // An unrecognised refusal is the `offline` cover with its code shown, and
   // keeps that cover's recovery.
   if (variant.kind !== "offline" && variant.kind !== "unrecognised-refusal") {
     return { onRetry: null, pending: false };
   }
-  // A healthy start in progress has nothing to retry. `cause === "cold-start"`
-  // always resolves to `offline` by design, so before this gate every local
-  // boot rendered Retry from its first frame, with no failure of any kind - the
+  // A healthy start in progress has nothing to retry. Before this gate every
+  // local boot rendered Retry from its first frame, with no failure of any kind - the
   // reported defect. Retry is live there too, so the impression of breakage
   // produced a real second converge.
   if (!settled.failed && !settled.slow) {
@@ -483,10 +485,6 @@ function showsReportIssue(
 ): boolean {
   return settled.failed && REPORTED_VARIANTS.has(variant.kind);
 }
-
-/** The door covers board C1 draws with a Retry: each says "then retry". */
-const DOOR_COVERS_WITH_RETRY: ReadonlySet<DoorCoverKind> =
-  new Set<DoorCoverKind>(["keys-unavailable", "clock-skew", "token-expired"]);
 
 /**
  * The boot body, or null when this state has none.
