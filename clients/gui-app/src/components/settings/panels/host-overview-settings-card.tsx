@@ -55,7 +55,7 @@ import {
   useHostMethodSupport,
   useHostMethodSchemaVersion,
 } from "@/hooks/host/use-host-supports-method";
-import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   environmentPickValue,
   PERSONAL_PICK,
@@ -269,7 +269,6 @@ function ClaimLocalTeamComputer(props: {
   readonly onClaimed: (receipt: string) => void;
 }): ReactNode {
   const mayClaim = useMayChangeTeamConfiguration(props.environmentId);
-  const binding = useHostBinding();
   const [open, setOpen] = useState(false);
   const mutation = useTeamComputerClaim(props.environmentId, () => {
     props.onClaimed(
@@ -325,12 +324,7 @@ function ClaimLocalTeamComputer(props: {
             <Button
               type="button"
               disabled={mutation.isPending}
-              onClick={() =>
-                mutation.mutate({
-                  hostId: props.hostId,
-                  chosenBy: binding?.auth.chosenSignIn() ?? null,
-                })
-              }
+              onClick={() => mutation.mutate(props.hostId)}
             >
               {mutation.isPending ? (
                 <AgentSpinningDots

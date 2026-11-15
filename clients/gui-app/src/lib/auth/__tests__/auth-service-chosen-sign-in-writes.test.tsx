@@ -7,9 +7,6 @@
  * that wait, and that one pressed across A's own token refresh is sent, with
  * the refreshed token. The cache's `onMutate` is held to widen the wait the
  * library already has; nothing else stands between the press and the call.
- * A pending mutation also takes each later render's options, so after the
- * switch its `mutationFn` closes over B's render: the claim's key names no
- * account, so that case holds the fence to the press, not to the closure.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -27,8 +24,6 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const AUTHN = "http://localhost:5005";
 const VALIDATION_URL = `${AUTHN}/api/v3/user/negotiated`;
 const MINT_URL = `${AUTHN}/api/v3/hosts/team-install-tokens`;
-const ACCEPT_URL = `${AUTHN}/api/v3/environments/me/invitations/accept`;
-const CLAIM_URL = `${AUTHN}/api/v3/hosts/host-1/team-release`;
 
 const bound = vi.hoisted(
   (): {
@@ -45,8 +40,6 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 
 import { useTeamComputerInstallTokenMutation } from "@/hooks/host/use-team-computer-install-token-mutation";
-import { useEnvironmentInvitationAcceptMutation } from "@/hooks/environment/use-environment-invitations";
-import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
 
 function installFetch(
   handler: (url: string, init: RequestInit | undefined) => Promise<Response>,
@@ -238,10 +231,6 @@ function mintAnswer(): Response {
   return json({ token: "install-1", environmentId: "env-a", expiresAt: 1 });
 }
 
-function acceptAnswer(): Response {
-  return json({ outcome: "accepted" });
-}
-
 /** Presses as A: the sign-in is read now, the call waits in Query. */
 function pressMint(session: SignedIn) {
   const hook = renderHook(() => useTeamComputerInstallTokenMutation("env-a"), {
@@ -249,33 +238,6 @@ function pressMint(session: SignedIn) {
   });
   const chosenBy: ChosenSignIn = session.service.chosenSignIn();
   act(() => hook.result.current.mutate(chosenBy));
-  return hook;
-}
-
-function pressAccept(session: SignedIn) {
-  const hook = renderHook(() => useEnvironmentInvitationAcceptMutation(), {
-    wrapper: session.wrapper,
-  });
-  const chosenBy: ChosenSignIn = session.service.chosenSignIn();
-  act(() =>
-    hook.result.current.mutate({
-      request: { environmentId: "env-a" },
-      chosenBy,
-    }),
-  );
-  return hook;
-}
-
-function claimAnswer(): Response {
-  return new Response(null, { status: 204 });
-}
-
-function pressClaim(session: SignedIn) {
-  const hook = renderHook(() => useTeamComputerClaim("env-a", undefined), {
-    wrapper: session.wrapper,
-  });
-  const chosenBy: ChosenSignIn = session.service.chosenSignIn();
-  act(() => hook.result.current.mutate({ hostId: "host-1", chosenBy }));
   return hook;
 }
 
@@ -303,60 +265,6 @@ describe("an install-token mint pressed before a sign-in change", () => {
   it("is sent across the same account's token refresh, with the refreshed token", async () => {
     const session = await signInA(MINT_URL, mintAnswer);
     const hook = pressMint(session);
-
-    await refreshA(session);
-    session.releasePress();
-
-    await waitFor(() => expect(hook.result.current.isSuccess).toBe(true));
-    expect(session.writes).toEqual(["Bearer token-a2"]);
-  });
-});
-
-describe("an invitation accept pressed before a sign-in change", () => {
-  it("is not sent as the account switched to before Query calls it", async () => {
-    const session = await signInA(ACCEPT_URL, acceptAnswer);
-    const hook = pressAccept(session);
-
-    await switchToB(session);
-    session.releasePress();
-
-    await waitFor(() => expect(hook.result.current.isError).toBe(true));
-    expect(hook.result.current.error?.message).toBe(
-      "The signed-in account changed. Nothing was accepted.",
-    );
-    expect(session.writes).toEqual([]);
-  });
-
-  it("is sent across the same account's token refresh, with the refreshed token", async () => {
-    const session = await signInA(ACCEPT_URL, acceptAnswer);
-    const hook = pressAccept(session);
-
-    await refreshA(session);
-    session.releasePress();
-
-    await waitFor(() => expect(hook.result.current.isSuccess).toBe(true));
-    expect(session.writes).toEqual(["Bearer token-a2"]);
-  });
-});
-
-describe("a team computer claim pressed before a sign-in change", () => {
-  it("is not sent as the account switched to before Query calls it", async () => {
-    const session = await signInA(CLAIM_URL, claimAnswer);
-    const hook = pressClaim(session);
-
-    await switchToB(session);
-    session.releasePress();
-
-    await waitFor(() => expect(hook.result.current.isError).toBe(true));
-    expect(hook.result.current.error?.message).toBe(
-      "The signed-in account changed. Nothing was claimed.",
-    );
-    expect(session.writes).toEqual([]);
-  });
-
-  it("is sent across the same account's token refresh, with the refreshed token", async () => {
-    const session = await signInA(CLAIM_URL, claimAnswer);
-    const hook = pressClaim(session);
 
     await refreshA(session);
     session.releasePress();

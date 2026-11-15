@@ -3246,17 +3246,10 @@ export class AuthService {
     return this.runnerHost.mintTeamComputerInstallToken(bearer, environmentId);
   }
 
-  /**
-   * Claims with the bearer of the sign-in that pressed; one that has ended
-   * since throws {@link SupersededAuthEraError}, so the computer never
-   * becomes the next account's.
-   */
   async releaseTeamComputer(
     hostId: string,
     environmentId: string,
-    chosenBy: ChosenSignIn,
   ): Promise<TeamComputerReleaseResult> {
-    if (!this.isChosenSignInLive(chosenBy)) throw new SupersededAuthEraError();
     const bearer = this.cloudBearer();
     if (bearer === null) throw new Error("Sign in to claim this computer.");
     return this.runnerHost.releaseTeamComputer(bearer, hostId, environmentId);
@@ -3591,16 +3584,9 @@ export class AuthService {
     );
   }
 
-  /**
-   * Accepts with the bearer of the sign-in that pressed; one that has ended
-   * since throws {@link SupersededAuthEraError}, so another account invited to
-   * the same team is never made to join it.
-   */
   async acceptEnvironmentInvitation(
     environmentId: string,
-    chosenBy: ChosenSignIn,
   ): Promise<EnvironmentInvitationsAcceptResponse> {
-    if (!this.isChosenSignInLive(chosenBy)) throw new SupersededAuthEraError();
     const bearer = this.cloudBearer();
     if (bearer === null) throw new Error("Sign in to accept this invitation.");
     return acceptEnvironmentInvitation(

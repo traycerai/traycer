@@ -495,10 +495,7 @@ describe("the invited rows of the Environment dropdown", () => {
       );
     });
     expect(onAccepted).not.toHaveBeenCalled();
-    expect(accept).toHaveBeenCalledExactlyOnceWith(
-      "env-beta",
-      harness.auth.chosenSignIn(),
-    );
+    expect(accept).toHaveBeenCalledExactlyOnceWith("env-beta");
 
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => {
@@ -599,12 +596,12 @@ describe("InviteAcceptDialog", () => {
         }),
       },
     );
-    return { accept, pressedAs: harness.auth.chosenSignIn() };
+    return accept;
   }
 
   it("shows the grant and accepts only when Accept is pressed, then reports the team to pick", async () => {
     const onAccepted = vi.fn();
-    const { accept, pressedAs } = renderDialog("accepted", onAccepted);
+    const accept = renderDialog("accepted", onAccepted);
 
     expect(
       screen.getByRole("heading", { name: "You're invited to Beta" }),
@@ -617,7 +614,7 @@ describe("InviteAcceptDialog", () => {
     await waitFor(() => {
       expect(onAccepted).toHaveBeenCalledExactlyOnceWith("env-beta");
     });
-    expect(accept).toHaveBeenCalledExactlyOnceWith("env-beta", pressedAs);
+    expect(accept).toHaveBeenCalledExactlyOnceWith("env-beta");
   });
 
   it("says the invitation is no longer open, and picks nothing, when it was withdrawn", async () => {
