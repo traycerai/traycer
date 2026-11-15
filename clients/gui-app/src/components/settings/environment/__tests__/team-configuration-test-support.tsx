@@ -23,12 +23,17 @@ import type { EnvironmentTransportRequest } from "@traycer-clients/shared/enviro
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { negotiatedVersionMeetsRequirement } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
-import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import {
+  environmentDescriptorSchemaV11,
+  environmentListUpgradeV10ToV11,
+  grantedEnvironmentRole,
+  type EnvironmentDescriptorV11,
+  type EnvironmentListResponse,
+} from "@traycer/protocol/host/environment/contracts";
 import {
   ConfigurationSourceContext,
   type ConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
-import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
@@ -194,6 +199,20 @@ function shareableTeamsFor(
   );
 }
 
+function descriptorFromEnvironmentList(
+  environment: EnvironmentListResponse["environments"][number],
+): EnvironmentDescriptorV11 {
+  const parsed = environmentDescriptorSchemaV11.safeParse(environment);
+  if (parsed.success) return parsed.data;
+  const upgraded = environmentListUpgradeV10ToV11.upgradeResponse({
+    environments: [environment],
+  }).environments[0];
+  if (upgraded === undefined) {
+    throw new Error("the environment list upgrade returned no row");
+  }
+  return upgraded;
+}
+
 /**
  * A host whose connection negotiated `negotiated` for a method: a request that
  * carries a higher version floor for that method is refused before anything is
@@ -286,7 +305,9 @@ function buildTeamPage(
     listEnvironments: async () => {
       const response = await cloudHandlers.listEnvironments();
       if (response?.kind === "ok") {
-        currentRows = [...response.list.environments];
+        currentRows = response.list.environments.map(
+          descriptorFromEnvironmentList,
+        );
         useAuthStore.setState({
           shareableTeams: shareableTeamsFor(currentRows),
         });
