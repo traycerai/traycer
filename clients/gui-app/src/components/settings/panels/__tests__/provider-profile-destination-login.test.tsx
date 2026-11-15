@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -18,6 +18,8 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { unavailableSignInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
 import {
   AddProviderProfileDialog,
   type ProviderTargetLoginControls,
@@ -34,6 +36,24 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+
+let authServiceForTest: AuthService | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
 
 vi.mock("@/lib/links/open-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/links/open-link")>();
@@ -184,8 +204,14 @@ function renderDestinationDialog(input: {
   return { messenger, queryClient, results, listReads: () => listReads };
 }
 
+beforeEach(() => {
+  authServiceForTest = unavailableSignInRequestAuthService();
+});
+
 afterEach(() => {
   cleanup();
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
   resetNegotiatedManifests();
   vi.clearAllMocks();
 });
@@ -213,6 +239,7 @@ describe("targeted sign-in in the Add dialog", () => {
           kind: "target-outcome",
           profileOutcome: outcome,
           admissionId: "leave-admission",
+          signInRecordingEnded: null,
         },
         expect.objectContaining({ accentColor: "#ef4444" }),
       ),
@@ -375,6 +402,7 @@ describe("targeted sign-in in the Add dialog", () => {
           kind: "target-outcome",
           profileOutcome: null,
           admissionId: "leave-admission",
+          signInRecordingEnded: null,
         },
         expect.objectContaining({ accentColor: "#ef4444" }),
       ),
@@ -407,6 +435,7 @@ describe("targeted sign-in in the Add dialog", () => {
             kind: "target-outcome",
             profileOutcome: outcome,
             admissionId: "leave-admission",
+            signInRecordingEnded: null,
           },
           expect.objectContaining({ accentColor: "#ef4444" }),
         ),

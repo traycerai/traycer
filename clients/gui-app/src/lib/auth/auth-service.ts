@@ -1,5 +1,10 @@
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import {
+  recordSignInRequestViaHttp,
+  type SignInRequestRecordAnswer,
+} from "@traycer-clients/shared/host-client/provider-sign-in-request";
+import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
+import {
   readProfileRecordsViaHttp,
   signOutProfileRecordViaHttp,
   removeProfileRecordViaHttp,
@@ -3603,6 +3608,27 @@ export class AuthService
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  /**
+   * Records the person's sign-in request on a verified session. A 401 hands
+   * the session to the shared revalidator, which is what any refused session
+   * gets: it rotates, or signs out and says the session expired.
+   */
+  async recordSignInRequest(
+    request: ProviderLoginSignInRequest,
+    signal: AbortSignal,
+  ): Promise<SignInRequestRecordAnswer> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const answer = await recordSignInRequestViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      request,
+      signal,
+    );
+    if (answer.kind === "unauthorized") void this.revalidateCurrentContext();
+    return answer;
   }
 
   async readProfileRecords(

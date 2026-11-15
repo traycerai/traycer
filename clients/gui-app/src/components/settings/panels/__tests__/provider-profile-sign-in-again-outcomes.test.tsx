@@ -4,14 +4,30 @@
 const clientMock = vi.hoisted(
   (): { current: HostClient<HostRpcRegistry> | null } => ({ current: null }),
 );
+let authServiceForTest: AuthService | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
 
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: currentAuthService,
+  };
 });
 vi.mock("@/lib/host/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
-  return { ...actual, useHostClient: () => clientMock.current };
+  return {
+    ...actual,
+    useHostClient: () => clientMock.current,
+    useAuthService: currentAuthService,
+  };
 });
 vi.mock("@/lib/links/open-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/links/open-link")>();
@@ -19,6 +35,7 @@ vi.mock("@/lib/links/open-link", async (importOriginal) => {
 });
 
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { AuthService } from "@/lib/auth/auth-service";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProviderLoginProfileOutcome,
@@ -30,8 +47,15 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ProviderMutationCliStateV21 } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import {
   profile,
   provider,
@@ -42,6 +66,19 @@ import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
+import {
+  ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+  noAnswerReply,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  type SignInRequestFetchHarness,
+  type SignInRequestFetchReply,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 
 const HOST_ID = "host-sign-in-again";
 const PROFILE_ID = "work";
@@ -68,23 +105,37 @@ interface RecordedCall {
   readonly params: unknown;
 }
 
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+beforeEach(() => {
+  activeSignInFetch = installSignInRequestFetchHarness();
+  authServiceForTest = signInRequestAuthService(activeSignInFetch.client);
+});
+
 let releaseHeldAwait: ((value: AwaitResponse) => void) | null = null;
 
 const REAUTH_DEFAULTS = {
   echoedSignedIn: false,
   ownership: false,
+  awaitAnswers: [],
 } satisfies {
   readonly echoedSignedIn: boolean;
   readonly ownership: boolean;
+  readonly awaitAnswers: readonly AwaitResponse[];
 };
 
 afterEach(() => {
   releaseHeldAwait?.(nothingChanged(null));
   releaseHeldAwait = null;
   cleanup();
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
   clientMock.current = null;
   useProviderProfileAddFlowStore.getState().close();
   resetNegotiatedManifests();
+  vi.restoreAllMocks();
 });
 
 function workProfile(): ProviderProfile {
@@ -123,6 +174,13 @@ function nothingChanged(
     refusal: null,
     installation: null,
     profileOutcome: outcome,
+  };
+}
+
+function asksToRecordSignIn(): AwaitResponse {
+  return {
+    ...nothingChanged(null),
+    signInRequest: SIGN_IN_REQUEST_FIXTURE,
   };
 }
 
@@ -174,8 +232,10 @@ function renderReauth(input: {
   readonly echoedSignedIn: boolean;
   /** Record the login-ownership manifest before the dialog mounts. */
   readonly ownership: boolean;
+  readonly awaitAnswers: readonly AwaitResponse[];
 }) {
   const calls: RecordedCall[] = [];
+  let awaitAnswerIndex = 0;
   const { client, messenger } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
@@ -187,8 +247,14 @@ function renderReauth(input: {
         calls.push({ method: "providers.startLogin", params });
         return startedBody();
       },
-      "providers.awaitLogin": () => {
-        calls.push({ method: "providers.awaitLogin", params: null });
+      "providers.awaitLogin": (params) => {
+        calls.push({ method: "providers.awaitLogin", params });
+        if (awaitAnswerIndex < input.awaitAnswers.length) {
+          const scriptedAnswer = input.awaitAnswers[awaitAnswerIndex];
+          awaitAnswerIndex += 1;
+          return scriptedAnswer;
+        }
+        awaitAnswerIndex += 1;
         if (input.holdAwait) {
           return new Promise((resolve) => {
             releaseHeldAwait = resolve;
@@ -211,6 +277,9 @@ function renderReauth(input: {
     });
   }
   clientMock.current = client;
+  const signInFetch = activeSignInFetch;
+  if (signInFetch === null)
+    throw new Error("sign-in request fetch harness is missing");
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -257,6 +326,7 @@ function renderReauth(input: {
     calls,
     messenger,
     cancelCount: () => methodCount(calls, "providers.cancelLogin"),
+    signInFetch,
     closeDialog: () => {
       view.rerender(element(false));
     },
@@ -550,6 +620,115 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     ).toBeNull();
     expect(screen.queryByText(ADD_AS_NEW)).toBeNull();
     expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
+  });
+
+  it("records a matching 200 receipt and shows the existing signed-in state", async () => {
+    const signedInToast = vi.spyOn(toast, "success");
+    const harness = renderReauth({
+      ...REAUTH_DEFAULTS,
+      offers: true,
+      outcome: null,
+      holdAwait: false,
+      awaitAnswers: [
+        asksToRecordSignIn(),
+        nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
+      ],
+    });
+    harness.signInFetch.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+
+    await waitFor(() => {
+      expect(harness.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(signedInToast).toHaveBeenCalledWith("Signed in to Work");
+    expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
+    const awaitCalls = harness.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+    expect(awaitCalls).toHaveLength(2);
+    expect(awaitCalls[1]?.params).toMatchObject({
+      recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+    });
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "a 403", reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY },
+    { name: "a 404", reply: ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY },
+    { name: "no answer", reply: noAnswerReply() },
+    { name: "a 401", reply: UNAUTHORIZED_SIGN_IN_REQUEST_REPLY },
+  ] satisfies ReadonlyArray<{
+    readonly name: string;
+    readonly reply: SignInRequestFetchReply;
+  }>)(
+    "shows did-not-finish after recording ends on $name",
+    async ({ reply }) => {
+      const harness = renderReauth({
+        ...REAUTH_DEFAULTS,
+        offers: true,
+        outcome: null,
+        holdAwait: false,
+        awaitAnswers: [asksToRecordSignIn()],
+      });
+      harness.signInFetch.enqueue(reply);
+
+      expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+      expect(
+        harness.calls.filter((call) => call.method === "providers.awaitLogin"),
+      ).toHaveLength(1);
+      expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("shows did-not-finish and stops after a duplicate id refusal", async () => {
+    const harness = renderReauth({
+      ...REAUTH_DEFAULTS,
+      offers: true,
+      outcome: null,
+      holdAwait: false,
+      awaitAnswers: [asksToRecordSignIn()],
+    });
+    harness.signInFetch.enqueue(MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY);
+
+    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+    expect(
+      harness.calls.filter((call) => call.method === "providers.awaitLogin"),
+    ).toHaveLength(1);
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows did-not-finish when the computer repeats its sign-in request", async () => {
+    const harness = renderReauth({
+      ...REAUTH_DEFAULTS,
+      offers: true,
+      outcome: null,
+      holdAwait: false,
+      awaitAnswers: [asksToRecordSignIn(), asksToRecordSignIn()],
+    });
+    harness.signInFetch.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+
+    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+    expect(
+      harness.calls.filter((call) => call.method === "providers.awaitLogin"),
+    ).toHaveLength(2);
+    expect(harness.signInFetch.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the older computer's did-not-finish result without recording", async () => {
+    const harness = renderReauth({
+      ...REAUTH_DEFAULTS,
+      offers: true,
+      outcome: null,
+      holdAwait: false,
+      awaitAnswers: [nothingChanged(null)],
+    });
+
+    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
+    const awaitCalls = harness.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+    expect(awaitCalls).toHaveLength(1);
+    expect(awaitCalls[0]?.params).not.toHaveProperty("recordedOperationId");
+    expect(harness.signInFetch.fetchMock).not.toHaveBeenCalled();
   });
 
   it.each([false, "absent"] as const)(
