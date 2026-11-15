@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toaster, toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -71,7 +71,27 @@ import {
   SIGN_IN_UNPROVEN_TEXT,
 } from "@/components/providers/profile-sync-copy";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { unavailableSignInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
 import { hostQueryKeys } from "@/lib/query-keys";
+
+let authServiceForTest: AuthService | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
 
 const HOST_ID = "leave-remote-test-host";
 type HostMethod = keyof HostRpcRegistry & string;
@@ -131,10 +151,16 @@ interface RemoteHarness {
 const harnesses: RemoteHarness[] = [];
 const extraQueryClients: QueryClient[] = [];
 
+beforeEach(() => {
+  authServiceForTest = unavailableSignInRequestAuthService();
+});
+
 afterEach(() => {
   cleanup();
   for (const harness of harnesses.splice(0)) harness.close();
   for (const queryClient of extraQueryClients.splice(0)) queryClient.clear();
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
   toast.dismiss();
   vi.useRealTimers();
   vi.restoreAllMocks();
