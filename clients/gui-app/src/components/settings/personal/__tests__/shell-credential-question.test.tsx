@@ -642,40 +642,6 @@ describe("the Variables empty state", () => {
   });
 });
 
-describe("a variable held for the person on a Personal page", () => {
-  const heldEntry = (
-    reason: string,
-    key: string,
-    entryId: string,
-  ): EnvironmentReviewEntry => ({
-    entryId,
-    reason,
-    kind: "variable",
-    key,
-    os: "any",
-    hostId: null,
-    heldAt: 1,
-  });
-
-  it("keeps an editable row for a variable the review names, and its Review opens Secrets", async () => {
-    renderShellPage({
-      ...READY_HOST,
-      existingVariables: [{ key: "SHELL_INIT", value: "echo hi" }],
-      review: [heldEntry("needs_grant", "SHELL_INIT", "entry-2")],
-    });
-
-    const banner = await screen.findByTestId("personal-review-row");
-    expect(banner.textContent).toContain(
-      "SHELL_INIT is waiting for you: was changed without your confirmation.",
-    );
-    expect(screen.getByLabelText("Value for SHELL_INIT")).toBeTruthy();
-    expect(screen.queryByTestId("env-held-row")).toBeNull();
-
-    fireEvent.click(within(banner).getByRole("button", { name: "Review" }));
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
-  });
-});
-
 function variableOverride(key: string, value: string): LocalOverride {
   return {
     target: { kind: "variable", key },

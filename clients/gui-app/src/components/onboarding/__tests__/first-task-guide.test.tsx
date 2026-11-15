@@ -387,7 +387,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
   });
 
   it("keeps the setup reminder when nothing is on hold", async () => {
-    computerHolding([held({ reason: "needs_grant" })]);
+    computerHolding([]);
     renderGuide();
 
     await waitFor(() =>
