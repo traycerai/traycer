@@ -1230,13 +1230,15 @@ describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)",
     });
   }
 
-  it("shows the connecting state, and no box, while A's stored draft with an image is still being read, then shows the box with A's stored text", async () => {
+  it("opens the tab while A's stored draft with an image is still being read, holding that box read-only with A's stored text, then gives the box A's stored text and image to edit", async () => {
     installFreshIndexedDb();
     const hash = await storeImageBytes();
     let release = (): void => {};
     channelHandles.imageGate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    // Whatever the case does, the image read ends with it.
+    onTestFinished(() => release());
     localStorage.setItem(
       botBoxDraftsKey(ACCOUNT_A),
       storedChannelDraft(
@@ -1251,13 +1253,31 @@ describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)",
 
     mountSurface();
 
-    await screen.findByTestId("bot-tab-connecting");
-    expect(screen.queryByTestId("bot-channel-composer-input")).toBeNull();
+    const waiting = await screen.findByTestId("bot-channel-composer-input");
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    expect(waiting).toHaveProperty("value", "A stored draft");
+    expect(waiting).toHaveProperty("disabled", true);
+    expect(waiting).toHaveProperty("readOnly", true);
+    expect(screen.getByTestId("bot-channel-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-channel-composer-reading").textContent).toBe(
+      "This draft's images are still loading.",
+    );
+
     release();
+
     await vi.waitFor(() =>
       expect(textOf(channelBox())).toContain("A stored draft"),
     );
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    expect(
+      JSON.stringify(
+        useBotDraftsStore.getState().threadBoxes[BOT_ID]?.[CHANNEL]?.content,
+      ),
+    ).toContain("b64content");
   });
 
   it("comes up with an empty box, not stuck connecting, when A's stored read throws, and leaves A's stored draft in place when the person types before it is read again", async () => {

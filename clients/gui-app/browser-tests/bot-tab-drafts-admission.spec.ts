@@ -183,3 +183,41 @@ test("opens under the new account after an account switch, and its channel box s
   await expect(boxEditor(page)).toHaveText("");
   await expect(page.getByText("first account's draft")).toHaveCount(0);
 });
+
+test.describe("a stored draft whose image read never settles", () => {
+  test("opens the tab with the box waiting by its stored text, which Discard replaces with an empty box to type in", async ({
+    page,
+  }) => {
+    await page.goto(fixture("bot-compact-actions-menu"));
+    await expectTabOpen(page);
+    await storeChannelDraft(page, FIRST_USER, "kept text", IMAGE_HASH);
+    // A request none of whose handlers ever fires: the read never ends.
+    await page.addInitScript(`(() => {
+      const original = IDBFactory.prototype.open;
+      IDBFactory.prototype.open = function (name, version) {
+        if (String(name).endsWith(":landing-images")) return Object.create(null);
+        return version === undefined ? original.call(this, name) : original.call(this, name, version);
+      };
+    })()`);
+    await page.reload();
+
+    await expectTabOpen(page);
+    const waiting = page.getByTestId("bot-channel-composer-input");
+    await expect(waiting).toHaveValue("kept text");
+    await expect(waiting).toBeDisabled();
+    await expect(page.getByTestId("bot-channel-composer-send")).toBeDisabled();
+    await expect(
+      page.getByTestId("bot-channel-composer-reading"),
+    ).toBeVisible();
+
+    await page.getByTestId("bot-channel-composer-discard").click();
+
+    await expect(page.getByTestId("bot-channel-composer-reading")).toHaveCount(
+      0,
+    );
+    await expect(boxEditor(page)).toHaveText("");
+    await boxEditor(page).click();
+    await page.keyboard.type("typed after discarding");
+    await expect(boxEditor(page)).toHaveText("typed after discarding");
+  });
+});

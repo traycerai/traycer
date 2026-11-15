@@ -12,7 +12,9 @@ import {
   retireBotBoxDraftWrites,
   storedBotBoxDrafts,
   storedBoxDraftsOf,
+  type BotBoxDraftsTextRead,
   type PersistedBotBoxDrafts,
+  type StoredBoxDrafts,
 } from "@/lib/bots/bot-box-draft-storage";
 import { isRecord } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, botBoxDraftsKey } from "@/lib/persist";
@@ -156,6 +158,15 @@ export interface BotAnswersMove {
   readonly notice: string;
 }
 
+/**
+ * A box whose stored draft names images still being read back (T186): it
+ * waits, read-only, while every other box holds its draft.
+ */
+export interface BotReadingBox {
+  /** The stored draft's text. */
+  readonly text: string;
+}
+
 /** A message a box sent that never reached the conversation. */
 export interface BotUnsentMessage {
   /** The replacement's original session: null is trunk; absent is unknown. */
@@ -214,11 +225,20 @@ interface BotDraftsState {
   readonly owner: BotDraftsOwner | null;
   /**
    * Whether `owner`'s own stored drafts are read: `false` from the retirement
-   * that names an account until that account's read ends, read or failed.
-   * The bot tab shows none of the store until then (`useBotDraftsAdmitted`),
-   * so nothing typed in an empty box replaces a draft it never showed.
+   * that names an account until that account's read ends, read or failed, or
+   * until their text is read where some have images still to read back
+   * (`boxesReading`). The bot tab shows none of the store until then
+   * (`useBotDraftsAdmitted`), so nothing typed in an empty box replaces a
+   * draft it never showed.
    */
   readonly ownDraftsRead: boolean;
+  /**
+   * The boxes whose stored drafts name images still being read back, keyed
+   * as `threadBoxes`, which holds none of them until that read ends. Each
+   * waits on its own (`useKeptBoxDraft`): a read that never ends holds those
+   * boxes, never the tab.
+   */
+  readonly boxesReading: ByBot<BotReadingBox>;
   /** Keeps a card's draft; `null` drops it, and any failure's word of it. */
   readonly setAnswer: (
     botId: string,
@@ -273,6 +293,11 @@ interface BotDraftsState {
     anchorMessageId: string,
     unsent: BotUnsentMessage | null,
   ) => void;
+  /**
+   * Drops the stored draft of a box still waiting for its images
+   * (`boxesReading`), images and all: the box is empty from then on.
+   */
+  readonly discardReadingBox: (botId: string, key: string) => void;
   /** Drops every draft of the bot: it is gone. */
   readonly forgetBot: (botId: string) => void;
   /**
@@ -303,6 +328,7 @@ export type BotDraftActions = Pick<
   | "noticeBox"
   | "typeThreadBox"
   | "offerUnsent"
+  | "discardReadingBox"
 >;
 
 /** Which question of which bot row a card draft answers. */
@@ -599,7 +625,8 @@ function retiredParts(
  * account's key as the person types, read back once that account signs in
  * (`createBotBoxDraftStorage`, `BotDraftsPersistLifecycleBridge`). What a box
  * did while they were read, typing or clearing, wins over what was stored
- * for it.
+ * for it. A box whose stored draft names images waits for them on its own
+ * (`boxesReading`).
  */
 export const useBotDraftsStore = create<BotDraftsState>()(
   persist(
@@ -613,6 +640,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       generation: 0,
       owner: null,
       ownDraftsRead: true,
+      boxesReading: {},
       setAnswer: (botId, key, draft) =>
         set((state) => {
           const answers = withEntry(state.answers, botId, key, draft);
@@ -735,6 +763,16 @@ export const useBotDraftsStore = create<BotDraftsState>()(
                 ),
               },
         ),
+      discardReadingBox: (botId, key) => {
+        if (get().boxesReading[botId]?.[key] === undefined) return;
+        // Changed while the stored drafts are read: the merge keeps none of
+        // its stored draft, and the write after it removes that.
+        noteBoxChange(botId, key);
+        botBoxDraftCleared(botId, key);
+        set((state) => ({
+          boxesReading: withEntry(state.boxesReading, botId, key, null),
+        }));
+      },
       forgetBot: (botId) => {
         noteBoxChange(botId, null);
         botBoxDraftsForgotten(botId);
@@ -745,6 +783,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           boxCarries: withoutBot(state.boxCarries, botId),
           draftMoves: withoutBot(state.draftMoves, botId),
           boxNotices: withoutBot(state.boxNotices, botId),
+          boxesReading: withoutBot(state.boxesReading, botId),
         }));
       },
       closeBot: (botId) =>
@@ -791,6 +830,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           boxCarries: {},
           draftMoves: {},
           boxNotices: {},
+          boxesReading: {},
           generation: state.generation + 1,
           owner,
           // One without an account id has no drafts of its own to read.
@@ -801,7 +841,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
     {
       ...PERSIST_OPTIONS,
       skipHydration: true,
-      storage: createBotBoxDraftStorage(),
+      storage: createBotBoxDraftStorage(storedTextRead),
       partialize: (state): PersistedBotBoxDrafts => ({
         threadBoxes: state.threadBoxes,
       }),
@@ -810,26 +850,11 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         const stored = storedBoxDraftsOf(
           isRecord(persisted) ? persisted.threadBoxes : null,
         );
-        const threadBoxes: Record<
-          string,
-          Readonly<Partial<Record<string, BotThreadBoxDraft>>>
-        > = {};
-        for (const botId of new Set([
-          ...Object.keys(stored),
-          ...Object.keys(current.threadBoxes),
-        ])) {
-          const kept: Partial<Record<string, BotThreadBoxDraft>> = {};
-          if (!changedDuringRead.bots.has(botId)) {
-            for (const [key, draft] of Object.entries(stored[botId] ?? {})) {
-              if (!changedDuringRead.keys.has(boxKey(botId, key))) {
-                kept[key] = draft;
-              }
-            }
-          }
-          const merged = { ...kept, ...current.threadBoxes[botId] };
-          if (Object.keys(merged).length > 0) threadBoxes[botId] = merged;
-        }
-        return { ...current, threadBoxes };
+        return {
+          ...current,
+          threadBoxes: mergedThreadBoxes(stored, current.threadBoxes),
+          boxesReading: {},
+        };
       },
       onRehydrateStorage: () => {
         readingStoredDrafts = true;
@@ -843,9 +868,10 @@ export const useBotDraftsStore = create<BotDraftsState>()(
             changedDuringRead.keys.size > 0 || changedDuringRead.bots.size > 0;
           changedDuringRead.keys.clear();
           changedDuringRead.bots.clear();
-          // Read or failed, the bot tab shows the store now: after a failed
-          // read its boxes are empty, and nothing is written over the stored.
-          useBotDraftsStore.setState({ ownDraftsRead: true });
+          // Read or failed, the bot tab shows the store now, no box waiting:
+          // after a failed read its boxes are empty, and nothing is written
+          // over the stored.
+          useBotDraftsStore.setState({ ownDraftsRead: true, boxesReading: {} });
           if (state === undefined || error !== undefined) return;
           botBoxDraftsRead({
             // The account's own key, which the bridge set before this read.
@@ -861,6 +887,66 @@ export const useBotDraftsStore = create<BotDraftsState>()(
     },
   ),
 );
+
+/**
+ * The account's stored drafts' text is read and some still have images to
+ * read back: every other box's draft is the store's now and the tab shows
+ * (`ownDraftsRead`), those boxes waiting on their own (`boxesReading`). A
+ * read that an account's retirement or a newer read overtook changes nothing.
+ */
+function storedTextRead(textRead: BotBoxDraftsTextRead): void {
+  if (!isCurrentBotBoxDraftsRead(textRead.read)) return;
+  useBotDraftsStore.setState((state) => ({
+    threadBoxes: mergedThreadBoxes(textRead.threadBoxes, state.threadBoxes),
+    boxesReading: readingBoxesOf(textRead.waiting),
+    ownDraftsRead: true,
+  }));
+}
+
+/**
+ * The stored drafts `stored` under the store's `current`: what a box did
+ * while they were read, typing or clearing, wins over what was stored for it,
+ * as does a bot forgotten meanwhile.
+ */
+function mergedThreadBoxes(
+  stored: StoredBoxDrafts,
+  current: ByBot<BotThreadBoxDraft>,
+): ByBot<BotThreadBoxDraft> {
+  const threadBoxes: Record<
+    string,
+    Readonly<Partial<Record<string, BotThreadBoxDraft>>>
+  > = {};
+  for (const botId of new Set([
+    ...Object.keys(stored),
+    ...Object.keys(current),
+  ])) {
+    const kept: Partial<Record<string, BotThreadBoxDraft>> = {};
+    if (!changedDuringRead.bots.has(botId)) {
+      for (const [key, draft] of Object.entries(stored[botId] ?? {})) {
+        if (!changedDuringRead.keys.has(boxKey(botId, key))) {
+          kept[key] = draft;
+        }
+      }
+    }
+    const merged = { ...kept, ...current[botId] };
+    if (Object.keys(merged).length > 0) threadBoxes[botId] = merged;
+  }
+  return threadBoxes;
+}
+
+/** Each waiting box's stored text, but for a box or bot that changed while they were read. */
+function readingBoxesOf(waiting: StoredBoxDrafts): ByBot<BotReadingBox> {
+  let reading: ByBot<BotReadingBox> = {};
+  for (const [botId, byKey] of Object.entries(waiting)) {
+    if (byKey === undefined || changedDuringRead.bots.has(botId)) continue;
+    for (const [key, draft] of Object.entries(byKey)) {
+      if (draft === undefined) continue;
+      if (changedDuringRead.keys.has(boxKey(botId, key))) continue;
+      reading = withEntry(reading, botId, key, { text: draft.text });
+    }
+  }
+  return reading;
+}
 
 /**
  * The store's changes, made for the account signed in now: once it retires
@@ -896,6 +982,9 @@ function draftActionsOf(generation: number): BotDraftActions {
     },
     offerUnsent: (botId, anchorMessageId, unsent) => {
       live()?.offerUnsent(botId, anchorMessageId, unsent);
+    },
+    discardReadingBox: (botId, key) => {
+      live()?.discardReadingBox(botId, key);
     },
   };
 }

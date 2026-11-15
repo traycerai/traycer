@@ -22,6 +22,7 @@ import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
 import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import {
   BotMessageComposer,
+  BotMessageComposerReading,
   type BotComposerEdit,
   type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
@@ -715,7 +716,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // Stable across what the box does to this component's own state, so typing
   // does not hand the replies' list a new header on every key.
   const origin = useMemo(() => <ThreadOrigin {...props} />, [props]);
-  const { seed, keptDraft, moved, notice } = useKeptBoxDraft(
+  const { seed, keptDraft, moved, notice, reading } = useKeptBoxDraft(
     botId,
     originMessageId,
   );
@@ -756,28 +757,37 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           thread.kind === "listed" ? thread.thread.sessionChatId : null
         }
       />
-      <BotMessageComposer
-        botId={props.botId}
-        botTitle={props.botTitle}
-        conversationId={box.conversationId}
-        threadId={box.threadId}
-        announcementId={box.announcementId}
-        sendable={thread.sendable}
-        imageReach={props.imageReach}
-        placeholder="Reply…"
-        label={edit === null ? box.label : IN_THREAD_LABEL}
-        testId="bot-thread-composer"
-        failure={props.sendFailure}
-        edit={edit}
-        onEditEnd={endEdit}
-        onEditResume={setEdit}
-        seed={seed}
-        keptDraft={keptDraft}
-        quote={props.quote}
-        moved={moved}
-        notice={notice}
-        onSent={keepOpenThread}
-      />
+      {reading === null ? (
+        <BotMessageComposer
+          botId={props.botId}
+          botTitle={props.botTitle}
+          conversationId={box.conversationId}
+          threadId={box.threadId}
+          announcementId={box.announcementId}
+          sendable={thread.sendable}
+          imageReach={props.imageReach}
+          placeholder="Reply…"
+          label={edit === null ? box.label : IN_THREAD_LABEL}
+          testId="bot-thread-composer"
+          failure={props.sendFailure}
+          edit={edit}
+          onEditEnd={endEdit}
+          onEditResume={setEdit}
+          seed={seed}
+          keptDraft={keptDraft}
+          quote={props.quote}
+          moved={moved}
+          notice={notice}
+          onSent={keepOpenThread}
+        />
+      ) : (
+        <BotMessageComposerReading
+          placeholder="Reply…"
+          label={edit === null ? box.label : IN_THREAD_LABEL}
+          reading={reading}
+          testId="bot-thread-composer"
+        />
+      )}
     </>
   );
 }

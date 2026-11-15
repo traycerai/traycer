@@ -7,9 +7,10 @@ import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
  * runs after the account changed (`BotDraftsPersistLifecycleBridge`); until
  * then it holds the outgoing account's, and then, until the read of the
  * incoming account's own stored drafts ends, none of its, so the bot tab
- * shows none of it (`BotTabSurface`). That read ends, read or failed, as
- * every image read under it does: each is one IndexedDB request, which
- * succeeds or fails. A sign-in attempt in flight, or one that failed, keeps
+ * shows none of it (`BotTabSurface`). The tab waits for their text only: a
+ * box whose stored draft names images still being read back waits on its own
+ * (`boxesReading`), so an image read that never ends holds that box, never
+ * the tab. A sign-in attempt in flight, or one that failed, keeps
  * the identity it started from, as the bridge does
  * (`useAuthIdentityTransition`).
  */

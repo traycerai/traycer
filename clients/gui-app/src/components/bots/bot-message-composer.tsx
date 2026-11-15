@@ -745,8 +745,85 @@ export function BotMessageComposerUnavailable(props: {
   readonly testId: string;
 }): ReactNode {
   const { testId } = props;
-  const inputId = useId();
   const reasonId = useId();
+  return (
+    <InertBotBox
+      placeholder={props.placeholder}
+      label={props.label}
+      value=""
+      describedBy={reasonId}
+      testId={testId}
+      below={
+        <p
+          id={reasonId}
+          className="px-1 text-ui-xs text-muted-foreground"
+          data-testid={`${testId}-reason`}
+        >
+          {props.reason}
+        </p>
+      }
+    />
+  );
+}
+
+/**
+ * A box whose kept draft names images still being read back (T186): drawn as
+ * the box is, holding the draft's text, with nothing to type and nothing to
+ * send until they are, and the draft can be discarded instead. Images whose
+ * read never ends hold this box only, never the tab.
+ */
+export function BotMessageComposerReading(props: {
+  readonly placeholder: string;
+  /** The accessible name of the box. */
+  readonly label: string;
+  readonly reading: BotComposerReading;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const lineId = useId();
+  return (
+    <InertBotBox
+      placeholder={props.placeholder}
+      label={props.label}
+      value={props.reading.text}
+      describedBy={lineId}
+      testId={testId}
+      below={
+        <div className="flex items-center gap-2 px-1 text-ui-xs text-muted-foreground">
+          <p
+            id={lineId}
+            className="min-w-0 flex-1"
+            data-testid={`${testId}-reading`}
+          >
+            This draft&apos;s images are still loading.
+          </p>
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            onClick={props.reading.discard}
+            data-testid={`${testId}-discard`}
+          >
+            Discard draft
+          </Button>
+        </div>
+      }
+    />
+  );
+}
+
+/** The box with `value` in it, nothing to type into and nothing to send, and `below` under it. */
+function InertBotBox(props: {
+  readonly placeholder: string;
+  readonly label: string;
+  readonly value: string;
+  /** The id of what `below` says about the box. */
+  readonly describedBy: string;
+  readonly below: ReactNode;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const inputId = useId();
   return (
     <div
       className="flex shrink-0 flex-col gap-1 px-4 pt-1 pb-3"
@@ -758,14 +835,14 @@ export function BotMessageComposerUnavailable(props: {
         </label>
         <Textarea
           id={inputId}
-          value=""
+          value={props.value}
           variant="bare"
           size="sm"
           rows={1}
           placeholder={props.placeholder}
           disabled
           readOnly
-          aria-describedby={reasonId}
+          aria-describedby={props.describedBy}
           className="max-h-60 min-h-10"
           data-testid={`${testId}-input`}
         />
@@ -784,13 +861,7 @@ export function BotMessageComposerUnavailable(props: {
           </Button>
         </div>
       </div>
-      <p
-        id={reasonId}
-        className="px-1 text-ui-xs text-muted-foreground"
-        data-testid={`${testId}-reason`}
-      >
-        {props.reason}
-      </p>
+      {props.below}
     </div>
   );
 }
@@ -1195,6 +1266,15 @@ export type BotComposerCarry = {
 export type BotComposerNotice = BotBoxNotice & {
   readonly clear: () => void;
   readonly clearFailure: () => void;
+};
+
+/**
+ * A box whose kept draft names images still being read back (T186): the
+ * draft's text, and dropping the draft, images and all.
+ */
+export type BotComposerReading = {
+  readonly text: string;
+  readonly discard: () => void;
 };
 
 /** A failed message loaded into the box to be edited and sent again. */

@@ -2636,3 +2636,34 @@ describe("<BotThreadPanel /> a member's quote above a plain line, stored in two 
     expectPlainLineOutsideQuote(screen.getByTestId("bot-thread-anchor"));
   });
 });
+
+describe("<BotThreadPanel /> a reply box whose stored draft names images still being read (T186)", () => {
+  afterEach(() => {
+    useBotDraftsStore.setState({ boxesReading: {} });
+  });
+
+  it("shows the stored text in a reply box that cannot be edited or sent until the person discards it, and then gives an empty reply box", async () => {
+    const user = userEvent.setup();
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    useBotDraftsStore.setState({
+      boxesReading: { [BOT_ID]: { "anchor-1": { text: "Stored reply" } } },
+    });
+    mountPanel(listed("user-teammate"), []);
+
+    const input = screen.getByTestId("bot-thread-composer-input");
+    expect(input).toHaveProperty("value", "Stored reply");
+    expect(input).toHaveProperty("disabled", true);
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.getByTestId("bot-thread-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+
+    await user.click(screen.getByTestId("bot-thread-composer-discard"));
+
+    expect(useBotDraftsStore.getState().boxesReading).toEqual({});
+    expect(screen.queryByTestId("bot-thread-composer-reading")).toBeNull();
+    expect(textOf(boxInput("Reply in the thread"))).toBe("");
+  });
+});

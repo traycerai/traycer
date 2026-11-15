@@ -43,6 +43,19 @@ export interface PersistedBotBoxDrafts {
 }
 
 /**
+ * What a read of an account's stored drafts has once it has read their
+ * documents, before it reads any image back (T186).
+ */
+export interface BotBoxDraftsTextRead {
+  /** The read's number, for {@link isCurrentBotBoxDraftsRead}. */
+  readonly read: number;
+  /** The drafts that name no stored image, as the read puts them back. */
+  readonly threadBoxes: StoredBoxDrafts;
+  /** The drafts whose images are still to be read back, as stored. */
+  readonly waiting: StoredBoxDrafts;
+}
+
+/**
  * Where every account's drafts were kept before each account's were kept
  * apart (T186, `botBoxDraftsKey`). Nobody owns what is stored there, so it is
  * never read: the drafts store removes it once an account signs in.
@@ -85,14 +98,34 @@ export const BOT_BOX_DRAFT_WRITE_DEBOUNCE_MS = 300;
  * read cannot replace them. A read that storage refuses fails, never reads as
  * nothing stored, so nothing is written for that account until a read does
  * succeed; a write that cannot read what is stored waits.
+ *
+ * Where some drafts name images, a read hands the drafts store the others as
+ * soon as it has read the documents (`onTextRead`), before it reads any image
+ * back: an image read that never ends holds its own box, never the others.
  */
-export function createBotBoxDraftStorage(): PersistStorage<PersistedBotBoxDrafts> {
+export function createBotBoxDraftStorage(
+  onTextRead: (textRead: BotBoxDraftsTextRead) => void,
+): PersistStorage<PersistedBotBoxDrafts> {
   return {
     getItem: async (name) => {
       if (writer.stopped) return null;
       const read = writer.readGeneration;
       const stored = readStoredValue(name);
       if (stored === null) return null;
+      const waiting = mapDrafts(stored.state.threadBoxes, (draft) =>
+        namesStoredImages(draft) ? draft : null,
+      );
+      if (Object.keys(waiting).length > 0) {
+        onTextRead({
+          read,
+          threadBoxes: mapDrafts(stored.state.threadBoxes, (draft) =>
+            namesStoredImages(draft)
+              ? null
+              : restoredDraft(draft, draft.content),
+          ),
+          waiting,
+        });
+      }
       const state = await inlineStoredImages(stored.state, read);
       // The stored drafts were wiped while their images were read, or the
       // account whose drafts they are retired and another's are read now.
@@ -909,11 +942,7 @@ async function inlineStoredImages(
         hashes: new Set(out.gone),
       });
     }
-    if (draft.text.length === 0 && !containsImageAtoms(content)) return null;
-    return {
-      ...draft,
-      content: (content.content?.length ?? 0) === 0 ? null : content,
-    };
+    return restoredDraft(draft, content);
   });
   // A read overtaken meanwhile leaves the writer to the read that overtook it.
   if (!wiped() && read === writer.readGeneration) {
@@ -933,6 +962,26 @@ async function inlineStoredImages(
     writer.gone = gone;
   }
   return { threadBoxes };
+}
+
+/** Whether `draft` names an image whose bytes are stored apart, to be read back. */
+function namesStoredImages(draft: StoredBoxDraft): boolean {
+  return (
+    draft.content !== null && hashOnlyImageHashes(draft.content).length > 0
+  );
+}
+
+/** `draft` holding `content` as read back; `null` where nothing is left in it. */
+function restoredDraft(
+  draft: StoredBoxDraft,
+  content: JsonContent | null,
+): StoredBoxDraft | null {
+  if (content === null) return draft;
+  if (draft.text.length === 0 && !containsImageAtoms(content)) return null;
+  return {
+    ...draft,
+    content: (content.content?.length ?? 0) === 0 ? null : content,
+  };
 }
 
 /** What a read could not put back in a box's document. */

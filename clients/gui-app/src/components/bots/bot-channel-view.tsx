@@ -58,6 +58,7 @@ import {
 } from "@/components/bots/bot-memory-panel";
 import {
   BotMessageComposer,
+  BotMessageComposerReading,
   type BotComposerEdit,
   type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
@@ -383,6 +384,7 @@ export function BotChannelView(props: {
     keptDraft: channelKeptDraft,
     moved: channelMoved,
     notice: channelNotice,
+    reading: channelReading,
   } = useKeptBoxDraft(botId, channelId);
 
   const {
@@ -900,30 +902,40 @@ export function BotChannelView(props: {
                 hostId={hostId}
                 sessionChatId={trunkChatId}
               />
-              <BotMessageComposer
-                // Its draft is the conversation's, kept by it (`channelKeptDraft`).
-                key={channel.conversationId}
-                botId={botId}
-                botTitle={botTitle}
-                conversationId={channel.conversationId}
-                threadId={null}
-                announcementId={null}
-                sendable
-                imageReach={imageReach}
-                placeholder={`Message ${botTitle}`}
-                label={`Message ${botTitle}`}
-                testId="bot-channel-composer"
-                failure={sendFailure}
-                edit={edit}
-                onEditEnd={endEdit}
-                onEditResume={setEdit}
-                seed={channelSeed}
-                keptDraft={channelKeptDraft}
-                quote={quoteFor(null)}
-                moved={channelMoved}
-                notice={channelNotice}
-                onSent={openPostedThread}
-              />
+              {channelReading === null ? (
+                <BotMessageComposer
+                  // Its draft is the conversation's, kept by it (`channelKeptDraft`).
+                  key={channel.conversationId}
+                  botId={botId}
+                  botTitle={botTitle}
+                  conversationId={channel.conversationId}
+                  threadId={null}
+                  announcementId={null}
+                  sendable
+                  imageReach={imageReach}
+                  placeholder={`Message ${botTitle}`}
+                  label={`Message ${botTitle}`}
+                  testId="bot-channel-composer"
+                  failure={sendFailure}
+                  edit={edit}
+                  onEditEnd={endEdit}
+                  onEditResume={setEdit}
+                  seed={channelSeed}
+                  keptDraft={channelKeptDraft}
+                  quote={quoteFor(null)}
+                  moved={channelMoved}
+                  notice={channelNotice}
+                  onSent={openPostedThread}
+                />
+              ) : (
+                <BotMessageComposerReading
+                  key={channel.conversationId}
+                  placeholder={`Message ${botTitle}`}
+                  label={`Message ${botTitle}`}
+                  reading={channelReading}
+                  testId="bot-channel-composer"
+                />
+              )}
             </section>
             <ChannelMemoryPane
               tiles={tiles}
