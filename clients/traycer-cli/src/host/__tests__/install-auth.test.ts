@@ -9,7 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -57,6 +57,8 @@ const mocks = vi.hoisted(() => ({
   probeHostHealthMock: vi.fn(),
   replacementMetadata: null as HostPidMetadata | null,
   credentialsPath: "",
+  enrollmentRecordPath: "",
+  mintTeamInstallTokenMock: vi.fn(),
   legacyHost: null as LegacyTeamHost | null,
   validateIdentityMock: vi.fn(),
   createStoreBackedRevalidatorMock: vi.fn(),
@@ -155,8 +157,29 @@ vi.mock("../../store/paths", async (importOriginal) => {
   return {
     ...actual,
     cliCredentialsPath: () => mocks.credentialsPath,
+    hostEnrollmentRecordPath: () => mocks.enrollmentRecordPath,
   };
 });
+
+// The token's mint is authn's; the command suites run the real mint against a
+// stubbed answer, and this suite pins what the attended install decides.
+vi.mock(
+  "@traycer-clients/shared/host-client/team-computer-install",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/team-computer-install")
+      >();
+    return {
+      ...actual,
+      mintTeamComputerInstallTokenBySlugViaHttp: (
+        ...callArgs: Parameters<
+          typeof actual.mintTeamComputerInstallTokenBySlugViaHttp
+        >
+      ) => mocks.mintTeamInstallTokenMock(...callArgs),
+    };
+  },
+);
 
 vi.mock(
   "@traycer-clients/shared/host-client/host-ownership",
@@ -177,6 +200,7 @@ vi.mock(
 );
 
 import {
+  beginAttendedTeamInstall,
   completeTeamInstall,
   maybeProvisionCredential,
   provisionRunningHostCredential,
@@ -437,6 +461,11 @@ describe("install auth helpers", () => {
     );
     caseCredentialsRoot = mkdtempSync(join(credentialsRoot, "case-"));
     mocks.credentialsPath = join(caseCredentialsRoot, "cli", "credentials");
+    mocks.enrollmentRecordPath = join(
+      caseCredentialsRoot,
+      "identity",
+      "enrollment.json",
+    );
     mocks.callHostRpcMock.mockImplementation((method: string) => {
       if (method === "environment.list") {
         return Promise.resolve({ environments: [teamEnvironment] });
@@ -465,6 +494,12 @@ describe("install auth helpers", () => {
       kind: "valid",
       user: defaultSignInUser(),
     });
+    mocks.mintTeamInstallTokenMock.mockResolvedValue({
+      kind: "ok",
+      token: "team-install-secret",
+      environmentId: "resolved-environment-acme",
+      expiresAt: 1_800_000_000,
+    });
     mocks.createStoreBackedRevalidatorMock.mockImplementation(
       (args: { readonly lease: { rotate(token: string): void } }) => {
         mocks.revalidateCurrentContextMock.mockImplementation(async () => {
@@ -485,6 +520,47 @@ describe("install auth helpers", () => {
       kind: "active",
       minted: true,
     });
+  });
+
+  it.each(["team/acme", "acme", "environment-acme"])(
+    "mints by the resolved team's slug, with authn's resolved environment id, when no enrollment record exists (typed as %s)",
+    async (typed) => {
+      const result = await beginAttendedTeamInstall(fakeCtx(), typed);
+
+      expect(result).toEqual({
+        kind: "enrol",
+        session: { preflight: signedIn(), inlineSignInToken: null },
+        slug: "acme",
+        token: "team-install-secret",
+        environmentId: "resolved-environment-acme",
+      });
+      expect(mocks.mintTeamInstallTokenMock).toHaveBeenCalledWith(
+        "https://authn.test",
+        "stored-bearer",
+        "acme",
+      );
+    },
+  );
+
+  it("takes the give path without minting when the enrollment record is present", async () => {
+    mkdirSync(join(caseCredentialsRoot, "identity"), { recursive: true });
+    writeFileSync(mocks.enrollmentRecordPath, "registered");
+
+    await expect(beginAttendedTeamInstall(fakeCtx(), "acme")).resolves.toEqual({
+      kind: "give",
+      session: { preflight: signedIn(), inlineSignInToken: null },
+    });
+    expect(mocks.mintTeamInstallTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("takes the give path without minting when the enrollment record cannot be read", async () => {
+    writeFileSync(join(caseCredentialsRoot, "identity"), "blocks-directory");
+
+    await expect(beginAttendedTeamInstall(fakeCtx(), "acme")).resolves.toEqual({
+      kind: "give",
+      session: { preflight: signedIn(), inlineSignInToken: null },
+    });
+    expect(mocks.mintTeamInstallTokenMock).not.toHaveBeenCalled();
   });
 
   it("discloses transfer once before both binds and reports restart progress during recovery", async () => {
