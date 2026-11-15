@@ -6,7 +6,6 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
 import {
@@ -73,8 +72,10 @@ function remoteIdentity(userId: string): RemoteSessionIdentity {
   };
 }
 
+type RefreshRpcRegistry = Pick<HostRpcRegistry, "host.accountSettings.refresh">;
+
 interface FakeRemoteSession extends IRemoteSession<
-  VersionedRpcRegistry,
+  RefreshRpcRegistry,
   VersionedStreamRpcRegistry
 > {
   readonly closeCalls: number;
@@ -317,6 +318,9 @@ describe("refreshConnectedAccountSettings", () => {
     const requestIds: string[] = [];
     const requestedHosts: string[] = [];
     const localEntries: readonly HostDirectoryEntry[] = [mockLocalHostEntry];
+    const localWebsocketUrl = mockLocalHostEntry.websocketUrl;
+    if (localWebsocketUrl === null)
+      throw new Error("expected the local websocket URL");
     const binding = makeBinding(
       localEntries,
       () => Promise.resolve(localEntries),
@@ -327,7 +331,7 @@ describe("refreshConnectedAccountSettings", () => {
       kind: "local",
       hostId: mockLocalHostEntry.hostId,
       userId: "viewer-1",
-      websocketUrl: mockLocalHostEntry.websocketUrl,
+      websocketUrl: localWebsocketUrl,
       publicKey: "",
       authnBaseUrl: "",
       authRecovery: "revalidate",

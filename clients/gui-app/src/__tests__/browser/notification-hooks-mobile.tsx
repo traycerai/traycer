@@ -68,7 +68,12 @@ const computerStatus: NotificationStatus = {
   pendingRemovalNotices: [],
 };
 
-const computerStatusQuery = queryOptions({
+const computerStatusQuery = queryOptions<
+  NotificationStatus,
+  HostRpcError,
+  NotificationStatus,
+  string[]
+>({
   queryKey: ["notification-hooks-mobile", "computer"],
   queryFn: () => Promise.resolve(computerStatus),
   staleTime: Infinity,
@@ -80,7 +85,7 @@ export function NotificationHooksMobileFixture() {
   const computer = view === "computer";
   const viewer = view === "team-viewer";
   const hooks = account ? [] : [buildHook];
-  const query = useQuery<NotificationStatus, HostRpcError>({
+  const query = useQuery({
     ...computerStatusQuery,
     initialData: computerStatus,
   });
