@@ -281,6 +281,7 @@ interface MutableAuthnState {
   itemReadGates: Deferred<EnvironmentTransportAnswer>[];
   setupScripts: SetupScript[];
   originSignInChecks: number;
+  itemReadResponsesReturned: number;
   revisionAfterApply: number | null;
   valueAfterApply: string | null;
 }
@@ -346,6 +347,7 @@ function makeSaveHarness(overrides: {
     itemReadGates: [],
     setupScripts: [],
     originSignInChecks: 0,
+    itemReadResponsesReturned: 0,
     revisionAfterApply: null,
     valueAfterApply: null,
   };
@@ -398,7 +400,11 @@ function makeSaveHarness(overrides: {
           if (state.failItems) return { status: 503, text: "" };
         }
         const readGate = state.itemReadGates.shift();
-        if (readGate !== undefined) return readGate.promise;
+        if (readGate !== undefined) {
+          const answer = await readGate.promise;
+          state.itemReadResponsesReturned += 1;
+          return answer;
+        }
         const items =
           kind === "env_override"
             ? state.rows
@@ -1921,16 +1927,16 @@ describe("settings-save callers", () => {
     });
 
     harness.state.rows = [row("macos", "teammate-value", 3)];
+    const readResponsesBeforeRelease = harness.state.itemReadResponsesReturned;
     ownRowRead.resolve({
       status: 200,
       text: JSON.stringify({
         items: [row("macos", "teammate-value", 3)],
       }),
     });
-    const checksBeforeReadCompleted = harness.state.originSignInChecks;
     await waitFor(() => {
-      expect(harness.state.originSignInChecks).toBeGreaterThan(
-        checksBeforeReadCompleted,
+      expect(harness.state.itemReadResponsesReturned).toBeGreaterThan(
+        readResponsesBeforeRelease,
       );
     });
 
