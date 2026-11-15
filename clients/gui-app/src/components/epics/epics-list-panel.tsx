@@ -29,7 +29,10 @@ import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
-import { namesHostOutsideSurface } from "@/components/epics/sweep-host-model";
+import {
+  namesHostOutsideSurface,
+  sweepOpeningHostId,
+} from "@/components/epics/sweep-host-model";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   Tooltip,
@@ -652,6 +655,28 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
+  // Asked of the whole sweep target: one other machine has to account for
+  // every selected Task's agents, and a Task whose hosts are unknown makes the
+  // answer unknown.
+  const sweepPreferredHostId = useMemo(() => {
+    if (sweepEpicIds === null) return null;
+    const hostIds = new Set<string>();
+    let surfaceWorktreeCount = 0;
+    for (const epicId of sweepEpicIds) {
+      const chatHostIds =
+        items.find((candidate) => candidate.epicId === epicId)?.chatHostIds ??
+        null;
+      if (chatHostIds === null) return null;
+      for (const chatHostId of chatHostIds) hostIds.add(chatHostId);
+      surfaceWorktreeCount += (worktreesByEpicId.get(epicId) ?? EMPTY_WORKTREES)
+        .length;
+    }
+    return sweepOpeningHostId({
+      hostIds,
+      surfaceHostId: hostId,
+      surfaceWorktreeCount,
+    });
+  }, [hostId, items, sweepEpicIds, worktreesByEpicId]);
   // A Task whose deletion is still in flight is not deletable AGAIN: the
   // dialog closes at kickoff, so its row renders with its controls back while
   // the host is still working, and nothing on the wire deduplicates a second
@@ -1134,6 +1159,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         // client currently addresses, which is what `useHostClientForHostId(null)`
         // follows.
         surfaceHostId={hostId}
+        preferredHostId={sweepPreferredHostId}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
           if (!open) setSweepEpicIds(null);

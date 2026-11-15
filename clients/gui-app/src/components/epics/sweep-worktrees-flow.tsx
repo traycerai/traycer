@@ -107,6 +107,12 @@ interface SweepWorktreesFlowProps {
   readonly surfaceHostClient: HostClient<HostRpcRegistry> | null;
   /** The host id behind `surfaceHostClient` — the host the chip opens on. */
   readonly surfaceHostId: string | null;
+  /**
+   * A host the caller has reason to open on instead of the surface's - see
+   * `sweepOpeningHostId`. Read once, at open, and only on a fleet with a
+   * choice in it; a host that cannot be dialled is ignored.
+   */
+  readonly preferredHostId: string | null;
   readonly taskTitle: string | null;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -159,6 +165,7 @@ export function SweepWorktreesFlow(props: SweepWorktreesFlowProps): ReactNode {
       phaseKind: phase.kind,
       fleet,
       surfaceHostId: props.surfaceHostId,
+      preferredHostId: props.preferredHostId,
       setDecidedKey,
       setPhase,
       setUnavailableHostId,
@@ -345,6 +352,7 @@ function applySelectionChange(input: {
     readonly resolved: boolean;
   };
   readonly surfaceHostId: string | null;
+  readonly preferredHostId: string | null;
   readonly setDecidedKey: (key: string | null) => void;
   readonly setPhase: (phase: SweepFlowPhase) => void;
   readonly setUnavailableHostId: (hostId: string | null) => void;
@@ -376,11 +384,17 @@ function applySelectionChange(input: {
   input.setPhase({
     kind: "choice",
     // `null` when the surface cannot name its host — the unchosen state.
-    openedOnHostId: input.surfaceHostId,
+    // The caller's preferred host wins only while it is dialable, so opening
+    // there can never land on a machine that cannot answer.
+    openedOnHostId:
+      input.preferredHostId !== null &&
+      input.fleet.hostIds.includes(input.preferredHostId)
+        ? input.preferredHostId
+        : input.surfaceHostId,
     switchedHostId: null,
     previousSwitchedHostId: null,
-    // The opened host is settled by definition: it is where the surface was
-    // already pointed, not something a person just reached for.
+    // The opened host is settled by definition: nobody just reached for it,
+    // so there is no gesture to undo if it stops answering.
     settled: true,
   });
 }

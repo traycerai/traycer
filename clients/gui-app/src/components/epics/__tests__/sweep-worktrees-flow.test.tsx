@@ -119,6 +119,21 @@ function flowOn(surface: SurfaceHost) {
       epicIds={["epic-1"]}
       surfaceHostClient={surface.client}
       surfaceHostId={surface.hostId}
+      preferredHostId={null}
+      taskTitle="Ship it"
+      onOpenChange={() => undefined}
+    />
+  );
+}
+
+/** A surface on host A whose caller has reason to open somewhere else. */
+function flowPreferring(preferredHostId: string) {
+  return (
+    <SweepWorktreesFlow
+      epicIds={["epic-1"]}
+      surfaceHostClient={SURFACE_CLIENT}
+      surfaceHostId="host-a"
+      preferredHostId={preferredHostId}
       taskTitle="Ship it"
       onOpenChange={() => undefined}
     />
@@ -444,6 +459,7 @@ describe("SweepWorktreesFlow", () => {
         epicIds={null}
         surfaceHostClient={SURFACE_CLIENT}
         surfaceHostId="host-a"
+        preferredHostId={null}
         taskTitle="Ship it"
         onOpenChange={() => undefined}
       />,
@@ -452,5 +468,28 @@ describe("SweepWorktreesFlow", () => {
 
     expect(lastOpenDialog().hostClient).toBe(SURFACE_CLIENT);
     expect(lastHostChoice().hostId).toBe("host-a");
+  });
+
+  it("opens on the caller's preferred host instead of the surface's", () => {
+    state.connectableHostIds = ["host-a", "host-b"];
+    render(flowPreferring("host-b"));
+
+    expect(lastHostChoice().hostId).toBe("host-b");
+    expect(lastOpenDialog().hostClient?.getActiveHostId()).toBe("host-b");
+  });
+
+  it("opens on the surface's host when the preferred one cannot be dialled", () => {
+    state.connectableHostIds = ["host-a", "host-b"];
+    render(flowPreferring("host-offline"));
+
+    expect(lastHostChoice().hostId).toBe("host-a");
+    expect(lastOpenDialog().hostClient).toBe(SURFACE_CLIENT);
+  });
+
+  it("ignores a preferred host on a single-host fleet", () => {
+    render(flowPreferring("host-b"));
+
+    expect(lastOpenDialog().hostChoice).toBeNull();
+    expect(lastOpenDialog().hostClient).toBe(SURFACE_CLIENT);
   });
 });
