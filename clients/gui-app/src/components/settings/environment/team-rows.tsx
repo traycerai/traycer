@@ -99,6 +99,7 @@ export function TeamRows(props: TeamRowsProps): ReactNode {
             badge={null}
             badgeTooltip={null}
             subtitle={
+              !query.isError &&
               mayChangeConfiguration(configurationRoleOf(team))
                 ? "You edit"
                 : "Read-only settings"

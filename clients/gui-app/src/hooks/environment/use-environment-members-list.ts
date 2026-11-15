@@ -371,6 +371,7 @@ export function useTeamEnvironmentDescriptor(
   environmentId: string | null,
 ): TeamEnvironmentDescriptor {
   const query = useEnvironmentListQuery(environmentId !== null);
+  const listFailed = query.isError;
   return useMemo((): TeamEnvironmentDescriptor => {
     if (environmentId === null) return EMPTY_TEAM;
     const data: EnvironmentListResponseV11 | undefined = query.data;
@@ -379,8 +380,11 @@ export function useTeamEnvironmentDescriptor(
       (environment) => environment.environmentId === environmentId,
     );
     if (match === undefined) return EMPTY_TEAM;
-    return descriptorFromListRow(match);
-  }, [environmentId, query.data]);
+    const descriptor = descriptorFromListRow(match);
+    // A failed re-read makes the role not known, whatever an earlier answer
+    // said; the name and handle stay for display.
+    return listFailed ? { ...descriptor, viewerRole: null } : descriptor;
+  }, [environmentId, listFailed, query.data]);
 }
 
 function descriptorFromListRow(

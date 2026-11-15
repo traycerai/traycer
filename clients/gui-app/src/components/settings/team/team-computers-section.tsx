@@ -13,7 +13,6 @@ import {
   usePickedTeamLabel,
 } from "@/components/settings/environment/team-pick-label";
 import { useTeamComputers } from "@/hooks/auth/use-team-computers";
-import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { AddComputerDialog } from "./add-computer-dialog";
 import { ClaimRunningWork } from "./claim-running-work";
 import { Button } from "@/components/ui/button";
@@ -41,12 +40,8 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
   const { read, claim } = useTeamComputers(props.environmentId);
   const canEdit = useCanEditConfiguration();
   const source = useConfigurationSource();
-  // The source's role comes from this list; a failed re-read of it makes the
-  // role not known, whatever an earlier answer said.
-  const listFailed = useEnvironmentListQuery(true).isError;
   // Only a team's Admins and Editors claim its computers.
   const mayClaim =
-    !listFailed &&
     source.kind === "pool" &&
     source.environmentId === props.environmentId &&
     mayChangeConfiguration(source.effectiveRole);

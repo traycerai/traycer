@@ -125,6 +125,7 @@ export function ConfigurationSourceBoundary(props: {
         entry.ownerKind === "organization"
       : entry.ownerKind === "user",
   );
+  const listFailed = list.isError;
   const source = useMemo<ConfigurationSource>(() => {
     if (descriptor === undefined) return { kind: "host" };
     const configuration = descriptor.ownerKind === "user" ? "personal" : "team";
@@ -134,13 +135,18 @@ export function ConfigurationSourceBoundary(props: {
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
       providerHandle: descriptor.providerHandle,
-      effectiveRole: configurationRoleOf(descriptor),
+      // A team role is the list's answer, so a failed re-read makes it not
+      // known, whatever an earlier answer said. Personal's is not read.
+      effectiveRole:
+        listFailed && configuration === "team"
+          ? null
+          : configurationRoleOf(descriptor),
       transportReadOnly: personalReadOnlyOnTeamComputer(
         configuration,
         onTeamComputer,
       ),
     };
-  }, [descriptor, onTeamComputer]);
+  }, [descriptor, listFailed, onTeamComputer]);
   useConfigurationRevision(descriptor?.environmentId ?? null);
   const gone = useGoneConfiguration({
     target,
