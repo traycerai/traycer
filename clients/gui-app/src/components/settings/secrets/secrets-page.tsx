@@ -19,10 +19,7 @@ import {
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { TeamSecretNames } from "@/components/settings/environment/team-secret-names";
-import {
-  HostMethodVersionUnsatisfiedError,
-  type ResponseOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
@@ -33,7 +30,6 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import {
   PERSONAL_SECRETS_READ_FAILED,
   SECRETS_ADD_LABEL,
-  SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 
 type SecretsList = ResponseOfMethod<
@@ -62,19 +58,12 @@ function secretRows(list: SecretsList | undefined): {
 }
 
 /**
- * Why the list is not shown: an old host by name, else the configuration's own
- * line. A remote error body is never rendered to the person — it says the
- * server's words ("the destination api.example.com does not resolve"), not
- * what this page could not do.
+ * Why the list is not shown: the configuration's own line. A remote error
+ * body is never rendered to the person — it says the server's words ("the
+ * destination api.example.com does not resolve"), not what this page could
+ * not do.
  */
-function readFailureText(
-  error: Error | null,
-  personal: boolean,
-  configurationName: string,
-): string {
-  if (error instanceof HostMethodVersionUnsatisfiedError) {
-    return SECRETS_NEED_UPDATED_HOST;
-  }
+function readFailureText(personal: boolean, configurationName: string): string {
   if (personal) return PERSONAL_SECRETS_READ_FAILED;
   return `Couldn't read ${configurationName}'s secrets.`;
 }
@@ -139,7 +128,7 @@ export function SecretsPage(props: {
           data-testid="secrets-page-error"
         >
           <span className="min-w-0 max-w-[72ch]">
-            {readFailureText(list.error, personal, configurationName)}
+            {readFailureText(personal, configurationName)}
           </span>
           <Button type="button" size="sm" variant="ghost" onClick={read.retry}>
             Retry
