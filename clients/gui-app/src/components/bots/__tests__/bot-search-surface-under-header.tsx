@@ -1,3 +1,5 @@
+// Register the host and navigation mocks before the header imports them.
+import "./bot-search-surface-support";
 import { vi } from "vitest";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
