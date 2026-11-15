@@ -71,6 +71,9 @@ const mocks = vi.hoisted(() => ({
   authService: vi.fn<() => AuthService>(),
   openLink: vi.fn(),
   toastError: vi.fn<ToastErrorCall>(),
+  analyticsTrack: vi.fn(),
+  analyticsIdentify: vi.fn(),
+  analyticsReset: vi.fn(),
   mobileApp: false,
   mobilePlatform: "ios" as "ios" | "android" | null,
 }));
@@ -109,7 +112,13 @@ vi.mock("@/lib/analytics", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/analytics")>();
   return {
     ...actual,
-    Analytics: { getInstance: () => ({ track: vi.fn() }) },
+    Analytics: {
+      getInstance: () => ({
+        track: mocks.analyticsTrack,
+        identify: mocks.analyticsIdentify,
+        reset: mocks.analyticsReset,
+      }),
+    },
   };
 });
 
