@@ -173,11 +173,19 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     return outcome;
   };
   // Every mint, a recovery's included, passes here, so a refusal for good is
-  // reported wherever it was asked.
+  // reported wherever it was asked. A token that could not be saved (the
+  // credentials lock stayed busy, or its write failed) is unavailable, as a
+  // mint that could not reach authn is: transient, never a rejected sign-in,
+  // and never a rejection for a caller that cannot handle one.
   const source: HostTokenAccess = {
     current: (id, hostId) => stored.current(id, hostId),
     obtain: async (id, hostId, fresh, signal) => {
-      const outcome = await stored.obtain(id, hostId, fresh, signal);
+      const outcome: HostTokenMintOutcome = await stored
+        .obtain(id, hostId, fresh, signal)
+        .catch((): HostTokenMintOutcome => ({
+          kind: "unavailable",
+          detail: "host-only token not saved",
+        }));
       if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
         refusedAfterRefresh = true;
       if (outcome.kind === "ok") refusedAfterRefresh = false;
