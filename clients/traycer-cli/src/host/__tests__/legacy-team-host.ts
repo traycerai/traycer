@@ -59,7 +59,7 @@ export class LegacyTeamHost {
                   manifest: frame.manifest,
                   optionalManifest: {
                     ...frame.optionalManifest,
-                    "environment.host.bind": { major: 1, minor: 0 },
+                    "environment.move.plan": { major: 1, minor: 2 },
                   },
                 }),
               });
