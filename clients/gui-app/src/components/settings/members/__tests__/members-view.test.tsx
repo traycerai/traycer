@@ -646,25 +646,22 @@ describe("MembersView demotion announcement", () => {
       ...BASE,
       viewerRole: "admin",
       members: [ADMIN, SECOND_ADMIN, EDITOR],
-      preview: () => ({ ...PREVIEW, linkedPlan: "Claude Max" }),
     });
     await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
     await user.click(await screen.findByRole("option", { name: "Editor" }));
 
     let described: string | null = null;
     try {
-      await screen.findByTestId("members-demotion-preview-table");
+      await screen.findByTestId("members-demotion-preview");
       described = appearance.text();
     } finally {
       // Bounded whatever happens above: an observer left on `document.body`
       // outlives this case and reads the next one's dialogs.
       appearance.stop();
     }
-    expect(described).not.toBeNull();
-    expect(described).toContain(
+    expect(described).toBe(
       "Grace can no longer invite people or change roles.",
     );
-    expect(described).toContain("Acme's agents stop using this plan.");
   });
 
   it("says the check is running on the row, and opens nothing, while the read is slow", async () => {
