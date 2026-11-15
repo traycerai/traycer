@@ -83,9 +83,10 @@ export interface AuthInvalidationRouter extends SettlingRouter {
     readonly status: "pending" | "idle";
     /**
      * Set when the router's first load resolves and never cleared after:
-     * `undefined` means no load has completed yet.
+     * absent means no load has completed yet. Optional as router-core
+     * declares it on `RouterState`.
      */
-    readonly resolvedLocation: unknown;
+    readonly resolvedLocation?: unknown;
   };
   invalidate: () => Promise<void> | void;
 }
