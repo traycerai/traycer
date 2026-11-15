@@ -19,7 +19,8 @@ import {
   botListResponseSchemaV11,
   botMemorySubscribeClientFrameSchema,
   botMemorySubscribeOpenRequestSchema,
-  botMemorySubscribeServerFrameSchema,
+  botMemorySubscribeServerFrameSchemaV10,
+  botMemorySubscribeServerFrameSchemaV11,
   botOpenRequestSchema,
   botOpenResponseSchema,
   botReadRequestSchema,
@@ -797,6 +798,20 @@ export const botMemorySubscribeV10 = defineStreamRpcContract({
   method: "bot.memory.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: botMemorySubscribeOpenRequestSchema,
-  serverFrameSchema: botMemorySubscribeServerFrameSchema,
+  serverFrameSchema: botMemorySubscribeServerFrameSchemaV10,
+  clientFrameSchema: botMemorySubscribeClientFrameSchema,
+});
+
+/**
+ * `@1.1` (T373) adds the bot's changes to the memory it reads, which the app
+ * draws as lines in the conversation that made them. Streams carry no
+ * downgrade bridge, so the host sends a `@1.0` subscriber the memory without
+ * them.
+ */
+export const botMemorySubscribeV11 = defineStreamRpcContract({
+  method: "bot.memory.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: botMemorySubscribeOpenRequestSchema,
+  serverFrameSchema: botMemorySubscribeServerFrameSchemaV11,
   clientFrameSchema: botMemorySubscribeClientFrameSchema,
 });

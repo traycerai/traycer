@@ -87,7 +87,7 @@ describe("a reply result's landing in its thread", () => {
   it("is gone after the memory takes the rail and the thread comes back as a plain thread", async () => {
     await openThreadFromSearch();
 
-    setRail({ kind: "memory", back: null });
+    setRail({ kind: "memory", back: null, focus: null });
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
     setRail(PLAIN_THREAD);
 

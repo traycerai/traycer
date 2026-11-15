@@ -1,4 +1,5 @@
 import type {
+  BotMemoryFocus,
   BotOpenThread,
   BotRail,
 } from "@/stores/bots/bot-open-thread-store";
@@ -233,7 +234,10 @@ export function railOfTracyPlace(
           sent:
             heldThreadOf(current, place.thread.anchorMessageId)?.sent ?? null,
         };
-  const under = underExchangeOf(place.memory, thread);
+  // The route does not carry the entries a line opened the memory on; a
+  // memory already open keeps them.
+  const focus = current?.kind === "memory" ? current.focus : null;
+  const under = underExchangeOf(place.memory, thread, focus);
   return place.exchangePeerBotId === null
     ? under
     : { kind: "exchange", peerBotId: place.exchangePeerBotId, back: under };
@@ -242,8 +246,9 @@ export function railOfTracyPlace(
 function underExchangeOf(
   memory: boolean,
   thread: BotOpenThread | null,
+  focus: BotMemoryFocus | null,
 ): BotRail | null {
-  if (memory) return { kind: "memory", back: thread };
+  if (memory) return { kind: "memory", back: thread, focus };
   return thread === null ? null : { kind: "thread", ...thread };
 }
 

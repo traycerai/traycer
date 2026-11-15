@@ -745,6 +745,7 @@ import {
   botDeleteV10,
   botListChangedV10,
   botMemorySubscribeV10,
+  botMemorySubscribeV11,
   botListV10,
   botListV11,
   botListV12,
@@ -16611,13 +16612,17 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
     },
   },
   // `bot.memory.subscribe` (Tracy Bots T87): a new name on `/stream`, so no
-  // baseline moves; a host without it shows no memory.
+  // baseline moves; a host without it shows no memory. 1.1 (T373) adds the
+  // bot's changes; a 1.0 peer reads none.
   "bot.memory.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: botMemorySubscribeV10,
+        },
+        1: {
+          contract: botMemorySubscribeV11,
         },
       },
     },

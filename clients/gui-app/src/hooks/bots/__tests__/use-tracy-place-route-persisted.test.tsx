@@ -255,7 +255,7 @@ const THREAD_A: BotRail = {
   anchorKind: null,
   sent: null,
 };
-const MEMORY: BotRail = { kind: "memory", back: null };
+const MEMORY: BotRail = { kind: "memory", back: null, focus: null };
 const THREAD_B: BotRail = {
   kind: "thread",
   anchorMessageId: "msg-2",

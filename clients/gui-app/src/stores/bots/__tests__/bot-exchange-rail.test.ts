@@ -46,7 +46,7 @@ describe("memoryRailOver a pair's log", () => {
   it("returns to the thread the log displaced, not to the log", () => {
     const log = exchangeRailOver(THREAD, RELEASE_BOT_ID);
 
-    expect(memoryRailOver(log)).toEqual({
+    expect(memoryRailOver(log, null)).toEqual({
       kind: "memory",
       back: {
         anchorMessageId: "post-1",
@@ -54,13 +54,14 @@ describe("memoryRailOver a pair's log", () => {
         anchorKind: null,
         sent: null,
       },
+      focus: null,
     });
   });
 
   it("returns to the thread under a search the log displaced, not to the results or the log", () => {
     const log = exchangeRailOver(searchRailOver(THREAD), RELEASE_BOT_ID);
 
-    expect(memoryRailOver(log)).toEqual({
+    expect(memoryRailOver(log, null)).toEqual({
       kind: "memory",
       back: {
         anchorMessageId: "post-1",
@@ -68,6 +69,7 @@ describe("memoryRailOver a pair's log", () => {
         anchorKind: null,
         sent: null,
       },
+      focus: null,
     });
   });
 });

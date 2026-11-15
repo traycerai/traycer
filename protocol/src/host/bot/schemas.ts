@@ -2053,6 +2053,67 @@ export type BotMemorySubscribeOpenRequest = z.infer<
 >;
 
 /**
+ * Frozen: `bot.memory.subscribe@1.0`'s frame and every schema under it, as
+ * they shipped. The live schemas below may grow; these do not, so a `@1.0`
+ * subscriber is never sent a field it did not agree to.
+ */
+export const botMemoryWriterSchemaV10 = lazySchema(() =>
+  z.object({
+    botId: z.string().min(1).nullable(),
+    chatId: z.string().min(1).nullable(),
+    requestId: z.string().min(1).nullable(),
+  }),
+);
+export type BotMemoryWriterV10 = z.infer<typeof botMemoryWriterSchemaV10>;
+
+export const botMemoryEntrySchemaV10 = lazySchema(() =>
+  z.object({
+    id: z.string().min(1),
+    text: z.string(),
+    tags: z.array(z.string().min(1)),
+    writtenBy: botMemoryWriterSchemaV10,
+    at: z.number().nullable(),
+    confirmedAt: z.number().nullable(),
+  }),
+);
+export type BotMemoryEntryV10 = z.infer<typeof botMemoryEntrySchemaV10>;
+
+export const botMemoryTagUsageSchemaV10 = lazySchema(() =>
+  z.object({
+    entries: z.number().int().nonnegative(),
+    chars: z.number().int().nonnegative(),
+    ceiling: z.number().int().positive(),
+  }),
+);
+export type BotMemoryTagUsageV10 = z.infer<typeof botMemoryTagUsageSchemaV10>;
+
+export const botMemorySchemaV10 = lazySchema(() =>
+  z.object({
+    entries: z.array(botMemoryEntrySchemaV10),
+    own: botMemoryTagUsageSchemaV10,
+    shared: botMemoryTagUsageSchemaV10,
+  }),
+);
+export type BotMemoryV10 = z.infer<typeof botMemorySchemaV10>;
+
+export const botMemorySubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      memory: botMemorySchemaV10.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotMemorySubscribeServerFrameV10 = z.infer<
+  typeof botMemorySubscribeServerFrameSchemaV10
+>;
+
+/**
  * Who wrote an entry: the bot and its chat (its trunk, or a thread's
  * session), and the member's post the chat was answering, by its request
  * id. `botId` and `chatId` are `null` for an entry copied in from the bots'
@@ -2100,24 +2161,46 @@ export const botMemoryTagUsageSchema = lazySchema(() =>
 export type BotMemoryTagUsage = z.infer<typeof botMemoryTagUsageSchema>;
 
 /**
+ * One change the bot made to a memory it reads (Tracy Bots T373): an entry
+ * added, rewritten or removed, in its own memory or the shared one, at `at`.
+ * `threadId` is the thread record whose session made it - stable across that
+ * thread's sessions - and `null` for the bot's channel. A confirmation or a
+ * write that changed no text is not a change. The serving host keeps each
+ * change for 7 days.
+ */
+export const botMemoryChangeSchema = lazySchema(() =>
+  z.object({
+    id: z.string().min(1),
+    at: z.number(),
+    action: z.enum(["add", "update", "remove"]),
+    memory: z.enum(["own", "shared"]),
+    entryId: z.string().min(1),
+    threadId: z.string().min(1).nullable(),
+  }),
+);
+export type BotMemoryChange = z.infer<typeof botMemoryChangeSchema>;
+
+/**
  * The entries the bot reads before every reply - those tagged its id and
- * those tagged `all` - and the usage of each of the two tags.
+ * those tagged `all` - the usage of each of the two tags, and the bot's
+ * changes to them, oldest first.
  */
 export const botMemorySchema = lazySchema(() =>
   z.object({
     entries: z.array(botMemoryEntrySchema),
     own: botMemoryTagUsageSchema,
     shared: botMemoryTagUsageSchema,
+    changes: z.array(botMemoryChangeSchema),
   }),
 );
 export type BotMemory = z.infer<typeof botMemorySchema>;
 
 /**
  * `snapshot` carries the bot's memory whole, on open and again after every
- * change to the pool, from any host or bot. `memory` is `null` while the
- * serving host cannot read the environment's room.
+ * change to the pool or to the bot's changes, from any host or bot. `memory`
+ * is `null` while the serving host cannot read the environment's room.
  */
-export const botMemorySubscribeServerFrameSchema = lazySchema(() =>
+export const botMemorySubscribeServerFrameSchemaV11 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
@@ -2130,8 +2213,8 @@ export const botMemorySubscribeServerFrameSchema = lazySchema(() =>
     }),
   ]),
 );
-export type BotMemorySubscribeServerFrame = z.infer<
-  typeof botMemorySubscribeServerFrameSchema
+export type BotMemorySubscribeServerFrameV11 = z.infer<
+  typeof botMemorySubscribeServerFrameSchemaV11
 >;
 
 export const botMemorySubscribeClientFrameSchema = lazySchema(() =>

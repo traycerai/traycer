@@ -176,6 +176,7 @@ vi.mock("@/hooks/bots/use-bot-memory", () => ({
         ),
         own: { entries: mocks.memoryEntries, chars: 0, ceiling: 8_000 },
         shared: { entries: 0, chars: 0, ceiling: 8_000 },
+        changes: [],
       },
     };
   },

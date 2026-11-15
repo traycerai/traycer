@@ -96,7 +96,7 @@ function KnowingChannel(): ReactNode {
       hostId: HOST_ID,
       botId: BOT_ID,
       environmentId: ENVIRONMENT_ID,
-      open: () => setRail(BOT_ID, memoryRailOver(rail)),
+      open: (focus) => setRail(BOT_ID, memoryRailOver(rail, focus)),
     }),
     [rail, setRail],
   );

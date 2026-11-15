@@ -83,6 +83,7 @@ import {
   type BotExchangeLogEntry,
 } from "@/lib/bots/bot-exchanges";
 import { useBotExchanges } from "@/hooks/bots/use-bot-exchanges";
+import { BotMemoryLinesProvider } from "@/components/bots/bot-memory-lines-provider";
 import {
   BotSearchBackLink,
   BotSearchPanel,
@@ -739,6 +740,9 @@ export function BotChannelView(props: {
     openPair: exchangeRail.open,
     openThread,
   });
+  // The bot's changes to its memory are drawn in the open thread by its
+  // stable id, so a change its earlier session made still shows in it.
+  const memoryThreadId = stableThreadIdOf(openThread, open);
   const threadLanding = useThreadPanelLanding(
     props.landOn,
     drawnPanelThreadId({
@@ -894,19 +898,24 @@ export function BotChannelView(props: {
                   on="channel"
                 />
                 <BotExchangeLinesContext value={exchangeLines.channel}>
-                  <BotChatTranscript
-                    botId={botId}
-                    chatId={channel.conversationId}
-                    hostId={hostId}
-                    title={botTitle}
-                    instanceId={`bot-channel:${botId}`}
-                    surface={surface}
-                    resolveMember={resolveMember}
-                    showConnecting
-                    header={null}
-                    landOn={landing}
-                    flow={null}
-                  />
+                  <BotMemoryLinesProvider
+                    botTitle={botTitle}
+                    surface={{ kind: "channel" }}
+                  >
+                    <BotChatTranscript
+                      botId={botId}
+                      chatId={channel.conversationId}
+                      hostId={hostId}
+                      title={botTitle}
+                      instanceId={`bot-channel:${botId}`}
+                      surface={surface}
+                      resolveMember={resolveMember}
+                      showConnecting
+                      header={null}
+                      landOn={landing}
+                      flow={null}
+                    />
+                  </BotMemoryLinesProvider>
                 </BotExchangeLinesContext>
               </div>
               <BotReplyingStrip
@@ -957,6 +966,7 @@ export function BotChannelView(props: {
                   threads={threadList.data?.threads ?? null}
                   botNameOf={botNameOf}
                   back={memory.back}
+                  focus={memory.focus}
                   onBack={
                     memory.back === null
                       ? null
@@ -992,34 +1002,40 @@ export function BotChannelView(props: {
               }
               render={(postId) => (
                 <BotExchangeLinesContext value={exchangeLines.thread}>
-                  <QuoteSinkContext value={quoteIntoThreadBox}>
-                    <BotThreadPanel
-                      key={postId}
-                      botId={botId}
-                      hostId={hostId}
-                      boundHostId={boundHostId}
-                      botTitle={botTitle}
-                      imageReach={imageReach}
-                      answerReach={answerReach}
-                      conversationId={channel.conversationId}
-                      originMessageId={postId}
-                      sent={open?.sent ?? null}
-                      thread={panelThread}
-                      tasks={tasks}
-                      anchorSenderLabel={anchorSenderLabel}
-                      resolveMember={resolveMember}
-                      landOn={
-                        threadLanding.landing ?? search.threadLandingOn(postId)
-                      }
-                      onClose={() => {
-                        threadLanding.spend();
-                        onOpenThread(null);
-                      }}
-                      onEditPost={editPostFromThread}
-                      onOpenTurn={onOpenTurn}
-                      quote={quoteFor(postId)}
-                    />
-                  </QuoteSinkContext>
+                  <BotMemoryLinesProvider
+                    botTitle={botTitle}
+                    surface={{ kind: "thread", threadId: memoryThreadId }}
+                  >
+                    <QuoteSinkContext value={quoteIntoThreadBox}>
+                      <BotThreadPanel
+                        key={postId}
+                        botId={botId}
+                        hostId={hostId}
+                        boundHostId={boundHostId}
+                        botTitle={botTitle}
+                        imageReach={imageReach}
+                        answerReach={answerReach}
+                        conversationId={channel.conversationId}
+                        originMessageId={postId}
+                        sent={open?.sent ?? null}
+                        thread={panelThread}
+                        tasks={tasks}
+                        anchorSenderLabel={anchorSenderLabel}
+                        resolveMember={resolveMember}
+                        landOn={
+                          threadLanding.landing ??
+                          search.threadLandingOn(postId)
+                        }
+                        onClose={() => {
+                          threadLanding.spend();
+                          onOpenThread(null);
+                        }}
+                        onEditPost={editPostFromThread}
+                        onOpenTurn={onOpenTurn}
+                        quote={quoteFor(postId)}
+                      />
+                    </QuoteSinkContext>
+                  </BotMemoryLinesProvider>
                 </BotExchangeLinesContext>
               )}
             />
@@ -1132,6 +1148,19 @@ function ChannelSearchBack(props: {
   const { botId, shown, on } = props;
   if (shown !== on) return null;
   return <BotSearchBackLink onBack={() => showBotSearchResults(botId)} />;
+}
+
+/**
+ * The open thread's stable id, which names the bot's memory changes made in
+ * it: the listed summary's, else the sent post's; `null` while neither is
+ * known.
+ */
+function stableThreadIdOf(
+  listed: BotThreadSummary | null,
+  open: BotOpenThread | null,
+): string | null {
+  if (listed !== null) return listed.threadId;
+  return open?.sent?.threadId ?? null;
 }
 
 /** Whether the rail beside the channel holds a thread, the memory or a pair's log. */

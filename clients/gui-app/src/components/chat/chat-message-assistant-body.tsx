@@ -1786,8 +1786,9 @@ export function AssistantSegment({
       // A judge notice: synthesized system row only, like the refusal above.
       return null;
     case "bot-exchanges":
-      // A bot channel's line of bot-to-bot messages: synthesized system row
-      // only, like the two above.
+    case "bot-memory-changes":
+      // A bot channel's line of bot-to-bot messages or of memory changes:
+      // synthesized system rows only, like the two above.
       return null;
     default: {
       const _exhaustive: never = segment;

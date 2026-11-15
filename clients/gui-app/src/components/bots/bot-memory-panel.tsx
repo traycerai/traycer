@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronLeft, X } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
@@ -24,11 +24,15 @@ import {
   nextMemoryMarks,
   type MemoryMarks,
 } from "@/lib/bots/bot-memory-model";
+import { memoryFocusGoneNote } from "@/lib/bots/bot-memory-lines";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { useMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import type {
+  BotMemoryFocus,
+  BotOpenThread,
+} from "@/stores/bots/bot-open-thread-store";
 
 /** Where an entry's "where" link takes the person. */
 export interface BotMemoryNavigation {
@@ -50,6 +54,11 @@ export interface BotMemoryPanelProps {
   /** Another bot of the environment by its id, for a common memory entry's writer. */
   readonly botNameOf: (botId: string) => string | null;
   readonly back: BotOpenThread | null;
+  /**
+   * The memory and entries a line of memory changes opened the pane on
+   * (T373), marked and scrolled to; `null` when no line opened it.
+   */
+  readonly focus: BotMemoryFocus | null;
   /** Brings back the thread the pane displaced; `null` when it displaced none. */
   readonly onBack: (() => void) | null;
   readonly onClose: () => void;
@@ -209,11 +218,21 @@ type ListProps = BotMemoryPanelProps & {
 };
 
 function MemoryList(props: ListProps): ReactNode {
-  const { memory, botId, botTitle } = props;
+  const { memory, botId, botTitle, focus } = props;
   const [query, setQuery] = useState("");
   const marks = useMemoryMarks(memory.entries);
   const { own, shared } = memorySections(memory, botId, query);
   const searching = query.trim().length > 0;
+  const gone =
+    focus === null
+      ? 0
+      : focus.entryIds.filter(
+          (id) => !memory.entries.some((entry) => entry.id === id),
+        ).length;
+  const focusOn = (section: BotMemoryFocus["memory"]): SectionFocus | null =>
+    focus?.memory === section ? { focus, gone } : null;
+  const focusNames = (entryId: string): boolean =>
+    focus?.entryIds.includes(entryId) === true;
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <p className="px-4 pt-3 text-ui-xs text-muted-foreground">
@@ -233,6 +252,7 @@ function MemoryList(props: ListProps): ReactNode {
         title={`${botTitle}'s memory`}
         count={own.length}
         testId="bot-memory-own"
+        focus={focusOn("own")}
       >
         {own.length === 0 ? (
           <EmptyLine
@@ -249,6 +269,7 @@ function MemoryList(props: ListProps): ReactNode {
               {...props}
               entry={entry}
               marks={marks}
+              focused={focusNames(entry.id)}
               shared={false}
             />
           ))
@@ -259,6 +280,7 @@ function MemoryList(props: ListProps): ReactNode {
           title="Common memory"
           count={shared.length}
           testId="bot-memory-shared"
+          focus={focusOn("shared")}
         >
           {shared.length === 0 ? (
             <EmptyLine text="No common memories yet." />
@@ -269,6 +291,7 @@ function MemoryList(props: ListProps): ReactNode {
                 {...props}
                 entry={entry}
                 marks={marks}
+                focused={focusNames(entry.id)}
                 shared
               />
             ))
@@ -297,14 +320,29 @@ function useMemoryMarks(entries: readonly BotMemoryEntry[]): MemoryMarks {
   return state.marks;
 }
 
+/** The section a line opened the pane on, and how many of its entries are gone. */
+interface SectionFocus {
+  readonly focus: BotMemoryFocus;
+  readonly gone: number;
+}
+
 function MemorySection(props: {
   readonly title: string;
   readonly count: number;
   readonly testId: string;
+  readonly focus: SectionFocus | null;
   readonly children: ReactNode;
 }): ReactNode {
+  const ref = useRef<HTMLElement>(null);
+  const focus = props.focus?.focus ?? null;
+  const gone = props.focus?.gone ?? 0;
+  // Each line opened on this section brings it into view, once.
+  useEffect(() => {
+    if (focus !== null) ref.current?.scrollIntoView({ block: "start" });
+  }, [focus]);
   return (
     <section
+      ref={ref}
       aria-label={props.title}
       data-testid={props.testId}
       className="pt-4"
@@ -315,7 +353,17 @@ function MemorySection(props: {
           {props.count}
         </span>
       </h3>
-      <ul className="flex flex-col">{props.children}</ul>
+      <ul className="flex flex-col">
+        {gone === 0 ? null : (
+          <li
+            data-testid="bot-memory-focus-gone"
+            className="border-t border-border/60 px-4 py-2 text-ui-sm text-muted-foreground"
+          >
+            {memoryFocusGoneNote(gone)}
+          </li>
+        )}
+        {props.children}
+      </ul>
     </section>
   );
 }
@@ -332,16 +380,18 @@ function EmptyLine(props: { readonly text: string }): ReactNode {
  * One entry: its text, then when it was confirmed and when and where it was
  * written - or that it was never confirmed since - for a common entry the
  * bot that wrote it, and for its own the other bots that keep it too. An
- * entry written while the pane is open says it is new.
+ * entry written while the pane is open says it is new; one the line that
+ * opened the pane names is marked.
  */
 function MemoryRow(
   props: ListProps & {
     readonly entry: BotMemoryEntry;
     readonly marks: MemoryMarks;
+    readonly focused: boolean;
     readonly shared: boolean;
   },
 ): ReactNode {
-  const { entry, marks } = props;
+  const { entry, marks, focused } = props;
   const isNew = marks.added.has(entry.id);
   const writer = props.shared ? writerOf(props, entry.writtenBy.botId) : null;
   const alsoFor = props.shared ? [] : otherKeepers(props, entry);
@@ -350,9 +400,11 @@ function MemoryRow(
       data-testid="bot-memory-entry"
       data-entry-id={entry.id}
       data-new={isNew ? "true" : undefined}
+      data-focused={focused ? "true" : undefined}
       className={cn(
         "border-t border-border/60 px-4 py-2 text-ui-sm",
         isNew && "bg-foreground/5",
+        focused && "bg-primary/10",
       )}
     >
       <p className="break-words whitespace-pre-wrap text-foreground">

@@ -173,7 +173,7 @@ function BotMemoryCount(props: {
         data-testid="bot-profile-memory"
         onClick={() => {
           closeCard();
-          access.open();
+          access.open(null);
         }}
       >
         {count === null

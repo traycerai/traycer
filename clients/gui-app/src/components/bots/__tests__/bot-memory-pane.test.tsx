@@ -275,6 +275,7 @@ function memoryOf(entries: readonly BotMemoryEntry[]): BotMemory {
     entries: [...entries],
     own: { entries: 3, chars: 300, ceiling: 8_000 },
     shared: { entries: 1, chars: 30, ceiling: 8_000 },
+    changes: [],
   };
 }
 
@@ -412,6 +413,7 @@ describe("the bot's profile card", () => {
     expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toEqual({
       kind: "memory",
       back: null,
+      focus: null,
     });
     expect(memoryPane()).toBeTruthy();
   });
@@ -671,7 +673,7 @@ describe("what the bot knows, in the rail", () => {
     expect(within(pane).queryAllByRole("textbox")).toEqual([]);
   });
 
-  it("shows what it last read when opened again, then what the host says now", async () => {
+  it("keeps reading while the channel is open: closing the pane opens no new read, and the card and pane show what the host says now", async () => {
     const user = userEvent.setup();
     render(<MountedKnowingChannel />);
     const pane = await openPane(user, MEMORY);
@@ -679,10 +681,8 @@ describe("what the bot knows, in the rail", () => {
     expect(screen.queryByTestId("bot-memory-pane")).toBeNull();
     const opened = streamClient().subscribeCallCount;
 
-    // Nothing reads the memory now; the card asks the host again, and counts
-    // what it last read before the host answers.
     const card = await openCard(user);
-    expect(streamClient().subscribeCallCount).toBeGreaterThan(opened);
+    expect(streamClient().subscribeCallCount).toBe(opened);
     const row = within(card).getByTestId("bot-profile-memory");
     expect(row.textContent).toBe("4 memories ›");
     await user.click(row);

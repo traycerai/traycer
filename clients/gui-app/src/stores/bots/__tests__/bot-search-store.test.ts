@@ -231,14 +231,14 @@ describe("opening and closing the search in a bot's rail", () => {
   it("keeps the displaced thread through the memory over a search, and the memory itself through a search over the memory", () => {
     const thread: BotRail = { kind: "thread", ...OPEN_THREAD };
     const search = searchRailOver(thread);
-    const memory = memoryRailOver(search);
+    const memory = memoryRailOver(search, null);
 
     expect(search).toEqual({
       kind: "search",
       back: thread,
       showing: { kind: "results" },
     });
-    expect(memory).toEqual({ kind: "memory", back: OPEN_THREAD });
+    expect(memory).toEqual({ kind: "memory", back: OPEN_THREAD, focus: null });
     expect(searchRailOver(memory)).toEqual({
       kind: "search",
       back: memory,
@@ -298,7 +298,7 @@ describe("the rail a search shares with a pair's log and the memory", () => {
   });
 
   it("over the memory: closing the results brings the memory back, with the thread it displaced", () => {
-    const memory = memoryRailOver(thread);
+    const memory = memoryRailOver(thread, null);
     useBotOpenThreadStore.getState().setRail(SEARCH_BOT_A, memory);
 
     openBotSearch(SEARCH_BOT_A, ALL, "ship");
@@ -307,6 +307,7 @@ describe("the rail a search shares with a pair's log and the memory", () => {
     expect(railOf(SEARCH_BOT_A)).toEqual({
       kind: "memory",
       back: OPEN_THREAD,
+      focus: null,
     });
   });
 
@@ -331,16 +332,20 @@ describe("the rail a search shares with a pair's log and the memory", () => {
     const results = railOf(SEARCH_BOT_A);
     if (results?.kind !== "search") throw new Error("the search did not open");
 
-    expect(memoryRailOver(results)).toEqual({
+    expect(memoryRailOver(results, null)).toEqual({
       kind: "memory",
       back: OPEN_THREAD,
+      focus: null,
     });
     expect(
-      memoryRailOver({
-        ...results,
-        showing: { kind: "thread", thread: RESULT_THREAD },
-      }),
-    ).toEqual({ kind: "memory", back: RESULT_THREAD });
+      memoryRailOver(
+        {
+          ...results,
+          showing: { kind: "thread", thread: RESULT_THREAD },
+        },
+        null,
+      ),
+    ).toEqual({ kind: "memory", back: RESULT_THREAD, focus: null });
   });
 
   it("opened while a pair's log sits over an older search: the older search leaves the chain, so closing the new one and then the log ends with no search", () => {

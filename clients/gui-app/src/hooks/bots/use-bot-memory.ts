@@ -4,9 +4,11 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
-  botMemorySubscribeServerFrameSchema,
+  botMemorySubscribeServerFrameSchemaV10,
+  botMemorySubscribeServerFrameSchemaV11,
   type BotMemory,
 } from "@traycer/protocol/host/bot/schemas";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
@@ -182,9 +184,11 @@ function openSession(
   };
   session.onServerFrame((envelope) => {
     if (closed) return;
-    const parsed = botMemorySubscribeServerFrameSchema.safeParse(envelope);
-    if (!parsed.success || parsed.data.kind !== "snapshot") return;
-    const { memory } = parsed.data;
+    const memory = snapshotMemoryOf(
+      envelope,
+      session.getNegotiatedSchemaVersion(),
+    );
+    if (memory === undefined) return;
     if (memory !== null) {
       queryClient.setQueryData(botQueryKeys.memory(slot), memory);
     }
@@ -202,4 +206,25 @@ function openSession(
     publish({ kind: "closed" });
   });
   return shared;
+}
+
+/**
+ * A snapshot frame's memory, read at the version this session negotiated: a
+ * `@1.1` host sends the bot's changes; a `@1.0` host, or one whose version is
+ * not known yet, sends none, so it is read as having none (T373). `undefined`
+ * for a frame that is not a snapshot or does not parse.
+ */
+function snapshotMemoryOf(
+  envelope: unknown,
+  negotiated: SchemaVersion | null,
+): BotMemory | null | undefined {
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor >= 1) {
+    const parsed = botMemorySubscribeServerFrameSchemaV11.safeParse(envelope);
+    if (!parsed.success || parsed.data.kind !== "snapshot") return undefined;
+    return parsed.data.memory;
+  }
+  const parsed = botMemorySubscribeServerFrameSchemaV10.safeParse(envelope);
+  if (!parsed.success || parsed.data.kind !== "snapshot") return undefined;
+  const { memory } = parsed.data;
+  return memory === null ? null : { ...memory, changes: [] };
 }

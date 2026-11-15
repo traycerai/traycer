@@ -259,7 +259,7 @@ const T1_ANSWER = threadRail("m-1", {
 });
 const T2 = threadRail("m-2", {});
 const CHAT: TracyPlaceSession = { chatId: "chat-1", threadId: null };
-const MEMORY_OVER_T1 = memoryRailOver(T1);
+const MEMORY_OVER_T1 = memoryRailOver(T1, null);
 const EXCHANGE_OVER_T1 = exchangeRailOver(T1, "bot-peer");
 const EXCHANGE_OVER_MEMORY = exchangeRailOver(MEMORY_OVER_T1, "bot-peer");
 const SEARCH_OVER_T1 = searchRailOver(T1);
@@ -329,7 +329,7 @@ const STEP_ROWS: ReadonlyArray<StepRow> = [
   {
     name: "opening the memory over a thread",
     start: { ...NOTHING, rail: T1 },
-    move: () => rails().setRail(BOT_A, memoryRailOver(railOf(BOT_A))),
+    move: () => rails().setRail(BOT_A, memoryRailOver(railOf(BOT_A), null)),
     moved: { ...NOTHING, rail: MEMORY_OVER_T1 },
     afterBack: { ...NOTHING, rail: T1 },
     restored: { ...NOTHING, rail: MEMORY_OVER_T1 },
@@ -869,7 +869,7 @@ describe("the Tracy surface's place on the route", () => {
 
       act(() => place().setView(BOT_A, "activity"));
       act(() => rails().setRail(BOT_A, T1));
-      act(() => rails().setRail(BOT_A, memoryRailOver(railOf(BOT_A))));
+      act(() => rails().setRail(BOT_A, memoryRailOver(railOf(BOT_A), null)));
       act(() => place().setSession(BOT_A, CHAT));
       act(() => place().setThreadsShown(true));
       await waitFor(() => {

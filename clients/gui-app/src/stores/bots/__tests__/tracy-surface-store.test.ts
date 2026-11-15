@@ -70,13 +70,14 @@ describe("selecting a Tracy channel", () => {
     surface().selectChannel("bot-a");
     useBotOpenThreadStore
       .getState()
-      .setRail("bot-a", { kind: "memory", back: null });
+      .setRail("bot-a", { kind: "memory", back: null, focus: null });
 
     surface().selectChannel("bot-b");
 
     expect(useBotOpenThreadStore.getState().byBotId["bot-a"]).toEqual({
       kind: "memory",
       back: null,
+      focus: null,
     });
   });
 

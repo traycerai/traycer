@@ -114,6 +114,7 @@ import {
   useBotOpenThreadStore,
   useBotRail,
   type BotExchangeRail,
+  type BotMemoryFocus,
   type BotOpenExchange,
   type BotOpenMemory,
   type BotOpenThread,
@@ -942,7 +943,7 @@ function useBotTabRail(
   readonly searchResultsOpen: boolean;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
   readonly setOpenMemory: (open: BotOpenMemory | null) => void;
-  readonly openMemoryInChannel: () => void;
+  readonly openMemoryInChannel: (focus: BotMemoryFocus | null) => void;
   readonly openExchange: BotOpenExchange | null;
   readonly exchanges: BotExchangeRail;
 } {
@@ -968,11 +969,15 @@ function useBotTabRail(
       setRail(botId, open === null ? null : { kind: "memory", ...open }),
     [botId, setRail],
   );
-  // From the profile card: the memory takes the slot beside the channel.
-  const openMemoryInChannel = useCallback(() => {
-    setRail(botId, memoryRailOver(rail));
-    onViewChange("messages");
-  }, [botId, onViewChange, rail, setRail]);
+  // From the profile card, or a line of memory changes with the entries it
+  // names: the memory takes the slot beside the channel.
+  const openMemoryInChannel = useCallback(
+    (focus: BotMemoryFocus | null) => {
+      setRail(botId, memoryRailOver(rail, focus));
+      onViewChange("messages");
+    },
+    [botId, onViewChange, rail, setRail],
+  );
   const setOpenThread = useCallback(
     (open: BotOpenThread | null) =>
       setRail(botId, open === null ? null : { kind: "thread", ...open }),

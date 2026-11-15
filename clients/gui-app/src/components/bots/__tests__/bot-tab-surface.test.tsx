@@ -300,7 +300,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       <button
         type="button"
         data-testid="stub-channel-open-memory"
-        onClick={() => props.onOpenMemory({ back: null })}
+        onClick={() => props.onOpenMemory({ back: null, focus: null })}
       />
       <button
         type="button"
