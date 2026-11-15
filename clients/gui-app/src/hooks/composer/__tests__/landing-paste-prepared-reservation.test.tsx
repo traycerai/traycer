@@ -244,6 +244,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
         fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -312,6 +313,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
         fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 
@@ -357,6 +359,7 @@ describe("useLandingComposerPaste - reservation charges the PREPARED byte length
         fileDrops: NOOP_FILE_DROPS,
         mentionRoots: NO_MENTION_ROOTS,
         fileRoute: NO_FILE_ROUTE,
+        pathsReachTarget: true,
       }),
     );
 

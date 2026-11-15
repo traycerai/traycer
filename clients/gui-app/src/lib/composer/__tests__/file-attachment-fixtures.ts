@@ -34,6 +34,23 @@ export const UNUSED_REQUESTER: FileAttachmentUploadClient = {
   requestWithResponseTimeout: unused,
 };
 
+/**
+ * The client of a whole composer surface under test: it answers every
+ * readiness read with "no host yet", so none of the surface's host queries
+ * runs, and a `drafts.putBlob` goes through `requestWithOptions`.
+ */
+export function putOnlyRequester(
+  requestWithOptions: FileAttachmentUploadClient["requestWithOptions"],
+): FileAttachmentUploadClient {
+  return {
+    ...UNUSED_REQUESTER,
+    getActiveHost: () => null,
+    getActiveHostId: () => null,
+    getRequestContextUserId: () => null,
+    requestWithOptions,
+  };
+}
+
 export function targetFor(hostId: string): FileAttachmentUploadTarget {
   return { hostId, client: UNUSED_REQUESTER };
 }

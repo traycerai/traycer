@@ -105,8 +105,10 @@ function originFor(
   if (policySource === null) {
     return `https://artifact-${artifactId}--${mountId}.traycer-artifact.invalid`;
   }
-  const scheme = policySource.slice(0, -1);
-  return `${scheme}://artifact-${artifactId}--${mountId}`;
+  // The desktop serves one site per artifact and names the mount in the path.
+  return policySource === DESKTOP_POLICY_SOURCE
+    ? `traycer-sandbox://artifact-${artifactId}`
+    : `traycer-artifact://artifact-${artifactId}--${mountId}`;
 }
 
 interface FakeBridge extends SandboxArtifactBridge {

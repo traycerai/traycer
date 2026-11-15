@@ -1,3 +1,4 @@
+import { UpdateHostHomeUnusableError } from "@traycer-clients/shared/host-update/host-home-unusable";
 import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
 
 // Machine-readable error codes the runner emits in NDJSON `error` events
@@ -143,6 +144,10 @@ export const CLI_ERROR_CODES = {
   // while the command reports success. Retryable once the directory is
   // writable.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
+  // A regular file sits where the host folder (or a folder above it in the
+  // data folder) belongs, so the update lock cannot be taken. Only the person
+  // can clear it; the message names the remedy.
+  HOST_HOME_UNUSABLE: "E_HOST_HOME_UNUSABLE",
   // A plain or `--if-idle` stop asked the service manager to stop the host,
   // and the host running is not the service's: `traycer host start` in a
   // terminal (a `foreground` run). The service stop reached nothing, so the
@@ -315,6 +320,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
     CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
+    CLI_ERROR_CODES.HOST_HOME_UNUSABLE,
     CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
     CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
@@ -424,6 +430,15 @@ export function isErrnoException(
 // their message and a generic UNEXPECTED code; falls back to String().
 export function toCliError(err: unknown): CliError {
   if (err instanceof CliError) return err;
+  if (err instanceof UpdateHostHomeUnusableError) {
+    return new CliError({
+      code: CLI_ERROR_CODES.HOST_HOME_UNUSABLE,
+      message:
+        "Traycer cannot create its host folder because a file is in the way. Rename or remove that file (by default ~/.traycer or ~/.traycer/host), then run this command again.",
+      details: null,
+      exitCode: 1,
+    });
+  }
   if (err instanceof Error) {
     return new CliError({
       code: CLI_ERROR_CODES.UNEXPECTED,

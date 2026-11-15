@@ -49,6 +49,7 @@ import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-mem
 import { TourSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-tour-slot";
 import { SettingsPanelSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-settings-panel";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
+import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   HostRuntimeProvider,
@@ -460,7 +461,7 @@ const captureSettingsMount = (
   mountSettings = mount;
 };
 
-/** Opens Settings → Agent memories, the real panel, on a host. */
+/** Opens Settings → Memories, the real panel, on a host. */
 export function openSettings(hostId: string): void {
   act(() => mountSettings?.(hostId));
 }
@@ -472,7 +473,7 @@ export function closeSettings(): void {
 /** What the panel's switch shows. */
 export async function settingsSwitchOn(): Promise<boolean> {
   const toggle = await screen.findByRole("switch", {
-    name: "Use Traycer memories for agents",
+    name: AGENT_MEMORIES.definitions.traycerMemories.label,
   });
   return toggle.getAttribute("aria-checked") === "true";
 }

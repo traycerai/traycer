@@ -365,7 +365,7 @@ describe("mobile tab origin", () => {
       const held = heldNavigate(real);
       dispatchOpen(held.navigate, "epic-1", FROM_BOT_1);
 
-      act(() => useTracySurfaceStore.getState().forgetBot("bot-1"));
+      act(() => useTracySurfaceStore.getState().forgetBot("bot-1", 1));
       await releaseAndSettle(held, "epic-1");
 
       expect(origin()).toBeNull();
@@ -394,7 +394,7 @@ describe("mobile tab origin", () => {
       ],
       [
         "the bot is forgotten",
-        () => useTracySurfaceStore.getState().forgetBot("bot-1"),
+        () => useTracySurfaceStore.getState().forgetBot("bot-1", 1),
       ],
     ])(
       "lands no way back when %s while the opening is hydration-queued",
@@ -418,7 +418,7 @@ describe("mobile tab origin", () => {
       const held = heldNavigate(real);
       dispatchOpen(held.navigate, "epic-1", FROM_BOT_1);
 
-      act(() => useTracySurfaceStore.getState().forgetBot("bot-2"));
+      act(() => useTracySurfaceStore.getState().forgetBot("bot-2", 1));
       await releaseAndSettle(held, "epic-1");
 
       await waitFor(() => expect(origin()).not.toBeNull());

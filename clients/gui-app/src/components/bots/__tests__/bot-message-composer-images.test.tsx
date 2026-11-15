@@ -315,6 +315,11 @@ function dropFiles(...files: ReadonlyArray<File>): boolean {
   return fireEvent.drop(box(), { dataTransfer });
 }
 
+/** The titles of the error toasts raised so far. */
+function errorToasts(): ReadonlyArray<unknown> {
+  return vi.mocked(toast.error).mock.calls.map(([message]) => message);
+}
+
 /** The images the strip holds, by the name each chip shows. */
 function openButtons(): HTMLElement[] {
   return screen.queryAllByRole("button", { name: /^Open Image#\d+:/ });
@@ -705,6 +710,45 @@ describe("<BotMessageComposer /> refusing what it cannot take", () => {
       expect(toast.error).toHaveBeenCalledWith(NOT_AN_IMAGE, expect.anything()),
     );
     expect(openButtons()).toHaveLength(0);
+  });
+
+  it("refuses a pasted SVG with the type sentence before reading any of it", async () => {
+    mount("delivered", PLAIN_BOX);
+    const svg = imageFile("logo.svg", "image/svg+xml");
+    const read = vi.spyOn(svg, "arrayBuffer");
+
+    pasteFiles(svg);
+
+    await waitFor(() => expect(errorToasts()).toEqual([NOT_AN_IMAGE]));
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(0);
+  });
+
+  it("refuses a dropped HEIC over the size ceiling with the type sentence, not the size toast", async () => {
+    mount("delivered", PLAIN_BOX);
+    const heic = imageFile("photo.heic", "image/heic");
+    Object.defineProperty(heic, "size", { value: MAX_IMAGE_SOURCE_BYTES + 1 });
+    const read = vi.spyOn(heic, "arrayBuffer");
+
+    dropFiles(heic);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(errorToasts()).toEqual([NOT_AN_IMAGE]);
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(0);
+  });
+
+  it("keeps the PNG of a paste that also carries an SVG, refusing the SVG once without reading it", async () => {
+    mount("delivered", PLAIN_BOX);
+    const svg = imageFile("logo.svg", "image/svg+xml");
+    const read = vi.spyOn(svg, "arrayBuffer");
+
+    pasteFiles(imageFile("clip.png", "image/png"), svg);
+
+    await holdsImage("Image#1: clip.png");
+    expect(errorToasts()).toEqual([NOT_AN_IMAGE]);
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(1);
   });
 
   it("refuses an image over the size the agent composer refuses, naming it", async () => {

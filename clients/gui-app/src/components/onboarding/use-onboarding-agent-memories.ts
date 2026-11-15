@@ -144,7 +144,7 @@ export function useOnboardingAgentMemories(input: {
       current.hostId === forHost ? change(current) : current,
     );
 
-  // The act's own cache entry, never the one Settings → Agent memories reads:
+  // The act's own cache entry, never the one Settings → Memories reads:
   // a read the act took can be overtaken (a rebind, a later change), and
   // Settings' read on opening would join one still in flight.
   const memoryRead = useHostQuery<HostRpcRegistry, "config.agentMemories.get">({

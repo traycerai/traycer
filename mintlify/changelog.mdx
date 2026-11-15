@@ -5,6 +5,30 @@ description: "Track the latest updates and improvements to Traycer Desktop."
 rss: true
 ---
 
+<Update label="v1.5.4">
+Smoother HTML artifact comments, CPU readings for the whole machine, and tighter privacy in error reports.
+
+- **HTML artifact comments** - turning **Comments** on or off keeps the page loaded, so its scroll position, zoom and state stay put. You can still scroll the page while commenting. See [HTML artifacts](/panels/artifacts/html#use-and-review-the-page).
+- **Resource monitor** - CPU is shown as a share of the whole machine, with the number of cores in the tooltip. A Host that doesn't report its processor count shows a dash instead. See [Resource monitor](/concepts/hosts/resource-monitor).
+- **Privacy** - error reports also redact home-folder names and credential-bearing links from the details used to group them.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/desktop-v1.5.4).
+</Update>
+
+<Update label="v1.5.3">
+A cleaner HTML artifact toolbar, steadier scrolling and zooming, and clearer provider errors.
+
+- **HTML artifacts** - pages open below a smaller set of controls: zoom with **−** and **+**, a version button that reads **Latest** or, on an older version, something like **v1 of 3**, and **More actions** for **Actual size** and **Download ZIP**. **Back** and **Home** appear on artifacts with more than one page. See [HTML artifacts](/panels/artifacts/html).
+- **Closing panels** - pressing ⌘W / Ctrl+W after clicking into an HTML artifact, canvas or MCP app closes that panel instead of the whole Task tab.
+- **PDF and Word previews** - pressing Ctrl or ⌘ while a trackpad scroll is still coasting no longer zooms the page, and pinch-to-zoom follows your fingers smoothly.
+- **Reading position** - a chat keeps your place when you come back after a queued message was delivered, instead of jumping to the first message.
+- **macOS windows** - Tasks in a window that is only covered by another app stay ready, so switching back no longer reopens them after five minutes.
+- **Providers** - **Settings › Providers** says whether the Host couldn't be reached or needs an update, with **Retry**. Pasting another provider's API key names the kind of key it looks like and the kind that's expected.
+- **Fixes** - status-bar popovers close when you click into an HTML artifact or browser panel, the usage popover highlights the selected provider on dark themes, streaming stays smooth with many changed files listed, expanding a sidebar branch is faster, and issue reports keep more evidence of Host slowdowns.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/desktop-v1.5.3).
+</Update>
+
 <Update label="v1.5.2">
 HTML artifacts and visual canvases, mobile simulators, and more control over providers and replies.
 

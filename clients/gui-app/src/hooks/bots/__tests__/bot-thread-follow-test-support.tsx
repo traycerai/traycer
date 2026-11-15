@@ -16,8 +16,10 @@ import type {
 /**
  * A host that keeps one person's thread follows (`bot.threadFollow.read` /
  * `.set`) behind a real HostClient and QueryClient. Tests change `follows`
- * to play another device, hold the re-read with `holdRead`, or refuse the
- * write with `refuse`.
+ * to play another device, hold the re-read with `holdRead`, refuse the
+ * write with `refuse`, or hold the write unanswered with `holdWrite` until
+ * each entry of `releaseWrites` is called (one per held write, in the order
+ * the writes arrived).
  */
 export interface FollowHostFixture {
   readonly client: HostClient<HostRpcRegistry>;
@@ -30,6 +32,8 @@ export interface FollowHostFixture {
     refuse: boolean;
     holdRead: boolean;
     releaseRead: (() => void) | null;
+    holdWrite: boolean;
+    releaseWrites: (() => void)[];
   };
 }
 
@@ -43,6 +47,8 @@ export function createFollowHostFixture(
     refuse: false,
     holdRead: false,
     releaseRead: null,
+    holdWrite: false,
+    releaseWrites: [],
   };
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -68,8 +74,13 @@ export function createFollowHostFixture(
           }
           return { follows: { ...follows } };
         },
-        "bot.threadFollow.set": (params) => {
+        "bot.threadFollow.set": async (params) => {
           writes.push(params);
+          if (control.holdWrite) {
+            await new Promise<void>((resolve) => {
+              control.releaseWrites.push(resolve);
+            });
+          }
           if (control.refuse) throw new Error("The thread was not found.");
           const follow: BotThreadFollow = {
             state: params.state,

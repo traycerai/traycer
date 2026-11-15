@@ -171,7 +171,7 @@ ReturnType<typeof fn>          // name the concrete type
 | Require port members that no consumer reads or calls.           | Keep only the members consumers use; remove fixture no-ops.                           |
 | Repeat an assertion implied by an exact result check.           | Keep the exact check and assertions for distinct effects.                             |
 | Assert only that a required field exists.                       | Exercise its effect through the real consumer.                                        |
-| Keep comments that describe a retired contract.                 | Update or remove stale claims when the contract changes.                              |
+| Keep comments or test titles that describe a retired contract.  | Update or remove stale claims when the contract changes.                              |
 | Assert only a test double's implementation.                     | Assert production behavior through the real consumer.                                 |
 | Treat a sleep or fixed microtask count as operation completion. | Await the operation's completion or its observable outcome before asserting.          |
 | Keep runtime declarations with no production consumer.          | Remove unused declarations and tests that exercise only them.                         |

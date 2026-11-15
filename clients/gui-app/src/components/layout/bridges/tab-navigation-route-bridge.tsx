@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { tabNavigationController } from "@/lib/tab-navigation";
 import { isStartupNavigationIntent } from "@/lib/host/startup-navigation-intent";
+import { declareTracyPlaceLanding } from "@/lib/bots/tracy-place-traversal";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import {
   consumeDesktopRestoredRoute,
@@ -157,6 +158,9 @@ export function TabNavigationRouteBridge(): null {
         // the rest of the session, long after the throw was handled upstream.
         skipRestoredRouteObservationRef.current = false;
       }
+      // The restored entry says where the Tracy surface was: it is read as a
+      // landing, not as an entry the app wrote for where the surface is now.
+      declareTracyPlaceLanding(router.history.location);
     }
     // Subscribe before synchronizing so no committed entry can fall into the
     // setup window. This bridge remains mounted outside HostReadyGate.

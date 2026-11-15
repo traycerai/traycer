@@ -3,7 +3,10 @@ import {
   type EpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { parseNestedFocusTargetFromHref } from "@/lib/epic-nested-focus-route";
-import { parseEpicTabHref } from "@/lib/history-navigation/liveness";
+import {
+  isGoneBotHref,
+  parseEpicTabHref,
+} from "@/lib/history-navigation/liveness";
 
 export type HistoryEligibilityState = Pick<
   EpicCanvasStore,
@@ -12,7 +15,7 @@ export type HistoryEligibilityState = Pick<
 
 /**
  * Eligible back/forward target per the "skip closed Tasks" rule: the entry's
- * route isn't an epic-tab route, its tab is open, or an unknown tab id would
+ * route isn't an epic-tab route (and is not a gone bot's channel), its tab is open, or an unknown tab id would
  * resolve to an open fallback tab for the same epic. Unknown nested targets
  * cannot fall back because their pane/tile identity belongs to the missing
  * tab. Exact and fallback tabs that are currently closed are both ineligible;
@@ -25,7 +28,8 @@ export function isHistoryEntryEligible(
 ): boolean {
   const epicTab = parseEpicTabHref(href);
   if (epicTab === null) {
-    return true;
+    // A gone bot's channel is skipped until the prune removes its entry.
+    return !isGoneBotHref(href);
   }
   if (state.tabsById[epicTab.tabId] === undefined) {
     if (parseNestedFocusTargetFromHref(href) !== null) {

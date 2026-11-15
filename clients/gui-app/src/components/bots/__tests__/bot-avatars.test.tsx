@@ -578,9 +578,10 @@ describe("a bot's picture while it works", () => {
     );
   });
 
-  it("keeps its eyes still for a person who asked for reduced motion", () => {
+  it("keeps its eyes still, with no timer running, for a person who asked for reduced motion", () => {
     vi.useFakeTimers();
     stubReducedMotion(true);
+    const timersBefore = vi.getTimerCount();
     render(working());
     const before = drawn()[0].paths;
 
@@ -589,6 +590,39 @@ describe("a bot's picture while it works", () => {
     });
 
     expect(drawn()[0].paths).toEqual(before);
+    expect(before).toEqual(pathsOf(TEAM_S_MAIN_BOT_ID, null, WORKING));
+    expect(vi.getTimerCount()).toBe(timersBefore);
+  });
+
+  it("moves every working mascot on one beat off one timer, whenever each was drawn, and stops the timer with the last", () => {
+    vi.useFakeTimers();
+    stubReducedMotion(false);
+    const timersBefore = vi.getTimerCount();
+    const first = render(working());
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    const second = render(working());
+
+    for (let beat = 1; beat <= MASCOT_WORKING_BEATS; beat += 1) {
+      const [early, late] = drawn();
+      expect(late.paths).toEqual(early.paths);
+      expect(early.paths).toEqual(
+        pathsOf(TEAM_S_MAIN_BOT_ID, null, {
+          ...WORKING,
+          beat: beat % MASCOT_WORKING_BEATS,
+        }),
+      );
+      expect(vi.getTimerCount()).toBe(timersBefore + 1);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+    }
+
+    first.unmount();
+    expect(vi.getTimerCount()).toBe(timersBefore + 1);
+    second.unmount();
+    expect(vi.getTimerCount()).toBe(timersBefore);
   });
 
   it("stops its eyes on the first beat when reduced motion is turned on while it works", () => {
@@ -619,6 +653,7 @@ describe("a bot's picture while it works", () => {
       pathsOf(TEAM_S_MAIN_BOT_ID, null, { ...WORKING, beat: 1 }),
     );
 
+    const timersWhileMoving = vi.getTimerCount();
     act(() => {
       preference.matches = true;
       for (const listener of preference.listeners) listener();
@@ -626,6 +661,7 @@ describe("a bot's picture while it works", () => {
     act(() => {
       vi.advanceTimersByTime(5000);
     });
+    expect(vi.getTimerCount()).toBe(timersWhileMoving - 1);
 
     expect(drawn()[0].paths).toEqual(
       pathsOf(TEAM_S_MAIN_BOT_ID, null, WORKING),

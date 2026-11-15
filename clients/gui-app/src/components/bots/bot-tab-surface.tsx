@@ -72,9 +72,20 @@ import {
 } from "@/lib/tab-navigation";
 import { defaultTracyChannelOf } from "@/lib/bots/tracy-channel";
 import {
+  goneReportStands,
   handTracyLandingToChannel,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
+import {
+  tracySessionOf,
+  tracyViewOf,
+  useTracyPlaceStore,
+} from "@/stores/bots/tracy-place-store";
+import { useTracyPlaceKey } from "@/hooks/bots/use-tracy-place-route";
+import {
+  isTracyChannelView,
+  type TracyChannelView,
+} from "@/lib/bots/tracy-place";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotDraftsAdmitted } from "@/hooks/bots/use-bot-drafts-admitted";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
@@ -109,6 +120,7 @@ import {
   BotSessionView,
   type BotOpenSession,
 } from "@/components/bots/bot-session-view";
+import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import {
@@ -133,7 +145,7 @@ import {
 } from "@/components/bots/bot-memory-context";
 import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
 import { ExpressiveBotAvatar } from "@/components/bots/bot-avatars";
-import { botExpressionOf, useBotActivity } from "@/hooks/bots/use-bot-activity";
+import { botExpressionOn, useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
@@ -145,15 +157,14 @@ import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
   botTabOpenState,
+  type BotTabOpenFailure,
   type BotTabPausedReason,
 } from "@/components/bots/bot-tab-open-state";
+import { useCloudRecoveryRing } from "@/hooks/host/use-cloud-recovery-ring";
+import { isTransientCloudFailure } from "@/lib/host/transient-cloud-failure";
 import { cn } from "@/lib/utils";
 
-type BotTabView = "messages" | "activity";
-
-function isBotTabView(value: string): value is BotTabView {
-  return value === "messages" || value === "activity";
-}
+type BotTabView = TracyChannelView;
 
 /**
  * The Tracy surface (decision 150): one per window, Slack's layout (decision
@@ -248,20 +259,23 @@ function TracySurfaceShell(props: {
 
   // Threads, from the column, in place of the channel; any move to one of
   // the channel's views ends it, and so does selecting a channel.
-  const [threadsShown, setThreadsShown] = useState(false);
-  const [threadsChannel, setThreadsChannel] = useState(botId);
-  if (threadsChannel !== botId) {
-    setThreadsChannel(botId);
-    setThreadsShown(false);
-  }
-  const leaveThreads = useCallback(() => setThreadsShown(false), []);
+  // Threads also takes the place of a session: leaving it shows the channel.
+  const threadsShown = useTracyPlaceStore((state) => state.threadsShown);
+  const leaveThreads = useCallback(
+    () => useTracyPlaceStore.getState().setThreadsShown(false),
+    [],
+  );
   const threadsView = useMemo(
     (): BotThreadsViewState => ({
       shown: threadsShown,
-      onShow: () => setThreadsShown(true),
+      onShow: () => {
+        const place = useTracyPlaceStore.getState();
+        if (botId !== null) place.setSession(botId, null);
+        place.setThreadsShown(true);
+      },
       onLeave: leaveThreads,
     }),
-    [leaveThreads, threadsShown],
+    [botId, leaveThreads, threadsShown],
   );
 
   const { level2, tiles, onRailDrawn } = useSurfaceTileForm();
@@ -420,8 +434,10 @@ function useSenderLandingSpentOnDeparture(botId: string | null): void {
  * navigation to the surface is in flight (a channel someone opened, not yet
  * acknowledged) it waits, so it never supersedes that navigation, and a
  * selected bot that goes away meanwhile is only deselected. A bot reported
- * gone is never the default (`unavailable`) until a list read newer than the
- * report settles it: the list it was reported against still carries it.
+ * gone is never the default (`unavailable`) while its report stands: the
+ * list it was reported against still carries it, and so can a list another
+ * host answered earlier. Only a list that answered after the report and
+ * carries the bot takes the report away (`settleListedBots`).
  */
 function useTracyChannelUpkeep(input: {
   readonly botId: string | null;
@@ -436,24 +452,27 @@ function useTracyChannelUpkeep(input: {
   readonly unavailable: ReadonlySet<string>;
 } {
   const { botId, groups, listed, listedAt, select } = input;
-  // Each bot reported gone, with the list read it was reported against.
-  const [goneReports, setGoneReports] = useState<ReadonlyMap<string, number>>(
-    () => new Map(),
-  );
-  const unavailable = useMemo(
-    () =>
-      new Set(
-        [...goneReports]
-          .filter(([, reportedAt]) => reportedAt === listedAt)
-          .map(([goneBotId]) => goneBotId),
-      ),
-    [goneReports, listedAt],
-  );
+  // Each bot reported gone, with the list read it was reported against: the
+  // one record the default below and the history's prune and skip both read.
+  const goneReports = useTracySurfaceStore((state) => state.goneReports);
+  // Read against the list in hand, not only the reports as last settled: a
+  // list that takes a report away is in this render before the effect below
+  // has taken it out of the store, and the default must not pass the bot over
+  // meanwhile.
+  const unavailable = useMemo(() => {
+    const listedIds = new Set(listed?.map((bot) => bot.botId));
+    return new Set(
+      Object.entries(goneReports)
+        .filter(([goneBotId, reportedAt]) =>
+          goneReportStands(reportedAt, listedIds.has(goneBotId), listedAt),
+        )
+        .map(([goneBotId]) => goneBotId),
+    );
+  }, [goneReports, listed, listedAt]);
   const forget = useCallback(
     (goneBotId: string): void => {
-      setGoneReports((reports) => new Map(reports).set(goneBotId, listedAt));
       const surface = useTracySurfaceStore.getState();
-      surface.forgetBot(goneBotId);
+      surface.forgetBot(goneBotId, listedAt);
       if (goneBotId !== surface.botId) return;
       if (tracyNavigationPending()) {
         surface.selectChannel(null);
@@ -477,6 +496,7 @@ function useTracyChannelUpkeep(input: {
   useEffect(() => {
     if (listed === null) return;
     const listedIds = new Set(listed.map((bot) => bot.botId));
+    useTracySurfaceStore.getState().settleListedBots(listedIds, listedAt);
     const seen = seenListedRef.current;
     for (const kept of new Set([...visitedBotIds, ...draftBotIds])) {
       if (listedIds.has(kept)) {
@@ -486,7 +506,7 @@ function useTracyChannelUpkeep(input: {
         forget(kept);
       }
     }
-  }, [draftBotIds, forget, listed, visitedBotIds]);
+  }, [draftBotIds, forget, listed, listedAt, visitedBotIds]);
   const defaultBotId =
     groups === null ? null : defaultTracyChannelOf(groups, unavailable);
   const navigationPending = useSyncExternalStore(
@@ -731,13 +751,15 @@ function BotTabBody(props: {
     enabled: true,
   });
   const client = useTabHostClient();
-  const [view, setView] = useState<BotTabView>("messages");
+  const view = useTracyPlaceStore((state) =>
+    tracyViewOf(state.viewByBotId, botId),
+  );
   const changeView = useCallback(
     (next: BotTabView) => {
-      setView(next);
+      useTracyPlaceStore.getState().setView(botId, next);
       onLeaveThreads();
     },
-    [onLeaveThreads],
+    [botId, onLeaveThreads],
   );
 
   // Open once per channel - this body is keyed by its bot - and again on
@@ -748,10 +770,11 @@ function BotTabBody(props: {
   // shown above it instead. The answer feeds only the channel's paused,
   // failed and opening states: whatever it says, the surface stays on its
   // host.
-  const { mutate: openBot } = useBotOpenMutation(client);
+  const { mutate: openBot, isPending: openPending } =
+    useBotOpenMutation(client);
   const [answer, setAnswer] = useState<BotOpenResponse | undefined>(undefined);
-  const [openError, setOpenError] = useState<string | null>(null);
-  const reopen = useCallback(
+  const [openError, setOpenError] = useState<BotTabOpenFailure | null>(null);
+  const sendOpen = useCallback(
     () =>
       openBot(
         { botId },
@@ -760,11 +783,26 @@ function BotTabBody(props: {
             setAnswer(response);
             setOpenError(null);
           },
-          onError: (error) => setOpenError(error.message),
+          onError: (error) =>
+            setOpenError({
+              message: error.message,
+              transient: isTransientCloudFailure(error),
+            }),
         },
       ),
     [botId, openBot],
   );
+  // An open the host failed only because it could not reach the cloud is
+  // asked again once on each ring of that host's cloud-recovery doorbell. The
+  // failure stands while a ring's open is in flight, so the hold does too. A
+  // ring that came after the open began, before it failed, asks once more
+  // when it does. Every open goes through `reopen`, so each forgets the rings
+  // that came before it.
+  const reopen = useCloudRecoveryRing({
+    hostId,
+    held: openError?.transient === true,
+    call: sendOpen,
+  });
   useEffect(() => {
     reopen();
   }, [reopen]);
@@ -840,6 +878,15 @@ function BotTabBody(props: {
       />
     );
   }
+  if (openState.kind === "reconnecting") {
+    return threadsShown ? null : (
+      <OpenReconnecting
+        onRetry={reopen}
+        pending={openPending}
+        className="m-4"
+      />
+    );
+  }
   const snapshot = subscription.snapshot;
   if (snapshot === null && subscription.error !== null) {
     return threadsShown ? null : (
@@ -860,8 +907,9 @@ function BotTabBody(props: {
       hostId={hostId}
       snapshot={snapshot}
       pausedReason={openState.kind === "paused" ? openState.reason : null}
-      reopenError={openError}
+      reopenFailure={openError}
       onReopen={reopen}
+      reopenPending={openPending}
       streamError={subscription.error}
       snapshotFresh={subscription.snapshotFresh}
       onRetry={resubscribe}
@@ -984,15 +1032,15 @@ function useChannelSearchEntry(args: {
  * so the same turn opened again lands again. The session's links show the
  * channel - on a post, or with a thread beside it - in Messages; its back
  * button returns to the view it was opened from, the channel where it was.
- * The channel lands on a post once: leaving Messages drops the landing.
+ * Either lands on its message once: leaving the place it was asked on, by
+ * a button or a step back or forward, drops the landing.
  * Threads takes the place of a session as well: leaving it shows the
  * channel, since a session open when Threads was chosen is not where either
  * way back says it goes.
  */
 function useBotTabSession(args: {
+  readonly botId: string;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
-  /** The shell's Threads shows in place of the channel's views. */
-  readonly threadsShown: boolean;
   readonly onViewChange: (view: BotTabView) => void;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
 }): {
@@ -1001,50 +1049,85 @@ function useBotTabSession(args: {
   readonly openSession: BotSessionOpen;
   readonly openTurn: BotTurnOpen;
   readonly closeSession: () => void;
-  readonly changeView: (view: BotTabView) => void;
   readonly showChannel: (messageId: string | null) => void;
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
 } {
-  const { threads, threadsShown, onViewChange, setOpenThread } = args;
+  const { botId, threads, onViewChange, setOpenThread } = args;
+  // Which session shows is the surface's place, kept in its store; where it
+  // lands is this visit's alone, and holds only for the session it was
+  // opened on: a session a step back or forward shows opens where it opens.
+  const shownSession = useTracyPlaceStore((state) =>
+    tracySessionOf(state.sessionByBotId, botId),
+  );
   const [shown, setShown] = useState<{
-    readonly session: BotOpenSession | null;
+    readonly sessionLanding: {
+      readonly chatId: string;
+      readonly landOn: BotTranscriptLanding;
+    } | null;
     readonly channelLanding: BotChannelLanding | null;
     readonly visits: number;
-  }>({ session: null, channelLanding: null, visits: 0 });
-  const [threadsSeen, setThreadsSeen] = useState(threadsShown);
-  if (threadsSeen !== threadsShown) {
-    setThreadsSeen(threadsShown);
-    if (threadsShown) setShown({ ...shown, session: null });
+  }>({ sessionLanding: null, channelLanding: null, visits: 0 });
+  // A landing belongs to the visit that asked for it. The view it landed in
+  // is gone once the surface is anywhere else, and the place shown again
+  // mounts a new one, which must not jump to that message a second time.
+  const placeKey = useTracyPlaceKey(botId);
+  const [landedAt, setLandedAt] = useState<{
+    readonly visit: number;
+    readonly placeKey: string;
+  } | null>(null);
+  const landing = shown.sessionLanding?.landOn ?? shown.channelLanding;
+  if (landing === null) {
+    if (landedAt !== null) setLandedAt(null);
+  } else if (landedAt?.visit !== landing.visit) {
+    setLandedAt({ visit: landing.visit, placeKey });
+  } else if (landedAt.placeKey !== placeKey) {
+    setShown({ ...shown, sessionLanding: null, channelLanding: null });
   }
-  const openSession = useCallback<BotSessionOpen>((target) => {
-    setShown((previous) => {
-      const visit = previous.visits + 1;
-      return {
-        session: {
-          chatId: target.chatId,
-          threadId: target.threadId,
-          landOn:
-            target.messageId === null
+  const session = useMemo(
+    (): BotOpenSession | null =>
+      shownSession === null
+        ? null
+        : {
+            chatId: shownSession.chatId,
+            threadId: shownSession.threadId,
+            landOn:
+              shown.sessionLanding?.chatId === shownSession.chatId
+                ? shown.sessionLanding.landOn
+                : null,
+          },
+    [shown.sessionLanding, shownSession],
+  );
+  const openSession = useCallback<BotSessionOpen>(
+    (target) => {
+      const { chatId, messageId } = target;
+      setShown((previous) => {
+        const visit = previous.visits + 1;
+        return {
+          sessionLanding:
+            messageId === null
               ? null
               : {
-                  messageId: target.messageId,
-                  sendPostId: target.sendPostId,
-                  visit,
+                  chatId,
+                  landOn: { messageId, sendPostId: target.sendPostId, visit },
                 },
-        },
-        channelLanding: null,
-        visits: visit,
-      };
-    });
-  }, []);
+          channelLanding: null,
+          visits: visit,
+        };
+      });
+      useTracyPlaceStore
+        .getState()
+        .setSession(botId, { chatId, threadId: target.threadId });
+    },
+    [botId],
+  );
   const openTurn = useCallback<BotTurnOpen>(
     (ref, sendPostId) => openSession(sessionTargetOfTurn(ref, sendPostId)),
     [openSession],
   );
   const closeSession = useCallback(
-    () => setShown((previous) => ({ ...previous, session: null })),
-    [],
+    () => useTracyPlaceStore.getState().setSession(botId, null),
+    [botId],
   );
   // The channel shows, landed on a message of it or of the thread beside it.
   const showLanded = useCallback(
@@ -1052,14 +1135,15 @@ function useBotTabSession(args: {
       setShown((previous) => {
         const visit = previous.visits + 1;
         return {
-          session: null,
+          sessionLanding: null,
           channelLanding: landOn === null ? null : { ...landOn, visit },
           visits: visit,
         };
       });
+      useTracyPlaceStore.getState().setSession(botId, null);
       onViewChange("messages");
     },
-    [onViewChange],
+    [botId, onViewChange],
   );
   // A row of the channel shows with nothing beside it: a thread left open
   // there is not what was asked for. Back to the channel (`null`) keeps it.
@@ -1088,21 +1172,6 @@ function useBotTabSession(args: {
     },
     [setOpenThread, showLanded],
   );
-  // Leaving Messages spends the channel's landing: the channel mounts again
-  // when Messages shows, and must not land on that post a second time.
-  const changeView = useCallback(
-    (view: BotTabView) => {
-      if (view !== "messages") {
-        setShown((previous) =>
-          previous.channelLanding === null
-            ? previous
-            : { ...previous, channelLanding: null },
-        );
-      }
-      onViewChange(view);
-    },
-    [onViewChange],
-  );
   // A thread the list does not name has no post to open it by: the channel
   // shows instead, with no other thread beside it. One it names opens on
   // `messageId` where one is named.
@@ -1129,12 +1198,11 @@ function useBotTabSession(args: {
     [setOpenThread, showLanded, threads],
   );
   return {
-    session: shown.session,
+    session,
     channelLanding: shown.channelLanding,
     openSession,
     openTurn,
     closeSession,
-    changeView,
     showChannel,
     landChannel,
     showThread,
@@ -1232,7 +1300,24 @@ function useSpendTabLanding(args: {
 }): void {
   const { botId, channelChatId, trunkChatId, threads } = args;
   const { threadsFetching, threadsFailed } = args;
-  const { landChannel, showThread, openSession, onViewChange, place } = args;
+  const { openSession, onViewChange, place } = args;
+  const { landChannel: landOnChannel, showThread: showLandedThread } = args;
+  // Where a landing puts the tab is nobody's own move: the route records it
+  // over the entry the opener made, so one step back leaves it.
+  const landChannel = useCallback(
+    (messageId: string | null) => {
+      useTracyPlaceStore.getState().markAutomaticMove();
+      landOnChannel(messageId);
+    },
+    [landOnChannel],
+  );
+  const showThread = useCallback(
+    (threadId: string, messageId: string | null) => {
+      useTracyPlaceStore.getState().markAutomaticMove();
+      showLandedThread(threadId, messageId);
+    },
+    [showLandedThread],
+  );
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
@@ -1276,6 +1361,7 @@ function useSpendTabLanding(args: {
       // Threads shows in place of a session, so leave it, onto the channel
       // the session's Back returns to; a channel or thread landing leaves it
       // the same way through `landChannel` and `showThread`.
+      useTracyPlaceStore.getState().markAutomaticMove();
       onViewChange("messages");
       openSession({
         chatId,
@@ -1365,9 +1451,11 @@ function BotTabContent(props: {
   readonly snapshot: BotSubscriptionSnapshot;
   readonly pausedReason: BotTabPausedReason | null;
   /** A re-open failed after an earlier one answered; the tab keeps that
-   * answer and says the re-open failed. */
-  readonly reopenError: string | null;
+   * answer and says the re-open failed, or is reconnecting. */
+  readonly reopenFailure: BotTabOpenFailure | null;
   readonly onReopen: () => void;
+  /** A re-open is in flight. */
+  readonly reopenPending: boolean;
   readonly streamError: string | null;
   readonly snapshotFresh: boolean;
   readonly onRetry: () => void;
@@ -1390,8 +1478,9 @@ function BotTabContent(props: {
     hostId,
     snapshot,
     pausedReason,
-    reopenError,
+    reopenFailure,
     onReopen,
+    reopenPending,
     streamError,
     snapshotFresh,
     onRetry,
@@ -1480,11 +1569,10 @@ function BotTabContent(props: {
     openSession,
     openTurn,
     closeSession,
-    changeView,
     showChannel,
     landChannel,
     showThread,
-  } = useBotTabSession({ threads, threadsShown, onViewChange, setOpenThread });
+  } = useBotTabSession({ botId, threads, onViewChange, setOpenThread });
   // Threads is the shell's, shown in place of the channel: a move too.
   const place = useMemo(
     (): BotTabPlace => ({
@@ -1523,8 +1611,8 @@ function BotTabContent(props: {
   const activeTasks = useBotActiveTasks(snapshot.tasks, hostId, snapshotFresh);
   const showMessages = useCallback(() => {
     closeSession();
-    changeView("messages");
-  }, [changeView, closeSession]);
+    onViewChange("messages");
+  }, [closeSession, onViewChange]);
   const openSearch = useChannelSearchEntry({
     botId,
     hostId,
@@ -1570,6 +1658,7 @@ function BotTabContent(props: {
                   value={{
                     tasks: snapshot.tasks,
                     subscriptions: snapshot.notificationSubscriptions,
+                    boundHostId: snapshot.boundHost.hostId,
                   }}
                 >
                   <BotSessionView
@@ -1589,7 +1678,7 @@ function BotTabContent(props: {
                 <Tabs
                   value={view}
                   onValueChange={(next) => {
-                    if (isBotTabView(next)) changeView(next);
+                    if (isTracyChannelView(next)) onViewChange(next);
                   }}
                   className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
                 >
@@ -1614,11 +1703,11 @@ function BotTabContent(props: {
                       className="mx-4 mt-2"
                     />
                   )}
-                  {reopenError === null ? null : (
-                    <ErrorNotice
-                      text={`Couldn't open this bot: ${reopenError}`}
-                      onRetry={onReopen}
-                      className="mx-4 mt-2"
+                  {reopenFailure === null ? null : (
+                    <ReopenFailureNotice
+                      failure={reopenFailure}
+                      onReopen={onReopen}
+                      pending={reopenPending}
                     />
                   )}
                   {pausedReason === null ? null : (
@@ -1741,6 +1830,73 @@ function retryFailedReads(
   };
 }
 
+/** A re-open that failed over a held answer, drawn above the channel. */
+function ReopenFailureNotice(props: {
+  readonly failure: BotTabOpenFailure;
+  readonly onReopen: () => void;
+  readonly pending: boolean;
+}): ReactNode {
+  const { failure, onReopen, pending } = props;
+  if (failure.transient) {
+    return (
+      <OpenReconnecting
+        onRetry={onReopen}
+        pending={pending}
+        className="mx-4 mt-2"
+      />
+    );
+  }
+  return (
+    <ErrorNotice
+      text={`Couldn't open this bot: ${failure.message}`}
+      onRetry={onReopen}
+      className="mx-4 mt-2"
+    />
+  );
+}
+
+/**
+ * An open that failed only because the host could not reach the cloud, which
+ * that host's cloud-recovery doorbell asks again: no technical text. Retry
+ * stays, since a host without the doorbell never rings, and is disabled while
+ * an open is in flight, so a second press adds no second open.
+ */
+function OpenReconnecting(props: {
+  readonly onRetry: () => void;
+  readonly pending: boolean;
+  readonly className: string;
+}): ReactNode {
+  return (
+    <div
+      role="status"
+      data-testid="bot-tab-reconnecting"
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-4 py-3 text-ui-sm text-muted-foreground",
+        props.className,
+      )}
+    >
+      <span className="flex items-center gap-2">
+        <AgentSpinningDots
+          className="shrink-0"
+          testId={undefined}
+          variant={undefined}
+          tone="muted"
+        />
+        Reconnecting…
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.pending}
+        onClick={props.onRetry}
+      >
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 /** An error, with Retry unless `onRetry` is `null`: nothing to ask again. */
 function ErrorNotice(props: {
   readonly text: string;
@@ -1794,7 +1950,7 @@ function BotChannelHeader(props: {
 }): ReactNode {
   const { settingsOpen } = props;
   const background = useChannelBackground(props.botId);
-  const expression = botExpressionOf(useBotActivity(props.botId));
+  const expression = botExpressionOn("title", useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header

@@ -1,4 +1,5 @@
 import { useContext, useId, useMemo, useState, type ReactNode } from "react";
+import { BotShellOutputContext } from "@/components/bots/bot-shell-output-context";
 import {
   ChatStatusExtraRowsContext,
   ChatStatusFreshContext,
@@ -365,6 +366,7 @@ function HeldManagedCommandRow(props: {
 }) {
   const { held, command, onOpen } = props;
   const readOnly = useContext(ChatStatusReadOnlyContext);
+  const openBotOutput = useContext(BotShellOutputContext);
   const content = (
     <>
       {command !== null && command.status.state === "running" ? (
@@ -404,7 +406,19 @@ function HeldManagedCommandRow(props: {
           className={CHAT_DOCK_PANEL_ROW}
           style={{ paddingLeft: chatDockPanelRowTreeInset(0) }}
         >
-          <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>{content}</div>
+          {openBotOutput === null ? (
+            <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>{content}</div>
+          ) : (
+            <button
+              type="button"
+              className={CHAT_DOCK_PANEL_ROW_BUTTON}
+              onClick={(event) =>
+                openBotOutput(held.commandId, event.currentTarget)
+              }
+            >
+              {content}
+            </button>
+          )}
         </div>
       </li>
     );
@@ -483,6 +497,7 @@ function ManagedCommandRow(props: {
 }) {
   const { command, epicId, hostId, viewTabId, onOpen } = props;
   const readOnly = useContext(ChatStatusReadOnlyContext);
+  const openBotOutput = useContext(BotShellOutputContext);
   const title = managedCommandTitle(command);
   const tile = useMemo(
     () => makeManagedCommandOutputTileRef({ commandId: command.id, hostId }),
@@ -543,7 +558,19 @@ function ManagedCommandRow(props: {
           className={CHAT_DOCK_PANEL_ROW}
           style={{ paddingLeft: chatDockPanelRowTreeInset(0) }}
         >
-          <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>{content}</div>
+          {openBotOutput === null ? (
+            <div className={CHAT_DOCK_PANEL_ROW_BUTTON}>{content}</div>
+          ) : (
+            <button
+              type="button"
+              className={CHAT_DOCK_PANEL_ROW_BUTTON}
+              onClick={(event) =>
+                openBotOutput(command.id, event.currentTarget)
+              }
+            >
+              {content}
+            </button>
+          )}
         </div>
       </li>
     );

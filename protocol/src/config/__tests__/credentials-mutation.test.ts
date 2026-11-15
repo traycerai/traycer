@@ -10,7 +10,7 @@ import {
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readCredentialsFile,
   writeCredentialsFile,
@@ -28,6 +28,37 @@ import {
 import { queryPidStartFingerprint } from "../credentials-lock";
 import { writeSidecarState } from "../credentials-wal";
 
+// Reload shared-worker modules so the lock path binds this file’s fs/promises mock.
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
+const lockContention = vi.hoisted(() => ({
+  lockPath: "",
+  onLockBusy: null as (() => void) | null,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    link: vi.fn((...args: Parameters<typeof actual.link>) =>
+      actual.link(...args).catch((error: unknown) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "EEXIST" &&
+          String(args[1]) === lockContention.lockPath
+        ) {
+          lockContention.onLockBusy?.();
+        }
+        throw error;
+      }),
+    ),
+  };
+});
+
 const CREDS: StoredCredentials = {
   token: "tok-0",
   refreshToken: "rt-0",
@@ -42,6 +73,9 @@ const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
 // -> commit-failed, while reads still succeed. Root and Windows ignore the bits.
 const canForceCommitFailure = !isWindows && !isRoot;
 
+// The lock wait the desktop and CLI stores pass in production.
+const PRODUCTION_LOCK_WAIT_MS = 12_000;
+
 describe("credentials mutation store", () => {
   let workDir: string;
   let credentialsPath: string;
@@ -50,11 +84,18 @@ describe("credentials mutation store", () => {
   const stores: CredentialsMutationStore[] = [];
 
   function makeStore(refresh: RefreshFn): CredentialsMutationStore {
+    return makeStoreWaiting(refresh, 500);
+  }
+
+  function makeStoreWaiting(
+    refresh: RefreshFn,
+    lockWaitMs: number,
+  ): CredentialsMutationStore {
     const store = createCredentialsMutationStore({
       paths: { credentialsPath, metaPath, lockPath },
       onDiskPressure: null,
       refresh,
-      lockWaitMs: 500,
+      lockWaitMs,
       lockPollIntervalMs: 25,
       continuationRetryMs: 15,
     });
@@ -120,9 +161,12 @@ describe("credentials mutation store", () => {
     // acquisition and reads still work (0o500 keeps search+read).
     mkdirSync(join(workDir, "lock"), { recursive: true, mode: 0o700 });
     lockPath = join(workDir, "lock", "credentials.lock");
+    lockContention.lockPath = lockPath;
+    lockContention.onLockBusy = null;
   });
 
   afterEach(() => {
+    lockContention.onLockBusy = null;
     for (const store of stores) store.dispose();
     stores.length = 0;
     chmodSync(workDir, 0o700);
@@ -289,27 +333,50 @@ describe("credentials mutation store", () => {
     });
 
     it("two racing rotations serialize under the lock: exactly one spend, the other adopts", async () => {
-      const shared = refreshStub(rotateOk);
-      const a = makeStore(shared.fn);
-      const b = makeStore(shared.fn);
+      let spends = 0;
+      let spendEntered: () => void = () => {};
+      const winnerInsideLock = new Promise<void>((resolve) => {
+        spendEntered = resolve;
+      });
+      let secondSpendEntered: () => void = () => {};
+      const loserEnteredSpend = new Promise<void>((resolve) => {
+        secondSpendEntered = resolve;
+      });
+      let releaseSpend: () => void = () => {};
+      const spendGate = new Promise<void>((resolve) => {
+        releaseSpend = resolve;
+      });
+      const heldRefresh: RefreshFn = async ({ token }) => {
+        spends += 1;
+        if (spends === 1) spendEntered();
+        else secondSpendEntered();
+        await spendGate;
+        return rotateOk(token);
+      };
+      const a = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS);
+      const b = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS);
       await seedSignedIn(a);
-      const [ra, rb] = await Promise.all([
-        a.rotate({
-          expectedUserId: CREDS.user.id,
-          expectedToken: CREDS.token,
-          refreshTokenOverride: null,
-          signal: null,
-        }),
-        b.rotate({
-          expectedUserId: CREDS.user.id,
-          expectedToken: CREDS.token,
-          refreshTokenOverride: null,
-          signal: null,
-        }),
-      ]);
-      expect(shared.calls()).toBe(1); // exactly one spend
-      const outcomes = [ra.outcome, rb.outcome].sort();
-      expect(outcomes).toEqual(["applied", "superseded"]);
+      const rotateArgs = {
+        expectedUserId: CREDS.user.id,
+        expectedToken: CREDS.token,
+        refreshTokenOverride: null,
+        signal: null,
+      };
+
+      const winning = a.rotate(rotateArgs);
+      await winnerInsideLock;
+      const loserFoundLockBusy = new Promise<void>((resolve) => {
+        lockContention.onLockBusy = resolve;
+      });
+      const losing = b.rotate(rotateArgs);
+      await Promise.race([loserFoundLockBusy, loserEnteredSpend]);
+      expect(spends).toBe(1);
+      releaseSpend();
+      const [ra, rb] = await Promise.all([winning, losing]);
+
+      expect(spends).toBe(1);
+      expect(ra.outcome).toBe("applied");
+      expect(rb.outcome).toBe("superseded");
     });
   });
 
@@ -412,8 +479,14 @@ describe("credentials mutation store", () => {
     it("window A's stale undo vs window B's signIn on the shared file: B survives either order", async () => {
       // Two independent stores on the SAME paths model two windows' main-side
       // mutations serialized only by the real file lock.
-      const storeA = makeStore(refreshStub(rotateOk).fn);
-      const storeB = makeStore(refreshStub(rotateOk).fn);
+      const storeA = makeStoreWaiting(
+        refreshStub(rotateOk).fn,
+        PRODUCTION_LOCK_WAIT_MS,
+      );
+      const storeB = makeStoreWaiting(
+        refreshStub(rotateOk).fn,
+        PRODUCTION_LOCK_WAIT_MS,
+      );
       const bPair: StoredCredentials = {
         ...CREDS,
         token: "tok-b",

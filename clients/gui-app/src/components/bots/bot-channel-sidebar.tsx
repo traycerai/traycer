@@ -9,7 +9,7 @@ import {
 import { BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
-import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { LiveBotAvatar, NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -54,6 +54,7 @@ import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
 import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
 import { openBotSearch } from "@/stores/bots/bot-search-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
@@ -180,8 +181,11 @@ export function BotChannelSidebar(props: {
   const [newBot, setNewBot] = useState<NewBotTarget | null>(null);
   const openChannel = (channel: SidebarChannel): void => {
     onChannelOpened();
-    if (channel.botId === activeBotId) {
-      threadsView?.onLeave();
+    // The surface's own channel, whichever row the caller marks current: a
+    // picker over Threads marks none.
+    const surface = useTracySurfaceStore.getState();
+    if (channel.botId === surface.botId) {
+      surface.showChannel();
       return;
     }
     openBotChannel(channel.botId, null);
@@ -727,7 +731,7 @@ function ChannelRow(props: {
         bold && !active && "font-semibold text-foreground",
       )}
     >
-      <NamedBotAvatar botId={bot.botId} size="sm" />
+      <LiveBotAvatar botId={bot.botId} hostId={hostId} size="sm" />
       {/* The star sits on the name, before any count. */}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="truncate">{bot.title}</span>

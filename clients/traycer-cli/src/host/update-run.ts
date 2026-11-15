@@ -3762,6 +3762,16 @@ function refusedMessage(target: string, refusal: string): string {
   return `host update: applied ${target} and the host is running it, but it REFUSED this client's authenticated call, so the update could not be verified: ${refusal}. The bytes ARE committed at ${target}. ${plane} Run 'traycer host doctor' to inspect the credential plane; updating forward to a newer host is the recovery.`;
 }
 
+/**
+ * What to tell the operator when the host refused this client and the refresh
+ * of this client's own sign-in was rejected as well. The update landed and the
+ * host runs it; what failed is the CLI's credential, so the remedy is to sign
+ * in again, not to update the host.
+ */
+function signInRejectedMessage(target: string): string {
+  return `host update: applied ${target} and the host is running it, but this CLI's sign-in was rejected, so the update could not be verified. The bytes ARE committed at ${target}. Run 'traycer login' to sign in again, then 'traycer host status' to see the running host.`;
+}
+
 /** Why the swap's service step started no host: see `postSwapStartFailure`. */
 interface PostSwapStartFailure {
   readonly reason: string;
@@ -3896,8 +3906,10 @@ async function verifyUnderClaim(
     // reason about the installed version's era. So the durable half belongs to
     // a version floor (Q18's O2), not to this set, and that boundary is what
     // makes the exclusion a rule rather than a judgement call.
+    const signInRejected = observation.runningDiagnosis === "sign-in-rejected";
     consecutiveRefusals =
-      observation.runningDiagnosis === "host-refuses-authenticated-rpc"
+      observation.runningDiagnosis === "host-refuses-authenticated-rpc" ||
+      signInRejected
         ? consecutiveRefusals + 1
         : 0;
     const refused = consecutiveRefusals >= VERIFY_REFUSAL_STREAK_TO_STOP;
@@ -3933,7 +3945,9 @@ async function verifyUnderClaim(
       // observational; `host ensure` is NOT, and would be the wrong pointer -
       // the "registered" it converges is the OS service, not enrollment.
       const message = refused
-        ? refusedMessage(target, observation.runningRefusal ?? diagnosis)
+        ? signInRejected
+          ? signInRejectedMessage(target)
+          : refusedMessage(target, observation.runningRefusal ?? diagnosis)
         : postSwapError === null
           ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
           : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}${startFailure === null || startFailure.remedy === null ? "." : `; ${startFailure.remedy}`} (probe: ${diagnosis})`;
@@ -3947,7 +3961,12 @@ async function verifyUnderClaim(
         phase: "verifying",
       });
       throw cliError({
-        code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+        // A dead sign-in is the person's own state, which the CLI reports as
+        // such: `E_AUTH_REJECTED` is an expected code, so it is not captured.
+        code:
+          refused && signInRejected
+            ? CLI_ERROR_CODES.AUTH_REJECTED
+            : CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
         message,
         details: {
           environment: args.environment,

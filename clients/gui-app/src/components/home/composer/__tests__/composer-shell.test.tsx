@@ -97,6 +97,20 @@ describe("ComposerShell file-drop overlay", () => {
     ).not.toBeNull();
   });
 
+  it("describes the upload for non-image drags onto a chat on another computer", () => {
+    renderComposerShell("files", null, null, null);
+
+    expect(screen.getByText("Drop to attach files")).not.toBeNull();
+    expect(screen.getByText("Files up to 16.0 MiB")).not.toBeNull();
+  });
+
+  it("describes both uploads for mixed drags onto a chat on another computer", () => {
+    renderComposerShell("imagesAndFiles", null, null, null);
+
+    expect(screen.getByText("Drop to attach images and files")).not.toBeNull();
+    expect(screen.getByText("Files up to 16.0 MiB")).not.toBeNull();
+  });
+
   it("places attachments in their own row before the editor", () => {
     renderComposerShell(
       "images",

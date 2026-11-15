@@ -49,11 +49,13 @@ import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-re
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-reads-on-focus";
 import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
+import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import {
   environmentStatusFixture,
   pendingUploadFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 
+const SWITCH_NAME = AGENT_MEMORIES.definitions.traycerMemories.label;
 const ENV = "env-a";
 const OTHER_ENV = "env-b";
 const UPLOAD = "upload-memory";
@@ -171,7 +173,7 @@ function mount(): TeamPageHarness {
 
 /** The row's status line; request failures use the shared host notice. */
 async function line(): Promise<string> {
-  const row = await screen.findByText("Use Traycer memories for agents");
+  const row = await screen.findByText("Agents use shared memories");
   const text = row.closest("div")?.parentElement?.textContent ?? null;
   if (text === null) throw new Error("no row text");
   return text;
@@ -180,7 +182,7 @@ async function line(): Promise<string> {
 async function flipOn(): Promise<void> {
   const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
   const toggle = await screen.findByRole("switch", {
-    name: "Use Traycer memories for agents",
+    name: SWITCH_NAME,
   });
   // Enabled once the row's first read has answered, which is when a click can
   // mean anything.
@@ -207,7 +209,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("Agent memories ▸ the host row's write", () => {
+describe("Memories ▸ the host row's write", () => {
   it.each(["settled", "held initial"] as const)(
     "refreshes the Personal switch when a revision overtakes a %s GET",
     async (initialRead) => {
@@ -271,7 +273,7 @@ describe("Agent memories ▸ the host row's write", () => {
         if (initialRead === "settled") {
           expect(
             screen
-              .getByRole("switch", { name: "Use Traycer memories for agents" })
+              .getByRole("switch", { name: SWITCH_NAME })
               .getAttribute("aria-checked"),
           ).toBe("false");
         }
@@ -306,7 +308,7 @@ describe("Agent memories ▸ the host row's write", () => {
         expect(
           screen
             .getByRole("switch", {
-              name: "Use Traycer memories for agents",
+              name: SWITCH_NAME,
             })
             .getAttribute("aria-checked"),
         ).toBe("true"),
@@ -406,7 +408,7 @@ describe("Agent memories ▸ the host row's write", () => {
     expect(await line()).toContain("Waiting to reach your configuration");
     expect(
       screen
-        .getByRole("switch", { name: "Use Traycer memories for agents" })
+        .getByRole("switch", { name: SWITCH_NAME })
         .getAttribute("aria-checked"),
     ).toBe("false");
     act(() => releasePostStatus(read(false, 10)));
@@ -442,7 +444,7 @@ describe("Agent memories ▸ the host row's write", () => {
         expect(
           screen
             .getByRole("switch", {
-              name: "Use Traycer memories for agents",
+              name: SWITCH_NAME,
             })
             .getAttribute("aria-checked"),
         ).toBe("true"),
@@ -467,7 +469,7 @@ describe("Agent memories ▸ the host row's write", () => {
         });
       view.rerender(<AgentMemoriesSettingsPanel />);
       const toggle = (): HTMLElement =>
-        screen.getByRole("switch", { name: "Use Traycer memories for agents" });
+        screen.getByRole("switch", { name: SWITCH_NAME });
       await waitFor(() =>
         expect(harness.paramsOf("config.agentMemories.get").length).toBe(
           confirmedReads + 1,
@@ -499,7 +501,7 @@ describe("Agent memories ▸ the host row's write", () => {
       wrapper: harness.Wrapper,
     });
     const toggle = (): HTMLElement =>
-      screen.getByRole("switch", { name: "Use Traycer memories for agents" });
+      screen.getByRole("switch", { name: SWITCH_NAME });
     await waitFor(() =>
       expect(toggle().getAttribute("aria-checked")).toBe("true"),
     );
@@ -549,7 +551,7 @@ describe("Agent memories ▸ the host row's write", () => {
     );
     const view = render(content, { wrapper: harness.Wrapper });
     await screen.findByRole("switch", {
-      name: "Use Traycer memories for agents",
+      name: SWITCH_NAME,
     });
     await flipOn();
     await waitFor(async () =>
@@ -573,7 +575,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("false"),
     );
@@ -585,7 +587,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -615,7 +617,7 @@ describe("Agent memories ▸ the host row's write", () => {
       expect(
         screen
           .getByRole("switch", {
-            name: "Use Traycer memories for agents",
+            name: SWITCH_NAME,
           })
           .getAttribute("aria-checked"),
       ).toBe("true"),
@@ -666,7 +668,7 @@ describe("Agent memories ▸ the host row's write", () => {
       await waitFor(() =>
         expect(
           screen
-            .getByRole("switch", { name: "Use Traycer memories for agents" })
+            .getByRole("switch", { name: SWITCH_NAME })
             .getAttribute("aria-checked"),
         ).toBe("false"),
       );
@@ -675,7 +677,7 @@ describe("Agent memories ▸ the host row's write", () => {
       await waitFor(() =>
         expect(
           screen
-            .getByRole("switch", { name: "Use Traycer memories for agents" })
+            .getByRole("switch", { name: SWITCH_NAME })
             .getAttribute("aria-checked"),
         ).toBe("false"),
       );
@@ -718,7 +720,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -727,7 +729,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -758,7 +760,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -777,7 +779,7 @@ describe("Agent memories ▸ the host row's write", () => {
       wrapper: harness.Wrapper,
     });
     await screen.findByRole("switch", {
-      name: "Use Traycer memories for agents",
+      name: SWITCH_NAME,
     });
     script.get = () =>
       new Promise((resolve) => {
@@ -801,7 +803,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -812,7 +814,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -821,7 +823,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -870,7 +872,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -900,7 +902,7 @@ describe("Agent memories ▸ the host row's write", () => {
     await waitFor(() =>
       expect(
         screen
-          .getByRole("switch", { name: "Use Traycer memories for agents" })
+          .getByRole("switch", { name: SWITCH_NAME })
           .getAttribute("aria-checked"),
       ).toBe("true"),
     );
@@ -925,7 +927,7 @@ describe("Agent memories ▸ the host row's write", () => {
       const harness = mount();
       await flipOn();
       const toggle = screen.getByRole("switch", {
-        name: "Use Traycer memories for agents",
+        name: SWITCH_NAME,
       });
       await waitFor(() =>
         expect(toggle.getAttribute("aria-checked")).toBe("true"),
@@ -972,7 +974,7 @@ describe("Agent memories ▸ the host row's write", () => {
       await original.queryClient.refetchQueries({ type: "active" });
     });
     const toggle = screen.getByRole("switch", {
-      name: "Use Traycer memories for agents",
+      name: SWITCH_NAME,
     });
     await waitFor(() =>
       expect(toggle.getAttribute("aria-checked")).toBe("true"),
@@ -1407,7 +1409,7 @@ describe("Agent memories ▸ the host row's write", () => {
     };
     const harness = mount();
     await screen.findByRole("switch", {
-      name: "Use Traycer memories for agents",
+      name: SWITCH_NAME,
     });
     script.get = () =>
       new Promise((resolve) => {

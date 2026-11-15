@@ -140,7 +140,7 @@ export const PROVIDERS = defineSettingsSection("providers", {
   nativeMemory: {
     kind: "group",
     search: { anchor: null },
-    label: "Memories",
+    label: "Provider memories",
     description:
       "Changes apply when a provider session next starts. Saved memories are kept.",
     breadcrumb: "Providers",

@@ -48,6 +48,7 @@ import {
   managedCommandViewResponseSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
+  managedCommandSubscribeBotOutputV10,
   managedCommandSubscribeOutputV10,
   managedCommandSubscribeOutputV11,
 } from "@traycer/protocol/host/managed-command/subscribe";
@@ -223,4 +224,8 @@ export const managedCommandDeliverHeldV10 = defineRpcContract({
   responseSchema: managedCommandDeliverHeldResponseSchema,
 });
 
-export { managedCommandSubscribeOutputV10, managedCommandSubscribeOutputV11 };
+export {
+  managedCommandSubscribeBotOutputV10,
+  managedCommandSubscribeOutputV10,
+  managedCommandSubscribeOutputV11,
+};
