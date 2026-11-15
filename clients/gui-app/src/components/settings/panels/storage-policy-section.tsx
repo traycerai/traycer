@@ -338,14 +338,13 @@ function windowLabel(group: string, row: string): string {
 type HeldItem = keyof ConfigurationStoragePolicy;
 
 /**
- * A saved item's value, held from the save's answer until the read of its
- * environment reports the item at the saved revision or a later one. Any
- * other read (an older revision, the addressed one, no item, no data yet) is
- * not evidence of the save, so it keeps the hold.
+ * A saved item's value, held from the save's answer until the read reports
+ * the item at the saved revision or a later one. Any other read (an older
+ * revision, the addressed one, no item, no data yet) is not evidence of the
+ * save, so it keeps the hold.
  */
 interface HeldSave {
   readonly id: number;
-  readonly environmentId: string;
   readonly item: HeldItem;
   /** The control the save was made from, for its spinner. */
   readonly field: StorageControl;
@@ -367,13 +366,13 @@ function confirmedBy(
 }
 
 /**
- * The shown environment's held save of each item, and `hold` to start one
- * from a save's answer. Only a `saved` answer that moved the revision holds:
- * a conflict, a refusal or a failed save shows the read as it did before.
- * Holds of an environment not shown are kept for when it is shown again. A
- * hold the read never confirms ends after {@link READ_BOUND_MS}: the item then
- * shows the read, and the re-read the save asked for is asked again for the
- * hold's own environment: now if it is shown, or when it is next shown.
+ * The held save of each item, and `hold` to start one from a save's answer.
+ * Only a `saved` answer that moved the revision holds: a conflict, a refusal
+ * or a failed save shows the read as it did before. A hold the read never
+ * confirms ends after {@link READ_BOUND_MS}: the item then shows the read, and
+ * the re-read the save asked for is asked once more. The page mounts the
+ * section once per environment pick, so its holds all belong to the one
+ * environment it shows.
  */
 function useHeldSaves(
   environmentId: string | null,
@@ -390,10 +389,10 @@ function useHeldSaves(
   const [holds, setHolds] = useState<readonly HeldSave[]>([]);
   const nextId = useRef(0);
   const timers = useRef(new Map<number, number>());
-  // What the bound's timer reads when it fires: the last committed holds.
-  const committed = useRef(holds);
+  // What the bound's timer reads when it fires: the last committed render.
+  const committed = useRef({ holds, environmentId });
   useEffect(() => {
-    committed.current = holds;
+    committed.current = { holds, environmentId };
   });
   useEffect(() => {
     for (const [id, timer] of timers.current) {
@@ -409,26 +408,23 @@ function useHeldSaves(
       pendingTimers.clear();
     };
   }, []);
-  const shownHolds = holds.filter(
-    (held) => held.environmentId === environmentId,
-  );
-  const confirmed = shownHolds.filter((held) => confirmedBy(held, policy));
+  const confirmed = holds.filter((held) => confirmedBy(held, policy));
   if (confirmed.length > 0) {
     setHolds(holds.filter((held) => !confirmed.includes(held)));
   }
   const inForce = (item: HeldItem): HeldSave | null =>
-    shownHolds.find(
-      (held) => held.item === item && !confirmed.includes(held),
-    ) ?? null;
+    holds.find((held) => held.item === item && !confirmed.includes(held)) ??
+    null;
   const expire = (id: number): void => {
     timers.current.delete(id);
-    const held = committed.current.find((candidate) => candidate.id === id);
-    if (held === undefined) return;
+    const now = committed.current;
+    if (!now.holds.some((candidate) => candidate.id === id)) return;
     setHolds((current) => current.filter((candidate) => candidate.id !== id));
     // The re-read a successful save asks for, asked once more.
-    invalidateConfigurationReads(queries, held.environmentId, [
-      "environment.configuration.items",
-    ]);
+    if (now.environmentId !== null)
+      invalidateConfigurationReads(queries, now.environmentId, [
+        "environment.configuration.items",
+      ]);
   };
   return {
     storage: inForce("storage"),
@@ -444,17 +440,13 @@ function useHeldSaves(
       nextId.current += 1;
       const held: HeldSave = {
         id,
-        environmentId: request.environmentId,
         item,
         field,
         value: request.value,
         saved: result.revision,
       };
       setHolds((current) => [
-        ...current.filter(
-          (other) =>
-            other.environmentId !== held.environmentId || other.item !== item,
-        ),
+        ...current.filter((other) => other.item !== item),
         held,
       ]);
       timers.current.set(
