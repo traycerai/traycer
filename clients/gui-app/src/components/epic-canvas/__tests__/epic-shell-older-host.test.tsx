@@ -395,14 +395,16 @@ function renderTabOnTheWindowsComputer(): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  // The window is attached to this computer, which no lease serves.
+  // The window is attached to this computer and has been served by it: the
+  // drop below the floor then reads as a computer that stopped being usable,
+  // not as a first launch.
   act(() => {
     useSelectionAuthorityStore.getState().applyKernelSnapshot({
       attached: true,
       preferredHostId: null,
       targetHostId: TAB_HOST_ID,
       effectiveHostId: TAB_HOST_ID,
-      leases: [],
+      leases: [{ hostId: TAB_HOST_ID, status: "ready", dead: null }],
       selectionRevision: 1,
     });
   });
