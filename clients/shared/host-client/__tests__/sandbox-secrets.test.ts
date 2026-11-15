@@ -1282,4 +1282,46 @@ describe("a redirect answered to a sandbox secrets request", () => {
       });
     },
   );
+
+  it.each(redirects)(
+    "reads $name on the team environment read as a network error, never as not-a-member",
+    async ({ answer }) => {
+      const fetchMock = stubFetch(() => answer({ environmentId: ENV_ID }));
+
+      const result = await fetchTeamEnvironmentViaHttp(BASE, BEARER, "team-1");
+
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: "the environment answer did not match the contract",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the providers read as a network error, with both requests told not to follow",
+    async ({ answer }) => {
+      const fetchMock = stubFetch(() => answer([]));
+
+      const result = await fetchEnvironmentProvidersViaHttp(
+        BASE,
+        BEARER,
+        ENV_ID,
+      );
+
+      expect(result).toMatchObject({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(init?.redirect).toBe("manual");
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          `Bearer ${BEARER}`,
+        );
+      }
+    },
+  );
 });

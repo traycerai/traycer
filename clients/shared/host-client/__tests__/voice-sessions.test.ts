@@ -373,4 +373,31 @@ describe("a redirect answered to a voice request", () => {
       );
     },
   );
+
+  it.each(redirects)(
+    "reads $name on the end as a network error, never as a closed session",
+    async ({ answer, status }) => {
+      const fetchMock = stubFetch(async () =>
+        answer({ closedAt: 1_791_000_000_000 }),
+      );
+
+      const result = await voiceSessionsEndViaHttp(
+        BASE,
+        BEARER,
+        null,
+        "vs_123",
+      );
+
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: `the voice end route answered HTTP ${status}`,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${BEARER}`,
+      );
+    },
+  );
 });

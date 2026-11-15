@@ -3,6 +3,7 @@ import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirec
 import {
   listUserSessionsViaHttp,
   mintHostCredentialViaHttp,
+  requestStepUpChallengeViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
   toRetainedStepUpVerifyResult,
@@ -543,6 +544,103 @@ describe("a redirect answered to a devices and sessions request", () => {
       const [, init] = fetchMock.mock.calls[0];
       expect(init?.redirect).toBe("manual");
       expect(JSON.parse(String(init?.body))).toEqual({ code: "123456" });
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on a single-session revoke as a network error, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init: RequestInit | undefined) => answer({}),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await revokeUserSessionViaHttp(
+        AUTHN,
+        "jwt-abc",
+        "family-1",
+      );
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on a revoke of every session as a network error, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init: RequestInit | undefined) => answer({}),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await revokeAllSessionsViaHttp(AUTHN, "jwt-abc");
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on a host credential mint as a network error, never as rejected or superseded",
+    async ({ answer }) => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init: RequestInit | undefined) =>
+          answer({
+            token: "host-access-word",
+            refreshToken: "host-refresh-word",
+            familyId: "family-host-1",
+            hostId: "host-abc",
+            expiresIn: 900,
+            provisionedAt: "2026-07-08T12:00:00.123Z",
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await mintHostCredentialViaHttp(
+        AUTHN,
+        "jwt-abc",
+        { hostId: "host-abc", hostLabel: "Mac", platform: null },
+        null,
+      );
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer jwt-abc",
+      );
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on a step-up challenge request as a network error, with the bearer sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init: RequestInit | undefined) => answer({}),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await requestStepUpChallengeViaHttp(AUTHN, "jwt-abc");
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
       expect((init?.headers as Record<string, string>).Authorization).toBe(
         "Bearer jwt-abc",
       );

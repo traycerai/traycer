@@ -15,6 +15,7 @@ import {
   mintLinkLoginCodeViaHttp,
   normalizeLinkLoginCodeInput,
   parseLinkLoginInput,
+  respondLinkLoginViaHttp,
 } from "../link-login";
 import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 
@@ -593,6 +594,63 @@ describe("a redirect answered to a link-login request", () => {
       const [, init] = fetchMock.mock.calls[0];
       expect(init?.redirect).toBe("manual");
       expect(JSON.parse(String(init?.body))).toEqual({ secret: "secret-word" });
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the status poll as a network error, with the bearer and code sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        answer({ status: "claimed" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      expect(
+        await linkLoginStatusViaHttp(
+          AUTHN_BASE_URL,
+          "bearer-word",
+          NORMALIZED,
+          null,
+        ),
+      ).toEqual({ kind: "network-error" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer bearer-word",
+      );
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        code: NORMALIZED,
+      });
+    },
+  );
+
+  it.each(redirects)(
+    "reads $name on the respond as a network error, with the decision sent once and never followed",
+    async ({ answer }) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => answer({ ok: true }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      expect(
+        await respondLinkLoginViaHttp(
+          AUTHN_BASE_URL,
+          "bearer-word",
+          NORMALIZED,
+          true,
+        ),
+      ).toEqual({ kind: "network-error" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.redirect).toBe("manual");
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer bearer-word",
+      );
+      expect(JSON.parse(String(init?.body))).toEqual({
+        code: NORMALIZED,
+        approve: true,
+      });
     },
   );
 });
