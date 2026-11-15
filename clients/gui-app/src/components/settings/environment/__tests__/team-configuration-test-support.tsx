@@ -40,6 +40,7 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hashAppQueryKey } from "@/lib/query/query-key-hash";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -275,7 +276,7 @@ function buildTeamPage(
 ): TeamPageHarness {
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
+      queries: { queryKeyHashFn: hashAppQueryKey, retry: false, gcTime: 0 },
       mutations: { retry: false },
     },
   });
