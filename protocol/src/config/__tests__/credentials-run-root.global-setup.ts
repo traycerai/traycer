@@ -1,3 +1,4 @@
+import "../../../../scripts/test-worker-environment";
 import type { TestProject } from "vitest/node";
 import {
   createRunRoot,

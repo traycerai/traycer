@@ -16,6 +16,8 @@ export type RunRootObservations = {
 declare module "vitest" {
   export interface ProvidedContext {
     runRootObservations: RunRootObservations;
+    /** A process the fixture case records as a second worker, or null. */
+    runRootExtraWorker: number | null;
   }
 }
 

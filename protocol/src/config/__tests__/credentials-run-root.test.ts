@@ -20,7 +20,6 @@ const GLOBAL_SETUP = join(
   "credentials-run-root.global-setup.ts",
 );
 const OBSERVE_SETUP = join(FIXTURE_ROOT, "observe-run-root.global-setup.ts");
-const EXTRA_WORKER_ENV = "CREDENTIALS_RUN_ROOT_EXTRA_WORKER";
 
 type LongLivedChild = {
   readonly pid: number;
@@ -117,13 +116,9 @@ describe("credentials test run root", () => {
       observations: RunRootObservations;
     }) => void | Promise<void>,
   ): Promise<void> {
-    const previousExtraWorker = process.env[EXTRA_WORKER_ENV];
     let vitest: Vitest | null = null;
     let root: string | null = null;
     try {
-      if (extraWorkerPid !== null) {
-        process.env[EXTRA_WORKER_ENV] = String(extraWorkerPid);
-      }
       vitest = await createVitest("test", {
         root: FIXTURE_ROOT,
         config: false,
@@ -134,6 +129,7 @@ describe("credentials test run root", () => {
         pool: "forks",
         isolate: false,
         maxWorkers: 1,
+        provide: { runRootExtraWorker: extraWorkerPid },
       });
       const { testModules, unhandledErrors } = await vitest.start();
       expect(unhandledErrors).toEqual([]);
@@ -160,13 +156,6 @@ describe("credentials test run root", () => {
         () => vitest?.close(),
         () => {
           if (root !== null) removeTree(root);
-        },
-        () => {
-          if (previousExtraWorker === undefined) {
-            delete process.env[EXTRA_WORKER_ENV];
-          } else {
-            process.env[EXTRA_WORKER_ENV] = previousExtraWorker;
-          }
         },
       ]);
     }

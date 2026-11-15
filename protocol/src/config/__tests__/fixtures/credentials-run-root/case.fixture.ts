@@ -11,8 +11,8 @@ it("ends a case without removing its directory", () => {
   endCaseWorkDir(workDir);
   expect(existsSync(workDir)).toBe(true);
 
-  const extraWorker = process.env.CREDENTIALS_RUN_ROOT_EXTRA_WORKER;
-  if (extraWorker !== undefined) {
-    recordWorker(inject("credentialsTestRoot"), Number(extraWorker));
+  const extraWorker = inject("runRootExtraWorker");
+  if (extraWorker !== null) {
+    recordWorker(inject("credentialsTestRoot"), extraWorker);
   }
 });
