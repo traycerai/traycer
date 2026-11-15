@@ -213,6 +213,9 @@ describe("ProfileEditDialog colour", () => {
     const auth = await signedInAuthService({
       writeStatus: 204,
       onWriteAccepted: () => {
+        if (host === null) {
+          throw new Error("expected the computer fixture");
+        }
         setListedAccentColor(host, NEW_COLOR);
       },
     });
@@ -265,7 +268,7 @@ describe("ProfileEditDialog colour", () => {
       writeStatus: 204,
       onWriteAccepted: () => undefined,
     });
-    const profile = {
+    const profile: ProviderProfile = {
       ...legacyProfile({
         profileId: "work-row",
         label: "Work",
