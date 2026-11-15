@@ -3,9 +3,8 @@
  * Update that file whenever this settings surface changes.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { UseQueryResult } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import type { z } from "zod";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   EnvironmentConfigurationItemPutRequest,
   EnvironmentConfigurationItemWriteResponse,
@@ -30,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
 import { READ_BOUND_MS } from "@/hooks/environment/team/use-bounded-read";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import {
@@ -49,7 +49,6 @@ import {
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
-import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { useHostClient } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
@@ -123,7 +122,7 @@ function StoragePolicySectionBody(props: {
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
   const policy = read.data;
-  const held = useHeldSaves(environment?.environmentId ?? null, read);
+  const held = useHeldSaves(environment?.environmentId ?? null, policy);
   const pending = put.isPending ? put.variables : null;
   const shown = shownValue(
     storagePolicyValueSchema,
@@ -376,14 +375,12 @@ function confirmedBy(
  * a conflict, a refusal or a failed save shows the read as it did before.
  * Holds of an environment not shown are kept for when it is shown again. A
  * hold the read never confirms ends after {@link READ_BOUND_MS}: the item then
- * shows the read, and the read is asked once more.
+ * shows the read, and the hold's own environment's configuration reads are
+ * marked stale, so they run again now if it is shown, or when it is next shown.
  */
 function useHeldSaves(
   environmentId: string | null,
-  read: Pick<
-    UseQueryResult<ConfigurationStoragePolicy, HostRpcError>,
-    "data" | "refetch"
-  >,
+  policy: ConfigurationStoragePolicy | undefined,
 ): HeldSaves & {
   readonly hold: (
     item: HeldItem,
@@ -392,13 +389,14 @@ function useHeldSaves(
     result: EnvironmentConfigurationItemWriteResponse,
   ) => void;
 } {
+  const queries = useQueryClient();
   const [holds, setHolds] = useState<readonly HeldSave[]>([]);
   const nextId = useRef(0);
   const timers = useRef(new Map<number, number>());
-  // What the bound's timer reads when it fires: the last committed render.
-  const latest = useRef({ holds, environmentId, refetch: read.refetch });
+  // What the bound's timer reads when it fires: the last committed holds.
+  const committed = useRef(holds);
   useEffect(() => {
-    latest.current = { holds, environmentId, refetch: read.refetch };
+    committed.current = holds;
   });
   // A released hold's bound is cancelled.
   useEffect(() => {
@@ -418,7 +416,7 @@ function useHeldSaves(
   const shownHolds = holds.filter(
     (held) => held.environmentId === environmentId,
   );
-  const confirmed = shownHolds.filter((held) => confirmedBy(held, read.data));
+  const confirmed = shownHolds.filter((held) => confirmedBy(held, policy));
   if (confirmed.length > 0) {
     setHolds(holds.filter((held) => !confirmed.includes(held)));
   }
@@ -428,12 +426,12 @@ function useHeldSaves(
     ) ?? null;
   const expire = (id: number): void => {
     timers.current.delete(id);
-    const now = latest.current;
-    const held = now.holds.find((candidate) => candidate.id === id);
+    const held = committed.current.find((candidate) => candidate.id === id);
     if (held === undefined) return;
     setHolds((current) => current.filter((candidate) => candidate.id !== id));
-    if (held.environmentId === now.environmentId)
-      void now.refetch().catch(ignoreError);
+    invalidateConfigurationReads(queries, held.environmentId, [
+      "environment.configuration.items",
+    ]);
   };
   return {
     storage: inForce("storage"),
