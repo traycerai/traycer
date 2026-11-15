@@ -97,6 +97,9 @@ export function configurationReadMatches(
   reads: ReadonlyArray<keyof HostRpcRegistry & string>,
 ): boolean {
   return (
+    (queryKey[0] === "auth" &&
+      queryKey[1] === "environment-profile-records" &&
+      queryKey[2] === environmentId) ||
     hostQueryKeys.matchesMethodOnAnyHost(queryKey, ENVIRONMENT_LIST_METHOD) ||
     [HOST_LIST_METHOD, ...reads].some(
       (method) => readEnvironmentId(queryKey, method) === environmentId,

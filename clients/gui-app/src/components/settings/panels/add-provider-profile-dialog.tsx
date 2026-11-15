@@ -1087,7 +1087,7 @@ function AddProfileOutcomeFooter({
   return null;
 }
 
-function DuplicateAccountNotice({
+export function DuplicateAccountNotice({
   profile,
 }: {
   readonly profile: ProviderProfile;

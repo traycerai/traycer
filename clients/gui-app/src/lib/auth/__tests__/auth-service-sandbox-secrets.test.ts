@@ -1,11 +1,14 @@
 /**
- * `AuthService.getSandboxGrants` / `decideSecretRequest`: the two secrets-broker
- * calls. With no verified bearer they answer `unauthorized` and never reach the
- * runner host; with one they hand it `(bearer, ...args)` and return its answer
- * untouched.
+ * AuthService cloud calls use a verified session before reaching their cloud
+ * request boundary.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  AUTH_FETCH_MAX_ATTEMPTS,
+  authRetryDelayMs,
+} from "@traycer-clients/shared/auth/auth-validation";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -18,6 +21,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // The identity route the sign-in validation hits; every fixture answers it.
 const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
 const BEARER = "user-token";
+const providerKeySetBodySchema = z.strictObject({
+  key: z.string(),
+  onlyIfAbsent: z.literal(false),
+});
 
 const SUMMARY_RESULT: SandboxGrantsFetchResult = {
   kind: "ok",
@@ -46,7 +53,7 @@ const SUMMARY_RESULT: SandboxGrantsFetchResult = {
 };
 
 function installFetch(
-  handler: (input: unknown) => Promise<Response>,
+  handler: (input: unknown, init: RequestInit | undefined) => Promise<Response>,
 ): () => void {
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
   Object.defineProperty(globalThis, "fetch", {
@@ -142,7 +149,7 @@ async function signedInService(): Promise<{
   return made;
 }
 
-describe("AuthService secrets-broker calls", () => {
+describe("AuthService cloud calls", () => {
   let restoreFetch: () => void = () => undefined;
 
   beforeEach(() => {
@@ -154,6 +161,7 @@ describe("AuthService secrets-broker calls", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     while (trackedServices.length > 0) {
       trackedServices.pop()?.dispose();
     }
@@ -226,7 +234,12 @@ describe("AuthService secrets-broker calls", () => {
       await expect(service.getTeamEnvironment("team-1")).resolves.toBe(result);
 
       expect(getTeamEnvironment).toHaveBeenCalledTimes(1);
-      expect(getTeamEnvironment).toHaveBeenCalledWith(BEARER, "team-1");
+      const teamCall = getTeamEnvironment.mock.calls.at(0);
+      expect(
+        teamCall !== undefined &&
+          teamCall[0] === BEARER &&
+          teamCall[1] === "team-1",
+      ).toBe(true);
     });
 
     it("getEnvironmentProviders hands the runner host the bearer and the environment and returns its result", async () => {
@@ -244,11 +257,114 @@ describe("AuthService secrets-broker calls", () => {
       );
 
       expect(getEnvironmentProviders).toHaveBeenCalledTimes(1);
-      expect(getEnvironmentProviders).toHaveBeenCalledWith(BEARER, "env-1");
+      const providersCall = getEnvironmentProviders.mock.calls.at(0);
+      expect(
+        providersCall !== undefined &&
+          providersCall[0] === BEARER &&
+          providersCall[1] === "env-1",
+      ).toBe(true);
     });
   });
 
   describe("signed in", () => {
+    it("uses the verified service bearer for its own provider-record request", async () => {
+      const { service } = await signedInService();
+      restoreFetch();
+      const directRequests: Array<{
+        readonly url: string;
+        readonly authorized: boolean;
+        readonly setBody: boolean;
+      }> = [];
+      restoreFetch = installFetch((input, init) => {
+        const url = String(input);
+        if (url.includes("/provider-keys/")) {
+          const bodyText = init?.body;
+          const parsedBody: unknown =
+            typeof bodyText === "string" ? JSON.parse(bodyText) : null;
+          const body = providerKeySetBodySchema.safeParse(parsedBody);
+          directRequests.push({
+            url,
+            authorized:
+              new Headers(init?.headers).get("Authorization") ===
+              `Bearer ${BEARER}`,
+            setBody: body.success,
+          });
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                profileId: "profile-synthetic",
+                providerId: "cursor",
+                state: "live",
+                signInNumber: "3",
+                recordRevision: "5",
+                personIntentNumber: "2",
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 500 }));
+      });
+
+      const result = await service.changeProviderKeyRecord(
+        "env-synthetic",
+        "cursor",
+        { action: "set", apiKey: "synthetic-provider-key" },
+        null,
+      );
+
+      expect(result.kind === "record").toBe(true);
+      const [directRequest] = directRequests;
+      expect(
+        directRequests.length === 1 &&
+          directRequest.authorized &&
+          directRequest.setBody,
+      ).toBe(true);
+      expect(
+        directRequest.url.includes(
+          "/environments/env-synthetic/provider-keys/cursor",
+        ),
+      ).toBe(true);
+    });
+
+    it("refuses the provider-record request while the retained session is unverified", async () => {
+      vi.useFakeTimers();
+      const { service, host } = makeService();
+      await host.tokenStore.signIn(
+        { token: BEARER, refreshToken: "user-token-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        Promise.reject(new TypeError("offline")),
+      );
+      const starting = service.start();
+      for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+        await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+      }
+      await starting;
+      expect(useAuthStore.getState().status).toBe("unverified");
+
+      restoreFetch();
+      let providerRecordRequests = 0;
+      restoreFetch = installFetch((input) => {
+        if (String(input).includes("/provider-keys/"))
+          providerRecordRequests += 1;
+        return Promise.reject(new TypeError("offline"));
+      });
+      const result = await service.changeProviderKeyRecord(
+        "env-synthetic",
+        "cursor",
+        { action: "clear" },
+        null,
+      );
+
+      expect(result.kind === "refused" && result.code === "UNAUTHORIZED").toBe(
+        true,
+      );
+      expect(providerRecordRequests).toBe(0);
+    });
+
     it("getSandboxGrants hands the runner host the bearer and the host id and returns its result", async () => {
       const { service, host } = await signedInService();
       const getSandboxGrants = vi
@@ -260,7 +376,13 @@ describe("AuthService secrets-broker calls", () => {
       );
 
       expect(getSandboxGrants).toHaveBeenCalledTimes(1);
-      expect(getSandboxGrants).toHaveBeenCalledWith(BEARER, "env-1", "host-1");
+      const grantCall = getSandboxGrants.mock.calls.at(0);
+      expect(
+        grantCall !== undefined &&
+          grantCall[0] === BEARER &&
+          grantCall[1] === "env-1" &&
+          grantCall[2] === "host-1",
+      ).toBe(true);
     });
 
     it("getSandboxGrants returns a failure the runner host reports unchanged", async () => {
@@ -289,12 +411,14 @@ describe("AuthService secrets-broker calls", () => {
       ).resolves.toBe(result);
 
       expect(decideSecretRequest).toHaveBeenCalledTimes(1);
-      expect(decideSecretRequest).toHaveBeenCalledWith(
-        BEARER,
-        "env-1",
-        "req-1",
-        "approve",
-      );
+      const decisionCall = decideSecretRequest.mock.calls.at(0);
+      expect(
+        decisionCall !== undefined &&
+          decisionCall[0] === BEARER &&
+          decisionCall[1] === "env-1" &&
+          decisionCall[2] === "req-1" &&
+          decisionCall[3] === "approve",
+      ).toBe(true);
     });
 
     it("hands the runner host a null environment as null", async () => {
@@ -309,13 +433,19 @@ describe("AuthService secrets-broker calls", () => {
       await service.getSandboxGrants(null, "host-1");
       await service.decideSecretRequest(null, "req-1", "decline");
 
-      expect(getSandboxGrants).toHaveBeenCalledWith(BEARER, null, "host-1");
-      expect(decideSecretRequest).toHaveBeenCalledWith(
-        BEARER,
-        null,
-        "req-1",
-        "decline",
-      );
+      const grantCall = getSandboxGrants.mock.calls.at(0);
+      const decisionCall = decideSecretRequest.mock.calls.at(0);
+      expect(
+        grantCall !== undefined &&
+          grantCall[0] === BEARER &&
+          grantCall[1] === null &&
+          grantCall[2] === "host-1" &&
+          decisionCall !== undefined &&
+          decisionCall[0] === BEARER &&
+          decisionCall[1] === null &&
+          decisionCall[2] === "req-1" &&
+          decisionCall[3] === "decline",
+      ).toBe(true);
     });
 
     it("decideSecretRequest returns a conflict the runner host reports unchanged", async () => {

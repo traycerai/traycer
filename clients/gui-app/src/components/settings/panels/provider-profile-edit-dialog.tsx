@@ -20,7 +20,6 @@ import {
 } from "@/components/providers/provider-profile-model";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -58,6 +57,9 @@ import {
   hostRunsPersonal,
 } from "@/lib/providers/provider-key-custody";
 import { ProfileEditDialogPresentation } from "./profile-edit-dialog-presentation";
+import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import { ProfilePersonActionConfirmation } from "./profile-person-action-confirmation";
+import { profilePersonActionLabel } from "./profile-person-action-copy";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -511,6 +513,8 @@ function ProfileEditAccountSection(props: {
 function ProfileSignOutAction(props: {
   readonly providerId: ProviderId;
   readonly profile: ProviderProfile;
+  readonly environmentName: string | null;
+  readonly recordAccount: boolean;
   readonly disabled: boolean;
   readonly onSignedOut: () => void;
 }): ReactNode {
@@ -522,15 +526,20 @@ function ProfileSignOutAction(props: {
     "providers.signOutProfile",
   );
   const custodyClass = props.profile.credentialHome?.custodyClass;
+  const recordAccount = props.recordAccount;
   if (
     !supported ||
     props.profile.kind !== "managed" ||
-    props.profile.presence?.kind !== "admitted" ||
-    (custodyClass !== "self-sufficient" && custodyClass !== "brokered")
+    (!recordAccount &&
+      (props.profile.presence?.kind !== "admitted" ||
+        (custodyClass !== "self-sufficient" && custodyClass !== "brokered")))
   )
     return null;
-  const everyHost = custodyClass === "brokered";
-  const label = everyHost ? "Sign out on every host" : "Sign out";
+  const environmentAccount = recordAccount || custodyClass === "brokered";
+  const scope = recordAccount ? "record" : "legacy";
+  const label = environmentAccount
+    ? profilePersonActionLabel("sign-out", scope)
+    : "Sign out";
   const submit = (): void =>
     signOut.mutate(
       { providerId: props.providerId, profileId: props.profile.profileId },
@@ -548,19 +557,19 @@ function ProfileSignOutAction(props: {
         size="sm"
         variant="ghost"
         disabled={props.disabled || signOut.isPending}
-        onClick={() => (everyHost ? setConfirmOpen(true) : submit())}
+        onClick={() => (environmentAccount ? setConfirmOpen(true) : submit())}
       >
         {signOut.isPending ? <MutedAgentSpinner /> : null}
         {label}
       </Button>
-      {everyHost ? (
-        <ConfirmDestructiveDialog
+      {environmentAccount ? (
+        <ProfilePersonActionConfirmation
+          action="sign-out"
+          scope={scope}
+          profileName={profileDisplayLabel(props.profile)}
+          environmentName={props.environmentName}
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
-          title="Sign this account out on every host?"
-          description="You’ll need to sign in again to use this account on any host."
-          cascadeSummary={null}
-          actionLabel={label}
           isPending={signOut.isPending}
           blockedReason={
             props.disabled
@@ -706,16 +715,24 @@ export function ProfileEditDialog(props: {
     props.onSelectedProfileIdChange,
     setSignInSettled,
   );
+  const offersSignIns = listOffersSignIns(
+    useProvidersList({ enabled: false, subscribed: false }).data,
+  );
+  const recordAccount = offersSignIns && props.profile.aliases !== undefined;
+  const presence = props.profile.credentialHome?.environmentPresence;
+  const environmentName = usePickedTeamLabel(
+    presence?.scope === "environment" ? presence.environmentId : "",
+  );
   const hostClient = useHostClient();
   const openSwitchFlow = useProviderProfileAddFlowStore(
     (state) => state.openForSwitch,
   );
   const startSwitch = (): void => {
+    const hostId = hostClient.getActiveHostId();
     if (signInOutcomes === null) {
       setSwitchingAccount(true);
       return;
     }
-    const hostId = hostClient.getActiveHostId();
     if (hostId === null) return;
     props.onOpenChange(false);
     openSwitchFlow(
@@ -821,6 +838,20 @@ export function ProfileEditDialog(props: {
     props.onOpenChange(false);
     setConfirmRemoveOpen(true);
   };
+  const confirmRemove = (): void => {
+    removeProfile.mutate(
+      { providerId, profileId: props.profile.profileId },
+      {
+        onSuccess: () => {
+          setConfirmRemoveOpen(false);
+          const nextProfile = props.remainingProfilesAfterRemoval.at(0);
+          props.onSelectedProfileIdChange(
+            nextProfile === undefined ? null : profileCommitId(nextProfile),
+          );
+        },
+      },
+    );
+  };
 
   return (
     <ProfileEditDialogPresentation
@@ -844,6 +875,8 @@ export function ProfileEditDialog(props: {
         <ProfileSignOutAction
           providerId={providerId}
           profile={props.profile}
+          environmentName={environmentName}
+          recordAccount={recordAccount}
           disabled={savePending}
           onSignedOut={() => props.onOpenChange(false)}
         />
@@ -855,20 +888,22 @@ export function ProfileEditDialog(props: {
       confirmRemoveOpen={confirmRemoveOpen}
       onConfirmRemoveOpenChange={setConfirmRemoveOpen}
       removeDescription={`Agents that ran on ${profileDisplayLabel(props.profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
-      onConfirmRemove={() =>
-        removeProfile.mutate(
-          { providerId, profileId: props.profile.profileId },
-          {
-            onSuccess: () => {
-              setConfirmRemoveOpen(false);
-              const nextProfile = props.remainingProfilesAfterRemoval.at(0);
-              props.onSelectedProfileIdChange(
-                nextProfile === undefined ? null : profileCommitId(nextProfile),
-              );
-            },
-          },
-        )
+      removeConfirmation={
+        recordAccount ? (
+          <ProfilePersonActionConfirmation
+            action="remove"
+            scope="record"
+            profileName={profileDisplayLabel(props.profile)}
+            environmentName={environmentName}
+            open={confirmRemoveOpen}
+            onOpenChange={setConfirmRemoveOpen}
+            isPending={removeProfile.isPending}
+            blockedReason={null}
+            onConfirm={confirmRemove}
+          />
+        ) : null
       }
+      onConfirmRemove={confirmRemove}
     >
       <ProfileEligibilityEditor
         profile={props.profile}

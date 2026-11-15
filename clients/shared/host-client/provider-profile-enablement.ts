@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ProviderProfileAccentColor } from "@traycer/protocol/host/provider-schemas";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { PATH_ID_PATTERN } from "./path-id";
 
@@ -13,6 +14,20 @@ export interface ProfileRecordEnablementClient {
     environmentId: string,
     harnessId: string,
     change: ProfileRecordEnabledChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult>;
+}
+
+export interface ProfileRecordColorChange {
+  readonly profileId: string;
+  readonly color: ProviderProfileAccentColor;
+}
+
+export interface ProfileRecordColorClient {
+  setProfileRecordColor(
+    environmentId: string,
+    harnessId: string,
+    change: ProfileRecordColorChange,
     callerSignal: AbortSignal | null,
   ): Promise<ProfileRecordEnablementResult>;
 }
@@ -34,7 +49,7 @@ const itemsSchema = z.object({
 });
 
 /** A revision-checked edit on the person's session; no retry or local write. */
-export async function setProfileRecordEnabledViaHttp(
+export function setProfileRecordEnabledViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
   environmentId: string,
@@ -43,6 +58,57 @@ export async function setProfileRecordEnabledViaHttp(
   enabled: boolean,
   callerSignal: AbortSignal | null,
 ): Promise<ProfileRecordEnablementResult> {
+  return writeProfileRecordItem({
+    authnBaseUrl,
+    bearerToken,
+    environmentId,
+    harnessId,
+    profileId,
+    patch: { enabled },
+    callerSignal,
+  });
+}
+
+export function setProfileRecordColorViaHttp(
+  authnBaseUrl: string,
+  bearerToken: string,
+  environmentId: string,
+  harnessId: string,
+  change: ProfileRecordColorChange,
+  callerSignal: AbortSignal | null,
+): Promise<ProfileRecordEnablementResult> {
+  return writeProfileRecordItem({
+    authnBaseUrl,
+    bearerToken,
+    environmentId,
+    harnessId,
+    profileId: change.profileId,
+    patch: { color: change.color },
+    callerSignal,
+  });
+}
+
+/** Both edits read the exact record's item and preserve every other value. */
+async function writeProfileRecordItem(input: {
+  readonly authnBaseUrl: string;
+  readonly bearerToken: string;
+  readonly environmentId: string;
+  readonly harnessId: string;
+  readonly profileId: string;
+  readonly patch:
+    | { readonly enabled: boolean }
+    | { readonly color: ProviderProfileAccentColor };
+  readonly callerSignal: AbortSignal | null;
+}): Promise<ProfileRecordEnablementResult> {
+  const {
+    authnBaseUrl,
+    bearerToken,
+    environmentId,
+    harnessId,
+    profileId,
+    patch,
+    callerSignal,
+  } = input;
   if (!PATH_ID_PATTERN.test(environmentId)) return { kind: "failed" };
   const abort = composeRequestAbort(callerSignal, 15_000);
   try {
@@ -89,7 +155,7 @@ export async function setProfileRecordEnabledViaHttp(
         body: JSON.stringify({
           key,
           os: null,
-          value: { ...value, enabled },
+          value: { ...value, ...patch },
           revision: item.revision,
           upload: null,
         }),

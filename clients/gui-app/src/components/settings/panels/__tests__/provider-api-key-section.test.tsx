@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
 import { ProviderApiKeySection } from "@/components/settings/panels/provider-api-key-section";
+import { apiKeyState } from "./provider-api-key-section-fixture";
 import {
   NO_NOTICES,
   NO_OVERRIDES,
@@ -18,23 +19,25 @@ const mocks = vi.hoisted(() => ({
   openLink: vi.fn(),
   setApiKeyMutate: vi.fn(),
   clearApiKeyMutate: vi.fn(),
+  setExpectedEnvironmentIds: new Array<string | null>(),
+  clearExpectedEnvironmentIds: new Array<string | null>(),
   /** What `useHostCredentialRefusal` answers; `null` is a host that takes keys. */
   credentialRefusal: null as string | null,
 }));
 const openLink = mocks.openLink;
 
 vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
-  useProvidersSetApiKey: () => ({
-    mutate: mocks.setApiKeyMutate,
-    isPending: false,
-  }),
+  useProvidersSetApiKey: (expectedEnvironmentId: string | null) => {
+    mocks.setExpectedEnvironmentIds.push(expectedEnvironmentId);
+    return { mutate: mocks.setApiKeyMutate, isPending: false };
+  },
 }));
 
 vi.mock("@/hooks/providers/use-providers-clear-api-key-mutation", () => ({
-  useProvidersClearApiKey: () => ({
-    mutate: mocks.clearApiKeyMutate,
-    isPending: false,
-  }),
+  useProvidersClearApiKey: (expectedEnvironmentId: string | null) => {
+    mocks.clearExpectedEnvironmentIds.push(expectedEnvironmentId);
+    return { mutate: mocks.clearApiKeyMutate, isPending: false };
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
@@ -45,38 +48,27 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => openLink,
 }));
 
-function apiKeyState(
-  providerId: ProviderCliState["providerId"],
-): ProviderCliState {
-  return {
-    providerId,
-    enabled: true,
-    disabledBy: null,
-    selected: { kind: "path" },
-    candidates: [],
-    auth: {
-      status: "unknown",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: true, configured: false, source: null },
-    terminalAgentArgs: "",
-    envOverrides: [],
-    loginCapability: null,
-    availabilityPending: false,
-    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-    profiles: [],
-  };
-}
-
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.credentialRefusal = null;
+  mocks.setExpectedEnvironmentIds.length = 0;
+  mocks.clearExpectedEnvironmentIds.length = 0;
 });
+
+function UnscopedProviderApiKeySection(props: {
+  readonly state: ProviderCliState;
+  readonly draft: string;
+  readonly onDraftChange: (draft: string) => void;
+}): ReactNode {
+  return (
+    <ProviderApiKeySection
+      {...props}
+      expectedEnvironmentId={null}
+      environmentName={null}
+    />
+  );
+}
 
 describe("ProviderApiKeySection dashboard link", () => {
   it("renders the key field without a 'get a key' button when the dashboard URL is null (kiro)", () => {
@@ -84,7 +76,7 @@ describe("ProviderApiKeySection dashboard link", () => {
     // Record marks that omission with null rather than silently dropping the
     // button the way a Partial record did for any missing entry.
     render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={apiKeyState("kiro")}
         draft=""
         onDraftChange={() => undefined}
@@ -99,7 +91,7 @@ describe("ProviderApiKeySection dashboard link", () => {
 
   it("renders a 'get a key' button when the dashboard URL is non-null (cursor)", () => {
     render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={apiKeyState("cursor")}
         draft=""
         onDraftChange={() => undefined}
@@ -135,7 +127,7 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
   it("disables the field and Save, shows the refusal, and never sends a typed key, by click or by Enter", () => {
     mocks.credentialRefusal = REFUSAL;
     render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={apiKeyState("cursor")}
         draft="sk-secret"
         onDraftChange={() => undefined}
@@ -157,7 +149,7 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
   it("keeps Clear enabled for a stored key: removing one sends nothing secret", () => {
     mocks.credentialRefusal = REFUSAL;
     render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={storedKeyState()}
         draft=""
         onDraftChange={() => undefined}
@@ -176,7 +168,7 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
 
   it("control: on a host that takes keys the same draft is saved by click and by Enter, with no refusal shown", () => {
     render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={apiKeyState("cursor")}
         draft="sk-secret"
         onDraftChange={() => undefined}
@@ -187,11 +179,17 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
 
-    expect(mocks.setApiKeyMutate).toHaveBeenCalledTimes(2);
-    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
-      { providerId: "cursor", apiKey: "sk-secret" },
-      expect.anything(),
-    );
+    const calls = mocks.setApiKeyMutate.mock.calls;
+    const firstCall = calls.at(0);
+    const secondCall = calls.at(1);
+    expect(
+      calls.length === 2 &&
+        firstCall !== undefined &&
+        secondCall !== undefined &&
+        firstCall[0].providerId === "cursor" &&
+        firstCall[0].apiKey === "sk-secret" &&
+        secondCall[0].apiKey === "sk-secret",
+    ).toBe(true);
   });
 });
 
@@ -203,7 +201,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
 
   it("shows the refusal beside the field, disables Save and sends nothing by click or by Enter", () => {
     render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={apiKeyState("openrouter")}
         draft={ANTHROPIC_KEY}
         onDraftChange={() => undefined}
@@ -230,7 +228,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
     for (const draft of [OPENROUTER_KEY, "unrecognized-shape-fake-key"]) {
       mocks.setApiKeyMutate.mockClear();
       const { unmount } = render(
-        <ProviderApiKeySection
+        <UnscopedProviderApiKeySection
           state={apiKeyState("openrouter")}
           draft={draft}
           onDraftChange={() => undefined}
@@ -242,10 +240,13 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
         screen.getByLabelText("API key").getAttribute("aria-invalid"),
       ).toBe("false");
       fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
-      expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
-        { providerId: "openrouter", apiKey: draft },
-        expect.anything(),
-      );
+      const savedCall = mocks.setApiKeyMutate.mock.calls.at(0);
+      expect(
+        mocks.setApiKeyMutate.mock.calls.length === 1 &&
+          savedCall !== undefined &&
+          savedCall[0].providerId === "openrouter" &&
+          savedCall[0].apiKey === draft,
+      ).toBe(true);
       unmount();
     }
   });
@@ -265,7 +266,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
       },
     };
     const { rerender } = render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={savedForeign}
         draft=""
         onDraftChange={() => undefined}
@@ -282,7 +283,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
     );
 
     rerender(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={savedForeign}
         draft="   "
         onDraftChange={() => undefined}
@@ -291,7 +292,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
     expect(screen.getByRole("alert").textContent).toBe(SAVED_KEY_AUTH_DETAIL);
 
     rerender(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={savedForeign}
         draft={OPENROUTER_KEY}
         onDraftChange={() => undefined}
@@ -306,15 +307,18 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
       screen.getByRole("button", { name: "Save" }).hasAttribute("disabled"),
     ).toBe(false);
     fireEvent.keyDown(screen.getByLabelText("API key"), { key: "Enter" });
-    expect(mocks.setApiKeyMutate).toHaveBeenCalledWith(
-      { providerId: "openrouter", apiKey: OPENROUTER_KEY },
-      expect.anything(),
-    );
+    const savedCall = mocks.setApiKeyMutate.mock.calls.at(0);
+    expect(
+      mocks.setApiKeyMutate.mock.calls.length === 1 &&
+        savedCall !== undefined &&
+        savedCall[0].providerId === "openrouter" &&
+        savedCall[0].apiKey === OPENROUTER_KEY,
+    ).toBe(true);
   });
 
   it("control: a saved key that is merely unauthenticated without a refusal shows no alert", () => {
     render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={{
           ...apiKeyState("openrouter"),
           apiKey: { supported: true, configured: true, source: "stored" },
@@ -347,39 +351,77 @@ describe("ProviderApiKeySection custody sentence", () => {
     return `Stored encrypted on ${host} only. When no key is saved here, ${provider} uses ${envName} from ${host}'s shell.`;
   }
 
+  function renderPersonal(
+    section: ReactNode,
+    hostState: PersonalHostState,
+  ): void {
+    render(
+      <PersonalPageContext.Provider
+        value={{
+          section: "providers",
+          pick: PERSONAL_PICK,
+          state: hostState,
+          line: null,
+          hostName: "Studio",
+          localOverrides: NO_OVERRIDES,
+          hostId: "host-1",
+          client: null,
+          notices: NO_NOTICES,
+          review: NO_REVIEW,
+        }}
+      >
+        {section}
+      </PersonalPageContext.Provider>,
+    );
+  }
+
   function renderOn(
     providerId: ProviderCliState["providerId"],
     hostState: PersonalHostState | null,
   ): void {
     const section = (
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={apiKeyState(providerId)}
         draft=""
         onDraftChange={() => undefined}
       />
     );
-    render(
-      hostState === null ? (
-        section
-      ) : (
-        <PersonalPageContext.Provider
-          value={{
-            section: "providers",
-            pick: PERSONAL_PICK,
-            state: hostState,
-            line: null,
-            hostName: "Studio",
-            localOverrides: NO_OVERRIDES,
-            hostId: "host-1",
-            client: null,
-            notices: NO_NOTICES,
-            review: NO_REVIEW,
-          }}
-        >
-          {section}
-        </PersonalPageContext.Provider>
-      ),
+    if (hostState === null) {
+      render(section);
+      return;
+    }
+    renderPersonal(section, hostState);
+  }
+
+  function renderRecorded(
+    providerId: ProviderCliState["providerId"],
+    environmentName: string,
+    personal: boolean,
+  ): void {
+    const environmentId = "environment-recorded";
+    const state: ProviderCliState = {
+      ...apiKeyState(providerId),
+      apiKey: {
+        supported: true,
+        configured: true,
+        source: "stored",
+        recordEnvironmentId: environmentId,
+      },
+    };
+    const section = (
+      <ProviderApiKeySection
+        state={state}
+        draft=""
+        onDraftChange={() => undefined}
+        expectedEnvironmentId={environmentId}
+        environmentName={environmentName}
+      />
     );
+    if (personal) {
+      renderPersonal(section, READY);
+      return;
+    }
+    render(section);
   }
 
   it("states Personal's custody and links how Traycer handles it for a provider whose key becomes Personal's secret", () => {
@@ -432,7 +474,7 @@ describe("ProviderApiKeySection custody sentence", () => {
 
   it("names the host even when the saved key came from the shell", () => {
     render(
-      <ProviderApiKeySection
+      <UnscopedProviderApiKeySection
         state={{
           ...apiKeyState("kiro"),
           apiKey: { supported: true, configured: true, source: "env" },
@@ -448,4 +490,83 @@ describe("ProviderApiKeySection custody sentence", () => {
       ),
     ).toBeDefined();
   });
+
+  it.each(["cursor", "openrouter", "huggingface", "amp"] as const)(
+    "shows the Personal record custody notice for %s",
+    (providerId) => {
+      renderRecorded(providerId, "Personal", true);
+
+      expect(
+        screen.getByText(
+          "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
+        ),
+      ).toBeDefined();
+      expect(screen.getByText("How Traycer handles this")).toBeDefined();
+    },
+  );
+
+  it("shows team record custody without the Personal data-handling notice", () => {
+    renderRecorded("cursor", "Acme", false);
+
+    expect(
+      screen.getByText(
+        "Stored encrypted in Traycer's cloud. Computers running Acme receive the value, readable by their tools and agents; sandboxes use it without seeing it.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText("How Traycer handles this")).toBeNull();
+    expect(screen.queryByText(/Personal/)).toBeNull();
+  });
+
+  it.each(["kiro", "droid"] as const)(
+    "keeps %s record keys host-scoped without the Personal notice",
+    (providerId) => {
+      renderRecorded(providerId, "Personal", true);
+
+      expect(
+        screen.getByText(
+          "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents.",
+        ),
+      ).toBeDefined();
+      expect(screen.queryByText("How Traycer handles this")).toBeNull();
+    },
+  );
+
+  it.each(["absent", "null"] as const)(
+    "keeps the legacy host and shell lines when recordEnvironmentId is %s",
+    (fact) => {
+      const state: ProviderCliState = {
+        ...apiKeyState("cursor"),
+        apiKey:
+          fact === "null"
+            ? {
+                supported: true,
+                configured: true,
+                source: "env",
+                recordEnvironmentId: null,
+              }
+            : { supported: true, configured: true, source: "env" },
+      };
+      render(
+        <UnscopedProviderApiKeySection
+          state={state}
+          draft=""
+          onDraftChange={() => undefined}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          "Using CURSOR_API_KEY from your shell. Save a key here to override it.",
+        ),
+      ).toBeDefined();
+      expect(
+        screen.getByText(
+          shortDeviceLine("this computer", "Cursor", "CURSOR_API_KEY"),
+        ),
+      ).toBeDefined();
+      expect(
+        screen.queryByText(/Stored encrypted in Traycer's cloud/),
+      ).toBeNull();
+    },
+  );
 });
