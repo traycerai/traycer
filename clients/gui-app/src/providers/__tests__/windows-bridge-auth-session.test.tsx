@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import type {
   AuthSessionSnapshot,
+  LiveRevalidationOutcome,
   RevokedCloudAuthorization,
 } from "@/lib/auth/auth-service";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type {
   DesktopAuthSessionRefusalReason,
   DesktopLocalAuthSessionRestoreResult,
@@ -113,7 +115,7 @@ interface AuthSessionBridgeTestHarness {
   ) => void;
   /** The session the sign-in service reports now (what a resend hands over). */
   readonly setCurrentSession: (snapshot: AuthSessionSnapshot) => void;
-  readonly revalidate: Mock<() => Promise<unknown>>;
+  readonly revalidate: Mock<() => Promise<LiveRevalidationOutcome | null>>;
   readonly revoke: Mock<
     (rejectedToken: string, revocation: RevocationScope) => Promise<void>
   >;
@@ -166,7 +168,9 @@ function renderWithFakes(
   const ingest = vi.fn((_snapshot: AuthSessionSnapshot): Promise<void> =>
     Promise.resolve(),
   );
-  const revalidate = vi.fn((): Promise<unknown> => Promise.resolve(null));
+  const revalidate = vi.fn((): Promise<LiveRevalidationOutcome | null> =>
+    Promise.resolve(null),
+  );
   const ingestRevoked = vi.fn(
     (_rejectedToken: string, _revocation: RevocationScope): void => undefined,
   );
@@ -701,6 +705,21 @@ const TOKEN_REFUSALS: readonly Exclude<
 ];
 
 const RESEND_MS = 60_000;
+
+// What the sign-in service's `revalidateCurrentContext` answers, typed by its
+// own exported outcome so a renamed or removed outcome fails this file's compile.
+const AUTHN_REFRESHED: LiveRevalidationOutcome = {
+  kind: "valid",
+  user: createAuthenticatedUserFixture(undefined),
+  refreshedToken: "refreshed-token",
+  refreshedRefreshToken: "refreshed-refresh",
+};
+const AUTHN_ACCEPTED: LiveRevalidationOutcome = {
+  kind: "valid",
+  user: createAuthenticatedUserFixture(undefined),
+};
+const AUTHN_REJECTED: LiveRevalidationOutcome = { kind: "rejected" };
+const AUTHN_UNREACHABLE: LiveRevalidationOutcome = { kind: "network-error" };
 const FRESH_SNAPSHOT: AuthSessionSnapshot = {
   ...SIGNED_IN_SNAPSHOT,
   token: "refreshed-token",
@@ -958,7 +977,7 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
         harness.setCurrentSession(FRESH_SNAPSHOT);
         harness.answerSetWith(ACCEPTED);
         harness.emitOutbound(FRESH_SNAPSHOT);
-        return Promise.resolve(null);
+        return Promise.resolve(AUTHN_REFRESHED);
       });
 
       await tick(RESEND_MS);
@@ -981,7 +1000,7 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
         harness.setCurrentSession(SIGNED_OUT_SNAPSHOT);
         harness.answerSetWith(ACCEPTED);
         harness.emitOutbound(SIGNED_OUT_SNAPSHOT);
-        return Promise.resolve(null);
+        return Promise.resolve(AUTHN_REJECTED);
       });
 
       await tick(RESEND_MS);
@@ -1009,7 +1028,7 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       harness.revalidate.mockImplementation(() => {
         harness.setCurrentSession(UNVERIFIED_SNAPSHOT);
         harness.emitOutbound(UNVERIFIED_SNAPSHOT);
-        return Promise.resolve(null);
+        return Promise.resolve(AUTHN_REJECTED);
       });
 
       await tick(RESEND_MS);
@@ -1059,6 +1078,7 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
     it("hands the same session over on the next tick when authn accepts it", async () => {
       const harness = await startOffline({});
       harness.answerSetWith(refused("unknown-signing-key"));
+      harness.revalidate.mockResolvedValue(AUTHN_ACCEPTED);
       await tick(RESEND_MS);
       expect(harness.revalidate).toHaveBeenCalledTimes(1);
 
@@ -1075,17 +1095,33 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       expect(harness.set).toHaveBeenCalledTimes(handedOver);
     });
 
-    it("keeps the hold and its timer when authn cannot be reached", async () => {
-      const harness = await startOffline({});
-      harness.answerSetWith(refused("expired"));
-      harness.revalidate.mockRejectedValue(new Error("network down"));
+    it.each([
+      {
+        label: "authn answers network-error",
+        script: (harness: AuthSessionBridgeTestHarness) => {
+          harness.revalidate.mockResolvedValue(AUTHN_UNREACHABLE);
+        },
+      },
+      {
+        label: "the call itself rejects",
+        script: (harness: AuthSessionBridgeTestHarness) => {
+          harness.revalidate.mockRejectedValue(new Error("network down"));
+        },
+      },
+    ])(
+      "keeps the hold and its timer when authn cannot be reached: $label",
+      async ({ script }) => {
+        const harness = await startOffline({});
+        harness.answerSetWith(refused("expired"));
+        script(harness);
 
-      await tick(RESEND_MS);
-      await tick(RESEND_MS);
+        await tick(RESEND_MS);
+        await tick(RESEND_MS);
 
-      expect(harness.set).toHaveBeenCalledTimes(3);
-      expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
-    });
+        expect(harness.set).toHaveBeenCalledTimes(3);
+        expect(harness.restoreLocal).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 
   it("lets a superseded write's refusal for the keys decide nothing", async () => {
