@@ -660,7 +660,6 @@ async function postHostRoute(
                   Accept: "application/json",
                 },
           ...(body === null ? {} : { body }),
-          redirect: "manual",
           signal: abort.signal,
           // The sign-in rides in a header, so a redirect is never followed:
           // it would carry the sign-in to wherever the answer pointed.
