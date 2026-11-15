@@ -12,6 +12,7 @@ import { EditorView } from "@uiw/react-codemirror";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import { TeamPlans } from "@/components/settings/environment/team-plans";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
@@ -19,6 +20,8 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { negotiateMethods } from "./mcp-skills-test-support";
 import {
+  answerTeamHostList,
+  authnAnswer,
   mountTeamPage,
   mountTeamPageNegotiating,
   hostIdsOf,
@@ -547,5 +550,81 @@ describe("TeamGuide", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
+  });
+});
+
+describe("TeamPlans' unlink sheet when authn answers the host list again", () => {
+  async function openUnlinkNamingMacMini() {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.plans.list": () => ({
+        plans: [
+          {
+            profileId: "prof-1",
+            bindingVersion: 7,
+            harness: "claude",
+            status: "linked" as const,
+            linkedBy: { name: "Ada", you: false },
+          },
+        ],
+      }),
+      "environment.list": () => environmentList,
+      "environment.host.list": () => ({ hosts: [host] }),
+      "environment.plans.unlinkPreview": () => ({
+        activeTurns: 2,
+        localHostId: host.hostId,
+        keepsWorking: [],
+      }),
+    });
+    render(<TeamPlans providerId="claude-code" adminNames={["Ada"]} />, {
+      wrapper: harness.Wrapper,
+    });
+    const card = await screen.findByRole("region", { name: "Plans" });
+    await userEvent.click(within(card).getByRole("button", { name: "Unlink" }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(within(dialog).getByText(/On Mac mini only\./)).toBeTruthy(),
+    );
+    return { harness, dialog };
+  }
+
+  it.each([
+    ["a 403 environment_action_forbidden", 403, "environment_action_forbidden"],
+    ["a 404 environment_not_found", 404, "environment_not_found"],
+  ])(
+    "calls the serving host by no name after %s",
+    async (_label, status, code) => {
+      const { harness, dialog } = await openUnlinkNamingMacMini();
+
+      answerTeamHostList(harness, "env-a", authnAnswer(status, { code }));
+      await act(() =>
+        invalidateEnvironmentReads(harness.queryClient, [
+          "environment.host.list",
+        ]),
+      );
+
+      await waitFor(() =>
+        expect(
+          within(dialog).getByText(/On the serving host only\./),
+        ).toBeTruthy(),
+      );
+      expect(within(dialog).queryByText(/Mac mini/)).toBeNull();
+    },
+  );
+
+  it("still names the serving host through a 503", async () => {
+    const { harness, dialog } = await openUnlinkNamingMacMini();
+
+    answerTeamHostList(
+      harness,
+      "env-a",
+      authnAnswer(503, { error: "temporarily unavailable" }),
+    );
+    await act(() =>
+      invalidateEnvironmentReads(harness.queryClient, [
+        "environment.host.list",
+      ]),
+    );
+
+    expect(within(dialog).getByText(/On Mac mini only\./)).toBeTruthy();
   });
 });
