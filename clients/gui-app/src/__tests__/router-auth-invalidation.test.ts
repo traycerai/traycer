@@ -7,6 +7,8 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { appLogger } from "@/lib/logger";
+import { runWhenRouterSettled } from "@/lib/router-settled";
 import { bindAuthInvalidation, type AuthInvalidationRouter } from "@/router";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -101,6 +103,7 @@ describe("bindAuthInvalidation", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetAuthStore();
   });
 
@@ -168,6 +171,32 @@ describe("bindAuthInvalidation", () => {
     await flushMicrotasks();
 
     expect(invalidate).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("still invalidates after a task queued ahead of it threw, and for every later change", async () => {
+    const errors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+    const { router, invalidate, resolve } = makeFakeRouter("pending", false);
+    const unsubscribe = bindAuthInvalidation(router);
+    const fault = new Error("quota exceeded");
+    // The bridge's replay, queued first, throws from `history.replace`.
+    runWhenRouterSettled(router, () => {
+      throw fault;
+    });
+
+    signIn("user-a");
+    resolve();
+    await flushMicrotasks();
+
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(errors).toHaveBeenCalledWith(
+      "[router] a task waiting for the router threw",
+      {},
+      fault,
+    );
+
+    switchUser("user-b");
+    expect(invalidate).toHaveBeenCalledTimes(2);
     unsubscribe();
   });
 

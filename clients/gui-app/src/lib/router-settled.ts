@@ -12,6 +12,8 @@
  * {@link runWhenRouterSettled}, so on one router no such load starts under
  * another.
  */
+import { appLogger } from "@/lib/logger";
+
 export interface SettlingRouter {
   readonly state: { readonly status: "pending" | "idle" };
   subscribe: (eventType: "onResolved", fn: () => void) => () => void;
@@ -20,6 +22,8 @@ export interface SettlingRouter {
 interface SettleQueue {
   readonly tasks: Array<() => void>;
   disarm: (() => void) | null;
+  /** A drain is queued for after the `onResolved` that armed it. */
+  scheduled: boolean;
 }
 
 const queues = new WeakMap<SettlingRouter, SettleQueue>();
@@ -27,13 +31,13 @@ const queues = new WeakMap<SettlingRouter, SettleQueue>();
 function queueFor(router: SettlingRouter): SettleQueue {
   const existing = queues.get(router);
   if (existing !== undefined) return existing;
-  const created: SettleQueue = { tasks: [], disarm: null };
+  const created: SettleQueue = { tasks: [], disarm: null, scheduled: false };
   queues.set(router, created);
   return created;
 }
 
 function drain(router: SettlingRouter, queue: SettleQueue): void {
-  while (queue.disarm === null) {
+  while (queue.disarm === null && !queue.scheduled) {
     const next = queue.tasks.shift();
     if (next === undefined) return;
     if (router.state.status === "pending") {
@@ -44,16 +48,28 @@ function drain(router: SettlingRouter, queue: SettleQueue): void {
         // The Transitioner emits `onResolved` BEFORE it sets `status:
         // "idle"`, in the same layout effect. A load started inside this
         // listener would be stamped idle while it runs, so it goes after
-        // that write.
+        // that write. Until then a task given from another `onResolved`
+        // listener only joins the queue.
+        queue.scheduled = true;
         queueMicrotask(() => {
+          queue.scheduled = false;
           drain(router, queue);
         });
       });
       return;
     }
     // A task that starts a load leaves the router pending, so the next one
-    // waits for that load to resolve.
-    next();
+    // waits for that load to resolve. A task that throws is reported and
+    // strands nothing behind it.
+    try {
+      next();
+    } catch (error) {
+      appLogger.error(
+        "[router] a task waiting for the router threw",
+        {},
+        error,
+      );
+    }
   }
 }
 
