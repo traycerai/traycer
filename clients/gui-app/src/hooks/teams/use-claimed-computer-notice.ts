@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
+  CancelledError,
+  focusManager,
   queryOptions,
-  useQueries,
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
@@ -48,17 +49,23 @@ interface ClaimReadsState {
   readonly era: ClaimReadEra | null;
   /** The sign-in read has been asked for, in this era. */
   readonly signInAsked: boolean;
+  /** The number of the last ask, in this era. */
+  readonly lastAsk: number;
   /**
    * The teams whose claims still need a read that answers: team id to the
-   * number of answers its entry had when the read was asked.
+   * ask whose read must answer. A later trigger's ask replaces it.
    */
   readonly pending: Readonly<Record<string, number>>;
+  /** The waiting teams whose latest read failed or was refused. */
+  readonly failed: ReadonlySet<string>;
 }
 
 const useClaimReadsStore = create<ClaimReadsState>()(() => ({
   era: null,
   signInAsked: false,
+  lastAsk: 0,
   pending: {},
+  failed: new Set(),
 }));
 
 function sameEra(a: ClaimReadEra | null, b: ClaimReadEra | null): boolean {
@@ -67,7 +74,13 @@ function sameEra(a: ClaimReadEra | null, b: ClaimReadEra | null): boolean {
 
 function beginEra(era: ClaimReadEra | null): void {
   if (sameEra(useClaimReadsStore.getState().era, era)) return;
-  useClaimReadsStore.setState({ era, signInAsked: false, pending: {} });
+  useClaimReadsStore.setState({
+    era,
+    signInAsked: false,
+    lastAsk: 0,
+    pending: {},
+    failed: new Set(),
+  });
 }
 
 /**
@@ -115,9 +128,8 @@ function claimsOf(
   return null;
 }
 
-interface AskedTeam {
+interface AskedTeam extends NoticeTeam {
   readonly teamId: string;
-  readonly environmentId: string;
 }
 
 /** The listed teams among `teamIds`. */
@@ -127,18 +139,64 @@ function teamsNamed(
 ): readonly AskedTeam[] {
   return [...teamIds].flatMap((teamId) => {
     const team = teams.get(teamId);
-    return team === undefined
-      ? []
-      : [{ teamId, environmentId: team.environmentId }];
+    return team === undefined ? [] : [{ teamId, ...team }];
+  });
+}
+
+/** Resolves once no read of `queryKey` is in flight. */
+function untilNoReadInFlight(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+): Promise<void> {
+  return new Promise((resolve) => {
+    const unsubscribe = queryClient.getQueryCache().subscribe(() => {
+      if (queryClient.isFetching({ queryKey, exact: true }) > 0) return;
+      unsubscribe();
+      resolve();
+    });
   });
 }
 
 /**
+ * One team's read for a trigger: the answer of a read started after the
+ * trigger, or `null` if the era ended first. A read already out may predate
+ * the trigger, and may be the cover's, so it is left to finish and its
+ * answer is not taken; triggers that waited on the same read share the one
+ * started after it. A read of ours that another reader cancels is no answer,
+ * and the same path asks again.
+ */
+async function readForTrigger(
+  queryClient: QueryClient,
+  era: ClaimReadEra,
+  team: AskedTeam,
+): Promise<ClaimedComputersResult | null> {
+  const options = claimedComputersOptions(
+    era.auth,
+    era.viewerUserId,
+    team.environmentId,
+  );
+  while (isCurrentEra(era)) {
+    if (queryClient.isFetching({ queryKey: options.queryKey, exact: true }) > 0)
+      await untilNoReadInFlight(queryClient, options.queryKey);
+    if (!isCurrentEra(era)) break;
+    const before = answersOf(queryClient, era, team.environmentId);
+    try {
+      const result = await queryClient.fetchQuery({ ...options, staleTime: 0 });
+      // A cancel on an entry that held an answer reverts to it and resolves
+      // with it. While this read is out, only it, or a read that replaced
+      // it, answers the entry.
+      if (answersOf(queryClient, era, team.environmentId) > before)
+        return result;
+    } catch (error) {
+      if (!(error instanceof CancelledError)) throw error;
+    }
+  }
+  return null;
+}
+
+/**
  * Ask for a read of each team started after this trigger; a team already
- * waiting is read again. A read already out was started before the trigger
- * and cannot answer for it, so it is cancelled first, as G6 does on the same
- * entry: the cancel reverts the entry and adds no answer to its count, and
- * only the read started here does.
+ * waiting is read again, and only this ask's read settles it.
  */
 function askReads(
   queryClient: QueryClient,
@@ -146,41 +204,76 @@ function askReads(
   asked: readonly AskedTeam[],
   signIn: boolean,
 ): void {
+  const asks = new Map<string, number>();
   useClaimReadsStore.setState((state) => {
     if (!sameEra(state.era, era)) return state;
     if (asked.length === 0 && (state.signInAsked || !signIn)) return state;
     const pending = { ...state.pending };
-    for (const team of asked)
-      pending[team.teamId] = answersOf(queryClient, era, team.environmentId);
-    return { pending, signInAsked: state.signInAsked || signIn };
+    const failed = new Set(state.failed);
+    let lastAsk = state.lastAsk;
+    for (const team of asked) {
+      lastAsk += 1;
+      pending[team.teamId] = lastAsk;
+      failed.delete(team.teamId);
+      asks.set(team.teamId, lastAsk);
+    }
+    return {
+      pending,
+      failed,
+      lastAsk,
+      signInAsked: state.signInAsked || signIn,
+    };
   });
   for (const team of asked) {
-    const options = claimedComputersOptions(
-      era.auth,
-      era.viewerUserId,
-      team.environmentId,
+    const ask = asks.get(team.teamId);
+    if (ask === undefined) continue;
+    void readForTrigger(queryClient, era, team).then(
+      (result) => {
+        if (result !== null) answerRead(era, team, ask, claimsOf(result));
+      },
+      () => {
+        answerRead(era, team, ask, null);
+      },
     );
-    const inFlight =
-      queryClient.isFetching({ queryKey: options.queryKey, exact: true }) > 0;
-    void (
-      inFlight
-        ? queryClient.cancelQueries({ queryKey: options.queryKey, exact: true })
-        : Promise.resolve()
-    )
-      .then(() => queryClient.fetchQuery({ ...options, staleTime: 0 }))
-      // A failed read is an answer the entry holds; a cancelled one is a
-      // later trigger's to replace.
-      .catch(() => undefined);
   }
 }
 
+/**
+ * What the read of `ask` answered: the claims, or `null` for a read that
+ * failed or was refused, which waits to be asked again.
+ */
+function answerRead(
+  era: ClaimReadEra,
+  team: AskedTeam,
+  ask: number,
+  claims: readonly ClaimedComputer[] | null,
+): void {
+  // A read that answers after a sign-out or a switch tells no one, and one a
+  // later ask replaced answers for nothing.
+  if (
+    !isCurrentEra(era) ||
+    useClaimReadsStore.getState().pending[team.teamId] !== ask
+  )
+    return;
+  if (claims === null) {
+    useClaimReadsStore.setState((state) => ({
+      failed: new Set(state.failed).add(team.teamId),
+    }));
+    return;
+  }
+  tellClaims(era.viewerUserId, team, claims);
+  settleRead(era, team.teamId, ask);
+}
+
 /** A team's read answered, or the person left the team: nothing waits on it. */
-function settleRead(era: ClaimReadEra, teamId: string, asked: number): void {
+function settleRead(era: ClaimReadEra, teamId: string, ask: number): void {
   useClaimReadsStore.setState((state) => {
-    if (!sameEra(state.era, era) || state.pending[teamId] !== asked)
+    if (!sameEra(state.era, era) || state.pending[teamId] !== ask)
       return state;
     const { [teamId]: _settled, ...pending } = state.pending;
-    return { pending };
+    const failed = new Set(state.failed);
+    failed.delete(teamId);
+    return { pending, failed };
   });
 }
 
@@ -237,10 +330,15 @@ function closedTeams(previous: Look, next: Look): ReadonlySet<string> {
 
 const NO_OWN_CLAIMS: readonly OwnClaim[] = [];
 
-interface ReadTarget extends NoticeTeam {
-  readonly teamId: string;
-  /** The entry's answers when this read was asked. */
-  readonly asked: number;
+/** The waiting teams whose latest read failed, asked again. */
+function askFailedReads(
+  queryClient: QueryClient,
+  era: ClaimReadEra,
+  teams: ReadonlyMap<string, NoticeTeam>,
+): void {
+  const state = useClaimReadsStore.getState();
+  if (!sameEra(state.era, era) || state.failed.size === 0) return;
+  askReads(queryClient, era, teamsNamed(teams, state.failed), false);
 }
 
 /**
@@ -250,8 +348,8 @@ interface ReadTarget extends NoticeTeam {
  * the list or its connection closes. Every claim this device has not told
  * yet shows the owner's sentence. A team's read waits until one answers: a
  * failed read is read again on focus and on the next list refresh. Each team
- * has one entry, which a claimed computer's cover reads too; a trigger
- * reads it again.
+ * has one entry, which a claimed computer's cover reads too: a trigger never
+ * cancels a read there, and only the read it asked for settles its team.
  */
 export function useClaimedComputerNotice(): void {
   const auth = useHostBinding()?.auth ?? null;
@@ -285,38 +383,6 @@ export function useClaimedComputerNotice(): void {
   );
   const look = useRef<{ era: ClaimReadEra; look: Look } | null>(null);
 
-  const targets = useMemo<readonly ReadTarget[]>(() => {
-    if (pending === null || teams === null) return [];
-    return Object.entries(pending).flatMap(([teamId, asked]) => {
-      const team = teams.get(teamId);
-      return team === undefined ? [] : [{ teamId, asked, ...team }];
-    });
-  }, [pending, teams]);
-  // Observed only while a read waits, and stale at once, so a waiting read
-  // that failed is read again on focus.
-  const results = useQueries({
-    queries: targets.map((target) => ({
-      ...claimedComputersOptions(auth, viewerUserId, target.environmentId),
-      enabled: era !== null,
-      staleTime: 0,
-    })),
-  });
-  // An answer counts once the entry has answered since the read was asked.
-  const answers = targets.flatMap((target, index) => {
-    const data = results[index]?.data;
-    if (
-      era === null ||
-      data === undefined ||
-      answersOf(queryClient, era, target.environmentId) <= target.asked
-    )
-      return [];
-    return [{ target, claims: claimsOf(data) }];
-  });
-  const failedTeams = answers
-    .filter((answer) => answer.claims === null)
-    .map((answer) => answer.target.teamId)
-    .join("\u0000");
-
   useEffect(() => {
     beginEra(era);
   }, [era]);
@@ -331,8 +397,8 @@ export function useClaimedComputerNotice(): void {
   // A team the person left has nothing to tell; the removal says its own.
   useEffect(() => {
     if (era === null || teams === null || pending === null) return;
-    for (const [teamId, asked] of Object.entries(pending)) {
-      if (!teams.has(teamId)) settleRead(era, teamId, asked);
+    for (const [teamId, ask] of Object.entries(pending)) {
+      if (!teams.has(teamId)) settleRead(era, teamId, ask);
     }
   }, [era, pending, teams]);
 
@@ -362,20 +428,21 @@ export function useClaimedComputerNotice(): void {
   }, [doorStates, era, leases, queryClient, registry, teams]);
 
   // A read that failed is read again when the list refreshes, even when the
-  // refresh answers the same list.
+  // refresh answers the same list, and on focus.
   const refreshedAt = registered.dataUpdatedAt;
   const lastRefresh = useRef(refreshedAt);
   useEffect(() => {
     if (lastRefresh.current === refreshedAt) return;
     lastRefresh.current = refreshedAt;
-    if (era === null || teams === null || failedTeams === "") return;
-    askReads(
-      queryClient,
-      era,
-      teamsNamed(teams, failedTeams.split("\u0000")),
-      false,
-    );
-  }, [era, failedTeams, queryClient, refreshedAt, teams]);
+    if (era === null || teams === null) return;
+    askFailedReads(queryClient, era, teams);
+  }, [era, queryClient, refreshedAt, teams]);
+  useEffect(() => {
+    if (era === null || teams === null) return;
+    return focusManager.subscribe((focused) => {
+      if (focused) askFailedReads(queryClient, era, teams);
+    });
+  }, [era, queryClient, teams]);
 
   // This person's own claim: read its team so the record is settled.
   useEffect(() => {
@@ -388,22 +455,11 @@ export function useClaimedComputerNotice(): void {
     askReads(queryClient, era, teamsNamed(teams, teamIds), false);
   }, [era, ownClaims, queryClient, teams]);
 
-  useEffect(() => {
-    if (era === null) return;
-    for (const { target, claims } of answers) {
-      // A failed or refused read waits, and is read again.
-      if (claims === null) continue;
-      // A read that answers after a sign-out or a switch tells no one.
-      if (!isCurrentEra(era)) return;
-      tellClaims(era.viewerUserId, target, claims);
-      settleRead(era, target.teamId, target.asked);
-    }
-  }, [answers, era]);
 }
 
 function tellClaims(
   viewerUserId: string,
-  target: ReadTarget,
+  target: AskedTeam,
   claims: readonly ClaimedComputer[],
 ): void {
   const ownHostIds = new Set(
