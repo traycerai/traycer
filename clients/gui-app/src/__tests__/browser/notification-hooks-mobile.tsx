@@ -111,7 +111,7 @@ export function NotificationHooksMobileFixture() {
         new Error("The mobile layout fixture does not save hooks"),
       ),
   });
-  let title = TEAM_NOTIFICATION_HOOKS_COPY.title;
+  let title: string = TEAM_NOTIFICATION_HOOKS_COPY.title;
   if (computer) title = "Computer notifications";
   else if (account) title = "Account notifications";
 

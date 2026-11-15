@@ -6,6 +6,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
 import {
@@ -49,6 +50,10 @@ const remoteHost = {
 const remoteSessionPolicy: RemoteSessionAcquirePolicy = {
   proactiveWakeEligible: true,
 };
+const refreshRpcRegistry = defineVersionedRpcRegistry({
+  "host.accountSettings.refresh":
+    hostRpcRegistry["host.accountSettings.refresh"],
+});
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
@@ -72,7 +77,7 @@ function remoteIdentity(userId: string): RemoteSessionIdentity {
   };
 }
 
-type RefreshRpcRegistry = Pick<HostRpcRegistry, "host.accountSettings.refresh">;
+type RefreshRpcRegistry = typeof refreshRpcRegistry;
 
 interface FakeRemoteSession extends IRemoteSession<
   RefreshRpcRegistry,
