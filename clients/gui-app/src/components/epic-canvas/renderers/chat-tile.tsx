@@ -1,5 +1,6 @@
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
+import { useComposerDropScope } from "@/components/chat/composer/composer-drop-scope";
 import {
   resolveChatSandbox,
   wakeOf,
@@ -1948,6 +1949,8 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
     [hostId, openTile, view.node.id, view.viewTabId],
   );
 
+  const dropScope = useComposerDropScope();
+
   return (
     <ChatAttachmentScopeContext.Provider value={attachmentScope}>
       <ChatDiffTargetContext.Provider value={diffOpener}>
@@ -1973,123 +1976,135 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
               <div
                 data-chat-pane=""
                 className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
+                {...dropScope.zoneProps}
               >
-                <ChatSandboxDestroyedLine hostId={view.tabHostId} />
-                <TranscriptQueuePauseReasonSupportContext
-                  value={queuePauseReasonSupport}
-                >
-                  <ChatSessionMessagesSurface
-                    snapshotLoaded={view.snapshotLoaded}
-                    thinkingTokensSource={view.handle.store}
-                    connectionStatus={view.connectionStatus}
-                    fatalClose={view.fatalClose}
-                    preSnapshotRetries={view.preSnapshotRetries}
-                    preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
-                    onRetry={view.onChatRetryFromUser}
-                    preContent={view.preContent}
-                    restoreContext={view.restoreContext}
-                    node={view.node}
-                    taskTitle={view.taskTitle}
-                    epicId={view.currentEpicId}
-                    viewTabId={view.viewTabId}
-                    tabHostId={view.tabHostId}
-                    workspaceRoots={view.linkResolutionRoots}
-                    messages={view.messages}
-                    activeTurnId={view.activeTurnId}
-                    transcriptWindow={view.transcriptWindow}
-                    onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
-                    onFindReadOrdinalChange={onFindReadOrdinalChange}
-                    baselineEpoch={view.transcriptBaselineEpoch}
-                    hydrationSequence={view.transcriptHydrationSequence}
-                    coldRewrittenMessageIds={view.coldRewrittenMessageIds}
-                    backgroundItems={view.lower.backgroundItems}
-                    scrollRequest={backgroundScrollRequest}
-                    onScrollRequestSettled={onScrollRequestSettled}
-                    surfaceVisible={view.surfaceVisible}
-                    systemOverlayActive={systemOverlayActive}
-                    getMessageActions={view.getMessageActions}
-                    nextStepActions={view.nextStepActions}
-                    planActions={view.planActions}
-                    composerOverlayHeight={
-                      lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
-                    }
-                    subagentDrillIn={subagentDrillIn}
-                  />
-                </TranscriptQueuePauseReasonSupportContext>
-                {/*
-                 * SurfaceActivityProvider narrows catalog/provider query subscriptions
-                 * to the one focused pane+tab. A visible split partner keeps rendering
-                 * its transcript and scroll state, but releases catalog/provider query
-                 * observers and cannot own palette/composer-global work.
-                 *
-                 * Absolutely overlays the transcript instead of
-                 * pushing its height via flex, so streamed replies flow visually
-                 * behind it; `lowerSurfacesHeight` (measured here) feeds the
-                 * transcript's bottom content inset. The full-width positioning
-                 * layer must remain both pointer- and paint-transparent so it
-                 * cannot cover the transcript scrollbar or its edge lanes.
-                 * Centered lower surfaces opt back into pointer handling and own
-                 * their opaque backplates (including the bottom seam seal), so
-                 * transcript content cannot show through the actual chrome.
-                 */}
-                {view.snapshotLoaded ? (
-                  <div
-                    ref={setLowerSurfacesElement}
-                    className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
-                    data-chat-lower-surfaces-overlay=""
-                  >
-                    <div className="pointer-events-none">
-                      <SurfaceActivityProvider active={view.surfaceFocused}>
-                        {/*
-                         * Above the dock and outside the lower surfaces: this row
-                         * is a turn-tail status line, not composer chrome, and it
-                         * belongs to the transcript side of the seam. It renders
-                         * `null` for every traversal state but `retrying`, so it
-                         * is mounted unconditionally and owns the predicate.
-                         */}
-                        <FallbackRetryRow
-                          pending={view.lower.fallback.pending}
-                          // The tile's one routed client, already resolved above
-                          // for attachments. Re-resolving it would add a second
-                          // directory-query subscription for the same answer.
-                          client={attachmentHostClient}
-                        />
-                        <QueuedMessageStagesContext
-                          value={view.lower.queueStages}
-                        >
-                          <ChatLowerInteractionSurfaces
-                            epicId={view.currentEpicId}
-                            viewTabId={view.viewTabId}
-                            chatId={view.node.id}
-                            hostId={hostId}
-                            runtime={view.lower.runtime}
-                            access={view.lower.access}
-                            turn={view.lower.turn}
-                            interview={view.lower.interview}
-                            approvals={view.lower.approvals}
-                            queue={view.lower.queue}
-                            composer={view.lower.composer}
-                            todo={view.todo}
-                            restoreContext={view.restoreContext}
-                            providerFallback={view.lower.fallback}
-                            backgroundItems={view.lower.backgroundItems}
-                            backgroundStopPendingTaskIds={
-                              view.lower.backgroundStopPendingTaskIds
-                            }
-                            backgroundStopAllPending={
-                              view.lower.backgroundStopAllPending
-                            }
-                            backgroundSessionStopPending={
-                              view.lower.backgroundSessionStopPending
-                            }
-                            onBackgroundItemClick={scrollToBackgroundItem}
-                            subagentView={subagentDockView}
-                          />
-                        </QueuedMessageStagesContext>
-                      </SurfaceActivityProvider>
-                    </div>
-                  </div>
-                ) : null}
+                {dropScope.provide(
+                  <>
+                    <ChatSandboxDestroyedLine hostId={view.tabHostId} />
+                    <TranscriptQueuePauseReasonSupportContext
+                      value={queuePauseReasonSupport}
+                    >
+                      <ChatSessionMessagesSurface
+                        snapshotLoaded={view.snapshotLoaded}
+                        thinkingTokensSource={view.handle.store}
+                        connectionStatus={view.connectionStatus}
+                        fatalClose={view.fatalClose}
+                        preSnapshotRetries={view.preSnapshotRetries}
+                        preSnapshotReloadStartedAt={
+                          view.preSnapshotReloadStartedAt
+                        }
+                        onRetry={view.onChatRetryFromUser}
+                        preContent={view.preContent}
+                        restoreContext={view.restoreContext}
+                        node={view.node}
+                        taskTitle={view.taskTitle}
+                        epicId={view.currentEpicId}
+                        viewTabId={view.viewTabId}
+                        tabHostId={view.tabHostId}
+                        workspaceRoots={view.linkResolutionRoots}
+                        messages={view.messages}
+                        activeTurnId={view.activeTurnId}
+                        transcriptWindow={view.transcriptWindow}
+                        onVisibleOrdinalRangeChange={
+                          onVisibleOrdinalRangeChange
+                        }
+                        onFindReadOrdinalChange={onFindReadOrdinalChange}
+                        baselineEpoch={view.transcriptBaselineEpoch}
+                        hydrationSequence={view.transcriptHydrationSequence}
+                        coldRewrittenMessageIds={view.coldRewrittenMessageIds}
+                        backgroundItems={view.lower.backgroundItems}
+                        scrollRequest={backgroundScrollRequest}
+                        onScrollRequestSettled={onScrollRequestSettled}
+                        surfaceVisible={view.surfaceVisible}
+                        systemOverlayActive={systemOverlayActive}
+                        getMessageActions={view.getMessageActions}
+                        nextStepActions={view.nextStepActions}
+                        planActions={view.planActions}
+                        composerOverlayHeight={
+                          lowerSurfacesElement === null
+                            ? 0
+                            : lowerSurfacesHeight
+                        }
+                        subagentDrillIn={subagentDrillIn}
+                      />
+                    </TranscriptQueuePauseReasonSupportContext>
+                    {/*
+                     * SurfaceActivityProvider narrows catalog/provider query subscriptions
+                     * to the one focused pane+tab. A visible split partner keeps rendering
+                     * its transcript and scroll state, but releases catalog/provider query
+                     * observers and cannot own palette/composer-global work.
+                     *
+                     * Absolutely overlays the transcript instead of
+                     * pushing its height via flex, so streamed replies flow visually
+                     * behind it; `lowerSurfacesHeight` (measured here) feeds the
+                     * transcript's bottom content inset. The full-width positioning
+                     * layer must remain both pointer- and paint-transparent so it
+                     * cannot cover the transcript scrollbar or its edge lanes.
+                     * Centered lower surfaces opt back into pointer handling and own
+                     * their opaque backplates (including the bottom seam seal), so
+                     * transcript content cannot show through the actual chrome.
+                     */}
+                    {view.snapshotLoaded ? (
+                      <div
+                        ref={setLowerSurfacesElement}
+                        className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
+                        data-chat-lower-surfaces-overlay=""
+                      >
+                        <div className="pointer-events-none">
+                          <SurfaceActivityProvider active={view.surfaceFocused}>
+                            {/*
+                             * Above the dock and outside the lower surfaces: this row
+                             * is a turn-tail status line, not composer chrome, and it
+                             * belongs to the transcript side of the seam. It renders
+                             * `null` for every traversal state but `retrying`, so it
+                             * is mounted unconditionally and owns the predicate.
+                             */}
+                            <FallbackRetryRow
+                              pending={view.lower.fallback.pending}
+                              // The tile's one routed client, already resolved above
+                              // for attachments. Re-resolving it would add a second
+                              // directory-query subscription for the same answer.
+                              client={attachmentHostClient}
+                            />
+                            <QueuedMessageStagesContext
+                              value={view.lower.queueStages}
+                            >
+                              <ChatLowerInteractionSurfaces
+                                epicId={view.currentEpicId}
+                                viewTabId={view.viewTabId}
+                                chatId={view.node.id}
+                                hostId={hostId}
+                                runtime={view.lower.runtime}
+                                access={view.lower.access}
+                                turn={view.lower.turn}
+                                interview={view.lower.interview}
+                                approvals={view.lower.approvals}
+                                queue={view.lower.queue}
+                                composer={view.lower.composer}
+                                todo={view.todo}
+                                restoreContext={view.restoreContext}
+                                providerFallback={view.lower.fallback}
+                                backgroundItems={view.lower.backgroundItems}
+                                backgroundStopPendingTaskIds={
+                                  view.lower.backgroundStopPendingTaskIds
+                                }
+                                backgroundStopAllPending={
+                                  view.lower.backgroundStopAllPending
+                                }
+                                backgroundSessionStopPending={
+                                  view.lower.backgroundSessionStopPending
+                                }
+                                onBackgroundItemClick={scrollToBackgroundItem}
+                                subagentView={subagentDockView}
+                              />
+                            </QueuedMessageStagesContext>
+                          </SurfaceActivityProvider>
+                        </div>
+                      </div>
+                    ) : null}
+                  </>,
+                )}
+                {dropScope.overlay}
               </div>
               <ChatTileErrorNoticeToasts handle={view.handle} />
               <ChatTileRestoreResultToasts handle={view.handle} />

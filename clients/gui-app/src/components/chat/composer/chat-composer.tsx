@@ -153,6 +153,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
+import { useComposerDropScopeTarget } from "./composer-drop-scope";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 
@@ -903,6 +904,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
     fileRoute,
     pathsReachTarget,
   });
+  const frameDrop = useComposerDropScopeTarget({
+    onDragEnter,
+    onDragLeave,
+    onDragOver,
+    onDrop,
+    overlayVariant: dragOverlayVariant,
+  });
   // The rich-clipboard channel and the mount-time restart. A file paste is
   // already hashed before insertion; these two cover the HTML paste (whose
   // nodes must keep their positions, so they go in with bytes and flip in
@@ -1177,11 +1185,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
               >
                 <ComposerShell
                   pickerStore={pickerStore}
-                  onDragOver={onDragOver}
-                  onDrop={onDrop}
-                  onDragEnter={onDragEnter}
-                  onDragLeave={onDragLeave}
-                  dragOverlayVariant={dragOverlayVariant}
+                  onDragOver={frameDrop.onDragOver}
+                  onDrop={frameDrop.onDrop}
+                  onDragEnter={frameDrop.onDragEnter}
+                  onDragLeave={frameDrop.onDragLeave}
+                  dragOverlayVariant={frameDrop.overlayVariant}
                   utilityRail={null}
                   expansion={composerExpansion}
                   attachmentsStrip={

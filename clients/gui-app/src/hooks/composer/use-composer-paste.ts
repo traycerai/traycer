@@ -459,6 +459,13 @@ interface ComposerDragState {
   readonly overlayVariant: FileTransferDragOverlayVariant | null;
 }
 
+function dragIsInZone(
+  zone: HTMLElement | null,
+  target: EventTarget | null,
+): boolean {
+  return zone !== null && target instanceof Node && zone.contains(target);
+}
+
 const IDLE_COMPOSER_DRAG_STATE: ComposerDragState = {
   depth: 0,
   overlayVariant: null,
@@ -1113,11 +1120,37 @@ export function useComposerPasteEvents<Attrs>(args: {
     });
   }, []);
 
+  // The element the handlers are on, as the drag last entered it.
+  const dragZoneRef = useRef<HTMLElement | null>(null);
+  const draggingOverZone = dragState.depth > 0;
+  // A zone that is hidden or loses its content under the pointer is sent no
+  // dragleave, so the affordance also ends when the drag is next seen outside
+  // the zone, and when it ends anywhere.
+  useEffect(() => {
+    if (!draggingOverZone) return;
+    const end = (): void => setDragState(IDLE_COMPOSER_DRAG_STATE);
+    const endOutsideZone = (event: Event): void => {
+      if (!dragIsInZone(dragZoneRef.current, event.target)) end();
+    };
+    window.addEventListener("dragover", endOutsideZone, true);
+    window.addEventListener("drop", end, true);
+    window.addEventListener("dragend", end, true);
+    return () => {
+      window.removeEventListener("dragover", endOutsideZone, true);
+      window.removeEventListener("drop", end, true);
+      window.removeEventListener("dragend", end, true);
+    };
+  }, [draggingOverZone]);
+
   const onDragEnter = useCallback((event: DragEvent<HTMLElement>) => {
     const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
     if (overlayVariant === null) return;
     event.preventDefault();
     event.stopPropagation();
+    // A layer portalled out of the zone bubbles here through React, but it is
+    // not in the zone.
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
+    dragZoneRef.current = event.currentTarget;
     setDragState((state) => ({
       depth: state.depth + 1,
       overlayVariant,
@@ -1128,6 +1161,7 @@ export function useComposerPasteEvents<Attrs>(args: {
     if (classifyFileTransferDrag(event.dataTransfer) === null) return;
     event.preventDefault();
     event.stopPropagation();
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
     setDragState((state) => {
       const depth = Math.max(0, state.depth - 1);
       if (depth === state.depth) return state;
