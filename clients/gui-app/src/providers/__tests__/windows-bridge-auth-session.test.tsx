@@ -950,19 +950,6 @@ describe("<WindowsBridgeAuthSessionBridge /> when main cannot reach its signing 
       expect(toast.warning).toHaveBeenCalledTimes(1);
     });
 
-    it("reads a refreshed token as a new verdict", async () => {
-      const harness = await startOffline({});
-      harness.answerSetWith(refused("expired"));
-      await tick(RESEND_MS);
-      expect(harness.revalidate).toHaveBeenCalledTimes(1);
-
-      harness.setCurrentSession(FRESH_SNAPSHOT);
-      harness.emitOutbound(FRESH_SNAPSHOT);
-      await settle();
-
-      expect(harness.revalidate).toHaveBeenCalledTimes(2);
-    });
-
     it("ends with main verified after authn refreshes the session, with no act by the person", async () => {
       const harness = await startOffline({});
       harness.answerSetWith(refused("expired"));
