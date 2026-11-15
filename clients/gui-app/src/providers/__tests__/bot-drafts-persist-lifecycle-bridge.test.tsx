@@ -26,6 +26,7 @@ import {
   LEGACY_BOX_DRAFTS_KEY,
   boxDoc,
   hashedImage,
+  hydrationAfter,
   startSignedOutApp,
   storeImageBytes,
   type App,
@@ -83,6 +84,15 @@ function signInAs(run: Run, userId: string): void {
       contextMetadata: { userId, username: userId },
     });
   });
+}
+
+/** The next read of an account's drafts finished after `action`, and what it fed has rendered. */
+async function hydratedAndRenderedAfter(
+  run: Run,
+  action: () => void,
+): Promise<void> {
+  await hydrationAfter(run.app, action);
+  await run.rtl.act(async () => {});
 }
 
 const IMAGE_STORE = "@/lib/composer/landing-image-store";
@@ -188,11 +198,9 @@ describe("<BotDraftsPersistLifecycleBridge /> drafts stored before drafts belong
     const run = await startOver();
     mountBridge(run);
 
-    signInAs(run, ACCOUNT_A);
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
 
-    await vi.waitFor(() =>
-      expect(localStorage.getItem(LEGACY_BOX_DRAFTS_KEY)).toBeNull(),
-    );
+    expect(localStorage.getItem(LEGACY_BOX_DRAFTS_KEY)).toBeNull();
     expect(run.app.drafts.getState().threadBoxes).toEqual({});
   });
 });
@@ -201,10 +209,7 @@ describe("<BotDraftsPersistLifecycleBridge /> what the drafts' writer logs", () 
   it("names no account in any log line when the storage refuses a write whose error message carries the key", async () => {
     const run = await startOver();
     mountBridge(run);
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
     // Only the drafts are written while this runs; any other write is dropped.
     vi.spyOn(Storage.prototype, "setItem").mockImplementation((key: string) => {
       if (key.startsWith("traycer-gui-app:bot-box-drafts")) {
@@ -244,11 +249,7 @@ describe("<BotDraftsPersistLifecycleBridge /> the images an account's stored dra
     );
     mountBridge(run);
 
-    signInAs(run, ACCOUNT_B);
-
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     expect(run.app.imageRoots().has(hash)).toBe(true);
   });
 });
@@ -266,10 +267,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a read an account switch overtook"
     mountBridge(run);
     signInAs(run, ACCOUNT_A);
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
 
@@ -311,10 +309,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a read the account signing out ove
       "A's own draft",
     );
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     expect(run.app.drafts.getState().threadBoxes).toEqual({});
     expect(
       localStorage.getItem(run.keys.botBoxDraftsKey(ACCOUNT_B)) ?? "",
@@ -326,10 +321,7 @@ describe("<BotDraftsPersistLifecycleBridge /> signed out", () => {
   it("writes nothing under the anonymous key when a box changes after the account signed out", async () => {
     const run = await startOver();
     mountBridge(run);
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
     run.rtl.act(() => {
       run.auth.useAuthStore.setState({
         status: "signed-out",
@@ -356,10 +348,7 @@ describe("<BotDraftsPersistLifecycleBridge /> signed out", () => {
     const anonKey = run.keys.botBoxDraftsKey(null);
     localStorage.setItem(anonKey, storedBox("Left under anon", null));
     mountBridge(run);
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
 
     const storage = run.app.drafts.persist.getOptions().storage;
     if (storage === undefined) throw new Error("the drafts store persists");
@@ -411,10 +400,7 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
       }));
     });
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
 
@@ -426,13 +412,7 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
       stored.indexOf("Hold the migration"),
     );
 
-    let finished = false;
-    const stop = run.app.drafts.persist.onFinishHydration(() => {
-      finished = true;
-    });
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() => expect(finished).toBe(true));
-    stop();
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
 
     const kept = JSON.stringify(
       run.app.drafts.getState().threadBoxes[BOT_ID]?.[CHANNEL],
@@ -480,10 +460,7 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
       }));
     });
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
 
@@ -534,10 +511,7 @@ describe("<BotDraftsPersistLifecycleBridge /> an account that retires while its 
       }));
     });
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
 
@@ -577,10 +551,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a storage that cannot be read", ()
       }),
     );
     mountBridge(run);
-    signInAs(run, ACCOUNT_A);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_A));
     const { readable, stored } = makeKeyUnreadable(keyOfA);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
@@ -646,10 +617,7 @@ describe("<BotDraftsPersistLifecycleBridge /> a storage that cannot be read", ()
     });
     const { readable } = makeKeyUnreadable(keyOfA);
 
-    signInAs(run, ACCOUNT_B);
-    await vi.waitFor(() =>
-      expect(run.app.drafts.persist.hasHydrated()).toBe(true),
-    );
+    await hydratedAndRenderedAfter(run, () => signInAs(run, ACCOUNT_B));
     release();
     await readsSettled();
     readable();

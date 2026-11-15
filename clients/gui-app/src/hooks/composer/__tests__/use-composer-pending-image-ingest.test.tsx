@@ -164,6 +164,15 @@ function immediateRunPendingImageJob(
   void job(new AbortController().signal);
 }
 
+/** The budget's real reservation, which the module's mock wraps: a fixture without it fails the case instead of refusing. */
+function realReserve(): NonNullable<
+  typeof landingImageBudgetMocks.actualReserve
+> {
+  const reserve = landingImageBudgetMocks.actualReserve;
+  if (reserve === null) throw new Error("the budget's real reserve is not set");
+  return reserve;
+}
+
 function b64Of(text: string): string {
   return btoa(text);
 }
@@ -1226,26 +1235,22 @@ describe("the budget's admission while the image roots cannot be read (Tracy Bot
     }
     // No reservation was left: the whole budget is still there to take.
     unreadableRoots.fromReservation = Number.POSITIVE_INFINITY;
-    const full = landingImageBudgetMocks.actualReserve?.(null, [
+    const full = realReserve()(null, [
       { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
     ]);
-    expect(full).not.toBeNull();
-    full?.release();
+    if (full === null) throw new Error("the whole budget was not free");
+    full.release();
   });
 
   it("keeps the inline node, and shows no toast, when a MIGRATION cannot read the roots to reserve capacity", async () => {
-    let reservationAsked: () => void = () => undefined;
-    const settled = new Promise<void>((resolve) => {
-      reservationAsked = resolve;
-    });
+    const reserve = realReserve();
     landingImageBudgetMocks.reserveLandingImageBudget.mockImplementation(
       (draftId, candidates) => {
-        reservationAsked();
         unreadableRoots.fromReservation = 1;
-        const actual = landingImageBudgetMocks.actualReserve;
-        return actual === null ? null : actual(draftId, candidates);
+        return reserve(draftId, candidates);
       },
     );
+    const jobs: Array<Promise<void>> = [];
     const editor = fakeEditor({
       type: "doc",
       content: [
@@ -1255,15 +1260,17 @@ describe("the budget's admission while the image roots cannot be read (Tracy Bot
     const { result } = renderHook(() =>
       useComposerPendingImageIngest({
         editorRef: { current: editor.handle },
-        runPendingImageJob: immediateRunPendingImageJob,
+        runPendingImageJob: (job) => {
+          jobs.push(job(new AbortController().signal));
+        },
         draftId: null,
       }),
     );
 
     result.current.reingestPendingImages();
 
-    await settled;
-    await flushMicrotasks();
+    expect(jobs).toHaveLength(1);
+    await Promise.all(jobs);
 
     expect(landingImageStoreMocks.putImage).toHaveBeenCalled();
     expect(editor.removeImageAttachmentById).not.toHaveBeenCalled();

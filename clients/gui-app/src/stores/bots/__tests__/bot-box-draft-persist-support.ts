@@ -108,6 +108,21 @@ export async function hydrated(app: App): Promise<App> {
   return app;
 }
 
+/** Runs `action` and resolves once the next read of an account's drafts has finished: the listener is registered before the action, so a read that finishes inside it is not missed. */
+export async function hydrationAfter(
+  app: App,
+  action: () => void,
+): Promise<void> {
+  const finished = new Promise<void>((resolve) => {
+    const stop = app.drafts.persist.onFinishHydration(() => {
+      stop();
+      resolve();
+    });
+  });
+  action();
+  await finished;
+}
+
 /** The first start of the app on a device holding nothing. */
 export async function startFresh(): Promise<App> {
   running?.close();

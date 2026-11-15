@@ -1735,6 +1735,20 @@ describe("<BotThreadsView /> a thread opened on a channel question, drawn withou
     };
   }
 
+  /** The fake clock moves until `check` holds: what the view starts on a timer, and what the host's replies feed, finishes in it. */
+  async function untilOnFakeClock(check: () => void): Promise<void> {
+    for (;;) {
+      try {
+        check();
+        return;
+      } catch {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+      }
+    }
+  }
+
   it("moves nothing off the origin's card when a teammate settles the question: the draft stays kept, and the thread's box holds nothing and says nothing", async () => {
     const summary = thread(TEAM, "team-new", 3_000);
     const { anchor } = summary;
@@ -1767,10 +1781,16 @@ describe("<BotThreadsView /> a thread opened on a channel question, drawn withou
       unsureSince: null,
       heldForSettlement: null,
     });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     mount();
-    await waitFor(() => expect(listed()).toContain("team-new"));
-    const full = within(await revealFull("team-new"));
-    const originCard = await full.findByTestId("question-card");
+    await untilOnFakeClock(() => expect(listed()).toContain("team-new"));
+    intersectTarget(card("team-new"), "near", true);
+    await untilOnFakeClock(() =>
+      expect(card("team-new").getAttribute("data-full")).toBe("true"),
+    );
+    const full = within(card("team-new"));
+    await untilOnFakeClock(() => full.getByTestId("question-card"));
+    const originCard = full.getByTestId("question-card");
     expect(
       within(originCard).getByRole("textbox", { name: "Your answer" }),
     ).toHaveProperty("value", "Hold the migration");
@@ -1779,7 +1799,8 @@ describe("<BotThreadsView /> a thread opened on a channel question, drawn withou
       mocks.channels[TEAM].store.setState({ messages: [question(true)] }),
     );
 
-    const item = await full.findByTestId("question-card-item");
+    await untilOnFakeClock(() => full.getByTestId("question-card-item"));
+    const item = full.getByTestId("question-card-item");
     expect(item.getAttribute("data-state")).toBe("settled");
     expect(useBotDraftsStore.getState().answers[TEAM]?.[key]?.typed).toBe(
       "Hold the migration",

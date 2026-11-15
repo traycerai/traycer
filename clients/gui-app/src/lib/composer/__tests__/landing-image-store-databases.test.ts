@@ -40,6 +40,8 @@ const holds = vi.hoisted(() => ({
   refuseWrites: false,
   /** How many reads of the image database were started. */
   reads: 0,
+  /** Callers waiting for the count of started reads to reach a number. */
+  readWaiters: [] as Array<{ count: number; resolve: () => void }>,
   /** The writes of an image's measured size: the store starts them and nobody awaits them. */
   sizeWrites: [] as Promise<void>[],
 }));
@@ -65,6 +67,9 @@ vi.mock("idb-keyval", async (importOriginal) => {
       store: UseStore | undefined,
     ): Promise<T | undefined> => {
       holds.reads += 1;
+      for (const waiter of holds.readWaiters) {
+        if (holds.reads >= waiter.count) waiter.resolve();
+      }
       const value = await real.get<T>(key, store);
       const gate = holds.afterRead;
       if (gate !== null) {
@@ -79,6 +84,14 @@ vi.mock("idb-keyval", async (importOriginal) => {
 /** The bytes as plain numbers: fake-indexeddb clones them in another realm, where `toEqual` on a typed array fails. */
 function numbers(bytes: ArrayLike<number> | undefined): number[] | undefined {
   return bytes === undefined ? undefined : Array.from(bytes);
+}
+
+/** Resolves once the image database has been asked for its `count`th read: the put's read, which comes just after it seeded the session. */
+function readStarted(count: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    holds.readWaiters.push({ count, resolve });
+    if (holds.reads >= count) resolve();
+  });
 }
 
 /** Every size write the store started has ended, so a read of the sizes database sees it. */
@@ -106,6 +119,7 @@ afterEach(() => {
   holds.refuseWrites = false;
   holds.reads = 0;
   holds.sizeWrites = [];
+  holds.readWaiters = [];
 });
 
 describe("the landing image databases when another window deletes them", () => {
@@ -308,11 +322,11 @@ describe("an operation of the window that a deletion of the image database overt
     ): Promise<{ readonly window: Window; readonly hash: string }> {
       const { window, hash } = await windowOverDiskOnlyImage(SEEDED);
       const held = await holdImageDatabase(hash);
+      const reads = holds.reads;
       const put = window.putImage(SEEDED);
       // The put has seeded the session, which it does just before it queues its read.
-      await vi.waitFor(() =>
-        expect(window.sessionImageBytes(hash)).not.toBeNull(),
-      );
+      await readStarted(reads + 1);
+      expect(window.sessionImageBytes(hash)).not.toBeNull();
 
       const deletion = deleteAndAwaitInvalidation(
         IMAGES_DB,
@@ -386,9 +400,8 @@ describe("an operation of the window that a deletion of the image database overt
         settledAt.push(window.landingImageDeletions());
         return stored;
       });
-      await vi.waitFor(() =>
-        expect(window.sessionImageBytes(hash)).not.toBeNull(),
-      );
+      await readStarted(reads + 1);
+      expect(window.sessionImageBytes(hash)).not.toBeNull();
 
       const deletion1 = deleteAndAwaitInvalidation(
         IMAGES_DB,
@@ -402,7 +415,7 @@ describe("an operation of the window that a deletion of the image database overt
       const held2 = (await opening2).hold(hash);
       onTestFinished(() => held2.release());
       await held2.started;
-      await vi.waitFor(() => expect(holds.reads).toBe(reads + 2));
+      await readStarted(reads + 2);
 
       const deletion2 = deleteAndAwaitInvalidation(
         IMAGES_DB,

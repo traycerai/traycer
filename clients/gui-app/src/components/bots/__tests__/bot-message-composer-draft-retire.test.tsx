@@ -13,6 +13,7 @@ import {
   BOT_ID,
   CHANNEL,
   OWNER_LABEL,
+  hydrationAfter,
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 import {
   app,
@@ -106,7 +107,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
           </ui.bridge.BotDraftsPersistLifecycleBridge>,
         ),
       );
-      await hydrationAfter(() => signInAs(ACCOUNT_A));
+      await hydrationAfter(app, () => signInAs(ACCOUNT_A));
     }
 
     function moveIn(typed: string): void {
@@ -144,20 +145,9 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     /** The box this describe's case has open; the bridge stays mounted when it is opened again. */
     let boxView: { readonly unmount: () => void } | null = null;
 
-    /** Runs `action` and resolves once the next read of an account's drafts has finished. */
-    function hydrationAfter(action: () => void): Promise<void> {
-      return new Promise<void>((resolve) => {
-        const stop = app.drafts.persist.onFinishHydration(() => {
-          stop();
-          resolve();
-        });
-        action();
-      });
-    }
-
     /** The box closed while `action` changes the account, then opened again once the new read finished: what it shows. */
     async function reopenedBoxAfter(action: () => void): Promise<string> {
-      const hydrated = hydrationAfter(action);
+      const hydrated = hydrationAfter(app, action);
       boxView?.unmount();
       await hydrated;
       boxView = ui.rtl.render(<ui.owner.OwnerBox initial={CHANNEL} />);
@@ -179,7 +169,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     it("gives A the same when another account signed in between", async () => {
       await offeredBackBesideANewerDraft();
       boxView?.unmount();
-      await hydrationAfter(() => signInAs(ACCOUNT_B));
+      await hydrationAfter(app, () => signInAs(ACCOUNT_B));
 
       const shown = await reopenedBoxAfter(() => signInAs(ACCOUNT_A));
 
