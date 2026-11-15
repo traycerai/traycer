@@ -89,13 +89,20 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
     // committed - including one whose own immediate predecessor happened to
     // fail pre-dispatch. Recomputing it per attempt would forget that.
     let replayMustBeKeyed = false;
+    // A refusal an earlier attempt met before its transport failure, carried
+    // to whatever failure ends the episode.
+    let earlier: HostRpcError | null = null;
     for (let attempt = 0; attempt < policy.maxRetries; attempt += 1) {
       throwIfAuthorityAborted(authority, method, replayMustBeKeyed);
       try {
         return await attemptCall(replayMustBeKeyed);
       } catch (cause) {
+        earlier = earlier ?? earlierRefusalOf(cause);
         if (!(cause instanceof RetryableTransportError)) {
-          throw withEpisodeDispatch(cause, method, replayMustBeKeyed);
+          throw withEarlierRefusal(
+            withEpisodeDispatch(cause, method, replayMustBeKeyed),
+            earlier,
+          );
         }
         replayMustBeKeyed = replayMustBeKeyed || cause.replaySafetyFromKey;
         await waitForRetryDelay(
@@ -121,7 +128,10 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
     try {
       return await attemptCall(replayMustBeKeyed);
     } catch (cause) {
-      throw withEarlierAttemptDispatch(cause, method, replayMustBeKeyed);
+      throw withEarlierRefusal(
+        withEarlierAttemptDispatch(cause, method, replayMustBeKeyed),
+        earlier ?? earlierRefusalOf(cause),
+      );
     }
   };
 
@@ -193,6 +203,43 @@ export function finalRefusalOf(error: unknown): unknown {
   return error instanceof RetryEpisodeOutcomeUnknownError
     ? error.finalRefusal
     : error;
+}
+
+/**
+ * The host's refusal of an earlier attempt of a call, kept on the transport
+ * failure that ended it: the credential was refused, a fresh one was had, and
+ * the next attempt never got an answer. Kept beside the error rather than on
+ * it, so a reader that classifies the failure by its own code reads it as
+ * before; {@link earlierRefusalOf} is for a reader that would otherwise call a
+ * host that answered unresponsive.
+ */
+const earlierRefusals = new WeakMap<HostRpcError, HostRpcError>();
+
+/**
+ * Keeps `refusal` on `failure` when `failure` is a transport failure that
+ * carries no refusal of its own, and hands `failure` on unchanged.
+ */
+export function withEarlierRefusal(
+  failure: unknown,
+  refusal: HostRpcError | null,
+): unknown {
+  if (
+    refusal !== null &&
+    failure instanceof HostTransportFailureError &&
+    !(failure instanceof RetryEpisodeOutcomeUnknownError) &&
+    failure.fatalDetails === null &&
+    failure.doorRefusal === null &&
+    !earlierRefusals.has(failure)
+  )
+    earlierRefusals.set(failure, refusal);
+  return failure;
+}
+
+/** The refusal {@link withEarlierRefusal} kept on `error`, if any. */
+export function earlierRefusalOf(error: unknown): HostRpcError | null {
+  return error instanceof HostRpcError
+    ? (earlierRefusals.get(error) ?? null)
+    : null;
 }
 
 /**

@@ -55,7 +55,10 @@ import {
   HostRpcError,
   HostTransportFailureError,
 } from "../../../shared/host-transport/host-messenger";
-import { finalRefusalOf } from "../../../shared/host-transport/retrying-messenger";
+import {
+  earlierRefusalOf,
+  finalRefusalOf,
+} from "../../../shared/host-transport/retrying-messenger";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rpc-client";
 import {
   readHostInstallRecord,
@@ -1711,8 +1714,10 @@ async function probeHostRpc(
     const status = await callHostRpcAtEndpoint("host.status", {}, endpoint);
     return crossHostMessagingIssue(status.crossHostMessaging);
   } catch (caught) {
-    // Classified by the refusal that ended a retry episode, if one did.
-    const err = finalRefusalOf(caught);
+    // Classified by the refusal that ended a retry episode, if one did, or
+    // that an attempt met before a transport failure ended the call: a host
+    // that refused the credential answered, whatever the resend did.
+    const err = earlierRefusalOf(caught) ?? finalRefusalOf(caught);
     if (err instanceof HostRpcError) {
       if (err.code === "UNAUTHORIZED") {
         return {

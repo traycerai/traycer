@@ -21,6 +21,7 @@ import {
 } from "./host-messenger";
 import {
   withEarlierAttemptDispatch,
+  withEarlierRefusal,
   withEpisodeDispatch,
 } from "./retrying-messenger";
 
@@ -221,7 +222,11 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
         return await call();
       } catch (retryCause) {
         await reportRefusedAgain(auth, authority, retryCause);
-        throw withEarlierAttemptDispatch(retryCause, method, sentEarlier);
+        // A resend that got no answer keeps the refusal it was sent after.
+        throw withEarlierRefusal(
+          withEarlierAttemptDispatch(retryCause, method, sentEarlier),
+          cause,
+        );
       }
     }
   };
