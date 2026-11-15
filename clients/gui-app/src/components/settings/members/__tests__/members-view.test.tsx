@@ -18,6 +18,15 @@ vitest.mock("sonner", async (importOriginal) => ({
   },
 }));
 
+// The removal preview is the app's own read, which waits for the signed-in
+// viewer.
+vitest.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "u-admin",
+}));
+
 import {
   act,
   cleanup,
@@ -36,11 +45,13 @@ import type {
   EnvironmentMembersRemoveResponse,
   EnvironmentMembersSetRoleResponse,
 } from "@traycer/protocol/host/environment/contracts";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   mountTeamPage,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { reachableHost } from "@/components/settings/environment/__tests__/mcp-skills-test-support";
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { MembersView } from "@/components/settings/members/members-view";
 import type {
@@ -57,10 +68,12 @@ import {
 } from "@/hooks/environment/use-environment-members-writes";
 import type { HostRpcRegistry } from "@/lib/host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  useSelectionAuthorityStore.getState().reset();
   toasts.success.mockReset();
   toasts.info.mockReset();
 });
@@ -129,6 +142,22 @@ function DetailsEntry(props: { readonly subjectKey: string }): ReactNode {
   );
 }
 
+/**
+ * What the host answers `environment.members` with, which authn's write and
+ * preview reads re-read to name the member by the id its list gives them.
+ */
+function membersRead(
+  members: readonly MembersListMember[],
+  legacyRoleNoticeSeenAt: number | null,
+) {
+  return {
+    members: members.map((entry) => ({ ...entry, avatarUrl: null })),
+    nextCursor: null,
+    legacyRoleNoticeSeenAt,
+    legacyMembers: [],
+  };
+}
+
 function renderView(options: {
   readonly viewerRole: TeamRole | null;
   readonly members: readonly MembersListMember[];
@@ -152,9 +181,20 @@ function renderView(options: {
   /** The real client the view reads through, for settling assertions. */
   readonly queryClient: QueryClient;
 } {
+  // Authn's removal preview names the member by the id its members list
+  // gives them, and counts the work only on the window's own host when
+  // authn's host list names it one of the team's.
+  useSelectionAuthorityStore.setState({
+    effectiveHostId: mockLocalHostEntry.hostId,
+  });
   const harness = mountTeamPage(
     { kind: "host" },
     {
+      "environment.members": () =>
+        membersRead(options.members, options.legacyRoleNoticeSeenAt),
+      "environment.host.list": () => ({
+        hosts: [{ ...reachableHost, hostId: mockLocalHostEntry.hostId }],
+      }),
       "environment.members.removePreview": (params) =>
         options.preview(params.userId),
     },
@@ -556,25 +596,22 @@ describe("MembersView demotion announcement", () => {
       ...BASE,
       viewerRole: "admin",
       members: [ADMIN, SECOND_ADMIN, EDITOR],
-      preview: () => ({ ...PREVIEW, linkedPlan: "Claude Max" }),
     });
     await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
     await user.click(await screen.findByRole("option", { name: "Editor" }));
 
     let described: string | null = null;
     try {
-      await screen.findByTestId("members-demotion-preview-table");
+      await screen.findByTestId("members-demotion-preview");
       described = appearance.text();
     } finally {
       // Bounded whatever happens above: an observer left on `document.body`
       // outlives this case and reads the next one's dialogs.
       appearance.stop();
     }
-    expect(described).not.toBeNull();
-    expect(described).toContain(
+    expect(described).toBe(
       "Grace can no longer invite people, change roles or edit the approval policy.",
     );
-    expect(described).toContain("Acme's agents stop using this plan.");
   });
 });
 
@@ -710,6 +747,7 @@ describe("MembersView pending writes", () => {
     const harness = mountTeamPage(
       { kind: "host" },
       {
+        "environment.members": () => membersRead(options.members, 1),
         "environment.members.removePreview": () => PREVIEW,
         ...options.handlers,
       },
