@@ -205,7 +205,16 @@ describe("TeamPlans", () => {
       });
     });
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/2 active turns/)).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "2 active turns. Each finishes its current step, then stops. No new turn can use the unlinked plan.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "Acme's Claude Code plan was unlinked. A host that has not confirmed keeps the unlink pending.",
+      ),
+    ).toBeTruthy();
     expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
 
     await userEvent.click(

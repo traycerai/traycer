@@ -482,7 +482,7 @@ export function planUnlinkTurnsLineFor(
   teamName: string,
   turnsOnPlan: number | null,
 ): string {
-  const stops = `then stops with "${teamName}'s Claude plan was unlinked. An admin can link one."`;
+  const stops = `then stops with "${teamName}'s Claude plan was unlinked."`;
   if (turnsOnPlan === null) {
     return `Unavailable. Each turn on Claude Code finishes its current step, ${stops}`;
   }

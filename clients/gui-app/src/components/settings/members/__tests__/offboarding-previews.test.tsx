@@ -309,7 +309,9 @@ describe("DemotionPreviewDialog", () => {
       nextRole: "editor",
       planLabel: "Claude Max",
     });
-    expect(withPlan).toContain("2 turns on Claude Code");
+    expect(withPlan).toContain(
+      '2 turns on Claude Code. Each finishes its current step, then stops with "Acme\'s Claude plan was unlinked."',
+    );
     expect(withPlan).toContain("Sandboxes keep running.");
     expect(screen.getByTestId("members-demotion-preview-table")).toBeTruthy();
     cleanup();
