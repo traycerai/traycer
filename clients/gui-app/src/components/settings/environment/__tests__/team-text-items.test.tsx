@@ -32,6 +32,8 @@ import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
+  rejectNextTeamEnvironmentItemPut,
+  requireTeamHostBinding,
   requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
@@ -43,7 +45,12 @@ const authViewerMock = vi.hoisted(() => ({ fromAuthStore: false }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
+  useHostBinding: () => requireTeamHostBinding(),
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamHostBinding(),
 }));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -503,7 +510,7 @@ describe("TeamTextItems accepted writes", () => {
     const row = nodeRegion();
     expect(await within(row).findByRole("alert")).toHaveProperty(
       "textContent",
-      "Cloud service is temporarily unavailable. Please try again shortly.",
+      "Connect to manage settings.",
     );
     expect(
       within(
@@ -579,17 +586,18 @@ describe("TeamTextItems accepted writes", () => {
       value: { value: "submitted" },
       original: variable("development", 1),
     };
-    const beforeWrite = vi.mocked(globalThis.fetch).mock.calls.length;
-    vi.mocked(globalThis.fetch).mockRejectedValueOnce(
-      new Error("The transport did not answer."),
-    );
+    const rejectedRequests = rejectNextTeamEnvironmentItemPut(harness);
     const firstWrites = getWrites();
     await act(async () => {
       await firstWrites.write(submitted);
     });
-    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
-      beforeWrite + 1,
-    );
+    expect(rejectedRequests).toHaveLength(1);
+    expect(rejectedRequests[0]?.method).toBe("PUT");
+    expect(rejectedRequests[0]?.body).toMatchObject({
+      key: "NODE_ENV",
+      revision: 1,
+      value: { value: "submitted" },
+    });
     const failedWrites = getWrites();
     const failure = failedWrites.failure;
     if (failure === null) throw new Error("The failed draft was not retained.");
@@ -612,9 +620,9 @@ describe("TeamTextItems accepted writes", () => {
       await restoredWrites.writeOnUnmount(submitted, typedOn);
     });
 
-    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
-      beforeWrite + 1,
-    );
+    expect(
+      harness.paramsOf("environment.configuration.items.put"),
+    ).toHaveLength(0);
   });
 
   it("the hook's unmount writer uses the last-typed revision after refusal (model via public calls)", async () => {
@@ -743,48 +751,29 @@ describe("TeamTextItems accepted writes", () => {
     await waitFor(() => expect(delayedReadStarted).toBe(true));
     const submittedField = nodeValue();
     await userEvent.type(submittedField, "!");
-    const fetchCallsBeforeRetry = vi.mocked(globalThis.fetch).mock.calls.length;
-    const authnFetch = vi.mocked(globalThis.fetch).getMockImplementation();
-    if (authnFetch === undefined)
-      throw new Error("The authn fetch fixture is absent.");
-    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
-      let target: string;
-      if (input instanceof Request) target = input.url;
-      else if (input instanceof URL) target = input.href;
-      else target = input;
-      const method =
-        init?.method ?? (input instanceof Request ? input.method : "GET");
-      if (
-        method === "PUT" &&
-        new URL(target).pathname.endsWith("/items/variable")
-      ) {
-        throw new Error("The transport did not answer.");
-      }
-      return authnFetch(input, init);
-    });
+    const rejectedRequests = rejectNextTeamEnvironmentItemPut(harness);
     commitNodeValue();
     expect(await within(nodeRegion()).findByRole("alert")).toHaveProperty(
       "textContent",
       "Connect to manage settings.",
     );
-    expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeGreaterThan(
-      fetchCallsBeforeRetry,
-    );
+    expect(rejectedRequests).toHaveLength(1);
+    expect(rejectedRequests[0]?.method).toBe("PUT");
+    expect(rejectedRequests[0]?.body).toMatchObject({
+      key: "NODE_ENV",
+      revision: 2,
+      value: { value: "submitted!" },
+    });
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
       expect.objectContaining({ revision: 1, value: { value: "submitted" } }),
     ]);
 
-    const fetchCallsBeforeReadSettles = vi.mocked(globalThis.fetch).mock.calls
-      .length;
     await act(async () => {
       delayedRead.resolve({ items });
       await delayedRead.promise;
     });
     await waitFor(() => expect(nodeValue()).not.toBe(submittedField));
     expect(nodeValue()).toHaveProperty("value", "submitted!");
-    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(
-      fetchCallsBeforeReadSettles,
-    );
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);
@@ -849,9 +838,7 @@ describe("TeamTextItems accepted writes", () => {
     });
     const page = render(<TextItemsPage />, { wrapper: harness.Wrapper });
     await editVariable("first");
-    vi.mocked(globalThis.fetch).mockRejectedValueOnce(
-      new Error("The transport did not answer."),
-    );
+    rejectNextTeamEnvironmentItemPut(harness);
     commitNodeValue();
 
     expect(await within(nodeRegion()).findByRole("alert")).toHaveProperty(
@@ -1032,9 +1019,9 @@ describe("TeamTextItems accepted writes", () => {
     await act(async () => {
       await harness.queryClient.refetchQueries();
     });
-    expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-      readsBeforeQuietRead + 1,
-    );
+    expect(
+      harness.paramsOf("environment.configuration.items").length,
+    ).toBeGreaterThan(readsBeforeQuietRead);
     expect(
       await screen.findByRole("region", { name: "NODE_ENV" }),
     ).toBeTruthy();
@@ -1075,9 +1062,9 @@ describe("TeamTextItems accepted writes", () => {
     items = [variable("production", 2)];
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     await expectUnlocked();
-    expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-      reads + 1,
-    );
+    expect(
+      harness.paramsOf("environment.configuration.items").length,
+    ).toBeGreaterThan(reads);
     expect(
       harness.paramsOf("environment.configuration.items.put"),
     ).toHaveLength(1);

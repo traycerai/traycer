@@ -65,7 +65,8 @@ export const teamHostBoundary: {
   auth: AuthService | null;
   runtime: HostRuntime<HostRpcRegistry> | null;
   directory: HostDirectoryService | null;
-} = { client: null, auth: null, runtime: null, directory: null };
+  binding: HostRuntimeBinding<HostRpcRegistry> | null;
+} = { client: null, auth: null, runtime: null, directory: null, binding: null };
 
 /**
  * The client of a second host (`mockRemoteHostEntry`) over the same messenger:
@@ -117,20 +118,10 @@ export function requireTeamCloudAuth(): AuthService {
 }
 
 export function requireTeamHostBinding(): HostRuntimeBinding<HostRpcRegistry> {
-  if (
-    teamHostBoundary.runtime === null ||
-    teamHostBoundary.directory === null ||
-    teamHostBoundary.auth === null
-  ) {
+  if (teamHostBoundary.binding === null) {
     throw new Error("no team host binding mounted");
   }
-  return {
-    runtime: teamHostBoundary.runtime,
-    hostClient: teamHostBoundary.runtime.hostClient,
-    directory: teamHostBoundary.directory,
-    auth: teamHostBoundary.auth,
-    hostId: null,
-  };
+  return teamHostBoundary.binding;
 }
 
 export function requireTeamEnvironmentAuthnBinding(): HostRuntimeBinding<HostRpcRegistry> {
@@ -242,6 +233,30 @@ export interface TeamPageHarness {
   readonly cloudResponses: TeamEnvironmentCloudResponses;
   /** The params of every request the host received for `method`, in order. */
   readonly paramsOf: (method: string) => unknown[];
+}
+
+export function rejectNextTeamEnvironmentItemPut(
+  harness: TeamPageHarness,
+): EnvironmentTransportRequest[] {
+  const cloud = harness.auth.environmentCloud();
+  const rejectedRequests: EnvironmentTransportRequest[] = [];
+  let rejectNextPut = true;
+  harness.auth.environmentCloud = () => ({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        rejectNextPut &&
+        request.method === "PUT" &&
+        new URL(request.url).pathname.endsWith("/items/variable")
+      ) {
+        rejectNextPut = false;
+        rejectedRequests.push(request);
+        throw new Error("The transport did not answer.");
+      }
+      return cloud.transport(request);
+    },
+  });
+  return rejectedRequests;
 }
 
 export function mountTeamPage(
@@ -457,6 +472,7 @@ function buildTeamPage(
     auth,
     hostId: null,
   };
+  teamHostBoundary.binding = authBinding;
   viewingHostBoundary.client = spine.createRequester(mockRemoteHostEntry);
   useAuthStore.setState({
     status: "signed-in",
@@ -497,6 +513,7 @@ export function resetTeamPageHarness(): void {
   teamHostBoundary.auth = null;
   teamHostBoundary.runtime = null;
   teamHostBoundary.directory = null;
+  teamHostBoundary.binding = null;
   viewingHostBoundary.client = null;
   windowHostBoundary.hostId = null;
   useAuthStore.setState({ status: "signed-out", shareableTeams: [] });
