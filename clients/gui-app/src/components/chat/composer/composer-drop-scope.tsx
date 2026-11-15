@@ -2,7 +2,9 @@ import {
   createContext,
   use,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type DragEvent,
   type DragEventHandler,
@@ -11,8 +13,10 @@ import {
 
 import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
 import { ComposerDropOverlay } from "@/components/home/composer/composer-shell";
+import { dragIsInZone } from "@/hooks/composer/use-composer-paste";
 import {
   classifyFileTransferDrag,
+  hasClaimableFileTransfer,
   type FileTransferDragOverlayVariant,
 } from "@/lib/files/file-transfer-paths";
 
@@ -41,27 +45,47 @@ type ComposerDropZoneProps = Pick<
   "onDragEnter" | "onDragLeave" | "onDragOver" | "onDrop"
 >;
 
-function keepFromPane(event: DragEvent<HTMLElement>): void {
+function keepFileDragHere(event: DragEvent<HTMLElement>): void {
+  if (!dragIsInZone(event.currentTarget, event.target)) return;
   if (classifyFileTransferDrag(event.dataTransfer) === null) return;
   event.stopPropagation();
-}
-
-function refuseFileDrag(event: DragEvent<HTMLElement>): void {
-  if (classifyFileTransferDrag(event.dataTransfer) === null) return;
-  event.preventDefault();
-  event.stopPropagation();
-  event.dataTransfer.dropEffect = "none";
 }
 
 /**
- * A pane with no box mounted still answers a file drag: it refuses it, so the
- * file is not handed to the window or to a pane around this one.
+ * Before the drop only the transfer's type names can be read, and a link
+ * dragged from a page has the same `text/uri-list` type as a file reference.
+ * So every file-like drag is held here for the drop to decide, and only one
+ * that certainly carries files is shown as refused.
  */
-const REFUSING_ZONE_PROPS: ComposerDropZoneProps = {
-  onDragEnter: keepFromPane,
-  onDragLeave: keepFromPane,
-  onDragOver: refuseFileDrag,
-  onDrop: refuseFileDrag,
+function refuseFileDragOver(event: DragEvent<HTMLElement>): void {
+  if (!dragIsInZone(event.currentTarget, event.target)) return;
+  if (classifyFileTransferDrag(event.dataTransfer) === null) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (Array.from(event.dataTransfer.types).includes("Files")) {
+    event.dataTransfer.dropEffect = "none";
+  }
+}
+
+function refuseFileDrop(event: DragEvent<HTMLElement>): void {
+  if (!dragIsInZone(event.currentTarget, event.target)) return;
+  if (!hasClaimableFileTransfer(event.dataTransfer)) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+/**
+ * Takes a file drag and refuses it, so the file reaches neither the window
+ * nor a pane around this element. A pane with no box mounted is this, and so
+ * is an element inside a pane that takes drops itself (a message being edited
+ * in the transcript): what its own handlers do not take is not the pane's
+ * box's to take. A link or text dragged over it is left alone.
+ */
+export const REFUSING_DROP_ZONE_PROPS: ComposerDropZoneProps = {
+  onDragEnter: keepFileDragHere,
+  onDragLeave: keepFileDragHere,
+  onDragOver: refuseFileDragOver,
+  onDrop: refuseFileDrop,
 };
 
 export interface ComposerDropScope {
@@ -80,7 +104,7 @@ export function useComposerDropScope(): ComposerDropScope {
     () => ({
       zoneProps:
         target === null
-          ? REFUSING_ZONE_PROPS
+          ? REFUSING_DROP_ZONE_PROPS
           : {
               onDragEnter: target.onDragEnter,
               onDragLeave: target.onDragLeave,
@@ -118,29 +142,28 @@ const PANE_TAKES_DROPS: ComposerDropTarget = {
  * what the box's own frame takes. That is nothing once a pane has it, and the
  * box's own handling in no pane.
  *
- * The four handlers must keep their identity between renders: each change is
- * a new claim, which renders the pane and the box again.
+ * The pane is given handlers that stay the same while the box's own change,
+ * so a box whose handlers are new on every render claims the zone once.
  */
 export function useComposerDropScopeTarget(
   target: ComposerDropTarget,
 ): ComposerDropTarget {
   const claim = use(ComposerDropScopeContext);
-  const { onDragEnter, onDragLeave, onDragOver, onDrop, overlayVariant } =
-    target;
+  const latest = useRef(target);
+  useLayoutEffect(() => {
+    latest.current = target;
+  });
+  const { overlayVariant } = target;
   useEffect(() => {
     if (claim === null) return;
-    claim({ onDragEnter, onDragLeave, onDragOver, onDrop, overlayVariant });
+    claim({
+      onDragEnter: (event) => latest.current.onDragEnter(event),
+      onDragLeave: (event) => latest.current.onDragLeave(event),
+      onDragOver: (event) => latest.current.onDragOver(event),
+      onDrop: (event) => latest.current.onDrop(event),
+      overlayVariant,
+    });
     return () => claim(null);
-  }, [claim, onDragEnter, onDragLeave, onDragOver, onDrop, overlayVariant]);
+  }, [claim, overlayVariant]);
   return claim === null ? target : PANE_TAKES_DROPS;
 }
-
-/**
- * For an element inside a pane that takes drops itself (a message being
- * edited in the transcript): the pane's zone ends at its edge, so the pane's
- * affordance never covers a drop the pane's box will not receive.
- */
-export const OWN_DROP_TARGET_PROPS = {
-  onDragEnter: keepFromPane,
-  onDragLeave: keepFromPane,
-} as const;

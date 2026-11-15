@@ -459,7 +459,12 @@ interface ComposerDragState {
   readonly overlayVariant: FileTransferDragOverlayVariant | null;
 }
 
-function dragIsInZone(
+/**
+ * Whether a drag event is over the zone's own DOM. A layer portalled out of
+ * the zone (a dialog, a menu) bubbles to the zone's handlers through React
+ * without being in it, and a drop there is not the zone's.
+ */
+export function dragIsInZone(
   zone: HTMLElement | null,
   target: EventTarget | null,
 ): boolean {
@@ -1107,6 +1112,7 @@ export function useComposerPasteEvents<Attrs>(args: {
   );
 
   const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
     const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
     if (overlayVariant === null) return;
     event.preventDefault();
@@ -1143,13 +1149,11 @@ export function useComposerPasteEvents<Attrs>(args: {
   }, [draggingOverZone]);
 
   const onDragEnter = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
     const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
     if (overlayVariant === null) return;
     event.preventDefault();
     event.stopPropagation();
-    // A layer portalled out of the zone bubbles here through React, but it is
-    // not in the zone.
-    if (!dragIsInZone(event.currentTarget, event.target)) return;
     dragZoneRef.current = event.currentTarget;
     setDragState((state) => ({
       depth: state.depth + 1,
@@ -1158,10 +1162,10 @@ export function useComposerPasteEvents<Attrs>(args: {
   }, []);
 
   const onDragLeave = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
     if (classifyFileTransferDrag(event.dataTransfer) === null) return;
     event.preventDefault();
     event.stopPropagation();
-    if (!dragIsInZone(event.currentTarget, event.target)) return;
     setDragState((state) => {
       const depth = Math.max(0, state.depth - 1);
       if (depth === state.depth) return state;
@@ -1174,6 +1178,7 @@ export function useComposerPasteEvents<Attrs>(args: {
 
   const onDrop = useCallback(
     (event: DragEvent<HTMLElement>) => {
+      if (!dragIsInZone(event.currentTarget, event.target)) return;
       // Drag-enter can only inspect the transfer's type names, so an ordinary
       // HTTPS URI is intentionally shown as potentially file-like until its
       // payload is readable here. A drop does not reliably emit dragleave,
