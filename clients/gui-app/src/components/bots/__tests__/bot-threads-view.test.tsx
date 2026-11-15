@@ -72,6 +72,10 @@ import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-h
 import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   negotiateBotSend,
   signInViewer,
@@ -230,6 +234,18 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 vi.mock("@/lib/chats/chat-serving-witness", () => ({
   useChatServingHostId: () => "host-1",
 }));
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => null,
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
+}));
+vi.mock("@/components/notifications/mobile-notifications-button", () => ({
+  MobileNotificationsButton: () => null,
+}));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),
@@ -342,6 +358,8 @@ const FOLLOWING: BotThreadFollow = {
 
 /** The installed app's form the next mount draws in; `null` where the container decides. */
 let mountLevel2: MobileLevel2Form | null = null;
+/** Whether the next mount draws the app header beside the view, which the view portals its picker into. */
+let mountUnderHeader = false;
 /** The last mount's query client, for a case that has the host read again. */
 let queryClient = new QueryClient();
 
@@ -413,18 +431,22 @@ function mount(): void {
   mocks.client = spine.createRequester(mockLocalHostEntry);
   render(
     <QueryClientProvider client={queryClient}>
-      <BotTestRunnerHost>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotThreadsView
-              level2={mountLevel2}
-              hostId="host-1"
-              channelTitle="Tracy"
-              onBack={mocks.back}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
-      </BotTestRunnerHost>
+      <MobileBotHeaderSlotProvider>
+        {mountUnderHeader ? <MobileAppHeader /> : null}
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotThreadsView
+                level2={mountLevel2}
+                hostId="host-1"
+                channelId={TRACY}
+                channelTitle="Tracy"
+                onBack={mocks.back}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </BotTestRunnerHost>
+      </MobileBotHeaderSlotProvider>
     </QueryClientProvider>,
   );
 }
@@ -633,6 +655,7 @@ beforeEach(() => {
   );
   vi.clearAllMocks();
   mountLevel2 = null;
+  mountUnderHeader = false;
   mocks.bots = [bot(TRACY, "Tracy"), bot(TEAM, "Team Tracy")];
   mocks.botList = "listed";
   mocks.refetchBots.mockResolvedValue(undefined);
@@ -1702,6 +1725,101 @@ describe("<BotThreadsView /> header", () => {
     expect(screen.getByTestId("bot-threads-back").className).not.toContain(
       "@3xl",
     );
+  });
+});
+
+const TRACY_REF = { kind: "tracy", id: "tracy" } as const;
+
+function focusTracy(): void {
+  useTabsStore.setState({
+    items: [{ kind: "tab", id: tabItemId(TRACY_REF), ref: TRACY_REF }],
+    activeItemId: tabItemId(TRACY_REF),
+    stripOrder: [TRACY_REF],
+  });
+}
+
+function mountUnderTracyHeader(level2: MobileLevel2Form | null): void {
+  focusTracy();
+  mountUnderHeader = true;
+  mountLevel2 = level2;
+  mocks.hosted[TRACY] = script([], {});
+  mocks.hosted[TEAM] = script([], {});
+  mount();
+}
+
+describe("<BotThreadsView /> in the compact app header", () => {
+  afterEach(() => {
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  it.each(["menu", "bar"] as const)(
+    "draws a Threads picker and the Back control in the app header at the %s form, not in the view's own header",
+    (form) => {
+      mountUnderTracyHeader(form);
+
+      const header = screen.getByTestId("app-header");
+      expect(
+        within(header).getByRole("button", { name: /^Threads$/ }),
+      ).toBeTruthy();
+      expect(
+        within(header).getByRole("button", { name: "Back to Tracy" }),
+      ).toBeTruthy();
+      expect(
+        within(screen.getByTestId("bot-threads-view")).queryByRole("button", {
+          name: /^Threads$/,
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("goes back to the tab's channel from the header's Back control", async () => {
+    const user = userEvent.setup();
+    mountUnderTracyHeader("menu");
+
+    await user.click(
+      within(screen.getByTestId("app-header")).getByRole("button", {
+        name: "Back to Tracy",
+      }),
+    );
+
+    expect(mocks.back).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the bots list from the Threads picker in the header", async () => {
+    const user = userEvent.setup();
+    mountUnderTracyHeader("menu");
+
+    await user.click(
+      within(screen.getByTestId("app-header")).getByRole("button", {
+        name: /^Threads$/,
+      }),
+    );
+
+    expect(await screen.findByTestId("bot-channel-picker")).toBeTruthy();
+  });
+
+  it("draws nothing in the header beside a column, where the channel row is the way back", () => {
+    mountUnderTracyHeader({ column: 256 });
+
+    const header = screen.getByTestId("app-header");
+    expect(
+      within(header).queryByRole("button", { name: /^Threads$/ }),
+    ).toBeNull();
+    expect(
+      within(header).queryByRole("button", { name: "Back to Tracy" }),
+    ).toBeNull();
+  });
+
+  it("takes the picker and Back out of the header when the view unmounts", () => {
+    mountUnderTracyHeader("menu");
+    const header = screen.getByTestId("app-header");
+    expect(
+      within(header).getByRole("button", { name: /^Threads$/ }),
+    ).toBeTruthy();
+
+    cleanup();
+
+    expect(screen.queryByRole("button", { name: /^Threads$/ })).toBeNull();
   });
 });
 
