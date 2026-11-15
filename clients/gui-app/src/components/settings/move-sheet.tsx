@@ -180,6 +180,19 @@ function MoveSheetBody(props: {
       },
     );
   };
+  // A plan refused for want of Personal is asked again only with Personal
+  // read again: rows read now give the plan a new request, which it reads by
+  // itself; a read that fails again asks the same plan again.
+  const retryPlan = (): void => {
+    if (personalRead.data !== null) {
+      void plan.refetch().catch(ignoreError);
+      return;
+    }
+    void personalRead
+      .refetch()
+      .then((reread) => (reread.data === null ? plan.refetch() : undefined))
+      .catch(ignoreError);
+  };
   const reachedHostNames = runningPersonal.hosts
     .filter((host) => host.hostId !== target.hostId)
     .map((host) => host.name);
@@ -211,12 +224,7 @@ function MoveSheetBody(props: {
             className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
           >
             <span className="min-w-0">{plan.error.message}</span>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => void plan.refetch().catch(ignoreError)}
-            >
+            <Button type="button" size="sm" variant="ghost" onClick={retryPlan}>
               Retry
             </Button>
           </div>

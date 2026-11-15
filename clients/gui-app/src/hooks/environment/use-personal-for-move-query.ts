@@ -21,6 +21,7 @@ import {
  * for each sheet and never kept once the sheet closes, so a sheet is never
  * drawn from an older copy. Never refetched on its own while the sheet is
  * open: the plan is drawn against this one read until the sheet asks again.
+ * A read that failed is not kept: the next sheet to open reads again.
  */
 export function usePersonalForMoveQuery(
   enabled: boolean,
@@ -38,7 +39,8 @@ export function usePersonalForMoveQuery(
       queryKey: environmentQueryKeys.personalForMove(viewerId),
       queryFn: () => (cloud === null ? null : readPersonalForMove(cloud())),
       enabled: enabled && cloud !== null && viewerId.length > 0 && authorized,
-      staleTime: Number.POSITIVE_INFINITY,
+      staleTime: (query) =>
+        query.state.data === null ? 0 : Number.POSITIVE_INFINITY,
       gcTime: 0,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
