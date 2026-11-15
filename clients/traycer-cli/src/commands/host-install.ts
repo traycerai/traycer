@@ -18,6 +18,7 @@ import {
   runSignInPreflight,
   runTeamInstallAuthPreflight,
   completeTeamInstall,
+  resolveSignInTeam,
   warnIfTeamInstallSignInRemains,
   type HostInstallAuthPreflight,
 } from "../host/install-auth";
@@ -259,6 +260,11 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             ? await runTeamInstallAuthPreflight(ctx)
             : null;
         try {
+          // The team is checked against the sign-in's own teams before any
+          // byte is staged, so a slug that names none of them installs
+          // nothing. `completeTeamInstall` checks it again after the start.
+          if (args.team !== null && teamSession !== null)
+            await resolveSignInTeam(args.team);
           const authPreflight: HostInstallAuthPreflight =
             preparedTeamToken !== null
               ? { state: "not-checked", reason: "team-install-token" }
