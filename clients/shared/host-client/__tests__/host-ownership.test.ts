@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirect";
 import { readHostOwnershipViaHttp } from "../host-ownership";
 
 const AUTHN = "https://authn.example.test";
@@ -183,12 +184,7 @@ describe("readHostOwnershipViaHttp", () => {
               headers: { location: redirectTarget },
             });
           }
-          const opaqueRedirect = new Response(null);
-          Object.defineProperties(opaqueRedirect, {
-            status: { value: 0 },
-            type: { value: "opaqueredirect" },
-          });
-          return opaqueRedirect;
+          return createOpaqueRedirectResponse();
         },
       );
       vi.stubGlobal("fetch", fetchMock);

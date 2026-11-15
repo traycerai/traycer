@@ -56,13 +56,16 @@ export function ChatSenderOverline(props: {
     <span className="text-overline font-medium text-muted-foreground/60">
       {/* Passive under the layout editor: the stamp beside it is a region
           and stays lit, the sender label is content. */}
-      <span data-layout-passive className="uppercase">
-        {props.label}
-      </span>
+      {/* An empty label names no one (`"system"`): the stamp stands alone. */}
+      {props.label.length === 0 ? null : (
+        <span data-layout-passive className="uppercase">
+          {props.label}
+        </span>
+      )}
       {props.stamped ? (
         <ChatMessageTimestamp
           timestamp={props.sentAt}
-          separated
+          separated={props.label.length > 0}
           instanceId={props.instanceId}
         />
       ) : null}

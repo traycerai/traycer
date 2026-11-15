@@ -280,10 +280,13 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
 
   it("saves the sign-in once another writer lets go of the credentials lock", async () => {
     const store = makeStore();
+    // A second writer takes its turn, as the desktop does (12 s wait, 50 ms
+    // poll): the store's own start-up work (reserve fill, recovery gate) can
+    // hold the lock for a moment as the store is made.
     const otherWriter = await acquireCredentialsLock({
       lockPath: `${credentialsPath()}.lock`,
       reason: "other writer",
-      waitMs: 0,
+      waitMs: 12_000,
       pollIntervalMs: 50,
       signal: null,
     });

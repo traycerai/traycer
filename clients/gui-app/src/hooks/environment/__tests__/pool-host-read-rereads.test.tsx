@@ -40,20 +40,9 @@ const REMOTE_HOST_ID = mockRemoteHostEntry.hostId;
 // A personal page reads its hosts from the host list; this window's own host
 // scope has no hosts here (the same stand-in as `team-page-frame-rereads`).
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
-  const WINDOW_HOST_SELECTION = {
-    scopedHostId: null,
-    setScopedHostId: () => undefined,
-  };
-  const { hostScopeFixture } =
+  const { noHostsScopeModule } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  const scope = hostScopeFixture({ host: null });
-  const useHostScope = () => scope;
-  return {
-    useHostScope,
-    useHostScopeFor: useHostScope,
-    usePersonalHostScope: useHostScope,
-    WINDOW_HOST_SELECTION,
-  };
+  return noHostsScopeModule();
 });
 // The runtime client and the client lookup by host id answer the harness's host.
 vi.mock("@/lib/host", async (importOriginal) => ({
