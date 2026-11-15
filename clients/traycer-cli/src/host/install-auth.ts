@@ -16,7 +16,7 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentOperationTarget } from "@traycer/protocol/host/environment/move-contracts";
 import {
-  HostTransportFailureError,
+  mayHaveReachedHost,
   type HostTransportEndpoint,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -839,7 +839,7 @@ async function giveInstalledHostToTeam(
           PLAIN_DISPATCH,
         );
       } catch (error) {
-        sent.startReplyLost = mayHaveStarted(error);
+        sent.startReplyLost = mayHaveReachedHost(error);
         throw error;
       }
     },
@@ -902,16 +902,6 @@ function acceptanceFailure(
   if (error.kind === "unauthorized" && signInRejected)
     return storedCredentialRejected();
   return teamTransferNotConfirmed();
-}
-
-/** `start`'s frame went out and no answer came back: the computer may have started. */
-function mayHaveStarted(error: unknown): boolean {
-  const mapped = hostRpcToCliError(error);
-  return (
-    error instanceof HostTransportFailureError &&
-    mapped instanceof CliError &&
-    mapped.code === CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN
-  );
 }
 
 /**
