@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -39,6 +40,13 @@ vi.mock("@/lib/windows/desktop-capabilities", async (importOriginal) => {
       desktopPlatform.override ?? actual.resolveDesktopPlatform(runnerHost),
   };
 });
+
+// The scope reads the router's Settings overlay; this suite mounts no router,
+// and the real scope is proved against one in `soundtrack-controls-wiring.test.tsx`.
+vi.mock("@/components/soundtrack/soundtrack-page-controls-scope", () => ({
+  SoundtrackPageControlsScope: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
 
 vi.mock("@/components/layout/tabs/tab-strip", () => ({
   TabStrip: () => <div data-testid="tab-strip" />,

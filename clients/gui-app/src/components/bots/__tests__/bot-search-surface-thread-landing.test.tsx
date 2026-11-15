@@ -7,6 +7,7 @@
  * transcript is the suite's stub, whose `data-land-on` is the `landOn` the
  * panel handed it.
  */
+import "./bot-search-surface-stubs";
 import {
   mocks,
   SEARCH_RESULT_A,

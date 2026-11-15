@@ -6,6 +6,7 @@
  * beside the results are in `bot-search-surface-states.test.tsx`.
  * The clock is a fake one, so the debounce is crossed by advancing it.
  */
+import "./bot-search-surface-stubs";
 import {
   mocks,
   TAB_HOST,
@@ -25,7 +26,9 @@ import {
   transcriptOf,
   installSearchSurfaceLifecycle,
 } from "./bot-search-surface-support";
-import { Surface } from "./bot-search-surface-view";
+import { Surface as UnthemedSurface } from "./bot-search-surface-view";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
+import type { ReactNode } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
@@ -50,6 +53,17 @@ import {
 } from "@/stores/bots/bot-search-store";
 
 installSearchSurfaceLifecycle();
+
+/** The surface under the resolved theme the app's provider supplies to the picker's sheet. */
+function Surface(): ReactNode {
+  return (
+    <ResolvedThemeContext.Provider
+      value={{ resolvedTheme: "dark", themePreset: "neutral" }}
+    >
+      <UnthemedSurface />
+    </ResolvedThemeContext.Provider>
+  );
+}
 
 /** ⌘F, as the keybinding and the menu route it. */
 function pressFind(): boolean {

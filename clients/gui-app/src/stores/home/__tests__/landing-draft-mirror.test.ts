@@ -156,6 +156,7 @@ function controlledStream(): {
       onFrame = handler;
     },
     onStatusChange: () => undefined,
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => undefined,
     getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),
@@ -302,6 +303,29 @@ describe("landing draft host-mirror bookkeeping", () => {
       .getState()
       .setDraftContent(id, EMPTY_LANDING_DRAFT_CONTENT, { from: 1, to: 1 });
     expect(collectUnadoptedLandingDrafts().map((d) => d.id)).toEqual([id]);
+  });
+
+  it("never offers a draft opened for one host to the mirror, and keeps its host through a host document", () => {
+    const id = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((draft) =>
+        draft.id === id ? { ...draft, namedHostId: "host-a" } : draft,
+      ),
+    }));
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(id, EMPTY_LANDING_DRAFT_CONTENT, { from: 1, to: 1 });
+    expect(collectUnadoptedLandingDrafts()).toEqual([]);
+    expect(
+      applyLandingHostDocument(
+        frozenLandingHostDocument(id, 1, FROZEN_CLAUDE_SETTINGS),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+    expect(
+      useLandingDraftStore.getState().drafts.find((d) => d.id === id)
+        ?.namedHostId,
+    ).toBe("host-a");
   });
 
   it("adopted drafts upsert to that host; dropLocalMirror does not host-delete", () => {

@@ -7,6 +7,7 @@
  * protocol's request schema, as the host does.
  * The clock is a fake one, so the debounce is crossed by advancing it.
  */
+import "./bot-search-surface-stubs";
 import {
   mocks,
   hitRows,

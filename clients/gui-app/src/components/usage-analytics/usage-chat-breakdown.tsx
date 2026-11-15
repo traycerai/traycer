@@ -2,23 +2,28 @@ import type { ReactNode } from "react";
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 import { sumTokenTotals } from "@/lib/usage-analytics/usage-chart-data";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
-import { useEpicTreeNode } from "@/lib/epic-selectors";
+import { useMaybeEpicTreeNodeTitle } from "@/lib/epic-selectors";
 
 type UsageChatBucket = UsageSummaryResponse["summary"]["chatBuckets"][number];
 
 export interface UsageChatBreakdownProps {
   readonly rows: readonly UsageChatBucket[];
+  /**
+   * Titles for chats no open epic's tree holds, by chat id: a bot's trunk
+   * and threads, whose tab has no epic session. `null` for none.
+   */
+  readonly chatTitles: ReadonlyMap<string, string> | null;
 }
 
 /**
  * By-chat/agent breakdown for the epic-scoped panel, as a real table
  * (2026-08-11 feedback round) with the same column styling as
  * `UsageBreakdownTable`. Titles are joined CLIENT-SIDE from the open epic's
- * own tree projection (`useEpicTreeNode`) - the summary only carries
- * `chatId`, and this is the one place in the app that already knows every
- * node's title, chat or A2A child agent alike (an A2A child agent is its
- * own chat, so this list doubles as the by-agent view with no separate wire
- * shape).
+ * own tree projection - the summary only carries `chatId`, and the tree
+ * already knows every node's title, chat or A2A child agent alike (an A2A
+ * child agent is its own chat, so this list doubles as the by-agent view
+ * with no separate wire shape) - else from `chatTitles`. The tree is read
+ * tolerantly: a bot tab opens this panel with no epic session around it.
  */
 export function UsageChatBreakdown(props: UsageChatBreakdownProps): ReactNode {
   if (props.rows.length === 0) {
@@ -54,7 +59,11 @@ export function UsageChatBreakdown(props: UsageChatBreakdownProps): ReactNode {
       </thead>
       <tbody>
         {sorted.map((row) => (
-          <UsageChatBreakdownRow key={row.chatId} row={row} />
+          <UsageChatBreakdownRow
+            key={row.chatId}
+            row={row}
+            fallbackTitle={props.chatTitles?.get(row.chatId) ?? null}
+          />
         ))}
       </tbody>
     </table>
@@ -63,10 +72,12 @@ export function UsageChatBreakdown(props: UsageChatBreakdownProps): ReactNode {
 
 function UsageChatBreakdownRow(props: {
   readonly row: UsageChatBucket;
+  readonly fallbackTitle: string | null;
 }): ReactNode {
   const { row } = props;
-  const node = useEpicTreeNode(row.chatId);
-  const title = (node?.title ?? "").trim() || "Untitled chat";
+  const treeTitle = useMaybeEpicTreeNodeTitle(row.chatId);
+  const title =
+    (treeTitle ?? props.fallbackTitle ?? "").trim() || "Untitled chat";
   const tokens = sumTokenTotals(row.tokens);
   return (
     <tr
