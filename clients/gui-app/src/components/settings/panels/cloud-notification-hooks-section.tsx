@@ -223,9 +223,10 @@ export function CloudNotificationHooksSection(props: {
                       variant="ghost"
                       size="sm"
                       disabled={disabled}
-                      onClick={() =>
-                        setPendingDelete({ hook, snapshot: props.snapshot })
-                      }
+                      onClick={() => {
+                        props.onClearProblem();
+                        setPendingDelete({ hook, snapshot: props.snapshot });
+                      }}
                     >
                       Delete
                     </Button>
@@ -287,7 +288,13 @@ export function CloudNotificationHooksSection(props: {
               "Hook deleted",
             )
           }
-        />
+        >
+          {props.saving || props.error === null ? null : (
+            <p role="alert" className="px-5 pb-5 text-ui-sm text-destructive">
+              {props.error}
+            </p>
+          )}
+        </ConfirmDestructiveDialog>
       )}
     </SettingsGroup>
   );

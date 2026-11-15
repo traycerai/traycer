@@ -121,6 +121,16 @@ function renderPage(role: "admin" | "editor" | "viewer" | "unknown") {
   return render(<TeamNotificationHooksSettingsPanel />, { wrapper: Wrapper });
 }
 
+function hookRow(manager: HTMLElement, name: string): HTMLElement {
+  let row: HTMLElement | null = within(manager).getByText(name);
+  while (row !== null && row !== manager) {
+    if (within(row).queryByRole("button", { name: "Edit" }) !== null)
+      return row;
+    row = row.parentElement;
+  }
+  throw new Error(`notification hook row for ${name} was not found`);
+}
+
 function requestBody(index: number): Record<string, unknown> {
   const body = fixtures.requests[index]?.body;
   if (typeof body !== "object" || body === null)
@@ -206,7 +216,11 @@ describe("team Notification hooks page", () => {
     renderPage("editor");
 
     const manager = screen.getByTestId("cloud-notification-hooks-manager");
-    fireEvent.click(within(manager).getByRole("button", { name: "Edit" }));
+    fireEvent.click(
+      within(hookRow(manager, "Build alerts")).getByRole("button", {
+        name: "Edit",
+      }),
+    );
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText("Name"), {
       target: { value: "Build alerts revised" },
@@ -235,6 +249,7 @@ describe("team Notification hooks page", () => {
         '"Build alerts" will stop being sent from Acme\'s computers.',
       ),
     ).toBeTruthy();
+    expect(within(dialog).queryByRole("alert")).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(fixtures.requests).toHaveLength(1));
@@ -243,6 +258,39 @@ describe("team Notification hooks page", () => {
       revision: 7,
       value: [],
     });
+  });
+
+  it("shows a failed Delete in its confirmation and clears it for a new opening", async () => {
+    fixtures.hooks = [buildHook];
+    fixtures.status = 503;
+    fixtures.body = { detail: "private failure details" };
+    renderPage("admin");
+
+    const manager = screen.getByTestId("cloud-notification-hooks-manager");
+    fireEvent.click(within(manager).getByRole("button", { name: "Delete" }));
+    const firstDialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(within(firstDialog).queryByRole("alert")).toBeNull();
+    fireEvent.click(
+      within(firstDialog).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(
+      (await within(firstDialog).findByRole("alert")).textContent,
+    ).toContain(
+      "Cloud service is temporarily unavailable. Please try again shortly.",
+    );
+    expect(
+      within(firstDialog).queryByText("private failure details"),
+    ).toBeNull();
+    fireEvent.click(within(firstDialog).getByTestId("confirm-cancel"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+    );
+    fireEvent.click(within(manager).getByRole("button", { name: "Delete" }));
+    const secondDialog = await screen.findByTestId(
+      "confirm-destructive-dialog",
+    );
+    expect(within(secondDialog).queryByRole("alert")).toBeNull();
   });
 
   it("blocks an interpolating header with the C26 local-only sentence", async () => {

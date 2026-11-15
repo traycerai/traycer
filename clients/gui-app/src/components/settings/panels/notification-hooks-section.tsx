@@ -343,36 +343,31 @@ function HooksEditor(props: {
         },
         onError: (error) => {
           const message = `${error.message} Review the refreshed hooks before saving again.`;
-          if (error instanceof NotificationHooksAccountSaveError) {
+          if (
+            error instanceof NotificationHooksAccountSaveError &&
+            origin.kind === "editor"
+          ) {
             // This app wrote these exact hooks locally. A retry may quote
             // that answered revision, but never a revision from a later read.
             const saved: HookSnapshot = {
               hooks,
               configurationRevision: error.savedConfigurationRevision,
             };
-            if (origin.kind === "editor")
-              setEditor((current) =>
-                current.kind === "closed" || current !== origin.opening
-                  ? current
-                  : {
-                      ...current,
-                      saveError: message,
-                      snapshot:
-                        current.kind === "add"
-                          ? {
-                              ...current.snapshot,
-                              configurationRevision:
-                                saved.configurationRevision,
-                            }
-                          : saved,
-                    },
-              );
-            else if (origin.kind === "delete")
-              setPendingDelete((current) =>
-                current === origin.opening
-                  ? { ...current, snapshot: saved }
-                  : current,
-              );
+            setEditor((current) =>
+              current.kind === "closed" || current !== origin.opening
+                ? current
+                : {
+                    ...current,
+                    saveError: message,
+                    snapshot:
+                      current.kind === "add"
+                        ? {
+                            ...current.snapshot,
+                            configurationRevision: saved.configurationRevision,
+                          }
+                        : saved,
+                  },
+            );
           } else {
             closeSubmittedOpening();
           }
