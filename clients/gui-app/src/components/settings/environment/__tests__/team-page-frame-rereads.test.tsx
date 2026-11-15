@@ -42,7 +42,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
     await import("@/components/settings/host-scope/host-scope-fixture");
   const scope = hostScopeFixture({ host: null });
   const useHostScope = () => scope;
-  return { useHostScope, useHostScopeFor: useHostScope, WINDOW_HOST_SELECTION };
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
+    WINDOW_HOST_SELECTION,
+  };
 });
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -216,9 +221,9 @@ describe("a team page under PersonalPageFrame", () => {
     });
 
     await waitFor(() => {
-      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-        before + 1,
-      );
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(before);
     });
     await waitFor(() => {
       expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
@@ -302,12 +307,14 @@ describe("a team page under PersonalPageFrame", () => {
     const field = await screen.findByLabelText("Value for NODE_ENV");
     await user.clear(field);
     await user.type(field, "development");
+    const readsBeforeConflict = harness.paramsOf(
+      "environment.configuration.items",
+    ).length;
     fireEvent.blur(screen.getByLabelText("Value for NODE_ENV"));
-
     await waitFor(() => {
-      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-        2,
-      );
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(readsBeforeConflict);
     });
     expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
       {

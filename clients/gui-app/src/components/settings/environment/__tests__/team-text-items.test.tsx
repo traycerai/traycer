@@ -1498,7 +1498,7 @@ describe("an unsaved variable's sign-in when its row unmounts", () => {
     });
 
     await waitFor(() => {
-      expect(nodeValue()).toHaveProperty("value", "saved");
+      expect(within(nodeRegion()).getByText("saved")).toBeTruthy();
     });
     expect(variablePutRequests(harness)).toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
@@ -1526,8 +1526,8 @@ describe("an unsaved variable's sign-in when its row unmounts", () => {
         authSessionForUser("person-a", "person-a-token-again"),
       );
     });
-    await screen.findByRole("region", { name: "NODE_ENV" });
-    expect(nodeValue()).toHaveProperty("value", "saved");
+    const row = await screen.findByRole("region", { name: "NODE_ENV" });
+    expect(within(row).getByText("saved")).toBeTruthy();
     expect(variablePutRequests(harness)).toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
     expect(screen.queryByText(/Couldn't save these settings/)).toBeNull();
