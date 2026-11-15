@@ -63,8 +63,12 @@ import * as configurationReadInvalidation from "@/hooks/environment/environment-
 const PERSONAL_ENV = "env-personal";
 const PERSONAL_SECTION = <StoragePolicySection pick={{ kind: "personal" }} />;
 const TEAM_ENV = "env-acme";
+const TEAM_SECTION = (
+  <StoragePolicySection pick={{ kind: "team", environmentId: TEAM_ENV }} />
+);
 const PUT = "environment.configuration.items.put";
 const SAVE_ERROR = "Couldn't save these settings.";
+const CONFLICT_LINE = "Changed by Someone a moment ago";
 
 function descriptor(
   effectiveRole: EnvironmentDescriptorV11["effectiveRole"],
@@ -266,6 +270,18 @@ function heldWriteRefusal(): {
     promise,
     refuse: () => rejectWrite(new Error("write refused")),
   };
+}
+
+/** Holds the next save in flight until `finish` answers it as saved. */
+function heldSave(): { readonly finish: (revision: number) => void } {
+  let answer: (revision: number) => void = () => {
+    throw new Error("save has not started");
+  };
+  host.put = () =>
+    new Promise<EnvironmentConfigurationItemWriteResponse>((resolve) => {
+      answer = (revision) => resolve({ outcome: "saved", revision });
+    });
+  return { finish: (revision) => answer(revision) };
 }
 
 function writesSettled(): Promise<void> {
@@ -1060,6 +1076,130 @@ describe("<StoragePolicySection />", () => {
       expect(snapshotsSelect().hasAttribute("disabled")).toBe(false),
     );
     expect(snapshotsSelect().textContent).toContain("After 30 days");
+  });
+
+  it("shows a Team snapshot save's value and spinner only while Team is shown", async () => {
+    host.items = [snapshotItem({ quietChatDays: 90 }, 3)];
+    host.teamItems = [snapshotItem({ quietChatDays: 30 }, 4)];
+    const save = heldSave();
+    const view = renderSection(TEAM_SECTION);
+    await settled();
+
+    pickOption(snapshotsSelect(), "Never");
+    await waitFor(() => {
+      expectSnapshotPut(TEAM_ENV, { quietChatDays: null }, 4);
+      expect(snapshotsSelect().textContent).toContain("Never");
+    });
+
+    view.rerender(PERSONAL_SECTION);
+    await waitFor(() => {
+      expect(snapshotsSelect().textContent).toContain("After 90 days");
+    });
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByTestId("storage-policy-saving")).toBeNull();
+
+    view.rerender(TEAM_SECTION);
+    await waitFor(() => {
+      expect(snapshotsSelect().textContent).toContain("Never");
+    });
+    expect(snapshotsSelect().hasAttribute("disabled")).toBe(true);
+    expect(
+      within(groupOf(SNAPSHOT_GROUP)).getByTestId("storage-policy-saving"),
+    ).toBeTruthy();
+
+    act(() => {
+      host.teamItems = [snapshotItem({ quietChatDays: null }, 5)];
+      save.finish(5);
+    });
+    await waitFor(() => {
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(false);
+    });
+    expect(snapshotsSelect().textContent).toContain("Never");
+    expect(screen.queryByTestId("storage-policy-saving")).toBeNull();
+  });
+
+  it("shows a Team storage save's value and spinner only while Team is shown", async () => {
+    host.items = [
+      storageItem({ chats: true, idleTaskDays: 14, archivedChatHours: 24 }, 2),
+    ];
+    host.teamItems = [
+      storageItem({ chats: true, idleTaskDays: null, archivedChatHours: 4 }, 4),
+    ];
+    const save = heldSave();
+    const view = renderSection(TEAM_SECTION);
+    await settled();
+
+    await userEvent.click(await chatsSwitch());
+    await waitFor(() => {
+      expectPut(
+        TEAM_ENV,
+        { chats: false, idleTaskDays: null, archivedChatHours: 4 },
+        4,
+      );
+    });
+    await waitFor(async () => {
+      expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("false");
+    });
+
+    view.rerender(PERSONAL_SECTION);
+    await waitFor(() => {
+      expect(idleTasksSelect().textContent).toContain("After 14 days");
+    });
+    const personalChats = await chatsSwitch();
+    expect(personalChats.getAttribute("aria-checked")).toBe("true");
+    expect(personalChats.hasAttribute("disabled")).toBe(true);
+    expect(
+      within(groupOf(IDLE_GROUP)).queryByTestId("storage-policy-saving"),
+    ).toBeNull();
+
+    view.rerender(TEAM_SECTION);
+    await waitFor(async () => {
+      expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("false");
+    });
+    expect((await chatsSwitch()).hasAttribute("disabled")).toBe(true);
+    expect(
+      within(groupOf(IDLE_GROUP)).getByTestId("storage-policy-saving"),
+    ).toBeTruthy();
+
+    act(() => {
+      host.teamItems = [
+        storageItem(
+          { chats: false, idleTaskDays: null, archivedChatHours: 4 },
+          5,
+        ),
+      ];
+      save.finish(5);
+    });
+    await waitFor(async () => {
+      expect((await chatsSwitch()).hasAttribute("disabled")).toBe(false);
+    });
+    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByTestId("storage-policy-saving")).toBeNull();
+  });
+
+  it("shows a Team save's conflict line only while Team is shown", async () => {
+    host.items = [snapshotItem({ quietChatDays: 90 }, 3)];
+    host.teamItems = [snapshotItem({ quietChatDays: 30 }, 4)];
+    host.put = () =>
+      Promise.resolve({
+        outcome: "conflict",
+        current: { revision: 6, changedBy: "Someone", changedAt: 0 },
+      });
+    const view = renderSection(TEAM_SECTION);
+    await settled();
+
+    pickOption(snapshotsSelect(), "Never");
+    expect(await screen.findByText(CONFLICT_LINE)).toBeTruthy();
+
+    view.rerender(PERSONAL_SECTION);
+    await waitFor(() => {
+      expect(snapshotsSelect().textContent).toContain("After 90 days");
+      expect(snapshotsSelect().hasAttribute("disabled")).toBe(false);
+    });
+    expect(screen.queryByText(CONFLICT_LINE)).toBeNull();
+
+    view.rerender(TEAM_SECTION);
+    expect(await screen.findByText(CONFLICT_LINE)).toBeTruthy();
   });
 
   it("keeps a saved snapshot when its refreshed query has no data yet", async () => {
