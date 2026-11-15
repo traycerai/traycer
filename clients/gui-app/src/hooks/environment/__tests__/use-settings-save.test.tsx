@@ -665,6 +665,7 @@ function makeSaveHarness(overrides: {
       requestId: () => "settings-save-test-" + ++requestSequence,
       handlers: {},
     }),
+    singleAttemptMessenger: null,
     requestContextProvider: authService.getRequestContextProvider(),
     directory,
     invalidator: createHostQueryInvalidator(queryClient),
