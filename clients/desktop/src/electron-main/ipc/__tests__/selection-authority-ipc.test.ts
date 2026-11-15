@@ -1405,6 +1405,8 @@ describe("an offline start", () => {
     registry.add("window-a", 101, windowA);
     registry.add("window-b", 202, buildWindow());
     bridge.install();
+    await flushIo();
+    const registryReadsAtStart = fetchRegisteredHostsMock.mock.calls.length;
 
     try {
       // The ordinary hand-over: main cannot reach its keys, adopts nothing,
@@ -1420,6 +1422,10 @@ describe("an offline start", () => {
       });
       expect(authSession.get().status).toBe("signed-out");
       expect(await listedHostIds(101)).toEqual([]);
+      expect(
+        fetchRegisteredHostsMock.mock.calls.length,
+        "registry reads after the refusal",
+      ).toBe(registryReadsAtStart);
 
       // The fallback: the local computer only, from disk, no account call.
       await expect(
@@ -1438,7 +1444,10 @@ describe("an offline start", () => {
       });
       await awaitSelectionTarget(windowA, "local-host");
       expect(await listedHostIds(101)).toEqual(["local-host"]);
-      expect(fetchRegisteredHostsMock).not.toHaveBeenCalled();
+      expect(
+        fetchRegisteredHostsMock.mock.calls.length,
+        "registry reads after the local restore",
+      ).toBe(registryReadsAtStart);
       // A second window is not signed out and lists the same computer.
       await expect(
         invokeHandler(RunnerHostInvoke.authSessionGet)(sender(202)),
