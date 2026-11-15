@@ -90,11 +90,10 @@ export async function openFrameCommentDraft(args: {
   );
   const store = useAnchoredDraftStore.getState();
   const current = store.byEpicId[args.epicId];
-  if (!yieldOpenDraft(args.epicId, args.tileId)) return null;
+  const kept = matchesDraft(current, args.tileId, selection);
+  if (!yieldOpenDraft(args.epicId, kept)) return null;
   const draft = {
-    draftId: matchesDraft(current, args.tileId, selection)
-      ? current.draftId
-      : crypto.randomUUID(),
+    draftId: kept ? current.draftId : crypto.randomUUID(),
     tileId: args.tileId,
     artifactId: selection.artifactId,
     artifactType: args.artifactType,

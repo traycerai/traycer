@@ -64,16 +64,17 @@ export interface AnchoredDraftTidInsertion {
 }
 
 /**
- * Another view starting a comment would replace this draft, and while out of
- * sight the draft answers no press outside it: it answers through the same
- * discard, which asks before dropping typed text.
+ * A comment started anywhere in the task, this view included, would replace
+ * this draft, and neither a pick inside a page nor a draft out of sight meets a
+ * press outside the box: it answers through `discard`, which asks before
+ * dropping typed text.
  */
-function useDiscardForAnotherDraft(
+function useDiscardForReplacement(
   epicId: string,
   draft: AnchoredCommentDraft | null,
-  dismiss: () => boolean,
+  answer: () => boolean,
 ): void {
-  const discard = useEffectEvent((): boolean => dismiss());
+  const discard = useEffectEvent((): boolean => answer());
   const draftId = draft?.draftId ?? null;
   useEffect(() => {
     if (draftId === null) return;
@@ -128,7 +129,13 @@ export function AnchoredDraftPopover(props: {
     onClosed();
     return true;
   }, [draft, epicId, onClosed, pending]);
+  // A press outside the box that the reader would not discard for is
+  // cancelled, but the click it ends in still reaches its target: an opener
+  // that click starts (a pin on the canvas, another view's Comment) takes that
+  // answer rather than asking again. The next press or key starts afresh.
+  const declinedPress = useRef(false);
   const keyDown = useEffectEvent((event: KeyboardEvent) => {
+    declinedPress.current = false;
     if (event.key !== "Escape" || event.defaultPrevented) return;
     event.preventDefault();
     dismiss();
@@ -152,6 +159,7 @@ export function AnchoredDraftPopover(props: {
     );
   };
   const outside = useEffectEvent((event: PointerEvent) => {
+    declinedPress.current = false;
     if (
       !(event.target instanceof Node) ||
       floatingRef.current?.contains(event.target) ||
@@ -166,12 +174,17 @@ export function AnchoredDraftPopover(props: {
     )
       return;
     if (!dismiss()) {
+      declinedPress.current = true;
       event.preventDefault();
       event.stopImmediatePropagation();
     }
   });
   const hasDraft = draft !== null;
-  useDiscardForAnotherDraft(epicId, draft, dismiss);
+  useDiscardForReplacement(
+    epicId,
+    draft,
+    () => !declinedPress.current && dismiss(),
+  );
   // The composer below is the only copy of what the reader typed, so a
   // transcript row the draft lives in stays mounted while it is open, raised
   // or not: a list that virtualized the row away would take the text with it.
@@ -185,6 +198,7 @@ export function AnchoredDraftPopover(props: {
     window.addEventListener("keydown", keyDown);
     window.addEventListener("pointerdown", outside, true);
     return () => {
+      declinedPress.current = false;
       window.removeEventListener("keydown", keyDown);
       window.removeEventListener("pointerdown", outside, true);
     };

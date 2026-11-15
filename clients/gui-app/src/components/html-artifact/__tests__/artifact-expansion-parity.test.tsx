@@ -1008,32 +1008,47 @@ describe("a card whose draft a blocker has parked", () => {
     act(() => release());
   }
 
-  describe("a second card starting a comment while the first card's draft is parked", () => {
-    /** The second card's pick, through the opener its provider calls. */
-    async function startSecondCardsComment(): Promise<void> {
-      await act(async () => {
-        await openFrameCommentDraft({
-          epicId: "epic-1",
-          tileId: SECOND_TILE,
-          artifactType: "html",
-          selection: {
-            ...textSelection(null, { tid: "b-el", marker: 1 }),
-            artifactId: "html-b",
-            boardPath: "index.html",
-          },
-          bridge: realBridge(),
-          frame: document.createElement("iframe"),
-          source: null,
-          queryClient: new QueryClient(),
-          isCurrent: () => true,
-        });
+  function openDraftId(): string | undefined {
+    return useAnchoredDraftStore.getState().byEpicId["epic-1"]?.draftId;
+  }
+
+  /** A pick of an element, through the opener a card's provider calls. */
+  async function pickElement(pick: {
+    readonly tileId: string;
+    readonly artifactId: string;
+    readonly tid: string;
+    readonly marker: number;
+  }): Promise<void> {
+    await act(async () => {
+      await openFrameCommentDraft({
+        epicId: "epic-1",
+        tileId: pick.tileId,
+        artifactType: "html",
+        selection: {
+          ...textSelection(null, { tid: pick.tid, marker: pick.marker }),
+          artifactId: pick.artifactId,
+          boardPath: "index.html",
+        },
+        bridge: realBridge(),
+        frame: document.createElement("iframe"),
+        source: null,
+        queryClient: new QueryClient(),
+        isCurrent: () => true,
       });
-    }
+    });
+  }
 
-    function openDraftId(): string | undefined {
-      return useAnchoredDraftStore.getState().byEpicId["epic-1"]?.draftId;
-    }
+  /** The second card's pick. */
+  function startSecondCardsComment(): Promise<void> {
+    return pickElement({
+      tileId: SECOND_TILE,
+      artifactId: "html-b",
+      tid: "b-el",
+      marker: 1,
+    });
+  }
 
+  describe("a second card starting a comment while the first card's draft is parked", () => {
     it("asks before dropping the parked draft's text, and keeps the draft and its text when the reader says no", async () => {
       const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
       parkFirstCardsDraft("unsent words", card("html-b", "Second"));
@@ -1075,6 +1090,81 @@ describe("a card whose draft a blocker has parked", () => {
           artifactId: "html-b",
         },
       );
+    });
+  });
+
+  describe("a pick in a card whose own draft holds typed text", () => {
+    function openFirstElementDraft(): void {
+      raiseFirstCard(null);
+      act(() =>
+        useAnchoredDraftStore.getState().setDraft("epic-1", {
+          draftId: "draft-x",
+          tileId: FIRST_TILE,
+          artifactId: "html-a",
+          artifactType: "html",
+          anchor: {
+            kind: "element",
+            artboard: "index.html",
+            elementId: "x-el",
+            label: "p",
+          },
+          quotedText: "",
+          rect: { x: 10, y: 10, width: 100, height: 20 },
+          selection: {
+            ...textSelection(null, { tid: "x-el", marker: 1 }),
+            artifactId: "html-a",
+            boardPath: "index.html",
+          },
+          retargeted: false,
+        }),
+      );
+      typeIntoEditor(composerEditorAt(0), "unsent words");
+    }
+
+    const otherElement = {
+      tileId: FIRST_TILE,
+      artifactId: "html-a",
+      tid: "y-el",
+      marker: 2,
+    };
+
+    it("asks before another element's pick replaces the draft, and keeps the draft and its text when the reader says no", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      openFirstElementDraft();
+      const editor = composerEditorAt(0);
+
+      await pickElement(otherElement);
+
+      expect(confirm).toHaveBeenCalledExactlyOnceWith(DISCARD_QUESTION);
+      expect(openDraftId()).toBe("draft-x");
+      expect(composerEditorAt(0)).toBe(editor);
+      expect(composerEditorAt(0).getText()).toBe("unsent words");
+    });
+
+    it("opens the other element's draft, with a new id, when the reader agrees to discard", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      openFirstElementDraft();
+
+      await pickElement(otherElement);
+
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(useAnchoredDraftStore.getState().byEpicId["epic-1"]).toMatchObject(
+        {
+          tileId: FIRST_TILE,
+          anchor: { elementId: "y-el" },
+        },
+      );
+      expect(openDraftId()).not.toBe("draft-x");
+    });
+
+    it("keeps the draft, without asking, when the same element is picked again", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      openFirstElementDraft();
+
+      await pickElement({ ...otherElement, tid: "x-el", marker: 1 });
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(openDraftId()).toBe("draft-x");
     });
   });
 
@@ -1269,6 +1359,53 @@ describe("a card whose draft a blocker has parked", () => {
       );
       created.resolve({ threadId: "thread-1" });
       await settle();
+    });
+
+    describe("after a press outside the box that the reader declined", () => {
+      function openDirtyPin(): string | undefined {
+        pin.events = null;
+        render(
+          <Providers>
+            <SurfacePresentationBoundary visible focused>
+              {canvasProvider()}
+            </SurfacePresentationBoundary>
+          </Providers>,
+        );
+        pinOnCanvas();
+        typeIntoEditor(composerEditorAt(0), "pinned words");
+        return openDraftId();
+      }
+
+      function pressOutside(): void {
+        fireEvent.pointerDown(document.body, { button: 0 });
+      }
+
+      it("takes the click that press ends in as the same answer, asking once", () => {
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+        const first = openDirtyPin();
+
+        pressOutside();
+        pinOnCanvas();
+
+        expect(confirm).toHaveBeenCalledTimes(1);
+        expect(openDraftId()).toBe(first);
+        expect(composerEditorAt(0).getText()).toBe("pinned words");
+      });
+
+      it("asks again for a pin that follows another key press", () => {
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+        const first = openDirtyPin();
+
+        pressOutside();
+        act(() => {
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+        });
+        pinOnCanvas();
+
+        expect(confirm).toHaveBeenCalledTimes(2);
+        expect(openDraftId()).toBe(first);
+        expect(composerEditorAt(0).getText()).toBe("pinned words");
+      });
     });
   });
 });

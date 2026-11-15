@@ -58,6 +58,15 @@ import { CanvasBoardPanel } from "./canvas-board-panel";
 import type { CanvasLayoutStore } from "./canvas-layout-store";
 import { frameLocator } from "./canvas-structure-identity";
 
+/**
+ * The selection owners whose pane has focus. Every one of them hears each
+ * Escape, and the one that made the window's selection is the one to clear it.
+ * Each owner is in it only while its Escape listener is attached with its pane
+ * focused: the listener's effect removes it when the pane loses focus and when
+ * the provider unmounts.
+ */
+const focusedSelectionOwners = new Set<symbol>();
+
 function sameSelectedBoard(
   selection: CanvasSelection | null,
   artifactId: string,
@@ -298,7 +307,7 @@ export function CanvasSelectionProvider(
         parent?.onCanvasView?.(view);
       },
       onPaneComment: (point) => {
-        if (!commentsEnabled || !yieldOpenDraft(epicId, draftOwner)) return;
+        if (!commentsEnabled || !yieldOpenDraft(epicId, false)) return;
         useCommentThreadsStore.getState().setActiveThread(epicId, null);
         useAnchoredDraftStore.getState().setDraft(epicId, {
           draftId: crypto.randomUUID(),
@@ -626,11 +635,23 @@ export function CanvasSelectionProvider(
       // view behind it, even one in the same pane, must not consume it first.
       const raised = fullscreenSurface();
       if (raised !== null && root.current?.contains(raised) !== true) return;
+      // A view that keeps another's selection must not take the key from the
+      // view that made it, when both hear it from one pane.
+      const holder = useCanvasSelectionStore.getState().selectionOwner;
+      if (
+        raised === null &&
+        holder !== null &&
+        holder !== selectionOwner &&
+        focusedSelectionOwners.has(holder)
+      )
+        return;
       escapeSelection();
       event.preventDefault();
     };
+    if (paneFocused) focusedSelectionOwners.add(selectionOwner);
     window.addEventListener("keydown", escape);
     return () => {
+      focusedSelectionOwners.delete(selectionOwner);
       requestSequence.current += 1;
       window.removeEventListener("keydown", escape);
       useCanvasSelectionStore.getState().retire(selectionOwner, null);
