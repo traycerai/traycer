@@ -4,7 +4,6 @@ import {
   MutableBearerLease,
   readLeaseBearer,
 } from "@traycer-clients/shared/auth/bearer-source";
-import type { RevalidateOutcome } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
   fetchEnvironmentTransport,
   type EnvironmentCloud,
@@ -13,7 +12,7 @@ import {
 import { config } from "../config";
 import {
   createCliCredentialsStore,
-  createStoreBackedRevalidator,
+  withCommitRetry,
 } from "../store/credentials-store";
 import { cliCredentialsPath } from "../store/paths";
 import type { HostAuth } from "./host-auth";
@@ -33,9 +32,16 @@ export interface CliEnvironmentCloud {
   readonly signInRejected: () => boolean;
 }
 
-interface SignInRefresh {
-  revalidateCurrentContext(): Promise<RevalidateOutcome>;
-}
+/**
+ * How this command's one refresh ended, judged under the credentials lock:
+ * - `refreshed`: this command spent the refresh token and committed the pair;
+ * - `not-own`: the stored sign-in is no longer the one this command holds (a
+ *   sign-out, another sign-in, another process's refresh), so nothing is sent
+ *   on it;
+ * - `rejected`: authn refused the refresh;
+ * - `unreachable`: nothing judged the sign-in.
+ */
+type OwnRefresh = "refreshed" | "not-own" | "rejected" | "unreachable";
 
 /**
  * The stored sign-in's user id and token, or null when there is none (signed
@@ -85,17 +91,49 @@ export function createCliEnvironmentCloud(auth: HostAuth): CliEnvironmentCloud {
     );
   };
 
-  const refresh = async (signal: AbortSignal): Promise<RevalidateOutcome> => {
+  // The store's own rotate, not the shared revalidator: the revalidator adopts
+  // a `superseded` pair as a refresh, which here is another sign-in. Only a
+  // pair this command committed under the lock continues its sign-in.
+  const refresh = async (signal: AbortSignal): Promise<OwnRefresh> => {
+    const held = readLeaseBearer(lease);
+    if (held === null) return "not-own";
     const store = createCliCredentialsStore();
     try {
-      // Named, as `credential-provisioning.ts` does: the factory's return also
-      // satisfies `AuthRevalidator`, whose overload answers `Promise<unknown>`.
-      const revalidator: SignInRefresh = createStoreBackedRevalidator({
-        store,
-        lease,
+      const result = await withCommitRetry(
+        () =>
+          store.rotate({
+            expectedUserId: auth.userId,
+            expectedToken: held,
+            refreshTokenOverride: null,
+            signal,
+          }),
         signal,
-      });
-      return await revalidator.revalidateCurrentContext();
+      );
+      switch (result.outcome) {
+        case "applied":
+          if (result.credentials === null) return "not-own";
+          lease.rotate(result.credentials.token);
+          return "refreshed";
+        // A pair still landing (`commit-failed`) is not on disk, and one that
+        // landed on a retry reads as `superseded`: neither is shown to be this
+        // command's sign-in, so neither is used.
+        case "superseded":
+        case "commit-failed":
+        case "user-mismatch":
+        case "deleted":
+        case "tombstoned":
+          return "not-own";
+        case "refresh-rejected-credential":
+        case "refresh-rejected-account":
+          return "rejected";
+        case "refresh-network":
+        case "lock-busy":
+        case "spend-pending":
+        case "disk-full":
+          return "unreachable";
+      }
+    } catch {
+      return "unreachable";
     } finally {
       store.dispose();
     }
@@ -105,12 +143,10 @@ export function createCliEnvironmentCloud(auth: HostAuth): CliEnvironmentCloud {
     const answer = await fetchEnvironmentTransport(request);
     if (answer.status !== 401 || refreshSpent) return answer;
     refreshSpent = true;
-    // The store adopts a same-user replacement it finds as a refresh; refresh
-    // only while the stored sign-in is still this command's own.
     if (!onOriginSignIn()) return answer;
     const outcome = await refresh(request.signal);
     if (outcome === "rejected") rejected = true;
-    if (outcome !== "rotated" || !onOriginSignIn()) return answer;
+    if (outcome !== "refreshed" || !onOriginSignIn()) return answer;
     const token = readLeaseBearer(lease);
     if (token === null) return answer;
     const again = await fetchEnvironmentTransport({
