@@ -30,7 +30,6 @@ import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/enviro
 import {
   environmentDescriptorSchemaV11,
   environmentListUpgradeV10ToV11,
-  grantedEnvironmentRole,
   type EnvironmentDescriptorV11,
   type EnvironmentListResponse,
 } from "@traycer/protocol/host/environment/contracts";
@@ -489,7 +488,6 @@ function buildTeamPage(
     messenger,
     requestContextProvider: auth.getRequestContextProvider(),
     directory,
-    onHostTokenRenewal: () => undefined,
     invalidator: createHostQueryInvalidator(queryClient),
     schedulingPolicy: hostRpcSchedulingPolicy,
     authorityRegistry: null,
