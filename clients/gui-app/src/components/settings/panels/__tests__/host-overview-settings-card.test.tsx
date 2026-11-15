@@ -216,7 +216,8 @@ function giveHandlers(
     },
     "environment.move.outcome": (request) => {
       calls.outcomes.push(request);
-      const answer = outcomeAnswers[Math.min(outcomeRead, outcomeAnswers.length - 1)];
+      const answer =
+        outcomeAnswers[Math.min(outcomeRead, outcomeAnswers.length - 1)];
       outcomeRead += 1;
       return answer;
     },
@@ -224,7 +225,10 @@ function giveHandlers(
 }
 
 async function openAdminGiveDialog(handlers: MockHandlerMap<HostRpcRegistry>) {
-  setEnvironmentDirectory([GIVE_DIRECTORY_ROW], [[GIVE_ENVIRONMENT_ID, "admin"]]);
+  setEnvironmentDirectory(
+    [GIVE_DIRECTORY_ROW],
+    [[GIVE_ENVIRONMENT_ID, "admin"]],
+  );
   const queryClient = renderCardWithBinding(
     environmentStatusFixture({}),
     handlers,
@@ -368,7 +372,9 @@ beforeEach(() => {
       const environmentId = path.split("/").at(-2) ?? "";
       return {
         status: 200,
-        body: { viewer: { effectiveRole: roleAnswers.get(environmentId) ?? null } },
+        body: {
+          viewer: { effectiveRole: roleAnswers.get(environmentId) ?? null },
+        },
       };
     }
     if (path.endsWith("/move-acceptances"))
@@ -376,7 +382,9 @@ beforeEach(() => {
         status: 201,
         body: { acceptanceId: "a7b8c9d0-e1f2-4a3b-8c5d-6e7f8091a2b3" },
       };
-    throw new Error(`Unexpected environment request: ${request.method} ${path}`);
+    throw new Error(
+      `Unexpected environment request: ${request.method} ${path}`,
+    );
   });
   hostBindingMock.current = {
     auth: {
@@ -538,7 +546,12 @@ describe("<HostOverviewSettingsCard />", () => {
   });
 
   it("gives a computer through the team plan, acceptance and outcome polling", async () => {
-    const calls: GiveCalls = { plans: [], stages: [], starts: [], outcomes: [] };
+    const calls: GiveCalls = {
+      plans: [],
+      stages: [],
+      starts: [],
+      outcomes: [],
+    };
     await openAdminGiveDialog(
       giveHandlers(calls, [
         {
@@ -599,7 +612,12 @@ describe("<HostOverviewSettingsCard />", () => {
   it.each(["needs_person", "not_found"] as const)(
     "shows the unfinished give line when the outcome is %s",
     async (outcomeState) => {
-      const calls: GiveCalls = { plans: [], stages: [], starts: [], outcomes: [] };
+      const calls: GiveCalls = {
+        plans: [],
+        stages: [],
+        starts: [],
+        outcomes: [],
+      };
       const ended: EnvironmentMoveOutcomeAnswer =
         outcomeState === "needs_person"
           ? {
@@ -616,7 +634,7 @@ describe("<HostOverviewSettingsCard />", () => {
       );
 
       expect(
-        await screen.findByTestId("team-give-not-finished").textContent,
+        (await screen.findByTestId("team-give-not-finished")).textContent,
       ).toBe("Giving this computer to Admin team was not finished.");
     },
   );
