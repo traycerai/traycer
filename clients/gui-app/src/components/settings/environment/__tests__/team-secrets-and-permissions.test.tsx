@@ -588,6 +588,23 @@ describe("TeamPermissions", () => {
     legacyRoleNoticeSeenAt: null,
     legacyMembers: [],
   };
+  // The roster is read only once the environment list has a row for the
+  // team, so a case that names who may change the policy answers the list too.
+  const listsTheTeam = () => ({
+    environments: [
+      {
+        environmentId: "env-a",
+        ownerKind: "organization" as const,
+        ownerId: "team-a",
+        roomId: "room-a",
+        label: "Acme",
+        effectiveRole: "viewer" as const,
+        kind: "team" as const,
+        hostCount: 1,
+        providerHandle: "handle-a",
+      },
+    ],
+  });
 
   it.each([
     { role: "an Admin", source: poolSource("admin"), canChange: true },
@@ -624,6 +641,7 @@ describe("TeamPermissions", () => {
   it("shows a viewer the policy read-only and names the admins and editors who change it", async () => {
     const ada = members.members[0];
     const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.list": listsTheTeam,
       "environment.configuration.items": () => ({
         items: [policy(3, "Allow reads")],
       }),
@@ -724,6 +742,7 @@ describe("TeamPermissions", () => {
     const harness = mountTeamPage(
       { ...viewerSource, effectiveRole: null },
       {
+        "environment.list": listsTheTeam,
         "environment.configuration.items": () => ({
           items: [policy(3, "Allow reads")],
         }),
