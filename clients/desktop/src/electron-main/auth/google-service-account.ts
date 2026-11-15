@@ -109,6 +109,7 @@ async function acquire(options: GoogleTokenOptions): Promise<string | null> {
         grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
         assertion,
       }).toString(),
+      redirect: "manual",
       signal: AbortSignal.timeout(ACQUISITION_TIMEOUT_MS),
     });
   } catch (error: unknown) {

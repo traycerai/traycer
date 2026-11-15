@@ -132,6 +132,7 @@ export function createSoundtrackSource(
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
+        redirect: "manual",
         signal: AbortSignal.timeout(MANIFEST_TIMEOUT_MS),
       },
     );

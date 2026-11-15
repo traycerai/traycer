@@ -3,6 +3,7 @@ import {
   listCreditOffersResponseSchema,
   type CreditOffer,
 } from "@traycer/protocol/auth/credit-offers";
+import { isRedirectAnswer } from "./redirect-answer";
 import { composeRequestAbort, untilAborted } from "./request-abort";
 
 /**
@@ -89,10 +90,14 @@ async function request(
           ...(init.body === null ? {} : { "Content-Type": "application/json" }),
         },
         body: init.body,
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
+    if (isRedirectAnswer(response.status)) {
+      return { status: response.status, body: null };
+    }
     const body: unknown = await untilAborted(
       response.json(),
       abort.signal,

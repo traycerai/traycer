@@ -5,6 +5,7 @@ import {
   type SecretRequestDecision,
 } from "@traycer/protocol/host/sandbox-secrets";
 import { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { PATH_ID_PATTERN } from "./path-id";
 
@@ -157,10 +158,14 @@ async function call(
                 "Content-Type": "application/json",
               },
         body,
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
+    if (isRedirectAnswer(response.status)) {
+      return { kind: "response", status: response.status, body: null };
+    }
     // An empty or non-JSON body (a proxy's HTML page) reads as `null` rather
     // than throwing before the status is classified.
     const text = await untilAborted(response.text(), abort.signal);

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
@@ -181,10 +182,14 @@ async function call(
             : { "Proxy-Authorization": `Bearer ${proxyToken}` }),
         },
         body,
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
+    if (isRedirectAnswer(response.status)) {
+      return { status: response.status, body: null, text: "" };
+    }
     const text = await untilAborted(response.text(), abort.signal);
     let parsed: unknown = null;
     if (text.trim().length > 0) {

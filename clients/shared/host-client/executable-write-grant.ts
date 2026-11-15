@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { PATH_ID_PATTERN } from "./path-id";
 
@@ -97,10 +98,14 @@ async function call(
                 "Content-Type": "application/json",
               },
         body,
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
+    if (isRedirectAnswer(response.status)) {
+      return { kind: "response", status: response.status, body: null };
+    }
     const text = await untilAborted(response.text(), abort.signal);
     return {
       kind: "response",

@@ -306,6 +306,7 @@ async function postJson(
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,

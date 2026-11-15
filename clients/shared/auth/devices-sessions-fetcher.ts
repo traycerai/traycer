@@ -14,6 +14,7 @@ import {
   type VerifyStepUpResponse,
 } from "@traycer/protocol/auth/devices-sessions";
 import type { z } from "zod";
+import { isRedirectAnswer } from "./redirect-answer";
 import { composeRequestAbort, untilAborted } from "./request-abort";
 
 const DEVICES_SESSIONS_FETCH_TIMEOUT_MS = 10_000;
@@ -123,10 +124,14 @@ async function fetchAuthn(
       fetch(authnApiUrl(authnBaseUrl, path), {
         ...init,
         headers: jsonHeaders(bearerToken),
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
     );
+    // A redirect fails as an unanswered request does, before the rebuild
+    // below, which refuses an opaque redirect's status 0.
+    if (isRedirectAnswer(response.status)) return null;
     const text = await untilAborted(response.text(), abort.signal);
     return new Response(NULL_BODY_STATUSES.has(response.status) ? null : text, {
       status: response.status,
