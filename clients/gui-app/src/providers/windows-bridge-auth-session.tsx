@@ -3,6 +3,7 @@ import { appLogger } from "@/lib/logger";
 import { useAuthService } from "@/lib/host";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import { authSessionRefusedToast } from "@/lib/toast/channels";
+import { onWakeReconnect } from "@/lib/host/wake-reconnect";
 import type { AuthSessionSnapshot } from "@/lib/auth/auth-service";
 import type {
   DesktopAuthSessionRefusalReason,
@@ -53,6 +54,10 @@ export function WindowsBridgeAuthSessionBridge(
     let projectingInbound = false;
     let lastWrittenSerialized: string | null = null;
     let lastLocalRestoreSerialized: string | null = null;
+    // The session main refused for want of its signing keys (no network) and
+    // holds as the local computer only; `null` once a later hand-over is
+    // accepted or superseded. One local restore per held session.
+    let heldLocally: string | null = null;
 
     const restoreLocal = (snapshot: AuthSessionSnapshot): void => {
       if (
@@ -116,14 +121,30 @@ export function WindowsBridgeAuthSessionBridge(
       lastWrittenSerialized = serialized;
       void bridge.authSession.set(desktopSnapshot).then(
         (result) => {
-          if (result.outcome !== "refused") return;
+          if (result.outcome !== "refused") {
+            heldLocally = null;
+            return;
+          }
           // The latch is an echo suppressor, not a record of what the bridge
           // holds: a refused write left nothing there, so keeping it latched
           // makes the very next projection of the SAME snapshot a no-op and
           // the window never re-attempts. Cleared only while the latch is
           // still this write's - a newer projection has already superseded it.
-          if (lastWrittenSerialized === serialized)
-            lastWrittenSerialized = null;
+          const current = lastWrittenSerialized === serialized;
+          if (current) lastWrittenSerialized = null;
+          // Main could not reach its signing keys (no network), so it lists
+          // no computer at all. The local computer needs no cloud verdict:
+          // restore it as an unverified session would, and hand this session
+          // over again when the network returns. Every other refusal is a
+          // statement about the token and adopts nothing.
+          if (
+            result.reason === "key-source-unavailable" &&
+            current &&
+            heldLocally !== serialized
+          ) {
+            heldLocally = serialized;
+            restoreLocal(snapshot);
+          }
           authSessionRefusedToast.warning(
             describeAuthSessionRefusalReason(result.reason),
           );
@@ -210,7 +231,16 @@ export function WindowsBridgeAuthSessionBridge(
     // Listen first so subsequent cross-window transitions remain observable.
     const sessionSubscription = auth.onSessionSnapshotChange(writeOutbound);
 
+    // The way back from a local hold: when the network returns, hand the
+    // same session over again so main can verify it. Event-driven only; a
+    // hand-over still in flight holds the latch, so a burst sends one.
+    const disposeWake = onWakeReconnect(() => {
+      if (heldLocally === null) return;
+      writeOutbound(auth.getCurrentSessionSnapshot());
+    });
+
     return () => {
+      disposeWake();
       sessionSubscription.dispose();
       inboundSubscription.dispose();
       revokeSubscription.dispose();
