@@ -1,6 +1,5 @@
 /**
- * Mutation keys for the `bot.*` host methods (Tracy Bots); `environment.host.bind`
- * lives with the other `environment.*` writes in `environment-mutation-keys`.
+ * Mutation keys for the `bot.*` host methods (Tracy Bots).
  * One builder per write so a surface's pending state can be read back by key
  * (`useIsMutating`) rather than by a flag of its own.
  */

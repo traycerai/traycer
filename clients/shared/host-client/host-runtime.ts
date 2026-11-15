@@ -56,6 +56,14 @@ export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
   readonly registry: Registry;
   readonly messenger: IHostMessenger<Registry>;
   /**
+   * The messenger `HostClient.requestSingleAttemptFor` sends on: `messenger`
+   * without the layers that resend. `null` when `messenger` already sends
+   * once per call (a test fake). Required for the same reason
+   * `connectionRegistry` is: a shell that forgot it would retry a call its
+   * caller promised goes out once, silently.
+   */
+  readonly singleAttemptMessenger: IHostMessenger<Registry> | null;
+  /**
    * Client `RequestContextProvider` boundary. The runtime threads
    * `provider.current()` into `HostClient` on `start()` and rebinds on
    * every `provider.onChange(...)` emission (sign-in, sign-out, cross-user
@@ -162,6 +170,8 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.hostClient = new HostClient<Registry>({
       registry: options.registry,
       messenger: options.messenger,
+      singleAttemptMessenger:
+        options.singleAttemptMessenger ?? options.messenger,
       invalidator: options.invalidator,
       authorityRegistry: this.authorityRegistry,
       schedulingPolicy: options.schedulingPolicy,

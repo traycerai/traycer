@@ -1,12 +1,17 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
+  EnvironmentCloud,
+  EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import type {
   EnvironmentNotice,
   EnvironmentReviewEntry,
-  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
   EnvironmentWriteOutcome,
-  HostRemoteAccessSetResponse,
+  HostRemoteAccessSetResponseV20,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import type { ConfigEnvEntry } from "@traycer/protocol/host/config/schemas";
@@ -17,11 +22,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
-  EnvironmentDescriptorV11,
-  EnvironmentHostBinding,
-  EnvironmentListResponseV11,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 
 /**
  * A fake host for the Access and setup tab and the Personal page notices. The
@@ -33,6 +34,33 @@ import type {
 
 export const ACCESS_HOST_ID = "host-a";
 export const ACCESS_HOST_NAME = "dev-box";
+
+const LOCAL_ACCESS_HOST_DIRECTORY_ENTRY: HostDirectoryEntry = {
+  hostId: ACCESS_HOST_ID,
+  label: ACCESS_HOST_NAME,
+  kind: "local",
+  websocketUrl: "ws://127.0.0.1:0",
+  version: "1.5.0",
+  transportDialability: "dialable",
+};
+
+let accessHostDirectoryEntry = LOCAL_ACCESS_HOST_DIRECTORY_ENTRY;
+
+export function setAccessHostDirectoryEntry(entry: HostDirectoryEntry): void {
+  accessHostDirectoryEntry = entry;
+}
+
+export function resetAccessHostDirectoryEntry(): void {
+  accessHostDirectoryEntry = LOCAL_ACCESS_HOST_DIRECTORY_ENTRY;
+}
+
+export function accessHostDirectoryEntryFor(
+  hostId: string | null,
+): HostDirectoryEntry | null {
+  return hostId !== null && accessHostDirectoryEntry.hostId === hostId
+    ? accessHostDirectoryEntry
+    : null;
+}
 
 /** The methods a current host advertises in its handshake. */
 export const ACCESS_METHODS: readonly string[] = [
@@ -46,14 +74,14 @@ export const ACCESS_METHODS: readonly string[] = [
   "config.env.localOverride.clear",
   "config.env.list",
   "host.remoteAccess.set",
+  "host.status.refresh",
   "environment.host.read",
-  "environment.list",
   "providers.list",
   "providers.setProfileEnabled",
 ];
 
 export interface AccessHostState {
-  status: EnvironmentStatusResponseV12;
+  status: EnvironmentStatusResponseV13;
   /** The host cannot answer `environment.status` (it is down). */
   failStatus: boolean;
   notices: EnvironmentNotice[];
@@ -62,12 +90,11 @@ export interface AccessHostState {
   providers: ProviderCliState[];
   envEntries: ConfigEnvEntry[];
   /** What `host.remoteAccess.set` answers. */
-  remoteAccessAnswer: HostRemoteAccessSetResponse;
+  remoteAccessAnswer: HostRemoteAccessSetResponseV20;
   remoteAccessError: HostRpcError | null;
+  /** What `host.status.refresh` answers. */
+  statusRefreshError: Error | null;
   binding: EnvironmentHostBinding | null;
-  environments: EnvironmentDescriptorV11[];
-  failEnvironmentList: boolean;
-  environmentListRead: Promise<EnvironmentListResponseV11> | null;
   /** What `environment.undo` answers. */
   undoAnswer: EnvironmentWriteOutcome;
   /** `config.env.localOverride.set` answers `needs_grant` instead of saving. */
@@ -83,7 +110,6 @@ export interface AccessHostReads {
   status: number;
   notices: number;
   review: number;
-  environments: number;
 }
 
 export interface AccessHost {
@@ -108,12 +134,10 @@ export function accessHostState(
     overrides: [],
     providers: [],
     envEntries: [],
-    remoteAccessAnswer: { state: "on" },
+    remoteAccessAnswer: { state: "off" },
     remoteAccessError: null,
+    statusRefreshError: null,
     binding: null,
-    environments: [],
-    failEnvironmentList: false,
-    environmentListRead: null,
     undoAnswer: { outcome: "saved", revision: 2 },
     localOverrideNeedsGrant: false,
     ...overrides,
@@ -137,7 +161,6 @@ export function buildAccessHostOn(
     status: 0,
     notices: 0,
     review: 0,
-    environments: 0,
   };
   const { client } = buildEnvironmentClient({
     hostId,
@@ -145,14 +168,6 @@ export function buildAccessHostOn(
       "environment.host.read": () => {
         if (state.binding === null) throw new Error("Binding unavailable");
         return { ...state.binding, sharingGeneration: null };
-      },
-      "environment.list": () => {
-        reads.environments += 1;
-        if (state.failEnvironmentList)
-          throw new Error("Environment list unavailable");
-        if (state.environmentListRead !== null)
-          return state.environmentListRead;
-        return { environments: state.environments };
       },
       "environment.status": () => {
         reads.status += 1;
@@ -190,6 +205,11 @@ export function buildAccessHostOn(
         requests.push({ method: "host.remoteAccess.set", params: request });
         if (state.remoteAccessError !== null) throw state.remoteAccessError;
         return state.remoteAccessAnswer;
+      },
+      "host.status.refresh": (request) => {
+        requests.push({ method: "host.status.refresh", params: request });
+        if (state.statusRefreshError !== null) throw state.statusRefreshError;
+        return {};
       },
       "environment.setup.retry": (request) => {
         requests.push({ method: "environment.setup.retry", params: request });
@@ -268,6 +288,44 @@ export function reviewEntryFixture(
 
 /** The sign-in origin the dashboard links resolve against. */
 export const DASHBOARD_ORIGIN = "https://example.invalid";
+
+export interface FakeEnvironmentCloud {
+  readonly cloud: EnvironmentCloud;
+  readonly requests: EnvironmentTransportRequest[];
+  readonly origin: { current: boolean };
+}
+
+export interface FakeEnvironmentCloudAnswer {
+  readonly status: number;
+  readonly body: unknown;
+}
+
+export type FakeEnvironmentCloudResponder = (
+  request: EnvironmentTransportRequest,
+) => FakeEnvironmentCloudAnswer | Promise<FakeEnvironmentCloudAnswer>;
+
+/** An authn transport fake that records the request without changing its path. */
+export function fakeEnvironmentCloud(
+  answer: FakeEnvironmentCloudAnswer | FakeEnvironmentCloudResponder,
+): FakeEnvironmentCloud {
+  const requests: EnvironmentTransportRequest[] = [];
+  const origin = { current: true };
+  return {
+    cloud: {
+      authnBaseUrl: "https://authn.test",
+      bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
+      onOriginSignIn: () => origin.current,
+      transport: async (request) => {
+        requests.push(request);
+        const response =
+          typeof answer === "function" ? await answer(request) : answer;
+        return { status: response.status, text: JSON.stringify(response.body) };
+      },
+    },
+    requests,
+    origin,
+  };
+}
 
 /** A shell with a sign-in origin, which is what the dashboard links need. */
 export function dashboardRunnerHost(): IRunnerHost {

@@ -10,6 +10,9 @@ export const environmentQueryKeys = {
       userId,
       viewerId,
     ] as const,
+  /** The read of Personal one move sheet is drawn against, by the viewer. */
+  personalForMove: (viewerId: string) =>
+    ["environment", "move", "personal", viewerId] as const,
   /**
    * authn's listing of `hostId` in `environmentId`, as a save on that host
    * reads it in one editor session.

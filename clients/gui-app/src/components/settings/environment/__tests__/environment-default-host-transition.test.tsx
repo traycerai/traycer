@@ -7,11 +7,11 @@ import { PersonalPageFrame } from "@/components/settings/personal/personal-page-
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 
 const facts = vi.hoisted(
   (): {
-    statuses: Map<string, EnvironmentStatusResponseV12 | null>;
+    statuses: Map<string, EnvironmentStatusResponseV13 | null>;
     mounts: string[];
     remote: boolean;
     registered: boolean;
