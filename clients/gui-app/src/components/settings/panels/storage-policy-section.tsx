@@ -56,7 +56,6 @@ const APPLIES_EVERYWHERE = "Applies on every host in this environment.";
 const CHAT_COMES_BACK = "A chat comes back when an agent continues it.";
 
 type StorageField = keyof StoragePolicyValue;
-/** A control on the page: a field of either item. */
 type StorageControl = StorageField | keyof SnapshotPolicyValue;
 
 const ANALYTICS_SETTING = {
@@ -336,7 +335,6 @@ function windowLabel(group: string, row: string): string {
   return `${group}: ${row}`;
 }
 
-/** One of the page's two items. */
 type HeldItem = keyof ConfigurationStoragePolicy;
 
 /**
@@ -397,7 +395,6 @@ function useHeldSaves(
   useEffect(() => {
     committed.current = holds;
   });
-  // A released hold's bound is cancelled.
   useEffect(() => {
     for (const [id, timer] of timers.current) {
       if (holds.some((held) => held.id === id)) continue;
@@ -468,7 +465,6 @@ function useHeldSaves(
   };
 }
 
-/** An item's value being saved, else its held save's, else none. */
 function pickedValue(
   pending: EnvironmentConfigurationItemPutRequest | null,
   kind: string,

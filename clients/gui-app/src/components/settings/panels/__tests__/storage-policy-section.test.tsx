@@ -890,7 +890,6 @@ describe("<StoragePolicySection />", () => {
         ),
       ]),
     );
-    // A read below the revision the save addressed does not release the hold.
     await waitFor(() =>
       expect(
         harness?.queryClient.isFetching({
@@ -1175,7 +1174,6 @@ describe("<StoragePolicySection />", () => {
     await settled();
 
     await userEvent.click(await chatsSwitch());
-    // The forbidden answer has arrived.
     await waitFor(() => {
       expect(harness?.paramsOf(PUT)).toHaveLength(1);
       expect(
