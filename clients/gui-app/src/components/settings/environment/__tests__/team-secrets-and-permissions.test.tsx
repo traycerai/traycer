@@ -14,6 +14,7 @@ import { TeamProviderKeys } from "@/components/settings/environment/team-provide
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { teamEnvironments } from "./mcp-skills-test-support";
 import {
   configurationItem,
   mountTeamPage,
@@ -605,6 +606,7 @@ describe("TeamPermissions", () => {
 
   it("shows an editor the policy read-only and names the admins who change it", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => teamEnvironments,
       "environment.configuration.items": () => ({
         items: [policy(3, "Allow reads")],
       }),
