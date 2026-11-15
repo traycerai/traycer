@@ -18,6 +18,7 @@ import type {
 } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type { SandboxRowOperation } from "@/hooks/sandboxes/use-sandbox-operation";
+import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
 import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { SANDBOX_FIRST_BOOT_FAILURE_COPIES } from "@/lib/sandboxes/__tests__/sandbox-first-boot-failure-copies";
@@ -97,6 +98,11 @@ function render(ui: ReactElement) {
   );
 }
 
+type CreditRefusal = Extract<
+  SandboxControlFailure,
+  { readonly kind: "refused" }
+>;
+
 describe("<SandboxDetailsDrawerHost />", () => {
   it("does not call an unresolved frozen refusal Personal's", () => {
     const summary = sandboxSummaryFixture({
@@ -126,6 +132,106 @@ describe("<SandboxDetailsDrawerHost />", () => {
       within(history).getByText("This sandbox is out of credits."),
     ).toBeTruthy();
     expect(history.textContent).not.toContain("Add credits to wake it.");
+  });
+
+  describe("a failed wake's credit refusal, by whose sandbox it is", () => {
+    const PERSONAL_ENV = "env-personal";
+    const NEUTRAL = "Not enough credits to wake this sandbox for an hour.";
+
+    /** A refused wake for want of credits, from the pot `creditSource` names. */
+    function openCreditRefusal(
+      row: { readonly ownerKnown: boolean },
+      failure: Partial<CreditRefusal>,
+    ): HTMLElement {
+      // A row nobody started: its environment is the person's own (the
+      // mocked configurations have answered, and name no team) or none at all.
+      const summary = sandboxSummaryFixture({
+        id: "sbx-credit-refusal",
+        state: "suspended",
+        environmentId: row.ownerKnown ? PERSONAL_ENV : null,
+        createdBy: null,
+      });
+      list.data = { sandboxes: [summary] };
+      list.operation = {
+        kind: "failed",
+        verb: "resume",
+        error: new SandboxOperationError({
+          ...refusal(402, "insufficient_credit"),
+          reason: "denied",
+          shortfallMc: 210,
+          ...failure,
+        }),
+        code: "insufficient_credit",
+        reference: "SBX-CREDIT",
+        destroyRequest: undefined,
+      };
+      render(<SandboxDetailsDrawerHost />);
+      act(() => {
+        openSandboxDetails(summary.id);
+      });
+      return screen.getByRole("region", { name: "History" });
+    }
+
+    it.each([
+      ["a personal pot", { creditSource: "personal" as const }],
+      ["no pot named", { creditSource: null }],
+      [
+        "a member's team allowance",
+        { creditSource: "team-allowance" as const },
+      ],
+    ])(
+      "tells no amount as the person's own while the owner is not known: %s",
+      (_pot, failure) => {
+        const history = openCreditRefusal({ ownerKnown: false }, failure);
+
+        expect(within(history).getByText(NEUTRAL)).toBeTruthy();
+        expect(history.textContent).not.toContain("$0.21");
+        expect(history.textContent).not.toContain("Your credits");
+        expect(history.textContent).not.toContain("allowance");
+      },
+    );
+
+    it("keeps the team's own sentence for the team's pot while the owner is not known", () => {
+      const history = openCreditRefusal(
+        { ownerKnown: false },
+        { creditSource: "team" },
+      );
+
+      expect(
+        within(history).getByText(
+          "The team's credits don't cover an hour of this sandbox.",
+        ),
+      ).toBeTruthy();
+      expect(history.textContent).not.toContain(NEUTRAL);
+    });
+
+    it("keeps the balance-unverified sentence while the owner is not known", () => {
+      const history = openCreditRefusal(
+        { ownerKnown: false },
+        { creditSource: "personal", reason: "unverified" },
+      );
+
+      expect(
+        within(history).getByText(
+          "Traycer couldn't confirm your credit balance. Try again in a moment.",
+        ),
+      ).toBeTruthy();
+      expect(history.textContent).not.toContain(NEUTRAL);
+    });
+
+    it("tells the person's own amount when the row is the person's own", () => {
+      const history = openCreditRefusal(
+        { ownerKnown: true },
+        { creditSource: "personal" },
+      );
+
+      expect(
+        within(history).getByText(
+          "Your credits don't cover an hour of this sandbox. Add $0.21 and try again.",
+        ),
+      ).toBeTruthy();
+      expect(history.textContent).not.toContain(NEUTRAL);
+    });
   });
 
   it("says a failed list read failed and reads it again on Retry, instead of loading for ever", () => {

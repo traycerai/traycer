@@ -277,10 +277,6 @@ beforeEach(() => {
   mocks.list = null;
   mocks.listError = false;
   mocks.listFetching = false;
-  afterEach(() => {
-    cleanup();
-    resetHostDirectoryRows();
-  });
   mocks.entryReads.mockClear();
   mocks.unavailableReason = null;
 });
