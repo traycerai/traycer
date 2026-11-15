@@ -51,6 +51,9 @@ class FakeInventorySession implements IStreamSession {
     this.statusHandler = handler;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {

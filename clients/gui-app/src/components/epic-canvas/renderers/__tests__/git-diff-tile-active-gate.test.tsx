@@ -123,6 +123,9 @@ class MockStreamSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     // Not exercised here.
   }

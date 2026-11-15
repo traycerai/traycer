@@ -156,8 +156,13 @@ export const useMigrationRunStore = create<
   remoteRunning: false,
   markRunning: (hostId) =>
     set(foldRun(hostId, () => ({ ...MIGRATION_RUN_IDLE, status: "running" }))),
+  // A `started` begins a run's counts. A run the host resumed after the
+  // connection that drove it went away sends a second one, with the totals of
+  // what is left, and the bar counts from there.
   applyStarted: (hostId, totals) =>
-    set(foldRun(hostId, (prev) => ({ ...prev, totals }))),
+    set(
+      foldRun(hostId, (prev) => ({ ...prev, totals, counts: INITIAL_COUNTS })),
+    ),
   incrementTaskChain: (hostId, outcome) =>
     set(
       foldRun(hostId, (prev) => ({
