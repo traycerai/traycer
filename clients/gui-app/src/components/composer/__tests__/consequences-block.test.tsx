@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -7,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { ConsequencesBlock } from "@/components/composer/consequences-block";
+import { SandboxBillingRuntime } from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
 import {
   consequencesShownSubject,
   type ConsequencesInput,
@@ -307,16 +309,43 @@ describe("<ConsequencesBlock />", () => {
     expect(screen.queryByTestId("consequences-what-this-means")).toBeNull();
   });
 
-  it("at a short balance asks for the team's credits and links to the configuration's billing page", () => {
+  it("at a short balance names the team's credits and offers a reader not known to be its Admin no top-up", () => {
     render(block(input({ needsCredits: true, shortfallMc: 120 })));
 
     expect(screen.getByTestId("consequences-price").textContent).toBe(
       "Acme's credits are short $0.12. $0.12 more starts this sandbox for an hour.",
     );
-    const link = within(screen.getByTestId("consequences-block")).getByRole(
-      "button",
-      { name: "Add credits ↗" },
+    // A team's credits are bought by its Admin only (board C25).
+    expect(
+      within(screen.getByTestId("consequences-block")).queryByRole("button", {
+        name: "Add credits ↗",
+      }),
+    ).toBeNull();
+  });
+
+  it("at a short balance links the team's billing page for the team's Admin", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <SandboxBillingRuntime
+        answer={{ kind: "ready", role: "admin" }}
+        hostId="billing-host"
+        environmentId="env-acme"
+        queryClient={queryClient}
+        onBinding={(binding) => {
+          vi.spyOn(binding.auth, "getTeamEnvironment").mockResolvedValue({
+            kind: "ok",
+            environmentId: "env-acme",
+          });
+        }}
+        onEnvironmentListRequest={null}
+      >
+        {block(input({ needsCredits: true, shortfallMc: 120 }))}
+      </SandboxBillingRuntime>,
     );
+
+    const link = await screen.findByRole("button", { name: "Add credits ↗" });
     fireEvent.click(link);
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://billing.test/acme",
@@ -339,6 +368,11 @@ describe("<ConsequencesBlock />", () => {
     expect(screen.getByTestId("consequences-price").textContent).toBe(
       "Not enough credits. $0.12 more starts this sandbox for an hour.",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Add credits ↗" }));
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://billing.test/acme",
+      "account",
+    );
   });
 
   it("offers another host instead of a terminal at a short allowance", () => {
@@ -359,7 +393,7 @@ describe("<ConsequencesBlock />", () => {
     ).toBeNull();
   });
 
-  it("says who takes over payment before a task wakes a team sandbox", () => {
+  it("names the team's credits before a task wakes a team sandbox", () => {
     render(block(input({ wakingName: "e2e-sbx-t1" })));
     expect(screen.getByTestId("consequences-price").textContent).toBe(
       "Waking e2e-sbx-t1 uses Acme's credits.",
