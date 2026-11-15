@@ -287,9 +287,16 @@ export const botConversationSendRequestSchemaV16 = lazySchema(() =>
  * The binding a send that carries a nonce was made for (T249): the bot's
  * bound host and its epoch as the client read them from the bot's record
  * (`boundHostId`, `hostEpoch`). Part of the send's identity
- * (`botSendRequestId`). The host refuses the send, nothing written, with
- * `E_BOT_AUTHORITY_MOVED` once it is no longer the bot's binding, and never
- * derives the id again under another.
+ * (`botSendRequestId`), which is never derived again under another binding.
+ *
+ * An old authority is not refused on sight. The bound host looks the request
+ * up before it compares: when it already holds this member's row of the
+ * request in the send's chat, it answers from that row whatever the
+ * authority, so a Retry across a re-claim by the same host finds its one
+ * row. Only on a miss does it compare the authority with its binding, and
+ * refuse one that is no longer the bot's with `E_BOT_AUTHORITY_MOVED`,
+ * before writing anything (`notWritten`). A host the bot is not bound to
+ * takes no nonce send and refuses it the same way.
  */
 export const botSendAuthoritySchema = lazySchema(() =>
   z.object({

@@ -29,8 +29,10 @@ import {
   answerRangeWith,
   createWindowedSession,
   indexNamesAppendedRow,
+  indexReindexed,
   messageAccepted,
   openWindowedChat,
+  recoverWindowedChat,
   paragraph,
   userSkeletonEntry,
   type WindowedChatIds,
@@ -362,6 +364,150 @@ describe("a member's own send in the channel's windowed list, drawn before its h
 
     expect(rowsSaying(TEXT)).toHaveLength(1);
     expect(screen.queryAllByText(/Not confirmed/)).toHaveLength(0);
+  });
+});
+
+/*
+ * A held send while the window is void (a reindex): the list draws only the
+ * ordinal space then, and what the chat holds that the host has not indexed
+ * yet must stay as it was, text and Retry included, for as long as the
+ * replacement snapshot is not answered. Recovery then brings the host's own
+ * row, under the same id, and the send is that one row.
+ */
+describe("a member's own send held while the transcript window is void", () => {
+  /** The host reindexes under the held send: the window goes void, and nothing replaces it yet. */
+  function voidTheWindow(rowCount: number): void {
+    act(() => {
+      indexReindexed(session, IDS, { epoch: 2, rowCount, indexRevision: 3 });
+    });
+    expect(
+      session.handle.store.getState().transcriptWindow.invalidated,
+      "the reindex did not void the window",
+    ).toBe(true);
+  }
+
+  /** The host answers the replacement: a fresh snapshot that holds the stored send. */
+  function recover(request: BotConversationSendRequest): void {
+    act(() => {
+      recoverWindowedChat(
+        session,
+        IDS,
+        {
+          messages: [
+            EARLIER,
+            storedRowOfSend(request, VIEWER_USER_ID, HOST_STORED_AT),
+          ],
+          events: [],
+          activeTurnId: null,
+          chatId: CHANNEL_ID,
+        },
+        { epoch: 2, indexRevision: 4 },
+      );
+    });
+    expect(
+      session.handle.store.getState().transcriptWindow.invalidated,
+      "the fresh snapshot did not recover the window",
+    ).toBe(false);
+  }
+
+  /** The one row of the send is the host's: it shows the host's timestamp. */
+  function expectHostsRow(step: string): void {
+    expect(
+      within(theRow(step)).getByRole("time").getAttribute("datetime"),
+      `${step}: the row is not the host's`,
+    ).toBe(new Date(HOST_STORED_AT).toISOString());
+  }
+
+  /** The index names the send's row at the next ordinal, before any body. */
+  function named(rowId: string): void {
+    act(() => {
+      indexNamesAppendedRow(session, IDS, {
+        rowCount: 2,
+        indexRevision: 2,
+        entry: userSkeletonEntry(rowId, Date.now()),
+      });
+    });
+  }
+
+  it("V1: stays one row, the same row, with its text, while the replacement is held, and is the host's one row after it is answered", async () => {
+    mountChannel();
+    await settleLegendList();
+    const { rowId, request } = pressSend();
+    await settleLegendList();
+    named(rowId);
+    await settleLegendList();
+    const drawn = theRow("after the index named the row");
+
+    voidTheWindow(2);
+    await settleLegendList();
+
+    expect(
+      theRow("while the window was void"),
+      "the row was replaced by another node",
+    ).toBe(drawn);
+
+    recover(request);
+    await settleLegendList();
+
+    expect(
+      rowsSaying(TEXT),
+      "after the window recovered the send was not one row",
+    ).toHaveLength(1);
+    expectHostsRow("after the window recovered");
+  });
+
+  it("V2: keeps an unconfirmed send's Retry drawn and enabled while the replacement is held, and one host row after it is answered", async () => {
+    mountChannel();
+    await settleLegendList();
+    const { rowId, request } = pressSend();
+    act(() => {
+      settlePendingSend(rowId, "uncertain");
+    });
+    await settleLegendList();
+    named(rowId);
+    await settleLegendList();
+    const drawn = theRow("unconfirmed, after the index named the row");
+
+    voidTheWindow(2);
+    await settleLegendList();
+
+    const voidRow = theRow("unconfirmed, while the window was void");
+    expect(voidRow).toBe(drawn);
+    const retry = within(voidRow).getByTestId("bot-message-unconfirmed-retry");
+    if (!(retry instanceof HTMLButtonElement)) throw new Error("no Retry");
+    expect(retry.disabled, "Retry was withheld in the void").toBe(false);
+
+    recover(request);
+    await settleLegendList();
+
+    expect(rowsSaying(TEXT)).toHaveLength(1);
+    expectHostsRow("unconfirmed, after the window recovered");
+    expect(screen.queryAllByText(/Not confirmed/)).toHaveLength(0);
+  });
+
+  it("V4: a void before any index entry names the row keeps the send as one row with its text, and one host row after recovery", async () => {
+    mountChannel();
+    await settleLegendList();
+    const { request } = pressSend();
+    await settleLegendList();
+    const drawn = theRow("at the press");
+
+    voidTheWindow(1);
+    await settleLegendList();
+
+    expect(
+      theRow("while the window was void, no index entry naming the row"),
+      "the row was replaced by another node",
+    ).toBe(drawn);
+
+    recover(request);
+    await settleLegendList();
+
+    expect(
+      rowsSaying(TEXT),
+      "after the window recovered the send was not one row",
+    ).toHaveLength(1);
+    expectHostsRow("after the window recovered");
   });
 });
 

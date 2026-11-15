@@ -2988,4 +2988,79 @@ describe("a member's own pending send the skeleton names before its body", () =>
 
     expect(kinds(rows)).toEqual([]);
   });
+
+  describe("while the index is void", () => {
+    /** A void window: the host reindexed and nothing yet describes its rows. */
+    function voidWindow(input: {
+      readonly rowCount: number;
+      readonly skeleton: readonly RowSkeletonEntry[];
+      readonly carriedSkeleton: readonly RowSkeletonEntry[];
+    }): TranscriptWindow {
+      return windowOf({
+        rowCount: input.rowCount,
+        spans: [],
+        skeleton: input.skeleton,
+        carriedSkeleton: input.carriedSkeleton,
+        skeletonComplete: false,
+        invalidated: true,
+      });
+    }
+
+    it("draws the held send after the ordinal space, with no ordinal", () => {
+      const rows = transcriptListRows({
+        pendingOwnedRowIds: new Set([SEND_ID]),
+        splitLongTurns: false,
+        window: voidWindow({
+          rowCount: 2,
+          skeleton: [skeletonEntry("r-0"), skeletonEntry("r-1")],
+          carriedSkeleton: [],
+        }),
+        rendered: [ownSend(SEND_ID)],
+      });
+
+      expect(kinds(rows), "the void dropped the member's held send").toEqual([
+        "P:0",
+        "P:1",
+        `H:${SEND_ID}`,
+      ]);
+      expect(rows[2].ordinal).toBeNull();
+    });
+
+    it("does not draw the held send at an ordinal only a carried entry names for it: the carried placeholder yields its key", () => {
+      const rows = transcriptListRows({
+        pendingOwnedRowIds: new Set([SEND_ID]),
+        splitLongTurns: false,
+        window: voidWindow({
+          rowCount: 1,
+          skeleton: [],
+          carriedSkeleton: [skeletonEntry(SEND_ID)],
+        }),
+        rendered: [ownSend(SEND_ID)],
+      });
+
+      expect(kinds(rows), "the void dropped the member's held send").toEqual([
+        "P:0",
+        `H:${SEND_ID}`,
+      ]);
+      expect(rows[0].key, "the placeholder kept the send's key").not.toBe(
+        SEND_ID,
+      );
+      expect(rows[1].ordinal).toBeNull();
+    });
+
+    it("GUARD: a rendered model outside the set and backed by nothing is still dropped", () => {
+      const rows = transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
+        splitLongTurns: false,
+        window: voidWindow({
+          rowCount: 1,
+          skeleton: [skeletonEntry("r-0")],
+          carriedSkeleton: [],
+        }),
+        rendered: [ownSend(SEND_ID)],
+      });
+
+      expect(kinds(rows)).toEqual(["P:0"]);
+    });
+  });
 });

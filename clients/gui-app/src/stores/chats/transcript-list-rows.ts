@@ -1064,10 +1064,14 @@ function seatPendingRows(input: {
  * Keep the virtualized list mounted with a placeholder per ordinal so a known
  * nonempty chat can never flash the brand-new-chat empty state or lose
  * LegendList's measurements/scroll position during the resnapshot. Only
- * genuinely unplaced rendered records remain after the ordinal space. Bodies
- * already backed by a retained span are represented by placeholders until
- * the replacement index lands; appending them too would draw the same history
- * twice on skeleton-loss paths.
+ * genuinely unplaced rendered records remain after the ordinal space: live
+ * ones, and the member's own sends the host has not returned
+ * (`pendingOwnedRowIds`), which nothing else in the window holds. A pending
+ * row is never drawn at the ordinal the voided index gave it: that index is
+ * no authority for where the row sits now. Bodies already backed by a
+ * retained span are represented by placeholders until the replacement index
+ * lands; appending them too would draw the same history twice on
+ * skeleton-loss paths.
  *
  * The void does not rekey a row the client can still name. A placeholder
  * takes the replacement skeleton's id where a chunk has already arrived, and
@@ -1083,6 +1087,7 @@ function invalidatedTranscriptListRows(
   window: TranscriptWindow,
   rendered: readonly ChatMessageModel[],
   splitLongTurns: boolean,
+  pendingOwnedRowIds: ReadonlySet<string>,
 ): readonly TranscriptListRow[] {
   const isLiveBacked = liveBackingLookup(window, rendered);
   // The rows a retained span DRAWS, not what its records could back. A row
@@ -1109,7 +1114,8 @@ function invalidatedTranscriptListRows(
   });
   const unplacedRendered = rendered.filter((model) => {
     if (staleSeatedRowIds.has(model.id)) return false;
-    return !retainedSpanRowIds.has(model.id) && isLiveBacked(model);
+    if (retainedSpanRowIds.has(model.id)) return false;
+    return isLiveBacked(model) || pendingOwnedRowIds.has(model.id);
   });
   // Decided before the ordinal loop so a placeholder can yield its key to the
   // hydrated copy - see `placeholderRowsFor`.
@@ -1162,7 +1168,8 @@ export function transcriptListRows(input: {
    * The rows drawn from a member's own sends the host has not returned yet
    * (Tracy Bots T249), by row id; empty for every other list. Each is seated
    * at the ordinal the index names for it until the host's row takes its
-   * place ({@link seatPendingRows}).
+   * place ({@link seatPendingRows}), and through a void it is drawn after the
+   * ordinal space ({@link invalidatedTranscriptListRows}).
    */
   readonly pendingOwnedRowIds: ReadonlySet<string>;
 }): readonly TranscriptListRow[] {
@@ -1182,7 +1189,12 @@ export function transcriptListRows(input: {
   }
 
   if (window.invalidated) {
-    return invalidatedTranscriptListRows(window, rendered, splitLongTurns);
+    return invalidatedTranscriptListRows(
+      window,
+      rendered,
+      splitLongTurns,
+      input.pendingOwnedRowIds,
+    );
   }
 
   const modelsById = new Map(rendered.map((model) => [model.id, model]));

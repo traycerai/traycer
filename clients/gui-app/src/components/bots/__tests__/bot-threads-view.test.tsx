@@ -90,8 +90,10 @@ import {
 import {
   createWindowedSession,
   indexNamesAppendedRow,
+  indexReindexed,
   messageAccepted,
   openWindowedChat,
+  recoverWindowedChat,
   paragraph,
   userSkeletonEntry,
   type WindowedChatIds,
@@ -2076,6 +2078,86 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
         session,
         IDS,
         storedRowOfSend(request, "user-1", HOST_STORED_AT),
+      );
+    });
+    await waitFor(() =>
+      expect(readMark(THREAD).getAttribute("data-mark-message-id")).toBe(rowId),
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readMark(THREAD), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    vi.useRealTimers();
+
+    await waitFor(() =>
+      expect(mocks.advances).toEqual([
+        {
+          botId: TEAM,
+          conversationId: THREAD,
+          messageId: rowId,
+          seq: 6_000,
+        },
+      ]),
+    );
+  });
+
+  it("CONTROL: earns no read credit while the window is void: no mark, no advance, then one read once the stored body is drawn", async () => {
+    await revealedWindowedCard();
+    const { rowId, request } = pressReply();
+    act(() => {
+      indexNamesAppendedRow(session, IDS, {
+        rowCount: 2,
+        indexRevision: 2,
+        entry: userSkeletonEntry(rowId, Date.now()),
+      });
+    });
+    // The host has written the reply, and its read names it the newest.
+    mocks.hosted[TEAM].cursors = {
+      cursors: { [THREAD]: { messageId: "team-a-reply-1", seq: 500 } },
+      latest: { [THREAD]: { messageId: rowId, seq: 6_000 } },
+    };
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    // The host reindexes under the held reply: the window is void, and no
+    // replacement has been answered.
+    act(() => {
+      indexReindexed(session, IDS, { epoch: 2, rowCount: 2, indexRevision: 2 });
+    });
+    expect(
+      session.handle.store.getState().transcriptWindow.invalidated,
+      "the reindex did not void the window",
+    ).toBe(true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    vi.useRealTimers();
+
+    expect(
+      within(card(THREAD)).queryByTestId("bot-chat-transcript-mark"),
+      "a read mark was drawn while the window was void",
+    ).toBeNull();
+    expect(
+      mocks.advances,
+      "the card's read advanced while the window was void",
+    ).toEqual([]);
+
+    act(() => {
+      recoverWindowedChat(
+        session,
+        IDS,
+        {
+          messages: [
+            earlierReply(),
+            storedRowOfSend(request, "user-1", HOST_STORED_AT),
+          ],
+          events: [],
+          activeTurnId: null,
+          chatId: THREAD,
+        },
+        { epoch: 2, indexRevision: 3 },
       );
     });
     await waitFor(() =>

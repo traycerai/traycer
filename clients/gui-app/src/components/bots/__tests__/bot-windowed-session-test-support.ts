@@ -60,6 +60,32 @@ export function openWindowedChat(
 }
 
 /**
+ * The host replaces a void window: a fresh snapshot of `input` and its
+ * skeleton, in `epoch` under `indexRevision`.
+ */
+export function recoverWindowedChat(
+  session: WindowedSession,
+  ids: WindowedChatIds,
+  input: WindowedTranscript,
+  next: { readonly epoch: number; readonly indexRevision: number },
+): void {
+  const snapshot = windowedSnapshotFrame(ids, {
+    rowCount: projectTranscriptRows(input).length,
+    tail: wholeTail(input),
+    indexRevision: next.indexRevision,
+  });
+  session.callbacks().onWindowedSnapshot({
+    ...snapshot,
+    snapshot: { ...snapshot.snapshot, transcriptEpoch: next.epoch },
+  });
+  const chunk = skeletonChunkFrame(ids, input);
+  session.callbacks().onSkeletonChunk({
+    ...chunk,
+    chunk: { ...chunk.chunk, epoch: next.epoch },
+  });
+}
+
+/**
  * The host's index names a member's own send, appended at the next ordinal,
  * before any frame has carried its body: the delta alone.
  */
@@ -81,6 +107,31 @@ export function indexNamesAppendedRow(
     rowCount: input.rowCount,
     indexRevision: input.indexRevision,
     changes: [{ type: "appended", entries: [input.entry] }],
+  });
+}
+
+/**
+ * The host moved rows it had indexed: a `reindexed` delta into the next epoch.
+ * The client's window goes void until a snapshot or an index replaces it.
+ */
+export function indexReindexed(
+  session: WindowedSession,
+  ids: WindowedChatIds,
+  input: {
+    readonly epoch: number;
+    readonly rowCount: number;
+    readonly indexRevision: number;
+  },
+): void {
+  session.callbacks().onIndexChanged({
+    kind: "indexChanged",
+    hasBinaryPayload: false,
+    epicId: ids.epicId,
+    chatId: ids.chatId,
+    epoch: input.epoch,
+    rowCount: input.rowCount,
+    indexRevision: input.indexRevision,
+    changes: [{ type: "reindexed" }],
   });
 }
 

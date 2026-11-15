@@ -342,16 +342,24 @@ export const RPC_ERROR_CODES = [
   // drop what it replies to. Nothing was written or queued. Additive, as
   // above.
   "E_BOT_REPLIES_UNSUPPORTED",
-  // `bot.conversation.send` carried a nonce whose request id names a stored
-  // row that is not this send's: another member's, another chat's, or a row
-  // that is no member's request. Nothing was written (`notWritten`), and the
-  // same send is refused again. Additive, as above.
+  // `bot.conversation.send` named a request whose stored row is not this
+  // send's: another member's, another chat's, or a row that is no member's
+  // request. The same send is refused again. Any send that names its request
+  // can meet it, not only one with a nonce. Marked `notWritten` when the
+  // host's lookup found that row before it accepted the send; unmarked when
+  // only the row's own write found it, after the send may have settled a card
+  // or opened its thread, so that attempt's outcome is unknown. Additive, as
+  // above.
   "E_BOT_SEND_CONFLICT",
   // `bot.conversation.send` carried a nonce for a binding (`authority`) that
   // is no longer the bot's: another host claimed it, or this host did again
-  // under a newer epoch. Nothing was written (`notWritten`); the client gives
-  // the message back to its box, and the next send reads the bot again.
-  // Additive, as above.
+  // under a newer epoch. The bound host looks the request up first: when it
+  // holds this member's row of it in the send's chat, it answers from that
+  // row whatever the authority. It refuses only on a miss, before writing
+  // anything (`notWritten`). The client reads the bot again, and gives the
+  // message back to its box only when no earlier attempt of the send had an
+  // unknown outcome; after one, the send stays unconfirmed with Retry
+  // (`not-written.ts`). Additive, as above.
   "E_BOT_AUTHORITY_MOVED",
   // ─── Evicted chats ──────────────────────────────────────────────────────
   //

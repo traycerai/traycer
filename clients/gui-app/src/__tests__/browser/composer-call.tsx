@@ -23,6 +23,7 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import "@/lib/theme-applier";
 import "@/index.css";
@@ -167,6 +168,22 @@ window.__composerCallProbe = {
 
 function noop(): void {}
 
+/**
+ * The account the fixture is signed in as, for the auth store and for the
+ * host client's request context alike: a send goes out only while the client
+ * sends as the account that pressed it.
+ */
+const VIEWER_ID = "user-viewer";
+useAuthStore.setState({
+  profile: {
+    userId: VIEWER_ID,
+    userName: "Vee Viewer",
+    email: "vee@example.com",
+    avatarUrl: null,
+  },
+  contextMetadata: { userId: VIEWER_ID, username: "vee" },
+});
+
 /** Give the real send mutation an authenticated fixture request context. */
 function RequestContext(props: { readonly children: ReactNode }): ReactNode {
   const binding = useHostBinding();
@@ -175,7 +192,14 @@ function RequestContext(props: { readonly children: ReactNode }): ReactNode {
     if (ready || binding === null) return;
     const unsubscribe = binding.hostClient.onChange(() => setReady(true));
     binding.hostClient.setRequestContext(
-      createRendererContextFixture({ bearerToken: "fixture" }),
+      createRendererContextFixture({
+        bearerToken: "fixture",
+        identity: {
+          userId: VIEWER_ID,
+          username: "vee",
+          providerHandle: null,
+        },
+      }),
     );
     return unsubscribe;
   }, [binding, ready]);
