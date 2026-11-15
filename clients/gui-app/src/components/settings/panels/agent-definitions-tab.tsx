@@ -14,6 +14,7 @@ import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mut
 import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
 import { useHostClient } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
 
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import {
@@ -30,6 +31,8 @@ import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useEnvironmentAgentDefinitionsQuery } from "@/hooks/environment/team/use-agent-definitions-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
+
+const SAVED_KINDS = ["agent_definition"] as const;
 
 const LIST = "environment.agentDefinitions.list";
 
@@ -64,12 +67,18 @@ export function AgentDefinitionsTab(): ReactNode {
 
 function useAgentDefinitionWrites() {
   const client = useHostClient();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
   const queryClient = useQueryClient();
   // A write that authn holds shows in the review the app reads from authn.
   const rereadReview = () =>
     void invalidateEnvironmentReads(queryClient, ["environment.review"]);
   const put = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.put",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "environment.agentDefinitions.put", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: environmentMutationKeys.agentDefinitionsPut(),
     errorMessage: "Couldn't save the agent definition.",
     invalidateMethods: [LIST, "environment.status", "environment.review"],
@@ -78,6 +87,11 @@ function useAgentDefinitionWrites() {
   });
   const remove = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.delete",
+    followSettingsSave: (request, sentOn) =>
+      prepareSave(
+        { method: "environment.agentDefinitions.delete", request },
+        sentOn.getActiveHostId(),
+      ),
     mutationKey: environmentMutationKeys.agentDefinitionsDelete(),
     errorMessage: "Couldn't delete the agent definition.",
     invalidateMethods: [LIST, "environment.status", "environment.review"],
