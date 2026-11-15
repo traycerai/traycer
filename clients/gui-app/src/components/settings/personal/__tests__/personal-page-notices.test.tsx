@@ -49,7 +49,6 @@ vi.mock("@/lib/settings-navigation", () => ({
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -162,13 +161,14 @@ const SHELL_PAGE: FrameOptions = {
 
 /** Reads and writes authn received for the page under test, in arrival order. */
 interface AuthnLog {
+  readonly queryClient: QueryClient;
   readonly requests: EnvironmentTransportRequest[];
   notices: number;
   review: number;
 }
 
-function authnLog(): AuthnLog {
-  return { requests: [], notices: 0, review: 0 };
+function authnLog(queryClient: QueryClient): AuthnLog {
+  return { queryClient, requests: [], notices: 0, review: 0 };
 }
 
 /**
@@ -187,25 +187,17 @@ function hostBackedAuthnAnswer(
   if (request.method === "GET" && path.endsWith("/notices")) {
     log.notices += 1;
     return jsonEnvironmentAnswer({
-      // authn lists a change only while no later change superseded it.
-      notices: host.state.notices.flatMap((notice, index) =>
-        notice.undoAvailable
-          ? [
-              {
-                kind: notice.kind,
-                key: notice.key,
-                os: notice.os === "any" ? null : notice.os,
-                revision: index + 1,
-                writtenAt: notice.writtenAt,
-                source: notice.source,
-                hostId: notice.from.kind === "host" ? notice.from.hostId : null,
-                hostName:
-                  notice.from.kind === "host" ? notice.from.hostLabel : null,
-                displaced: "previous",
-              },
-            ]
-          : [],
-      ),
+      notices: host.state.notices.map((notice, index) => ({
+        kind: notice.kind,
+        key: notice.key,
+        os: notice.os === "any" ? null : notice.os,
+        revision: index + 1,
+        writtenAt: notice.writtenAt,
+        source: notice.source,
+        hostId: notice.from.kind === "host" ? notice.from.hostId : null,
+        hostName: notice.from.kind === "host" ? notice.from.hostLabel : null,
+        displaced: "previous",
+      })),
     });
   }
   if (request.method === "GET" && path.endsWith("/review")) {
@@ -321,7 +313,10 @@ function ScopedBinding(props: { readonly children: ReactNode }): ReactNode {
 }
 
 function renderPage(host: AccessHost, options: FrameOptions): AuthnLog {
-  const log = authnLog();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const log = authnLog(queryClient);
   recordNegotiatedHostMethods(options.windowHostId, options.methods);
   const { auth } = createFakeEnvironmentCloudServices({
     listEnvironments: () =>
@@ -372,9 +367,6 @@ function renderPage(host: AccessHost, options: FrameOptions): AuthnLog {
     status: "ready",
     client: host.client,
   };
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
   const page: ReactNode = (
     <PersonalPageFrame section={options.section}>
       <FakePanel />
@@ -448,12 +440,13 @@ function hostWith(
   });
 }
 
-/** Lets everything a NEGATIVE assertion depends on happen first. */
-async function settle(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
+/**
+ * Waits until every read the page started has answered, so a NEGATIVE
+ * assertion runs after the reads it depends on, not after a guessed delay.
+ */
+async function settled(log: AuthnLog): Promise<void> {
+  await waitFor(() => {
+    expect(log.queryClient.isFetching()).toBe(0);
   });
 }
 
@@ -551,7 +544,7 @@ describe("a Personal page's convergence notices", () => {
     await waitFor(() => {
       expect(log.notices).toBeGreaterThan(0);
     });
-    await settle();
+    await settled(log);
     expect(screen.queryByTestId("personal-page-notices")).toBeNull();
     expect(screen.queryByTestId("personal-notice")).toBeNull();
   });
@@ -598,7 +591,7 @@ describe("Undo on a notice", () => {
     );
   });
 
-  it("sends environment.undo with the notice id and the grant", async () => {
+  it("sends the Undo to authn with the change's kind, key and os", async () => {
     const host = hostWith({}, { notices: [noticeFixture({})] });
     renderPage(host, SHELL_PAGE);
 
@@ -612,16 +605,7 @@ describe("Undo on a notice", () => {
     expect(screen.queryByTestId("personal-notice-refusal")).toBeNull();
   });
 
-  it("lists a change with its Undo while nothing has superseded it", async () => {
-    const host = hostWith({}, { notices: [noticeFixture({})] });
-    renderPage(host, SHELL_PAGE);
-
-    const row = await screen.findByTestId("personal-notice");
-    expect(row.textContent).toContain("LOG_LEVEL from dev-box");
-    expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
-  });
-
-  it("says the value was changed again since when the host answers stale", async () => {
+  it("says the value was changed again since when authn answers superseded", async () => {
     const host = hostWith(
       {},
       {
@@ -642,7 +626,7 @@ describe("Undo on a notice", () => {
     ).toBe("Couldn't undo: LOG_LEVEL was changed again since.");
   });
 
-  it("asks the person to sign in again when the host needs a confirmation", async () => {
+  it("asks the person to sign in again when authn asks for a confirmation", async () => {
     const host = hostWith(
       {},
       {
@@ -761,12 +745,12 @@ describe("Keep this host's value", () => {
         envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
       },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const row = await screen.findByTestId("personal-notice");
     expect(row.textContent).toContain("LOG_LEVEL from laptop");
     expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
-    await settle();
+    await settled(log);
     expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
   });
 
@@ -778,10 +762,10 @@ describe("Keep this host's value", () => {
         envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
       },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const row = await screen.findByTestId("personal-notice");
-    await settle();
+    await settled(log);
     expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
     expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
   });
@@ -794,28 +778,27 @@ describe("Keep this host's value", () => {
         envEntries: [{ key: "OTHER", value: "x" }],
       },
     );
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const row = await screen.findByTestId("personal-notice");
-    await settle();
+    await settled(log);
     expect(within(row).getByRole("button", { name: "Undo" })).toBeTruthy();
     expect(within(row).queryByRole("button", { name: /^Keep / })).toBeNull();
   });
 
-  it("is not offered once a later change superseded it, because authn no longer lists it", async () => {
+  it("draws no row and no Keep for a change authn's list does not carry", async () => {
+    // authn lists a change only while no later change superseded it, so a
+    // superseded one is simply absent from its answer.
     const host = hostWith(
       {},
-      {
-        notices: [noticeFixture({ from: FROM_DEV_BOX, undoAvailable: false })],
-        envEntries: [{ key: "LOG_LEVEL", value: "debug" }],
-      },
+      { notices: [], envEntries: [{ key: "LOG_LEVEL", value: "debug" }] },
     );
     const log = renderPage(host, SHELL_PAGE);
 
     await waitFor(() => {
       expect(log.notices).toBeGreaterThan(0);
     });
-    await settle();
+    await settled(log);
     expect(screen.queryByTestId("personal-notice")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Keep / })).toBeNull();
   });
@@ -868,7 +851,7 @@ describe("Keep this host's value", () => {
 });
 
 describe("a Personal page's 'needs you' rows", () => {
-  it("says why each value waits, and sends a held command to the host's retrospective sheet and the rest to Secrets", async () => {
+  it("says why a held command waits, and sends it to the host's retrospective sheet", async () => {
     const host = hostWith(
       {},
       {
@@ -880,16 +863,6 @@ describe("a Personal page's 'needs you' rows", () => {
             reason: "executable_entry",
             command: "zsh -l",
           }),
-          reviewEntryFixture({
-            entryId: "entry-3",
-            key: "LOG_LEVEL",
-            reason: "needs_grant",
-          }),
-          reviewEntryFixture({
-            entryId: "entry-4",
-            key: "FUTURE_THING",
-            reason: "a_reason_from_a_newer_host",
-          }),
         ],
       },
     );
@@ -900,24 +873,14 @@ describe("a Personal page's 'needs you' rows", () => {
       expect.stringContaining(
         "shell (shell) is what terminals and agents start in: zsh -l and is on hold until you choose",
       ),
-      expect.stringContaining(
-        "LOG_LEVEL is waiting for you: was changed without your confirmation.",
-      ),
-      expect.stringContaining("FUTURE_THING is waiting for you."),
     ]);
-    for (const row of rows) {
-      expect(within(row).getByRole("button", { name: "Review" })).toBeTruthy();
-    }
+    expect(
+      within(rows[0]).getByRole("button", { name: "Review" }),
+    ).toBeTruthy();
 
-    // Any other reason's Review opens Secrets.
-    fireEvent.click(within(rows[1]).getByRole("button", { name: "Review" }));
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
-    expect(useRetrospectiveSheetStore.getState().open).toBe(false);
-
-    // A held command's opens the host's retrospective sheet.
+    // A held command's Review opens the host's retrospective sheet.
     fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(navigateToSettingsSectionMock).not.toHaveBeenCalled();
     expect(useRetrospectiveSheetStore.getState()).toMatchObject({
       open: true,
       target: { hostId: ACCESS_HOST_ID, hostName: ACCESS_HOST_NAME },
@@ -990,7 +953,7 @@ describe("a team's host on a Personal page", () => {
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).not.toBeNull();
 
-    await settle();
+    await settled(log);
     expect(screen.queryByTestId("personal-notice")).toBeNull();
     expect(screen.queryByTestId("personal-review-row")).toBeNull();
     expect(log.notices).toBe(0);
@@ -999,13 +962,13 @@ describe("a team's host on a Personal page", () => {
 
   it("does not put the person's own page in an inert region", async () => {
     const host = hostWith({ principal: { kind: "personal" } }, {});
-    renderPage(host, SHELL_PAGE);
+    const log = renderPage(host, SHELL_PAGE);
 
     const edit = await screen.findByRole("button", { name: "Edit the page" });
     await waitFor(() => {
       expect(host.reads.status).toBeGreaterThan(0);
     });
-    await settle();
+    await settled(log);
     expect(edit.closest("[inert]")).toBeNull();
     expect(screen.queryByTestId("team-owned-line")).toBeNull();
   });

@@ -593,11 +593,17 @@ describe("a row's Verify", () => {
   });
 });
 
-describe("a row's Details on a Local pick", () => {
+describe("a row's Details when Personal's environment cannot be named", () => {
   it("keeps Verify and the versions when the environment list cannot be read", async () => {
-    const host = buildLocalSecretsHost({
-      secrets: [secretFixture({ secretId: "sec-1" })],
-    });
+    // On the Personal pick of a computer's own settings, a list that cannot be
+    // read names no environment, so the page falls back to the host's own.
+    const host = mountSecretsHost(
+      {
+        secrets: [secretFixture({ secretId: "sec-1" })],
+        environmentsError: new Error("environment list unavailable"),
+      },
+      { kind: "host" },
+    );
     renderPage(host);
 
     const row = await screen.findByTestId("secret-row");

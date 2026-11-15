@@ -79,6 +79,13 @@ import {
 } from "@traycer/protocol/host/released-wire-rows";
 
 const AT = Date.UTC(2026, 9, 20, 9, 30);
+/**
+ * What a write's own invalidation must answer within. The boundary's revision
+ * poll ticks every 5 seconds from the page's mount and the write is made within
+ * a second of the initial reads, so a read inside this bound cannot have come
+ * from the poll: a write that dropped its own invalidation fails here.
+ */
+const OWN_INVALIDATION_WAIT_MS = 2_000;
 /** The revision poll's 5 seconds, and the time to see its answer re-read. */
 const REVISION_POLL_WAIT_MS = 9_000;
 type SecretReadMethod = (typeof SECRET_READS)[number];
@@ -400,26 +407,38 @@ function readCounts(
 }
 
 /**
- * More reads of each secret method reached authn, and none reached a host. A
- * committed change moves authn's revision, which the boundary re-reads within
- * its 5 second poll and answers by re-reading what it moved.
+ * More reads of each secret method reached authn, and none reached a host.
+ * The write's own invalidation re-reads the list and the versions, and (a
+ * create or a replace) the rotation, inside {@link OWN_INVALIDATION_WAIT_MS}.
+ * A Remove, an Undo and a removal retry invalidate only the list and the
+ * versions: their rotation is re-read when the committed change moves authn's
+ * revision, which the boundary sees within its 5 second poll.
  */
 async function expectAuthnReadsAfter(
   harness: TeamPageHarness,
   before: Record<SecretReadMethod, number>,
   extraVersionReads: number,
+  rotationFromRevision: boolean,
 ): Promise<void> {
+  const grew = (method: SecretReadMethod): void => {
+    expect(harness.paramsOf(method).length).toBeGreaterThan(
+      before[method] +
+        (method === "environment.secrets.versions" ? extraVersionReads : 0),
+    );
+  };
   await waitFor(
     () => {
-      for (const method of SECRET_READS) {
-        expect(harness.paramsOf(method).length).toBeGreaterThan(
-          before[method] +
-            (method === "environment.secrets.versions" ? extraVersionReads : 0),
-        );
-      }
+      grew("environment.secrets.list");
+      grew("environment.secrets.versions");
+      if (!rotationFromRevision) grew("environment.secrets.rotation");
     },
-    { timeout: REVISION_POLL_WAIT_MS },
+    { timeout: OWN_INVALIDATION_WAIT_MS },
   );
+  if (rotationFromRevision) {
+    await waitFor(() => grew("environment.secrets.rotation"), {
+      timeout: REVISION_POLL_WAIT_MS,
+    });
+  }
   for (const method of SECRET_READS) {
     expect(hostIdsOf(harness, method)).toEqual([]);
   }
@@ -497,7 +516,7 @@ describe("secret writes on a build with a server pool", () => {
     fireEvent.click(await screen.findByTestId("secret-save"));
 
     expect(await screen.findByText("DATABASE_URL")).toBeTruthy();
-    await expectAuthnReadsAfter(harness, before, 0);
+    await expectAuthnReadsAfter(harness, before, 0, false);
     await waitFor(() =>
       expect(screen.getByTestId("pool-secret-list").textContent).toContain(
         "DATABASE_URL",
@@ -516,7 +535,7 @@ describe("secret writes on a build with a server pool", () => {
     });
     fireEvent.click(await screen.findByTestId("replace-secret-confirm"));
 
-    await expectAuthnReadsAfter(harness, before, 0);
+    await expectAuthnReadsAfter(harness, before, 0, false);
     await waitFor(() => {
       expect(screen.getByTestId("pool-secret-version").textContent).toBe(
         "ver-3",
@@ -537,7 +556,7 @@ describe("secret writes on a build with a server pool", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
 
     expect(await screen.findByTestId("removed-secret-row")).toBeTruthy();
-    await expectAuthnReadsAfter(harness, before, 0);
+    await expectAuthnReadsAfter(harness, before, 0, true);
     await waitFor(() =>
       expect(screen.getByTestId("pool-secret-list").textContent).toContain(
         "STRIPE_KEY",
@@ -554,7 +573,7 @@ describe("secret writes on a build with a server pool", () => {
 
     fireEvent.click(within(rows[1]).getByTestId("secret-version-undo"));
 
-    await expectAuthnReadsAfter(harness, before, 0);
+    await expectAuthnReadsAfter(harness, before, 0, true);
     await waitFor(() => {
       expect(screen.getByTestId("pool-secret-version").textContent).toBe(
         "ver-1",
@@ -584,6 +603,6 @@ describe("secret writes on a build with a server pool", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("removed-secret-row")).toBeNull(),
     );
-    await expectAuthnReadsAfter(harness, before, 1);
+    await expectAuthnReadsAfter(harness, before, 1, true);
   });
 });
