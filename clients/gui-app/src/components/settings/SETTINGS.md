@@ -6056,18 +6056,22 @@ wrap`). Each row names the account its first usable match runs on, the
     another. While a write is pending, every control shows the value being
     saved, is disabled, and the changed control has a spinner beside it.
     Once the write is saved, its item's controls keep that value, disabled,
-    with the spinner, until the read of that environment reports the item at
-    the saved revision or a later one; the other item's controls are free
-    again. An older revision, no item or no data keeps the value. A hold
-    is kept per environment, so picking another and coming back still shows
-    it, and it lasts at most the configuration read bound (15 seconds). Then
-    the controls show the read, and the section asks again for exactly the
-    re-read a successful save asks for (`invalidateConfigurationReads`, same
-    arguments), for the hold's own environment, shown or not: that
-    environment's items reads on every host, plus the environment list and
-    that environment's host list. They run again at once if it is shown, or
-    when it is next shown; another environment's items read is never touched.
-    A remount of the section forgets its holds. A
+    with the spinner, until the read reports the item at the saved revision
+    or a later one; the other item's controls are free again. An older
+    revision, no item or no data keeps the value. A hold lasts at most the
+    configuration read bound (15 seconds). Then the controls show the read,
+    and the section asks again for exactly the re-read a successful save asks
+    for (`invalidateConfigurationReads`, same arguments): the environment's
+    items reads on every host, plus the environment list and that
+    environment's host list.
+  - The page mounts the section once per environment pick: in
+    `PersonalPageFrame` Personal and a team are different frames, so a switch
+    between them remounts by element type, and a team's `CloudPageFrame` and a
+    cloud-read page's `ConfigurationSourceBoundary` are keyed by the
+    environment, so picking another environment starts the section over. A hold or a save
+    in flight does not carry across a switch: on return the row shows what
+    the read says. That is a stated limit, and a rare one: it takes a switch
+    away and back within the few seconds of a save. A
     refused write drops back to the value read, and the shared mutation's
     toast says why. A stale or refused outcome shows
     `ConfigurationWriteFeedback` under the groups. A viewer of a team
