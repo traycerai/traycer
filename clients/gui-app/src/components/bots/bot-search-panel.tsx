@@ -26,7 +26,6 @@ import {
   ChatSearchHighlightedText,
   ChatSearchResultTime,
 } from "@/components/chat-search/chat-search-results-view";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,7 +44,6 @@ import {
   useEnvironmentMemberDirectory,
   useEnvironmentMembers,
 } from "@/hooks/bots/use-environment-members-query";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { botMemberAvatarUrl, botMemberName } from "@/lib/bots/bot-member-names";
 import {
@@ -147,7 +145,6 @@ export function BotSearchPanel(props: {
   /** The channel the panel is open beside. */
   readonly botId: string;
   readonly botTitle: string;
-  readonly hostId: string;
   /** The channel's environment, whose members From offers. */
   readonly environmentId: string;
   readonly onClose: () => void;
@@ -273,7 +270,6 @@ export function BotSearchPanel(props: {
             bots={bots}
             botTitle={botTitle}
             environmentId={props.environmentId}
-            hostId={props.hostId}
           />
         )}
       </div>
@@ -309,20 +305,14 @@ function BotSearchFilterRow(props: {
   readonly bots: ReadonlyArray<BotRecord>;
   readonly botTitle: string;
   readonly environmentId: string;
-  readonly hostId: string;
 }): ReactNode {
-  const { bots, botTitle, environmentId, hostId } = props;
-  const client = useTabHostClient();
+  const { bots, botTitle, environmentId } = props;
   const scope = useBotSearchStore((state) => state.scope);
   const filters = useBotSearchStore((state) => state.filters);
   const setScope = useBotSearchStore((state) => state.setScope);
   const setFilters = useBotSearchStore((state) => state.setFilters);
   const viewer = useAuthStore((state) => state.profile);
-  const directory = useEnvironmentMemberDirectory(
-    client,
-    environmentId,
-    useHostMethodSupport(hostId, "environment.members") === true,
-  );
+  const directory = useEnvironmentMemberDirectory(environmentId, true);
   const scopeTitle =
     scope.kind === "bot" ? (titleOf(bots, scope.botId) ?? botTitle) : null;
   const inOptions: ReadonlyArray<FilterOption<string>> = [
@@ -823,11 +813,9 @@ function useHitSender(
   botTitle: string | null,
   environmentId: string | null,
 ): { readonly name: string; readonly avatarUrl: string | null } {
-  const client = useTabHostClient();
   const resolve = useEnvironmentMembers(
-    client,
     hit.senderUserId === null ? null : environmentId,
-    useHostMethodSupport(useTabHostId(), "environment.members") === true,
+    true,
   );
   const viewer = useAuthStore((state) => state.profile);
   if (hit.senderUserId === null) {

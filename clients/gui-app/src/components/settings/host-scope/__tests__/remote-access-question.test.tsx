@@ -9,33 +9,63 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
 import {
   ACCESS_HOST_ID,
   ACCESS_METHODS,
   buildAccessHost,
   buildAccessHostOn,
+  fakeEnvironmentCloud,
+  resetAccessHostDirectoryEntry,
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const hostMock = vi.hoisted(
+  (): { binding: { readonly auth: unknown } | null } => ({ binding: null }),
+);
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostBinding: () => hostMock.binding };
+});
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  const { accessHostDirectoryEntryFor } =
+    await import("@/components/settings/host-scope/__tests__/host-access-test-support");
+  return {
+    ...actual,
+    useHostDirectoryEntry: accessHostDirectoryEntryFor,
+  };
+});
 
 const OTHER_HOST_ID = "host-b";
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  hostMock.binding = null;
   window.localStorage.clear();
+  useAuthStore.getState().setSignedOut();
   useHostAccessPromptsStore.setState({
     remoteAccessAnswered: {},
     movedNoticeDismissed: {},
   });
+});
+
+beforeEach(() => {
+  resetAccessHostDirectoryEntry();
 });
 
 const WITHOUT_REMOTE_ACCESS_SET = ACCESS_METHODS.filter(
@@ -49,7 +79,6 @@ function askingHost(overrides: Partial<EnvironmentStatusResponse>): AccessHost {
       remoteAccess: "off",
       ...overrides,
     }),
-    remoteAccessAnswer: { state: "on" },
   });
 }
 
@@ -146,6 +175,25 @@ describe("<RemoteAccessQuestion />", () => {
 
   it("On sends enabled: true, records the answer and stops asking", async () => {
     const host = askingHost({});
+    const { cloud, requests } = fakeEnvironmentCloud({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "remote-access-test", username: "remote" },
+    });
+    host.state.statusRefreshError = new RetryableTransportError({
+      replaySafetyFromKey: false,
+      code: "RPC_ERROR",
+      message: "the host is offline",
+      requestId: "local-refresh",
+      method: "host.status.refresh",
+      fatalDetails: null,
+    });
+    hostMock.binding = {
+      auth: { environmentCloud: () => cloud },
+    };
     renderQuestion({
       host,
       hostId: ACCESS_HOST_ID,
@@ -157,13 +205,19 @@ describe("<RemoteAccessQuestion />", () => {
     fireEvent.click(screen.getByRole("button", { name: "On" }));
 
     await waitFor(() => {
-      expect(host.paramsOf("host.remoteAccess.set")).toEqual([
-        { enabled: true },
-      ]);
-    });
-    await waitFor(() => {
       expect(screen.queryByTestId("remote-access-question")).toBeNull();
     });
+    expect(
+      requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(host.paramsOf("host.status.refresh")).toEqual([{}]);
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
     expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual({
       [ACCESS_HOST_ID]: true,
     });

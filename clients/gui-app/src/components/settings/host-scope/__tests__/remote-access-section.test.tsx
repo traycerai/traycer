@@ -7,7 +7,22 @@ const hostMock = vi.hoisted(
 );
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostBinding: () => hostMock.binding };
+  return {
+    ...actual,
+    useHostBinding: () => hostMock.binding,
+  };
+});
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  const { accessHostDirectoryEntryFor } =
+    await import("@/components/settings/host-scope/__tests__/host-access-test-support");
+  return {
+    ...actual,
+    useHostDirectoryEntry: accessHostDirectoryEntryFor,
+  };
 });
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -20,26 +35,49 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
+import {
+  acquireRemoteSession,
+  remoteSessionBorrowCountForTest,
+  remoteSessionRefCountForTest,
+  resetRemoteSessionReadinessListenersForTest,
+  retireAllRemoteSessions,
+  type RemoteSessionAcquirePolicy,
+  type RemoteSessionIdentity,
+} from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteAccessState } from "@traycer/protocol/host/environment-schemas";
 import {
   ACCESS_HOST_ID,
   ACCESS_HOST_NAME,
   ACCESS_METHODS,
+  accessHostDirectoryEntryFor,
   buildAccessHost,
+  fakeEnvironmentCloud,
+  resetAccessHostDirectoryEntry,
+  setAccessHostDirectoryEntry,
+  type FakeEnvironmentCloud,
+  type FakeEnvironmentCloudAnswer,
+  type FakeEnvironmentCloudResponder,
   type AccessHost,
 } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { REMOTE_ACCESS_TEXT } from "@/components/settings/host-scope/host-access-model";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
-  environmentListUpgradeV10ToV11,
+  type EnvironmentDescriptor,
   type EnvironmentDescriptorV11,
-  type EnvironmentListResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import {
+  HostRpcError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
@@ -48,6 +86,8 @@ import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-st
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  retireAllRemoteSessions();
+  resetRemoteSessionReadinessListenersForTest();
   hostMock.binding = null;
   useAuthStore.getState().setSignedOut();
   window.localStorage.clear();
@@ -55,6 +95,10 @@ afterEach(() => {
     remoteAccessAnswered: {},
     movedNoticeDismissed: {},
   });
+});
+
+beforeEach(() => {
+  resetAccessHostDirectoryEntry();
 });
 
 const WITHOUT_REMOTE_ACCESS_SET = ACCESS_METHODS.filter(
@@ -86,17 +130,12 @@ function teamHost(remoteAccess: RemoteAccessState): AccessHost {
       enrolledByUserId: null,
       canUnbind: false,
     },
-    environments: [TEAM_ENVIRONMENT],
   });
 }
 
-function hostWithRemoteAccess(
-  remoteAccess: RemoteAccessState,
-  answer: RemoteAccessState,
-): AccessHost {
+function hostWithRemoteAccess(remoteAccess: RemoteAccessState): AccessHost {
   return buildAccessHost({
     status: environmentStatusFixture({ remoteAccess }),
-    remoteAccessAnswer: { state: answer },
   });
 }
 
@@ -105,6 +144,18 @@ function renderTab(
   methods: readonly string[],
   promptAnswered: boolean,
 ): QueryClient {
+  const entry = accessHostDirectoryEntryFor(ACCESS_HOST_ID);
+  if (entry === null) throw new Error("The local test entry was not set");
+  return renderTabWithDirectory(host, methods, promptAnswered, entry);
+}
+
+function renderTabWithDirectory(
+  host: AccessHost,
+  methods: readonly string[],
+  promptAnswered: boolean,
+  entry: HostDirectoryEntry,
+): QueryClient {
+  setAccessHostDirectoryEntry(entry);
   recordNegotiatedHostMethods(ACCESS_HOST_ID, methods);
   useHostAccessPromptsStore.setState({
     remoteAccessAnswered: promptAnswered ? { [ACCESS_HOST_ID]: true } : {},
@@ -126,6 +177,105 @@ function renderTab(
   );
   return queryClient;
 }
+
+function signInWithEnvironmentCloud(
+  answer: FakeEnvironmentCloudAnswer | FakeEnvironmentCloudResponder,
+): FakeEnvironmentCloud {
+  const environmentCloud = fakeEnvironmentCloud(answer);
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "remote-access-test", username: "remote" },
+  });
+  hostMock.binding = {
+    auth: { environmentCloud: () => environmentCloud.cloud },
+  };
+  return environmentCloud;
+}
+
+const REMOTE_SESSION_IDENTITY: RemoteSessionIdentity = {
+  hostId: ACCESS_HOST_ID,
+  userId: "remote-access-test",
+  hostPublicKey: "remote-host-key",
+  relayAttachUrl: "wss://relay.test/attach",
+  authRecovery: "revalidate",
+  authEpoch: "remote-access-test-epoch",
+  openAuth: "user-bearer",
+};
+
+const REMOTE_SESSION_POLICY: RemoteSessionAcquirePolicy = {
+  proactiveWakeEligible: true,
+};
+
+interface FakeRemoteSession extends IRemoteSession<
+  VersionedRpcRegistry,
+  VersionedStreamRpcRegistry
+> {
+  sendUnaryCalls: number;
+  startCalls: number;
+}
+
+function fakeRemoteSession(
+  ready: boolean,
+  sendError: Error | null,
+): FakeRemoteSession {
+  const session: FakeRemoteSession = {
+    sendUnaryCalls: 0,
+    startCalls: 0,
+    start: () => {
+      session.startCalls += 1;
+    },
+    isClosed: () => false,
+    isReady: () => ready,
+    isSilentFor: () => false,
+    sendUnary: ((method: string) => {
+      session.sendUnaryCalls += 1;
+      if (method !== "host.status.refresh")
+        return Promise.reject(new Error(`not exercised: ${method}`));
+      return sendError === null
+        ? Promise.resolve({})
+        : Promise.reject(sendError);
+    }) as FakeRemoteSession["sendUnary"],
+    forceReconnect: vi.fn(),
+    subscribe: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    subscribeAtVersion: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    subscribeWithParamsProvider: vi.fn(() => {
+      throw new Error("not exercised by this test");
+    }),
+    notifyBearerRotated: vi.fn(),
+    notifyCloudVerdictChanged: vi.fn(),
+    wake: vi.fn(),
+    onClosed: () => () => undefined,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    subscribeReadinessLost: () => () => undefined,
+    getMethodSupport: () => "supported",
+    getMethodSchemaVersion: () => ({ major: 1, minor: 0 }),
+    subscribeMethodSupport: () => () => undefined,
+    terminalFatal: () => null,
+    close: vi.fn(),
+  };
+  return session;
+}
+
+function acquireFakeRemoteSession(session: FakeRemoteSession) {
+  return acquireRemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>(
+    REMOTE_SESSION_IDENTITY,
+    REMOTE_SESSION_POLICY,
+    () => session,
+  );
+}
+
+const REMOTE_ENTRY: HostDirectoryEntry = {
+  hostId: ACCESS_HOST_ID,
+  label: "Remote computer",
+  kind: "remote",
+  websocketUrl: "wss://relay.test/attach",
+  version: "1.5.0",
+  transportDialability: "dialable",
+};
 
 /** What the section says now, as the person reads it. */
 async function shownState(): Promise<string> {
@@ -175,91 +325,167 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     });
   });
 
-  it("offers the team's switch only to its admin or editor, fails closed on unknown roles, and shows a refused change", async () => {
+  it("offers the team's switch to Admin and Editor, and withholds it from Viewer and unknown roles", async () => {
+    const host = teamHost("off");
+    const otherTeam: EnvironmentDescriptor = {
+      environmentId: "another-team",
+      ownerKind: "organization",
+      ownerId: "another-owner",
+      roomId: "another-room",
+      label: "Other team",
+    };
+    const directory = {
+      kind: "ok",
+      list: {
+        environments: [
+          otherTeam,
+          {
+            environmentId: TEAM_ENVIRONMENT.environmentId,
+            ownerKind: TEAM_ENVIRONMENT.ownerKind,
+            ownerId: TEAM_ENVIRONMENT.ownerId,
+            roomId: TEAM_ENVIRONMENT.roomId,
+            label: TEAM_ENVIRONMENT.label,
+          },
+        ],
+      },
+    } satisfies EnvironmentDirectoryResult;
+    const firstRoleRead = Promise.withResolvers<FakeEnvironmentCloudAnswer>();
+    let heldRoleRead: Promise<FakeEnvironmentCloudAnswer> | null =
+      firstRoleRead.promise;
+    let failDirectoryRead = false;
+    let directoryReads = 0;
+    let targetRoleAnswer: FakeEnvironmentCloudAnswer = {
+      status: 200,
+      body: { viewer: { effectiveRole: "admin" } },
+    };
+    const authn = signInWithEnvironmentCloud((request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/hosts"))
+        return { status: 200, body: { hosts: [{ purgePending: false }] } };
+      if (path.endsWith("/environments/another-team/members"))
+        return { status: 200, body: { viewer: { effectiveRole: "admin" } } };
+      if (
+        path.endsWith(`/environments/${TEAM_ENVIRONMENT.environmentId}/members`)
+      )
+        return heldRoleRead ?? targetRoleAnswer;
+      throw new Error(`Unexpected environment read: ${request.method} ${path}`);
+    });
+    hostMock.binding = {
+      auth: {
+        environmentCloud: () => authn.cloud,
+        listEnvironments: () => {
+          directoryReads += 1;
+          return Promise.resolve(
+            failDirectoryRead ? { kind: "unavailable" } : directory,
+          );
+        },
+      },
+    };
     useAuthStore.setState({
       status: "signed-in",
       contextMetadata: { userId: "viewer-test", username: "viewer" },
+      shareableTeams: [
+        { teamId: "another-owner", slug: "other", avatarUrl: null },
+        { teamId: TEAM_ENVIRONMENT.ownerId, slug: "studio", avatarUrl: null },
+      ],
     });
-    const host = teamHost("off");
-    const otherTeam = {
-      ...TEAM_ENVIRONMENT,
-      environmentId: "another-team",
-      effectiveRole: "admin" as const,
-    };
-    host.state.environments = [otherTeam];
-    const roleRead = Promise.withResolvers<EnvironmentListResponseV11>();
-    host.state.environmentListRead = roleRead.promise;
     const queryClient = renderTab(host, ACCESS_METHODS, false);
     await shownState();
-    await waitFor(() => expect(host.reads.environments).toBeGreaterThan(0));
+    const targetMemberReads = () =>
+      authn.requests.filter((request) =>
+        request.url.endsWith(
+          `/api/v3/environments/${TEAM_ENVIRONMENT.environmentId}/members`,
+        ),
+      );
+    await waitFor(() => expect(targetMemberReads().length).toBeGreaterThan(0));
     // The role read has started but is held, so it cannot authorize a switch.
     noSwitch();
     await act(async () => {
-      host.state.environmentListRead = null;
-      roleRead.resolve({ environments: host.state.environments });
-      await roleRead.promise;
+      heldRoleRead = null;
+      firstRoleRead.resolve({
+        status: 200,
+        body: { viewer: { effectiveRole: "admin" } },
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["host", "authn", "environment.list"],
+      });
     });
-    await rereadStatus(queryClient, host);
-    noSwitch();
+    await screen.findByRole("button", { name: "Turn on" });
 
     for (const effectiveRole of ["admin", "editor"] as const) {
-      host.state.environments = [
-        otherTeam,
-        { ...TEAM_ENVIRONMENT, effectiveRole },
-      ];
+      targetRoleAnswer = {
+        status: 200,
+        body: { viewer: { effectiveRole } },
+      };
       await rereadStatus(queryClient, host);
       const control = await screen.findByRole("button", { name: "Turn on" });
       expect(control.closest("[inert]")).toBeNull();
     }
-    const refreshedRole = Promise.withResolvers<EnvironmentListResponseV11>();
-    host.state.environmentListRead = refreshedRole.promise;
-    const beforeRefresh = host.reads.environments;
-    const refreshing = queryClient.invalidateQueries();
+    const refreshedRole = Promise.withResolvers<FakeEnvironmentCloudAnswer>();
+    const beforeRefresh = targetMemberReads().length;
+    heldRoleRead = refreshedRole.promise;
+    const refreshing = queryClient.invalidateQueries({
+      queryKey: ["host", "authn", "environment.list"],
+    });
     await waitFor(() => {
-      expect(host.reads.environments).toBeGreaterThan(beforeRefresh);
+      expect(targetMemberReads().length).toBeGreaterThan(beforeRefresh);
       noSwitch();
     });
     await act(async () => {
-      host.state.environmentListRead = null;
-      refreshedRole.resolve({ environments: host.state.environments });
+      heldRoleRead = null;
+      refreshedRole.resolve({
+        status: 200,
+        body: { viewer: { effectiveRole: "admin" } },
+      });
       await refreshing;
     });
     await screen.findByRole("button", { name: "Turn on" });
-    host.state.remoteAccessError = new HostRpcError({
-      code: "FORBIDDEN",
-      message: "private refusal detail",
-      requestId: "refused-access",
-      method: "host.remoteAccess.set",
-      fatalDetails: null,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "You don't have permission to change remote access on this computer.",
-    );
-    expect(host.paramsOf("host.remoteAccess.set")).toEqual([{ enabled: true }]);
-    expect(await shownState()).toBe(
-      "Off. Team members and agents can't reach this computer.",
-    );
-    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
-      {},
-    );
 
-    host.state.environments = environmentListUpgradeV10ToV11.upgradeResponse({
-      environments: [TEAM_ENVIRONMENT],
-    }).environments;
+    targetRoleAnswer = {
+      status: 200,
+      body: { viewer: { effectiveRole: "viewer" } },
+    };
+    const beforeViewerRead = targetMemberReads().length;
+    await rereadStatus(queryClient, host);
+    expect(targetMemberReads().length).toBeGreaterThan(beforeViewerRead);
+    noSwitch();
+
+    targetRoleAnswer = { status: 500, body: {} };
     await rereadStatus(queryClient, host);
     noSwitch();
 
-    host.state.environments = [TEAM_ENVIRONMENT];
+    failDirectoryRead = true;
+    const beforeDirectoryRead = directoryReads;
     await rereadStatus(queryClient, host);
-    await screen.findByRole("button", { name: "Turn on" });
-    host.state.failEnvironmentList = true;
-    await rereadStatus(queryClient, host);
+    expect(directoryReads).toBeGreaterThan(beforeDirectoryRead);
     noSwitch();
   });
 
+  it("shows the permission refusal for authn's 403 and does not refresh the host", async () => {
+    const host = hostWithRemoteAccess("off");
+    const { requests } = signInWithEnvironmentCloud({ status: 403, body: {} });
+    renderTab(host, ACCESS_METHODS, true);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "You don't have permission to change remote access on this computer.",
+    );
+    expect(
+      requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(host.paramsOf("host.status.refresh")).toEqual([]);
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
+  });
+
   it("shows the unanswered prompt inside the Remote access group without a second row label", async () => {
-    const host = hostWithRemoteAccess("off", "off");
+    const host = hostWithRemoteAccess("off");
     renderTab(host, ACCESS_METHODS, false);
 
     const section = await screen.findByTestId("remote-access-section");
@@ -281,7 +507,7 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("Off shows 'turning off' until the host confirms", async () => {
-    const host = hostWithRemoteAccess("on", "turning_off");
+    const host = hostWithRemoteAccess("on");
     const queryClient = renderTab(host, ACCESS_METHODS, true);
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.on);
 
@@ -289,12 +515,11 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
 
     // The request is Off, and nothing else.
     await waitFor(() => {
-      expect(host.paramsOf("host.remoteAccess.set")).toEqual([
-        { enabled: false },
-      ]);
+      expect(host.paramsOf("host.remoteAccess.set")).toEqual([{}]);
     });
-    // The host answered `turning_off`, and its status read can still say `on`
-    // for a poll or two: the section shows the host's answer, not that read.
+    // The host took the Off, and its status read can still say `on` for a
+    // poll or two: the section says "turning off" from the taken Off, not
+    // from that read.
     await waitFor(() => {
       expect(screen.getByTestId("remote-access-state").textContent).toBe(
         "Turning off. Other devices and agents are being disconnected.",
@@ -337,8 +562,27 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     expect(screen.queryByRole("button", { name: "Turn off" })).toBeNull();
   });
 
+  it("keeps the permission line when the host refuses Off", async () => {
+    const host = hostWithRemoteAccess("on");
+    host.state.remoteAccessError = HostRpcError.fromWireEnvelope(
+      { code: "FORBIDDEN", message: "not allowed" },
+      "remote-access-off",
+      "host.remoteAccess.set",
+    );
+    renderTab(host, ACCESS_METHODS, true);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Turn off" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "You don't have permission to change remote access on this computer.",
+    );
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([{}]);
+    expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.on);
+    expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
+  });
+
   it("says what On means and offers Turn off", async () => {
-    renderTab(hostWithRemoteAccess("on", "turning_off"), ACCESS_METHODS, true);
+    renderTab(hostWithRemoteAccess("on"), ACCESS_METHODS, true);
 
     expect(await shownState()).toBe(
       "On. Other devices and agents signed in to your account can reach this computer.",
@@ -349,17 +593,38 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("Turn on sends enabled: true and shows what the host reads next", async () => {
-    const host = hostWithRemoteAccess("off", "on");
-    const queryClient = renderTab(host, ACCESS_METHODS, true);
+    const host = hostWithRemoteAccess("off");
+    const { requests } = signInWithEnvironmentCloud({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
+    const queryClient = renderTab(host, ACCESS_METHODS, false);
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.off);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+    fireEvent.click(await screen.findByRole("button", { name: "On" }));
 
     await waitFor(() => {
-      expect(host.paramsOf("host.remoteAccess.set")).toEqual([
-        { enabled: true },
-      ]);
+      expect(host.paramsOf("host.status.refresh")).toEqual([{}]);
     });
+    expect(
+      requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
+    await waitFor(() => {
+      expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
+        { [ACCESS_HOST_ID]: true },
+      );
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.queryByText("Couldn't change remote access. Try again."),
+    ).toBeNull();
     host.state.status = environmentStatusFixture({ remoteAccess: "on" });
     await rereadStatus(queryClient, host);
     await waitFor(() => {
@@ -370,8 +635,134 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
   });
 
+  it("does not refresh or answer the question when the click's sign-in changes during authn's PUT", async () => {
+    const host = hostWithRemoteAccess("off");
+    const put = Promise.withResolvers<FakeEnvironmentCloudAnswer>();
+    const authn = signInWithEnvironmentCloud(() => put.promise);
+    renderTab(host, ACCESS_METHODS, false);
+
+    fireEvent.click(await screen.findByRole("button", { name: "On" }));
+    await waitFor(() => expect(authn.requests).toHaveLength(1));
+
+    authn.origin.current = false;
+    put.resolve({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "On" }).hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    expect(host.paramsOf("host.status.refresh")).toEqual([]);
+    expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
+    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
+      {},
+    );
+    expect(screen.getByTestId("remote-access-question")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.queryByText(
+        "On. Other devices and agents signed in to your account can reach this computer.",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not acquire or dial a remote session when none is ready to refresh", async () => {
+    const host = hostWithRemoteAccess("off");
+    signInWithEnvironmentCloud({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
+    const session = fakeRemoteSession(false, null);
+    const owner = acquireFakeRemoteSession(session);
+    expect(remoteSessionRefCountForTest(REMOTE_SESSION_IDENTITY)).toBe(1);
+
+    renderTabWithDirectory(host, ACCESS_METHODS, true, REMOTE_ENTRY);
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Turn on" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    expect(host.paramsOf("host.status.refresh")).toEqual([]);
+    expect(remoteSessionRefCountForTest(REMOTE_SESSION_IDENTITY)).toBe(1);
+    expect(remoteSessionBorrowCountForTest(REMOTE_SESSION_IDENTITY)).toBe(0);
+    expect(session.startCalls).toBe(0);
+    expect(session.sendUnaryCalls).toBe(0);
+    expect(screen.queryByRole("alert")).toBeNull();
+    owner.close();
+  });
+
+  it("releases a ready remote session after its one refresh rejects", async () => {
+    const host = hostWithRemoteAccess("off");
+    signInWithEnvironmentCloud({
+      status: 200,
+      body: { remoteAccess: { enabled: true, epoch: 1 } },
+    });
+    const refreshFailure = new RetryableTransportError({
+      replaySafetyFromKey: false,
+      code: "RPC_ERROR",
+      message: "the open remote session dropped the refresh",
+      requestId: "remote-refresh",
+      method: "host.status.refresh",
+      fatalDetails: null,
+    });
+    const session = fakeRemoteSession(true, refreshFailure);
+    const owner = acquireFakeRemoteSession(session);
+
+    renderTabWithDirectory(host, ACCESS_METHODS, true, REMOTE_ENTRY);
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Turn on" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    expect(session.sendUnaryCalls).toBe(1);
+    expect(remoteSessionBorrowCountForTest(REMOTE_SESSION_IDENTITY)).toBe(0);
+    expect(remoteSessionRefCountForTest(REMOTE_SESSION_IDENTITY)).toBe(1);
+    expect(host.paramsOf("host.status.refresh")).toEqual([]);
+    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual({
+      [ACCESS_HOST_ID]: true,
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.queryByText("Couldn't change remote access. Try again."),
+    ).toBeNull();
+    owner.close();
+  });
+
+  it("shows the generic refusal for authn's 409 and does not refresh the host", async () => {
+    const host = hostWithRemoteAccess("off");
+    const { requests } = signInWithEnvironmentCloud({ status: 409, body: {} });
+    renderTab(host, ACCESS_METHODS, true);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Couldn't change remote access. Try again.",
+    );
+    expect(
+      requests.map(({ method, url, body }) => [method, url, body]),
+    ).toEqual([
+      [
+        "PUT",
+        `https://authn.test/api/v3/hosts/${ACCESS_HOST_ID}/remote-access`,
+        { enabled: true },
+      ],
+    ]);
+    expect(host.paramsOf("host.status.refresh")).toEqual([]);
+  });
+
   it("shows a host that is turning remote access off by itself the same way", async () => {
-    renderTab(hostWithRemoteAccess("turning_off", "off"), ACCESS_METHODS, true);
+    renderTab(hostWithRemoteAccess("turning_off"), ACCESS_METHODS, true);
 
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.turning_off);
     expect(screen.getByTestId("remote-access-turning-off")).toBeTruthy();
@@ -379,31 +770,11 @@ describe("<RemoteAccessSection /> in Access and setup", () => {
   });
 
   it("offers no switch on a host that does not have host.remoteAccess.set, and still says the state", async () => {
-    const host = hostWithRemoteAccess("on", "turning_off");
+    const host = hostWithRemoteAccess("on");
     renderTab(host, WITHOUT_REMOTE_ACCESS_SET, true);
 
     expect(await shownState()).toBe(REMOTE_ACCESS_TEXT.on);
     noSwitch();
     expect(host.paramsOf("host.remoteAccess.set")).toEqual([]);
-  });
-
-  it("marks the host answered when the person switches remote access, and no other host", async () => {
-    const host = hostWithRemoteAccess("on", "turning_off");
-    renderTab(host, ACCESS_METHODS, false);
-    await shownState();
-    expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
-      {},
-    );
-
-    fireEvent.click(await screen.findByRole("button", { name: "Turn off" }));
-
-    await waitFor(() => {
-      expect(useHostAccessPromptsStore.getState().remoteAccessAnswered).toEqual(
-        { [ACCESS_HOST_ID]: true },
-      );
-    });
-    expect(
-      useHostAccessPromptsStore.getState().remoteAccessAnswered["host-b"],
-    ).toBeUndefined();
   });
 });

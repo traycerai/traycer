@@ -1,11 +1,7 @@
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { environmentCloudQueryKey } from "@/hooks/environment/use-environment-cloud";
 import { removalLabel } from "@/components/settings/details/details-copy";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
   EnvironmentSecretRemoval,
@@ -178,15 +174,10 @@ async function singleSecretDetails(
   const versions =
     removed?.removal.outcome === "destroyed"
       ? null
-      : await context.client.requestWithSignalRequiringHostMethodVersion(
-          "environment.secrets.versions",
-          { environmentId: subject.environmentId, secretId: subject.key },
-          undefined,
-          {
-            method: "environment.secrets.versions",
-            version: { major: 1, minor: 1 },
-          },
-        );
+      : await context.environmentCloud("environment.secrets.versions", {
+          environmentId: subject.environmentId,
+          secretId: subject.key,
+        });
   const current = versions?.versions.find((version) => version.current);
   const removal = newestRemoval(
     versions?.removal ?? null,
@@ -217,7 +208,7 @@ async function singleSecretDetails(
  * second entry that no observer ever refetches, and a sweep over the method's
  * scope would go on reading its answer long after the page's own had moved on.
  *
- * `staleTime: 0` keeps the read itself. Every open asks the host again, as
+ * `staleTime: 0` keeps the read itself. Every open asks authn again, as
  * the direct call did, so the answer is as fresh and as authorized as before;
  * the cache holds the result, never a licence to skip the request.
  */
@@ -226,27 +217,17 @@ async function readSecretsList(
   context: DetailsProviderContext,
 ): Promise<SecretsList> {
   const viewerId = useAuthStore.getState().contextMetadata?.userId ?? "";
+  // `environmentCloud` is the sign-in of the viewer the key already names.
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
   return context.queryClient.fetchQuery({
-    queryKey: [
-      ...hostQueryKeys.method<HostRpcRegistry, "environment.secrets.list">(
-        hostRpcServingTierHostId(
-          "environment.secrets.list",
-          context.hostId,
-          readProcessHostRpcTierPlan(),
-          null,
-        ),
-        "environment.secrets.list",
-        { environmentId },
-      ),
+    queryKey: environmentCloudQueryKey(
+      "environment.secrets.list",
+      { environmentId },
       viewerId,
-    ],
-    queryFn: ({ signal }) =>
-      context.client.requestWithSignalRequiringHostMethodVersion(
-        "environment.secrets.list",
-        { environmentId },
-        signal,
-        { method: "environment.secrets.list", version: { major: 1, minor: 1 } },
-      ),
+      [],
+    ),
+    queryFn: () =>
+      context.environmentCloud("environment.secrets.list", { environmentId }),
     staleTime: 0,
     retry: false,
   });

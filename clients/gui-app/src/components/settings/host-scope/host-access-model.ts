@@ -1,6 +1,6 @@
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   EnvironmentStatusResponse,
   EnvironmentWriteOutcome,
   LocalOverride,
@@ -47,17 +47,18 @@ export function remoteAccessText(
     : REMOTE_ACCESS_TEXT[state];
 }
 
+/** The host refuses a role with `FORBIDDEN`, authn with a 403 (`E_ROLE_FORBIDDEN`). */
 export function remoteAccessFailureText(code: string): string {
-  return code === "FORBIDDEN"
+  return code === "FORBIDDEN" || code === "E_ROLE_FORBIDDEN"
     ? "You don't have permission to change remote access on this computer."
     : "Couldn't change remote access. Try again.";
 }
 
 /**
- * The state the section shows. Off answers `turning_off` until the host has
- * closed every session, and the status read can still say `on` for a poll or
- * two after that answer, so an Off the person pressed shows "turning off"
- * until the host itself reports `off`. Any other answer is the status's.
+ * The state the section shows. The status read can still say `on` for a poll
+ * or two after the host took an Off, so an Off the person pressed
+ * (`lastAnswer` `turning_off`) shows "turning off" until the host itself
+ * reports `off`. Otherwise the status's.
  */
 export function shownRemoteAccess(
   status: RemoteAccessState,
@@ -308,7 +309,7 @@ const REVIEW_REASONS: Readonly<Partial<Record<string, string>>> = {
  * "DATABASE_URL is waiting for you: was changed without your confirmation.";
  * a held command reads `heldCommandText`.
  */
-export function reviewText(entry: EnvironmentReviewEntry): string {
+export function reviewText(entry: ReviewHeldEntry): string {
   if (entry.reason === "executable_entry") return heldCommandText(entry);
   const reason = REVIEW_REASONS[entry.reason];
   return reason === undefined
@@ -323,7 +324,7 @@ export function reviewText(entry: EnvironmentReviewEntry): string {
  * you choose"; every other kind by its own line (`heldCommandLine`). Its
  * row's `Review` opens the retrospective sheet.
  */
-function heldCommandText(entry: EnvironmentReviewEntry): string {
+function heldCommandText(entry: ReviewHeldEntry): string {
   const line = heldCommandLine(entry);
   return `${line.name} ${line.clause}${line.acts ? " and" : ""} is on hold until you choose`;
 }

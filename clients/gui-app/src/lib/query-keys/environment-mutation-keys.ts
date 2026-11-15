@@ -1,20 +1,11 @@
 /**
  * Write keys for the Personal settings the host forwards to the person's
  * environment (`environment.*`): agent definitions and machine setup, plus the
- * Tracy Bots host binding (`environment.host.bind`) and main bot
- * (`environment.setMainBot`), and the environments redesign's writes: the
- * move, a team configuration's items and policy, members, and the
- * retrospective sheet's held items.
+ * Tracy Bots main bot (`environment.setMainBot`), and the environments
+ * redesign's writes: the move, a team configuration's items and policy,
+ * members, and the retrospective sheet's held items.
  */
 export const environmentMutationKeys = {
-  hostBind: () => ["environment.host.bind"] as const,
-  hostBindConfirmedOwner: (hostId: string, userId: string | null) =>
-    [
-      ...environmentMutationKeys.hostBind(),
-      "confirmed-owner",
-      hostId,
-      userId,
-    ] as const,
   agentDefinitionsPut: () => ["environment.agentDefinitions.put"] as const,
   agentDefinitionsDelete: () =>
     ["environment.agentDefinitions.delete"] as const,
@@ -24,8 +15,9 @@ export const environmentMutationKeys = {
   localOverrideSet: () => ["config.env.localOverride.set"] as const,
   localOverrideClear: () => ["config.env.localOverride.clear"] as const,
   remoteAccessSet: () => ["host.remoteAccess.set"] as const,
+  remoteAccessTurnOn: () => ["hosts.remoteAccess.put"] as const,
   setMainBot: () => ["environment.setMainBot"] as const,
-  moveAccept: () => ["environment.move.accept"] as const,
+  moveStart: () => ["environment.move.start"] as const,
   moveStop: () => ["environment.move.stop"] as const,
   configurationItemsPut: () => ["environment.configuration.items.put"] as const,
   configurationItemsDelete: () =>

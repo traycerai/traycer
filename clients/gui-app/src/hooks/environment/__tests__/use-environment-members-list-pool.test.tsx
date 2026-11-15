@@ -161,13 +161,10 @@ describe("useEnvironmentMembersList on a pooled build", () => {
     );
 
     const { result } = renderHook(
-      () => {
-        const client = requireTeamHostClient();
-        return {
-          list: useEnvironmentMembersList(client, ENVIRONMENT_ID, true),
-          writes: useEnvironmentMembersWrites(client, ENVIRONMENT_ID),
-        };
-      },
+      () => ({
+        list: useEnvironmentMembersList(ENVIRONMENT_ID, true),
+        writes: useEnvironmentMembersWrites(ENVIRONMENT_ID),
+      }),
       { wrapper: harness.Wrapper },
     );
 

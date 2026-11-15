@@ -1,7 +1,9 @@
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
@@ -277,6 +279,7 @@ export interface DesktopPreloadBridge {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -923,6 +926,7 @@ export interface DesktopRunnerHostOptions {
 export class DesktopRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly environmentTransport = fetchEnvironmentTransport;
   readonly relayBaseUrl: string;
   readonly poolBaseUrl: string;
   // False for a launch booted in the `none` lifecycle mode: main runs no
@@ -1340,6 +1344,10 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
     return this.bridge.listSandboxes(bearerToken);
+  }
+
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult> {
+    return this.bridge.listEnvironments(bearerToken);
   }
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {

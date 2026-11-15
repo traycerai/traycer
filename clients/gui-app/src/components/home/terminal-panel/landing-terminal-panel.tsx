@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useCallback,
   useEffect,
@@ -1509,6 +1510,7 @@ export function LandingTerminalPanel(): ReactNode {
       // no arm here at all - the tombstone the store just wrote is the whole
       // request, and the drain is its only sender.
       if (isLandingTerminalTab(closed)) {
+        showHostUpdateNeededForGesture(closed.hostId);
         dispatchLandingTerminalClose({
           entry: authorityEntry,
           closed,
@@ -1792,6 +1794,7 @@ export function LandingTerminalPanel(): ReactNode {
       renameTab(instanceId, name);
       return;
     }
+    if (showHostUpdateNeededForGesture(tab.hostId)) return;
     const entry = authorityEntries[tab.hostId];
     if (!landingTerminalAuthorityReady(entry)) return;
     if (entry.authority.capability.status === "legacy") {

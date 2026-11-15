@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
-  EnvironmentReviewEntryV12,
   EnvironmentStatusResponse,
   EnvironmentWriteOutcome,
   LocalOverride,
@@ -50,24 +49,8 @@ function notice(overrides: Partial<EnvironmentNotice>): EnvironmentNotice {
   };
 }
 
-/** A review entry as an `environment.review@1.2` host sends it. */
-function reviewEntryV12(
-  overrides: Partial<EnvironmentReviewEntryV12>,
-): EnvironmentReviewEntryV12 {
-  return {
-    ...reviewEntry({}),
-    command: null,
-    event: null,
-    description: null,
-    harness: null,
-    value: null,
-    ...overrides,
-  };
-}
-
-function reviewEntry(
-  overrides: Partial<EnvironmentReviewEntry>,
-): EnvironmentReviewEntry {
+/** A held entry as the app reads it from authn, with its masked facts. */
+function reviewEntry(overrides: Partial<ReviewHeldEntry>): ReviewHeldEntry {
   return {
     entryId: "entry-1",
     reason: "executable_entry",
@@ -76,6 +59,14 @@ function reviewEntry(
     os: "any",
     hostId: null,
     heldAt: 1,
+    command: null,
+    event: null,
+    description: null,
+    harness: null,
+    value: null,
+    op: "put",
+    heldRevision: 1,
+    liveRevision: null,
     ...overrides,
   };
 }
@@ -628,7 +619,7 @@ describe("reviewText", () => {
   it("names a held MCP server's command and says it waits for a choice", () => {
     expect(
       reviewText(
-        reviewEntryV12({
+        reviewEntry({
           kind: "mcp_server",
           key: "env-e2e-memory",
           reason: "executable_entry",
@@ -643,7 +634,7 @@ describe("reviewText", () => {
   it("names a held hook's command and event", () => {
     expect(
       reviewText(
-        reviewEntryV12({
+        reviewEntry({
           kind: "hook",
           key: "notify",
           reason: "executable_entry",
@@ -659,7 +650,7 @@ describe("reviewText", () => {
   it("words a held environment setting by the program it changes", () => {
     expect(
       reviewText(
-        reviewEntryV12({
+        reviewEntry({
           kind: "env_override",
           key: "claude:NODE_OPTIONS",
           reason: "executable_entry",
@@ -675,7 +666,7 @@ describe("reviewText", () => {
   it("words a held setup script by when a sandbox runs it", () => {
     expect(
       reviewText(
-        reviewEntryV12({
+        reviewEntry({
           kind: "setup_script",
           key: "setup",
           reason: "executable_entry",
@@ -687,7 +678,7 @@ describe("reviewText", () => {
     );
   });
 
-  it("names the kind alone for a held command from a host that does not send it", () => {
+  it("names the kind alone for a held command with no command to show", () => {
     expect(
       reviewText(
         reviewEntry({

@@ -89,12 +89,9 @@ describe("useEnvironmentListQuery - per-viewer cache partition", () => {
   it("does not serve viewer A's environments on viewer B's first render", async () => {
     const fixture = createFixture();
     viewer.current = "user-a";
-    const first = renderHook(
-      () => useEnvironmentListQuery(fixture.client, true),
-      {
-        wrapper: fixture.Wrapper,
-      },
-    );
+    const first = renderHook(() => useEnvironmentListQuery(true), {
+      wrapper: fixture.Wrapper,
+    });
     await waitFor(() => {
       expect(first.result.current.data?.environments[0]?.label).toBe("user-a");
     });
@@ -106,10 +103,9 @@ describe("useEnvironmentListQuery - per-viewer cache partition", () => {
       refetchType: "none",
     });
     viewer.current = "user-b";
-    const second = renderHook(
-      () => useEnvironmentListQuery(fixture.client, true),
-      { wrapper: fixture.Wrapper },
-    );
+    const second = renderHook(() => useEnvironmentListQuery(true), {
+      wrapper: fixture.Wrapper,
+    });
 
     expect(second.result.current.data).toBeUndefined();
     await waitFor(() => {
@@ -119,10 +115,9 @@ describe("useEnvironmentListQuery - per-viewer cache partition", () => {
 
   it("sends no request while the viewer is unresolved", async () => {
     const fixture = createFixture();
-    const { result } = renderHook(
-      () => useEnvironmentListQuery(fixture.client, true),
-      { wrapper: fixture.Wrapper },
-    );
+    const { result } = renderHook(() => useEnvironmentListQuery(true), {
+      wrapper: fixture.Wrapper,
+    });
     await Promise.resolve();
     await Promise.resolve();
 

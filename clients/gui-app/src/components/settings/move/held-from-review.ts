@@ -1,7 +1,5 @@
-import type {
-  EnvironmentOs,
-  EnvironmentReviewEntry,
-} from "@traycer/protocol/host/environment-schemas";
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
+import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import type { HeldRow } from "@/components/settings/move/retrospective-sheet";
 import {
   reviewEntryFacts,
@@ -25,20 +23,21 @@ const OS_LABELS: Readonly<Record<EnvironmentOs, string | null>> = {
 
 /** Executable entries held for the person; grant-needed writes stay on the page notices. */
 export function heldReviewEntries(
-  entries: readonly EnvironmentReviewEntry[],
-): readonly EnvironmentReviewEntry[] {
+  entries: readonly ReviewHeldEntry[],
+): readonly ReviewHeldEntry[] {
   return entries.filter((entry) => entry.reason === "executable_entry");
 }
 
 export function heldRowsFromReview(
-  entries: readonly EnvironmentReviewEntry[],
+  entries: readonly ReviewHeldEntry[],
 ): readonly HeldRow[] {
   return heldReviewEntries(entries).map((entry) => {
     const line = heldCommandLine(entry);
     return {
       heldId: entry.entryId,
       name: line.name,
-      detail: `${line.clause}. ${line.reach}`,
+      detail:
+        line.reach.length === 0 ? line.clause : `${line.clause}. ${line.reach}`,
     };
   });
 }
@@ -59,20 +58,12 @@ export interface HeldCommandLine {
 
 const RUNS_EVERYWHERE = `Once approved, it runs on ${EVERYWHERE}.`;
 
-export function heldCommandLine(
-  entry: EnvironmentReviewEntry,
-): HeldCommandLine {
+export function heldCommandLine(entry: ReviewHeldEntry): HeldCommandLine {
+  if (entry.op === "delete") return removalLine(entry);
   const facts = reviewEntryFacts(entry);
   switch (entry.kind) {
     case "mcp_server":
       return runsLine(entry.key, "MCP server", facts.command);
-    case "skill":
-      return {
-        name: entry.key,
-        clause: `(skill) gives agents instructions for ${facts.description ?? "a kind of task"}`,
-        acts: true,
-        reach: `Once approved, every provider on ${EVERYWHERE} can use it.`,
-      };
     case "shell":
       return shellLine(entry.key, OS_LABELS[entry.os], facts.command);
     case "setup_script":
@@ -117,6 +108,31 @@ export function heldCommandLine(
   }
 }
 
+/** The kind a held entry's line names, in the words its own line uses. */
+const KIND_LABELS: Readonly<Record<string, string>> = {
+  mcp_server: "MCP server",
+  shell: "shell",
+  setup_script: "setup script",
+  agent_definition: "agent definition",
+  variable: "variable",
+  env_override: "variable",
+};
+
+/** A held removal: `Remove <name> (MCP server)`. Approving it removes the item. */
+function removalLine(entry: ReviewHeldEntry): HeldCommandLine {
+  const separator = entry.key.indexOf(":");
+  const name =
+    entry.kind === "env_override" && separator >= 0
+      ? entry.key.slice(separator + 1)
+      : entry.key;
+  return {
+    name: `Remove ${name}`,
+    clause: `(${KIND_LABELS[entry.kind] ?? entry.kind.replaceAll("_", " ")})`,
+    acts: false,
+    reach: "",
+  };
+}
+
 /** `<name> (MCP server) runs <command>`, or the kind alone without a command. */
 function runsLine(
   name: string,
@@ -153,7 +169,7 @@ function shellLine(
  * is `<harness>:<NAME>`, and the line names it by `<NAME>`.
  */
 function variableLine(
-  entry: EnvironmentReviewEntry,
+  entry: ReviewHeldEntry,
   facts: ReviewEntryFacts,
 ): HeldCommandLine {
   const separator = entry.key.indexOf(":");
@@ -177,14 +193,14 @@ function variableLine(
 
 export interface HeldItemsGroup {
   readonly hostId: string | null;
-  readonly entries: readonly EnvironmentReviewEntry[];
+  readonly entries: readonly ReviewHeldEntry[];
 }
 
 export function heldItemsGroupedByHost(
-  entries: readonly EnvironmentReviewEntry[],
+  entries: readonly ReviewHeldEntry[],
 ): readonly HeldItemsGroup[] {
   const order: string[] = [];
-  const groups = new Map<string, EnvironmentReviewEntry[]>();
+  const groups = new Map<string, ReviewHeldEntry[]>();
   for (const entry of heldReviewEntries(entries)) {
     const key = entry.hostId ?? "";
     const existing = groups.get(key);
