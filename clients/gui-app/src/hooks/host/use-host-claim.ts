@@ -251,14 +251,14 @@ function newestClaim(
 
 /**
  * Who claimed `hostId` and from which team, while its door answers
- * `host_claimed`, or `null` until a claim for it is read. Each team the
+ * `host_claimed`, or `null` until every team's claims are read. Each team the
  * person belongs to has its claims read once per state, through
  * `AuthService.listClaimedComputers`, into that team's own entry
  * (`authQueryKeys.claimedComputers`), kept for the account and shared with
- * the team's screens. Only answers read under this state count, and the
- * newest claim naming this computer across them gives the claimant, from the
- * entry as it now stands; the team's name is that team's. A state's end
- * cancels a read no other state is on.
+ * the team's screens. Once every team's read under this state has answered or
+ * failed, the newest claim naming this computer across the answers gives the
+ * claimant, from the entry as it now stands; the team's name is that team's.
+ * A state's end cancels a read no other state is on.
  */
 export function useHostClaim(
   hostId: string | null,
@@ -355,6 +355,13 @@ export function useHostClaim(
   }, [auth, claimedState, queryClient, reads, teams, userId]);
 
   if (claimedState === null || reads === null) return null;
+  // Today's cover until every team's read under this state has settled.
+  const settled = teams.every(
+    (team) =>
+      reads.finished.has(team.environmentId) ||
+      reads.failed.has(team.environmentId),
+  );
+  if (!settled) return null;
   return newestClaim(
     claimedState.hostId,
     teams.map((team, index) => ({
