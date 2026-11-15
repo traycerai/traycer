@@ -396,6 +396,8 @@ export const SIDE_STRIP_RAIL_NEEDS_YOU_DOT_CLASS =
  */
 export const SIDE_STRIP_NAV_TILE_COUNT_CLASS =
   "absolute -top-px -right-px h-4 min-w-4 rounded-md px-1 text-overline leading-4 ring-2 ring-canvas md:ring-shell-ground";
+export const SIDE_STRIP_NAV_TILE_QUIET_DOT_CLASS =
+  "absolute top-0.75 right-0.75 ring-2 ring-canvas md:ring-shell-ground";
 export const SIDE_STRIP_NAV_TILE_UNKNOWN_DOT_CLASS =
   "absolute top-0.75 right-0.75 bg-canvas md:bg-shell-ground ring-2 ring-canvas md:ring-shell-ground";
 /** The "Tasks · N" label above the rows. */

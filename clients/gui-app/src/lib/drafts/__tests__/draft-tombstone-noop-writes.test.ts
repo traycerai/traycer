@@ -79,6 +79,7 @@ describe("drafts listing tombstones for ids no store holds", () => {
       sendClientFrame: () => undefined,
       onServerFrame: () => undefined,
       onStatusChange: () => undefined,
+      hasSentOpenRequest: () => false,
       requestReconnect: () => undefined,
       close: () => undefined,
       getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),

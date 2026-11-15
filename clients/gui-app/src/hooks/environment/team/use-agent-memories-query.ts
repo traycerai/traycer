@@ -56,7 +56,7 @@ function agentMemoriesOf(
     !("enabled" in value) ||
     typeof value.enabled !== "boolean"
   ) {
-    throw new Error("Couldn't read the memories setting.");
+    throw new Error("Couldn't read the common memory setting.");
   }
   return { enabled: value.enabled, revision: item.revision };
 }

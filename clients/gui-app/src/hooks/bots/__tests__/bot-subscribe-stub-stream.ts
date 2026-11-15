@@ -43,6 +43,9 @@ export class StubSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   emit(frame: BotSubscribeServerFrame): void {
