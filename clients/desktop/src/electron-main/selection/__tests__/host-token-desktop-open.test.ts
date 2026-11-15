@@ -412,6 +412,13 @@ describe("desktop main local streams open with host tokens", () => {
     if (client === null)
       throw new Error("the local inventory stream did not build at the floor");
     expect(wsStreamClientConstructionHarness.constructed).toBe(1);
+    const inventory = new HostInventoryStreamClient({
+      wsStreamClient: client,
+      callbacks: {
+        onSnapshot: () => undefined,
+        onConnectionStatus: () => undefined,
+      },
+    });
 
     try {
       await vi.waitFor(() =>
@@ -431,7 +438,9 @@ describe("desktop main local streams open with host tokens", () => {
       const equalitySocket = FakeNativeWebSocket.instances[1];
       if (equalitySocket === undefined)
         throw new Error("the equality reconnect socket was not constructed");
-      expect(equalitySocket.url).toBe(websocketUrl);
+      expect(equalitySocket.url).toBe(
+        websocketUrl.replace(/\/rpc$/, "/stream"),
+      );
       equalitySocket.fireOpen();
       await settle();
 
@@ -452,6 +461,7 @@ describe("desktop main local streams open with host tokens", () => {
       );
       expect(FakeNativeWebSocket.instances).toHaveLength(2);
     } finally {
+      inventory.close();
       client.close("test complete");
     }
   });

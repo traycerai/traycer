@@ -224,7 +224,8 @@ vi.mock("@/markdown", () => ({
   TraycerMarkdown: () => null,
 }));
 
-vi.mock("@tanstack/react-query", () => ({
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 

@@ -60,16 +60,16 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => tabHostIdRef.value,
 }));
 
-const mockHostBinding = vi.hoisted(() => ({
-  directory: {
-    onChange: () => ({ dispose() {} }),
-    findById: () => null,
-  },
+const EMPTY_HOST_DIRECTORY = vi.hoisted(() => ({
+  onChange: () => ({ dispose() {} }),
+  findById: () => null,
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostDirectory: () => mockHostBinding.directory,
-  useHostBinding: () => mockHostBinding,
+  useHostDirectory: () => EMPTY_HOST_DIRECTORY,
+  // The one directory, as in the app: `useHostDirectoryEntry` reads it off the
+  // binding.
+  useHostBinding: () => ({ directory: EMPTY_HOST_DIRECTORY }),
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),

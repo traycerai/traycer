@@ -16,6 +16,7 @@ import {
   windowNarrationAwaitsDiscovery,
   type WindowNarrationInput,
 } from "@/lib/host/window-narration";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
 import {
   noteHostDoorState,
@@ -1159,7 +1160,7 @@ describe("useWindowNarration door states through the real stores", () => {
     });
   });
 
-  it("keeps the current offline result for older-host while nothing serves", () => {
+  it("covers an older host with the update cover while nothing serves", () => {
     const { result } = renderWindowNarrationHook(false);
     act(() => {
       noteHostDoorState({
@@ -1172,7 +1173,17 @@ describe("useWindowNarration door states through the real stores", () => {
     expect(result.current.narration).toEqual({
       kind: "narrating",
       cause: "no-usable-host",
-      variant: { kind: "offline" },
+      variant: {
+        kind: "update-host",
+        hostId: WINDOW_NARRATION_HOST_ID,
+        isTargetHost: true,
+        detail: {
+          code: "older-host",
+          hostVersion: null,
+          minSupportedVersion: MINIMUM_HOST_VERSION,
+          clientCompatibility: null,
+        },
+      },
     });
   });
 

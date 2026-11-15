@@ -39,17 +39,7 @@ export interface ChatTileHostUpdate {
 export function useChatTileHostUpdate(): ChatTileHostUpdate {
   const tabHostId = useTabHostId();
   const hostEntry = useHostDirectoryEntry(tabHostId);
-  const { openSettings } = useSystemTabModalActions();
-  const openHostUpdate = useCallback(() => {
-    carryViewedHostIntoSettingsScope(tabHostId);
-    openSettings({
-      section: "host",
-      resetToGeneral: false,
-      tab: "updates",
-      draft: null,
-      hostId: null,
-    });
-  }, [openSettings, tabHostId]);
+  const openHostUpdate = useOpenHostUpdate(tabHostId);
   return useMemo(
     () => ({
       hostAppVersion: hostAppVersionFromDirectoryEntry(hostEntry),
@@ -58,4 +48,23 @@ export function useChatTileHostUpdate(): ChatTileHostUpdate {
     }),
     [hostEntry, openHostUpdate],
   );
+}
+
+/**
+ * The gesture behind "Update now" on a surface bound to `hostId`: Settings ▸
+ * Host ▸ Updates, scoped to that host. A task tab whose host is below the
+ * floor offers the same jump as a chat tile, so both read it from here.
+ */
+export function useOpenHostUpdate(hostId: string): () => void {
+  const { openSettings } = useSystemTabModalActions();
+  return useCallback(() => {
+    carryViewedHostIntoSettingsScope(hostId);
+    openSettings({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: null,
+    });
+  }, [openSettings, hostId]);
 }

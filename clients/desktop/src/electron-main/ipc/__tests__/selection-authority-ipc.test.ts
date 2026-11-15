@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { DEFAULT_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import {
   FakeNativeWebSocket,
+  openAckFrame,
   sentFramesOfKind,
   sentTokens,
   settle,
@@ -1025,15 +1026,45 @@ describe("local auth-session restore", () => {
     try {
       bridge.install();
       await vi.waitFor(() =>
-        expect(FakeNativeWebSocket.instances).toHaveLength(1),
+        expect(FakeNativeWebSocket.instances).toHaveLength(2),
       );
-      const initialSocket = FakeNativeWebSocket.instances[0];
-      if (initialSocket === undefined)
-        throw new Error("at-floor local inventory socket was not constructed");
-      initialSocket.fireOpen();
+      const initialSockets = [...FakeNativeWebSocket.instances];
+      for (const socket of initialSockets) socket.fireOpen();
       await settle();
-      expect(sentFramesOfKind(initialSocket, "open")).toHaveLength(1);
+      for (const socket of initialSockets) {
+        expect(sentFramesOfKind(socket, "open")).toHaveLength(1);
+        socket.fireMessage(openAckFrame([], null));
+      }
       expect(sentTokens()).toContain("host-only-token");
+
+      const subscriptionMethodsFor = (socket: FakeNativeWebSocket): string[] =>
+        sentFramesOfKind(socket, "subscribe").flatMap((frame) =>
+          typeof frame.method === "string" ? [frame.method] : [],
+        );
+      await vi.waitFor(() => {
+        const methods = initialSockets.flatMap(subscriptionMethodsFor);
+        expect(methods).toContain("host.hostInventory.subscribe");
+        expect(methods).toContain("host.browserPreparation.subscribe");
+      });
+      const inventorySockets = initialSockets.filter((socket) =>
+        subscriptionMethodsFor(socket).includes("host.hostInventory.subscribe"),
+      );
+      const browserPreparationSockets = initialSockets.filter((socket) =>
+        subscriptionMethodsFor(socket).includes(
+          "host.browserPreparation.subscribe",
+        ),
+      );
+      expect(inventorySockets).toHaveLength(1);
+      expect(browserPreparationSockets).toHaveLength(1);
+      const initialSocket = inventorySockets[0];
+      if (initialSocket === undefined) {
+        throw new Error("at-floor local inventory subscription was not opened");
+      }
+      const browserPreparationSocket = browserPreparationSockets.at(0);
+      if (browserPreparationSocket === undefined) {
+        throw new Error("browser preparation subscription was not opened");
+      }
+      expect(browserPreparationSocket).not.toBe(initialSocket);
 
       const readsBeforeReconnect = observedSnapshotVersions.length;
       const belowFloorSnapshot = { ...floorSnapshot, version: "1.5.4" };
@@ -1048,7 +1079,15 @@ describe("local auth-session restore", () => {
       expect(observedSnapshotVersions.slice(readsBeforeReconnect)).toContain(
         "1.5.4",
       );
-      expect(FakeNativeWebSocket.instances).toHaveLength(1);
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      const inventorySocketsAfterReconnect =
+        FakeNativeWebSocket.instances.filter((socket) =>
+          subscriptionMethodsFor(socket).includes(
+            "host.hostInventory.subscribe",
+          ),
+        );
+      expect(inventorySocketsAfterReconnect).toHaveLength(1);
+      expect(inventorySocketsAfterReconnect.at(0)).toBe(initialSocket);
     } finally {
       bridge.dispose();
       snapshotReader.mockRestore();
