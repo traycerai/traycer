@@ -2,18 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   epicListChatRecordsUpgradeV12ToV13,
   epicListChatRecordsUpgradeV13ToV14,
+  epicListChatRecordsUpgradeV14ToV15,
   epicListChatRecordsV12,
   epicListChatRecordsV13,
 } from "@traycer/protocol/host/epic/contracts";
 import {
   hostChatRecordsSubscribeServerFrameSchemaV13,
   hostChatRecordsSubscribeServerFrameSchemaV14,
+  hostChatRecordsSubscribeServerFrameSchemaV15,
   hostChatRecordsSubscribeV13,
+  hostChatRecordsSubscribeV14,
   listChatRecordsRequestV11Schema,
   listChatRecordsRequestV13Schema,
   listChatRecordsResponseV12Schema,
   listChatRecordsResponseV13Schema,
   listChatRecordsResponseV14Schema,
+  listChatRecordsResponseV15Schema,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   epicListTuiAgentsUpgradeV12ToV13,
@@ -554,6 +558,116 @@ describe("host.chatRecords.subscribe@1.4", () => {
         revision: tuiRecord.revision + 1,
         listRevision: STAMP,
         record: tuiRecord,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+// ─── D. epic.listChatRecords@1.5 and host.chatRecords.subscribe@1.5 ─────────
+
+describe("epic.listChatRecords@1.5", () => {
+  const V14_ROW = { ...CHAT_ROW, evicted: false };
+
+  it("D1: a @1.5 row carries starterUserId, and parses under @1.4 with it stripped", () => {
+    const snapshot = {
+      kind: "snapshot" as const,
+      listStamp: STAMP,
+      chats: [{ ...V14_ROW, starterUserId: "user-2" }],
+    };
+    expect(listChatRecordsResponseV15Schema.parse(snapshot)).toEqual(snapshot);
+
+    const parsed = listChatRecordsResponseV14Schema.parse(snapshot);
+
+    if (parsed.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(parsed.chats).toEqual([V14_ROW]);
+  });
+
+  it("D2: starterUserId may be absent (an older record, a foreign replica) but never empty", () => {
+    const withRows = (chats: readonly Record<string, unknown>[]) => ({
+      kind: "snapshot" as const,
+      listStamp: STAMP,
+      chats,
+    });
+    expect(
+      listChatRecordsResponseV15Schema.safeParse(withRows([V14_ROW])).success,
+    ).toBe(true);
+    expect(
+      listChatRecordsResponseV15Schema.safeParse(
+        withRows([{ ...V14_ROW, starterUserId: "" }]),
+      ).success,
+    ).toBe(false);
+    expect(
+      listChatRecordsResponseV15Schema.safeParse(
+        withRows([{ ...V14_ROW, starterUserId: null }]),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("D3: the upgrade from @1.4 states no starter for that peer and leaves both arms as they were", () => {
+    const snapshot = {
+      kind: "snapshot" as const,
+      listStamp: STAMP,
+      chats: [V14_ROW],
+    };
+    const upgraded =
+      epicListChatRecordsUpgradeV14ToV15.upgradeResponse(snapshot);
+    expect(upgraded).toEqual(snapshot);
+    expect(listChatRecordsResponseV15Schema.parse(upgraded)).toEqual(snapshot);
+
+    const unchanged = {
+      kind: "unchanged" as const,
+      listStamp: STAMP,
+      touched: [],
+    };
+    expect(
+      epicListChatRecordsUpgradeV14ToV15.upgradeResponse(unchanged),
+    ).toEqual(unchanged);
+
+    const request = {
+      epicId: "epic-1",
+      hasDocReplica: true,
+      knownRevision: STAMP,
+    };
+    expect(epicListChatRecordsUpgradeV14ToV15.upgradeRequest(request)).toEqual(
+      request,
+    );
+  });
+});
+
+describe("host.chatRecords.subscribe@1.5", () => {
+  const upsert = {
+    kind: "upsert" as const,
+    hasBinaryPayload: false as const,
+    epicId: "epic-1",
+    chatId: CHAT_STREAM_ROW.chatId,
+    revision: CHAT_STREAM_ROW.revision,
+    listRevision: STAMP,
+    record: { ...CHAT_STREAM_ROW, starterUserId: "user-2" },
+  };
+
+  it("D4: the @1.5 upsert carries starterUserId; the frozen @1.4 set strips it and stays installed by identity", () => {
+    const v15 = hostChatRecordsSubscribeServerFrameSchemaV15.parse(upsert);
+    if (v15.kind !== "upsert") throw new Error("expected upsert");
+    expect(v15.record.starterUserId).toBe("user-2");
+
+    const v14 = hostChatRecordsSubscribeServerFrameSchemaV14.parse(upsert);
+    if (v14.kind !== "upsert") throw new Error("expected upsert");
+    expect(Object.hasOwn(v14.record, "starterUserId")).toBe(false);
+
+    expect(hostChatRecordsSubscribeV14.serverFrameSchema).toBe(
+      hostChatRecordsSubscribeServerFrameSchemaV14,
+    );
+  });
+
+  it("D5: @1.5 keeps @1.4's listRevision requirement and refuses an empty starter", () => {
+    const { listRevision: _stamp, ...unstamped } = upsert;
+    expect(
+      hostChatRecordsSubscribeServerFrameSchemaV15.safeParse(unstamped).success,
+    ).toBe(false);
+    expect(
+      hostChatRecordsSubscribeServerFrameSchemaV15.safeParse({
+        ...upsert,
+        record: { ...upsert.record, starterUserId: "" },
       }).success,
     ).toBe(false);
   });
