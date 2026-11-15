@@ -1,3 +1,4 @@
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import {
   useEffect,
   useId,
@@ -500,6 +501,7 @@ export function ProviderMcpAddDialog(props: {
           handleOpenChange(false);
         },
         onError: (error) => {
+          if (reportedSaveFailure(error) === null) return;
           if (isProviderNativeRpcError(error)) {
             setFormError(
               nativeErrorMessage(error.nativeCode, error.nativeDetail),

@@ -1,3 +1,4 @@
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useSignOutProviderProfile } from "@/hooks/providers/use-sign-out-provider-profile-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useId, useState, type ReactNode } from "react";
@@ -757,8 +758,8 @@ export function ProfileEditDialog(props: {
       />
 
       <ProfileEditErrors
-        renameError={renameProfile.error}
-        recolorError={recolorProfile.error}
+        renameError={reportedSaveFailure(renameProfile.error)}
+        recolorError={reportedSaveFailure(recolorProfile.error)}
         removeError={removeProfile.error}
       />
     </ProfileEditDialogPresentation>
