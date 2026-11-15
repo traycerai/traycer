@@ -146,7 +146,7 @@ function makeHostClient(
   options: {
     readonly initialHooks?: HostHooksStatus["hooks"];
     readonly deferFirstSave?: boolean;
-  } = {},
+  },
 ): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly saves: HostHooksSaveRequest[];
@@ -335,7 +335,7 @@ async function reopenAddDialog(name: string, url: string): Promise<void> {
 
 describe("computer hook saves and the host's answered account part", () => {
   it("writes exactly the host's answered account hooks with held false and the app-read revision", async () => {
-    const { client, saves } = makeHostClient([hostAnsweredHttpHook]);
+    const { client, saves } = makeHostClient([hostAnsweredHttpHook], {});
     renderComputerTab(client);
 
     await convertCommandHookToHttp();
@@ -364,7 +364,7 @@ describe("computer hook saves and the host's answered account part", () => {
   });
 
   it("replaces the account hook list with empty when the host answers an empty account part", async () => {
-    const { client } = makeHostClient([]);
+    const { client } = makeHostClient([], {});
     renderComputerTab(client);
 
     await convertCommandHookToHttp();
@@ -381,7 +381,7 @@ describe("computer hook saves and the host's answered account part", () => {
   });
 
   it("does not write the account when the host answers null", async () => {
-    const { client } = makeHostClient(null);
+    const { client } = makeHostClient(null, {});
     renderComputerTab(client);
 
     await convertCommandHookToHttp();
@@ -393,7 +393,7 @@ describe("computer hook saves and the host's answered account part", () => {
   });
 
   it("keeps the computer tab open and shows its failed-save words when the account PUT fails", async () => {
-    const { client } = makeHostClient([hostAnsweredHttpHook]);
+    const { client } = makeHostClient([hostAnsweredHttpHook], {});
     accountCloud.putFailureStatus = 503;
     renderComputerTab(client);
 
@@ -414,7 +414,7 @@ describe("computer hook saves and the host's answered account part", () => {
   });
 
   it("retries an Add with the same draft once at the host's answered revision after the account PUT fails", async () => {
-    const { client, saves } = makeHostClient([hostAnsweredHttpHook]);
+    const { client, saves } = makeHostClient([hostAnsweredHttpHook], {});
     accountCloud.putFailureStatus = 503;
     renderComputerTab(client);
 
@@ -589,7 +589,7 @@ describe("computer hook saves and the host's answered account part", () => {
         headers: { "x-long-header": "v".repeat(1200) },
       },
     };
-    const { client } = makeHostClient([oversizedHostAnswer]);
+    const { client } = makeHostClient([oversizedHostAnswer], {});
     accountCloud.putFailureStatus = 400;
     renderComputerTab(client);
 
@@ -634,7 +634,7 @@ describe("computer hook saves and the host's answered account part", () => {
   ])(
     "refuses a host-answer contract violation for $label without an account write",
     async ({ hook }) => {
-      const { client } = makeHostClient([hook]);
+      const { client } = makeHostClient([hook], {});
       renderComputerTab(client);
 
       await convertCommandHookToHttp();

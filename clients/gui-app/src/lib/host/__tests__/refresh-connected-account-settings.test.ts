@@ -19,7 +19,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { refreshConnectedAccountSettings } from "@/lib/host/refresh-connected-account-settings";
 
-const remoteHost: RemoteHostDirectoryEntry = {
+const remoteHost = {
   hostId: "remote-in-fleet",
   label: "Remote computer",
   kind: "remote",
@@ -38,7 +38,7 @@ const remoteHost: RemoteHostDirectoryEntry = {
     appVersion: null,
     lastSeenAt: null,
   },
-};
+} satisfies RemoteHostDirectoryEntry;
 
 const remoteSessionPolicy: RemoteSessionAcquirePolicy = {
   proactiveWakeEligible: true,
