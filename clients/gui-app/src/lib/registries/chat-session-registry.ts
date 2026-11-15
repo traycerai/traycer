@@ -10,6 +10,7 @@ import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-st
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
+import { signInRecoveryForStream } from "@/lib/host/stream-presents-sign-in";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -514,9 +515,11 @@ function useChatSessionHandleInContainer(input: {
       };
     };
 
-    const onAuthError = (): void => {
+    // Decided on the host the stream is opened on, never the chat's own: a
+    // chat at rest is served by the pool, which presents the sign-in.
+    const onAuthError = signInRecoveryForStream(servingHostId, () => {
       void authServiceRef.current.revalidateCurrentContext();
-    };
+    });
 
     // A `code: "auth"` error frame means the tab's provider CLI signed out. The
     // host has already poisoned its auth cache, so a PLAIN invalidate (not a

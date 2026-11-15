@@ -178,6 +178,8 @@ vi.mock(
 );
 
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
+import { retryHostDoor } from "@/lib/host/host-door-retry";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useStreamHostId,
@@ -808,6 +810,51 @@ describe("HostStreamProvider", () => {
     expect(result.current?.isClosed()).toBe(false);
   });
 
+  it("retries this app stream now and keeps its quick-close streak", async () => {
+    vi.useFakeTimers();
+    mountLocalHost();
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const first = result.current;
+    expect(first).toBeInstanceOf(WsStreamClient);
+
+    act(() => {
+      first?.close("test-terminal-close");
+    });
+    const second = result.current;
+    expect(second).not.toBe(first);
+
+    act(() => {
+      second?.close("test-terminal-close");
+    });
+    expect(result.current).toBeNull();
+
+    await act(async () => {
+      await retryHostDoor(OTHER_HOST_ID, inertHostTokenSource());
+    });
+    expect(result.current).toBeNull();
+
+    await act(async () => {
+      await retryHostDoor(mockLocalHostEntry.hostId, inertHostTokenSource());
+    });
+    const third = result.current;
+    expect(third).toBeInstanceOf(WsStreamClient);
+    expect(third).not.toBe(second);
+
+    act(() => {
+      third?.close("test-terminal-close");
+    });
+    expect(result.current).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_999);
+    });
+    expect(result.current).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(result.current).toBeInstanceOf(WsStreamClient);
+  });
+
   it("backs off consecutive quick underneath-closes instead of hot-looping the rebuild", () => {
     // A terminal-class close (incompatible protocol, revoked access) would
     // otherwise loop: rebuild -> fresh dial (grant mint included) -> same
@@ -957,6 +1004,58 @@ describe("HostStreamProvider", () => {
     });
     expect(sessionForKeyA.closeCalls).toBe(1);
     expect(sessionForKeyB.closeCalls).toBe(0);
+  });
+
+  it("re-dials the SAME client once when its remote's owner changes, and not on an unchanged row or a rename", () => {
+    installRemoteTransport({ "pubkey-a": fakeRemoteSession() });
+    const reconnectSpy = vi.spyOn(RemoteStreamClient.prototype, "reconnectAll");
+    const personal: RemoteHostDirectoryEntry = {
+      ...remoteTarget("pubkey-a"),
+      owner: { kind: "user", id: "user-a" },
+    };
+    const team: RemoteHostDirectoryEntry = {
+      ...personal,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    };
+    const directory = new TestHostDirectory();
+    directory.publishUnannounced([personal]);
+    const client = buildClient(directory);
+    installDirectory(directory);
+    pointWindowAt(client, "remote-host-a");
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const first = result.current;
+    expect(first).toBeInstanceOf(RemoteStreamClient);
+    expect(reconnectSpy).not.toHaveBeenCalled();
+
+    // Only the owner moves: same host, user, key, relay and version. The
+    // client is kept, and its stream re-dials at once, so the host judges a
+    // fresh open against the computer's new owner.
+    act(() => {
+      directory.publish([team]);
+    });
+    expect(result.current).toBe(first);
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+    expect(reconnectSpy).toHaveBeenCalledWith("host-endpoint-change", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    // The same owner again, then renamed: whose computer it is has not
+    // changed, so nothing re-dials.
+    act(() => {
+      directory.publish([{ ...team }]);
+    });
+    const renamed: RemoteHostDirectoryEntry = {
+      ...team,
+      owner: { kind: "team", id: "team-a", name: "Alpha renamed" },
+    };
+    act(() => {
+      directory.publish([renamed]);
+    });
+    expect(result.current).toBe(first);
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
   });
 
   it("stops stream work when the window points at no host and recreates it only on re-point", () => {

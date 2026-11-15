@@ -1,4 +1,5 @@
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
@@ -42,6 +43,7 @@ export function openOneShotStreamTransport(params: {
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly authnBaseUrl: string;
+  readonly hostTokens: HostTokenSource;
 }): DurableStreamTransport {
   const wsStreamClient = buildHostStreamClient({
     target: params.target,
@@ -51,6 +53,7 @@ export function openOneShotStreamTransport(params: {
       authorizesCloudCapability(useAuthStore.getState().status),
     authnBaseUrl: params.authnBaseUrl,
     auth: null,
+    hostTokens: params.hostTokens,
     userId: params.userId,
     // The whole point of this transport: a swept reconnect would replay the
     // side-effecting subscribe (see the doc above), so the process-wide wake
