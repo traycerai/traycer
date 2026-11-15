@@ -41,6 +41,8 @@ import {
   HostRpcError,
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -1160,6 +1162,14 @@ describe("new-conversation modal's send on a staged sandbox", () => {
       "a plain failure",
       attachRefusal("RPC_ERROR"),
       [{ via: "error", message: "Couldn't send your message." }],
+    ],
+    [
+      "a host below the minimum version",
+      new HostBelowMinimumError({
+        requestId: "request-attach-floor",
+        method: "epic.attachEnvironment",
+      }),
+      [{ via: "error", message: HOST_UPDATE_SKEW_COPY.title }],
     ],
     [
       "a task that could not be shared (offline)",

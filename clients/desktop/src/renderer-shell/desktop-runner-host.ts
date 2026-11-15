@@ -1,5 +1,8 @@
 import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import type { HostTokensBridgeSurface } from "../ipc-contracts/host-token-types";
+import { createDesktopHostTokenSource } from "./desktop-host-tokens";
 import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
@@ -396,6 +399,7 @@ export interface DesktopPreloadBridge {
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
+  hostTokens: HostTokensBridgeSurface;
   listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
   revokeUserSession(
     bearerToken: string,
@@ -532,7 +536,6 @@ export interface DesktopFileDropsBridge {
  * `buildHostManagementBridge()`.
  */
 export interface DesktopHostManagementBridge {
-  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   getHostControllerStatus(): Promise<HostControllerStatus>;
   convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
   applyStaged(
@@ -954,6 +957,7 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   readonly secureStorage: ISecureStorage;
   readonly tokenStore: ITokenStore;
+  readonly hostTokens: HostTokenSource;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState;
   readonly workspaceFolders: IWorkspaceFoldersHost;
@@ -1082,6 +1086,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     // CLI and read by the host, reached here over IPC. The old renderer-local
     // encrypted-localStorage token slots are retired (their migration is §6).
     this.tokenStore = options.bridge.tokenStore;
+    this.hostTokens = createDesktopHostTokenSource(options.bridge.hostTokens);
 
     this.notifications = {
       systemSettings: this.bridge.notifications.systemSettings,
@@ -1719,9 +1724,6 @@ function buildDesktopHostManagement(
     getRemovalState: () => managementBridge.getRemovalState(),
     clearRemoval: () => managementBridge.clearRemoval(),
     restartHost: () => managementBridge.restartHost(),
-    invalidateLocalTeamAdmission: (hostId) =>
-      managementBridge.invalidateLocalTeamAdmission?.(hostId) ??
-      Promise.resolve(),
     getHostLogs: (input) => managementBridge.getHostLogs(input),
     runDoctor: (input) => managementBridge.runDoctor(input),
     availableVersions: (input) => managementBridge.availableVersions(input),

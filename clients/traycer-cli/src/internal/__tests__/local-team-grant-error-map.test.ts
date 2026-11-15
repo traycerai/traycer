@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   TEAM_MEMBERSHIP_REQUIRED,
-  TEAM_MEMBERSHIP_REQUIRED_MESSAGE,
   TEAM_MEMBERSHIP_UNAVAILABLE,
 } from "../../../../shared/host-transport/local-open-auth";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
@@ -25,7 +24,7 @@ function membershipFatal(code: string, reason: string): HostRpcError {
 }
 
 describe("CLI mapping for local team computer admission", () => {
-  it("maps a typed nonmember refusal to the actionable sign-in error without exposing host text", async () => {
+  it("maps a reasonless non-retryable membership refusal as an older host", async () => {
     const privateHostText =
       "Membership denied for account user-123@example.test on team team-secret-456";
     const mapped = await toAgentCliError(
@@ -35,16 +34,18 @@ describe("CLI mapping for local team computer admission", () => {
     ).catch((error: unknown) => error);
 
     expect(mapped).toMatchObject({
-      code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
-      message: `traycer: ${TEAM_MEMBERSHIP_REQUIRED_MESSAGE} Run \`traycer login\` to switch accounts.`,
+      code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+      message:
+        "The host is out of date. Reinstall the latest host with 'traycer host update'.",
       details: null,
       exitCode: 1,
     });
     expect(
-      EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED),
+      EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.HOST_INCOMPATIBLE),
     ).toBe(true);
     expect(JSON.stringify(mapped)).not.toContain("user-123@example.test");
     expect(JSON.stringify(mapped)).not.toContain("team-secret-456");
+    expect(JSON.stringify(mapped)).not.toContain("traycer login");
   });
 
   it("maps typed membership lookup outages to the retryable CLI error with fixed copy", async () => {

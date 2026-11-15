@@ -7,6 +7,7 @@ import type {
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
 import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { providersMutationKeys } from "@/lib/query-keys";
 
@@ -23,15 +24,20 @@ export function useProvidersSetEnvOverride(): UseMutationResult<
   { readonly hostId: string | null }
 > {
   const prepareSave = useSettingsSave(useHostClient(), SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   return useHostScopedMutation({
     method: "providers.setEnvOverride",
     mutationKey: providersMutationKeys.setEnvOverride(),
     errorMessage: "Couldn't save the variable.",
     invalidateMethods: PROVIDER_INVALIDATIONS,
-    followSettingsSave: (request, client) =>
-      prepareSave(
-        { method: "providers.setEnvOverride", request },
-        client.getActiveHostId(),
-      ),
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, client, pressedOn) =>
+        prepareSave(
+          { method: "providers.setEnvOverride", request },
+          client.getActiveHostId(),
+          pressedOn,
+        ),
+    },
   });
 }

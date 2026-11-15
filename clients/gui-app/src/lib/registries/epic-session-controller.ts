@@ -116,6 +116,7 @@ import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/
 import { SESSION_SILENCE_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
+import { streamPresentsSignIn } from "@/lib/host/stream-presents-sign-in";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -1580,7 +1581,7 @@ function createEpicSessionController(): EpicSessionController {
           };
         },
         onAuthError: () => {
-          environment?.revalidateAuth();
+          if (streamPresentsSignIn(targetHostId)) environment?.revalidateAuth();
         },
         adoptLegacyPersistKey: (adoptForUserId) => {
           adoptLegacyOpenEpicKey(epicId, adoptForUserId);

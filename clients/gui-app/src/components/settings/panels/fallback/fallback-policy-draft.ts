@@ -835,6 +835,15 @@ export type FallbackPolicyDraftAction =
     }
   | FallbackSaveFailedAction
   /**
+   * A save that was never sent (the sign-in it was pressed on ended first).
+   * The editor is as it was before the press: the pending save goes, nothing
+   * is reported, and a draft it carried counts as unsent again.
+   */
+  | {
+      readonly type: "save-abandoned";
+      readonly requestId: number;
+    }
+  /**
    * The authoritative read-back after a save whose outcome was unknown.
    *
    * The ONLY action that installs a policy this editor did not send, and it is
@@ -1874,6 +1883,31 @@ function withoutPendingSave(
 }
 
 /**
+ * The `save-abandoned` arm: the save never went out, so it leaves no notice,
+ * no error and no claim about the host.
+ */
+function applySaveAbandoned(
+  state: FallbackPolicyDraftState,
+  requestId: number,
+): FallbackPolicyDraftState {
+  const pending = pendingSaveFor(state, requestId);
+  if (pending === null) return state;
+  return {
+    ...state,
+    pendingSaves: withoutPendingSave(state, requestId),
+    // A draft is dispatched only after its own `edited`, so this one was the
+    // only dispatch at its revision and every earlier one is below it. One
+    // below is therefore the mark under which the display, at or after this
+    // revision, is unsent again; a later dispatch has already raised it past.
+    lastDispatchedRevision:
+      pending.carries === "draft" &&
+      state.lastDispatchedRevision === pending.revision
+        ? pending.revision - 1
+        : state.lastDispatchedRevision,
+  };
+}
+
+/**
  * The `edited` arm. Extracted for the same reason as {@link applySaveSucceeded}:
  * the reducer's own complexity ceiling, which this pass pushed over again by
  * giving `save-started` a second thing to decide.
@@ -2196,6 +2230,8 @@ function reduceDraft(
       return applySaveSucceeded(state, action);
     case "save-failed":
       return applySaveFailed(state, action);
+    case "save-abandoned":
+      return applySaveAbandoned(state, action.requestId);
     case "reset-unrefreshed":
       return applyResetUnrefreshed(state, action);
     case "reconciled":
