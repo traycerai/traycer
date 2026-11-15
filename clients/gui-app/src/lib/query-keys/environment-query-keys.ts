@@ -10,6 +10,22 @@ export const environmentQueryKeys = {
       userId,
       viewerId,
     ] as const,
+  /** authn's unlink preview for one plan, by the viewer who asked, for one opening. */
+  planUnlinkPreview: (
+    environmentId: string,
+    profileId: string,
+    viewerId: string,
+    previewId: string,
+  ) =>
+    [
+      "environment",
+      "plans",
+      "unlink-preview",
+      environmentId,
+      profileId,
+      viewerId,
+      previewId,
+    ] as const,
   /**
    * authn's listing of `hostId` in `environmentId`, as a save on that host
    * reads it in one editor session.

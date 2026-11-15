@@ -22,6 +22,7 @@ import { PlansCard, type ConfigurationPlan } from "./plans-card";
 import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { useEnvironmentPlanWorkNow } from "@/hooks/environment/use-environment-plan-work-now";
 import { useWindowHostIsTeamComputer } from "@/hooks/environment/use-window-host-is-team-computer";
 import { TeamReadFailed } from "./team-read-failed";
 
@@ -120,6 +121,10 @@ function TeamPlanUnlink(props: {
     props.plan.id,
     props.previewId,
   );
+  const workNow = useEnvironmentPlanWorkNow(
+    source.kind === "pool" ? source.environmentId : "",
+    props.plan.id,
+  );
   const unlink = useConfigurationPlanUnlinkMutation();
   if (preview.isPending || preview.isFetching)
     return (
@@ -161,12 +166,12 @@ function TeamPlanUnlink(props: {
       <PlanUnlinkPreview
         teamName={props.teamName}
         plan={props.plan}
-        activeTurns={preview.data.activeTurns}
+        activeTurns={workNow === null ? null : workNow.activeTurns}
         activeHostName={
-          preview.data.localHostId === null
+          workNow === null
             ? null
             : (scope.hosts.data?.hosts.find(
-                (host) => host.hostId === preview.data.localHostId,
+                (host) => host.hostId === workNow.hostId,
               )?.hostLabel ?? "the serving host")
         }
         remainingAccess={preview.data.keepsWorking}
