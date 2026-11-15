@@ -443,13 +443,26 @@ describe("bot list", () => {
     ).toEqual(["sign-in-bearer", "refreshed-bearer"]);
   });
 
-  it("returns bare cloud-unreachable when the one sign-in refresh cannot reach authn", async () => {
+  it("reports authn unreachable with whoami's line when the sign-in read cannot reach authn", async () => {
+    stage({ environments: [], bots: [], client: botSubscribeClient({}) });
+    hoisted.validateIdentity.mockResolvedValue({ kind: "network-error" });
+
+    await expect(runList()).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: "Could not reach the authn service; check your network.",
+      exitCode: 1,
+    });
+    expect(hoisted.revalidateCurrentContext).not.toHaveBeenCalled();
+  });
+
+  it("reports authn unreachable with whoami's line when the one sign-in refresh cannot reach authn", async () => {
     stage({ environments: [], bots: [], client: botSubscribeClient({}) });
     hoisted.validateIdentity.mockResolvedValueOnce({ kind: "rejected" });
     hoisted.refreshOutcome = "network-error";
 
     await expect(runList()).rejects.toMatchObject({
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: "Could not reach the authn service; check your network.",
       exitCode: 1,
     });
     expect(hoisted.revalidateCurrentContext).toHaveBeenCalledTimes(1);
@@ -749,13 +762,13 @@ describe("bot list", () => {
       });
     });
 
-    it("reports cloud-unreachable, with no message, when the directory cannot be reached", async () => {
+    it("reports the ownership as unconfirmed when the directory cannot be reached", async () => {
       stageThreeEnvironments();
       hoisted.readHostOwnership.mockResolvedValue({ kind: "network-error" });
 
       await expect(runList()).rejects.toMatchObject({
         code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-        message: "",
+        message: "This computer's ownership could not be confirmed. Try again.",
         exitCode: 1,
       });
     });

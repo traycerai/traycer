@@ -1529,4 +1529,74 @@ describe("install auth helpers", () => {
       }),
     );
   });
+
+  describe("a sign-in environment read that cannot reach authn", () => {
+    const commands = [
+      {
+        name: "host use",
+        run: () => buildHostUseCommand("acme")(fakeCtx()),
+      },
+      {
+        name: "host install --team and host ensure --team",
+        run: () =>
+          completeTeamInstall(
+            "acme",
+            {
+              preflight: { state: "signed-in", reason: null },
+              inlineSignInToken: null,
+            },
+            vi.fn<CommandContext["progress"]>(),
+          ),
+      },
+    ];
+    const reads = [
+      {
+        name: "the first read",
+        stage: (): void => {
+          mocks.validateIdentityMock.mockResolvedValue({
+            kind: "network-error",
+          });
+        },
+      },
+      {
+        name: "the refresh",
+        stage: (): void => {
+          mocks.validateIdentityMock.mockResolvedValueOnce({
+            kind: "rejected",
+          });
+          mocks.refreshOutcome = "network-error";
+        },
+      },
+      {
+        name: "the read after a refresh",
+        stage: (): void => {
+          mocks.validateIdentityMock
+            .mockResolvedValueOnce({ kind: "rejected" })
+            .mockResolvedValueOnce({ kind: "network-error" });
+        },
+      },
+    ];
+
+    it.each(
+      commands.flatMap((command) =>
+        reads.map((read) => ({
+          command,
+          read,
+          name: `${command.name}, ${read.name}`,
+        })),
+      ),
+    )(
+      "prints whoami's authn line, keeping its code and exit, for $name",
+      async ({ command, read }) => {
+        read.stage();
+
+        await expect(command.run()).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: "Could not reach the authn service; check your network.",
+          exitCode: 1,
+        });
+        expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
+      },
+    );
+  });
 });
