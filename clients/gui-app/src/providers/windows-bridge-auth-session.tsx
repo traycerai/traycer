@@ -67,14 +67,14 @@ export function WindowsBridgeAuthSessionBridge(
     let heldLocally: string | null = null;
     let restoringLocally: string | null = null;
     let localHoldResendTimer: number | null = null;
-    // The held session main has since judged bad, and that authn was asked
-    // about: one revalidation per judged session, not one per tick.
-    let revalidatedHeld: string | null = null;
+    // The held session main has since judged bad: told once and, for the
+    // verdicts authn can settle, asked about once - not once per tick.
+    let judgedHeld: string | null = null;
 
     const releaseLocalHold = (): void => {
       heldLocally = null;
       restoringLocally = null;
-      revalidatedHeld = null;
+      judgedHeld = null;
       if (localHoldResendTimer !== null) {
         window.clearInterval(localHoldResendTimer);
         localHoldResendTimer = null;
@@ -184,24 +184,26 @@ export function WindowsBridgeAuthSessionBridge(
             });
             return;
           }
-          // A held session main now judges bad (its keys came back): ask authn
-          // at once, as the start's own validation would. A refresh is handed
-          // over, a rejection signs out, an acceptance is handed over on the
-          // next tick, and an unreachable authn leaves the hold as it is.
-          if (
-            heldLocally !== null &&
-            current &&
-            revalidatedHeld !== serialized &&
-            (result.reason === "bad-signature" ||
+          if (heldLocally !== null && current) {
+            // A held session main now judges bad (its keys came back): told
+            // once per judged session, never on every tick. For a verdict
+            // authn can settle, ask it at once, as the start's own validation
+            // would: a refresh is handed over, a rejection signs out, an
+            // acceptance is handed over on the next tick, and an unreachable
+            // authn leaves the hold as it is.
+            if (judgedHeld === serialized) return;
+            judgedHeld = serialized;
+            if (
+              result.reason === "bad-signature" ||
               result.reason === "unknown-signing-key" ||
-              result.reason === "expired")
-          ) {
-            revalidatedHeld = serialized;
-            void auth.revalidateCurrentContext().catch((cause: unknown) => {
-              appLogger.warn("[auth] could not revalidate a held session", {
-                cause: cause instanceof Error ? cause.message : String(cause),
+              result.reason === "expired"
+            ) {
+              void auth.revalidateCurrentContext().catch((cause: unknown) => {
+                appLogger.warn("[auth] could not revalidate a held session", {
+                  cause: cause instanceof Error ? cause.message : String(cause),
+                });
               });
-            });
+            }
           }
           authSessionRefusedToast.warning(
             describeAuthSessionRefusalReason(result.reason),
