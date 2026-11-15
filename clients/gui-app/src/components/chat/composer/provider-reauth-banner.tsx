@@ -43,6 +43,7 @@ import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-
 import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
+import { ProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
@@ -1167,7 +1168,7 @@ function TokenReauthForm({
     setTokenError(null);
     if (apiKeySupported) {
       setApiKey.mutate(
-        { providerId, apiKey: trimmed },
+        { providerId, apiKey: new ProviderApiKeyInput(trimmed) },
         {
           onSuccess: ({ keyChangeResult }) => {
             if (

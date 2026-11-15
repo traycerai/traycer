@@ -9,6 +9,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
+import { ProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
 import { useProvidersClearApiKey } from "@/hooks/providers/use-providers-clear-api-key-mutation";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
@@ -162,7 +163,7 @@ export function ProviderApiKeySection({
     if (saveDisabled) return;
     const trimmed = draft.trim();
     setApiKey.mutate(
-      { providerId, apiKey: trimmed },
+      { providerId, apiKey: new ProviderApiKeyInput(trimmed) },
       { onSuccess: () => onDraftChange("") },
     );
   };

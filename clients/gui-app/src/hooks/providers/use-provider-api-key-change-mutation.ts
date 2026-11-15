@@ -44,6 +44,7 @@ interface ProviderApiKeyChangeMutationArgs<Variables> {
   readonly method: "providers.setApiKey" | "providers.clearApiKey";
   readonly mutationKey: readonly unknown[];
   readonly errorMessage: string;
+  readonly clearVariables: (variables: Variables) => void;
   readonly changeOf: (variables: Variables) => {
     readonly providerId: ProviderId;
     readonly change: ProviderApiKeyChange;
@@ -129,7 +130,8 @@ export function useProviderApiKeyChangeMutation<Variables>(
         }
         toastFromHostError(error, args.errorMessage);
       },
-      onSettled: (_data, error, _variables, context) => {
+      onSettled: (_data, error, variables, context) => {
+        args.clearVariables(variables);
         if (context === undefined || context.hostId === null) return;
         for (const method of PROVIDER_INVALIDATIONS) {
           void queryClient.invalidateQueries({

@@ -24,5 +24,6 @@ export function useProvidersClearApiKey(
     mutationKey: providersMutationKeys.clearApiKey(),
     errorMessage: "Couldn't clear the API key.",
     changeOf: ({ providerId }) => ({ providerId, change: { action: "clear" } }),
+    clearVariables: () => undefined,
   });
 }
