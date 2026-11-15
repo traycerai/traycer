@@ -64,7 +64,8 @@ export function TeamGiveDialog(props: {
     cacheKeyIdentity: undefined,
     client: props.client,
     method: "environment.move.plan",
-    params: { target },
+    // A give hands the computer nothing of Personal.
+    params: { target, personal: null },
     options: { refetchOnWindowFocus: false },
   });
   const start = useEnvironmentMoveStartMutation(props.client, null);
@@ -98,7 +99,13 @@ export function TeamGiveDialog(props: {
     setAttempt(null);
     setNotFinished(false);
     start.mutate(
-      { hostId: props.hostId, target, planHash, keyChoices: [] },
+      {
+        hostId: props.hostId,
+        target,
+        planHash,
+        keyChoices: [],
+        personal: null,
+      },
       {
         onSuccess: (result) => {
           if (result.kind === "sign_in_changed") return;

@@ -29,6 +29,7 @@ const teamAcceptance: EnvironmentMoveAcceptance = {
   target: { kind: "team", environmentId: "env-team", teamId: TEAM_ID },
   planHash: PLAN_HASH,
   keyChoices: [{ key: "variable:API_URL", choice: "stays" }],
+  personal: null,
 };
 
 function teamStage(
@@ -114,7 +115,11 @@ describe("runEnvironmentMove", () => {
     const result = await runEnvironmentMove(host, cloud, teamAcceptance);
 
     expect(calls.stage).toEqual([
-      { target: teamAcceptance.target, keyChoices: teamAcceptance.keyChoices },
+      {
+        target: teamAcceptance.target,
+        keyChoices: teamAcceptance.keyChoices,
+        personal: null,
+      },
     ]);
     expect(
       sent.map((request) => [request.method, request.url, request.body]),
@@ -143,6 +148,58 @@ describe("runEnvironmentMove", () => {
         acceptanceId: ACCEPTANCE_ID,
       },
     });
+  });
+
+  it("stages a move into Personal against the read of Personal the sheet was drawn from", async () => {
+    const personal = {
+      items: [
+        {
+          kind: "variable" as const,
+          key: "API_URL",
+          os: null,
+          value: "https://api.example",
+        },
+      ],
+      holdsSecrets: true,
+    };
+    const { host, calls } = fakeHost(() =>
+      Promise.resolve({
+        evidence: {
+          attemptId: ATTEMPT_ID,
+          planHash: PLAN_HASH,
+          planRevision: 3,
+          hostVersion: "1.2.3",
+          itemCount: 1,
+          keyChoices: [],
+          sourceHostId: HOST_ID,
+          sharingGeneration: 1,
+          targetKind: "personal",
+          environmentId: "env-me",
+          disclosureVersion: 1,
+        },
+        authorization: { manifestHash: "d".repeat(64) },
+      }),
+    );
+    const { cloud } = fakeCloud({
+      status: 201,
+      body: { acceptanceId: ACCEPTANCE_ID },
+    });
+
+    await runEnvironmentMove(host, cloud, {
+      hostId: HOST_ID,
+      target: { kind: "personal", environmentId: "env-me" },
+      planHash: PLAN_HASH,
+      keyChoices: [],
+      personal,
+    });
+
+    expect(calls.stage).toEqual([
+      {
+        target: { kind: "personal", environmentId: "env-me" },
+        keyChoices: [],
+        personal,
+      },
+    ]);
   });
 
   it.each([
