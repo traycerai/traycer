@@ -41,7 +41,6 @@ export {
   type RemoteSessionAcquirePolicy,
   remoteSessionCacheKey,
   retireAllRemoteSessions,
-  retireRemoteSessionsForHost,
   wakeHeldRemoteSessions,
   subscribeRemoteSessionReadiness,
   resetRemoteSessionReadinessListenersForTest,

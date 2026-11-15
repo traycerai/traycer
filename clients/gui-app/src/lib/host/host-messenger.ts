@@ -5,7 +5,6 @@ import {
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
-import { noteRemoteHostOpened } from "@/lib/host/host-owner-change";
 import { v4 as uuidv4 } from "uuid";
 import type {
   BearerSourceProvider,
@@ -165,7 +164,6 @@ export function buildRawHostMessengerForTarget<
       return null;
     }
 
-    noteRemoteHostOpened(params.target);
     const remoteTransport = createRemoteHostTransport<
       Registry,
       HostStreamRpcRegistry
