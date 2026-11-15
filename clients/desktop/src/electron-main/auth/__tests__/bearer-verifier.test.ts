@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { log } from "../../app/logger";
 import {
@@ -18,6 +19,11 @@ vi.mock("../../app/logger", () => ({
 
 const AUTHN_BASE_URL = "https://authn.example.test";
 const USER_ID = "user-victim";
+const REFRESH_FAILED = "[bearer-verifier] JWKS refresh failed";
+
+beforeEach(() => {
+  vi.mocked(log.warn).mockClear();
+});
 
 interface Harness {
   readonly verifier: DesktopBearerVerifier;
@@ -187,12 +193,36 @@ describe("desktop bearer verifier", () => {
       "key-source-unavailable",
     );
     expect(harness.urls).toHaveLength(1);
+    expect(log.warn).toHaveBeenCalledTimes(1);
 
-    // And nothing at all until the cooldown has passed.
+    // And nothing at all until the cooldown has passed: no fetch, no warning.
     expect(await harness.verifier.verify(token, USER_ID)).toBe(
       "key-source-unavailable",
     );
     expect(harness.urls).toHaveLength(1);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets verifies that arrive during the first key fetch share its answer", async () => {
+    const key = createSigningKey("kid-1", "bearer");
+    const token = key.sign(userBearerClaims(USER_ID, nowMs + 60_000));
+    const pendingFetch = Promise.withResolvers<Response>();
+    const fetchImpl = vi.fn<FetchLike>(() => pendingFetch.promise);
+    const verifier = createDesktopBearerVerifier({
+      authnBaseUrl: AUTHN_BASE_URL,
+      fetchImpl,
+      now: () => nowMs,
+    });
+
+    const verdicts = Promise.all([
+      verifier.verify(token, USER_ID),
+      verifier.verify(token, USER_ID),
+    ]);
+    pendingFetch.resolve(jwksResponse([key.publicJwk]));
+
+    expect(await verdicts).toEqual([null, null]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("calls an unknown kid unknown once the live set is fresh again", async () => {
@@ -243,6 +273,7 @@ describe("desktop bearer verifier", () => {
 
 type ExpectedRefreshFailure =
   | { readonly kind: "timeout" }
+  | { readonly kind: "network" }
   | { readonly kind: "http-status"; readonly status: number }
   | { readonly kind: "invalid-body" }
   | { readonly kind: "no-usable-key" };
@@ -266,12 +297,17 @@ describe("JWKS refresh failure logging", () => {
     {
       name: "timeout",
       fetchImpl: () => {
-        // This realm's DOMException isn't an Error, so set Error.name directly.
+        // A plain Error stands in for the abort; the real signal is exercised below.
         const timeoutError = new Error(sensitiveFailure);
         timeoutError.name = "TimeoutError";
         return Promise.reject(timeoutError);
       },
       warning: { kind: "timeout" },
+    },
+    {
+      name: "network failure",
+      fetchImpl: () => Promise.reject(new TypeError(sensitiveFailure)),
+      warning: { kind: "network" },
     },
     {
       name: "non-2xx response",
@@ -294,10 +330,6 @@ describe("JWKS refresh failure logging", () => {
     },
   ];
 
-  beforeEach(() => {
-    vi.mocked(log.warn).mockClear();
-  });
-
   it.each(failures)(
     "logs $name once without changing the refusal",
     async ({ fetchImpl, warning }) => {
@@ -311,10 +343,7 @@ describe("JWKS refresh failure logging", () => {
         "key-source-unavailable",
       );
       expect(log.warn).toHaveBeenCalledTimes(1);
-      expect(log.warn).toHaveBeenCalledWith(
-        "[bearer-verifier] JWKS refresh failed",
-        warning,
-      );
+      expect(log.warn).toHaveBeenCalledWith(REFRESH_FAILED, warning);
 
       const logged = JSON.stringify(vi.mocked(log.warn).mock.calls);
       expect(logged).not.toContain(token);
@@ -323,4 +352,45 @@ describe("JWKS refresh failure logging", () => {
       expect(logged).not.toContain(urlWithQuery);
     },
   );
+
+  it("logs the abort of the real request timeout as a timeout", async () => {
+    // Node's AbortSignal.timeout rejects with its own TimeoutError. Fake timers
+    // do not drive that native timer, so the real signal is created with a 1 ms
+    // budget instead of waiting out the 3 s one, which is asserted as requested.
+    const requestedMs: number[] = [];
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => {
+        requestedMs.push(ms);
+        return realTimeout(1);
+      });
+    const verifier = createDesktopBearerVerifier({
+      authnBaseUrl: AUTHN_BASE_URL,
+      fetchImpl: (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init.signal;
+          if (signal === undefined || signal === null) {
+            reject(new Error("no abort signal was passed"));
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        }),
+      now: () => nowMs,
+    });
+
+    try {
+      expect(await verifier.verify(token, USER_ID)).toBe(
+        "key-source-unavailable",
+      );
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+
+    expect(requestedMs).toEqual([3_000]);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(REFRESH_FAILED, { kind: "timeout" });
+  });
 });
