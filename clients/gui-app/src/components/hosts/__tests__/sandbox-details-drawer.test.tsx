@@ -3,10 +3,14 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderTestingLibrary,
   screen,
   within,
 } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import type {
   SandboxSummary,
@@ -48,15 +52,25 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: null }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
-  useSandboxConfigurations: () => ({
-    configurations: [{ kind: "personal" }],
-    teamEnvironmentIds: new Set<string>(),
-    complete: true,
-  }),
-  sandboxConfigurationOf: () => ({ kind: "personal" }),
-  useSandboxWakeString: () => null,
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+      >();
+    return {
+      ...actual,
+      useSandboxConfigurations: () => ({
+        configurations: [{ kind: "personal" as const }],
+        teamEnvironmentIds: new Set<string>(),
+        complete: true,
+        personalEnvironmentId: null,
+      }),
+      useSandboxWakeString: () => null,
+    };
+  },
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-operation", () => ({
   useSandboxOperation: () => list.operation,
 }));
@@ -72,7 +86,48 @@ afterEach(() => {
   list.operation = null;
 });
 
+function render(ui: ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return renderTestingLibrary(
+    <RunnerHostProvider runnerHost={createFakeRunnerHost({})}>
+      <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+    </RunnerHostProvider>,
+  );
+}
+
 describe("<SandboxDetailsDrawerHost />", () => {
+  it("does not call an unresolved frozen refusal Personal's", () => {
+    const summary = sandboxSummaryFixture({
+      id: "sbx-unknown-frozen",
+      state: "suspended",
+      frozen: true,
+      environmentId: null,
+      createdBy: null,
+    });
+    list.data = { sandboxes: [summary] };
+    list.operation = {
+      kind: "failed",
+      verb: "resume",
+      error: new SandboxOperationError(refusal(402, "sandbox_frozen")),
+      code: "sandbox_frozen",
+      reference: "SBX-UNKNOWN",
+      destroyRequest: undefined,
+    };
+
+    render(<SandboxDetailsDrawerHost />);
+    act(() => {
+      openSandboxDetails(summary.id);
+    });
+
+    const history = screen.getByRole("region", { name: "History" });
+    expect(
+      within(history).getByText("This sandbox is out of credits."),
+    ).toBeTruthy();
+    expect(history.textContent).not.toContain("Add credits to wake it.");
+  });
+
   it("says a failed list read failed and reads it again on Retry, instead of loading for ever", () => {
     render(<SandboxDetailsDrawerHost />);
     act(() => {

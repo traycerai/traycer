@@ -13,6 +13,8 @@ import {
   type HostAnswers,
   mocks,
   environmentListClientHosts,
+  environmentListAnswer,
+  sandboxListState,
   mirrorMountHosts,
   NEW_TARGET,
   RESUME_TARGET,
@@ -34,8 +36,9 @@ import {
   seed,
   RUNNER_HOST,
   mount,
-  mountInTileBoundTo,
+  mountInTileBoundToWithBillingRuntime,
   mountInChat,
+  mountInChatWithBillingRuntime,
   waitForCreateChats,
   createChatCalls,
   composerStages,
@@ -135,6 +138,9 @@ import { openNewChatDraftRow } from "@/lib/drafts/draft-inventory-actions";
 
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { teamSubscription } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import {
   readStagedSandbox,
@@ -170,60 +176,10 @@ import {
 } from "@/stores/host/surface-host-selection-store";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
 
-const refusalCopyMocks = vi.hoisted(() => ({
-  configuration: null as SandboxPageConfiguration | null,
-  buysTeamCredits: false,
-}));
-
-vi.mock(
-  "@/hooks/sandboxes/use-sandbox-configurations",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/hooks/sandboxes/use-sandbox-configurations")
-      >();
-    return {
-      ...actual,
-      useSandboxConfigurations: () =>
-        refusalCopyMocks.configuration === null
-          ? actual.useSandboxConfigurations()
-          : {
-              configurations: [
-                { kind: "personal" as const },
-                refusalCopyMocks.configuration,
-              ],
-              teamEnvironmentIds: new Set([
-                refusalCopyMocks.configuration.kind === "team"
-                  ? (refusalCopyMocks.configuration.environmentId ?? "")
-                  : "",
-              ]),
-              complete: true,
-            },
-    };
-  },
-);
-vi.mock("@/hooks/sandboxes/use-team-billing-admin", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/hooks/sandboxes/use-team-billing-admin")
-    >();
-  return {
-    ...actual,
-    useOffersAddCredits: (
-      configuration:
-        | { readonly kind: "personal" }
-        | { readonly kind: "team"; readonly teamId: string },
-    ) => configuration.kind === "personal" || refusalCopyMocks.buysTeamCredits,
-  };
-});
-afterEach(() => {
-  refusalCopyMocks.configuration = null;
-  refusalCopyMocks.buysTeamCredits = false;
-});
-
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 import { recordMapStorageKey } from "@/lib/persist/keys";
+
 import {
   PendingSandboxSendsDriver,
   SandboxReadyLineForChat,
@@ -5070,7 +5026,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     answerHost(SANDBOX_HOST, CODEX_READY);
     mirrorMountHosts.length = 0;
     environmentListClientHosts.length = 0;
-    mountInTileBoundTo(TILE_HOST);
+    mountInTileBoundToWithBillingRuntime(TILE_HOST);
     await screen.findByTestId("sandbox-setup-line");
 
     answerSandboxRows([rowIn("failed")], FRESH + 1);
@@ -5966,7 +5922,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   type Kind = (typeof KINDS)[number];
   const TEAM_CONFIGURATION: SandboxPageConfiguration = {
     kind: "team",
-    teamId: "team-acme",
+    teamId: "team-1",
     teamName: "Acme",
     environmentId: "env-acme",
   };
@@ -5995,50 +5951,89 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     {
       role: "Editor",
       configuration: TEAM_CONFIGURATION,
-      buysTeamCredits: false,
+      environmentRole: "editor",
+      environmentLoading: false,
+      environmentFailed: false,
       expected: "Acme's credits ran out.",
       remedy: "Details",
     },
     {
       role: "Viewer",
       configuration: TEAM_CONFIGURATION,
-      buysTeamCredits: false,
+      environmentRole: "viewer",
+      environmentLoading: false,
+      environmentFailed: false,
       expected: "Acme's credits ran out.",
       remedy: "Details",
     },
     {
       role: "role loading",
       configuration: TEAM_CONFIGURATION,
-      buysTeamCredits: false,
+      environmentRole: null,
+      environmentLoading: true,
+      environmentFailed: false,
       expected: "Acme's credits ran out.",
       remedy: "Details",
     },
     {
       role: "environment list failed",
       configuration: TEAM_CONFIGURATION,
-      buysTeamCredits: false,
+      environmentRole: null,
+      environmentLoading: false,
+      environmentFailed: true,
       expected: "Acme's credits ran out.",
       remedy: "Details",
     },
     {
       role: "Admin",
       configuration: TEAM_CONFIGURATION,
-      buysTeamCredits: true,
+      environmentRole: "admin",
+      environmentLoading: false,
+      environmentFailed: false,
       expected: "Add credits to resume this sandbox.",
       remedy: "Add credits",
     },
     {
       role: "Personal",
-      configuration: null,
-      buysTeamCredits: false,
+      configuration: { kind: "personal" },
+      environmentRole: null,
+      environmentLoading: false,
+      environmentFailed: false,
       expected: "Add credits to resume this sandbox.",
       remedy: "Add credits",
     },
   ] as const)(
     "renders the pending message's credit line for a $role",
-    async ({ configuration, buysTeamCredits, expected, remedy }) => {
-      refusalCopyMocks.configuration = configuration;
-      refusalCopyMocks.buysTeamCredits = buysTeamCredits;
+    async ({
+      configuration,
+      environmentRole,
+      environmentLoading,
+      environmentFailed,
+      expected,
+      remedy,
+    }) => {
+      mocks.authUser =
+        configuration.kind === "team"
+          ? createAuthenticatedUserFixture({
+              teamSubscriptions: [
+                {
+                  ...teamSubscription(0),
+                  teamID: "team-1",
+                  team: {
+                    ...teamSubscription(0).team,
+                    id: "team-1",
+                    slug: "Acme",
+                  },
+                },
+              ],
+            })
+          : null;
+      environmentListAnswer.role = environmentRole;
+      environmentListAnswer.loading = environmentLoading;
+      environmentListAnswer.failed = environmentFailed;
+      environmentListAnswer.personalEnvironmentId =
+        configuration.kind === "personal" ? "env-personal" : null;
+      environmentListClientHosts.length = 0;
       const input: PendingSandboxSendDispatch["input"] = {
         epicId: "epic-1",
         hostId: SANDBOX_HOST,
@@ -6052,7 +6047,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
           messageId: "message-credit-blocked",
           clientActionId: "action-credit-blocked",
           content: MESSAGE_CONTENT,
-          sender: { type: "user", userId: "user-1" },
+          sender: { type: "user", userId: AUTHENTICATED_USER_FIXTURE_ID },
           settings: PICKED_SETTINGS,
           accountContext: { type: "PERSONAL" },
           sentFromHostId: null,
@@ -6064,11 +6059,21 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         sandboxId: SANDBOX_ID,
         readySeconds: 24,
       };
+      const sandboxRow = sandboxSummaryFixture({
+        id: SANDBOX_ID,
+        hostId: SANDBOX_HOST,
+        state: "suspended",
+        frozen: true,
+        environmentId:
+          configuration.kind === "team"
+            ? configuration.environmentId
+            : "env-personal",
+      });
       usePendingSandboxSendStore.getState().add(
         pendingSend({
           id: SEND_ID,
+          userId: AUTHENTICATED_USER_FIXTURE_ID,
           request: { kind: "message", chatId: input.chatId },
-          delivery,
           dispatch: {
             input,
             status: "uncertain",
@@ -6077,29 +6082,79 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
           },
         }),
       );
-      answerSandboxRows(
-        [
-          sandboxSummaryFixture({
-            id: SANDBOX_ID,
-            hostId: SANDBOX_HOST,
-            state: "awake",
-            environmentId:
-              configuration?.kind === "team"
-                ? configuration.environmentId
-                : null,
-          }),
-        ],
-        FRESH,
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mountInChatWithBillingRuntime(input.chatId);
+      const dispatch = await screen.findByTestId("pending-sandbox-dispatch");
+      answerSandboxRows([sandboxRow], FRESH);
+      if (configuration.kind === "team") {
+        await waitFor(() => {
+          expect(environmentListClientHosts).toContain(SANDBOX_HOST);
+        });
+      }
+      await waitFor(() => {
+        expect(within(dispatch).getByText(expected)).toBeTruthy();
+      });
+      expect(
+        within(dispatch).getByRole("button", { name: remedy }),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["pending", "failed"] as const)(
+    "keeps an unknown-owner credits refusal actionable while the sandbox list is %s",
+    async (listState) => {
+      sandboxListState.pending = listState === "pending";
+      sandboxListState.failed = listState === "failed";
+      mocks.sandboxes = [];
+      const input: PendingSandboxSendDispatch["input"] = {
+        epicId: "epic-1",
+        hostId: SANDBOX_HOST,
+        parentId: null,
+        chatId: `chat-credit-list-${listState}`,
+        workspaceMode: "folderless",
+        worktreeIntent: null,
+        settings: PICKED_SETTINGS,
+        title: "",
+        initialMessage: {
+          messageId: `message-credit-list-${listState}`,
+          clientActionId: `action-credit-list-${listState}`,
+          content: MESSAGE_CONTENT,
+          sender: {
+            type: "user",
+            userId: AUTHENTICATED_USER_FIXTURE_ID,
+          },
+          settings: PICKED_SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          sentFromHostId: null,
+        },
+      };
+      usePendingSandboxSendStore.getState().add(
+        pendingSend({
+          id: SEND_ID,
+          userId: AUTHENTICATED_USER_FIXTURE_ID,
+          request: { kind: "message", chatId: input.chatId },
+          dispatch: {
+            input,
+            status: "uncertain",
+            delivery: {
+              chatId: input.chatId,
+              hostId: SANDBOX_HOST,
+              sandboxId: SANDBOX_ID,
+              readySeconds: 24,
+            },
+            blocker: "credits",
+          },
+        }),
       );
       answerHost(SANDBOX_HOST, CODEX_READY);
-      mount();
+      mountInChatWithBillingRuntime(input.chatId);
 
-      expect(await screen.findByText(expected)).toBeTruthy();
+      const dispatch = await screen.findByTestId("pending-sandbox-dispatch");
       expect(
-        within(screen.getByTestId("pending-sandbox-dispatch")).getByRole(
-          "button",
-          { name: remedy },
-        ),
+        within(dispatch).queryByText("Add credits to resume this sandbox."),
+      ).toBeNull();
+      expect(
+        within(dispatch).getByRole("button", { name: "Details" }),
       ).toBeTruthy();
     },
   );

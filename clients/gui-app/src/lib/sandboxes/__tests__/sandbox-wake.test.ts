@@ -248,6 +248,7 @@ describe("wakeSandboxOnPick", () => {
   it("names the credit shortfall rounded up, and none when the gate sent none", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
+    binding.directory.findById.mockReturnValue(sandboxHostEntry(HOST_ID, null));
     binding.auth.listSandboxes.mockImplementation(
       listOf({ state: "suspended" }),
     );
@@ -271,6 +272,26 @@ describe("wakeSandboxOnPick", () => {
     expect(mocks.toastWarning).toHaveBeenLastCalledWith(
       "Not enough credits to wake this sandbox",
       { description: "Add credits, then try again." },
+    );
+  });
+
+  it("does not offer a personal top-up in the wake toast while the directory has no owner", async () => {
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    binding.auth.listSandboxes.mockImplementation(
+      listOf({ state: "suspended" }),
+    );
+    binding.auth.runSandboxVerb.mockResolvedValueOnce({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: 10_100,
+      creditSource: "personal",
+    });
+
+    wakeSandboxOnPick(sandboxOption("suspended", false), null);
+    await settleWake();
+
+    expect(mocks.toastWarning).toHaveBeenCalledWith(
+      "Not enough credits to wake this sandbox",
     );
   });
 
@@ -308,7 +329,7 @@ describe("wakeSandboxOnPick", () => {
       "Not enough credits to wake this sandbox",
       {
         description:
-          "Your Acme credits are short $0.12. $0.12 more wakes it for an hour.",
+          "Acme's credits are short $0.12. $0.12 more wakes it for an hour.",
       },
     );
   });
@@ -901,6 +922,7 @@ describe("wakeSandboxOnPick across accounts", () => {
   it("control: with the same account throughout, the outcome is toasted and the directory and host list are refreshed", async () => {
     const binding = createFakeSandboxBinding();
     mocks.binding = binding;
+    binding.directory.findById.mockReturnValue(sandboxHostEntry(HOST_ID, null));
     binding.auth.listSandboxes.mockImplementation(
       listOf({ state: "suspended" }),
     );

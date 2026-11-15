@@ -140,6 +140,7 @@ const mocks = vi.hoisted(() => ({
   /** The Automations read and open run through their real hooks and query. */
   realAutomation: false,
   configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
+  personalEnvironmentId: null as string | null,
   catalogue: null as SandboxCatalogue | null,
   report: { kind: "unknown" } as SandboxSessionReport,
   sessionFailed: false,
@@ -194,6 +195,7 @@ vi.mock(
         ),
       ),
       complete: true,
+      personalEnvironmentId: mocks.personalEnvironmentId,
     }),
     useSandboxWakeString: () => null,
   }),
@@ -548,6 +550,7 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.listed = true;
     mocks.realActions = false;
     mocks.configurations = [{ kind: "personal" }];
+    mocks.personalEnvironmentId = null;
     mocks.catalogue = null;
     mocks.report = { kind: "unknown" };
     mocks.sessionFailed = false;
@@ -1429,6 +1432,7 @@ describe("<SandboxesSettingsPanel />", () => {
 
   it("keeps a frozen payer consequence once on its own line before the removal date", () => {
     const frozenAt = Date.UTC(2026, 9, 9);
+    mocks.personalEnvironmentId = PERSONAL_ENV;
     renderPanel([
       row("frozen", {
         state: "suspended",
@@ -1436,6 +1440,7 @@ describe("<SandboxesSettingsPanel />", () => {
         frozenAt,
         destroyAt: frozenDestroyAt(frozenAt),
         withdrawalEndsAt: Date.UTC(2026, 11, 1),
+        environmentId: PERSONAL_ENV,
       }),
     ]);
 
@@ -1893,10 +1898,16 @@ describe("<SandboxesSettingsPanel />", () => {
       },
     ];
     renderPanel([
-      row("mine", { environmentId: null, createdBy: null }),
+      row("mine", { environmentId: null, createdBy: null, frozen: true }),
       row("acme-box", { environmentId: "env-acme" }),
     ]);
     expect(names()).toEqual(["mine"]);
+    expect(rowOf("mine").textContent).not.toContain("Your credits ran out");
+    expect(
+      within(rowOf("mine")).queryByRole("button", {
+        name: "Add credits ↗",
+      }),
+    ).toBeNull();
     expect(screen.queryByTestId("sandboxes-configuration")).toBeNull();
 
     act(() => {
@@ -2575,7 +2586,7 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(frozenRow.textContent).not.toContain("storage uses");
       expect(
         within(frozenRow).getByText(
-          "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake",
+          "Linux · 2 vCPU · 4 GB · $0.12 an hour while awake · uses Acme's credits",
         ),
       ).toBeTruthy();
       expect(within(frozenRow).queryByText(/Paid by/)).toBeNull();

@@ -119,6 +119,21 @@ afterEach(() => {
 });
 
 describe("<ChatSandboxFooter /> a resting sandbox", () => {
+  it("keeps payer actions and own-credit wording out while configuration is unknown", () => {
+    const knownState = resting("suspended", { team: false });
+    if (knownState.kind !== "resting") {
+      throw new Error("expected a resting sandbox fixture");
+    }
+    const unresolved = { ...knownState, configuration: null };
+    const line = lineOf(unresolved);
+
+    expect(line?.place).toBe("slot");
+    expect(line?.text).toBe("e2e-sbx-rest is suspended");
+    render(<ChatSandboxFooter line={line} />);
+    expect(screen.queryByRole("button", { name: "Add credits ↗" })).toBeNull();
+    expect(screen.queryByText(/uses your credits/)).toBeNull();
+  });
+
   it.each([
     [
       "suspended",

@@ -40,24 +40,30 @@ import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
 import type { SandboxCreditSource } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxRowVerb } from "@/hooks/sandboxes/use-sandbox-operation";
+import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  SandboxBillingRuntime,
+  type SandboxBillingEnvironmentAnswer,
+} from "@/hooks/sandboxes/__tests__/sandbox-billing-runtime-fixture";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
+import { HostRuntimeContext } from "@/lib/host";
 
 const mocks = vi.hoisted(() => ({
   binding: null as FakeSandboxBinding | null,
   entry: null as RemoteHostDirectoryEntry | null,
-  configuration: { kind: "personal" } as SandboxPageConfiguration,
-  buysTeamCredits: false,
+  configuration: { kind: "personal" } as SandboxPageConfiguration | null,
+  environmentRole: "admin" as "admin" | "editor" | "viewer" | null,
+  environmentListLoading: false,
+  environmentListFailed: false,
 }));
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostBinding: () => mocks.binding,
-}));
-vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({ signInUrl: "https://example.test" }),
-  useRunnerHostOrNull: () => ({ signInUrl: "https://example.test" }),
-}));
+const environmentListClientHosts: Array<string | null> = [];
+let billingBinding: HostRuntimeBinding<HostRpcRegistry> | null = null;
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -91,14 +97,22 @@ vi.mock("@/components/host/host-restart-sessions", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
   useSandboxConfigurations: () => ({
-    configurations: [mocks.configuration],
+    configurations: mocks.configuration === null ? [] : [mocks.configuration],
+    teamEnvironmentIds: new Set(
+      mocks.configuration?.kind === "team" &&
+        mocks.configuration.environmentId !== null
+        ? [mocks.configuration.environmentId]
+        : [],
+    ),
     complete: true,
+    personalEnvironmentId:
+      mocks.configuration?.kind === "personal" ? "env-personal" : null,
   }),
-  sandboxConfigurationOf: () => mocks.configuration,
+  sandboxConfigurationOf: (
+    _summary: SandboxSummary,
+    _configurations: SandboxConfigurations,
+  ) => mocks.configuration,
   useSandboxWakeString: () => null,
-}));
-vi.mock("@/hooks/sandboxes/use-team-billing-admin", () => ({
-  useOffersAddCredits: () => mocks.buysTeamCredits,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: undefined }),
@@ -153,11 +167,15 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 beforeEach(() => {
+  environmentListClientHosts.length = 0;
+  billingBinding = null;
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
   useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
   mocks.configuration = { kind: "personal" };
-  mocks.buysTeamCredits = true;
+  mocks.environmentRole = "admin";
+  mocks.environmentListLoading = false;
+  mocks.environmentListFailed = false;
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: "u1", userName: "Ada", email: "ada@example.test" },
@@ -166,6 +184,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  environmentListClientHosts.length = 0;
   closeSandboxDetails();
   useAuthStore.setState({
     status: "signed-out",
@@ -251,9 +270,37 @@ function Rows(): ReactNode {
   ));
 }
 
+function billingEnvironmentAnswer(): SandboxBillingEnvironmentAnswer {
+  if (mocks.environmentListLoading) return { kind: "loading" };
+  if (mocks.environmentListFailed) return { kind: "failed" };
+  if (mocks.environmentRole === null) return { kind: "loading" };
+  return { kind: "ready", role: mocks.environmentRole };
+}
+
+async function renderWithRunnerHost(children: ReactNode, client: QueryClient) {
+  await waitFor(() => expect(billingBinding).not.toBeNull());
+  const binding = billingBinding;
+  if (binding === null) {
+    throw new Error("The billing runtime binding was not prepared");
+  }
+  return render(
+    <RunnerHostProvider runnerHost={createFakeRunnerHost({})}>
+      <HostRuntimeContext.Provider value={binding}>
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      </HostRuntimeContext.Provider>
+    </RunnerHostProvider>,
+  );
+}
+
 function setup(testCase: VerbCase, overrides: Partial<SandboxSummary> | null) {
   const binding = mocks.binding;
   if (binding === null) throw new Error("Expected the signed-in binding");
+  if (mocks.configuration?.kind === "team") {
+    binding.auth.getTeamEnvironment.mockResolvedValue({
+      kind: "ok",
+      environmentId: mocks.configuration.environmentId ?? "env-acme",
+    });
+  }
   const answer = Promise.withResolvers<SandboxLifecycleVerbFetchResult>();
   binding.auth.runSandboxVerb.mockReturnValue(answer.promise);
   binding.auth.destroySandbox.mockReturnValue(answer.promise);
@@ -276,12 +323,99 @@ function setup(testCase: VerbCase, overrides: Partial<SandboxSummary> | null) {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
-    <QueryClientProvider client={client}>
+    <SandboxBillingRuntime
+      answer={billingEnvironmentAnswer()}
+      hostId="billing-host"
+      environmentId={
+        mocks.configuration?.kind === "team"
+          ? (mocks.configuration.environmentId ?? "env-acme")
+          : "env-acme"
+      }
+      queryClient={client}
+      onBinding={(runtimeBinding: HostRuntimeBinding<HostRpcRegistry>) => {
+        billingBinding = runtimeBinding;
+        const fakeBinding = mocks.binding;
+        if (fakeBinding === null) {
+          throw new Error("the fake AuthService answers were not prepared");
+        }
+        vi.spyOn(runtimeBinding.auth, "getTeamEnvironment").mockImplementation(
+          (teamId) => fakeBinding.auth.getTeamEnvironment(teamId),
+        );
+        vi.spyOn(runtimeBinding.auth, "listSandboxes").mockImplementation(() =>
+          fakeBinding.auth.listSandboxes(),
+        );
+        vi.spyOn(runtimeBinding.auth, "runSandboxVerb").mockImplementation(
+          (sandboxId, verb, gesture, timeoutMs) =>
+            fakeBinding.auth.runSandboxVerb(
+              sandboxId,
+              verb,
+              gesture,
+              timeoutMs,
+            ),
+        );
+        vi.spyOn(runtimeBinding.auth, "destroySandbox").mockImplementation(
+          (sandboxId, onlyIfIdle) =>
+            fakeBinding.auth.destroySandbox(sandboxId, onlyIfIdle),
+        );
+      }}
+      onEnvironmentListRequest={(hostId) => {
+        environmentListClientHosts.push(hostId);
+      }}
+    >
       <Rows />
       <SandboxDetailsDrawerHost />
-    </QueryClientProvider>,
+    </SandboxBillingRuntime>,
   );
   return { answer, binding, client, main, other };
+}
+
+async function waitForEnvironmentList(
+  client: QueryClient,
+  result: "success" | "error" | null,
+): Promise<void> {
+  await waitFor(
+    () => {
+      expect(environmentListClientHosts).toContain("billing-host");
+      if (result !== null) {
+        expect(
+          client
+            .getQueryCache()
+            .getAll()
+            .some(
+              (query) =>
+                query.queryKey.includes("environment.list") &&
+                query.state.status === result,
+            ),
+        ).toBe(true);
+      }
+    },
+    {
+      onTimeout: (error) => {
+        const queries = client
+          .getQueryCache()
+          .getAll()
+          .map((query) => {
+            const data = query.state.data;
+            const kind =
+              typeof data === "object" && data !== null && "kind" in data
+                ? data.kind
+                : undefined;
+            return {
+              queryKey: query.queryKey.map((part) =>
+                typeof part === "object" && part !== null
+                  ? Object.keys(part)
+                  : part,
+              ),
+              status: query.state.status,
+              fetchStatus: query.state.fetchStatus,
+              kind,
+            };
+          });
+        error.message += `\nQuery state: ${JSON.stringify({ queries, environmentListClientHosts })}`;
+        return error;
+      },
+    },
+  );
 }
 
 async function press(testCase: VerbCase): Promise<HTMLElement> {
@@ -347,19 +481,26 @@ describe("sandbox row operations", () => {
   };
 
   it.each([
-    ["Editor", false],
-    ["Viewer", false],
-    ["role loading", false],
-    ["environment list failed", false],
-    ["Admin", true],
+    ["Editor", "editor", false, false],
+    ["Viewer", "viewer", false, false],
+    ["role loading", null, true, false],
+    ["environment list failed", null, false, true],
+    ["Admin", "admin", false, false],
   ] as const)(
     "renders the C29 frozen refusal for a team %s on the row",
-    async (_role, buysTeamCredits) => {
+    async (
+      _role,
+      environmentRole,
+      environmentListLoading,
+      environmentListFailed,
+    ) => {
       mocks.configuration = TEAM_CONFIGURATION;
-      mocks.buysTeamCredits = buysTeamCredits;
+      mocks.environmentRole = environmentRole;
+      mocks.environmentListLoading = environmentListLoading;
+      mocks.environmentListFailed = environmentListFailed;
       const resume = CASES.find((entry) => entry.verb === "resume");
       if (resume === undefined) throw new Error("Expected the Resume case");
-      const { answer } = setup(resume, null);
+      const { answer, client } = setup(resume, null);
       const row = await press(resume);
       await act(async () => {
         answer.resolve(refusal(402, "sandbox_frozen"));
@@ -367,8 +508,13 @@ describe("sandbox row operations", () => {
       });
 
       const failure = await within(row).findByRole("alert");
+      let environmentListResult: "success" | "error" | null = null;
+      if (!environmentListLoading) {
+        environmentListResult = environmentListFailed ? "error" : "success";
+      }
+      await waitForEnvironmentList(client, environmentListResult);
       expect(failure.textContent).toContain(
-        buysTeamCredits
+        environmentRole === "admin"
           ? "Couldn't resume build-box. This sandbox is out of credits. Add credits to wake it."
           : "Couldn't resume build-box. This sandbox is out of credits. Acme's bundle is out.",
       );
@@ -377,17 +523,19 @@ describe("sandbox row operations", () => {
 
   it("keeps today's frozen refusal sentence when the team name is unavailable", async () => {
     mocks.configuration = { ...TEAM_CONFIGURATION, teamName: "" };
-    mocks.buysTeamCredits = false;
+    mocks.environmentRole = "admin";
     const resume = CASES.find((entry) => entry.verb === "resume");
     if (resume === undefined) throw new Error("Expected the Resume case");
-    const { answer } = setup(resume, null);
+    const { answer, client } = setup(resume, null);
     const row = await press(resume);
     await act(async () => {
       answer.resolve(refusal(402, "sandbox_frozen"));
       await answer.promise;
     });
 
-    expect((await within(row).findByRole("alert")).textContent).toContain(
+    const failure = await within(row).findByRole("alert");
+    await waitForEnvironmentList(client, "success");
+    expect(failure.textContent).toContain(
       "Couldn't resume build-box. This sandbox is out of credits. Add credits to wake it.",
     );
   });
@@ -407,17 +555,17 @@ describe("sandbox row operations", () => {
     "shows the C29 insufficient-credit History line for a team %s",
     async (_role, buysTeamCredits, expected) => {
       mocks.configuration = TEAM_CONFIGURATION;
-      mocks.buysTeamCredits = buysTeamCredits;
+      mocks.environmentRole = buysTeamCredits ? "admin" : "editor";
       const resume = CASES.find((entry) => entry.verb === "resume");
       if (resume === undefined) throw new Error("Expected the Resume case");
-      const { answer } = setup(resume, null);
+      const { answer, client } = setup(resume, null);
       const row = await press(resume);
       await act(async () => {
         answer.resolve({
           ...refusal(402, "insufficient_credit"),
           reason: "denied",
-          shortfallMc: 120,
-          newRateMcPerHour: 120,
+          shortfallMc: 1_200,
+          newRateMcPerHour: 1_200,
           currentAwakeBurnMcPerHour: 0,
           creditSource: "team",
         });
@@ -425,6 +573,12 @@ describe("sandbox row operations", () => {
       });
 
       const failure = await within(row).findByRole("alert");
+      await waitForEnvironmentList(client, "success");
+      if (buysTeamCredits) {
+        expect(
+          within(failure).getByRole("button", { name: "Add credits ↗" }),
+        ).toBeTruthy();
+      }
       await userEvent.click(
         within(failure).getByRole("button", { name: "Details" }),
       );
@@ -432,10 +586,82 @@ describe("sandbox row operations", () => {
     },
   );
 
+  it.each([
+    [
+      "Editor",
+      "editor",
+      "This sandbox is out of credits. Acme's bundle is out.",
+    ],
+    [
+      "Admin",
+      "admin",
+      "This sandbox is out of credits. Add credits to wake it.",
+    ],
+    [
+      "Personal",
+      "admin",
+      "This sandbox is out of credits. Add credits to wake it.",
+    ],
+  ] as const)(
+    "shows the A13 frozen History line for a team %s reader",
+    async (reader, environmentRole, expected) => {
+      mocks.configuration =
+        reader === "Personal" ? { kind: "personal" } : TEAM_CONFIGURATION;
+      mocks.environmentRole = environmentRole;
+      const resume = CASES.find((entry) => entry.verb === "resume");
+      if (resume === undefined) throw new Error("Expected the Resume case");
+      const { answer, client } = setup(resume, null);
+      const row = await press(resume);
+      await act(async () => {
+        answer.resolve(refusal(402, "sandbox_frozen"));
+        await answer.promise;
+      });
+
+      const failure = await within(row).findByRole("alert");
+      if (reader !== "Personal") {
+        await waitForEnvironmentList(client, "success");
+      }
+      await userEvent.click(
+        within(failure).getByRole("button", { name: "Details" }),
+      );
+      const history = await screen.findByRole("region", { name: "History" });
+      expect(within(history).getByText(expected)).toBeTruthy();
+    },
+  );
+
+  it("does not call an unknown sandbox's personal-source shortfall yours", async () => {
+    mocks.configuration = null;
+    const resume = CASES.find((entry) => entry.verb === "resume");
+    if (resume === undefined) throw new Error("Expected the Resume case");
+    const { answer } = setup(resume, null);
+    const row = await press(resume);
+    await act(async () => {
+      answer.resolve({
+        ...refusal(402, "insufficient_credit"),
+        reason: "denied",
+        shortfallMc: 210,
+        newRateMcPerHour: 1_200,
+        currentAwakeBurnMcPerHour: 0,
+        creditSource: "personal",
+      });
+      await answer.promise;
+    });
+
+    const failure = await within(row).findByRole("alert");
+    expect(failure.textContent).not.toContain("your credits");
+    expect(failure.textContent).not.toContain("short $0.21");
+    expect(failure.textContent).not.toContain("$0.21 more");
+    expect(
+      within(failure).queryByRole("button", { name: "Add credits ↗" }),
+    ).toBeNull();
+  });
+
   it("keeps a stopped receipt and its draft when Start fails, then clears it after a successful Retry", async () => {
     const testCase = CASES.find((entry) => entry.verb === "start");
     if (testCase === undefined) throw new Error("Expected the Start case");
     const { answer, binding, client, main } = setup(testCase, null);
+    const receiptUserId = useAuthStore.getState().profile?.userId ?? null;
+    if (receiptUserId === null) throw new Error("Expected a signed-in reader");
     await screen.findByRole("region", { name: "build-box" });
     useNewConversationModalStore.getState().setContent("receipt-epic", {
       type: "doc",
@@ -456,7 +682,7 @@ describe("sandbox row operations", () => {
       sandboxId: main.id,
       name: main.displayName,
       confirmedAt: Date.now() + 60_000,
-      userId: "u1",
+      userId: receiptUserId,
       epicId: "receipt-epic",
       returned: {
         kind: "task",
@@ -473,10 +699,9 @@ describe("sandbox row operations", () => {
       ),
     };
     useStoppedSandboxSendReceiptStore.setState({ receipts: { receipt } });
-    render(
-      <QueryClientProvider client={client}>
-        <StoppedSandboxSendReceiptStrip epicId="receipt-epic" tabId="tab" />
-      </QueryClientProvider>,
+    await renderWithRunnerHost(
+      <StoppedSandboxSendReceiptStrip epicId="receipt-epic" tabId="tab" />,
+      client,
     );
     const strip = screen.getByTestId("sandbox-stopped-line");
     await userEvent.click(within(strip).getByRole("button", { name: "Start" }));
@@ -512,7 +737,7 @@ describe("sandbox row operations", () => {
 
   it.each<{ source: SandboxCreditSource; pot: string }>([
     { source: "team-allowance", pot: "your pool-e2e-fixture allowance is" },
-    { source: "team", pot: "your pool-e2e-fixture credits are" },
+    { source: "team", pot: "pool-e2e-fixture's credits are" },
     { source: "personal", pot: "your credits are" },
   ])(
     "keeps a $source refusal and remedies on the row without a toast",
@@ -528,7 +753,7 @@ describe("sandbox row operations", () => {
             };
       const testCase = CASES.find((entry) => entry.verb === "resume");
       if (testCase === undefined) throw new Error("Expected the Resume case");
-      const { answer } = setup(testCase, null);
+      const { answer, client } = setup(testCase, null);
       const row = await press(testCase);
       await act(async () => {
         answer.resolve({
@@ -545,6 +770,9 @@ describe("sandbox row operations", () => {
         await answer.promise;
       });
       const failure = await within(row).findByRole("alert");
+      if (mocks.configuration.kind === "team") {
+        await waitForEnvironmentList(client, "success");
+      }
       expect(failure.textContent).toContain(
         `Couldn't resume build-box · ${pot} short $0.21. $0.21 more wakes it for an hour.`,
       );
@@ -566,7 +794,7 @@ describe("sandbox row operations", () => {
     };
     const testCase = CASES.find((entry) => entry.verb === "resume");
     if (testCase === undefined) throw new Error("Expected the Resume case");
-    const { answer } = setup(testCase, null);
+    const { answer, client } = setup(testCase, null);
     const row = await press(testCase);
     await act(async () => {
       answer.resolve({
@@ -577,6 +805,7 @@ describe("sandbox row operations", () => {
       await answer.promise;
     });
     const failure = await within(row).findByRole("alert");
+    await waitForEnvironmentList(client, "success");
     expect(failure.textContent).toContain(
       "Couldn't resume build-box · not enough credits to wake this sandbox for an hour.",
     );
@@ -597,17 +826,16 @@ describe("sandbox row operations", () => {
       ownerKind: "unknown",
       teamOwned: false,
     };
-    render(
-      <QueryClientProvider client={client}>
-        <div data-testid="sandbox-header-actions">
-          <SandboxHeaderActions
-            hostName={main.displayName}
-            sandbox={sandbox}
-            onDestroyed={null}
-            renderActions={null}
-          />
-        </div>
-      </QueryClientProvider>,
+    await renderWithRunnerHost(
+      <div data-testid="sandbox-header-actions">
+        <SandboxHeaderActions
+          hostName={main.displayName}
+          sandbox={sandbox}
+          onDestroyed={null}
+          renderActions={null}
+        />
+      </div>,
+      client,
     );
     const headerActions = screen.getByTestId("sandbox-header-actions");
     await press(SUSPEND_CASE);
@@ -700,17 +928,16 @@ describe("sandbox row operations", () => {
         ownerKind: "unknown",
         teamOwned: false,
       };
-      render(
-        <QueryClientProvider client={client}>
-          <div data-testid="sandbox-header-actions">
-            <SandboxHeaderActions
-              hostName={main.displayName}
-              sandbox={sandbox}
-              onDestroyed={null}
-              renderActions={null}
-            />
-          </div>
-        </QueryClientProvider>,
+      await renderWithRunnerHost(
+        <div data-testid="sandbox-header-actions">
+          <SandboxHeaderActions
+            hostName={main.displayName}
+            sandbox={sandbox}
+            onDestroyed={null}
+            renderActions={null}
+          />
+        </div>,
+        client,
       );
 
       const headerActions = screen.getByTestId("sandbox-header-actions");
@@ -754,12 +981,11 @@ describe("sandbox row operations", () => {
         ownerTeamId: null,
       },
     };
-    render(
-      <QueryClientProvider client={client}>
-        <SandboxTileStateFrame chat={null}>
-          <textarea aria-label="Tile body" />
-        </SandboxTileStateFrame>
-      </QueryClientProvider>,
+    await renderWithRunnerHost(
+      <SandboxTileStateFrame chat={null}>
+        <textarea aria-label="Tile body" />
+      </SandboxTileStateFrame>,
+      client,
     );
     const wake = await screen.findByTestId("sandbox-tile-overlay-wake");
     expect(wake.hasAttribute("disabled")).toBe(false);
@@ -776,18 +1002,17 @@ describe("sandbox row operations", () => {
   it("shows the same operation in another mounted view of that sandbox", async () => {
     const testCase = SUSPEND_CASE;
     const { answer, client, main } = setup(testCase, null);
-    render(
-      <QueryClientProvider client={client}>
-        <section aria-label="Another view">
-          <SandboxRowActions
-            summary={main}
-            configuration={mocks.configuration}
-            unreachable={false}
-            frozenOffersAddCredits={false}
-            settingsFailed={false}
-          />
-        </section>
-      </QueryClientProvider>,
+    await renderWithRunnerHost(
+      <section aria-label="Another view">
+        <SandboxRowActions
+          summary={main}
+          configuration={mocks.configuration}
+          unreachable={false}
+          frozenOffersAddCredits={false}
+          settingsFailed={false}
+        />
+      </section>,
+      client,
     );
     await press(testCase);
     const otherView = screen.getByRole("region", { name: "Another view" });
@@ -886,6 +1111,11 @@ describe("sandbox row operations", () => {
 
   it("drops a Stop refused as a conflict, on the row and the card, once neither offers Stop", async () => {
     const { answer, binding, client, main, other } = setup(STOP_CASE, null);
+    await waitFor(() => expect(billingBinding).not.toBeNull());
+    const runtimeBinding = billingBinding;
+    if (runtimeBinding === null) {
+      throw new Error("The billing runtime binding was not prepared");
+    }
     const card = (state: HostSandboxState) => {
       const sandbox: HostScopeSandbox = {
         state,
@@ -895,16 +1125,20 @@ describe("sandbox row operations", () => {
         teamOwned: false,
       };
       return (
-        <QueryClientProvider client={client}>
-          <div data-testid="sandbox-header-actions">
-            <SandboxHeaderActions
-              hostName={main.displayName}
-              sandbox={sandbox}
-              onDestroyed={null}
-              renderActions={null}
-            />
-          </div>
-        </QueryClientProvider>
+        <RunnerHostProvider runnerHost={createFakeRunnerHost({})}>
+          <HostRuntimeContext.Provider value={runtimeBinding}>
+            <QueryClientProvider client={client}>
+              <div data-testid="sandbox-header-actions">
+                <SandboxHeaderActions
+                  hostName={main.displayName}
+                  sandbox={sandbox}
+                  onDestroyed={null}
+                  renderActions={null}
+                />
+              </div>
+            </QueryClientProvider>
+          </HostRuntimeContext.Provider>
+        </RunnerHostProvider>
       );
     };
     const { rerender } = render(card("awake"));

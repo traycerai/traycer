@@ -34,6 +34,7 @@ const sources = vi.hoisted(
       configurations: [{ kind: "personal" }],
       teamEnvironmentIds: new Set(),
       complete: true,
+      personalEnvironmentId: null,
     },
     entry: null,
   }),
@@ -67,6 +68,7 @@ const HOST = "host-sbx";
 const VIEWER = "viewer-1";
 const OTHER = "member-other";
 const TEAM_ENV = "env-acme";
+const PERSONAL_ENV = "env-personal";
 
 function row(overrides: Partial<SandboxSummary>): SandboxSummary {
   return sandboxSummaryFixture({
@@ -97,6 +99,7 @@ beforeEach(() => {
     ],
     teamEnvironmentIds: new Set([TEAM_ENV]),
     complete: true,
+    personalEnvironmentId: null,
   };
   sources.entry = null;
   useAuthStore.setState({
@@ -144,8 +147,14 @@ describe("useChatSandboxState", () => {
     },
   );
 
-  it("reads a frozen sandbox as resting, and a personal one under Personal", () => {
-    sources.sandboxes = [row({ state: "awake", frozen: true })];
+  it("reads a frozen sandbox as resting, and its known personal environment as Personal", () => {
+    sources.configurations = {
+      ...sources.configurations,
+      personalEnvironmentId: PERSONAL_ENV,
+    };
+    sources.sandboxes = [
+      row({ state: "awake", frozen: true, environmentId: PERSONAL_ENV }),
+    ];
 
     expect(stateOf(true)).toMatchObject({
       kind: "resting",
@@ -165,6 +174,50 @@ describe("useChatSandboxState", () => {
     expect(stateOf(false)).toEqual({
       kind: "resting",
       sandbox,
+      configuration: null,
+    });
+  });
+
+  it.each([
+    ["pending", new Set<string>()],
+    ["failed", new Set<string>()],
+    ["failed refetch with retained team data", new Set([TEAM_ENV])],
+  ] as const)(
+    "keeps a creator-less row unknown while the team read is %s",
+    (_state, teamEnvironmentIds) => {
+      sources.configurations = {
+        configurations: [
+          { kind: "personal" },
+          {
+            kind: "team",
+            teamId: "team-a",
+            teamName: "Acme",
+            environmentId: null,
+          },
+        ],
+        teamEnvironmentIds,
+        complete: false,
+        personalEnvironmentId: null,
+      };
+      const sandbox = row({
+        state: "suspended",
+        environmentId: "env-unresolved",
+      });
+      sources.sandboxes = [sandbox];
+
+      expect(stateOf(false)).toEqual({
+        kind: "resting",
+        sandbox,
+        configuration: null,
+      });
+    },
+  );
+
+  it("never treats a creator-less row without an environment id as Personal", () => {
+    sources.sandboxes = [row({ state: "suspended", environmentId: null })];
+
+    expect(stateOf(false)).toMatchObject({
+      kind: "resting",
       configuration: null,
     });
   });

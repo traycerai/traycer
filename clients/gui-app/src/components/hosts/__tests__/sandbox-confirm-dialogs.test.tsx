@@ -11,6 +11,8 @@ import type { ReactElement, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { SandboxSessionReport } from "@/lib/sandboxes/sandbox-row-lines";
 import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { EMPTY_FOCUS_MODEL } from "@/lib/home-focus/build-focus-model";
 import type { FocusModel } from "@/lib/home-focus/focus-model";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
@@ -34,7 +36,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const mocks = vi.hoisted(() => ({
   report: { kind: "unknown" } as SandboxSessionReport,
-  configuration: { kind: "personal" } as SandboxPageConfiguration,
+  configuration: { kind: "personal" } as SandboxPageConfiguration | null,
   focusModel: null as FocusModel | null,
   handles: [] as TerminalSessionStoreHandle[],
   handleHosts: new WeakMap<TerminalSessionStoreHandle, string>(),
@@ -60,11 +62,15 @@ vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
   useSandboxConfigurations: () => ({
-    configurations: [mocks.configuration],
+    configurations: mocks.configuration === null ? [] : [mocks.configuration],
     teamEnvironmentIds: new Set<string>(),
     complete: true,
+    personalEnvironmentId: "env-personal",
   }),
-  sandboxConfigurationOf: () => mocks.configuration,
+  sandboxConfigurationOf: (
+    _summary: SandboxSummary,
+    _configurations: SandboxConfigurations,
+  ) => mocks.configuration,
   useSandboxWakeString: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-verb-mutation", () => ({
@@ -116,7 +122,11 @@ import {
 } from "@/components/hosts/sandbox-confirm-dialogs";
 
 const NAME = "build-box";
-const SANDBOX = sandboxSummaryFixture({ displayName: NAME, state: "awake" });
+const SANDBOX = sandboxSummaryFixture({
+  displayName: NAME,
+  state: "awake",
+  environmentId: "env-personal",
+});
 
 function render(element: ReactElement) {
   const client = new QueryClient();
@@ -702,6 +712,60 @@ describe("sandbox confirm dialogs", () => {
     },
   );
 
+  it("leaves payer wording out of Suspend, Stop and Keep while ownership is unknown", () => {
+    mocks.configuration = null;
+    const unknownSandbox = sandboxSummaryFixture({
+      displayName: NAME,
+      state: "awake",
+      environmentId: null,
+    });
+    render(
+      <SandboxSuspendDialog
+        sandbox={unknownSandbox}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    const suspend = screen.getByTestId("sandbox-confirm-suspend").textContent;
+    expect(suspend).not.toContain("Storage uses your credits.");
+    expect(suspend).not.toContain("Storage uses");
+    cleanup();
+
+    render(
+      <SandboxStopDialog
+        sandbox={unknownSandbox}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    const stop = screen.getByTestId("sandbox-confirm-stop").textContent;
+    expect(stop).toContain("The disk is kept at the lower storage rate.");
+    expect(stop).not.toContain("on your credits");
+    cleanup();
+
+    render(
+      <SandboxKeepDialog
+        sandbox={unknownSandbox}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    const keep = screen.getByTestId("sandbox-confirm-keep").textContent;
+    expect(keep).not.toContain("Paid by you while awake.");
+    expect(keep).not.toContain(
+      "'s defaults; change them on the row afterwards.",
+    );
+  });
+
+  it("keeps Personal's payer sentence when its environment is known", () => {
+    mocks.configuration = { kind: "personal" };
+    render(<SandboxKeepDialog sandbox={SANDBOX} open onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId("sandbox-confirm-keep").textContent).toContain(
+      "Paid by you while awake.",
+    );
+  });
+
   describe("dates, counted from a pinned now", () => {
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -852,12 +916,14 @@ describe("sandbox confirm dialogs", () => {
       );
     });
 
-    it("drops only the idle sentence from the Keep preview for a withdrawn row, keeping the two sentences that are still true", () => {
+    it("drops payer wording from a withdrawn row whose owner is unknown", () => {
+      mocks.configuration = null;
       render(
         <SandboxKeepDialog
           sandbox={sandboxSummaryFixture({
             displayName: NAME,
             withdrawalEndsAt: Date.UTC(2026, 11, 1),
+            environmentId: null,
           })}
           open
           onOpenChange={vi.fn()}
@@ -865,8 +931,10 @@ describe("sandbox confirm dialogs", () => {
       );
       const text = screen.getByTestId("sandbox-confirm-keep").textContent;
       expect(text).toContain("Stops deleting itself when idle.");
-      expect(text).toContain("Paid by you while awake.");
-      expect(text.match(/Paid by you while awake\./gu)).toHaveLength(1);
+      expect(text).not.toContain("Paid by you while awake.");
+      expect(text).not.toContain(
+        "'s defaults; change them on the row afterwards.",
+      );
       expect(text).not.toContain("idle days");
       expect(text).not.toContain("Destroyed after");
     });
