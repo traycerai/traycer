@@ -167,7 +167,7 @@ const ALLOWED_COPY: ReadonlyArray<VocabularyAllowance> = [
   {
     file: "components/settings/environment/mcp-skills-copy.ts",
     texts: [
-      "Auto-update: follows upstream, cannot be edited here. Evolve: you and your agents can change it, updates wait for you. Frozen: nothing changes it.",
+      "Auto-update: follows upstream, cannot be edited here. Evolve: you and your agents can change it. Upstream updates require your action. Frozen: nothing changes it.",
       "This skill can't be edited while it's set to Auto-update or Frozen. Switch it to Evolve to edit it.",
       "is set to Auto-update or Frozen, so it can't be replaced. Switch it to Evolve first.",
     ],

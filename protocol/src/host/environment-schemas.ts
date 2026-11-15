@@ -357,10 +357,9 @@ export type EnvironmentStatusResponseV12 = z.infer<
  * - `needs_person` reasons known: authn's eight `operation_acceptance_invalid`
  *   reasons (`missing`, `ended`, `plan_hash_mismatch`,
  *   `manifest_hash_mismatch`, `ownership_generation_mismatch`,
- *   `target_mismatch`, `disclosure_mismatch`, `consumed`); authn's conflict
- *   codes `move_acceptance_conflict` and `move_upload_limit_exceeded`, as full
- *   codes; and `acceptance_not_found`, the host's word for authn's 404 on a
- *   missing or foreign acceptance, which carries no code.
+ *   `target_mismatch`, `disclosure_mismatch`, `consumed`); and authn's
+ *   conflict codes `move_acceptance_conflict` and `move_upload_limit_exceeded`,
+ *   as full codes.
  */
 export const environmentMoveAttemptOutcomeSchema = lazySchema(() => {
   const ids = {
@@ -732,6 +731,28 @@ export const hostRemoteAccessSetResponseSchemaV20 = lazySchema(() =>
 );
 export type HostRemoteAccessSetResponseV20 = z.infer<
   typeof hostRemoteAccessSetResponseSchemaV20
+>;
+
+// ── host.status.refresh ─────────────────────────────────────────────────────
+
+/** `host.status.refresh@1.0` takes nothing; an unknown key is refused. */
+export const hostStatusRefreshRequestSchema = lazySchema(() =>
+  z.object({}).strict(),
+);
+export type HostStatusRefreshRequest = z.infer<
+  typeof hostStatusRefreshRequestSchema
+>;
+
+/**
+ * Empty on purpose, and no result field is ever added: the answer means only
+ * that this computer has tried to read its own row. The app reads
+ * `environment.status` afterwards, the one place that state is read.
+ */
+export const hostStatusRefreshResponseSchema = lazySchema(() =>
+  z.object({}).strict(),
+);
+export type HostStatusRefreshResponse = z.infer<
+  typeof hostStatusRefreshResponseSchema
 >;
 
 // ── providers.link / linkComplete ───────────────────────────────────────────

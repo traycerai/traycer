@@ -135,8 +135,6 @@ function buildFakeBridge(
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
     listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
-    setEnvironmentBotHost: () =>
-      Promise.resolve({ kind: "unauthorized" as const }),
     mintTeamComputerInstallToken: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     releaseTeamComputer: () =>
@@ -809,8 +807,8 @@ function buildFakeBridge(
     },
     sandboxArtifacts: {
       policySource: "traycer-sandbox:",
-      artifactOrigin: ({ artifactId, mountId }) =>
-        `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+      artifactOrigin: ({ artifactId }) =>
+        `traycer-sandbox://artifact-${artifactId}`,
       register: async () => undefined,
       unregister: async () => undefined,
       onRequest: (_handler) => ({ dispose: () => undefined }),

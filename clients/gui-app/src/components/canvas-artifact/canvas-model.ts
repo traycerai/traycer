@@ -5,9 +5,33 @@ import type {
   CanvasNote,
 } from "@traycer/protocol/persistence/epic/canvas-layout";
 
+import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
+import { artifactMountsShareSite } from "@/lib/sandbox/artifact-serving/artifact-address";
+
 export const CANVAS_LOCAL_ORIGIN = Symbol("canvas-local");
-export const LIVE_BOARD_SLOT_BUDGET = 24;
 const LIVE_BOARD_BYTES_PER_SLOT = 40 * 1024;
+/**
+ * How many board frames a canvas keeps live, in slots of
+ * {@link LIVE_BOARD_BYTES_PER_SLOT}.
+ *
+ * Where the shell serves the canvas from one site (the desktop), its boards
+ * share one renderer process apart from the app's, so a light board costs a
+ * few MB rather than a process of its own: measured in one process, 24
+ * screenshot boards took 68 MB and 24 DOM mockups 250 MB. 48 slots keep a
+ * dense page near 500 MB, and most pages never unload a board, which loses
+ * the state it had.
+ *
+ * Every other shell holds the boards in the app's own content process, and a
+ * phone has far less memory to spare, so it keeps 24.
+ */
+export function liveBoardSlotBudget(
+  bridge: Pick<SandboxArtifactBridge, "artifactOrigin"> | null,
+  artifactId: string,
+): number {
+  return bridge !== null && artifactMountsShareSite(bridge, artifactId)
+    ? 48
+    : 24;
+}
 /** The selection/board inspector is parked, not removed: the panels stay in
  * the tree behind this flag until the inspector earns its place in the UI. */
 export const CANVAS_INSPECTOR_ENABLED: boolean = false;

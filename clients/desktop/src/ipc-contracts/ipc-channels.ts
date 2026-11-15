@@ -71,7 +71,6 @@ export const RunnerHostInvoke = {
   // management bridge next to the OS-service verbs it must not be confused with.
   readHostOwnership: "runnerHost:hosts:readOwnership",
   listTeamComputers: "runnerHost:teams:listComputers",
-  setEnvironmentBotHost: "runnerHost:teams:setBotHost",
   mintTeamComputerInstallToken: "runnerHost:teams:mintComputerInstallToken",
   releaseTeamComputer: "runnerHost:hosts:releaseTeamComputer",
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",

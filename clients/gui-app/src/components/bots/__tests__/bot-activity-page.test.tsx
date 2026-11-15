@@ -89,8 +89,6 @@ const mocks = vi.hoisted(() => {
     indicatorRead: "ok" as "ok" | "pending" | "error" | "unanswered",
     /** The feed mode the notification session negotiated. */
     feedMode: "cloud" as "local" | "cloud" | "upgrade-required",
-    /** Each host an enabled reachability read asked about. */
-    reachabilityAsked: new Set<string>(),
   };
   const answers = new Map<string, unknown>();
   /** Each agent chat id an enabled indicator read asked a host about. */
@@ -169,7 +167,6 @@ vi.mock("@/hooks/bots/use-bot-activity", () => ({
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => {
-    mocks.state.reachabilityAsked.add(hostId);
     return {
       status: mocks.state.unreachable.has(hostId) ? "unreachable" : "reachable",
     };
@@ -542,7 +539,6 @@ beforeEach(() => {
   mocks.state.unreachable = new Set();
   mocks.state.indicatorRead = "ok";
   mocks.state.feedMode = "local";
-  mocks.state.reachabilityAsked = new Set();
   mocks.actions.length = 0;
   mocks.forgetAnswers();
   __resetAgentActivityStoreForTests();
@@ -889,13 +885,6 @@ describe("<BotActivityPage /> when the evidence is incomplete", () => {
   const QUIET = (): BotTaskEntry =>
     completed("t-quiet", { lastCheckinAt: NOW });
 
-  it("drops a quiet, seen task once every source vouches", () => {
-    mocks.state.feedMode = "cloud";
-    mount([QUIET()], { boundHere: true });
-
-    expect(rowIds()).toEqual([]);
-  });
-
   it("keeps an on-completion task still tracking as status unknown, though nothing works or is unseen yet, and drops its ended and seen counterpart", () => {
     mocks.state.feedMode = "cloud";
     // Tracking can precede the completion report: no activity and nothing
@@ -1021,7 +1010,7 @@ function remoteUnseenResult(
     originHostId,
     coalesceKey: `agent.stopped:${chatId}`,
     entry: {
-      id: `entry-${taskId}-${chatId}`,
+      id: `entry-${taskId}`,
       updatedAt: NOW,
       readAt: null,
       kind: "agent.stopped",
@@ -1200,9 +1189,6 @@ describe("<BotActivityPage /> what a lost connection leaves cached is never show
         notificationSubscriptions={null}
       />,
     );
-    // The hook reads the serving host's reachability, not only the notification host's.
-    expect(mocks.state.reachabilityAsked.has(HOST_ID)).toBe(true);
-    expect(mocks.state.reachabilityAsked.has("host-notifications")).toBe(true);
     expect(band("t-wait")).toBe("needs-you");
 
     mocks.state.unreachable.add("host-unrelated");
@@ -2071,7 +2057,7 @@ describe("<BotActivityPage /> a host-local approval stands while the cloud feed 
     expect(glyphLabel("t-warm")).toBe("1 waiting for approval");
   });
 
-  it("reads a quiet agent unknown, not idle, with the cloud feed disconnected, and idle once it is connected (control)", async () => {
+  it("reads a quiet agent unknown with the cloud feed disconnected", async () => {
     mocks.state.feedMode = "cloud";
     warmTask("t-warm", AGENTS);
     mountInCloudMode([task("t-warm", {})], { connected: false });

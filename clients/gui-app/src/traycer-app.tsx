@@ -65,6 +65,7 @@ import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
 import { LandingDraftMirrorMount } from "@/hooks/drafts/use-landing-draft-mirror";
 import { ProvidersChangedStreamMount } from "@/providers/providers-changed-stream-mount";
+import { CloudRecoveryDoorbellMount } from "@/providers/cloud-recovery-doorbell-mount";
 import { RateLimitPollProvider } from "@/providers/rate-limit-poll-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
@@ -310,6 +311,10 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                   <ChatRecordsStreamMount />
                                   <LandingDraftMirrorMount />
                                 </HostScopeReady>
+                                {/* Outside the default-host gate: a read stranded on
+                                  any host, a remote one included, rings that host's
+                                  own doorbell. */}
+                                <CloudRecoveryDoorbellMount />
                                 {/* Above the shell split on purpose: the onboarding tour
                                   renders through `StandaloneShell`, not `AppShell`, so a
                                   mount inside the app shell left the tour's Import button

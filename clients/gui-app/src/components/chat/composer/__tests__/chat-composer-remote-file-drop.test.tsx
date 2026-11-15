@@ -17,6 +17,12 @@
  * this file observes.
  */
 import {
+  fileTransfer,
+  pdfFile,
+  nodesOfType,
+  typedPathSpans,
+} from "@/lib/composer/__tests__/file-drop-fixtures";
+import {
   forwardRef,
   useCallback,
   type ComponentProps,
@@ -472,46 +478,16 @@ async function mountComposer(
   return editor;
 }
 
-function pdfTransfer() {
-  const file = new File([crypto.randomUUID()], "report.pdf", {
-    type: "application/pdf",
-  });
-  return {
-    files: [file],
-    types: ["Files"],
-    items: [{ kind: "file", type: file.type, getAsFile: () => file }],
-    getData: () => "",
-  };
-}
-
 function dropReport(editor: HTMLElement): void {
-  fireEvent.drop(editor, { dataTransfer: pdfTransfer() });
+  fireEvent.drop(editor, {
+    dataTransfer: fileTransfer([pdfFile("report.pdf")]),
+  });
 }
 
 function pasteReport(editor: HTMLElement): void {
-  fireEvent.paste(editor, { clipboardData: pdfTransfer() });
-}
-
-function nodesOfType(
-  content: JsonContent | null,
-  type: string,
-): ReadonlyArray<JsonContent> {
-  if (content === null) return [];
-  const own = content.type === type ? [content] : [];
-  return [
-    ...own,
-    ...(content.content ?? []).flatMap((child) => nodesOfType(child, type)),
-  ];
-}
-
-/** The text of every inline-code span: how a typed path sits in the editor. */
-function codeSpans(content: JsonContent | null): ReadonlyArray<string> {
-  return nodesOfType(content, "text").flatMap((node) =>
-    node.marks?.some((mark) => mark.type === "code") === true &&
-    node.text !== undefined
-      ? [node.text]
-      : [],
-  );
+  fireEvent.paste(editor, {
+    clipboardData: fileTransfer([pdfFile("report.pdf")]),
+  });
 }
 
 /**
@@ -557,7 +533,7 @@ async function expectUploaded(): Promise<void> {
     ).toEqual(["report.pdf"]),
   );
   await settled();
-  expect(codeSpans(answers.document)).toEqual([]);
+  expect(typedPathSpans(answers.document)).toEqual([]);
   expect(toasts.error).not.toHaveBeenCalled();
 }
 
@@ -569,7 +545,7 @@ describe("a file dropped or pasted into a regular chat's composer", () => {
     dropReport(editor);
 
     await waitFor(() =>
-      expect(codeSpans(answers.document)).toEqual([REPORT_PATH]),
+      expect(typedPathSpans(answers.document)).toEqual([REPORT_PATH]),
     );
     await settled();
     expect(nodesOfType(answers.document, "fileAttachment")).toEqual([]);
@@ -587,7 +563,6 @@ describe("a file dropped or pasted into a regular chat's composer", () => {
   });
 
   it("is uploaded when this renderer knows no local host at all", async () => {
-    answers.localHostId = null;
     const editor = await mountComposer(null);
 
     dropReport(editor);
@@ -620,7 +595,7 @@ describe("a file dropped or pasted into a regular chat's composer", () => {
     pasteReport(editor);
 
     await waitFor(() =>
-      expect(codeSpans(answers.document)).toEqual([REPORT_PATH]),
+      expect(typedPathSpans(answers.document)).toEqual([REPORT_PATH]),
     );
     await settled();
     expect(nodesOfType(answers.document, "fileAttachment")).toEqual([]);

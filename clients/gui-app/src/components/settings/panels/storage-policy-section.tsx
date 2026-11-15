@@ -176,7 +176,6 @@ function StoragePolicySectionBody(props: {
                 presets={IDLE_TASK_PRESETS}
                 format={afterDays}
                 value={shown.idleTaskDays}
-                // The window cleans only while chats are on.
                 disabled={disabled || !shown.chats}
                 onWindowChange={(days) => {
                   write("idleTaskDays", days);

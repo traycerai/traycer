@@ -722,9 +722,8 @@ export const botSubscribeV13 = defineStreamRpcContract({
 /**
  * `bot.subscribe@1.4`: each notification subscription carries when it started
  * (`since`). A 1.3 subscriber's snapshot omits that field. Each
- * entry's pause, stop and pending Run now, each received check-in's
- * requester, each subscription's digests and the stopped watches, all
- * defaulted `null`.
+ * task entry's pause, stop and pending Run now, each subscription's digests,
+ * and the stopped watches all default to `null`.
  */
 export const botSubscribeV14 = defineStreamRpcContract({
   method: "bot.subscribe",

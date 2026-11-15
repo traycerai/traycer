@@ -537,7 +537,7 @@ describe("eager-schema gate: protocol/src outside framework/", () => {
     expect(outsideFiles.length).toBeGreaterThan(100);
   });
 
-  it("CONTROL: production scan finds EXACTLY 49 eager schemas inside protocol/src/framework/ (47 z-rooted, 2 combinator) - a census fact, not a ceiling", () => {
+  it("CONTROL: production scan finds EXACTLY 51 eager schemas inside protocol/src/framework/ (49 z-rooted, 2 combinator) - a census fact, not a ceiling", () => {
     const frameworkFindings = scan.findings.filter((finding) =>
       isFrameworkPath(finding.sourceFile),
     );
@@ -546,10 +546,10 @@ describe("eager-schema gate: protocol/src outside framework/", () => {
       byKind.set(finding.kind, (byKind.get(finding.kind) ?? 0) + 1);
     }
 
-    if (frameworkFindings.length !== 49) {
+    if (frameworkFindings.length !== 51) {
       throw new Error(
         [
-          `Expected exactly 49 eager schemas inside protocol/src/framework/, found ${frameworkFindings.length}.`,
+          `Expected exactly 51 eager schemas inside protocol/src/framework/, found ${frameworkFindings.length}.`,
           "This number is a CENSUS FACT pinned when this gate was built (wave 2's own",
           "measurement: the framework barrel builds 165 instances of its own, imports",
           "no contract module, forces nothing downstream) - not a ceiling. framework/",
@@ -562,7 +562,7 @@ describe("eager-schema gate: protocol/src outside framework/", () => {
       );
     }
 
-    expect(byKind.get("z-rooted")).toBe(47);
+    expect(byKind.get("z-rooted")).toBe(49);
     expect(byKind.get("combinator-on-identifier")).toBe(2);
     expect(
       frameworkFindings.some(
