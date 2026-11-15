@@ -85,9 +85,15 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   hostClientLocating,
+  memberPost,
   turnRef,
   turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  expectPlainLineOutsideQuote,
+  PLAIN_LINE,
+  QUOTE_LINE,
+} from "@/components/bots/__tests__/bot-channel-rows-test-support";
 import {
   sessionTargetOfTurn,
   type BotTurnOpen,
@@ -2594,5 +2600,34 @@ describe("<BotThreadPanel /> a reply that names the post the thread opens on", (
     for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
       expect(opening.classList.contains(token)).toBe(true);
     }
+  });
+});
+
+describe("<BotThreadPanel /> a member's quote above a plain line, stored in two paragraphs", () => {
+  function quoteThenPlainLine(messageId: string): Message {
+    return memberPost({
+      messageId,
+      requestId: `req-${messageId}`,
+      lines: [QUOTE_LINE, PLAIN_LINE],
+      timestamp: 1_000,
+      resolvedBy: null,
+    });
+  }
+
+  it("keeps the plain line out of the quote in a member's reply", () => {
+    mountPanel(listed("user-teammate"), [quoteThenPlainLine("reply-1")]);
+
+    const row = within(screen.getByTestId("bot-thread-replies"))
+      .getByText("implementation not confirmed started.", { exact: false })
+      .closest<HTMLElement>('[data-testid="bot-member-row"]');
+    if (row === null) throw new Error("the reply is not drawn as a member row");
+    expectPlainLineOutsideQuote(row);
+  });
+
+  it("keeps the plain line out of the quote in the post the thread opens on", () => {
+    channelMessages = [quoteThenPlainLine("anchor-1")];
+    mountPanel(listed("user-teammate"), []);
+
+    expectPlainLineOutsideQuote(screen.getByTestId("bot-thread-anchor"));
   });
 });
