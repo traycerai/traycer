@@ -618,7 +618,7 @@ export type ConfigAgentMemoriesSetRequest = z.infer<
  * revision is therefore not confirmable by a later read: the caller may say
  * the change is waiting, and must not later claim it arrived.
  */
-export const configAgentMemoriesSetResponseSchema = lazySchema(() =>
+export const configAgentMemoriesSetResponseSchemaV10 = lazySchema(() =>
   z.object({
     enabled: z.boolean(),
     state: z.enum(["applied", "saved", "queued"]),
@@ -641,6 +641,13 @@ export const configAgentMemoriesSetResponseSchema = lazySchema(() =>
      */
     uploadId: z.string().min(1).nullable(),
   }),
+);
+/** A completed save on a computer with no known bound environment has no receipt. */
+export const configAgentMemoriesSetResponseSchema = lazySchema(() =>
+  z.union([
+    configAgentMemoriesSetResponseSchemaV10,
+    z.object({ state: z.literal("local_only"), enabled: z.boolean() }),
+  ]),
 );
 export type ConfigAgentMemoriesSetResponse = z.infer<
   typeof configAgentMemoriesSetResponseSchema

@@ -606,6 +606,8 @@ import {
 import {
   configAgentMemoriesGetV10,
   configAgentMemoriesSetV10,
+  configAgentMemoriesSetV11,
+  configAgentMemoriesSetUpgradeV10ToV11,
   configBrowserGetV10,
   configBrowserSetV10,
   configEnvDeleteV10,
@@ -7091,11 +7093,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.agentMemories.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configAgentMemoriesSetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configAgentMemoriesSetV11,
+          upgradeFromPreviousVersion: configAgentMemoriesSetUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},

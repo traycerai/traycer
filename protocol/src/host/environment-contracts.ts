@@ -491,6 +491,73 @@ export const providersLinkCompleteUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+export const environmentAgentDefinitionsPutV10 = defineRpcContract({
+  method: "environment.agentDefinitions.put",
+  schemaVersion: { major: 1, minor: 0 },
+  requestSchema: schemas.environmentAgentDefinitionsPutRequestSchema,
+  responseSchema: schemas.environmentWriteOutcomeSchema,
+});
+export const environmentAgentDefinitionsPutV11 = defineRpcContract({
+  method: "environment.agentDefinitions.put",
+  schemaVersion: { major: 1, minor: 1 },
+  requestSchema: schemas.environmentAgentDefinitionsPutRequestSchema,
+  responseSchema: schemas.environmentLocalWriteOutcomeSchema,
+});
+export const environmentAgentDefinitionsPutUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentAgentDefinitionsPutV10,
+  typeof environmentAgentDefinitionsPutV11
+>({
+  from: environmentAgentDefinitionsPutV10.schemaVersion,
+  to: environmentAgentDefinitionsPutV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const environmentAgentDefinitionsDeleteV10 = defineRpcContract({
+  method: "environment.agentDefinitions.delete",
+  schemaVersion: { major: 1, minor: 0 },
+  requestSchema: schemas.environmentAgentDefinitionsDeleteRequestSchema,
+  responseSchema: schemas.environmentWriteOutcomeSchema,
+});
+export const environmentAgentDefinitionsDeleteV11 = defineRpcContract({
+  method: "environment.agentDefinitions.delete",
+  schemaVersion: { major: 1, minor: 1 },
+  requestSchema: schemas.environmentAgentDefinitionsDeleteRequestSchema,
+  responseSchema: schemas.environmentLocalWriteOutcomeSchema,
+});
+export const environmentAgentDefinitionsDeleteUpgradeV10ToV11 =
+  defineUpgradePath<
+    typeof environmentAgentDefinitionsDeleteV10,
+    typeof environmentAgentDefinitionsDeleteV11
+  >({
+    from: environmentAgentDefinitionsDeleteV10.schemaVersion,
+    to: environmentAgentDefinitionsDeleteV11.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
+export const environmentSetupPutV10 = defineRpcContract({
+  method: "environment.setup.put",
+  schemaVersion: { major: 1, minor: 0 },
+  requestSchema: schemas.environmentSetupPutRequestSchema,
+  responseSchema: schemas.environmentWriteOutcomeSchema,
+});
+export const environmentSetupPutV11 = defineRpcContract({
+  method: "environment.setup.put",
+  schemaVersion: { major: 1, minor: 1 },
+  requestSchema: schemas.environmentSetupPutRequestSchema,
+  responseSchema: schemas.environmentLocalWriteOutcomeSchema,
+});
+export const environmentSetupPutUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentSetupPutV10,
+  typeof environmentSetupPutV11
+>({
+  from: environmentSetupPutV10.schemaVersion,
+  to: environmentSetupPutV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const ENVIRONMENT_RPC_METHODS = {
   "providers.link": {
     degrade: { kind: "unsupported" },
@@ -763,16 +830,17 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.agentDefinitions.put": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "environment.agentDefinitions.put",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.environmentAgentDefinitionsPutRequestSchema,
-            responseSchema: schemas.environmentWriteOutcomeSchema,
-          }),
+          contract: environmentAgentDefinitionsPutV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentAgentDefinitionsPutV11,
+          upgradeFromPreviousVersion:
+            environmentAgentDefinitionsPutUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -781,17 +849,17 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.agentDefinitions.delete": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "environment.agentDefinitions.delete",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema:
-              schemas.environmentAgentDefinitionsDeleteRequestSchema,
-            responseSchema: schemas.environmentWriteOutcomeSchema,
-          }),
+          contract: environmentAgentDefinitionsDeleteV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentAgentDefinitionsDeleteV11,
+          upgradeFromPreviousVersion:
+            environmentAgentDefinitionsDeleteUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -818,16 +886,16 @@ export const ENVIRONMENT_RPC_METHODS = {
   "environment.setup.put": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "environment.setup.put",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.environmentSetupPutRequestSchema,
-            responseSchema: schemas.environmentWriteOutcomeSchema,
-          }),
+          contract: environmentSetupPutV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentSetupPutV11,
+          upgradeFromPreviousVersion: environmentSetupPutUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
