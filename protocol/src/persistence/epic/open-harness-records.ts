@@ -54,6 +54,7 @@ import {
   textBlockSchema,
   todoBlockSchema,
   toolCallBlockSchema,
+  toolCallBlockSchemaPreFeedbackOrigin,
   toolCallBlockSchemaPreArtifact,
   toolCallBlockSchemaPreBotSendReceipt,
   toolCallBlockSchemaPreFeedbackDraft,
@@ -61,6 +62,7 @@ import {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   assistantMessageSchema,
+  assistantMessageSchemaPreFeedbackOrigin,
   assistantMessageSchemaPreMultiSelect,
   userMessageSchema,
   userMessageSchemaPreCanvas,
@@ -219,6 +221,25 @@ export const openContentBlockSchemaPreNotApplied = lazySchema(() =>
  * Every other member is the live schema; a NEW member has to be added here,
  * which `open-harness-wire.test.ts` enforces by comparing member sets.
  */
+export const openContentBlockSchemaPreFeedbackOrigin = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreFeedbackOrigin,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 export const openContentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
@@ -248,7 +269,7 @@ export const openContentBlockSchemaPreConversationMessage = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPreFeedbackOrigin,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -395,6 +416,12 @@ export const openAssistantMessageSchemaPreNotApplied = lazySchema(() =>
   }),
 );
 
+export const openAssistantMessageSchemaPreFeedbackOrigin = lazySchema(() =>
+  assistantMessageSchemaPreFeedbackOrigin.extend({
+    sender: openAgentSenderSchema,
+    blocks: z.array(openContentBlockSchemaPreFeedbackOrigin),
+  }),
+);
 export const openAssistantMessageSchema = lazySchema(() =>
   assistantMessageSchema.extend({
     sender: openAgentSenderSchema,
@@ -438,6 +465,12 @@ export const openMessageSchemaPreNotApplied = lazySchema(() =>
   ]),
 );
 
+export const openMessageSchemaPreFeedbackOrigin = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchema,
+    openAssistantMessageSchemaPreFeedbackOrigin,
+  ]),
+);
 export const openMessageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,

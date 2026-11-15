@@ -1934,6 +1934,45 @@ describe("useRenderedMessages", () => {
     expect(completedSegment.isStreaming).toBe(false);
   });
 
+  it("carries a bot row's feedback draft projection onto the rendered row and refreshes it when the stamp settles", () => {
+    const pending = {
+      source: {
+        hostId: "host-source",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        blockId: "block-1",
+      },
+      draft: {
+        category: "tool_problem",
+        toolName: "traycer_run_shell",
+        goal: "Restart a shell with a new working directory.",
+        observed: "The process kept the old directory.",
+        suggestion: null,
+        suggestDiagnostics: false,
+        state: "pending" as const,
+        decidedAt: null,
+        failureReason: null,
+      },
+    };
+    const sent = {
+      ...pending,
+      draft: { ...pending.draft, state: "sent" as const, decidedAt: 5000 },
+    };
+    const row: Message = {
+      ...assistantMessage("turn-1", 2000),
+      feedbackDraft: pending,
+    };
+
+    const driver = renderRenderedMessages({ messages: [row] });
+    expect(driver.result.current[0].feedbackDraft).toEqual(pending);
+
+    // Same row id and timestamp, only the mirrored stamp changed: the cached
+    // turn must not hide it.
+    driver.patch({ messages: [{ ...row, feedbackDraft: sent }] });
+
+    expect(driver.result.current[0].feedbackDraft).toEqual(sent);
+  });
+
   it("invalidates assistant turn cache when text changes without a timestamp change", () => {
     const partialAssistant: Message = {
       ...assistantMessage("turn-1", 2000),

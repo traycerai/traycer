@@ -534,6 +534,49 @@ describe("computeStableChatTimelineRows", () => {
     const afterResolved = computeStableChatTimelineRows([resolved], afterSame);
     expect(afterResolved.result[0]).toBe(resolved);
   });
+
+  // A feedback draft's decision is mirrored onto the bot's row as a new
+  // projection, the row's text as it was: the card must draw the outcome.
+  it("treats a mirrored decision on a bot row's feedback draft as a real change, and the same projection as no change at all", () => {
+    const source = {
+      hostId: "host-source",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      blockId: "block-1",
+    };
+    const draft = {
+      category: "tool_problem",
+      toolName: "traycer_run_shell",
+      goal: "Restart a shell with a new working directory.",
+      observed: "The process kept the old directory.",
+      suggestion: null,
+      suggestDiagnostics: false,
+      state: "pending" as const,
+      decidedAt: null,
+      failureReason: null,
+    };
+    const pending: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      feedbackDraft: { source, draft },
+    };
+    const state = computeStableChatTimelineRows(
+      [pending],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+    // The same projection on a rebuilt row object changes nothing.
+    const afterSame = computeStableChatTimelineRows([{ ...pending }], state);
+    expect(afterSame).toBe(state);
+
+    const sent: ChatMessage = {
+      ...pending,
+      feedbackDraft: {
+        source,
+        draft: { ...draft, state: "sent" as const, decidedAt: 5 },
+      },
+    };
+    const afterSent = computeStableChatTimelineRows([sent], afterSame);
+    expect(afterSent.result[0]).toBe(sent);
+  });
 });
 
 describe("didChatTimelineKeySequenceChange", () => {

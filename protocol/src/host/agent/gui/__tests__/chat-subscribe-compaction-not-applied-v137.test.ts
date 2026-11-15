@@ -319,7 +319,7 @@ function parseFrame(
 
 describe("chat.subscribe@1.37 registration", () => {
   it("binds chatSubscribeV137 above 1.36, frozen under the 1.44 head", () => {
-    expect(line.latestMinor).toBe(44);
+    expect(line.latestMinor).toBe(45);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);

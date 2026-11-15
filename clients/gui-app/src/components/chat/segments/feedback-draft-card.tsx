@@ -56,9 +56,12 @@ function feedbackDraftCategoryLabel(category: string): string {
 export type FeedbackDraftReadOnlyReason =
   | "no-chat"
   | "not-allowed"
-  | "host-unsupported";
+  | "host-unsupported"
+  | "source-unavailable";
 
 const READ_ONLY_COPY: Record<FeedbackDraftReadOnlyReason, string> = {
+  "source-unavailable":
+    "This feedback draft is unavailable. Try again when its computer is connected.",
   "no-chat": "Open this chat in the desktop app to send it.",
   "not-allowed": "Only someone who can act in this chat can send it.",
   "host-unsupported": "Update Traycer on this computer to send it.",
@@ -166,7 +169,7 @@ function liveReadOnlyReason(
   return null;
 }
 
-interface LiveDraftActions {
+export interface LiveDraftActions {
   readonly blockRef: FeedbackDraftBlockRef;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly readOnly: FeedbackDraftReadOnlyReason | null;
@@ -177,7 +180,7 @@ interface LiveDraftActions {
   ) => void;
 }
 
-function FeedbackDraftView(
+export function FeedbackDraftView(
   props: FeedbackDraftCardProps & { readonly live: LiveDraftActions | null },
 ): ReactNode {
   const { draft, live } = props;

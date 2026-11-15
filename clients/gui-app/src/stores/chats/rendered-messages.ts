@@ -16,6 +16,7 @@ import type {
   BotAnnouncement,
   BotQuestion,
   BotSurfaceReference,
+  BotFeedbackDraftProjection,
 } from "@traycer/protocol/persistence/epic/messages";
 import type { BotSendReceipt } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
@@ -2394,6 +2395,7 @@ interface AssistantTurnAccumulator {
   question: BotQuestion | null;
   /** What in a task a bot's post points at, with its resolution; `null` on every other turn. */
   surface: BotSurfaceReference | null;
+  feedbackDraft: BotFeedbackDraftProjection | null;
   /** The member's post a bot's direct reply answers; `null` on every other turn. */
   repliesTo: string | null;
   imageResolutionsByBlockId: Map<
@@ -2918,6 +2920,7 @@ function renderPersistedAssistantMessageTurn(
     stoppedSignature(stopped),
     questionSignature(acc.question),
     surfaceSignature(acc.surface),
+    JSON.stringify(acc.feedbackDraft),
   ].join(":");
   const cached = turnCache.get(turnKey);
   if (cached !== undefined && cached.cacheKey === cacheKey) {
@@ -2974,6 +2977,8 @@ function mergeBotRowFields(
   existing.options = existing.options ?? message.options ?? null;
   existing.question = existing.question ?? message.question ?? null;
   existing.surface = existing.surface ?? message.surface ?? null;
+  existing.feedbackDraft =
+    existing.feedbackDraft ?? message.feedbackDraft ?? null;
   existing.repliesTo = existing.repliesTo ?? message.repliesTo ?? null;
 }
 
@@ -3050,6 +3055,7 @@ function addAssistantMessageToAccumulator(
     options: null,
     question: null,
     surface: null,
+    feedbackDraft: null,
     repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
@@ -3851,6 +3857,9 @@ function renderAssistantTurnSlice(
     ...(input.acc.question === null ? {} : { question: input.acc.question }),
     // Only a bot post that points into a task carries it; absent everywhere else.
     ...(input.acc.surface === null ? {} : { surface: input.acc.surface }),
+    ...(input.acc.feedbackDraft === null
+      ? {}
+      : { feedbackDraft: input.acc.feedbackDraft }),
     // Only a bot's direct reply in its channel carries it; absent everywhere else.
     ...(input.acc.repliesTo === null ? {} : { repliesTo: input.acc.repliesTo }),
     // Assistant rows render no provider/model label above the bubble (it moved
@@ -4240,6 +4249,7 @@ function renderLiveAssistant(
     options: null,
     question: null,
     surface: null,
+    feedbackDraft: null,
     repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),

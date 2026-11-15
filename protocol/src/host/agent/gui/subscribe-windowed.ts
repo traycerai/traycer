@@ -10,6 +10,7 @@ import {
   openChatEventSchema,
   openChatEventSchemaPreProviderSelection,
   openMessageSchema,
+  openMessageSchemaPreFeedbackOrigin,
   openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreSlack,
   openMessageSchemaPreNotApplied,
@@ -21,7 +22,7 @@ import {
   openMessageSchemaPreDelivery,
 } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import {
-  messageSchema,
+  messageSchemaPreFeedbackOrigin,
   messageSchemaPreMessageDelivery,
   messageSchemaPreBrowser,
   messageSchemaPreFallback,
@@ -782,7 +783,7 @@ export const chatTranscriptWindowSchemaPreProviderSelection = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     /** Rows whose required record set is incomplete in this tail. */
     incompleteRowIds: z.array(z.string()).optional(),
-    messages: z.array(messageSchema),
+    messages: z.array(messageSchemaPreFeedbackOrigin),
     events: z.array(chatEventSchemaPreProviderSelection),
     /**
      * What the tail's rows render WITH, by row id - see
@@ -846,7 +847,7 @@ export const openChatTranscriptWindowSchemaPreCanvas = lazySchema(() =>
 export const openChatTranscriptWindowSchemaPreProviderSelection = lazySchema(
   () =>
     chatTranscriptWindowSchemaPreProviderSelection.extend({
-      messages: z.array(openMessageSchema),
+      messages: z.array(openMessageSchemaPreFeedbackOrigin),
       events: z.array(openChatEventSchemaPreProviderSelection),
     }),
 );
@@ -858,9 +859,14 @@ export const openChatTranscriptWindowSchemaPreFeedbackDraft = lazySchema(() =>
   }),
 );
 /** Provider dispatch provenance first rides chat.subscribe@1.44. */
-export const openChatTranscriptWindowSchema = lazySchema(() =>
+export const openChatTranscriptWindowSchemaPreFeedbackOrigin = lazySchema(() =>
   openChatTranscriptWindowSchemaPreProviderSelection.extend({
     events: z.array(openChatEventSchema),
+  }),
+);
+export const openChatTranscriptWindowSchema = lazySchema(() =>
+  openChatTranscriptWindowSchemaPreFeedbackOrigin.extend({
+    messages: z.array(openMessageSchema),
   }),
 );
 export type OpenChatTranscriptWindow = z.infer<
@@ -1174,7 +1180,7 @@ export const chatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
      * parallel array to `rowIds`. A turn's records appear once however many of
      * its slices are in the span.
      */
-    messages: z.array(messageSchema),
+    messages: z.array(messageSchemaPreFeedbackOrigin),
     events: z.array(chatEventSchemaPreProviderSelection),
     /**
      * What the served rows render WITH, by row id.
@@ -1274,14 +1280,19 @@ export const openChatRangeResponseSchemaPreCanvas = lazySchema(() =>
  */
 export const openChatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
   chatRangeResponseSchemaPreProviderSelection.extend({
-    messages: z.array(openMessageSchema),
+    messages: z.array(openMessageSchemaPreFeedbackOrigin),
     events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 /** Provider dispatch provenance first rides chat.subscribe@1.44. */
-export const openChatRangeResponseSchema = lazySchema(() =>
+export const openChatRangeResponseSchemaPreFeedbackOrigin = lazySchema(() =>
   openChatRangeResponseSchemaPreProviderSelection.extend({
     events: z.array(openChatEventSchema),
+  }),
+);
+export const openChatRangeResponseSchema = lazySchema(() =>
+  openChatRangeResponseSchemaPreFeedbackOrigin.extend({
+    messages: z.array(openMessageSchema),
   }),
 );
 export type OpenChatRangeResponse = z.infer<typeof openChatRangeResponseSchema>;

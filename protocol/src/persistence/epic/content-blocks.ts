@@ -976,7 +976,7 @@ export type ToolCallFeedbackDraftStamp = z.infer<
   typeof toolCallFeedbackDraftStampSchema
 >;
 
-export const toolCallBlockSchema = lazySchema(() =>
+export const toolCallBlockSchemaPreFeedbackOrigin = lazySchema(() =>
   z.object({
     ...baseBlockFields,
     status: actionBlockStatus,
@@ -1094,6 +1094,34 @@ export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
     mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
   }),
 );
+/** Owner-verified destination captured before a bot accepts a feedback draft. */
+export const toolCallFeedbackDraftOriginSchema = lazySchema(() => {
+  const fields = {
+    botId: z.string().min(1).max(255),
+    hostEpoch: z.number().int().nonnegative(),
+    conversationId: z.string().min(1).max(255),
+    initiatingMessageId: z.string().min(1).max(255),
+    initiatingRequestId: z.string().min(1).max(255),
+  };
+  return z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("channel"), ...fields }),
+    z.strictObject({
+      kind: z.literal("thread"),
+      ...fields,
+      channelId: z.string().min(1).max(255),
+    }),
+  ]);
+});
+export type ToolCallFeedbackDraftOrigin = z.infer<
+  typeof toolCallFeedbackDraftOriginSchema
+>;
+
+export const toolCallBlockSchema = lazySchema(() =>
+  toolCallBlockSchemaPreFeedbackOrigin.extend({
+    feedbackDraftOrigin: toolCallFeedbackDraftOriginSchema.optional(),
+  }),
+);
+
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
 // Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.37` through
@@ -2810,6 +2838,25 @@ export const contentBlockSchemaPreHtml = lazySchema(() =>
   ]),
 );
 
+export const contentBlockSchemaPreFeedbackOrigin = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreFeedbackOrigin,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 export const contentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchema,

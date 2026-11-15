@@ -1,3 +1,4 @@
+import { BotFeedbackDraftCard } from "@/components/bots/bot-feedback-draft-card";
 import {
   Fragment,
   useEffect,
@@ -582,13 +583,7 @@ function BotRow(props: {
       ) : (
         <BotRowBody announcement={announcement} body={body} />
       )}
-      {message.surface === undefined ? null : (
-        <BotSurfaceCard
-          messageId={message.persistentMessageId}
-          surface={message.surface}
-          postText={message.content}
-        />
-      )}
+      <BotRowCards message={message} />
       {message.options === undefined || questions !== null ? null : (
         <ReplyOptions
           options={message.options}
@@ -677,6 +672,27 @@ function BotRowBody(props: {
     <BotAnnouncementBody announcement={announcement}>
       {body}
     </BotAnnouncementBody>
+  );
+}
+
+function BotRowCards(props: { readonly message: ChatMessageModel }): ReactNode {
+  const { message } = props;
+  return (
+    <>
+      {message.feedbackDraft === undefined ? null : (
+        <BotFeedbackDraftCard
+          key={`${message.feedbackDraft.source.hostId}:${message.feedbackDraft.source.epicId}:${message.feedbackDraft.source.chatId}:${message.feedbackDraft.source.blockId}`}
+          {...message.feedbackDraft}
+        />
+      )}
+      {message.surface === undefined ? null : (
+        <BotSurfaceCard
+          messageId={message.persistentMessageId}
+          surface={message.surface}
+          postText={message.content}
+        />
+      )}
+    </>
   );
 }
 

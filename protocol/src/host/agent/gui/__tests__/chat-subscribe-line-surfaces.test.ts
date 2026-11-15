@@ -119,9 +119,10 @@ const CLAUDE_PARITY_MINOR = 20;
 // message, which older lines receive as a plain user row, and lets a user row
 // say `spoken` (pinned by `chat-subscribe-spoken-v143.test.ts`), and names the
 // member's message on a resume divider's trigger (pinned below). `1.44` adds
-// provider selection provenance. Every threshold above still reads `>=`
+// provider selection provenance. `1.45` adds a bot's feedback draft origin and
+// its channel row's projection (pinned below). Every threshold above still reads `>=`
 // against the live line.
-const LIVE_MINOR = 44;
+const LIVE_MINOR = 45;
 // `1.40`: `queueSteerNow.restartConfirmed` on the client frames and
 // `actionAck.steerRestartReasons` on the server frames.
 const STEER_RESTART_CONFIRM_MINOR = 40;
@@ -178,6 +179,14 @@ const DELIVERY_NEEDLES = ['"agentMessageDelivery":'];
 // `1.42`: the tool-call `feedbackDraft` stamp, server frames only.
 const FEEDBACK_DRAFT_MINOR = 42;
 const FEEDBACK_DRAFT_NEEDLES = ['"feedbackDraft":'];
+// `1.45`: the host-owned `feedbackDraftOrigin` on the tool call and the
+// channel row's `feedbackDraft` projection (its source tuple), server frames
+// only. All or none: a line with the card and no origin could not repair it.
+const FEEDBACK_DRAFT_ORIGIN_MINOR = 45;
+const FEEDBACK_DRAFT_ORIGIN_NEEDLES = [
+  '"feedbackDraftOrigin":',
+  '"initiatingRequestId":',
+];
 // `1.43`: the member's message a bot conversation delivery carried, on a
 // resume divider's trigger, server frames only.
 const RESUME_CONVERSATION_MESSAGE_MINOR = 43;
@@ -426,14 +435,14 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.44 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.45 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
       21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
-      39, 40, 41, 42, 43, 44,
+      39, 40, 41, 42, 43, 44, 45,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -494,6 +503,19 @@ describe("chat.subscribe line surfaces", () => {
         expect(
           FEEDBACK_DRAFT_NEEDLES.filter((needle) => text.includes(needle)),
         ).toEqual(carriesFeedbackDraft ? FEEDBACK_DRAFT_NEEDLES : []);
+      });
+
+      const carriesFeedbackDraftOrigin = minor >= FEEDBACK_DRAFT_ORIGIN_MINOR;
+
+      it(`server frames ${carriesFeedbackDraftOrigin ? "carry" : "hold back"} the feedback draft origin`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        expect(
+          FEEDBACK_DRAFT_ORIGIN_NEEDLES.filter((needle) =>
+            text.includes(needle),
+          ),
+        ).toEqual(
+          carriesFeedbackDraftOrigin ? FEEDBACK_DRAFT_ORIGIN_NEEDLES : [],
+        );
       });
 
       const carriesResumeConversationMessage =

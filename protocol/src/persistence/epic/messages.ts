@@ -1,7 +1,9 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
+  toolCallFeedbackDraftStampSchema,
   contentBlockSchema,
+  contentBlockSchemaPreFeedbackOrigin,
   contentBlockSchemaPreHtml,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
@@ -1013,7 +1015,7 @@ export const assistantMessageSchemaV18 = lazySchema(() =>
  */
 export const assistantMessageSchemaPreMultiSelect = lazySchema(() =>
   assistantMessageSchemaV18.extend({
-    blocks: z.array(contentBlockSchema),
+    blocks: z.array(contentBlockSchemaPreFeedbackOrigin),
     /**
      * This attempt's own profile snapshot - see {@link assistantTurnProfileSchema}
      * for what it records and why it is stamped at row creation.
@@ -1083,12 +1085,41 @@ export const assistantMessageSchemaPreMultiSelect = lazySchema(() =>
     surface: botSurfaceReferenceSchema.optional(),
   }),
 );
-export const assistantMessageSchema = lazySchema(() =>
+export const assistantMessageSchemaPreFeedbackOrigin = lazySchema(() =>
   assistantMessageSchemaPreMultiSelect.extend({
     /** The row's questions, each of which may say `multiSelect` (`chat.subscribe@1.43`). */
     question: botQuestionSchema.optional(),
   }),
 );
+/** A bot post mirrors its original draft; decisions still address the source block. */
+export const botFeedbackDraftProjectionSchema = lazySchema(() =>
+  z.object({
+    source: z.object({
+      hostId: z.string().min(1).max(255),
+      epicId: z.string().min(1).max(255),
+      chatId: z.string().min(1).max(255),
+      blockId: z.string().min(1).max(255),
+    }),
+    draft: toolCallFeedbackDraftStampSchema,
+  }),
+);
+export type BotFeedbackDraftProjection = z.infer<
+  typeof botFeedbackDraftProjectionSchema
+>;
+
+export const assistantMessageSchema = lazySchema(() =>
+  assistantMessageSchemaPreFeedbackOrigin.extend({
+    blocks: z.array(contentBlockSchema),
+    feedbackDraft: botFeedbackDraftProjectionSchema.optional(),
+  }),
+);
+export const messageSchemaPreFeedbackOrigin = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchema,
+    assistantMessageSchemaPreFeedbackOrigin,
+  ]),
+);
+
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
 export const messageSchema = lazySchema(() =>
