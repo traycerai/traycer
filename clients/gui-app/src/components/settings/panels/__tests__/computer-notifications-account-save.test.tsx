@@ -243,20 +243,29 @@ function renderComputerTab(client: HostClient<HostRpcRegistry>) {
   });
 }
 
-async function convertCommandHookToHttp(): Promise<void> {
-  const row = await screen.findByTestId(
-    "notification-hook-row-convert-this-hook",
-  );
+async function openCommandHookEditor(hookId: string): Promise<HTMLElement> {
+  const row = await screen.findByTestId(`notification-hook-row-${hookId}`);
   fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
-  const dialog = await screen.findByRole("dialog");
+  return screen.findByRole("dialog");
+}
+
+async function fillCommandHookEditorAsHttp(
+  dialog: HTMLElement,
+  url: string,
+): Promise<void> {
   fireEvent.click(within(dialog).getByRole("combobox", { name: "Action" }));
   fireEvent.click(await screen.findByRole("option", { name: "POST to a URL" }));
   fireEvent.change(within(dialog).getByLabelText("URL"), {
-    target: { value: "https://hooks.example/converted" },
+    target: { value: url },
   });
   fireEvent.change(within(dialog).getByLabelText("Headers"), {
     target: { value: "authorization: Bearer literal-value" },
   });
+}
+
+async function convertCommandHookToHttp(): Promise<void> {
+  const dialog = await openCommandHookEditor("convert-this-hook");
+  await fillCommandHookEditorAsHttp(dialog, "https://hooks.example/converted");
   fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
 }
 
@@ -504,6 +513,7 @@ describe("computer hook saves and the host's answered account part", () => {
         }),
       ).toHaveProperty("disabled", false),
     );
+    expect(within(screen.getByRole("dialog")).queryByRole("alert")).toBeNull();
 
     fireEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", {
@@ -576,6 +586,60 @@ describe("computer hook saves and the host's answered account part", () => {
       within(screen.getByRole("dialog")).getByLabelText("Name"),
     ).toHaveProperty("value", "Draft B");
     expect(accountCloud.requests).toEqual([]);
+  });
+
+  it("keeps Delete locked while its account save is pending and retries its opening after failure settles", async () => {
+    const { client, saves } = makeHostClient([], {
+      initialHooks: [commandHooks[0]],
+    });
+    accountCloud.deferPut = true;
+    renderComputerTab(client);
+
+    const row = await screen.findByTestId(
+      "notification-hook-row-convert-this-hook",
+    );
+    fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(accountCloud.pendingPutResolve).not.toBeNull());
+    expect(saves).toHaveLength(1);
+    expect(saves[0]?.configurationRevision).toBe("host-rev-7");
+    expect(saves[0]?.hooks).toEqual([]);
+    expect(within(dialog).getByTestId("confirm-cancel")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(within(dialog).getByTestId("confirm-action")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    fireEvent.click(within(dialog).getByTestId("confirm-cancel"));
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBe(dialog);
+
+    settleDeferredAccountPut(503);
+    await waitFor(() =>
+      expect(within(dialog).getByTestId("confirm-cancel")).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
+    expect(within(dialog).getByTestId("confirm-action")).toHaveProperty(
+      "disabled",
+      false,
+    );
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1]?.configurationRevision).toBe("host-rev-8");
+    expect(saves[1]?.hooks).toEqual([]);
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+    );
+    expect(
+      accountCloud.requests.filter((request) => request.method === "PUT"),
+    ).toHaveLength(2);
+    expect(accountCloud.requests[1]?.body).toEqual({ hooks: [], revision: 17 });
   });
 
   it("sends oversized host-answered HTTP hooks unchanged and treats authn's 400 as a failed save", async () => {
