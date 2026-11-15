@@ -243,29 +243,20 @@ function renderComputerTab(client: HostClient<HostRpcRegistry>) {
   });
 }
 
-async function openCommandHookEditor(hookId: string): Promise<HTMLElement> {
-  const row = await screen.findByTestId(`notification-hook-row-${hookId}`);
+async function convertCommandHookToHttp(): Promise<void> {
+  const row = await screen.findByTestId(
+    "notification-hook-row-convert-this-hook",
+  );
   fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
-  return screen.findByRole("dialog");
-}
-
-async function fillCommandHookEditorAsHttp(
-  dialog: HTMLElement,
-  url: string,
-): Promise<void> {
+  const dialog = await screen.findByRole("dialog");
   fireEvent.click(within(dialog).getByRole("combobox", { name: "Action" }));
   fireEvent.click(await screen.findByRole("option", { name: "POST to a URL" }));
   fireEvent.change(within(dialog).getByLabelText("URL"), {
-    target: { value: url },
+    target: { value: "https://hooks.example/converted" },
   });
   fireEvent.change(within(dialog).getByLabelText("Headers"), {
     target: { value: "authorization: Bearer literal-value" },
   });
-}
-
-async function convertCommandHookToHttp(): Promise<void> {
-  const dialog = await openCommandHookEditor("convert-this-hook");
-  await fillCommandHookEditorAsHttp(dialog, "https://hooks.example/converted");
   fireEvent.click(within(dialog).getByRole("button", { name: "Save hook" }));
 }
 

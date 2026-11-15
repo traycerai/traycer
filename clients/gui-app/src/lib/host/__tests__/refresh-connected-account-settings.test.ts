@@ -55,8 +55,6 @@ function deferred<T>() {
 function remoteIdentity(userId: string): RemoteSessionIdentity {
   const hostPublicKey = remoteHost.publicKey;
   const relayAttachUrl = remoteHost.websocketUrl;
-  if (hostPublicKey === null || relayAttachUrl === null)
-    throw new Error("The remote fixture needs a public key and relay address.");
   return {
     hostId: remoteHost.hostId,
     userId,
@@ -86,9 +84,11 @@ function readyRemoteSession(): FakeRemoteSession {
     isClosed: () => closed,
     isReady: () => !closed,
     isSilentFor: () => false,
-    sendUnary: vi.fn(async () => {
-      throw new Error("remote refresh response is not used by this fake");
-    }),
+    sendUnary: vi.fn(() =>
+      Promise.reject(
+        new Error("remote refresh response is not used by this fake"),
+      ),
+    ),
     forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("refresh must not open a stream subscription");
@@ -172,6 +172,7 @@ describe("refreshConnectedAccountSettings", () => {
     const requestedHosts: string[] = [];
     const identity = remoteIdentity("viewer-1");
     const session = readyRemoteSession();
+    const sendUnary = vi.spyOn(session, "sendUnary");
     const owner = acquireRemoteSession(
       identity,
       remoteSessionPolicy,
@@ -202,7 +203,7 @@ describe("refreshConnectedAccountSettings", () => {
 
     expect(requestedHosts).toEqual([]);
     expect(requestIds).toEqual([]);
-    expect(session.sendUnary).not.toHaveBeenCalled();
+    expect(sendUnary).not.toHaveBeenCalled();
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
   });
 
@@ -213,11 +214,12 @@ describe("refreshConnectedAccountSettings", () => {
     const session = readyRemoteSession();
     const sendStarted = deferred<void>();
     const sendGate = deferred<void>();
-    session.sendUnary = vi.fn(async () => {
+    const sendUnary = vi.fn(async () => {
       sendStarted.resolve();
       await sendGate.promise;
       throw new Error("remote refresh response is not used by this fake");
     });
+    session.sendUnary = sendUnary;
     const owner = acquireRemoteSession(
       identity,
       remoteSessionPolicy,
@@ -226,7 +228,7 @@ describe("refreshConnectedAccountSettings", () => {
     const entries = [remoteHost];
     const binding = makeBinding(
       entries,
-      async () => entries,
+      () => Promise.resolve(entries),
       requestIds,
       requestedHosts,
     );
@@ -247,7 +249,7 @@ describe("refreshConnectedAccountSettings", () => {
     sendGate.resolve();
     await refresh;
 
-    expect(session.sendUnary).toHaveBeenCalledTimes(1);
+    expect(sendUnary).toHaveBeenCalledTimes(1);
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
     expect(requestedHosts).toEqual([]);
     expect(requestIds).toEqual([]);
@@ -258,6 +260,7 @@ describe("refreshConnectedAccountSettings", () => {
     const requestedHosts: string[] = [];
     const identity = remoteIdentity("another-viewer");
     const session = readyRemoteSession();
+    const sendUnary = vi.spyOn(session, "sendUnary");
     const owner = acquireRemoteSession(
       identity,
       remoteSessionPolicy,
@@ -266,7 +269,7 @@ describe("refreshConnectedAccountSettings", () => {
     const entries = [remoteHost];
     const binding = makeBinding(
       entries,
-      async () => entries,
+      () => Promise.resolve(entries),
       requestIds,
       requestedHosts,
     );
@@ -278,7 +281,7 @@ describe("refreshConnectedAccountSettings", () => {
       () => true,
     );
 
-    expect(session.sendUnary).not.toHaveBeenCalled();
+    expect(sendUnary).not.toHaveBeenCalled();
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
     expect(requestedHosts).toEqual([]);
