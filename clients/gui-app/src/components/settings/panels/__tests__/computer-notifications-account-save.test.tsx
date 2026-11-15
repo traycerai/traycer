@@ -37,6 +37,14 @@ const accountCloud = vi.hoisted(() => ({
   signInId: "account-a",
   bearerToken: "test-bearer",
 }));
+const notificationToast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warning: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({ toast: notificationToast }));
 
 vi.mock("@/hooks/environment/use-environment-cloud", () => ({
   useEnvironmentCloud: () => () => {
@@ -158,6 +166,10 @@ afterEach(() => {
   accountCloud.originSignInActive = true;
   accountCloud.signInId = "account-a";
   accountCloud.bearerToken = "test-bearer";
+  notificationToast.success.mockClear();
+  notificationToast.error.mockClear();
+  notificationToast.info.mockClear();
+  notificationToast.warning.mockClear();
   useAuthStore.setState({ status: "signed-out" });
 });
 
@@ -171,6 +183,7 @@ function makeHostClient(
   readonly client: HostClient<HostRpcRegistry>;
   readonly saves: HostHooksSaveRequest[];
   readonly getStatus: () => HostHooksStatus;
+  readonly getStatusReadCount: () => number;
   readonly resolvePendingHostSave: () => void;
   readonly rejectPendingHostSave: () => void;
 } {
@@ -186,6 +199,7 @@ function makeHostClient(
     pendingRemovalNotices: [],
   };
   let revision = 7;
+  let statusReadCount = 0;
   const registry = hostRpcRegistry;
   const spine = new HostClient<HostRpcRegistry>({
     registry,
@@ -198,7 +212,10 @@ function makeHostClient(
       handlers: {
         "host.notifications.getLongTurnAlert": () => ({ thresholdMs: null }),
         "host.notifications.setLongTurnAlert": (request) => request,
-        "host.notificationHooks.status": () => status,
+        "host.notificationHooks.status": () => {
+          statusReadCount += 1;
+          return status;
+        },
         "host.notificationHooks.test": () => ({
           outcome: "ok",
           detail: "delivered",
@@ -242,6 +259,7 @@ function makeHostClient(
     client: spine.createRequester(mockLocalHostEntry),
     saves,
     getStatus: () => status,
+    getStatusReadCount: () => statusReadCount,
     resolvePendingHostSave: () => {
       if (resolvePendingHostSave === null)
         throw new Error("No deferred host save is pending.");
@@ -729,16 +747,18 @@ describe("computer hook saves and the host's answered account part", () => {
     expect(within(screen.getByRole("dialog")).queryByRole("alert")).toBeNull();
   });
 
-  it("shows a failed Delete in its confirmation and not in a new Delete opening", async () => {
-    const { client } = makeHostClient([hostAnsweredHttpHook], {
-      initialHooks: commandHooks,
-    });
+  it("closes a failed Delete and shows the refreshed refusal under the list", async () => {
+    const { client, saves, getStatusReadCount } = makeHostClient(
+      [hostAnsweredHttpHook],
+      { initialHooks: commandHooks },
+    );
     accountCloud.putFailureStatus = 503;
     renderComputerTab(client);
 
     const firstRow = await screen.findByTestId(
       "notification-hook-row-convert-this-hook",
     );
+    const statusReadsBeforeFailure = getStatusReadCount();
     fireEvent.click(within(firstRow).getByRole("button", { name: "Delete" }));
     const firstDialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(within(firstDialog).queryByRole("alert")).toBeNull();
@@ -746,29 +766,25 @@ describe("computer hook saves and the host's answered account part", () => {
       within(firstDialog).getByRole("button", { name: "Delete" }),
     );
 
-    expect(
-      (await within(firstDialog).findByRole("alert")).textContent,
-    ).toContain(
-      "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
-    );
-    fireEvent.click(within(firstDialog).getByTestId("confirm-cancel"));
     await waitFor(() =>
       expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
     );
-    const remainingRow = await screen.findByTestId(
-      "notification-hook-row-keep-local-hook",
+    const manager = screen.getByTestId("notification-hooks-manager");
+    expect((await within(manager).findByRole("alert")).textContent).toBe(
+      "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
     );
-    fireEvent.click(
-      within(remainingRow).getByRole("button", { name: "Delete" }),
+    await waitFor(() =>
+      expect(getStatusReadCount()).toBeGreaterThan(statusReadsBeforeFailure),
     );
-    const secondDialog = await screen.findByTestId(
-      "confirm-destructive-dialog",
-    );
-    expect(within(secondDialog).queryByRole("alert")).toBeNull();
+    expect(saves).toHaveLength(1);
+    expect(
+      accountCloud.requests.filter((request) => request.method === "PUT"),
+    ).toHaveLength(1);
+    expect(notificationToast.success).not.toHaveBeenCalled();
   });
 
-  it("keeps Delete locked while its account save is pending and retries its opening after failure settles", async () => {
-    const { client, saves } = makeHostClient([], {
+  it("keeps Delete locked while its account save is pending and closes when it fails", async () => {
+    const { client, saves, getStatusReadCount } = makeHostClient([], {
       initialHooks: [commandHooks[0]],
     });
     accountCloud.deferPut = true;
@@ -797,29 +813,58 @@ describe("computer hook saves and the host's answered account part", () => {
     fireEvent.click(within(dialog).getByTestId("confirm-cancel"));
     expect(screen.getByTestId("confirm-destructive-dialog")).toBe(dialog);
 
+    const statusReadsBeforeFailure = getStatusReadCount();
     settleDeferredAccountPut(503);
-    await waitFor(() =>
-      expect(within(dialog).getByTestId("confirm-cancel")).toHaveProperty(
-        "disabled",
-        false,
-      ),
-    );
-    expect(within(dialog).getByTestId("confirm-action")).toHaveProperty(
-      "disabled",
-      false,
-    );
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(saves).toHaveLength(2));
-    expect(saves[1]?.configurationRevision).toBe("host-rev-8");
-    expect(saves[1]?.hooks).toEqual([]);
     await waitFor(() =>
       expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
     );
+    const manager = screen.getByTestId("notification-hooks-manager");
+    expect((await within(manager).findByRole("alert")).textContent).toBe(
+      "Cloud service is temporarily unavailable. Please try again shortly. Review the refreshed hooks before saving again.",
+    );
+    await waitFor(() =>
+      expect(getStatusReadCount()).toBeGreaterThan(statusReadsBeforeFailure),
+    );
+    expect(saves).toHaveLength(1);
     expect(
       accountCloud.requests.filter((request) => request.method === "PUT"),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(accountCloud.requests[1]?.body).toEqual({ hooks: [], revision: 17 });
+    expect(notificationToast.success).not.toHaveBeenCalled();
+  });
+
+  it("closes a failed host Delete before the account PUT and shows the refusal under the list", async () => {
+    const { client, saves, rejectPendingHostSave, getStatusReadCount } =
+      makeHostClient(null, {
+        initialHooks: [commandHooks[0]],
+        deferFirstSave: true,
+      });
+    renderComputerTab(client);
+
+    const row = await screen.findByTestId(
+      "notification-hook-row-convert-this-hook",
+    );
+    const statusReadsBeforeFailure = getStatusReadCount();
+    fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(accountCloud.requests).toEqual([]);
+
+    rejectPendingHostSave();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+    );
+    const manager = screen.getByTestId("notification-hooks-manager");
+    expect((await within(manager).findByRole("alert")).textContent).toBe(
+      "The host save failed. Review the refreshed hooks before saving again.",
+    );
+    await waitFor(() =>
+      expect(getStatusReadCount()).toBeGreaterThan(statusReadsBeforeFailure),
+    );
+    expect(saves).toHaveLength(1);
+    expect(accountCloud.requests).toEqual([]);
+    expect(notificationToast.success).not.toHaveBeenCalled();
   });
 
   it("sends oversized host-answered HTTP hooks unchanged and treats authn's 400 as a failed save", async () => {
