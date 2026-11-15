@@ -197,6 +197,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  resetHostDirectoryRows();
   environmentListClientHosts.length = 0;
   closeSandboxDetails();
   useAuthStore.setState({
