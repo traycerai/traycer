@@ -394,3 +394,117 @@ describe("<BotTabSurface /> doorbell rings that must not open the bot", () => {
     expect(opens()).toBe(before);
   });
 });
+
+describe("<BotTabSurface /> asks a transiently failed open again by itself", () => {
+  beforeEach(() => {
+    // Only the timers the tab's backoff uses; the query client's own
+    // scheduling and the doorbell stay real.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(Math, "random").mockReturnValue(1);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const advance = (ms: number): Promise<void> =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  /** Steps the clock until the tab asks again; returns how long that took. */
+  async function untilAsked(): Promise<number> {
+    const before = opens();
+    let elapsed = 0;
+    while (opens() === before && elapsed < 120_000) {
+      await advance(500);
+      elapsed += 500;
+    }
+    expect(opens()).toBeGreaterThan(before);
+    return elapsed;
+  }
+
+  it("asks again after a wait that lengthens with each failure, and shows the channel when one succeeds", async () => {
+    doorbellHosts.unsupportedHosts.add(TAB_HOST);
+    failTransiently();
+    render(tree(true));
+    expectReconnecting();
+
+    const mounted = opens();
+    await advance(2_499);
+    expect(opens()).toBe(mounted);
+    expectReconnecting();
+
+    const first = await untilAsked();
+    expectReconnecting();
+    const second = await untilAsked();
+    expect(second).toBeGreaterThan(first);
+    expectReconnecting();
+
+    mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
+    await untilAsked();
+
+    expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
+    expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+    const settled = opens();
+    await advance(120_000);
+    expect(opens()).toBe(settled);
+  });
+
+  it("never asks again after a failure that is not a cloud failure, and keeps the error with Retry", async () => {
+    mocks.state.openResult = {
+      kind: "failure",
+      error: hostFailure("RPC_ERROR", "bot.open"),
+    };
+    render(tree(true));
+    const mounted = opens();
+
+    await advance(120_000);
+
+    expect(opens()).toBe(mounted);
+    const alert = screen.getByTestId("bot-tab-error");
+    expect(within(alert).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
+  });
+
+  it("does not ask again on its own while the pane is hidden, and opens when it comes into view", async () => {
+    mocks.state.paneVisible = false;
+    failTransiently();
+    const view = render(tree(true));
+    expectReconnecting();
+    const mounted = opens();
+
+    await advance(120_000);
+    expect(opens()).toBe(mounted);
+
+    mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
+    mocks.state.paneVisible = true;
+    view.rerender(tree(true));
+
+    expect(opens()).toBeGreaterThan(mounted);
+    expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+  });
+
+  it("asks again by itself when a re-open fails above the held channel, and clears the notice when it succeeds", async () => {
+    doorbellHosts.unsupportedHosts.add(TAB_HOST);
+    const view = render(tree(true));
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+
+    failTransiently();
+    mocks.state.paneVisible = false;
+    view.rerender(tree(true));
+    mocks.state.paneVisible = true;
+    view.rerender(tree(true));
+    expectReconnecting();
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+
+    mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
+    await untilAsked();
+
+    expect(screen.queryByTestId("bot-tab-reconnecting")).toBeNull();
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+  });
+});

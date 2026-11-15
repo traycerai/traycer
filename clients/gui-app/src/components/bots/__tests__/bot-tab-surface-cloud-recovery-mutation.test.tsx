@@ -844,3 +844,40 @@ describe("<BotTabSurface /> a ring around the start of an open", () => {
     expect(opens).toHaveLength(served + 1);
   });
 });
+
+describe("<BotTabSurface /> the tab's own re-ask while a ring's re-open is in flight", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout"],
+      shouldAdvanceTime: true,
+    });
+    notifyManager.setScheduler((notify) => {
+      queueMicrotask(notify);
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends one bot.open, not two, when the backoff would have fired during the ring's open", async () => {
+    render(tree());
+    const mounted = await failMountOpensUntilReconnecting();
+    await waitForNoOpenInFlight();
+    const asked = opens.length;
+    expect(mounted).toBeGreaterThan(0);
+
+    await ringAsking(asked + 1);
+    const submitted = openSubmissions;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+
+    expect(openSubmissions).toBe(submitted);
+    expect(opens).toHaveLength(asked + 1);
+
+    await settle(heldOpen(asked), (open) => open.resolve(SERVING));
+    await waitFor(() => expectChannelOnly());
+    expect(opens).toHaveLength(asked + 1);
+  });
+});

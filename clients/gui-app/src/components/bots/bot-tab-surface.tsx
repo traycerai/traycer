@@ -167,6 +167,7 @@ import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
   botTabOpenState,
+  botTabReopenDelayMs,
   type BotTabOpenFailure,
   type BotTabPausedReason,
 } from "@/components/bots/bot-tab-open-state";
@@ -775,20 +776,26 @@ function BotTabBody(props: {
     useBotOpenMutation(client);
   const [answer, setAnswer] = useState<BotOpenResponse | undefined>(undefined);
   const [openError, setOpenError] = useState<BotTabOpenFailure | null>(null);
+  // Transient failures in a row, which set the wait before the tab's own
+  // re-ask below.
+  const transientFailures = useRef(0);
   const sendOpen = useCallback(
     () =>
       openBot(
         { botId },
         {
           onSuccess: (response) => {
+            transientFailures.current = 0;
             setAnswer(response);
             setOpenError(null);
           },
-          onError: (error) =>
-            setOpenError({
-              message: error.message,
-              transient: isTransientCloudFailure(error),
-            }),
+          onError: (error) => {
+            const transient = isTransientCloudFailure(error);
+            transientFailures.current = transient
+              ? transientFailures.current + 1
+              : 0;
+            setOpenError({ message: error.message, transient });
+          },
         },
       ),
     [botId, openBot],
@@ -869,6 +876,22 @@ function BotTabBody(props: {
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
+  // A transient failure is also asked again on the tab's own backoff, since
+  // the host owes no ring for a lone 5xx. Only while the surface and the
+  // window are in view, by the rule above; coming back into view re-opens.
+  // Each failure is a new `openError`, so each arms its own wait.
+  useEffect(() => {
+    if (openError?.transient !== true || openPending || !paneVisible) {
+      return undefined;
+    }
+    const timer = setTimeout(
+      () => {
+        if (document.visibilityState === "visible") reopen();
+      },
+      botTabReopenDelayMs(transientFailures.current, () => Math.random()),
+    );
+    return () => clearTimeout(timer);
+  }, [openError, openPending, paneVisible, reopen]);
 
   if (openState.kind === "failed") {
     return threadsShown ? null : (
@@ -1887,10 +1910,11 @@ function ReopenFailureNotice(props: {
 }
 
 /**
- * An open that failed only because the host could not reach the cloud, which
- * that host's cloud-recovery doorbell asks again: no technical text. Retry
- * stays, since a host without the doorbell never rings, and is disabled while
- * an open is in flight, so a second press adds no second open.
+ * An open that failed only because the host got no verdict from the cloud,
+ * which that host's cloud-recovery doorbell and the tab's own backoff ask
+ * again: no technical text. Retry stays, to ask at once rather than after
+ * the wait, and is disabled while an open is in flight, so a second press
+ * adds no second open.
  */
 function OpenReconnecting(props: {
   readonly onRetry: () => void;
