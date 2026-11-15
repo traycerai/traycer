@@ -58,12 +58,18 @@ type ReserveStatGate = {
   wait: Promise<void>;
 };
 
+type WriteRecord = {
+  readonly path: string;
+  readonly options: Parameters<typeof fsPromises.writeFile>[2];
+};
+
 // Everything the filesystem mock records or arms for one case. The mock
 // resolves the case from the path of each call and keeps that object for the
 // whole operation, so a completion that lands after its case ended reaches
 // that case's own, no longer read, object and no later case's.
 type CaseMock = {
   readonly directory: string;
+  readonly writes: WriteRecord[];
   readonly lockPath: string;
   readonly faults: Fault[];
   onClearPressure: (() => void) | null;
@@ -90,6 +96,7 @@ function createCaseMock(directory: string): CaseMock {
   const faults: Fault[] = [];
   return {
     directory,
+    writes: [],
     lockPath: join(directory, "credentials.lock"),
     faults,
     onClearPressure: null,
@@ -255,6 +262,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       const path = String(args[0]);
       const mock = ownerOf(path);
       if (mock === null) return actual.writeFile(...args);
+      mock.writes.push({ path, options: args[2] });
       if (path.includes(".space-check.")) {
         mock.onSpaceCheckWrite?.();
       }
@@ -374,6 +382,15 @@ function reserveCounters(mock: typeof zeroed): typeof zeroed {
     reserveWritesInFlight: mock.reserveWritesInFlight,
     mkdirCalls: mock.mkdirCalls,
   };
+}
+
+function isFlushWrite(options: WriteRecord["options"]): boolean {
+  return (
+    options != null &&
+    typeof options === "object" &&
+    "flush" in options &&
+    options.flush === true
+  );
 }
 
 // The lock wait the desktop and CLI stores pass in production.
@@ -551,14 +568,13 @@ describe("credentials store disk pressure", () => {
       );
     }
     const scanFinished = settleReserveScan(16);
-    const writeSpy = vi.mocked(fsPromises.writeFile);
-    writeSpy.mockClear();
+    filesystemMock.writes.length = 0;
 
     makeStore(refreshOk);
     await scanFinished;
 
     expect(filesystemMock.mkdirCalls).toBe(0);
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(filesystemMock.writes).toHaveLength(0);
     expect(filesystemMock.reserveAllocationAttempts).toBe(0);
     expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(0);
   });
@@ -577,8 +593,7 @@ describe("credentials store disk pressure", () => {
     const reserveWrite = new Promise<void>((resolve) => {
       filesystemMock.onReserveWrite = resolve;
     });
-    const writeSpy = vi.mocked(fsPromises.writeFile);
-    writeSpy.mockClear();
+    filesystemMock.writes.length = 0;
 
     makeStore(refreshOk);
     await reserveWrite;
@@ -586,8 +601,8 @@ describe("credentials store disk pressure", () => {
 
     expect(statSync(join(workDir, "credentials.reserve.7")).size).toBe(65_536);
     expect(
-      writeSpy.mock.calls.filter((call) =>
-        String(call[0]).includes(".space-check."),
+      filesystemMock.writes.filter((write) =>
+        write.path.includes(".space-check."),
       ).length,
     ).toBe(1);
     expect(filesystemMock.reserveAllocationAttempts).toBe(1);
@@ -1074,8 +1089,7 @@ describe("credentials store disk pressure", () => {
     await startupScan;
     expect((await store.signIn(CREDS, false, null)).outcome).toBe("applied");
     await waitForReserveReadCloses(32);
-    const writeSpy = vi.mocked(fsPromises.writeFile);
-    writeSpy.mockClear();
+    filesystemMock.writes.length = 0;
 
     const result = await rotate(store);
     filesystemMock.mkdirCalls = 0;
@@ -1084,8 +1098,8 @@ describe("credentials store disk pressure", () => {
     expect(filesystemMock.mkdirCalls).toBe(0);
     expect(result.outcome).toBe("applied");
     expect(
-      writeSpy.mock.calls.filter((call) =>
-        String(call[0]).includes(".space-check."),
+      filesystemMock.writes.filter((write) =>
+        write.path.includes(".space-check."),
       ).length,
     ).toBe(1);
     expect(filesystemMock.reserveAllocationAttempts).toBe(0);
@@ -1294,20 +1308,50 @@ describe("credentials store disk pressure", () => {
     });
   });
 
-  it("passes flush:true through both atomic writer seams", async () => {
+  it("keeps a finished case's late writes out of the next case's write history", async () => {
+    const first = filesystemMock;
+    const refreshHeld = Promise.withResolvers<void>();
+    const refreshRelease = Promise.withResolvers<void>();
+    const store = makeStore(async ({ token }) => {
+      refreshHeld.resolve();
+      await refreshRelease.promise;
+      return {
+        kind: "refreshed",
+        token: `${token}-new`,
+        refreshToken: `${token}-refresh-new`,
+      };
+    });
+    await seed(store);
+    const rotating = rotate(store);
+    await refreshHeld.promise;
+    store.dispose();
+    endCaseWorkDir(workDir);
+    const writesBeforeRelease = first.writes.length;
+
+    const secondDirectory = createCaseWorkDir("traycer-cred-pressure-");
+    extraDirectories.push(secondDirectory);
+    const second = beginCase(secondDirectory);
     const writeSpy = vi.mocked(fsPromises.writeFile);
+    writeSpy.mockClear();
+
+    refreshRelease.resolve();
+    const result = await rotating;
+
+    const lateWrites = first.writes.slice(writesBeforeRelease);
+    expect(result.outcome).toBe("applied");
+    expect(lateWrites.some((write) => isFlushWrite(write.options))).toBe(true);
+    expect(writeSpy.mock.calls.map((call) => String(call[0]))).toEqual(
+      lateWrites.map((write) => write.path),
+    );
+    expect(second.writes).toHaveLength(0);
+  });
+
+  it("passes flush:true through both atomic writer seams", async () => {
     await writeCredentialsFile(join(workDir, "credentials"), CREDS, 0);
     await writeJsonFileAtomic(join(workDir, "state.json"), { ok: true }, 0o600);
 
-    const options = writeSpy.mock.calls.map((call) => call[2]);
     expect(
-      options.filter(
-        (option) =>
-          option != null &&
-          typeof option === "object" &&
-          "flush" in option &&
-          option.flush === true,
-      ),
+      filesystemMock.writes.filter((write) => isFlushWrite(write.options)),
     ).toHaveLength(2);
   });
 });
