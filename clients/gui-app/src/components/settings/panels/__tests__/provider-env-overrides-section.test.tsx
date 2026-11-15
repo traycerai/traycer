@@ -106,6 +106,7 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 import type { EnvOverrideValue } from "../env-override-editor";
 import {
   ProviderEnvOverridesSection,
@@ -207,10 +208,6 @@ function expectSetOverrideTargetVariables(providerId: string): void {
     providerId,
     executableWriteGrant: null,
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 type OutgoingSetOverrideRequest = {
