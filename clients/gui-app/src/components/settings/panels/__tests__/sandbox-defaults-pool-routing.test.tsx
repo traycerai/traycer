@@ -214,6 +214,51 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     readsFromCloud(harness, "members");
   });
 
+  it("hides the sandbox defaults form when the cached Editor role read fails", async () => {
+    let roleReadFails = false;
+    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+      "environment.list": () => {
+        if (roleReadFails) throw new Error("Could not read environment list");
+        return {
+          environments: [{ ...TEAM_ENVIRONMENT, effectiveRole: "editor" }],
+        };
+      },
+      "environment.configuration.items": () => ({
+        items: [SANDBOX_DEFAULTS_ITEM],
+      }),
+      "environment.members": () => MEMBERS_RESPONSE,
+    });
+    render(
+      <SandboxDefaultsSection
+        configuration={{
+          kind: "team",
+          teamId: "team-1",
+          teamName: "Acme",
+          environmentId: "env-acme",
+        }}
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    expect(await screen.findByTestId("sandboxes-defaults-form")).toBeTruthy();
+    const listQuery = harness.queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+    roleReadFails = true;
+    await act(async () => {
+      await harness.queryClient.invalidateQueries({
+        queryKey: listQuery.queryKey,
+      });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
+  });
+
   it("shows roster loading until the members read answers", async () => {
     let finish: (value: EnvironmentMembersResponseV12) => void = () =>
       undefined;

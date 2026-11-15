@@ -11,6 +11,7 @@ import type {
   ClaimedComputer,
   ClaimedComputersResult,
 } from "@traycer-clients/shared/auth/claimed-computers";
+import { fetchClaimedComputers } from "@traycer-clients/shared/auth/claimed-computers";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { keyedSeen } from "@/lib/persist/keyed-seen-store";
 
@@ -169,6 +170,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
@@ -251,6 +253,71 @@ describe("useClaimedComputerNotice", () => {
       }),
     );
     expect(mocks.read).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts a post-departure read instead of joining the pending sign-in read", async () => {
+    const pendingResponses: Array<{
+      readonly resolve: (response: Response) => void;
+    }> = [];
+    const fetchMock = vi.fn<typeof fetch>(() => {
+      let resolve: (response: Response) => void = () => undefined;
+      const promise = new Promise<Response>((settle) => {
+        resolve = settle;
+      });
+      pendingResponses.push({ resolve });
+      return promise;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mocks.read.mockImplementation((environmentId, signal) =>
+      fetchClaimedComputers(
+        "https://authn.example.test",
+        "claimed-computer-test-token",
+        environmentId,
+        signal,
+      ),
+    );
+    mocks.hosts.current = { hosts: [teamHost("host-1")] };
+    const view = mount();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/api/v3/environments/env-a/claimed-computers",
+    );
+
+    mocks.hosts.current = { hosts: [] };
+    mocks.hosts.updatedAt = 2;
+    view.rerender();
+    await act(async () => {
+      pendingResponses[0]?.resolve(
+        new Response(JSON.stringify({ claims: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/api/v3/environments/env-a/claimed-computers",
+    );
+    await act(async () => {
+      pendingResponses[1]?.resolve(
+        new Response(JSON.stringify({ claims: [CLAIM] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(mocks.toastInfo).toHaveBeenCalledExactlyOnceWith(ADA_SENTENCE, {
+        id: "claimed-computer:host-1@2026-11-14T10:00:00.000Z",
+      }),
+    );
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes("/claimed-computers"),
+      ),
+    ).toHaveLength(2);
   });
 
   it("tells nothing, and records nothing, when the account switches while the read waits", async () => {

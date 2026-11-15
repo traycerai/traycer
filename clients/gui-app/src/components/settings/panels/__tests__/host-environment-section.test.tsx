@@ -679,6 +679,46 @@ describe("HostEnvironmentSection", () => {
     expect(stopPreviewCalls).toBe(0);
   });
 
+  it("hides Claim after the cached Admin role read fails", async () => {
+    mocks.state.binding = teamBinding(true);
+    mocks.auth.readHostOwnership.mockResolvedValue(ownershipResult(TEAM_OWNER));
+    const queryClient = renderSection("personal", {
+      ...NO_SECTION_OPTIONS,
+      owner: TEAM_OWNER,
+      isLocalMachine: true,
+      handlers: {
+        "environment.list": () => ({
+          environments: [
+            listedEnvironment(PERSONAL),
+            { ...listedEnvironment(TEAM), effectiveRole: "admin" },
+          ],
+        }),
+      },
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Claim this computer" }),
+    ).toBeTruthy();
+    const listQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+
+    mocks.auth.listEnvironments.mockRejectedValueOnce(
+      new Error("The account environment list could not be read."),
+    );
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: listQuery.queryKey });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(
+      screen.queryByRole("button", { name: "Claim this computer" }),
+    ).toBeNull();
+  });
+
   it("does not offer Claim this computer on a remote team-owned host", () => {
     mocks.state.binding = teamBinding(true);
     renderSection("personal", {

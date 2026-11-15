@@ -19,6 +19,7 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import type { LocalTeamAdmissionState } from "@traycer-clients/shared/host-transport/local-open-auth";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import {
@@ -31,6 +32,7 @@ import {
   ConfigurationSourceBoundary,
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
+import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
 import {
@@ -57,12 +59,14 @@ import {
 } from "./mcp-skills-test-support";
 import {
   mountTeamPage,
+  configurationItem,
   poolSource,
   requireTeamCloudAuth,
   requireTeamHostClient,
   requireViewingHostClient,
   resetTeamPageHarness,
   teamHostBoundary,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 
 /**
@@ -333,10 +337,19 @@ function mountConfigurationPermissionBoundary(options: {
   readonly environments: readonly EnvironmentDescriptorV11[];
   readonly activeHost: HostDirectoryEntry;
   readonly localAdmissionByHost: ReadonlyMap<string, LocalAdmissionFixture>;
-}): void {
-  const harness = mountTeamPage(poolSource("admin"), {
-    "environment.list": () => ({ environments: [...options.environments] }),
-  });
+  readonly failEnvironmentList?: { current: boolean };
+  readonly children?: ReactNode;
+  readonly handlers?: MockHandlerMap<HostRpcRegistry>;
+}): TeamPageHarness["queryClient"] {
+  const handlers: MockHandlerMap<HostRpcRegistry> = {
+    "environment.list": () => {
+      if (options.failEnvironmentList?.current)
+        throw new Error("Could not read environment list");
+      return { environments: [...options.environments] };
+    },
+    ...options.handlers,
+  };
+  const harness = mountTeamPage(poolSource("admin"), handlers);
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(harness.queryClient),
@@ -355,10 +368,14 @@ function mountConfigurationPermissionBoundary(options: {
   });
   render(
     <ConfigurationSourceBoundary target={options.target} section={null}>
-      <ConfigurationPermissionProbe />
+      <>
+        <ConfigurationPermissionProbe />
+        {options.children}
+      </>
     </ConfigurationSourceBoundary>,
     { wrapper: harness.Wrapper },
   );
+  return harness.queryClient;
 }
 
 /**
@@ -1427,6 +1444,92 @@ describe("configuration access after the team-computer lift", () => {
     });
 
     await expectEditableAdmin();
+  });
+
+  it("closes the configuration gate after the cached Admin role read fails", async () => {
+    const failEnvironmentList = { current: false };
+    const queryClient = mountConfigurationPermissionBoundary({
+      target: { kind: "team", environmentId: "env-a" },
+      environments: [PERSONAL, team("admin")],
+      activeHost: TEAM_OWNED_PHYSICAL_HOST,
+      localAdmissionByHost: new Map(),
+      failEnvironmentList,
+    });
+    const probe = await screen.findByTestId("configuration-permission-probe");
+    expect(probe.getAttribute("data-effective-role")).toBe("admin");
+    expect(probe.getAttribute("data-can-edit")).toBe("true");
+    expect(probe.getAttribute("data-can-administer")).toBe("true");
+    const listQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+
+    failEnvironmentList.current = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: listQuery.queryKey });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(probe.getAttribute("data-can-edit")).toBe("false");
+    expect(probe.getAttribute("data-can-administer")).toBe("false");
+    expect(
+      await screen.findByText(
+        "You can see Acme's settings but not change them.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("makes the approval policy read-only when its cached Admin role read fails", async () => {
+    const failEnvironmentList = { current: false };
+    const queryClient = mountConfigurationPermissionBoundary({
+      target: { kind: "team", environmentId: "env-a" },
+      environments: [PERSONAL, team("admin")],
+      activeHost: TEAM_OWNED_PHYSICAL_HOST,
+      localAdmissionByHost: new Map(),
+      failEnvironmentList,
+      handlers: {
+        "environment.configuration.items": () => ({
+          items: [
+            configurationItem({
+              kind: "auto_policy",
+              key: "policy",
+              value: { body: "Allow reads" },
+              revision: 3,
+            }),
+          ],
+        }),
+      },
+      children: <TeamPermissions>{null}</TeamPermissions>,
+    });
+
+    const editor = await screen.findByRole("textbox", {
+      name: "Approval policy",
+    });
+    expect(editor.getAttribute("aria-readonly")).toBe("false");
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    const listQuery = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (listQuery === undefined)
+      throw new Error("environment list was not read");
+
+    failEnvironmentList.current = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: listQuery.queryKey });
+    });
+
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("textbox", { name: "Approval policy" })
+          .getAttribute("aria-readonly"),
+      ).toBe("true"),
+    );
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
   it("keeps Personal's owner editable on the user's physical remote host", async () => {

@@ -44,6 +44,11 @@ const localHostId = "local-team-computer";
 const mocks = vi.hoisted(() => ({
   localHostId: null as string | null,
   currentContext: null as object | null,
+  currentUserId: null as string | null,
+  switchAfterContextRead: null as {
+    readonly context: object;
+    readonly userId: string;
+  } | null,
   binding: null as {
     readonly auth: {
       getRequestContextProvider: () => { current: () => object | null };
@@ -102,12 +107,32 @@ function installAuth(
   context: RequestContext,
   directoryRefresh: () => Promise<readonly HostDirectoryEntry[]> = () =>
     Promise.resolve([]),
+  switchAfterContextRead: RequestContext | null = null,
 ): void {
   mocks.currentContext = context;
+  mocks.currentUserId = context.identity.userId;
+  mocks.switchAfterContextRead =
+    switchAfterContextRead === null
+      ? null
+      : {
+          context: switchAfterContextRead,
+          userId: switchAfterContextRead.identity.userId,
+        };
   mocks.directoryRefresh = directoryRefresh;
   const auth = {
     getRequestContextProvider: () => ({
-      current: () => mocks.currentContext,
+      current: () => {
+        const current = mocks.currentContext;
+        const next = mocks.switchAfterContextRead;
+        if (next !== null) {
+          mocks.switchAfterContextRead = null;
+          queueMicrotask(() => {
+            mocks.currentContext = next.context;
+            mocks.currentUserId = next.userId;
+          });
+        }
+        return current;
+      },
     }),
     acceptEnvironmentInvitation,
   };
@@ -148,6 +173,8 @@ describe("invitation acceptance clears the local host door state", () => {
     useHostDoorStateStore.setState({ byHost: new Map() });
     mocks.localHostId = localHostId;
     mocks.currentContext = null;
+    mocks.currentUserId = null;
+    mocks.switchAfterContextRead = null;
     mocks.binding = null;
     mocks.directoryRefresh = null;
     mocks.refreshHostFleet.mockClear();
@@ -161,6 +188,8 @@ describe("invitation acceptance clears the local host door state", () => {
     mocks.binding = null;
     mocks.directoryRefresh = null;
     mocks.currentContext = null;
+    mocks.currentUserId = null;
+    mocks.switchAfterContextRead = null;
   });
 
   it("refreshes the registered host list after an accepted invitation", async () => {
@@ -187,6 +216,51 @@ describe("invitation acceptance clears the local host door state", () => {
     });
     expect(directoryRefresh).toHaveBeenCalledOnce();
     expect(mocks.refreshHostFleet).toHaveBeenCalledOnce();
+  });
+
+  it("does not accept for the new account when identity changes after mutate begins", async () => {
+    const accountA = createContext("user-a");
+    const accountB = createContext("user-b");
+    const sentAs: string[] = [];
+    const accept = vi.fn(async (_environmentId: string) => {
+      sentAs.push(mocks.currentUserId ?? "none");
+      return { outcome: "accepted" as const };
+    });
+    installAuth(accept, accountA, () => Promise.resolve([]), accountB);
+    const { result } = renderHook(
+      () => useEnvironmentInvitationAcceptMutation(),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    await act(async () => {
+      await result.current.mutateAsync({ environmentId: "team-a" });
+    });
+
+    expect(accept).not.toHaveBeenCalled();
+    expect(sentAs).toEqual([]);
+    expectDoorStatesKept();
+  });
+
+  it("still accepts after a same-user token rotation in the mutate gap", async () => {
+    const accountA = createContext("user-a");
+    const rotated = createContext("user-a");
+    const sentAs: string[] = [];
+    const accept = vi.fn(async (_environmentId: string) => {
+      sentAs.push(mocks.currentUserId ?? "none");
+      return { outcome: "accepted" as const };
+    });
+    installAuth(accept, accountA, () => Promise.resolve([]), rotated);
+    const { result } = renderHook(
+      () => useEnvironmentInvitationAcceptMutation(),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    await act(async () => {
+      await result.current.mutateAsync({ environmentId: "team-a" });
+    });
+
+    expect(accept).toHaveBeenCalledExactlyOnceWith("team-a");
+    expect(sentAs).toEqual(["user-a"]);
   });
 
   it("does not invalidate after an invitation was not found", async () => {
