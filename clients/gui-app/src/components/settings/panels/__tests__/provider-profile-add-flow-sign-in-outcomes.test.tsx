@@ -277,27 +277,31 @@ async function createAddProfileNameAuthFixture(reply: ProfileNameReply) {
     const accepted =
       reply === "accepted" || (reply === "retry-once" && nameRequests > 1);
     if (accepted) profileNameTransport.onAccepted("Personal");
-    const status = accepted
-      ? 200
-      : reply === "unauthorized"
-        ? 401
-        : reply === "forbidden"
-          ? 403
-          : 500;
-    const body = accepted
-      ? {
-          profileId: MINTED_PROFILE_ID,
-          harnessId: "claude",
-          recordRevision: "18",
-          name: "Personal",
-        }
-      : reply === "forbidden"
-        ? {
-            statusCode: 403,
-            error: "private response detail",
-            code: "environment_action_forbidden",
-          }
-        : { error: "private response detail" };
+    const statusByReply: Record<ProfileNameReply, number> = {
+      accepted: 200,
+      unauthorized: 401,
+      forbidden: 403,
+      "untyped-failure": 500,
+      "retry-once": 500,
+    };
+    const status = accepted ? statusByReply.accepted : statusByReply[reply];
+    let body: Record<string, number | string>;
+    if (accepted) {
+      body = {
+        profileId: MINTED_PROFILE_ID,
+        harnessId: "claude",
+        recordRevision: "18",
+        name: "Personal",
+      };
+    } else if (reply === "forbidden") {
+      body = {
+        statusCode: 403,
+        error: "private response detail",
+        code: "environment_action_forbidden",
+      };
+    } else {
+      body = { error: "private response detail" };
+    }
     return Promise.resolve(
       new Response(JSON.stringify(body), {
         status,
@@ -1860,12 +1864,12 @@ describe("Add a profile around one sign-in", () => {
         );
         expect(retries).toHaveLength(2);
         const retry = retries[1];
-        expect(retry?.params).toMatchObject({
+        expect(retry.params).toMatchObject({
           providerId: "claude-code",
           profileId: null,
           target: null,
         });
-        expect(startCreateProfile(retry?.params)).toEqual({
+        expect(startCreateProfile(retry.params)).toEqual({
           label: "New profile",
           shareSkillsAndPlugins: true,
         });

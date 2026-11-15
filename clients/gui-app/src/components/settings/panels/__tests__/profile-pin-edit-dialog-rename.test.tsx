@@ -112,29 +112,30 @@ async function signedInAuthService(
     if (reply === "accepted" && request.url === PROFILE_RECORD_URL) {
       recordNameTransport.onNameAccepted("Desk");
     }
-    const status =
-      reply === "accepted"
-        ? 200
-        : reply === "unauthorized"
-          ? 401
-          : reply === "forbidden"
-            ? 403
-            : 500;
-    const body =
-      reply === "accepted"
-        ? {
-            profileId: "work-row",
-            harnessId: "opencode",
-            recordRevision: "18",
-            name: "Desk",
-          }
-        : reply === "forbidden"
-          ? {
-              statusCode: 403,
-              error: "private response detail",
-              code: "environment_action_forbidden",
-            }
-          : { error: "private response detail" };
+    const statusByReply: Record<ProfileRecordReply, number> = {
+      accepted: 200,
+      unauthorized: 401,
+      forbidden: 403,
+      "untyped-failure": 500,
+    };
+    const status = statusByReply[reply];
+    let body: Record<string, number | string>;
+    if (reply === "accepted") {
+      body = {
+        profileId: "work-row",
+        harnessId: "opencode",
+        recordRevision: "18",
+        name: "Desk",
+      };
+    } else if (reply === "forbidden") {
+      body = {
+        statusCode: 403,
+        error: "private response detail",
+        code: "environment_action_forbidden",
+      };
+    } else {
+      body = { error: "private response detail" };
+    }
     return Promise.resolve(
       new Response(JSON.stringify(body), {
         status,
