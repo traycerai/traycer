@@ -181,6 +181,9 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
         "Destruction · kept until you destroy it",
       );
     });
+    expect(screen.queryByTestId("sandboxes-defaults-form")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save defaults" })).toBeNull();
+    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([]);
     const itemReads = harness.paramsOf("environment.configuration.items");
     expect(itemReads.length).toBeGreaterThan(0);
     for (const params of itemReads) {
