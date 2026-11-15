@@ -9,7 +9,8 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import {
   registerDetailsProvider,
@@ -19,12 +20,28 @@ import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-envi
 import { providerState, reachableHost } from "./mcp-skills-test-support";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type {
+  ProviderApiKeyChange,
+  ProviderKeyRecordClient,
+} from "@traycer-clients/shared/host-client/provider-api-key-change";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  ProviderCliState,
+  ProvidersBeginApiKeyChangeResponse,
+  ProvidersSettleApiKeyChangeRequest,
+} from "@traycer/protocol/host/provider-schemas";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
   requireTeamHostClient,
   resetTeamPageHarness,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 import {
   profile,
@@ -40,10 +57,28 @@ import {
   profileTriggerName,
   handlers,
 } from "./team-providers-test-support";
+import { negotiateMethods, WINDOW_HOST_ID } from "./mcp-skills-test-support";
+
+const apiKeyPageHost = vi.hoisted((): { hostId: string | null } => ({
+  hostId: null,
+}));
+const apiKeyRecordBoundary = vi.hoisted(
+  (): {
+    current: Pick<ProviderKeyRecordClient, "changeProviderKeyRecord"> | null;
+  } => ({
+    current: null,
+  }),
+);
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useAuthService: () => {
+    const service = apiKeyRecordBoundary.current;
+    if (service === null)
+      throw new Error("provider key auth boundary is unset");
+    return service;
+  },
 }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
@@ -59,6 +94,9 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null ? null : requireTeamHostClient(),
 }));
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => apiKeyPageHost.hostId,
+}));
 vi.mock("@/components/settings/secrets/secret-row", () => ({
   SecretRow: () => null,
 }));
@@ -69,8 +107,22 @@ vi.mock("@/lib/links/open-link", () => ({
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
+  apiKeyPageHost.hostId = null;
+  apiKeyRecordBoundary.current = null;
   useSettingsEnvironmentPickStore.setState({ pick: null });
   setSystemTabModalApi(null);
+  vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  vi.doUnmock("@/lib/host");
+  vi.doUnmock("@/lib/host/runtime");
+  vi.doUnmock("@/hooks/chats/use-cloud-chat-queries");
+  vi.doUnmock("@/hooks/host/use-host-client-for-host-id");
+  vi.doUnmock("@/hooks/host/use-addressable-host-id");
+  vi.doUnmock("@/components/settings/secrets/secret-row");
+  vi.doUnmock("@/lib/links/open-link");
 });
 
 describe("TeamProviders items", () => {
@@ -622,4 +674,428 @@ describe("TeamProviders items", () => {
       harness.paramsOf("environment.configuration.items").length,
     ).toBeGreaterThan(0);
   });
+});
+
+const API_KEY_TEST_VALUE = "synthetic-key-test-value";
+const PAGE_ENVIRONMENT_ID = "env-a";
+
+type KeyAction = "set" | "clear";
+
+interface ProviderKeyRecordCall {
+  readonly environmentMatches: boolean;
+  readonly providerMatches: boolean;
+  readonly action: KeyAction;
+  readonly keyMatches: boolean | null;
+}
+
+interface ProviderKeyLegacyCall {
+  readonly action: KeyAction;
+  readonly providerMatches: boolean;
+  readonly keyMatches: boolean | null;
+}
+
+interface ProviderKeySettleCall {
+  readonly action: KeyAction;
+  readonly providerMatches: boolean;
+  readonly hasRecordNumbers: boolean;
+}
+
+interface ProviderKeyPageAudit {
+  readonly recordCalls: ProviderKeyRecordCall[];
+  readonly legacyCalls: ProviderKeyLegacyCall[];
+  readonly settleCalls: ProviderKeySettleCall[];
+}
+
+function providerKeyPageAudit(): ProviderKeyPageAudit {
+  return { recordCalls: [], legacyCalls: [], settleCalls: [] };
+}
+
+function providerRowWithKey(
+  recordEnvironmentId: string | null | undefined,
+  configured: boolean,
+): ProviderCliState {
+  return {
+    ...cursorProviderListRow(),
+    apiKey: {
+      supported: true,
+      configured,
+      source: configured ? "stored" : null,
+      ...(recordEnvironmentId === undefined ? {} : { recordEnvironmentId }),
+    },
+  };
+}
+
+function recordBegin(
+  environmentId: string,
+): ProvidersBeginApiKeyChangeResponse {
+  return {
+    mode: "record",
+    changeToken: "opaque-test-change-token",
+    environmentId,
+  };
+}
+
+function legacyBegin(): ProvidersBeginApiKeyChangeResponse {
+  return { mode: "legacy", changeToken: null, environmentId: null };
+}
+
+function installProviderKeyRecordBoundary(audit: ProviderKeyPageAudit): void {
+  audit.recordCalls.length = 0;
+  audit.legacyCalls.length = 0;
+  audit.settleCalls.length = 0;
+  apiKeyRecordBoundary.current = {
+    async changeProviderKeyRecord(
+      environmentId,
+      providerId,
+      change,
+      callerSignal,
+    ) {
+      void callerSignal;
+      audit.recordCalls.push({
+        environmentMatches: environmentId === PAGE_ENVIRONMENT_ID,
+        providerMatches: providerId === "cursor",
+        action: change.action,
+        keyMatches:
+          change.action === "set" ? change.apiKey === API_KEY_TEST_VALUE : null,
+      });
+      return {
+        kind: "record",
+        record: {
+          profileId: "synthetic-provider-record",
+          providerId,
+          state: change.action === "set" ? "live" : "removed",
+          signInNumber: "1",
+          recordRevision: "2",
+          personIntentNumber: "3",
+        },
+      };
+    },
+  };
+}
+
+function providerKeyHandlers(
+  row: ProviderCliState,
+  begin: ProvidersBeginApiKeyChangeResponse,
+  audit: ProviderKeyPageAudit,
+): MockHandlerMap<HostRpcRegistry> {
+  return {
+    ...handlers(() => []),
+    "environment.status": () =>
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Team A" },
+      }),
+    "providers.list": () => ({ providers: [row] }),
+    "providers.beginApiKeyChange": () => begin,
+    "providers.settleApiKeyChange": (
+      request: ProvidersSettleApiKeyChangeRequest,
+    ) => {
+      audit.settleCalls.push({
+        action: request.action,
+        providerMatches: request.providerId === "cursor",
+        hasRecordNumbers:
+          request.recordId !== null &&
+          request.signInNumber !== null &&
+          request.recordRevision !== null,
+      });
+      return { state: row, result: "installed" };
+    },
+    "providers.setApiKey": (
+      request: RequestOfMethod<HostRpcRegistry, "providers.setApiKey">,
+    ) => {
+      audit.legacyCalls.push({
+        action: "set",
+        providerMatches: request.providerId === "cursor",
+        keyMatches: request.apiKey === API_KEY_TEST_VALUE,
+      });
+      return { state: row };
+    },
+    "providers.clearApiKey": (
+      request: RequestOfMethod<HostRpcRegistry, "providers.clearApiKey">,
+    ) => {
+      audit.legacyCalls.push({
+        action: "clear",
+        providerMatches: request.providerId === "cursor",
+        keyMatches: null,
+      });
+      return { state: row };
+    },
+  };
+}
+
+function renderProviderKeyPage(
+  source: ConfigurationSource,
+  row: ProviderCliState,
+  begin: ProvidersBeginApiKeyChangeResponse,
+  includeBeginMethod: boolean,
+  audit: ProviderKeyPageAudit,
+): TeamPageHarness {
+  apiKeyPageHost.hostId = WINDOW_HOST_ID;
+  installProviderKeyRecordBoundary(audit);
+  const manifest: Record<string, { major: number; minor: number }> = {
+    "environment.status": { major: 1, minor: 2 },
+    "providers.list": { major: 10, minor: 13 },
+    "providers.settleApiKeyChange": { major: 1, minor: 0 },
+  };
+  if (includeBeginMethod) {
+    manifest["providers.beginApiKeyChange"] = { major: 1, minor: 0 };
+  }
+  negotiateMethods(manifest);
+  const harness = mountTeamPage(source, providerKeyHandlers(row, begin, audit));
+  render(<TeamProviders />, { wrapper: harness.Wrapper });
+  return harness;
+}
+
+async function openCursorKeyField(): Promise<HTMLElement> {
+  await userEvent.click(railButton("Cursor"));
+  return screen.findByLabelText("API key");
+}
+
+function safeInputValue(element: HTMLElement): string | null {
+  return element instanceof HTMLInputElement ? element.value : null;
+}
+
+async function expectNoFieldAfterCursorSelection(): Promise<void> {
+  await screen.findByRole("navigation", { name: "Providers" });
+  await userEvent.click(railButton("Cursor"));
+  expect(screen.queryByLabelText("API key")).toBeNull();
+}
+
+async function attemptEnvironmentMismatch(
+  action: KeyAction,
+  begin: ProvidersBeginApiKeyChangeResponse,
+): Promise<void> {
+  const audit = providerKeyPageAudit();
+  const row = providerRowWithKey(PAGE_ENVIRONMENT_ID, action === "clear");
+  const harness = renderProviderKeyPage(
+    poolSource("editor"),
+    row,
+    begin,
+    true,
+    audit,
+  );
+  const input = await openCursorKeyField();
+  fireEvent.change(input, { target: { value: API_KEY_TEST_VALUE } });
+  await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+  const listReadsBefore = harness.paramsOf("providers.list").length;
+  const statusReadsBefore = harness.paramsOf("environment.status").length;
+  const errorToast = vi.spyOn(toast, "error");
+
+  await userEvent.click(
+    screen.getByRole("button", {
+      name: action === "set" ? "Save" : "Clear",
+    }),
+  );
+
+  await waitFor(() => expect(errorToast.mock.calls.length).toBeGreaterThan(0));
+  await waitFor(() => {
+    expect(harness.paramsOf("providers.list").length).toBeGreaterThan(
+      listReadsBefore,
+    );
+    expect(harness.paramsOf("environment.status").length).toBeGreaterThan(
+      statusReadsBefore,
+    );
+    expect(harness.queryClient.isFetching()).toBe(0);
+  });
+
+  const expectedFailureCopy =
+    action === "set"
+      ? "Couldn't save the API key."
+      : "Couldn't clear the API key.";
+  expect(
+    errorToast.mock.calls.some(
+      ([message]) =>
+        typeof message === "string" && message === expectedFailureCopy,
+    ),
+  ).toBe(true);
+  expect(safeInputValue(input) === API_KEY_TEST_VALUE).toBe(true);
+  expect(audit.recordCalls.length).toBe(0);
+  expect(audit.legacyCalls.length).toBe(0);
+  expect(audit.settleCalls.length).toBe(0);
+}
+
+describe("TeamProviders provider-key record guard", () => {
+  it("sets a key through the own team's negotiated record route", async () => {
+    const audit = providerKeyPageAudit();
+    const row = providerRowWithKey(PAGE_ENVIRONMENT_ID, false);
+    const harness = renderProviderKeyPage(
+      poolSource("editor"),
+      row,
+      recordBegin(PAGE_ENVIRONMENT_ID),
+      true,
+      audit,
+    );
+    const input = await openCursorKeyField();
+    fireEvent.change(input, { target: { value: API_KEY_TEST_VALUE } });
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(audit.settleCalls.length).toBe(1));
+
+    expect(
+      audit.recordCalls.some(
+        (call) =>
+          call.environmentMatches &&
+          call.providerMatches &&
+          call.action === "set" &&
+          call.keyMatches === true,
+      ),
+    ).toBe(true);
+    expect(
+      audit.settleCalls.some(
+        (call) =>
+          call.action === "set" &&
+          call.providerMatches &&
+          call.hasRecordNumbers,
+      ),
+    ).toBe(true);
+    expect(audit.legacyCalls.length).toBe(0);
+    await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+    expect(safeInputValue(input) === "").toBe(true);
+  });
+
+  it("clears a stored key through the own team's negotiated record route", async () => {
+    const audit = providerKeyPageAudit();
+    const row = providerRowWithKey(PAGE_ENVIRONMENT_ID, true);
+    renderProviderKeyPage(
+      poolSource("editor"),
+      row,
+      recordBegin(PAGE_ENVIRONMENT_ID),
+      true,
+      audit,
+    );
+    await openCursorKeyField();
+
+    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(audit.settleCalls.length).toBe(1));
+
+    expect(
+      audit.recordCalls.some(
+        (call) =>
+          call.environmentMatches &&
+          call.providerMatches &&
+          call.action === "clear" &&
+          call.keyMatches === null,
+      ),
+    ).toBe(true);
+    expect(
+      audit.settleCalls.some(
+        (call) =>
+          call.action === "clear" &&
+          call.providerMatches &&
+          call.hasRecordNumbers,
+      ),
+    ).toBe(true);
+    expect(audit.legacyCalls.length).toBe(0);
+  });
+
+  it("keeps the key field unavailable to a reader even with a matching live record", async () => {
+    const audit = providerKeyPageAudit();
+    const harness = renderProviderKeyPage(
+      poolSource("viewer"),
+      providerRowWithKey(PAGE_ENVIRONMENT_ID, true),
+      recordBegin(PAGE_ENVIRONMENT_ID),
+      true,
+      audit,
+    );
+
+    await expectNoFieldAfterCursorSelection();
+
+    expect(harness.paramsOf("providers.beginApiKeyChange").length).toBe(0);
+    expect(audit.recordCalls.length).toBe(0);
+    expect(audit.legacyCalls.length).toBe(0);
+    expect(audit.settleCalls.length).toBe(0);
+  });
+
+  it("hides the field when the own computer's record belongs to another team configuration", async () => {
+    const audit = providerKeyPageAudit();
+    const harness = renderProviderKeyPage(
+      poolSource("editor"),
+      providerRowWithKey("env-b", true),
+      recordBegin(PAGE_ENVIRONMENT_ID),
+      true,
+      audit,
+    );
+
+    await expectNoFieldAfterCursorSelection();
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.status").length).toBeGreaterThan(0);
+      expect(harness.paramsOf("providers.list").length).toBeGreaterThan(0);
+    });
+    expect(harness.paramsOf("providers.beginApiKeyChange").length).toBe(0);
+  });
+
+  it.each([undefined, null])(
+    "hides the field when the key row has no record environment fact",
+    async (recordEnvironmentId: string | null | undefined) => {
+      const audit = providerKeyPageAudit();
+      const harness = renderProviderKeyPage(
+        poolSource("editor"),
+        providerRowWithKey(recordEnvironmentId, true),
+        recordBegin(PAGE_ENVIRONMENT_ID),
+        true,
+        audit,
+      );
+
+      await expectNoFieldAfterCursorSelection();
+
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.status").length).toBeGreaterThan(
+          0,
+        );
+        expect(harness.paramsOf("providers.list").length).toBeGreaterThan(0);
+      });
+      expect(harness.paramsOf("providers.beginApiKeyChange").length).toBe(0);
+    },
+  );
+
+  it("hides the field until the own computer has negotiated beginApiKeyChange", async () => {
+    const audit = providerKeyPageAudit();
+    const harness = renderProviderKeyPage(
+      poolSource("editor"),
+      providerRowWithKey(PAGE_ENVIRONMENT_ID, true),
+      recordBegin(PAGE_ENVIRONMENT_ID),
+      false,
+      audit,
+    );
+
+    await expectNoFieldAfterCursorSelection();
+
+    expect(harness.paramsOf("providers.beginApiKeyChange").length).toBe(0);
+    expect(audit.recordCalls.length).toBe(0);
+    expect(audit.legacyCalls.length).toBe(0);
+    expect(audit.settleCalls.length).toBe(0);
+  });
+
+  it("does not show the team key field on a Personal cloud source", async () => {
+    const audit = providerKeyPageAudit();
+    const harness = renderProviderKeyPage(
+      personalPoolSource(),
+      providerRowWithKey("env-personal", true),
+      recordBegin("env-personal"),
+      true,
+      audit,
+    );
+
+    await expectNoFieldAfterCursorSelection();
+
+    expect(harness.paramsOf("providers.beginApiKeyChange").length).toBe(0);
+    expect(audit.recordCalls.length).toBe(0);
+    expect(audit.legacyCalls.length).toBe(0);
+    expect(audit.settleCalls.length).toBe(0);
+  });
+
+  it.each([
+    { action: "set", begin: recordBegin("env-b") },
+    { action: "clear", begin: recordBegin("env-b") },
+    { action: "set", begin: legacyBegin() },
+    { action: "clear", begin: legacyBegin() },
+  ] satisfies readonly {
+    action: KeyAction;
+    begin: ProvidersBeginApiKeyChangeResponse;
+  }[])(
+    "refuses $action when the page's environment does not match the begin response",
+    async ({ action, begin }) => {
+      await attemptEnvironmentMismatch(action, begin);
+    },
+  );
 });
