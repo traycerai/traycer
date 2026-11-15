@@ -55,16 +55,16 @@ export interface TeamPeopleHarnessOptions {
     | Promise<EnvironmentListResponseV11>;
   readonly members?: (
     environmentId: string,
-    cursor: string | null,
   ) => EnvironmentMembersResponseV12 | Promise<EnvironmentMembersResponseV12>;
   readonly methods?: ReadonlyArray<string>;
 }
 
 export interface TeamPeopleHarness {
-  readonly memberRequests: Array<{
-    environmentId: string;
-    cursor: string | null;
-  }>;
+  /**
+   * The members reads the account service (authn) received, in order.
+   */
+  readonly memberRequests: Array<{ environmentId: string }>;
+  /** The reads of the account's environment directory (traycer-server). */
   readonly environmentListRequests: number;
   readonly personReads: string[];
   readonly people: PersonAvatarHarness;
@@ -104,6 +104,15 @@ export async function createTeamPeopleHarness(
   };
   let personStatus = 200;
   const personReads: string[] = [];
+  const memberRequests: Array<{ environmentId: string }> = [];
+  let environmentListRequests = 0;
+  let listedEnvironments: EnvironmentListResponseV11["environments"] = [];
+  const defaultMembersPage: EnvironmentMembersResponseV12 = {
+    members: [TEAM_MEMBER],
+    nextCursor: null,
+    legacyRoleNoticeSeenAt: null,
+    legacyMembers: [],
+  };
   vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
     let url: string;
     if (typeof input === "string") {
@@ -123,6 +132,41 @@ export async function createTeamPeopleHarness(
           },
         }),
       );
+    }
+    const pathname = new URL(url).pathname;
+    if (pathname === "/api/environments") {
+      environmentListRequests += 1;
+      return Promise.resolve(
+        options.environmentList?.() ?? environmentListWithTeam(),
+      ).then((list) => {
+        listedEnvironments = list.environments;
+        return jsonResponse(list);
+      });
+    }
+    const environmentRead =
+      /^\/api\/v3\/environments\/([^/]+)\/(hosts|members)$/u.exec(pathname);
+    if (environmentRead !== null) {
+      const environmentId = decodeURIComponent(environmentRead[1]);
+      if (environmentRead[2] === "hosts") {
+        const hostCount =
+          listedEnvironments.find(
+            (environment) => environment.environmentId === environmentId,
+          )?.hostCount ?? 0;
+        return Promise.resolve(
+          jsonResponse({
+            hosts: Array.from({ length: hostCount }, () => ({
+              purgePending: false,
+            })),
+          }),
+        );
+      }
+      // The viewer's account lists no team, so the environment list's role
+      // join sends nothing for the team's row and leaves it degraded; every
+      // members read that arrives is a read of the team's people.
+      memberRequests.push({ environmentId });
+      return Promise.resolve(
+        options.members?.(environmentId) ?? defaultMembersPage,
+      ).then((page) => jsonResponse(authnMembersAnswer(page)));
     }
     if (url.includes("/api/v3/environments/") && url.includes("/people/")) {
       personReads.push(url);
@@ -147,11 +191,6 @@ export async function createTeamPeopleHarness(
 
   const people = createPersonAvatarHarness();
   const queryClient = people.queryClient;
-  const memberRequests: Array<{
-    environmentId: string;
-    cursor: string | null;
-  }> = [];
-  let environmentListRequests = 0;
   const owner = options.owner ?? { kind: "team", id: TEAM_ID, name: "Team" };
   const remoteHost: RemoteHostDirectoryEntry = {
     ...remoteEntry(TEAM_HOST_ID, null),
@@ -189,23 +228,7 @@ export async function createTeamPeopleHarness(
     new MockHostMessenger<HostRpcRegistry>({
       registry,
       requestId: () => `identity-test-${++requestSeq}`,
-      handlers: {
-        "environment.list": () => {
-          environmentListRequests += 1;
-          return options.environmentList?.() ?? environmentListWithTeam();
-        },
-        "environment.members": (request) => {
-          memberRequests.push(request);
-          return (
-            options.members?.(request.environmentId, request.cursor) ?? {
-              members: [TEAM_MEMBER],
-              nextCursor: null,
-              legacyRoleNoticeSeenAt: null,
-              legacyMembers: [],
-            }
-          );
-        },
-      },
+      handlers: {},
     });
   const remoteFetcher = (): Promise<RemoteHostFetchOutcome> =>
     Promise.resolve({ kind: "hosts", entries: [remoteHost] });
@@ -251,6 +274,37 @@ export async function createTeamPeopleHarness(
       people.dispose();
       resetNegotiatedManifests();
       useSelectionAuthorityStore.getState().reset();
+    },
+  };
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** authn's members answer for a page of members, as the account service sends it. */
+function authnMembersAnswer(page: EnvironmentMembersResponseV12) {
+  return {
+    members: page.members.map((member) => ({
+      id: member.userId,
+      email: member.email ?? "",
+      user: {
+        id: member.userId,
+        name: member.displayName,
+        avatarUrl: member.avatarUrl,
+      },
+      effectiveRole: member.effectiveRole,
+      linkedPlan: member.linkedPlan,
+      inviteState: member.inviteState ?? "accepted",
+      invitedAddress: member.invitedAddress,
+    })),
+    viewer: {
+      effectiveRole: "admin",
+      legacyRoleNoticeSeenAt: null,
+      legacyMembers: [],
     },
   };
 }
