@@ -4031,6 +4031,19 @@ export const hostNotificationHooksSaveDowngradeV30ToV10 = defineDowngradePath<
   }),
 });
 
+/** A new major drops the grant; released majors keep their frozen request shape. */
+export const notificationHooksSaveRequestSchemaV40 = lazySchema(() =>
+  z
+    .object({
+      hooks: z.array(notificationHookConfigSchema),
+      configurationRevision: z.string().min(1).nullable(),
+    })
+    .strict(),
+);
+export type NotificationHooksSaveRequestV40 = z.infer<
+  typeof notificationHooksSaveRequestSchemaV40
+>;
+
 /**
  * `host.notificationHooks.save@4.0`'s answer: the status `@3.0` answers, and
  * the account's part of the saved list.
@@ -4061,13 +4074,13 @@ export type NotificationHooksSaveResponseV40 = z.infer<
 /**
  * A major, not a minor: `@3.0`'s answer is `.strict()`, so a `@3.0` caller
  * refuses an answer carrying `accountHooks`; the downgrades below drop it.
- * The request is `@3.0`'s. Defined and not registered: it registers with its
- * first caller.
+ * Its request drops the grant field. Older request shapes receive a null
+ * grant on downgrade; their requests lose that field on upgrade.
  */
 export const hostNotificationHooksSaveV40 = defineRpcContract({
   method: "host.notificationHooks.save",
   schemaVersion: { major: 4, minor: 0 } as const,
-  requestSchema: notificationHooksSaveRequestSchema,
+  requestSchema: notificationHooksSaveRequestSchemaV40,
   responseSchema: notificationHooksSaveResponseSchemaV40,
 });
 /** A host before `@4.0` answers no account part: the app writes nothing. */
@@ -4077,7 +4090,10 @@ export const hostNotificationHooksSaveUpgradeV3ToV4 = defineUpgradePath<
 >({
   from: { major: 3, minor: 0 },
   to: { major: 4, minor: 0 },
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({
+    hooks: request.hooks,
+    configurationRevision: request.configurationRevision,
+  }),
   upgradeResponse: (response) => ({ ...response, accountHooks: null }),
 });
 function withoutAccountHooks(
@@ -4092,7 +4108,10 @@ export const hostNotificationHooksSaveDowngradeV40ToV30 = defineDowngradePath<
 >({
   from: { major: 4, minor: 0 },
   to: { major: 3, minor: 0 },
-  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: { ...request, executableWriteGrant: null },
+  }),
   downgradeResponse: (response) => ({
     ok: true,
     value: withoutAccountHooks(response),
@@ -4108,7 +4127,7 @@ export const hostNotificationHooksSaveDowngradeV40ToV20 = defineDowngradePath<
     ok: true,
     value: {
       hooks: request.hooks,
-      executableWriteGrant: request.executableWriteGrant,
+      executableWriteGrant: null,
     },
   }),
   downgradeResponse: (response) => ({

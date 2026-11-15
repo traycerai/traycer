@@ -8,6 +8,11 @@ import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-tok
 import { listTeamComputersViaHttp } from "@traycer-clients/shared/host-client/team-computers";
 import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
+import { saveAutoPolicyViaHttp } from "@traycer-clients/shared/host-client/auto-policy-save";
+import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
 import { listEnvironmentsViaHttp } from "@traycer-clients/shared/host-client/environment-directory";
 import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import { sandboxCatalogueReadinessRequestSchema } from "@traycer/protocol/host/sandbox-control";
@@ -298,6 +303,20 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
   );
 }
 
+/** The renderer's attachment request, checked field by field before it is sent. */
+function attachmentRequestOf(value: unknown): TaskEnvironmentAttachmentRequest {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(
+      "attachTaskEnvironment.request requires an object argument",
+    );
+  }
+  const taskId: unknown = Reflect.get(value, "taskId");
+  const environmentId: unknown = Reflect.get(value, "environmentId");
+  assertString(taskId, "attachTaskEnvironment.request.taskId");
+  assertString(environmentId, "attachTaskEnvironment.request.environmentId");
+  return { taskId, environmentId };
+}
+
 /** The renderer's mint request, checked field by field before it is sent. */
 function voiceSessionMintRequestOf(value: unknown): VoiceSessionMintRequest {
   if (typeof value !== "object" || value === null) {
@@ -385,6 +404,35 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
         fetchEnvironmentTransport,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.saveAutoPolicy,
+    async (_event, bearerToken: unknown, body: unknown) => {
+      assertString(bearerToken, "saveAutoPolicy.bearerToken");
+      assertString(body, "saveAutoPolicy.body");
+      return saveAutoPolicyViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        body,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.attachTaskEnvironment,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "attachTaskEnvironment.bearerToken");
+      return attachTaskEnvironmentViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        fetchEnvironmentTransport,
+        attachmentRequestOf(request),
       );
     },
   );

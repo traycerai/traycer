@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   defineRpcContract,
   defineUpgradePath,
+  upgradeResponseToVersion,
   validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -210,12 +211,13 @@ describe("notification hook save account part @4.0", () => {
     });
     const minorRegistry = {
       "host.notificationHooks.save": {
-        ...hostRpcRegistry["host.notificationHooks.save"],
         3: {
-          ...hostRpcRegistry["host.notificationHooks.save"][3],
           latestMinor: 1,
           versions: {
-            ...hostRpcRegistry["host.notificationHooks.save"][3].versions,
+            0: {
+              contract: hostNotificationHooksSaveV30,
+              upgradeFromPreviousVersion: null,
+            },
             1: {
               contract: hypotheticalV31,
               upgradeFromPreviousVersion: upgradeV30ToV31,
@@ -230,9 +232,18 @@ describe("notification hook save account part @4.0", () => {
     );
   });
 
-  it("keeps @4.0 out of the installed registry", () => {
-    expect(
-      Object.hasOwn(hostRpcRegistry["host.notificationHooks.save"], 4),
-    ).toBe(false);
+  it("upgrades a legacy host response through the installed save registry", () => {
+    const legacyStatus = latestStatus();
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["host.notificationHooks.save"],
+      { major: 3, minor: 0 },
+      { major: 4, minor: 0 },
+      legacyStatus,
+    );
+
+    expect(upgraded).toEqual({ ...legacyStatus, accountHooks: null });
+    expect(hostNotificationHooksSaveV40.responseSchema.parse(upgraded)).toEqual(
+      { ...legacyStatus, accountHooks: null },
+    );
   });
 });

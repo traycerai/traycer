@@ -78,6 +78,15 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
 import { useProvidersSetAutoJudge } from "@/hooks/providers/use-providers-set-auto-judge-mutation";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+
+/** The operation a save was pressed on; these saves go to the host, which reads none of it. */
+const PRESSED_ON: EnvironmentCloud = {
+  authnBaseUrl: "",
+  bearer: { kind: "cloud", getBearerToken: () => null },
+  transport: () => Promise.reject(new Error("not sent")),
+  onOriginSignIn: () => true,
+};
 
 interface CapturedMutation {
   readonly options: {
@@ -264,8 +273,14 @@ describe("useAutoPolicySetMutation - client-side write ordering", () => {
       wrapper: wrapperWith(queryClient),
     });
 
-    result.current.mutate({ body: "policy draft one" });
-    result.current.mutate({ body: "policy draft two" });
+    result.current.mutate({
+      request: { body: "policy draft one" },
+      operation: PRESSED_ON,
+    });
+    result.current.mutate({
+      request: { body: "policy draft two" },
+      operation: PRESSED_ON,
+    });
 
     await waitFor(() => {
       expect(mocks.request).toHaveBeenCalledTimes(1);

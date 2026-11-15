@@ -23,6 +23,10 @@ import { PlanUnlinkPreview } from "./plan-unlink-preview";
 import { Button } from "@/components/ui/button";
 import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import {
+  useTeamComputerWorkNow,
+  type TeamComputerWorkNow,
+} from "@/hooks/environment/use-team-computer-work-now";
 import { useWindowHostOwnership } from "@/hooks/environment/use-window-host-is-team-computer";
 import { TeamReadFailed } from "./team-read-failed";
 
@@ -110,6 +114,24 @@ export function TeamPlans(props: {
   );
 }
 
+/**
+ * The turns running on the plan where the window's own team computer counted
+ * them. No answer, or that computer's "cannot count", is no count.
+ */
+function countedPlanWork(
+  workNow: TeamComputerWorkNow,
+): { readonly activeTurns: number; readonly hostId: string } | null {
+  if (
+    workNow.status !== "settled" ||
+    workNow.hostId === null ||
+    workNow.answer === null ||
+    workNow.answer.activeTurns === null
+  ) {
+    return null;
+  }
+  return { activeTurns: workNow.answer.activeTurns, hostId: workNow.hostId };
+}
+
 function TeamPlanUnlink(props: {
   readonly plan: ConfigurationPlan;
   readonly previewId: string;
@@ -122,8 +144,27 @@ function TeamPlanUnlink(props: {
     props.plan.id,
     props.previewId,
   );
+  const environmentId = source.kind === "pool" ? source.environmentId : "";
+  // The turns running on the plan, from the window's own team computer; the
+  // confirm waits for its one answer rather than say they could not be
+  // counted while they are being counted.
+  const workNow = useTeamComputerWorkNow({
+    environmentId,
+    subject: props.plan.id,
+    read: {
+      method: "environment.previewLocalFacts",
+      paramsFor: (profileId) => ({
+        environmentId,
+        subject: { kind: "plan", profileId },
+      }),
+    },
+  });
   const unlink = useConfigurationPlanUnlinkMutation();
-  if (preview.isPending || preview.isFetching)
+  if (
+    preview.isPending ||
+    preview.isFetching ||
+    (!preview.isError && workNow.status === "pending")
+  )
     return (
       <div className="flex items-center gap-2">
         <MutedAgentSpinner />
@@ -158,17 +199,18 @@ function TeamPlanUnlink(props: {
         </div>
       </div>
     );
+  const counted = countedPlanWork(workNow);
   return (
     <>
       <PlanUnlinkPreview
         teamName={props.teamName}
         plan={props.plan}
-        activeTurns={preview.data.activeTurns}
+        activeTurns={counted === null ? null : counted.activeTurns}
         activeHostName={
-          preview.data.localHostId === null
+          counted === null
             ? null
             : (environmentReadData(scope.hosts)?.hosts.find(
-                (host) => host.hostId === preview.data.localHostId,
+                (host) => host.hostId === counted.hostId,
               )?.hostLabel ?? "the serving host")
         }
         remainingAccess={preview.data.keepsWorking}

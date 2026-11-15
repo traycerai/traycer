@@ -1,5 +1,14 @@
 import { fetchEnvironmentTransport } from "../../environment/environment-cloud";
 import {
+  saveAutoPolicyViaHttp,
+  type AutoPolicySaveResult,
+} from "../auto-policy-save";
+import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+  type TaskEnvironmentAttachmentResult,
+} from "../task-environment-attachment";
+import {
   listEnvironmentsViaHttp,
   type EnvironmentDirectoryResult,
 } from "../environment-directory";
@@ -775,6 +784,32 @@ export class MockRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       fetchEnvironmentTransport,
+    );
+  }
+
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult> {
+    return saveAutoPolicyViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      body,
+    );
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return attachTaskEnvironmentViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      fetchEnvironmentTransport,
+      request,
     );
   }
 

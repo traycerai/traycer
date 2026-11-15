@@ -1,3 +1,5 @@
+import { notificationHookRefusalSchema } from "./account-notification-schemas";
+import { NotificationHookRefusalError } from "./notification-hook-refusal";
 /**
  * `environment.configuration.items*`, `.revision`, `.mcpServers.*`,
  * `.policy.put`, `environment.history` and `environment.plans.*` as the app's
@@ -7,7 +9,9 @@
  * forwarding/settings.ts` in the internal repository), so a screen reads the
  * same shape whether a host served it or authn did.
  */
-import type { z } from "zod";
+import { z } from "zod";
+import { providerIdOfHarness } from "@traycer/protocol/host/environment/item-identity";
+import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import {
   environmentConfigurationRevisionResponseSchema,
   environmentHistoryResponseSchema,
@@ -120,6 +124,14 @@ async function itemWriteOutcome(
   answer: EnvironmentAnswer,
 ): Promise<EnvironmentConfigurationItemWriteResponse> {
   if (answer.status === 403) return { outcome: "forbidden" };
+  if (answer.status === 400) {
+    const refusal = notificationHookRefusalSchema.safeParse(answer.body);
+    if (refusal.success)
+      throw new NotificationHookRefusalError(
+        refusal.data.code,
+        refusal.data.index,
+      );
+  }
   if (answer.status === 409) {
     const conflict = authnItemConflictSchema.safeParse(answer.body);
     if (conflict.success) {
@@ -685,6 +697,74 @@ export async function listConfigurationPlans(
               },
       })),
   };
+}
+
+/**
+ * The name a `managed_profile` row carries, as much of its value as the
+ * unlink confirm reads. Not strict: the row holds more than the name.
+ */
+const managedProfileNameSchema = z.object({
+  name: z.string().min(1).max(64),
+});
+
+/** What authn says still works for a team once one of its plans is unlinked. */
+export interface ConfigurationPlanUnlinkPreview {
+  /** The other linked plans and the provider sign-ins the team keeps, by name. */
+  readonly keepsWorking: readonly string[];
+}
+
+/**
+ * The cloud part of the unlink confirm for `profileId`: the names of what
+ * keeps working without that plan, named as the host's forwarder named them
+ * (a linked plan by its profile's name, else its provider's, else its
+ * harness; then each provider sign-in). The turns running on the plan are
+ * counted by a computer, never here.
+ */
+export async function readConfigurationPlanUnlinkPreview(
+  cloud: EnvironmentCloud,
+  environmentId: string,
+  profileId: string,
+): Promise<ConfigurationPlanUnlinkPreview> {
+  const connections = await planConnections(cloud, environmentId);
+  const target = connections.find(
+    (connection) =>
+      connection.profileId === profileId && connection.kind !== "api_key",
+  );
+  if (target === undefined) {
+    throw new EnvironmentCloudError("invalid", "This plan is unavailable.");
+  }
+  const path = environmentPath(environmentId);
+  const [secrets, profiles] = await Promise.all([
+    sendSettings(cloud, "GET", `${path}/secrets`, null).then((answer) =>
+      parseSettings(answer, authnSecretsListSchema),
+    ),
+    sendSettings(cloud, "GET", `${path}/items?kind=managed_profile`, null).then(
+      (answer) => parseSettings(answer, authnItemsResponseSchema),
+    ),
+  ]);
+  const names = connections
+    .filter(
+      (connection) =>
+        connection.profileId !== target.profileId &&
+        planStatus(connection) === "linked",
+    )
+    .map((connection) => {
+      const item = profiles.items.find(
+        (row) => row.key === `${connection.harnessId}:${connection.profileId}`,
+      );
+      const profile = managedProfileNameSchema.safeParse(item?.value);
+      if (profile.success) return profile.data.name;
+      const provider = providerIdOfHarness(connection.harnessId);
+      return provider === null
+        ? connection.harnessId
+        : PROVIDER_DISPLAY_NAMES[provider];
+    });
+  names.push(
+    ...secrets.secrets
+      .filter((secret) => secret.kind === "provider")
+      .map((secret) => secret.name),
+  );
+  return { keepsWorking: [...new Set(names)] };
 }
 
 export async function unlinkConfigurationPlan(

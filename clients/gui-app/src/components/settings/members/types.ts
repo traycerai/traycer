@@ -68,7 +68,7 @@ export interface MemberWorkNow {
 export interface RemovePreviewModel {
   /** authn's: the team's sandboxes that get a replacement sign-in. */
   readonly sandboxesToRekey: number;
-  /** Null until a team computer has counted it, and when none can. */
+  /** Null when no team computer counted it. */
   readonly workNow: MemberWorkNow | null;
 }
 

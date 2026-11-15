@@ -379,7 +379,7 @@ const attachCalls: AttachCall[] = [];
 
 function attachHandler(
   hostId: string,
-): (params: unknown) => Promise<{ readonly attached: true }> {
+): (params: unknown) => Promise<{ readonly prepared: true }> {
   return (params) =>
     new Promise((resolve, reject) => {
       dialogMocks.events.push(`attach-sent@${hostId}`);
@@ -387,7 +387,7 @@ function attachHandler(
         params,
         settle: (outcome) => {
           dialogMocks.events.push("attach-settled");
-          if (outcome === "resolve") resolve({ attached: true });
+          if (outcome === "resolve") resolve({ prepared: true });
           else reject(outcome);
         },
       });

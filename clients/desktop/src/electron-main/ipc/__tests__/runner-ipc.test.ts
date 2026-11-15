@@ -864,6 +864,8 @@ describe("RunnerIpcBridge", () => {
           // The sandbox control plane, for traycer-server's CORS reason.
           RunnerHostInvoke.listSandboxes,
           RunnerHostInvoke.listEnvironments,
+          RunnerHostInvoke.saveAutoPolicy,
+          RunnerHostInvoke.attachTaskEnvironment,
           RunnerHostInvoke.getSandboxCosts,
           RunnerHostInvoke.getSandboxCatalogue,
           RunnerHostInvoke.getTraycerModels,

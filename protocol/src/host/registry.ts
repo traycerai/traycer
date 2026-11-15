@@ -1,3 +1,4 @@
+import { hostAccountSettingsRefreshV10 } from "@traycer/protocol/host/account-settings/contracts";
 import {
   epicCreateV14,
   epicCreateUpgradeV13ToV14,
@@ -1046,7 +1047,9 @@ import {
   epicRevokeCollaboratorV11,
   epicRevokeCollaboratorUpgradeV10ToV11,
   epicChatPublicationStateV10,
+  epicAttachEnvironmentUpgradeV10ToV20,
   epicAttachEnvironmentV10,
+  epicAttachEnvironmentV20,
   epicLocalHistoryReadV10,
   epicSetChatArchivedV10,
   epicSetChatArchivedV11,
@@ -1264,6 +1267,11 @@ import {
   hostNotificationHooksSave,
   hostNotificationHooksSaveV20,
   hostNotificationHooksSaveV30,
+  hostNotificationHooksSaveV40,
+  hostNotificationHooksSaveUpgradeV3ToV4,
+  hostNotificationHooksSaveDowngradeV40ToV30,
+  hostNotificationHooksSaveDowngradeV40ToV20,
+  hostNotificationHooksSaveDowngradeV40ToV10,
   hostNotificationHooksSaveUpgradeV2ToV3,
   hostNotificationHooksSaveDowngradeV30ToV20,
   hostNotificationHooksSaveDowngradeV30ToV10,
@@ -7977,6 +7985,33 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: hostNotificationHooksSaveDowngradeV30ToV20,
       },
     },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksSaveV40,
+          upgradeFromPreviousVersion: hostNotificationHooksSaveUpgradeV3ToV4,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationHooksSaveDowngradeV40ToV10,
+        2: hostNotificationHooksSaveDowngradeV40ToV20,
+        3: hostNotificationHooksSaveDowngradeV40ToV30,
+      },
+    },
+  },
+  "host.accountSettings.refresh": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostAccountSettingsRefreshV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
   "host.notifications.getConfig": {
     degrade: { kind: "unsupported" },
@@ -10354,6 +10389,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         0: {
           contract: epicAttachEnvironmentV10,
           upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    // The prepare without the cloud attachment, which the app then makes on
+    // the person's sign-in. No downgrade to `@1.0`: a prepare cannot be sent
+    // as an attachment, nor an attachment answered as a prepare.
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicAttachEnvironmentV20,
+          upgradeFromPreviousVersion: epicAttachEnvironmentUpgradeV10ToV20,
         },
       },
       downgradePathsFromLatest: {},
