@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type { EnvironmentInvitationsAcceptResponse } from "@traycer/protocol/host/environment/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { authQueryKeys } from "@/lib/query-keys";
+import type { LiveRevalidationOutcome } from "@/lib/auth/auth-service";
+import { authQueryKeys, hostQueryKeys } from "@/lib/query-keys";
 import {
   hostDoorStateFor,
   noteHostDoorState,
@@ -50,12 +51,14 @@ const mocks = vi.hoisted(() => ({
       acceptEnvironmentInvitation: (
         environmentId: string,
       ) => Promise<EnvironmentInvitationsAcceptResponse>;
+      revalidateCurrentContextAfterInvalidation: () => Promise<LiveRevalidationOutcome | null>;
     };
     readonly directory: {
       refresh: () => Promise<readonly HostDirectoryEntry[]>;
     };
   } | null,
   refreshHostFleet: vi.fn(() => Promise.resolve()),
+  revalidate: vi.fn<() => Promise<LiveRevalidationOutcome | null>>(),
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -97,8 +100,7 @@ function installAuth(
     environmentId: string,
   ) => Promise<EnvironmentInvitationsAcceptResponse>,
   context: RequestContext,
-  directoryRefresh: () => Promise<readonly HostDirectoryEntry[]> = () =>
-    Promise.resolve([]),
+  directoryRefresh: () => Promise<readonly HostDirectoryEntry[]>,
 ): void {
   mocks.currentContext = context;
   const auth = {
@@ -106,6 +108,7 @@ function installAuth(
       current: () => mocks.currentContext,
     }),
     acceptEnvironmentInvitation,
+    revalidateCurrentContextAfterInvalidation: () => mocks.revalidate(),
   };
   mocks.binding = { auth, directory: { refresh: directoryRefresh } };
 }
@@ -128,6 +131,32 @@ function createQueryClient(): QueryClient {
   });
 }
 
+const LIST_KEY = [
+  ...hostQueryKeys.method("authn", "environment.list", {}),
+  "invitation-user",
+] as const;
+
+/**
+ * Seeds the account's environment list and records, into `order`, the moment
+ * the hook invalidates it, so a case can say what came first.
+ */
+function watchListInvalidation(queryClient: QueryClient, order: string[]) {
+  queryClient.setQueryData(LIST_KEY, { environments: [] });
+  const invalidate = queryClient.invalidateQueries.bind(queryClient);
+  return vi
+    .spyOn(queryClient, "invalidateQueries")
+    .mockImplementation((filters, options) => {
+      const list = queryClient.getQueryCache().find({ queryKey: LIST_KEY });
+      if (list !== undefined && filters?.predicate?.(list) === true)
+        order.push("invalidate-list");
+      return invalidate(filters, options);
+    });
+}
+
+function listInvalidated(queryClient: QueryClient): boolean {
+  return queryClient.getQueryState(LIST_KEY)?.isInvalidated === true;
+}
+
 function createWrapper(
   queryClient: QueryClient,
 ): (props: { readonly children: ReactNode }) => ReactNode {
@@ -146,6 +175,8 @@ describe("invitation acceptance clears the local host door state", () => {
     mocks.currentContext = null;
     mocks.binding = null;
     mocks.refreshHostFleet.mockClear();
+    mocks.revalidate.mockReset();
+    mocks.revalidate.mockResolvedValue({ kind: "superseded" });
     seedDoorStates();
   });
 
@@ -158,14 +189,19 @@ describe("invitation acceptance clears the local host door state", () => {
     mocks.currentContext = null;
   });
 
-  it("refreshes the host list after an accepted invitation", async () => {
+  it("refreshes the host list after an accepted invitation, and reads the account before the environment list", async () => {
     const context = createContext("direct-user");
     const accept = vi.fn(() =>
       Promise.resolve({ outcome: "accepted" } as const),
     );
     const directoryRefresh = vi.fn(() => Promise.resolve([]));
-    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const order: string[] = [];
+    mocks.revalidate.mockImplementation(() => {
+      order.push("revalidate");
+      return Promise.resolve({ kind: "superseded" });
+    });
     installAuth(accept, context, directoryRefresh);
+    const invalidateQueries = watchListInvalidation(queryClient, order);
     const { result } = renderHook(
       () => useEnvironmentInvitationAcceptMutation(),
       { wrapper: createWrapper(queryClient) },
@@ -182,7 +218,43 @@ describe("invitation acceptance clears the local host door state", () => {
     });
     expect(directoryRefresh).toHaveBeenCalledOnce();
     expect(mocks.refreshHostFleet).toHaveBeenCalledOnce();
+    // The list joins each row to the account's teams, so the account is read
+    // first and the list invalidated only after that read has answered.
+    expect(order).toEqual(["revalidate", "invalidate-list"]);
   });
+
+  it.each([
+    ["rejects", () => Promise.reject(new Error("authn is down"))],
+    ["answers network-error", () => Promise.resolve({ kind: "network-error" })],
+  ] satisfies [string, () => Promise<LiveRevalidationOutcome>][])(
+    "still invalidates the environment list when the account read %s",
+    async (_name, answer) => {
+      const order: string[] = [];
+      mocks.revalidate.mockImplementation(() => {
+        order.push("revalidate");
+        return answer();
+      });
+      installAuth(
+        () => Promise.resolve({ outcome: "accepted" }),
+        createContext("direct-user"),
+        () => Promise.resolve([]),
+      );
+      watchListInvalidation(queryClient, order);
+      const { result } = renderHook(
+        () => useEnvironmentInvitationAcceptMutation(),
+        { wrapper: createWrapper(queryClient) },
+      );
+
+      await act(async () => {
+        await result.current.mutateAsync({ environmentId: "team-1" });
+      });
+
+      expect(order).toEqual(["revalidate", "invalidate-list"]);
+      expect(listInvalidated(queryClient)).toBe(true);
+      // The accept is never lost to the account read's failure.
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    },
+  );
 
   it("does not invalidate after an invitation was not found", async () => {
     const context = createContext("direct-user");
@@ -208,6 +280,7 @@ describe("invitation acceptance clears the local host door state", () => {
     });
     expect(directoryRefresh).not.toHaveBeenCalled();
     expect(mocks.refreshHostFleet).not.toHaveBeenCalled();
+    expect(mocks.revalidate).not.toHaveBeenCalled();
   });
 
   it("does not invalidate on failure or when the account context changes before success", async () => {
@@ -276,5 +349,8 @@ describe("invitation acceptance clears the local host door state", () => {
     });
     expect(switchedDirectoryRefresh).not.toHaveBeenCalled();
     expect(mocks.refreshHostFleet).not.toHaveBeenCalled();
+    // Neither the failed accept nor the one answered after the switch read the
+    // account: the new account is told nothing.
+    expect(mocks.revalidate).not.toHaveBeenCalled();
   });
 });
