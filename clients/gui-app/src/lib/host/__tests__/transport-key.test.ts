@@ -1,15 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-vi.mock(
-  "@traycer-clients/shared/host-client/minimum-host-version",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
-      >();
-    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
-  },
-);
-
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -42,7 +31,6 @@ import {
   hostTransportKey,
   hostTransportKeyFor,
   dialableHostEndpoint,
-  dialableHostEndpointFor,
   remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
 
@@ -56,7 +44,7 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
     label: "Host A",
     kind: "local",
     websocketUrl: "ws://127.0.0.1:9/stream",
-    version: "2.0.0",
+    version: "1.2.3",
     transportDialability: "dialable",
     ...overrides,
   };
@@ -195,39 +183,7 @@ describe("the transport's refusal gate", () => {
   });
 });
 
-describe("minimum-version transport gate", () => {
-  it("uses the local entry version and remote appVersion for both key and endpoint", () => {
-    const localAtFloor = entry({ version: "2.0.0" });
-    const localBelowFloor = entry({ version: "1.5.4" });
-    const remoteAtFloor = remoteEntry({
-      version: "9.9.9",
-      remoteStatus: {
-        connectivity: "connectable",
-        viewerReachability: "ok",
-        clientCloud: "ok",
-        updateState: "current",
-        appVersion: "2.0.0",
-        lastSeenAt: null,
-      },
-    });
-    const remoteBelowFloor = remoteEntry({
-      ...remoteAtFloor,
-      remoteStatus: { ...remoteAtFloor.remoteStatus, appVersion: "1.5.4" },
-    });
-
-    expect(hostTransportKeyFor(localAtFloor, false)).not.toBeNull();
-    expect(dialableHostEndpointFor(localAtFloor, false)).not.toBeNull();
-    expect(hostTransportKeyFor(localBelowFloor, false)).toBeNull();
-    expect(dialableHostEndpointFor(localBelowFloor, false)).toBeNull();
-
-    expect(hostTransportKeyFor(remoteAtFloor, false)).not.toBeNull();
-    expect(dialableHostEndpointFor(remoteAtFloor, false)).not.toBeNull();
-    expect(hostTransportKeyFor(remoteBelowFloor, false)).toBeNull();
-    expect(dialableHostEndpointFor(remoteBelowFloor, false)).toBeNull();
-  });
-});
-
-describe("hostTransportKeyFor - what OPEN presents is identity", () => {
+describe("hostTransportKeyFor - whose computer it is is identity", () => {
   const personal = remoteEntry({ sandbox: null });
   const sandbox = remoteEntry({
     sandbox: {
@@ -237,14 +193,6 @@ describe("hostTransportKeyFor - what OPEN presents is identity", () => {
       ownerTeamName: null,
       ownerTeamId: null,
     },
-  });
-
-  it("keys a sandbox row apart from the same host projected as a personal one, so a stale read rebuilds the stream", () => {
-    const asPersonal = hostTransportKeyFor(personal, false);
-    const asSandbox = hostTransportKeyFor(sandbox, false);
-    expect(asPersonal).not.toBeNull();
-    expect(asSandbox).not.toBeNull();
-    expect(asSandbox).not.toBe(asPersonal);
   });
 
   it("changes transport identity when a physical host's owner changes from personal to team", () => {
@@ -280,8 +228,8 @@ describe("hostTransportKeyFor - what OPEN presents is identity", () => {
         false,
       ),
     ).toBe(hostTransportKeyFor(sandbox, false));
-    // The lifecycle word is not part of what OPEN presents: waking it must
-    // not tear the stream down.
+    // The lifecycle word is not identity: waking it must not tear the stream
+    // down.
     expect(
       hostTransportKeyFor(
         remoteEntry({

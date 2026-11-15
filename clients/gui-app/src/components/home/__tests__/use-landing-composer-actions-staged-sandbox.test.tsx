@@ -1860,6 +1860,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         mayHaveDispatched: false,
       }),
+      [],
     ],
     [
       "a recoverable sign-in check",
@@ -1870,11 +1871,12 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         fatalDetails: null,
       }),
+      [errorToast(NOT_SENT_LINE)],
     ],
   ] as const)(
-    "says nothing and saves no draft when the attachment is silent and nothing was returned (%s)",
-    async (_label, error) => {
-      expect(await toastsFromRefusal("nowhere", error)).toEqual([]);
+    "%s and saves no draft when no sandbox was returned",
+    async (_label, error, expectedToasts) => {
+      expect(await toastsFromRefusal("nowhere", error)).toEqual(expectedToasts);
       expect(useLandingDraftStore.getState().drafts).toEqual([]);
     },
   );
@@ -2028,16 +2030,17 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
 
   it.each([
     [
-      "an aborted request",
+      "an aborted request stays silent",
       new HostRequestAbortedError({
         message: "authority replaced",
         requestId: "request-attach-abort",
         method: "epic.attachEnvironment",
         mayHaveDispatched: false,
       }),
+      [],
     ],
     [
-      "a recoverable sign-in check",
+      "a recoverable sign-in check reports the caller's existing line",
       new HostRpcError({
         code: "UNAUTHORIZED",
         message: "token refresh in flight",
@@ -2045,11 +2048,14 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         fatalDetails: null,
       }),
+      [errorToast(BACK_IN_COMPOSER_LINE)],
     ],
   ] as const)(
-    "says nothing from the attachment for %s, the message back in the composer",
-    async (_label, error) => {
-      expect(await toastsFromRefusal("composer", error)).toEqual([]);
+    "%s when the message is back in the composer",
+    async (_label, error, expectedToasts) => {
+      expect(await toastsFromRefusal("composer", error)).toEqual(
+        expectedToasts,
+      );
     },
   );
 

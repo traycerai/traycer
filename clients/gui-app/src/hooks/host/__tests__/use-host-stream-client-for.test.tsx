@@ -620,7 +620,7 @@ describe("useHostStreamClientFor", () => {
     expect(closeSpy.mock.contexts[1]).toBe(second);
   });
 
-  it("keeps one host-token transport when a physical remote's owner becomes a team", () => {
+  it("reopens a sole holder's stream when its remote's owner becomes a team, and leaves a stream another holder shares to the host", () => {
     const transportSessions: ControllableSession[] = [];
     const opened: Array<
       CreateRemoteTransportOptions<HostRpcRegistry, HostStreamRpcRegistry>
@@ -662,32 +662,39 @@ describe("useHostStreamClientFor", () => {
         } as const,
       },
     );
-    const personalSurface = renderHook(
+    const soleSurface = renderHook(
       ({ target }) => useHostStreamClientFor(target, null),
       { initialProps: { target: personalEntry } },
     );
-    const first = personalSurface.result.current;
-    const siblingPersonalSurface = renderHook(
-      ({ target }) => useHostStreamClientFor(target, null),
-      { initialProps: { target: personalEntry } },
-    );
-    expect(siblingPersonalSurface.result.current).toBe(first);
+    const first = soleSurface.result.current;
     expect(transportSessions).toHaveLength(1);
 
-    personalSurface.rerender({ target: teamEntry });
-
-    // Both owners open with the host-only token, so the owner change is not a
-    // new transport. The sibling keeps the one session this host already has.
-    expect(personalSurface.result.current).toBe(first);
-    expect(siblingPersonalSurface.result.current).toBe(first);
-    expect(transportSessions).toHaveLength(1);
-    expect(opened[0]?.hostTokens).toBe(runnerHost.hostTokens);
-    expect(transportSessions[0].closeCalls).toBe(0);
-
-    personalSurface.unmount();
-    expect(transportSessions[0].closeCalls).toBe(0);
-    siblingPersonalSurface.unmount();
+    // The only holder: the owner change reopens it, and the reopen builds a
+    // fresh transport with the host-only token.
+    soleSurface.rerender({ target: teamEntry });
+    const reopened = soleSurface.result.current;
+    expect(reopened).not.toBe(first);
+    expect(transportSessions).toHaveLength(2);
     expect(transportSessions[0].closeCalls).toBe(1);
+    expect(opened[1]?.hostTokens).toBe(runnerHost.hostTokens);
+
+    // A stream another holder shares is not ended app-side: the client cache
+    // keys no owner, so the surface that moves takes the shared client back,
+    // and the host's close is what ends it.
+    const sibling = renderHook(
+      ({ target }) => useHostStreamClientFor(target, null),
+      { initialProps: { target: teamEntry } },
+    );
+    expect(sibling.result.current).toBe(reopened);
+    soleSurface.rerender({ target: personalEntry });
+    expect(soleSurface.result.current).toBe(reopened);
+    expect(transportSessions).toHaveLength(2);
+    expect(transportSessions[1].closeCalls).toBe(0);
+
+    soleSurface.unmount();
+    expect(transportSessions[1].closeCalls).toBe(0);
+    sibling.unmount();
+    expect(transportSessions[1].closeCalls).toBe(1);
   });
 
   it("keeps a healthy LOCAL client across a cloud-capability restoration", async () => {
