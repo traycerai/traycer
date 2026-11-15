@@ -31,6 +31,10 @@ import {
 } from "@/stores/host/surface-host-selection-store";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -114,12 +118,28 @@ vi.mock("@/lib/host/transport-key", async (importOriginal) => ({
   ) => userId,
 }));
 
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
+// Nulls where the real key does: no row, no endpoint, no user, or a row below
+// the version floor.
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   hostStreamTransportKeyFor: (
     hostEntry: HostDirectoryEntry | null,
     userId: string | null,
   ) =>
-    hostEntry?.websocketUrl === null || hostEntry === null || userId === null
+    hostEntry === null ||
+    hostEntry.websocketUrl === null ||
+    userId === null ||
+    hostDirectoryEntryNeedsUpdate(hostEntry, MINIMUM_HOST_VERSION)
       ? null
       : hookState.transportKey,
 }));
@@ -479,6 +499,7 @@ function installTransport(dropUntilLive: boolean): void {
   hookState.hostEntry = {
     ...hookState.hostEntry,
     websocketUrl: INITIAL_ENDPOINT,
+    version: "test-version",
   };
 }
 
@@ -997,6 +1018,43 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(stream.closed).toBe(false);
 
     cleanup();
+    expect(transport.closed).toBe(true);
+    expect(stream.closed).toBe(true);
+  });
+
+  it("releases a held coordinator when its host falls below the version floor", () => {
+    const transport = hookState.durableTransport;
+    if (transport === null) {
+      throw new Error("expected durable stream transport");
+    }
+    // A fresh element each time: React skips re-rendering an identical one.
+    const providerTree = (): ReactNode => (
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>
+    );
+    const { rerender } = render(providerTree());
+    const stream = transport.wsStreamClient.sessions[0];
+    expect(stream).toBeDefined();
+    act(() => {
+      stream.emitStatus("open");
+    });
+
+    act(() => {
+      hookState.hostEntry = {
+        ...hookState.hostEntry,
+        version: MINIMUM_HOST_VERSION,
+      };
+      rerender(providerTree());
+    });
+    expect(transport.closed).toBe(false);
+    expect(stream.closed).toBe(false);
+
+    act(() => {
+      hookState.hostEntry = { ...hookState.hostEntry, version: "1.9.0" };
+      rerender(providerTree());
+    });
+    expect(hookState.openedHostIds).toEqual(["host-test"]);
     expect(transport.closed).toBe(true);
     expect(stream.closed).toBe(true);
   });
