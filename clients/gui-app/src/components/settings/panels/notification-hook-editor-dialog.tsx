@@ -277,7 +277,12 @@ function HookEditor(
         </div>
 
         <DialogFooter className="flex-col items-stretch sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-ui-xs text-destructive">{problem ?? ""}</p>
+          <p
+            role={problem === null ? undefined : "alert"}
+            className="text-ui-xs text-destructive"
+          >
+            {problem ?? ""}
+          </p>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={props.onCancel}>
               Cancel
