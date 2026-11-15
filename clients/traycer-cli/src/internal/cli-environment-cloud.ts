@@ -38,16 +38,21 @@ interface SignInRefresh {
 }
 
 /**
- * The user id of the stored sign-in, or null when there is none (signed out,
- * an empty token) or the file cannot be read now: a sign-in that cannot be
- * shown to be the same one is not.
+ * The stored sign-in's user id and token, or null when there is none (signed
+ * out, an empty token) or the file cannot be read now: a sign-in that cannot
+ * be shown to be the same one is not.
  */
-function storedSignInUserId(): string | null {
+function storedSignIn(): {
+  readonly userId: string;
+  readonly token: string;
+} | null {
   try {
     const stored = parseStoredCredentials(
       JSON.parse(readFileSync(cliCredentialsPath(config.environment), "utf8")),
     );
-    return stored !== null && stored.token.length > 0 ? stored.user.id : null;
+    return stored !== null && stored.token.length > 0
+      ? { userId: stored.user.id, token: stored.token }
+      : null;
   } catch {
     return null;
   }
@@ -65,7 +70,20 @@ export function createCliEnvironmentCloud(auth: HostAuth): CliEnvironmentCloud {
   let refreshSpent = false;
   let rejected = false;
 
-  const onOriginSignIn = (): boolean => storedSignInUserId() === auth.userId;
+  // The same sign-in, not only the same person: the stored token is the one
+  // this command holds, which moves only with this command's own refresh
+  // below. A sign-out and sign-in again, as anyone, writes a token this
+  // command never held. The stored file names no sign-in session, so another
+  // process's refresh reads as a change too: the command then stops rather
+  // than act on a sign-in it cannot show is its own.
+  const onOriginSignIn = (): boolean => {
+    const stored = storedSignIn();
+    return (
+      stored !== null &&
+      stored.userId === auth.userId &&
+      stored.token === readLeaseBearer(lease)
+    );
+  };
 
   const refresh = async (signal: AbortSignal): Promise<RevalidateOutcome> => {
     const store = createCliCredentialsStore();
@@ -87,6 +105,9 @@ export function createCliEnvironmentCloud(auth: HostAuth): CliEnvironmentCloud {
     const answer = await fetchEnvironmentTransport(request);
     if (answer.status !== 401 || refreshSpent) return answer;
     refreshSpent = true;
+    // The store adopts a same-user replacement it finds as a refresh; refresh
+    // only while the stored sign-in is still this command's own.
+    if (!onOriginSignIn()) return answer;
     const outcome = await refresh(request.signal);
     if (outcome === "rejected") rejected = true;
     if (outcome !== "rotated" || !onOriginSignIn()) return answer;
