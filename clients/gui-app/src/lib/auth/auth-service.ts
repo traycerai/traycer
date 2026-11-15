@@ -3164,22 +3164,21 @@ export class AuthService {
     hostId: string,
     era: AuthEra,
   ): Promise<HostOwnershipResult> {
-    const before = this.currentAuthEra();
-    if (
-      before.identity !== era.identity ||
-      before.credentialGeneration !== era.credentialGeneration
-    )
-      throw new SupersededAuthEraError();
+    this.assertLiveAuthEra(era);
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
     const result = await this.runnerHost.readHostOwnership(bearer, hostId);
-    const after = this.currentAuthEra();
+    this.assertLiveAuthEra(era);
+    return result;
+  }
+
+  private assertLiveAuthEra(era: AuthEra): void {
+    const live = this.currentAuthEra();
     if (
-      after.identity !== era.identity ||
-      after.credentialGeneration !== era.credentialGeneration
+      live.identity !== era.identity ||
+      live.credentialGeneration !== era.credentialGeneration
     )
       throw new SupersededAuthEraError();
-    return result;
   }
 
   async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {
