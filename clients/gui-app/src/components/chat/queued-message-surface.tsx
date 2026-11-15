@@ -1505,7 +1505,8 @@ const CANCEL_COPY: Record<
   },
   "memory-curation": {
     ariaLabel: "Dismiss memory notice",
-    tooltip: "Dismiss this notice — the bot won't be asked to tidy the memory",
+    tooltip:
+      "Dismiss this notice — the bot won't be asked to tidy common memory",
   },
   "notification-digest": {
     ariaLabel: "Dismiss notification digest",
